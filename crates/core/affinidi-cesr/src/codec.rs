@@ -16,6 +16,21 @@ const B64_DECODE: [u8; 128] = {
     table
 };
 
+/// Reject non-ASCII input before any byte-offset slicing.
+///
+/// qb64 (the CESR text domain) is defined over base64url, which is pure
+/// ASCII. The `from_qb64` parsers compute sizes as character counts and then
+/// slice the input on those values as *byte* offsets. For ASCII input the two
+/// coincide, but a multi-byte UTF-8 character would let a byte offset land
+/// mid-character and panic the slice. Guarding here makes every downstream
+/// slice in the caller safe by construction.
+pub fn ensure_ascii(qb64: &str) -> Result<(), CesrError> {
+    if let Some((position, ch)) = qb64.char_indices().find(|(_, c)| !c.is_ascii()) {
+        return Err(CesrError::InvalidCharacter { position, ch });
+    }
+    Ok(())
+}
+
 /// Encode raw bytes to URL-safe Base64 (no padding).
 pub fn b64_encode(data: &[u8]) -> String {
     use base64ct::{Base64UrlUnpadded, Encoding};

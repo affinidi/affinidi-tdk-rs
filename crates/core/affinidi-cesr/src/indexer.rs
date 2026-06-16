@@ -67,6 +67,7 @@ impl Indexer {
         if qb64.is_empty() {
             return Err(CesrError::EmptyInput);
         }
+        codec::ensure_ascii(qb64)?;
 
         let first_char = qb64.chars().next().ok_or(CesrError::EmptyInput)?;
         let hs = hardage(first_char).ok_or(CesrError::UnknownCode(first_char.to_string()))?;
@@ -243,6 +244,16 @@ impl std::fmt::Display for Indexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_qb64_rejects_non_ascii_without_panicking() {
+        // Would previously panic at `&qb64[..hs]` (hardage('0')==2 slices into
+        // the multi-byte U+FFFD).
+        assert!(matches!(
+            Indexer::from_qb64("0\u{FFFD}"),
+            Err(CesrError::InvalidCharacter { .. })
+        ));
+    }
 
     #[test]
     fn test_indexer_new_ed25519() {
