@@ -58,7 +58,12 @@ deliberately deferred: the abstractions mostly already exist and the concrete
 churn it would isolate is rare, so it isn't worth pre-abstracting.
 */
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
+
+// `Arc` is only used by the extra-roots TLS path, which is compiled out on
+// Android (see `create_http_client`).
+#[cfg(not(target_os = "android"))]
+use std::sync::Arc;
 
 use affinidi_did_authentication::{AuthorizationTokens, errors::DIDAuthError};
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
@@ -69,7 +74,11 @@ use errors::TDKError;
 use profiles::TDKProfile;
 use reqwest::Client;
 use rustls::{ClientConfig, pki_types::CertificateDer};
-use rustls_platform_verifier::{ConfigVerifierExt, Verifier};
+use rustls_platform_verifier::ConfigVerifierExt;
+// `Verifier::new_with_extra_roots` is not available on the Android backend of
+// `rustls-platform-verifier` (see `create_http_client`).
+#[cfg(not(target_os = "android"))]
+use rustls_platform_verifier::Verifier;
 use tracing::warn;
 
 pub mod config;
@@ -103,17 +112,26 @@ pub struct TDKSharedState {
 ///
 /// Pass an empty slice for the default behaviour (platform trust store only).
 /// Non-empty `extra_roots` are added on top of the platform store via
-/// [`Verifier::new_with_extra_roots`] — useful for environments with
+/// `Verifier::new_with_extra_roots` — useful for environments with
 /// internal/private CAs (see
 /// [`TDKEnvironment::ssl_certificate_paths`](environments::TDKEnvironment::ssl_certificate_paths)).
 ///
 /// Installs `rustls`'s `aws-lc-rs` crypto provider as the process default
 /// exactly once via [`OnceLock`] — repeated calls are a no-op.
 ///
+/// # Platform support
+///
+/// `extra_roots` is **not supported on Android**: `rustls-platform-verifier`'s
+/// Android backend delegates entirely to the platform trust store and provides
+/// no API to append extra roots. On `target_os = "android"`, passing non-empty
+/// `extra_roots` returns a [`TDKError::Config`] error; an empty slice (platform
+/// trust store only) works on all platforms.
+///
 /// # Errors
 ///
 /// Returns [`TDKError::Config`] if the platform TLS verifier or the
-/// [`reqwest::Client`] cannot be constructed.
+/// [`reqwest::Client`] cannot be constructed, or if non-empty `extra_roots`
+/// are supplied on Android (see *Platform support*).
 pub fn create_http_client(extra_roots: &[CertificateDer<'static>]) -> Result<Client, TDKError> {
     static CRYPTO_INIT: OnceLock<()> = OnceLock::new();
     CRYPTO_INIT.get_or_init(|| {
@@ -124,22 +142,44 @@ pub fn create_http_client(extra_roots: &[CertificateDer<'static>]) -> Result<Cli
         ClientConfig::with_platform_verifier()
             .map_err(|e| TDKError::Config(format!("rustls platform verifier init failed: {e}")))?
     } else {
-        let crypto_provider = rustls::crypto::CryptoProvider::get_default()
-            .cloned()
-            .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
-        let verifier =
-            Verifier::new_with_extra_roots(extra_roots.iter().cloned(), crypto_provider.clone())
+        // `rustls-platform-verifier` 0.7 only implements
+        // `Verifier::new_with_extra_roots` on the non-Android backends; the
+        // Android backend delegates to the platform trust store and exposes no
+        // way to append extra roots. Referencing it on Android is a compile
+        // error, so the extra-roots path is `cfg`-gated out there and we
+        // surface a clear runtime error instead of breaking the cross-compile
+        // or silently dropping the requested roots (issue #483).
+        #[cfg(target_os = "android")]
+        {
+            return Err(TDKError::Config(
+                "extra TLS roots (ssl_certificate_paths) are not supported on Android: \
+                 rustls-platform-verifier has no `new_with_extra_roots` on the Android backend"
+                    .to_string(),
+            ));
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let crypto_provider = rustls::crypto::CryptoProvider::get_default()
+                .cloned()
+                .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
+            let verifier = Verifier::new_with_extra_roots(
+                extra_roots.iter().cloned(),
+                crypto_provider.clone(),
+            )
+            .map_err(|e| {
+                TDKError::Config(format!(
+                    "rustls platform verifier (with extra roots) init failed: {e}"
+                ))
+            })?;
+            ClientConfig::builder_with_provider(crypto_provider)
+                .with_safe_default_protocol_versions()
                 .map_err(|e| {
-                    TDKError::Config(format!(
-                        "rustls platform verifier (with extra roots) init failed: {e}"
-                    ))
-                })?;
-        ClientConfig::builder_with_provider(crypto_provider)
-            .with_safe_default_protocol_versions()
-            .map_err(|e| TDKError::Config(format!("rustls protocol-version setup failed: {e}")))?
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(verifier))
-            .with_no_client_auth()
+                    TDKError::Config(format!("rustls protocol-version setup failed: {e}"))
+                })?
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(verifier))
+                .with_no_client_auth()
+        }
     };
     reqwest::ClientBuilder::new()
         .use_rustls_tls()
