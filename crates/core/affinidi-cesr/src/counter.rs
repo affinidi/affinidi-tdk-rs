@@ -33,6 +33,7 @@ impl Counter {
         if qb64.is_empty() {
             return Err(CesrError::EmptyInput);
         }
+        codec::ensure_ascii(qb64)?;
 
         let first_char = qb64.chars().next().ok_or(CesrError::EmptyInput)?;
         if first_char != '-' {
@@ -122,6 +123,15 @@ impl std::fmt::Display for Counter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_qb64_rejects_non_ascii_without_panicking() {
+        // Would previously panic slicing the soft portion on a char boundary.
+        assert!(matches!(
+            Counter::from_qb64("-C\u{FFFD}"),
+            Err(CesrError::InvalidCharacter { .. })
+        ));
+    }
 
     #[test]
     fn test_counter_new() {

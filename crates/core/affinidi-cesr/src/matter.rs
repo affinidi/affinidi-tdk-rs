@@ -47,6 +47,7 @@ impl Matter {
         if qb64.is_empty() {
             return Err(CesrError::EmptyInput);
         }
+        codec::ensure_ascii(qb64)?;
 
         // Determine hard size from first character
         let first_char = qb64.chars().next().ok_or(CesrError::EmptyInput)?;
@@ -393,6 +394,22 @@ impl std::fmt::Display for Matter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_qb64_rejects_non_ascii_without_panicking() {
+        // Each of these would previously panic on a char-boundary slice
+        // because the byte offset lands inside the multi-byte U+FFFD.
+        assert!(matches!(
+            Matter::from_qb64("-\u{FFFD}"),
+            Err(CesrError::InvalidCharacter { .. })
+        ));
+        assert!(matches!(
+            Matter::from_qb64(&format!("B{}\u{FFFD}", "A".repeat(41))),
+            Err(CesrError::InvalidCharacter { .. })
+        ));
+        // ASCII input still parses or returns a normal (non-panicking) error.
+        let _ = Matter::from_qb64(&"B".repeat(44));
+    }
 
     #[test]
     fn test_matter_raw_size() {

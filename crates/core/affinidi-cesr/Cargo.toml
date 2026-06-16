@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-cesr"
 description = "CESR (Composable Event Streaming Representation) encoding and decoding"
-version = "0.1.2"
+version = "0.1.3"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
