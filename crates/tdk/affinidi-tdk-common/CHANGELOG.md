@@ -6,6 +6,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
 
+## 0.6.5 — 2026-06-16
+
+### Fixed
+
+- **`create_http_client` no longer fails to compile for Android targets.** The
+  extra-roots branch called `Verifier::new_with_extra_roots`, which
+  `rustls-platform-verifier` 0.7 does not implement on its Android backend, so
+  any downstream crate cross-compiling to a `*-linux-android` target failed to
+  build (host builds were unaffected, hiding the breakage). That branch — and
+  its `Verifier`/`Arc` imports — is now `cfg`-gated out on
+  `target_os = "android"`. Passing an empty `extra_roots` slice (platform trust
+  store only) works on all platforms; passing non-empty `extra_roots`
+  (`ssl_certificate_paths`) on Android now returns a clear `TDKError::Config`
+  error at runtime rather than silently dropping the requested roots. No change
+  in behaviour on non-Android platforms. (#483)
+
 ## 0.6.4 — 2026-06-13
 
 ### Added
