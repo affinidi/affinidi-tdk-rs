@@ -30,6 +30,12 @@
   cannot be fixed from this workspace (1.0.1 is the latest published version and
   `tonic 0.12` hardcodes `ring`); making cheqd opt-in is the durable in-workspace
   mitigation. Patch bump keeps the `0.8` pin valid.
+- **`rustls-platform-verifier` bumped `0.6` → `0.7`** to match the rest of the
+  workspace (`affinidi-tdk-common` is already on `0.7`), consolidating the lock
+  to a single version. The SDK only calls `ClientConfig::with_platform_verifier()`
+  (available on all backends, incl. Android) and does not use
+  `Verifier::new_with_extra_roots`, so the Android cross-compile gap from #483/#484
+  does not apply here. No source change required.
 
 ## 14th June 2026
 
