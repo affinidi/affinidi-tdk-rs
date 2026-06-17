@@ -109,6 +109,25 @@ pub async fn resolve(
     }
 }
 
+/// Derive a `did:cheqd` method DID from a URL-mode `?src=did:cheqd:...` source.
+///
+/// `did-cheqd` is optional because `did-resolver-cheqd` forces the rustls `ring`
+/// TLS backend (via `tonic 0.12`); see the crate's feature docs. When the
+/// feature is disabled this returns a clear error instead of failing to compile.
+#[cfg(feature = "did-cheqd")]
+fn derive_cheqd_url(src: &str, scid: &str) -> Result<ScidMethod, DIDSCIDError> {
+    let cheqd = format!("{src}:{scid}");
+    debug!("derived cheqd DID: {cheqd}");
+    Ok(ScidMethod::Cheqd(cheqd))
+}
+
+#[cfg(not(feature = "did-cheqd"))]
+fn derive_cheqd_url(_src: &str, _scid: &str) -> Result<ScidMethod, DIDSCIDError> {
+    Err(DIDSCIDError::CheqdError(
+        "did:cheqd source requires the `did-cheqd` feature".to_string(),
+    ))
+}
+
 /// Converts a SCID DID to a valid Method DID Identifier
 /// peer_src: Optional meta_data if operating in peer mode
 fn convert_scid_to_method(
@@ -123,9 +142,7 @@ fn convert_scid_to_method(
 
     if let Some(src) = caps.get(2).map(|m| m.as_str()) {
         if src.starts_with("did:cheqd:") {
-            let cheqd = format!("{src}:{scid}");
-            debug!("derived cheqd DID: {cheqd}");
-            Ok(ScidMethod::Cheqd(cheqd))
+            derive_cheqd_url(src, scid)
         } else if src.starts_with("did:") {
             Err(DIDSCIDError::UnsupportedFormat)
         } else {
@@ -143,6 +160,7 @@ fn convert_scid_to_method(
                 debug!("derived peer webvh DID: {webvh}");
                 Ok(ScidMethod::WebVH(webvh))
             }
+            #[cfg(feature = "did-cheqd")]
             Some(ScidMethod::Cheqd(src)) => {
                 let cheqd = format!("did:cheqd:{src}:{scid}");
                 debug!("derived peer cheqd DID: {cheqd}");
@@ -369,6 +387,7 @@ mod tests {
 
     // -- pre-existing happy paths ------------------------------------------
 
+    #[cfg(feature = "did-cheqd")]
     #[test]
     fn test_cheqd_conversion() {
         match convert_scid_to_method("did:scid:vh:1:abcde?src=did:cheqd:mainnet", None) {
@@ -377,6 +396,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "did-cheqd")]
     #[test]
     fn test_cheqd_peer_conversion() {
         match convert_scid_to_method(
@@ -449,6 +469,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "did-cheqd")]
     #[tokio::test]
     #[ignore = "requires external network (cheqd.net)"]
     async fn test_scid_cheqd_resolution() {

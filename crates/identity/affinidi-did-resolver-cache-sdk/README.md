@@ -27,8 +27,8 @@ affinidi-did-resolver-cache-sdk = "0.8"
 | `did:ethr` | Yes | — |
 | `did:pkh` | Yes | — |
 | `did:webvh` | Yes | `did-methods` |
-| `did:cheqd` | Yes | `did-methods` |
 | `did:scid` | Yes | `did-methods` |
+| `did:cheqd` | No | `did-cheqd` (opt-in — pulls a `ring` TLS backend, see below) |
 | `did:ebsi` | No | `did-ebsi` (EBSI DID Registry API) |
 | `did:example` | No | `did_example` (must be manually loaded) |
 
@@ -37,13 +37,36 @@ affinidi-did-resolver-cache-sdk = "0.8"
 | Feature | Default | Description |
 |---|---|---|
 | `local` | Yes | Reserved for future local-only features |
-| `did-methods` | Yes | Includes `did-webvh`, `did-cheqd`, `did-scid` |
+| `did-methods` | Yes | Includes `did-webvh`, `did-scid` |
 | `did-ebsi` | No | EBSI DID method (requires network access to EU API) |
 | `network` | No | Enable network mode for remote cache server |
 | `did-webvh` | — | WebVH DID method support |
-| `did-cheqd` | — | Cheqd blockchain DID method support |
+| `did-cheqd` | No | Cheqd blockchain DID method support (opt-in, see TLS note) |
 | `did-scid` | — | Self-Certifying Identifier DID method |
 | `did_example` | — | Example DID method for testing |
+
+### `did-cheqd` and the rustls `ring` backend
+
+`did-cheqd` is **not** enabled by default. It pulls `did-resolver-cheqd`, whose
+gRPC client (`tonic 0.12`) hardcodes the `ring` backend on
+`tokio-rustls`/`rustls 0.23`. This SDK's `network` feature — and most downstream
+binaries (via `kube`, `reqwest`, `jsonwebtoken`, …) — select the `aws_lc_rs`
+backend instead. When both backends are compiled, `rustls` cannot auto-select
+one and panics at the first TLS call with:
+
+```text
+no process-level CryptoProvider available
+```
+
+If you enable `did-cheqd`, you accept the `ring` backend. Because installing a
+process-global `CryptoProvider` is the application's decision, your binary's
+`main` must do it before any TLS is used, e.g.:
+
+```rust,ignore
+rustls::crypto::aws_lc_rs::default_provider()
+    .install_default()
+    .expect("install default rustls CryptoProvider");
+```
 
 ## Usage
 

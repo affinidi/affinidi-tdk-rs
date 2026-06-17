@@ -2,6 +2,41 @@
 
 ## Changelog history
 
+## 17th June 2026
+
+### 0.8.11 — `did-cheqd` is now opt-in (no forced rustls `ring` backend)
+
+- **`did-cheqd` removed from the default `did-methods` set.** It pulled
+  `did-resolver-cheqd`, whose `tonic 0.12` dependency hardcodes the rustls
+  `ring` backend on `tokio-rustls`/`rustls 0.23`. Combined with `network`
+  (which uses `aws_lc_rs`) — or any downstream binary that selects `aws_lc_rs`
+  via `kube`/`reqwest`/`jsonwebtoken` — both rustls backends were compiled and
+  `rustls` could no longer auto-select one, panicking with "no process-level
+  CryptoProvider available" at the first TLS call (e.g. `ClientConfig::builder()`).
+  `did-methods` is now `["did-webvh", "did-scid"]`; a default + `network` build
+  compiles `aws_lc_rs` only.
+- **The `did-scid` dependency now uses `default-features = false` + `did-webvh`**
+  so it no longer drags `did-resolver-cheqd` (and the `ring` stack) in
+  transitively.
+- **The fix is purely about not forcing a backend.** No runtime
+  `install_default()` was added here — installing a process-global rustls
+  `CryptoProvider` remains the application's decision and belongs in the
+  downstream binary's `main`.
+- **Opt back in** with `features = ["did-cheqd"]` (or `did-cheqd` +
+  `network`) when you need `did:cheqd` resolution; that re-enables the `ring`
+  backend, so install a `CryptoProvider` in your binary's `main`. See the
+  README's "did-cheqd and the rustls ring backend" section.
+- Root cause is the external `did-resolver-cheqd 1.0.1` + `tonic 0.12.3`, which
+  cannot be fixed from this workspace (1.0.1 is the latest published version and
+  `tonic 0.12` hardcodes `ring`); making cheqd opt-in is the durable in-workspace
+  mitigation. Patch bump keeps the `0.8` pin valid.
+- **`rustls-platform-verifier` bumped `0.6` → `0.7`** to match the rest of the
+  workspace (`affinidi-tdk-common` is already on `0.7`), consolidating the lock
+  to a single version. The SDK only calls `ClientConfig::with_platform_verifier()`
+  (available on all backends, incl. Android) and does not use
+  `Verifier::new_with_extra_roots`, so the Android cross-compile gap from #483/#484
+  does not apply here. No source change required.
+
 ## 14th June 2026
 
 ### 0.8.10 — non_exhaustive DIDCacheError (W7 sweep)

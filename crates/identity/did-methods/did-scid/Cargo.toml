@@ -1,7 +1,7 @@
 
 [package]
 name = "did-scid"
-version = "0.1.9"
+version = "0.1.10"
 description = "Implementation of did:scid in Rust"
 repository.workspace = true
 edition.workspace = true
@@ -14,7 +14,14 @@ readme = "README.md"
 rust-version.workspace = true
 
 [features]
-default = ["did-webvh", "did-cheqd"]
+# `did-cheqd` is intentionally NOT in `default`: it pulls `did-resolver-cheqd`,
+# whose `tonic 0.12` dependency hardcodes the rustls `ring` backend on
+# `tokio-rustls`/`rustls 0.23`. Forcing `ring` clashes with downstream binaries
+# that select `aws_lc_rs` (the ecosystem default via kube/reqwest/jsonwebtoken),
+# producing a "no process-level CryptoProvider available" panic. Opt in to
+# `did-cheqd` only when you accept the `ring` backend (and install a
+# CryptoProvider in your binary's `main`).
+default = ["did-webvh"]
 
 did-cheqd = ["dep:did-resolver-cheqd"]
 did-webvh = ["dep:didwebvh-rs"]
