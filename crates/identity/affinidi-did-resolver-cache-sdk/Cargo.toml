@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.10"
+version = "0.8.11"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -30,7 +30,15 @@ network = [
   "tokio/net",
   "tokio/io-util",
 ]
-did-methods = ["did-cheqd", "did-webvh", "did-scid"]
+# `did-cheqd` is intentionally NOT part of `did-methods` (and so not in
+# `default`): it pulls `did-resolver-cheqd`, whose `tonic 0.12` dependency
+# hardcodes the rustls `ring` backend on `tokio-rustls`/`rustls 0.23`. With
+# `network` (which uses `aws_lc_rs`) or any downstream that selects `aws_lc_rs`
+# (kube/reqwest/jsonwebtoken), compiling both backends makes rustls unable to
+# auto-select one, panicking with "no process-level CryptoProvider available"
+# at the first TLS call. Enable `did-cheqd` explicitly only when you accept the
+# `ring` backend and install a CryptoProvider in your binary's `main`.
+did-methods = ["did-webvh", "did-scid"]
 did_example = ["dep:did-example"]
 did-jwk = ["dep:did-jwk"]
 did-cheqd = ["dep:did-resolver-cheqd"]
@@ -45,7 +53,12 @@ affinidi-did-resolver-traits = { version = "0.1", path = "../affinidi-did-resolv
 # Shared background-task supervision (network mode only)
 affinidi-task-utils = { version = "0.1", optional = true }
 did-example = { version = "0.5", optional = true }
-did-scid = { version = "0.1", optional = true }
+# `default-features = false` keeps did-scid's own optional `did-cheqd` backend
+# (and its `tonic`/`ring` TLS stack) out of this SDK's default build; pulling
+# `did-cheqd` here re-enables it deliberately.
+did-scid = { version = "0.1", optional = true, default-features = false, features = [
+  "did-webvh",
+] }
 did-ebsi = { version = "0.1", path = "../did-methods/did-ebsi", optional = true }
 
 # External Crates
