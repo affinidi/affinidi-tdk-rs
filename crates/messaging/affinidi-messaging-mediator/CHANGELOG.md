@@ -4,6 +4,21 @@
 
 ## 22nd June 2026
 
+### 0.16.7 — TSP client authentication
+
+- New `POST /tsp/authenticate` endpoint (dual `didcomm,tsp` build) lets a TSP
+  client obtain a mailbox/WS session. The client reuses the protocol-agnostic
+  `POST /authenticate/challenge` for a challenge, signs it with its VID's Ed25519
+  key, and posts the signature here; the mediator resolves the VID's signing key
+  from its DID document and verifies it — no mediator TSP keys, no decryption.
+- On success the mediator mints the **identical** EdDSA `SessionClaims`
+  access+refresh JWT pair the DIDComm path issues, so every downstream
+  ACL/pickup/WS gate is reused unchanged (the session is DID-keyed and
+  protocol-agnostic). This is what lets a TSP client pick up the Direct messages
+  the mediator now stores (0.16.6).
+- VID must be a `did:` (phase-1 DID-VID constraint). No change to the DIDComm
+  auth path.
+
 ### 0.16.6 — TSP Direct local delivery
 
 - `handle_inbound_tsp` now stores an inbound TSP **Direct** message addressed to

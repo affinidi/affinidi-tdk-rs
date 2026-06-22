@@ -12,6 +12,8 @@ mod challenge;
 mod helpers;
 mod refresh;
 mod response;
+#[cfg(feature = "tsp")]
+pub mod tsp;
 
 pub use challenge::*;
 pub use helpers::create_random_string;
