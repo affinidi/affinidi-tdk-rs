@@ -2,6 +2,22 @@
 
 ## Changelog history
 
+## 23rd June 2026
+
+### 0.16.9 — TSP routed relay
+
+- The mediator now acts as a **routed TSP relay hop**. A `Routed` message sealed
+  to the mediator is unwrapped using its own TSP identity (0.16.8), the next hop
+  is read (`next_hop`), and the onward message is forwarded — re-sealed as this
+  mediator for an intermediate hop, or forwarded opaquely when this is the last
+  hop (the inner is already sealed end-to-end to the final recipient).
+- Direct delivery and the final hop of a relay now share one `deliver_tsp_local`
+  path: check the recipient is local, apply its access-list against the envelope
+  sender, store for pickup.
+- A `Routed` message addressed to a *local account* (the account is itself a hop)
+  is stored opaquely for it. Remote next-hops (forwarding to another mediator) and
+  Nested/Control messages return a clear problem report — they land later.
+
 ## 22nd June 2026
 
 ### 0.16.8 — Mediator TSP identity (relay foundation)

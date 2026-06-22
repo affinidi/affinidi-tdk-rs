@@ -58,3 +58,54 @@ async fn tsp_direct_message_round_trips_through_the_mediator() {
     assert_eq!(recovered, payload, "payload round-trips end to end");
     assert_eq!(sender, alice.did, "sender VID is recovered");
 }
+
+/// End-to-end TSP **Routed** relay: Alice sends through the mediator as a relay
+/// hop to Bob. The payload is sealed end-to-end to Bob; the outer routing layer
+/// is sealed to the mediator, which unwraps it and forwards the opaque inner to
+/// Bob (a local recipient). Proves the mediator's routed-relay path: derive its
+/// own TSP identity → unpack the layer sealed to it → `next_hop` → deliver.
+#[tokio::test]
+async fn tsp_routed_message_relays_through_the_mediator() {
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+    let mediator_did = env.mediator.did().to_string();
+
+    let payload = b"routed hello over TSP";
+
+    // Route: alice -> mediator (relay hop) -> bob.
+    let route = vec![mediator_did, bob.did.clone()];
+    env.atm
+        .tsp()
+        .send_routed(&alice.profile, &route, payload)
+        .await
+        .expect("alice sends a routed TSP message via the mediator");
+
+    // Bob fetches the relayed (now opaque Direct) message and unpacks it.
+    let fetched = env
+        .atm
+        .fetch_messages(&bob.profile, &FetchOptions::default())
+        .await
+        .expect("bob fetches messages");
+    let element = fetched
+        .success
+        .first()
+        .expect("bob has one relayed message");
+    let stored = element
+        .msg
+        .as_ref()
+        .expect("relayed message carries its body");
+
+    let (recovered, sender) = env
+        .atm
+        .tsp()
+        .unpack(&bob.profile, stored)
+        .await
+        .expect("bob unpacks the relayed TSP message");
+
+    assert_eq!(recovered, payload, "payload survives the relay end to end");
+    assert_eq!(sender, alice.did, "original sender VID is recovered, not the relay");
+}

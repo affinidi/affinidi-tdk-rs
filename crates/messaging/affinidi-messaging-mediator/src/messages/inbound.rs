@@ -95,37 +95,131 @@ pub(crate) async fn handle_inbound_tsp(
         )
     })?;
 
-    // Only Direct messages are delivered so far; Routed/Nested relay and Control
-    // handling land in later PRs.
-    if meta.message_type != TspMessageType::Direct {
-        return Err(MediatorError::problem(
-            37,
-            &session.session_id,
-            None,
-            ProblemReportSorter::Error,
-            ProblemReportScope::Protocol,
-            "protocol.tsp.unsupported",
-            "Only TSP Direct messages are handled so far (routing/relay not yet enabled)",
-            vec![],
-            StatusCode::NOT_IMPLEMENTED,
-        ));
-    }
+    use affinidi_tsp::message::routed::{RouteStep, next_hop, pack_routed};
 
-    let to_vid = &meta.receiver;
-    let from_vid = &meta.sender;
+    match meta.message_type {
+        // Direct: deliver to the (local) recipient named in the envelope.
+        TspMessageType::Direct => deliver_tsp_local(state, session, raw).await,
+
+        // Routed addressed to *this mediator*: we are a relay hop. Unwrap our
+        // routing layer (sealed to us) and forward the onward message to the next
+        // hop, re-sealing as this mediator unless we are the last hop (in which
+        // case the opaque inner is already sealed to the final recipient).
+        TspMessageType::Routed if meta.receiver == state.config.mediator_did => {
+            let identity = state.tsp_identity().await?;
+            let sender = resolve_tsp_vid(state, &meta.sender, &session.session_id).await?;
+            let unpacked = affinidi_tsp::message::direct::unpack(
+                raw,
+                &identity.decryption_key,
+                &sender.encryption_key,
+                &sender.signing_key,
+            )
+            .map_err(|e| {
+                tsp_problem(
+                    session,
+                    37,
+                    "message.tsp.unpack",
+                    format!("couldn't unpack routed TSP layer: {e}"),
+                    StatusCode::BAD_REQUEST,
+                )
+            })?;
+
+            let step = next_hop(&unpacked.payload).map_err(|e| {
+                tsp_problem(
+                    session,
+                    37,
+                    "message.tsp.route",
+                    format!("malformed TSP route: {e}"),
+                    StatusCode::BAD_REQUEST,
+                )
+            })?;
+
+            let forward_bytes = match step {
+                // Last relay hop: `next` is the final recipient and `inner` is
+                // already sealed end-to-end to them — forward it opaquely.
+                RouteStep::Forward {
+                    remaining, inner, ..
+                } if remaining.is_empty() => inner,
+                // Re-seal the onward route to the next hop, authenticating as this
+                // mediator.
+                RouteStep::Forward {
+                    next,
+                    remaining,
+                    inner,
+                } => {
+                    let next_vid = resolve_tsp_vid(state, &next, &session.session_id).await?;
+                    pack_routed(
+                        &inner,
+                        &remaining,
+                        &identity.vid,
+                        &next,
+                        &identity.signing_key,
+                        &identity.decryption_key,
+                        &next_vid.encryption_key,
+                    )
+                    .map_err(|e| {
+                        tsp_problem(
+                            session,
+                            37,
+                            "message.tsp.reseal",
+                            format!("couldn't re-seal routed TSP message: {e}"),
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                        )
+                    })?
+                    .bytes
+                }
+                // This hop is the exit: `inner` is sealed to its final recipient.
+                RouteStep::Deliver { inner } => inner,
+            };
+
+            deliver_tsp_local(state, session, &forward_bytes).await
+        }
+
+        // Routed addressed to a *local account* (that account is itself the hop):
+        // store it opaquely for them to pick up and relay onward.
+        TspMessageType::Routed => deliver_tsp_local(state, session, raw).await,
+
+        // Nested / Control relay are not handled yet.
+        _ => Err(tsp_problem(
+            session,
+            37,
+            "protocol.tsp.unsupported",
+            "Only TSP Direct and Routed messages are handled so far".to_string(),
+            StatusCode::NOT_IMPLEMENTED,
+        )),
+    }
+}
+
+/// Deliver a TSP message to the local recipient named in its envelope: check the
+/// recipient is a local account, apply the recipient's access-list against the
+/// (envelope) sender, then store it for pickup. Shared by Direct delivery and the
+/// final hop of a routed relay. Remote recipients (forwarding on to another
+/// mediator) are not yet handled.
+#[cfg(feature = "tsp")]
+async fn deliver_tsp_local(
+    state: &SharedData,
+    session: &Session,
+    bytes: &[u8],
+) -> Result<InboundMessageResponse, MediatorError> {
+    let meta = TspMetaEnvelope::parse(bytes).map_err(|e| {
+        tsp_problem(
+            session,
+            37,
+            "message.tsp.malformed",
+            format!("malformed TSP message: {e}"),
+            StatusCode::BAD_REQUEST,
+        )
+    })?;
+    let to_vid = meta.receiver;
     let to_hash = digest(to_vid.as_bytes());
 
-    // The recipient must be a local account — there is no TSP routing/bridge yet.
     if !state.database.account_exists(&to_hash).await? {
-        return Err(MediatorError::problem(
+        return Err(tsp_problem(
+            session,
             58,
-            &session.session_id,
-            None,
-            ProblemReportSorter::Error,
-            ProblemReportScope::Protocol,
             "direct_delivery.recipient.unknown",
-            "TSP recipient is not local to this mediator (routing not yet enabled)",
-            vec![],
+            "TSP recipient is not local to this mediator (remote forwarding not yet enabled)"
+                .to_string(),
             StatusCode::NOT_FOUND,
         ));
     }
@@ -133,27 +227,21 @@ pub(crate) async fn handle_inbound_tsp(
     // Access-list check (sender → recipient), mirroring DIDComm direct delivery.
     // The sender VID is the cleartext envelope claim; like an opaque DIDComm
     // forward, the mediator routes on it and the recipient verifies end-to-end.
-    let from_hash = digest(from_vid.as_bytes());
+    let from_hash = digest(meta.sender.as_bytes());
     if authz::check_access_list(state.database.as_ref(), &to_hash, Some(&from_hash))
         .await
         .is_err()
     {
-        return Err(MediatorError::problem(
+        return Err(tsp_problem(
+            session,
             73,
-            &session.session_id,
-            None,
-            ProblemReportSorter::Error,
-            ProblemReportScope::Protocol,
             "authorization.access_list.denied",
-            "Delivery blocked due to ACLs (access_list denied)",
-            vec![],
+            "Delivery blocked due to ACLs (access_list denied)".to_string(),
             StatusCode::FORBIDDEN,
         ));
     }
 
-    // Store base64url(qb2) = the CESR qb64 text form, through the neutral store
-    // path. DIDComm storage is unchanged.
-    let encoded = BASE64_URL_SAFE_NO_PAD.encode(raw);
+    let encoded = BASE64_URL_SAFE_NO_PAD.encode(bytes);
     let data = ProcessMessageResponse {
         store_message: true,
         force_live_delivery: false,
@@ -165,13 +253,55 @@ pub(crate) async fn handle_inbound_tsp(
         ),
     };
 
-    tracing::debug!(
-        to_vid = %to_vid,
-        from_vid = %from_vid,
-        "TSP direct delivery stored for local recipient"
-    );
-
+    tracing::debug!(to_vid = %to_vid, from_vid = %meta.sender, "TSP message stored for local recipient");
     store_message(state, session, &data, &UnpackMetadata::default()).await
+}
+
+/// Resolve a DID-based TSP VID to its keys + endpoints.
+#[cfg(feature = "tsp")]
+async fn resolve_tsp_vid(
+    state: &SharedData,
+    did: &str,
+    session_id: &str,
+) -> Result<affinidi_tsp::ResolvedVid, MediatorError> {
+    affinidi_tsp::DidVidResolver::new(state.did_resolver.clone())
+        .resolve_did(did)
+        .await
+        .map_err(|e| {
+            MediatorError::problem(
+                58,
+                session_id,
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "message.tsp.resolve",
+                "couldn't resolve TSP VID: {1}",
+                vec![format!("{did}: {e}")],
+                StatusCode::BAD_GATEWAY,
+            )
+        })
+}
+
+/// Build a TSP protocol problem report with a single human-readable message.
+#[cfg(feature = "tsp")]
+fn tsp_problem(
+    session: &Session,
+    code: u16,
+    code_str: &str,
+    message: String,
+    status: StatusCode,
+) -> MediatorError {
+    MediatorError::problem(
+        code,
+        &session.session_id,
+        None,
+        ProblemReportSorter::Error,
+        ProblemReportScope::Protocol,
+        code_str,
+        &message,
+        vec![],
+        status,
+    )
 }
 
 #[cfg(feature = "didcomm")]

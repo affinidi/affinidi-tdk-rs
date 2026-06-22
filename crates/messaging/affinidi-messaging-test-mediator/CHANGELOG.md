@@ -2,6 +2,15 @@
 
 ## Changelog history
 
+## 23rd June 2026
+
+### 0.2.14 — TSP routed relay e2e
+
+- New `tsp_routed_message_relays_through_the_mediator` test: Alice sends a TSP
+  message routed through the mediator (as a relay hop) to Bob, asserting the
+  payload survives the relay and the original sender is recovered. Complements the
+  existing Direct delivery test.
+
 ## 22nd June 2026
 
 ### 0.2.13 — TSP end-to-end fixture
