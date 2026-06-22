@@ -4,6 +4,18 @@
 
 ## 22nd June 2026
 
+### 0.16.8 — Mediator TSP identity (relay foundation)
+
+- `SharedData::tsp_identity()` derives (and caches, lazily) the mediator's own TSP
+  keys — the Ed25519 signing key from its DID's `authentication` and the X25519
+  decryption key from its `keyAgreement` — from the configured DID document and
+  the operating secrets it already uses to decrypt inbound DIDComm. No new key
+  management.
+- This is the foundation for acting as a **routed relay hop** (unpack a `Routed`
+  message sealed to the mediator, re-seal it onward), landing next. TSP **Direct**
+  delivery is a blind store-and-forward and never touches this. Purely additive;
+  derived only on first use.
+
 ### 0.16.7 — TSP client authentication
 
 - New `POST /tsp/authenticate` endpoint (dual `didcomm,tsp` build) lets a TSP

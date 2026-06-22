@@ -31,6 +31,8 @@ pub mod messages;
 pub mod server;
 pub mod store;
 pub mod tasks;
+#[cfg(feature = "tsp")]
+pub mod tsp_identity;
 
 /// Shared application state available to all request handlers via Axum's state extraction.
 #[derive(Clone)]
@@ -78,9 +80,34 @@ pub struct SharedData {
     /// tests can inject a `TestClock` (via `TestMediatorBuilder::clock`) and
     /// advance it to exercise expiry instantly.
     pub clock: Arc<dyn affinidi_messaging_mediator_common::types::clock::Clock>,
+    /// The mediator's own TSP identity (Ed25519 signing + X25519 decryption keys),
+    /// derived lazily on first use from the configured DID + operating secrets.
+    /// Only needed when the mediator acts as a routed TSP relay hop; Direct
+    /// delivery is a blind store-and-forward and never touches it.
+    #[cfg(feature = "tsp")]
+    pub tsp_identity: Arc<tokio::sync::OnceCell<tsp_identity::MediatorTspIdentity>>,
 }
 
 impl SharedData {
+    /// The mediator's TSP identity, derived (and cached) on first use from its
+    /// configured DID document and operating secrets.
+    #[cfg(feature = "tsp")]
+    pub async fn tsp_identity(
+        &self,
+    ) -> Result<
+        &tsp_identity::MediatorTspIdentity,
+        affinidi_messaging_mediator_common::errors::MediatorError,
+    > {
+        self.tsp_identity
+            .get_or_try_init(|| {
+                tsp_identity::MediatorTspIdentity::derive(
+                    &self.config.mediator_did,
+                    &self.did_resolver,
+                    &*self.config.security.mediator_secrets,
+                )
+            })
+            .await
+    }
     /// Bound for request-path storage calls made during admission/validation
     /// (see [`common::storage_timeout`]). Sourced from the existing
     /// `[database] database_timeout` (the same knob that caps Redis

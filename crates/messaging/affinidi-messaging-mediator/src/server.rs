@@ -588,6 +588,8 @@ pub async fn serve_internal(
         self_authorities: Arc::new(self_authorities),
         component_health: supervisor.registry(),
         clock,
+        #[cfg(feature = "tsp")]
+        tsp_identity: Arc::new(tokio::sync::OnceCell::new()),
     };
 
     let app: Router = application_routes(&api_prefix, &shared_state);
