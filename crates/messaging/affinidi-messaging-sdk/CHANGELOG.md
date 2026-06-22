@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.18.14] - 2026-06-22
+
+TSP send/receive — `atm.tsp()` can now pack, send, and unpack TSP **Direct**
+messages end to end:
+
+- `pack(profile, to_did, payload)` builds a TSP Direct message — extracting the
+  profile's Ed25519 signing key (from its `authentication`) and X25519 encryption
+  key (from its `keyAgreement`) via the secrets resolver, and resolving the
+  recipient's keys from its DID document.
+- `send(profile, to_did, payload)` packs and POSTs to the mediator `/inbound`,
+  reusing the profile's existing (DIDComm) authenticated session for the bearer
+  token; the mediator sniffs the TSP magic byte and stores it for pickup.
+- `unpack(profile, stored)` decodes a fetched message, resolves the sender, and
+  decrypts + verifies with the profile's key, returning `(payload, sender_vid)`.
+
+Verified end to end against a live mediator in
+`affinidi-messaging-test-mediator` (alice packs → mediator stores → bob unpacks).
+Additive (no `tsp` feature = no change); patch bump keeps the `0.18` pin valid.
+
+NB: works around a copy-paste bug in `affinidi-did-common`'s
+`DocumentExt::find_authentication(None)` (it returns `keyAgreement` ids) by
+reading `doc.authentication` directly.
+
 ## [0.18.13] - 2026-06-22
 
 TSP client support — foundation. New optional `tsp` feature and an `atm.tsp()`

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.2.12"
+version = "0.2.13"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -19,6 +19,9 @@ default = []
 ## available). Adds a few hundred ms to test-binary build time and
 ## pulls in fjall + tempfile, so it's opt-in.
 fjall-backend = ["affinidi-messaging-mediator/fjall-backend", "dep:tempfile"]
+## Spawn the mediator with TSP support and expose `atm.tsp()` so the e2e suite
+## can exercise the dual-protocol (DIDComm + TSP) flows.
+tsp = ["affinidi-messaging-mediator/tsp", "affinidi-messaging-sdk/tsp"]
 
 [dependencies]
 # ── Mediator: the thing we're spawning ───────────────────────────────────

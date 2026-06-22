@@ -2,6 +2,17 @@
 
 ## Changelog history
 
+## 22nd June 2026
+
+### 0.2.13 — TSP end-to-end fixture
+
+- New opt-in `tsp` feature spawns the mediator with TSP support and enables the
+  SDK's `atm.tsp()`, so the suite can exercise dual-protocol (DIDComm + TSP)
+  flows.
+- New `tsp_delivery` integration test: a full TSP Direct round-trip through the
+  mediator driven by the SDK (alice packs → `/inbound` sniff + store → bob fetches
+  + unpacks), asserting payload and sender are recovered. DIDComm suite unchanged.
+
 ## 14th June 2026
 
 ### 0.2.12 — non_exhaustive error enums (W7 sweep)
