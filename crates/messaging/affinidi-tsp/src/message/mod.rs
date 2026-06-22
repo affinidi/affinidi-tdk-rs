@@ -3,6 +3,7 @@
 pub mod control;
 pub mod direct;
 pub mod envelope;
+pub mod meta;
 pub mod routed;
 
 use crate::error::TspError;

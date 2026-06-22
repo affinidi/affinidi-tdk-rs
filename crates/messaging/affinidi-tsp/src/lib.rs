@@ -38,6 +38,7 @@ pub mod vid;
 
 pub use error::TspError;
 pub use message::MessageType;
+pub use message::meta::{MetaEnvelope, TSP_MAGIC_BYTE, is_tsp};
 pub use message::routed::{MAX_HOPS, RouteStep};
 pub use relationship::RelationshipState;
 pub use vid::resolver::VidResolver;
