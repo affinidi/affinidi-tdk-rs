@@ -4,6 +4,24 @@
 
 ## 22nd June 2026
 
+### 0.16.5 — ingress protocol dispatcher (sniff DIDComm vs TSP)
+
+- Inbound messages are now sniffed at ingress: a TSP message (CESR `1AAF` magic
+  byte `0xD4`) is routed to the TSP handler, everything else to DIDComm. Active
+  only in a dual `didcomm,tsp` build.
+- `POST /inbound` now takes the raw request body (`Bytes`) and sniffs it. **The
+  DIDComm path is byte-identical**: the JWE envelope is parsed and re-serialised
+  to the same canonical string as before, so the stored blob and its sha256
+  message-id are unchanged for existing clients (regression-tested, and verified
+  by the full end-to-end integration suite). The only behavior change is that a
+  malformed request body returns the mediator's own problem-report 400 instead of
+  the axum `Json`-extractor 400; the success path is unchanged.
+- The WebSocket frame loop routes a `Binary` frame leading with `0xD4` to the TSP
+  handler; all other frames are handled as DIDComm exactly as before.
+- TSP ingress is the **seam only**: a sniffed TSP message is parsed (cleartext
+  envelope, no keys) and then rejected with a clear problem report — TSP message
+  delivery (store / relay / bridge) lands in later PRs.
+
 ### 0.16.4 — TSP coexistence groundwork
 
 - Groundwork for the dual-protocol (DIDComm + TSP) mediator. **No behavior

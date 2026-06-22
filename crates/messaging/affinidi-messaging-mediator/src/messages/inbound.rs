@@ -10,6 +10,8 @@ use crate::{
     common::authz::{self, Capability},
     messages::store::store_message,
 };
+#[cfg(feature = "tsp")]
+use affinidi_tsp::MetaEnvelope as TspMetaEnvelope;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_mediator_common::tasks::forwarding::RelayMode;
@@ -54,6 +56,53 @@ pub(crate) async fn handle_inbound(
             StatusCode::BAD_REQUEST,
         ))
     }
+}
+
+/// Handle an inbound TSP message, sniffed at ingress by its CESR magic byte.
+///
+/// This is the ingress *seam*: it parses the cleartext envelope (no keys) to
+/// validate the message and surface its addressing. TSP message **delivery**
+/// (local store / routed relay / bridge) is not yet wired — it lands in a later
+/// PR — so for now a well-formed TSP message is rejected with a clear problem
+/// report and a malformed one with a parse error.
+#[cfg(feature = "tsp")]
+pub(crate) async fn handle_inbound_tsp(
+    _state: &SharedData,
+    session: &Session,
+    raw: &[u8],
+) -> Result<InboundMessageResponse, MediatorError> {
+    let meta = TspMetaEnvelope::parse(raw).map_err(|e| {
+        MediatorError::problem(
+            37,
+            &session.session_id,
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Message,
+            "message.tsp.malformed",
+            "Malformed TSP message envelope: {1}",
+            vec![e.to_string()],
+            StatusCode::BAD_REQUEST,
+        )
+    })?;
+
+    tracing::debug!(
+        to_vid = %meta.receiver,
+        from_vid = %meta.sender,
+        tsp_msg_type = ?meta.message_type,
+        "Received TSP message (handling not yet enabled)"
+    );
+
+    Err(MediatorError::problem(
+        37,
+        &session.session_id,
+        None,
+        ProblemReportSorter::Error,
+        ProblemReportScope::Protocol,
+        "protocol.tsp.unsupported",
+        "TSP message handling is not yet enabled on this mediator",
+        vec![],
+        StatusCode::NOT_IMPLEMENTED,
+    ))
 }
 
 #[cfg(feature = "didcomm")]
