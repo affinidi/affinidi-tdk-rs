@@ -205,13 +205,8 @@ impl TspOps<'_> {
             .map_err(|e| ATMError::DIDError(format!("couldn't resolve own DID {did}: {e}")))?
             .doc;
 
-        // NB: read `doc.authentication` directly rather than via
-        // `DocumentExt::find_authentication(None)` — that method has a
-        // copy-paste bug and returns the `keyAgreement` ids instead of the
-        // `authentication` ids, which would yield X25519 keys here.
-        let auth_kids: Vec<&str> = doc.authentication.iter().map(|vr| vr.get_id()).collect();
         let signing_key = self
-            .first_private_key(auth_kids, KeyType::Ed25519)
+            .first_private_key(doc.find_authentication(None), KeyType::Ed25519)
             .await
             .ok_or_else(|| {
                 ATMError::SecretsError(format!("no Ed25519 authentication key for {did}"))
