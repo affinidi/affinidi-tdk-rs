@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.15] - 2026-06-22
+
+Picks up the `affinidi-did-common` 0.3.8 fix for
+`DocumentExt::find_authentication`, which **fixes DIDComm signed-message
+verification when the signer's `kid` is a bare DID** (no fragment): the unpack
+path looked up the first authentication key via that method and previously got a
+keyAgreement (X25519) key, so verification failed. Fragment-qualified kids were
+unaffected. Also drops the local workaround in `atm.tsp()` (now that
+`find_authentication` is correct). No API change; patch bump.
+
 ## [0.18.14] - 2026-06-22
 
 TSP send/receive — `atm.tsp()` can now pack, send, and unpack TSP **Direct**
