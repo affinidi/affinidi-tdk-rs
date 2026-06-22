@@ -5,29 +5,31 @@ use crate::messages::MessageHandler;
 #[cfg(feature = "didcomm")]
 use crate::messages::protocols::routing::{relay_peer_trusted, rewrap_inner_attachment};
 use crate::{SharedData, common::session::Session};
+// Shared by both the DIDComm direct-delivery path and the TSP delivery path.
+#[cfg(any(feature = "didcomm", feature = "tsp"))]
+use crate::{common::authz, messages::store::store_message};
 #[cfg(feature = "didcomm")]
-use crate::{
-    common::authz::{self, Capability},
-    messages::store::store_message,
-};
+use crate::common::authz::Capability;
 #[cfg(feature = "tsp")]
 use affinidi_tsp::MetaEnvelope as TspMetaEnvelope;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_mediator_common::tasks::forwarding::RelayMode;
-#[cfg(feature = "didcomm")]
+#[cfg(any(feature = "didcomm", feature = "tsp"))]
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::{
     problem_report::{ProblemReportScope, ProblemReportSorter},
     sending::InboundMessageResponse,
 };
+#[cfg(feature = "tsp")]
+use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use http::StatusCode;
-#[cfg(feature = "didcomm")]
+#[cfg(any(feature = "didcomm", feature = "tsp"))]
 use sha256::digest;
 #[cfg(feature = "didcomm")]
 use tracing::{Instrument, debug, span};
 
-#[cfg(feature = "didcomm")]
+#[cfg(any(feature = "didcomm", feature = "tsp"))]
 use super::{ProcessMessageResponse, WrapperType};
 
 pub(crate) async fn handle_inbound(
@@ -60,17 +62,25 @@ pub(crate) async fn handle_inbound(
 
 /// Handle an inbound TSP message, sniffed at ingress by its CESR magic byte.
 ///
-/// This is the ingress *seam*: it parses the cleartext envelope (no keys) to
-/// validate the message and surface its addressing. TSP message **delivery**
-/// (local store / routed relay / bridge) is not yet wired — it lands in a later
-/// PR — so for now a well-formed TSP message is rejected with a clear problem
-/// report and a malformed one with a parse error.
+/// Parses the cleartext envelope (no keys) and, for a **Direct** message
+/// addressed to a **locally-served** recipient, stores it for pickup — reusing
+/// the protocol-neutral store path that DIDComm direct delivery uses. The TSP
+/// message is base64url-encoded for storage (which is its CESR qb64 text form),
+/// so it rides the existing UTF-8 string store/pickup pipeline; a pickup client
+/// recognises it by the qb64 (`1AAF…`) prefix and decodes it back to qb2.
+///
+/// Routed/Nested/Control message types, remote recipients (routing/relay), and
+/// the TSP↔DIDComm bridge land in later PRs. The mediator does not decrypt or
+/// verify the message — exactly as for an opaque DIDComm envelope it forwards —
+/// the recipient authenticates the sender end-to-end on unpack.
 #[cfg(feature = "tsp")]
 pub(crate) async fn handle_inbound_tsp(
-    _state: &SharedData,
+    state: &SharedData,
     session: &Session,
     raw: &[u8],
 ) -> Result<InboundMessageResponse, MediatorError> {
+    use affinidi_tsp::MessageType as TspMessageType;
+
     let meta = TspMetaEnvelope::parse(raw).map_err(|e| {
         MediatorError::problem(
             37,
@@ -85,24 +95,83 @@ pub(crate) async fn handle_inbound_tsp(
         )
     })?;
 
+    // Only Direct messages are delivered so far; Routed/Nested relay and Control
+    // handling land in later PRs.
+    if meta.message_type != TspMessageType::Direct {
+        return Err(MediatorError::problem(
+            37,
+            &session.session_id,
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "protocol.tsp.unsupported",
+            "Only TSP Direct messages are handled so far (routing/relay not yet enabled)",
+            vec![],
+            StatusCode::NOT_IMPLEMENTED,
+        ));
+    }
+
+    let to_vid = &meta.receiver;
+    let from_vid = &meta.sender;
+    let to_hash = digest(to_vid.as_bytes());
+
+    // The recipient must be a local account — there is no TSP routing/bridge yet.
+    if !state.database.account_exists(&to_hash).await? {
+        return Err(MediatorError::problem(
+            58,
+            &session.session_id,
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "direct_delivery.recipient.unknown",
+            "TSP recipient is not local to this mediator (routing not yet enabled)",
+            vec![],
+            StatusCode::NOT_FOUND,
+        ));
+    }
+
+    // Access-list check (sender → recipient), mirroring DIDComm direct delivery.
+    // The sender VID is the cleartext envelope claim; like an opaque DIDComm
+    // forward, the mediator routes on it and the recipient verifies end-to-end.
+    let from_hash = digest(from_vid.as_bytes());
+    if authz::check_access_list(state.database.as_ref(), &to_hash, Some(&from_hash))
+        .await
+        .is_err()
+    {
+        return Err(MediatorError::problem(
+            73,
+            &session.session_id,
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "authorization.access_list.denied",
+            "Delivery blocked due to ACLs (access_list denied)",
+            vec![],
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    // Store base64url(qb2) = the CESR qb64 text form, through the neutral store
+    // path. DIDComm storage is unchanged.
+    let encoded = BASE64_URL_SAFE_NO_PAD.encode(raw);
+    let data = ProcessMessageResponse {
+        store_message: true,
+        force_live_delivery: false,
+        forward_message: false,
+        data: WrapperType::Envelope(
+            to_vid.clone(),
+            encoded,
+            state.clock.unix_secs() + state.config.limits.message_expiry_seconds,
+        ),
+    };
+
     tracing::debug!(
-        to_vid = %meta.receiver,
-        from_vid = %meta.sender,
-        tsp_msg_type = ?meta.message_type,
-        "Received TSP message (handling not yet enabled)"
+        to_vid = %to_vid,
+        from_vid = %from_vid,
+        "TSP direct delivery stored for local recipient"
     );
 
-    Err(MediatorError::problem(
-        37,
-        &session.session_id,
-        None,
-        ProblemReportSorter::Error,
-        ProblemReportScope::Protocol,
-        "protocol.tsp.unsupported",
-        "TSP message handling is not yet enabled on this mediator",
-        vec![],
-        StatusCode::NOT_IMPLEMENTED,
-    ))
+    store_message(state, session, &data, &UnpackMetadata::default()).await
 }
 
 #[cfg(feature = "didcomm")]
@@ -634,5 +703,48 @@ mod tests {
         // Anoncrypt doesn't set encrypted_from_kid either
         let meta = make_metadata(false, None, None);
         assert!(is_anonymous(&meta));
+    }
+}
+
+#[cfg(all(test, feature = "tsp"))]
+mod tsp_tests {
+    use affinidi_tsp::message::direct;
+    use affinidi_tsp::{MessageType as TspMessageType, PrivateVid, is_tsp};
+    use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+
+    /// The storage-format contract for TSP messages: a TSP message (raw CESR
+    /// qb2, leads with the `0xD4` magic byte) is stored base64url-encoded, which
+    /// is its CESR qb64 text form (`1AAF…`). This must round-trip exactly, stay
+    /// distinguishable from a DIDComm JSON envelope (`{`), and decode back to a
+    /// recognisable TSP message — so a pickup client can identify and decode it.
+    #[test]
+    fn tsp_storage_encoding_roundtrips_and_is_recognisable() {
+        let alice = PrivateVid::generate("did:example:alice");
+        let bob = PrivateVid::generate("did:example:bob");
+
+        let packed = direct::pack(
+            b"hello over TSP",
+            TspMessageType::Direct,
+            "did:example:alice",
+            "did:example:bob",
+            &alice.signing_key,
+            &alice.decryption_key,
+            &bob.encryption_key,
+        )
+        .unwrap();
+        let raw = &packed.bytes;
+        assert!(is_tsp(raw), "packed message leads with the TSP magic byte");
+
+        // This is exactly what handle_inbound_tsp stores.
+        let stored = BASE64_URL_SAFE_NO_PAD.encode(raw);
+
+        // The stored form is CESR qb64 text and is unambiguously not DIDComm JSON.
+        assert!(stored.starts_with("1AAF"), "qb64 envelope-code prefix");
+        assert!(!stored.starts_with('{'), "distinct from a DIDComm JSON envelope");
+
+        // A pickup client base64url-decodes back to the exact original bytes.
+        let decoded = BASE64_URL_SAFE_NO_PAD.decode(stored.as_bytes()).unwrap();
+        assert_eq!(&decoded, raw, "decode round-trips the qb2 bytes exactly");
+        assert!(is_tsp(&decoded), "decoded bytes are a recognisable TSP message");
     }
 }

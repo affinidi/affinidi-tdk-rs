@@ -4,6 +4,24 @@
 
 ## 22nd June 2026
 
+### 0.16.6 — TSP Direct local delivery
+
+- `handle_inbound_tsp` now stores an inbound TSP **Direct** message addressed to
+  a **locally-served** recipient, for pickup — reusing the protocol-neutral store
+  path that DIDComm direct delivery uses (recipient-is-local + access-list checks
+  mirror the DIDComm path).
+- **Storage format**: the TSP message is stored `base64url(qb2)` — which is its
+  CESR **qb64** text form (`1AAF…`) — so it rides the existing UTF-8 string
+  store/pickup/stream pipeline with **no store-schema change and DIDComm storage
+  byte-identical**. A pickup client recognises it by the qb64 prefix (vs DIDComm
+  JSON `{`) and base64url-decodes back to qb2. (Future: a raw-byte store can be
+  introduced later as a self-migrating change — messages are transient, so the
+  old string store drains over one message-TTL window with no backfill.)
+- Routed/Nested/Control message types, remote recipients (routing/relay), and the
+  TSP↔DIDComm bridge are rejected with clear problem reports until later PRs. The
+  mediator does not decrypt or verify the message; the recipient authenticates the
+  sender end-to-end on unpack.
+
 ### 0.16.5 — ingress protocol dispatcher (sniff DIDComm vs TSP)
 
 - Inbound messages are now sniffed at ingress: a TSP message (CESR `1AAF` magic
