@@ -9,6 +9,8 @@ use crate::{
     messages::inbound::handle_inbound,
     tasks::websocket_streaming::{StreamingUpdate, StreamingUpdateState, WebSocketCommands},
 };
+#[cfg(feature = "tsp")]
+use crate::messages::inbound::handle_inbound_tsp;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_didcomm::message::Message as DidcommMessage;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError};
@@ -454,6 +456,17 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                 Message::Binary(msg) => {
                                     if msg.len() > state.config.limits.ws_size {
                                         warn!("Error processing message, the size is too big. limit is {}, message size is {}", state.config.limits.ws_size, msg.len());
+                                        continue;
+                                    }
+
+                                    // A binary frame leading with the TSP magic byte (0xD4) is a
+                                    // TSP message; route it to the TSP handler. Other binary frames
+                                    // are UTF-8-decoded and handled as DIDComm exactly as before.
+                                    #[cfg(feature = "tsp")]
+                                    if affinidi_tsp::is_tsp(&msg) {
+                                        if let Err(e) = handle_inbound_tsp(&state, &session, &msg).await {
+                                            warn!("WebSocket TSP inbound error: {}", e);
+                                        }
                                         continue;
                                     }
 
