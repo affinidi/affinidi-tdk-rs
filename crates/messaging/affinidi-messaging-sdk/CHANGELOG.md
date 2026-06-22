@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.13] - 2026-06-22
+
+TSP client support — foundation. New optional `tsp` feature and an `atm.tsp()`
+ops accessor (the TSP sibling of `atm.routing()` etc.). This first slice adds the
+**storage-format codec** a client needs on pickup: a mediator stores a TSP message
+`base64url(qb2)` (its CESR qb64 text form, `1AAF…`), so `atm.tsp().is_tsp()`
+distinguishes it from a DIDComm JSON envelope and `decode()`/`encode()` convert
+to/from the raw qb2 bytes. Purely additive (no `tsp` feature = no change); patch
+bump keeps the `0.18` pin valid. The pack/send and fetch/unpack paths land next.
+
 ## [0.18.12] - 2026-06-14
 
 `ATMError` is now `#[non_exhaustive]` (ADR-0003) so new variants land additively.

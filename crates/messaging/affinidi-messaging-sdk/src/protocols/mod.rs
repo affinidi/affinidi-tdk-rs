@@ -30,6 +30,8 @@ pub mod mediator;
 pub mod message_pickup;
 pub mod oob_discovery;
 pub mod routing;
+#[cfg(feature = "tsp")]
+pub mod tsp;
 pub mod trust_ping;
 
 // `String` implements `GenericDataStruct` via an impl in
