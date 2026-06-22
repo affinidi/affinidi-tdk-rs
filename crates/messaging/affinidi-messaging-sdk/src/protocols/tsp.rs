@@ -28,7 +28,6 @@ use affinidi_secrets_resolver::secrets::KeyType;
 use affinidi_tsp::message::direct;
 use affinidi_tsp::{DidVidResolver, MessageType, MetaEnvelope};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-use tracing::debug;
 
 use crate::ATM;
 use crate::errors::ATMError;
@@ -110,7 +109,54 @@ impl TspOps<'_> {
         payload: &[u8],
     ) -> Result<(), ATMError> {
         let bytes = self.pack(profile, to_did, payload).await?;
+        self.send_raw(profile, &bytes).await
+    }
 
+    /// Send a TSP message **routed** through one or more relay hops.
+    ///
+    /// `route` is the ordered hop list ending at the final recipient, e.g.
+    /// `[mediator_did, bob_did]`. The payload is sealed end-to-end to the final
+    /// recipient (`route.last()`), then wrapped in a routing layer sealed to the
+    /// first hop (`route[0]`) — which must be a mediator that speaks TSP routing.
+    /// Each hop unwraps its layer and forwards onward; only the final recipient
+    /// can read the payload.
+    pub async fn send_routed(
+        &self,
+        profile: &Arc<ATMProfile>,
+        route: &[String],
+        payload: &[u8],
+    ) -> Result<(), ATMError> {
+        let final_did = route
+            .last()
+            .ok_or_else(|| ATMError::MsgSendError("route must not be empty".into()))?;
+        let first_hop = &route[0];
+
+        // End-to-end Direct message to the final recipient.
+        let inner = self.pack(profile, final_did, payload).await?;
+
+        // Routing layer to the first hop, carrying the hops after it.
+        let (from_did, _) = profile.dids()?;
+        let (signing_key, encryption_key) = self.profile_tsp_keys(from_did).await?;
+        let first_vid = self.resolve_vid(first_hop).await?;
+        let routed = affinidi_tsp::message::routed::pack_routed(
+            &inner,
+            &route[1..],
+            from_did,
+            first_hop,
+            &signing_key,
+            &encryption_key,
+            &first_vid.encryption_key,
+        )
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't pack routed TSP message: {e}")))?;
+
+        self.send_raw(profile, &routed.bytes).await
+    }
+
+    /// POST an already-packed TSP message (raw qb2 bytes) to the mediator
+    /// `/inbound`, reusing the profile's existing (DIDComm) authenticated session
+    /// for the bearer token. The mediator sniffs the TSP magic byte and routes it
+    /// to its TSP handler.
+    pub async fn send_raw(&self, profile: &Arc<ATMProfile>, bytes: &[u8]) -> Result<(), ATMError> {
         let mediator_url = profile.get_mediator_rest_endpoint().ok_or_else(|| {
             ATMError::MsgSendError("Profile is missing a valid mediator URL".into())
         })?;
@@ -130,7 +176,7 @@ impl TspOps<'_> {
             .post([&mediator_url, "/inbound"].concat())
             .header("Content-Type", "application/tsp")
             .header("Authorization", format!("Bearer {}", tokens.access_token))
-            .body(bytes)
+            .body(bytes.to_vec())
             .send()
             .await
             .map_err(|e| ATMError::TransportError(format!("Could not send TSP message: {e:?}")))?;
@@ -142,7 +188,6 @@ impl TspOps<'_> {
                 "Mediator rejected TSP message: status({status}), body({body})"
             )));
         }
-        debug!("TSP message sent to {to_did}");
         Ok(())
     }
 

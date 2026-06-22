@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.18.16] - 2026-06-23
+
+`atm.tsp()` gains routed send:
+- `send_routed(profile, route, payload)` — send a TSP message through one or more
+  relay hops. The payload is sealed end-to-end to the final recipient
+  (`route.last()`), wrapped in a routing layer sealed to the first hop
+  (`route[0]`, a TSP-routing mediator); each hop unwraps and forwards onward.
+- `send_raw(profile, bytes)` — POST an already-packed TSP message to `/inbound`
+  (the shared transport `send()` now builds on this).
+
+Verified end to end against a live mediator relay in
+`affinidi-messaging-test-mediator`. Additive; patch bump.
+
 ## [0.18.15] - 2026-06-22
 
 Picks up the `affinidi-did-common` 0.3.8 fix for
