@@ -4,10 +4,10 @@ use crate::didcomm_compat::MetaEnvelope;
 use crate::messages::MessageHandler;
 #[cfg(feature = "didcomm")]
 use crate::messages::protocols::routing::{relay_peer_trusted, rewrap_inner_attachment};
+use crate::{SharedData, common::session::Session};
+#[cfg(feature = "didcomm")]
 use crate::{
-    SharedData,
     common::authz::{self, Capability},
-    common::session::Session,
     messages::store::store_message,
 };
 use affinidi_messaging_mediator_common::errors::MediatorError;
@@ -22,14 +22,16 @@ use affinidi_messaging_sdk::messages::{
 use http::StatusCode;
 #[cfg(feature = "didcomm")]
 use sha256::digest;
+#[cfg(feature = "didcomm")]
 use tracing::{Instrument, debug, span};
 
+#[cfg(feature = "didcomm")]
 use super::{ProcessMessageResponse, WrapperType};
 
 pub(crate) async fn handle_inbound(
-    state: &SharedData,
+    #[cfg_attr(not(feature = "didcomm"), allow(unused_variables))] state: &SharedData,
     session: &Session,
-    message: &str,
+    #[cfg_attr(not(feature = "didcomm"), allow(unused_variables))] message: &str,
 ) -> Result<InboundMessageResponse, MediatorError> {
     // Try DIDComm first if enabled
     #[cfg(feature = "didcomm")]

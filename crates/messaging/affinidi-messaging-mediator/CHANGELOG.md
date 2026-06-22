@@ -2,6 +2,22 @@
 
 ## Changelog history
 
+## 22nd June 2026
+
+### 0.16.4 — TSP coexistence groundwork
+
+- Groundwork for the dual-protocol (DIDComm + TSP) mediator. **No behavior
+  change** to the supported `didcomm` and `didcomm,tsp` builds.
+- The `didcomm` and `tsp` features are NOT mutually exclusive — corrected the
+  stale Cargo.toml comments. The dual build (`--features didcomm,tsp`) is the
+  intended dual-protocol deployment and compiles cleanly under `-D warnings`.
+- A `tsp`-only build (`--no-default-features --features tsp,<backend>`) now
+  compiles: DIDComm-only imports/helpers (the OOB encoders in `store::mod`,
+  problem-report/forward imports on the inbound/websocket paths) are gated to
+  `#[cfg(feature = "didcomm")]`. Such a build remains non-functional (no
+  auth/inbound) until the TSP message-handling path lands in later PRs; the
+  shared authz/store machinery it will reuse is intentionally left ungated.
+
 ## 14th June 2026
 
 ### 0.16.2 — bump vta-sdk to 0.13
