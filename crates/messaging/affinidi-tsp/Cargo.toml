@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-tsp"
 description = "Trust Spanning Protocol (TSP) implementation for the Affinidi TDK"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -17,6 +17,7 @@ default = ["did-resolver"]
 did-resolver = [
     "dep:affinidi-did-resolver-cache-sdk",
     "dep:affinidi-did-common",
+    "dep:affinidi-encoding",
     "dep:tokio",
 ]
 messaging-core = ["dep:affinidi-messaging-core", "dep:async-trait"]
@@ -29,6 +30,7 @@ affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1"
 # Optional Affinidi crates (for DID-based VID resolution)
 affinidi-did-resolver-cache-sdk = { path = "../../identity/affinidi-did-resolver-cache-sdk", version = "0.8", optional = true }
 affinidi-did-common = { path = "../../identity/affinidi-did-common", version = "0.3", optional = true }
+affinidi-encoding = { path = "../../core/affinidi-encoding", version = "0.1", optional = true }
 
 # Crypto
 ed25519-dalek = { version = "2", features = ["rand_core"] }

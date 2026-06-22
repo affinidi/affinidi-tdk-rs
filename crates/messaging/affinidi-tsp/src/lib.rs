@@ -40,6 +40,8 @@ pub use error::TspError;
 pub use message::MessageType;
 pub use relationship::RelationshipState;
 pub use vid::resolver::VidResolver;
+#[cfg(feature = "did-resolver")]
+pub use vid::{DidVidResolver, TSP_SERVICE_TYPE};
 pub use vid::{PrivateVid, ResolvedVid};
 
 use message::control::ControlMessage;

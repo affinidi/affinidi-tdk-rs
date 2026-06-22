@@ -38,4 +38,7 @@ pub enum TspError {
 
     #[error("serialization error: {0}")]
     Serialization(String),
+
+    #[error("DID resolution error: {0}")]
+    DidResolution(String),
 }
