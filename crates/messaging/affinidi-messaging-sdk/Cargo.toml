@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.18.12"
+version = "0.18.13"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -12,11 +12,20 @@ readme = "README.md"
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+## Trust Spanning Protocol (TSP) client support — `atm.tsp()` ops, alongside the
+## always-on DIDComm support. EXPERIMENTAL: the message-construction (pack/send)
+## and receive (fetch/unpack) paths are still being built.
+tsp = ["dep:affinidi-tsp"]
+
 [dependencies]
 # Affinidi Crates
 affinidi-tdk-common = "0.6"
 affinidi-crypto = { version = "0.2", features = ["jose"] }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15" }
+## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
+affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
 ## Source of truth for the mediator protocol vocabulary (ACLs, accounts,
 ## message types, problem reports). The SDK re-exports these so existing
 ## call sites continue to resolve their old paths.

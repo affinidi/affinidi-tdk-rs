@@ -184,6 +184,8 @@ use crate::protocols::{
     message_pickup::MessagePickupOps, oob_discovery::OOBDiscoveryOps, routing::RoutingOps,
     trust_ping::TrustPingOps,
 };
+#[cfg(feature = "tsp")]
+use crate::protocols::tsp::TspOps;
 use affinidi_task_utils::CancellationToken;
 use affinidi_tdk_common::TDKSharedState;
 use config::ATMConfig;
@@ -336,5 +338,11 @@ impl ATM {
     /// Access Discover Features protocol methods
     pub fn discover_features(&self) -> DiscoverfeaturesOps<'_> {
         DiscoverfeaturesOps { atm: self }
+    }
+
+    /// Access Trust Spanning Protocol (TSP) client methods.
+    #[cfg(feature = "tsp")]
+    pub fn tsp(&self) -> TspOps<'_> {
+        TspOps { atm: self }
     }
 }
