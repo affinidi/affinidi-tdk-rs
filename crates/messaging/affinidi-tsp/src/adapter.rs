@@ -102,14 +102,37 @@ impl MessagingProtocol for TspAdapter {
 
     async fn wrap_for_relay(
         &self,
-        _packed: &[u8],
-        _next_hop: &str,
-        _final_recipient: &str,
+        packed: &[u8],
+        next_hop: &str,
+        final_recipient: &str,
     ) -> Result<Vec<u8>, MessagingError> {
-        // Nested/routed modes are Phase 3
-        Err(MessagingError::NotSupported(
-            "TSP nested/routed modes not yet implemented".into(),
-        ))
+        // Relay as our default VID: build a routed layer addressed to `next_hop`
+        // carrying the opaque `packed` inner; `next_hop` forwards it to
+        // `final_recipient` (the single remaining route entry).
+        let our_vid = self.default_vid()?;
+        let our_private = self
+            .agent
+            .store
+            .get_private_vid(our_vid)
+            .map_err(|e| MessagingError::Protocol(e.to_string()))?;
+        let next = self
+            .agent
+            .resolver
+            .resolve(next_hop)
+            .map_err(|e| MessagingError::Resolution(e.to_string()))?;
+
+        let relayed = crate::message::routed::pack_routed(
+            packed,
+            &[final_recipient.to_string()],
+            our_vid,
+            next_hop,
+            &our_private.signing_key,
+            &our_private.decryption_key,
+            &next.encryption_key,
+        )
+        .map_err(|e| MessagingError::Protocol(e.to_string()))?;
+
+        Ok(relayed.bytes)
     }
 }
 

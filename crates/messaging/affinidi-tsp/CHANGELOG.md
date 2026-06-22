@@ -2,6 +2,25 @@
 
 ## 22nd June 2026
 
+### 0.1.5 — routed & nested message modes (§5.3 / §5.5)
+
+- New `message::routed` module implementing TSP routed mode (multi-hop relay
+  through intermediaries, with the remaining route carried inside each
+  HPKE-sealed routing layer and re-sealed/re-authenticated at every hop) and the
+  nested metadata-privacy wrapper. The inner message stays opaque to every
+  intermediary. Replaces the previous `MessageType::Nested`/`Routed`
+  recognized-but-unimplemented stubs.
+- Public primitives `pack_routed`, `pack_nested`, `next_hop`, and the `RouteStep`
+  / `MAX_HOPS` exports.
+- New high-level `TspAgent` methods `send_routed`, `send_nested`, and
+  `forward_routed` (returning `ForwardOutcome::{Relay, Deliver}`), which resolve
+  each hop's keys via the agent resolver.
+- `TspAdapter::wrap_for_relay` (messaging-core) now implemented (was
+  `NotSupported`): relays an opaque packed message to the next hop toward the
+  final recipient, as the adapter's default VID.
+- Purely additive; patch bump 0.1.4 → 0.1.5. 84 tests incl. a full multi-hop
+  crypto round-trip and a two-intermediary agent-level relay.
+
 ### 0.1.4 — DID-document VID resolver
 
 - New `DidVidResolver` (behind the existing `did-resolver` feature): resolves a
