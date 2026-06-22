@@ -75,6 +75,17 @@ pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router 
             .route("/oob", delete(oob_discovery::delete_oobid_handler));
     }
 
+    // TSP clients reuse `/authenticate/challenge`, then prove control of their VID
+    // by signing the challenge (Ed25519) and posting it here. Requires both
+    // protocols — it mints the same DIDComm JWT session for a TSP-authenticated VID.
+    #[cfg(all(feature = "didcomm", feature = "tsp"))]
+    {
+        app = app.route(
+            "/tsp/authenticate",
+            post(authenticate::tsp::tsp_authentication_response),
+        );
+    }
+
     // `api_prefix` arrives in the canonical form produced by
     // `config::helpers::normalize_api_prefix`: either `""` (mount at
     // root) or `"/<segment>"` with no trailing slash (the form axum's
