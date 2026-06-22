@@ -28,6 +28,7 @@ pub mod websocket;
 pub mod well_known_did_fetch;
 
 pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router {
+    #[cfg_attr(not(feature = "didcomm"), allow(unused_mut))]
     let mut app = Router::new()
         // Outbound message handling to ATM clients
         .route(

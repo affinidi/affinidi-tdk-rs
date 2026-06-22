@@ -14,7 +14,9 @@ use affinidi_messaging_sdk::messages::sending::{InboundMessageList, InboundMessa
 use http::StatusCode;
 use sha256::digest;
 use std::sync::Arc;
-use tracing::{Instrument, debug, error, span, trace, warn};
+#[cfg(feature = "didcomm")]
+use tracing::trace;
+use tracing::{Instrument, debug, error, span, warn};
 
 use super::{ProcessMessageResponse, WrapperType};
 
@@ -66,7 +68,7 @@ pub(crate) async fn store_message(
     state: &SharedData,
     session: &Session,
     response: &ProcessMessageResponse,
-    metadata: &UnpackMetadata,
+    #[cfg_attr(not(feature = "didcomm"), allow(unused_variables))] metadata: &UnpackMetadata,
 ) -> Result<InboundMessageResponse, MediatorError> {
     let _span = span!(tracing::Level::DEBUG, "store_message",);
 

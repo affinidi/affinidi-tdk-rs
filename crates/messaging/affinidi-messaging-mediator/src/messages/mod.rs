@@ -4,6 +4,7 @@ use self::protocols::ping;
 use crate::didcomm_compat;
 #[cfg(feature = "didcomm")]
 use crate::messages::protocols::discover_features;
+#[cfg(feature = "didcomm")]
 use crate::{SharedData, common::session::Session};
 #[cfg(feature = "didcomm")]
 use affinidi_did_common::service::Endpoint;
@@ -11,9 +12,11 @@ use affinidi_did_common::service::Endpoint;
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_didcomm::message::Message;
+#[cfg(feature = "didcomm")]
 use affinidi_messaging_mediator_common::errors::MediatorError;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::messages::compat::{PackEncryptedMetadata, UnpackMetadata};
+#[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::messages::{
     known::MessageType as SDKMessageType,
     problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
@@ -22,6 +25,7 @@ use affinidi_messaging_sdk::messages::{
 use affinidi_secrets_resolver::SecretsResolver;
 #[cfg(feature = "didcomm")]
 use ahash::AHashSet as HashSet;
+#[cfg(feature = "didcomm")]
 use http::StatusCode;
 #[cfg(feature = "didcomm")]
 use protocols::{

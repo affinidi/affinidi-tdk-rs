@@ -13,9 +13,9 @@ use crate::{
 use affinidi_messaging_didcomm::message::Message as DidcommMessage;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError};
 use affinidi_messaging_mediator_common::store::StatCounter;
-use affinidi_messaging_sdk::messages::problem_report::{
-    ProblemReport, ProblemReportScope, ProblemReportSorter,
-};
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_sdk::messages::problem_report::ProblemReport;
+use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use axum::{
     extract::{
         State, WebSocketUpgrade,
@@ -29,6 +29,7 @@ use axum_extra::{
 };
 use dashmap::DashMap;
 use http::{HeaderMap, HeaderValue, StatusCode, header::ORIGIN, header::SEC_WEBSOCKET_PROTOCOL};
+#[cfg(feature = "didcomm")]
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -38,6 +39,7 @@ use tokio::{
     sync::mpsc::{self, Receiver, Sender},
 };
 use tracing::{Instrument, debug, info, span, warn};
+#[cfg(feature = "didcomm")]
 use uuid::Uuid;
 
 /// Subprotocol prefix used to carry the bearer JWT through the

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.16.3"
+version = "0.16.4"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -36,12 +36,15 @@ memory-backend = []
 
 ## DIDComm v2 — industry-standard DID-based secure messaging.
 ## Enables inbound/outbound message handling, authentication, and OOB discovery.
-## Mutually exclusive with `tsp` at runtime (only one protocol active).
+## At least one of `didcomm` or `tsp` must be enabled (see the `compile_error!`
+## in `lib.rs`); the two are NOT mutually exclusive — they are designed to run
+## together (`--features didcomm,tsp`), which is the dual-protocol deployment.
 didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding", "dep:affinidi-crypto"]
 
-## TSP (Trust Spanning Protocol) — lightweight alternative to DIDComm.
-## EXPERIMENTAL: not all mediator features are supported yet.
-## Mutually exclusive with `didcomm` at runtime.
+## TSP (Trust Spanning Protocol) — additive alongside DIDComm.
+## EXPERIMENTAL: TSP message handling is still being built; a `tsp`-only build
+## compiles but is not yet functional (no auth/inbound). Run it together with
+## `didcomm` for a dual-protocol mediator.
 tsp = ["dep:affinidi-tsp"]
 
 ## Secret storage backends — forwarded to `mediator-common`'s `secrets-*`
