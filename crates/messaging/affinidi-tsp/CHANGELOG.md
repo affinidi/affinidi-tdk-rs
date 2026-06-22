@@ -2,6 +2,17 @@
 
 ## 22nd June 2026
 
+### 0.1.6 — ingress sniff + keys-free envelope metadata
+
+- New `message::meta` module for relays/mediators that must route a message
+  without holding keys: `is_tsp` (cheap first-byte classifier — every TSP
+  message starts with the CESR `1AAF` magic byte `0xD4`, vs DIDComm's `{`/`ey`),
+  the `TSP_MAGIC_BYTE` constant, and `MetaEnvelope::parse` which reads the
+  cleartext sender/receiver VIDs + message type and computes the SHA-256 message
+  id without decrypting the payload.
+- Re-exported at the crate root (`is_tsp`, `MetaEnvelope`, `TSP_MAGIC_BYTE`).
+- Purely additive; patch bump 0.1.5 → 0.1.6.
+
 ### 0.1.5 — routed & nested message modes (§5.3 / §5.5)
 
 - New `message::routed` module implementing TSP routed mode (multi-hop relay
