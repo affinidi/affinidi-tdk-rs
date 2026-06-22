@@ -33,3 +33,7 @@ CLAUDE.md
 
 # Local agent state (Claude Code, etc.)
 .claude/
+
+# Secrets and credentials
+.env
+.env.*
