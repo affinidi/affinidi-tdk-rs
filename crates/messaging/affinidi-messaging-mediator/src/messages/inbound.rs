@@ -134,21 +134,29 @@ pub(crate) async fn handle_inbound_tsp(
                 )
             })?;
 
-            let forward_bytes = match step {
-                // Last relay hop: `next` is the final recipient and `inner` is
-                // already sealed end-to-end to them — forward it opaquely.
+            match step {
+                // Last relay hop: `next` is the final recipient named in the route
+                // and `inner` is already sealed end-to-end to them. Deliver the
+                // opaque inner — which may be a TSP *or* a DIDComm message — to that
+                // recipient, who handles it natively on pickup. This is the
+                // TSP↔DIDComm bridge point: the mediator forwards on the route, not
+                // on the inner's (possibly non-TSP) envelope.
                 RouteStep::Forward {
-                    remaining, inner, ..
-                } if remaining.is_empty() => inner,
-                // Re-seal the onward route to the next hop, authenticating as this
-                // mediator.
+                    next,
+                    remaining,
+                    inner,
+                } if remaining.is_empty() => {
+                    deliver_opaque(state, session, &next, &meta.sender, &inner).await
+                }
+                // Intermediate hop: re-seal the onward route to the next hop,
+                // authenticating as this mediator, and forward.
                 RouteStep::Forward {
                     next,
                     remaining,
                     inner,
                 } => {
                     let next_vid = resolve_tsp_vid(state, &next, &session.session_id).await?;
-                    pack_routed(
+                    let resealed = pack_routed(
                         &inner,
                         &remaining,
                         &identity.vid,
@@ -166,13 +174,13 @@ pub(crate) async fn handle_inbound_tsp(
                             StatusCode::INTERNAL_SERVER_ERROR,
                         )
                     })?
-                    .bytes
+                    .bytes;
+                    deliver_opaque(state, session, &next, &identity.vid, &resealed).await
                 }
-                // This hop is the exit: `inner` is sealed to its final recipient.
-                RouteStep::Deliver { inner } => inner,
-            };
-
-            deliver_tsp_local(state, session, &forward_bytes).await
+                // Empty route: `inner` is sealed to its own final recipient —
+                // deliver by its (TSP) envelope.
+                RouteStep::Deliver { inner } => deliver_tsp_local(state, session, &inner).await,
+            }
         }
 
         // Routed addressed to a *local account* (that account is itself the hop):
@@ -190,11 +198,10 @@ pub(crate) async fn handle_inbound_tsp(
     }
 }
 
-/// Deliver a TSP message to the local recipient named in its envelope: check the
-/// recipient is a local account, apply the recipient's access-list against the
-/// (envelope) sender, then store it for pickup. Shared by Direct delivery and the
-/// final hop of a routed relay. Remote recipients (forwarding on to another
-/// mediator) are not yet handled.
+/// Deliver a TSP message to the local recipient named in *its own envelope*:
+/// parse the envelope and hand off to [`deliver_opaque`]. Used for Direct
+/// delivery and the empty-route (`Deliver`) relay case, where the recipient is
+/// the TSP receiver rather than a route hop.
 #[cfg(feature = "tsp")]
 async fn deliver_tsp_local(
     state: &SharedData,
@@ -210,7 +217,27 @@ async fn deliver_tsp_local(
             StatusCode::BAD_REQUEST,
         )
     })?;
-    let to_vid = meta.receiver;
+    deliver_opaque(state, session, &meta.receiver, &meta.sender, bytes).await
+}
+
+/// Deliver an opaque message to a known local recipient: check the recipient is a
+/// local account, apply its access-list against `from_vid`, then store the bytes
+/// for pickup. The bytes are **not** parsed — this is the TSP↔DIDComm bridge
+/// primitive. A routed relay carries an opaque inner (which may be a DIDComm
+/// message) and delivers it to the route's named recipient, who recognises and
+/// handles it natively on pickup; the mediator never reads it. `from_vid` is the
+/// authenticated sender the mediator routes on (the routing-layer sender for a
+/// relayed message, or the envelope sender for Direct), against which the
+/// recipient's access-list is applied. Remote recipients (forwarding on to
+/// another mediator) are not yet handled.
+#[cfg(feature = "tsp")]
+async fn deliver_opaque(
+    state: &SharedData,
+    session: &Session,
+    to_vid: &str,
+    from_vid: &str,
+    bytes: &[u8],
+) -> Result<InboundMessageResponse, MediatorError> {
     let to_hash = digest(to_vid.as_bytes());
 
     if !state.database.account_exists(&to_hash).await? {
@@ -225,9 +252,9 @@ async fn deliver_tsp_local(
     }
 
     // Access-list check (sender → recipient), mirroring DIDComm direct delivery.
-    // The sender VID is the cleartext envelope claim; like an opaque DIDComm
-    // forward, the mediator routes on it and the recipient verifies end-to-end.
-    let from_hash = digest(meta.sender.as_bytes());
+    // The mediator routes on the authenticated sender and the recipient verifies
+    // the (opaque) message end-to-end on pickup.
+    let from_hash = digest(from_vid.as_bytes());
     if authz::check_access_list(state.database.as_ref(), &to_hash, Some(&from_hash))
         .await
         .is_err()
@@ -241,19 +268,38 @@ async fn deliver_tsp_local(
         ));
     }
 
-    let encoded = BASE64_URL_SAFE_NO_PAD.encode(bytes);
+    // Store in the form the recipient's protocol expects, so a pickup client can
+    // recognise and decode it. A TSP message is stored as base64url(qb2) = its
+    // CESR qb64 text (`1AAF…`); a bridged DIDComm message is stored as its plain
+    // JWE/JWS text. Both ride the same UTF-8 string store; the client sniffs the
+    // prefix (qb64 vs `{`/`ey`) on pickup.
+    let encoded = if affinidi_tsp::is_tsp(bytes) {
+        BASE64_URL_SAFE_NO_PAD.encode(bytes)
+    } else {
+        std::str::from_utf8(bytes)
+            .map_err(|e| {
+                tsp_problem(
+                    session,
+                    37,
+                    "message.bridge.malformed",
+                    format!("bridged inner is neither a TSP message nor valid UTF-8 text: {e}"),
+                    StatusCode::BAD_REQUEST,
+                )
+            })?
+            .to_string()
+    };
     let data = ProcessMessageResponse {
         store_message: true,
         force_live_delivery: false,
         forward_message: false,
         data: WrapperType::Envelope(
-            to_vid.clone(),
+            to_vid.to_string(),
             encoded,
             state.clock.unix_secs() + state.config.limits.message_expiry_seconds,
         ),
     };
 
-    tracing::debug!(to_vid = %to_vid, from_vid = %meta.sender, "TSP message stored for local recipient");
+    tracing::debug!(%to_vid, %from_vid, "TSP/bridged message stored for local recipient");
     store_message(state, session, &data, &UnpackMetadata::default()).await
 }
 

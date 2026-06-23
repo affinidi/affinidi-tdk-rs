@@ -129,17 +129,34 @@ impl TspOps<'_> {
         let final_did = route
             .last()
             .ok_or_else(|| ATMError::MsgSendError("route must not be empty".into()))?;
+        // End-to-end Direct TSP message to the final recipient, carried opaquely.
+        let inner = self.pack(profile, final_did, payload).await?;
+        self.send_routed_opaque(profile, route, &inner).await
+    }
+
+    /// Route an **already-packed** inner message through one or more relay hops.
+    ///
+    /// Like [`send_routed`], but `inner` is a pre-built message sealed to the final
+    /// recipient — which may be a **DIDComm** message (the TSP↔DIDComm bridge): a
+    /// TSP-routing mediator carries it opaquely to the recipient, who unpacks it
+    /// with their native protocol. `route` is the hop list ending at that
+    /// recipient (`route.last()`); the routing layer is sealed to `route[0]`.
+    pub async fn send_routed_opaque(
+        &self,
+        profile: &Arc<ATMProfile>,
+        route: &[String],
+        inner: &[u8],
+    ) -> Result<(), ATMError> {
+        if route.is_empty() {
+            return Err(ATMError::MsgSendError("route must not be empty".into()));
+        }
         let first_hop = &route[0];
 
-        // End-to-end Direct message to the final recipient.
-        let inner = self.pack(profile, final_did, payload).await?;
-
-        // Routing layer to the first hop, carrying the hops after it.
         let (from_did, _) = profile.dids()?;
         let (signing_key, encryption_key) = self.profile_tsp_keys(from_did).await?;
         let first_vid = self.resolve_vid(first_hop).await?;
         let routed = affinidi_tsp::message::routed::pack_routed(
-            &inner,
+            inner,
             &route[1..],
             from_did,
             first_hop,

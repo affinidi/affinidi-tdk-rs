@@ -4,6 +4,13 @@
 
 ## 23rd June 2026
 
+### 0.2.15 — TSP↔DIDComm bridge e2e
+
+- New `tsp_routed_bridges_a_didcomm_message_to_the_recipient` test: Alice authcrypts
+  a DIDComm message to Bob and routes it over TSP through the mediator; the mediator
+  delivers the opaque DIDComm inner and Bob unpacks it natively. Proves protocol
+  bridging end to end.
+
 ### 0.2.14 — TSP routed relay e2e
 
 - New `tsp_routed_message_relays_through_the_mediator` test: Alice sends a TSP

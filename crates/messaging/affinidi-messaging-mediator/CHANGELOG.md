@@ -4,6 +4,19 @@
 
 ## 23rd June 2026
 
+### 0.16.10 — TSP↔DIDComm bridge
+
+- A routed TSP relay now bridges protocols. At the exit hop the mediator delivers
+  the **opaque inner** to the recipient *named in the route* (not parsed from the
+  inner's envelope), so the inner may be a TSP **or** a DIDComm message — the
+  recipient recognises and unpacks it natively. The mediator never reads it.
+- `deliver_opaque` is the bridge primitive: known recipient + authenticated
+  routing-layer sender for the access-list, store for pickup. It stores a TSP
+  inner as base64url(qb2) (`1AAF…` qb64) and a DIDComm inner as its plain JWE/JWS
+  text, so a pickup client sniffs the prefix and decodes correctly.
+  `deliver_tsp_local` (Direct + empty-route `Deliver`) now parses the envelope and
+  delegates to it.
+
 ### 0.16.9 — TSP routed relay
 
 - The mediator now acts as a **routed TSP relay hop**. A `Routed` message sealed

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.17] - 2026-06-23
+
+`atm.tsp().send_routed_opaque(profile, route, inner)` — route an **already-packed**
+inner message through TSP relay hops. The inner may be a **DIDComm** message (the
+TSP↔DIDComm bridge): pack it with `atm.pack_encrypted`, then route it over TSP to a
+recipient who unpacks it natively. `send_routed` now builds on this. Additive;
+patch bump.
+
 ## [0.18.16] - 2026-06-23
 
 `atm.tsp()` gains routed send:
