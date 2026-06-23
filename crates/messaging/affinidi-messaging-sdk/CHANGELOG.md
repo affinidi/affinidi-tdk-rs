@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.20] - 2026-06-23
+
+`MessageType` gains a `TrustTaskEnvelope` variant (the Trust Tasks DIDComm binding
+envelope `type`), so the mediator can route Trust Task documents. Additive
+scaffolding for the messaging Trust Tasks migration; no API change. The deliberate
+minor bump that signals the migration's breaking client changes lands with
+`atm.trust_tasks()` (next).
+
 ## [0.18.19] - 2026-06-23
 
 WebSocket live-stream is now TSP-safe. An inbound frame is sniffed (the frame is

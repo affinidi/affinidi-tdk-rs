@@ -1,6 +1,8 @@
 #[cfg(feature = "didcomm")]
 use self::protocols::ping;
 #[cfg(feature = "didcomm")]
+use self::protocols::trust_tasks;
+#[cfg(feature = "didcomm")]
 use crate::didcomm_compat;
 #[cfg(feature = "didcomm")]
 use crate::messages::protocols::discover_features;
@@ -68,6 +70,9 @@ impl MessageType {
                 acls::process(message, state, session, metadata).await
             }
             SDKMessageType::TrustPing => ping::process(message, session, state.clock.unix_secs()),
+            SDKMessageType::TrustTaskEnvelope => {
+                trust_tasks::process(message, state, session, metadata).await
+            }
             SDKMessageType::MessagePickupStatusRequest => {
                 message_pickup::status_request(message, state, session).await
             }
