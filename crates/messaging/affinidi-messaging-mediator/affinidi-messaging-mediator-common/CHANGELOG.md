@@ -2,6 +2,17 @@
 
 ## Changelog history
 
+## 23rd June 2026
+
+### 0.15.16 — Forwarding processor: TSP-aware delivery
+
+- The forwarding processor now delivers **TSP** forwards correctly. A TSP forward
+  is queued as `base64url(qb2)` text; `deliver_via_rest` decodes it back to the raw
+  qb2 bytes and POSTs with `Content-Type: application/tsp` so the remote mediator's
+  ingress recognises the TSP magic byte. TSP forwards always use REST (the WebSocket
+  relay path is DIDComm-text oriented). DIDComm forwarding is unchanged — a DIDComm
+  message is not valid base64url of a TSP message, so it is sent verbatim as before.
+
 ## 14th June 2026
 
 ### 0.15.15 — non_exhaustive ProcessorError + SecretStoreError (W7 sweep)

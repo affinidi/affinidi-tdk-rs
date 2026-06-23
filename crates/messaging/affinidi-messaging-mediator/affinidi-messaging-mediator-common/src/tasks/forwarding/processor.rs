@@ -110,6 +110,24 @@ fn now_epoch_secs() -> u64 {
         .as_secs()
 }
 
+/// A forward whose `message` is a TSP message decodes back to raw qb2 bytes for
+/// the wire; a DIDComm message does not (and is sent as text, unchanged).
+///
+/// TSP forwards are queued as `base64url(qb2)` — the CESR qb64 text form, which
+/// begins `1AAF` (the TSP envelope code) and decodes to bytes leading with the
+/// `0xD4` magic byte. A DIDComm JWE/JWS is not valid base64url of such bytes, so
+/// this returns `None` and the message is sent verbatim.
+fn decode_tsp_forward(message: &str) -> Option<Vec<u8>> {
+    use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+    if !message.starts_with("1AAF") {
+        return None;
+    }
+    BASE64_URL_SAFE_NO_PAD
+        .decode(message)
+        .ok()
+        .filter(|bytes| bytes.first() == Some(&0xD4))
+}
+
 /// State for a connection to a remote mediator endpoint
 struct EndpointState {
     rate_tracker: EndpointRateTracker,
@@ -613,6 +631,10 @@ impl ForwardingProcessor {
         msg: &ForwardQueueEntry,
         use_websocket: bool,
     ) -> Result<(), String> {
+        // TSP forwards go over REST: they carry raw qb2 binary which the remote
+        // mediator's ingress sniffs by its magic byte, whereas the WebSocket relay
+        // path is DIDComm-text oriented.
+        let use_websocket = use_websocket && decode_tsp_forward(&msg.message).is_none();
         if use_websocket {
             match self.deliver_via_websocket(endpoint_url, msg).await {
                 Ok(()) => Ok(()),
@@ -642,12 +664,23 @@ impl ForwardingProcessor {
             format!("{endpoint_url}/inbound")
         };
 
+        // A TSP forward is queued as base64url(qb2) text; send the decoded raw qb2
+        // so the remote mediator's ingress recognises the TSP magic byte. A DIDComm
+        // message is sent as-is. (DIDComm forwarding is unchanged.)
+        let (content_type, body): (&str, Vec<u8>) = match decode_tsp_forward(&msg.message) {
+            Some(qb2) => ("application/tsp", qb2),
+            None => (
+                "application/didcomm-encrypted+json",
+                msg.message.clone().into_bytes(),
+            ),
+        };
+
         let response = self
             .http_pool
             .client
             .post(&inbound_url)
-            .header("Content-Type", "application/didcomm-encrypted+json")
-            .body(msg.message.clone())
+            .header("Content-Type", content_type)
+            .body(body)
             .send()
             .await
             .map_err(|e| format!("Connection error to {inbound_url}: {e}"))?;
@@ -759,6 +792,28 @@ impl ForwardingProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- decode_tsp_forward tests ---
+
+    #[test]
+    fn decode_tsp_forward_recovers_qb2_and_passes_didcomm_through() {
+        use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+
+        // A TSP message (leads with the 0xD4 magic byte) queued as base64url(qb2).
+        let qb2 = [0xD4u8, 0x00, 0x05, 1, 2, 3, 4];
+        let queued = BASE64_URL_SAFE_NO_PAD.encode(qb2);
+        assert!(queued.starts_with("1AAF"), "qb64 envelope-code prefix");
+        assert_eq!(
+            decode_tsp_forward(&queued).as_deref(),
+            Some(&qb2[..]),
+            "a TSP forward decodes back to the exact qb2 bytes"
+        );
+
+        // DIDComm messages (JSON or compact) are not TSP — sent verbatim.
+        assert!(decode_tsp_forward("{\"protected\":\"...\"}").is_none());
+        assert!(decode_tsp_forward("eyJhbGciOiJ...").is_none());
+        assert!(decode_tsp_forward("").is_none());
+    }
 
     // --- http_to_ws_url tests ---
 

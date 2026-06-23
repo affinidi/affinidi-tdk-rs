@@ -4,6 +4,20 @@
 
 ## 23rd June 2026
 
+### 0.16.11 — TSP remote forwarding
+
+- A routed TSP relay now forwards to a **remote** next hop. When the next hop is
+  not a local account, the mediator reads its `TSPTransport` endpoint from its DID
+  document and enqueues the message on the shared forwarding queue; the forwarding
+  processor (mediator-common 0.15.16) POSTs the raw qb2 to the remote mediator's
+  `/inbound`. A next hop that resolves back to this mediator is rejected as a loop.
+- The relay's hop delivery now dispatches via `forward_to_next`: local recipient →
+  store (`deliver_opaque`); remote → enqueue (`forward_tsp_remote`).
+- Note: the wire path is exercised by the existing DIDComm cross-mediator suite
+  (same processor); a TSP-specific two-mediator e2e awaits `did:web` TSP-endpoint
+  test fixtures (a `did:peer` does not surface a custom `TSPTransport` service to
+  the resolver).
+
 ### 0.16.10 — TSP↔DIDComm bridge
 
 - A routed TSP relay now bridges protocols. At the exit hop the mediator delivers
