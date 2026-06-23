@@ -2,6 +2,18 @@
 
 ## Changelog history
 
+## 24th June 2026
+
+### 0.16.15 — Trust Tasks: account/get
+
+- The Trust Tasks consumer now handles `messaging/account/get` (self-or-admin,
+  read-only): it authorizes via the existing `check_permissions`, reads
+  `state.database.account_get`, and maps the mediator's internal `Account` to the
+  wire shape — the account hash as the `Vid` (per the messaging spec's privacy
+  note) and the `u64` ACL bitfield decoded into the spec's named booleans
+  (`didcommEnabled`/`tspEnabled` have no bitfield slot, reported as `null`). Adds
+  a reusable `type_uri_of` / `downcast` routing pair. Existing protocols untouched.
+
 ## 23rd June 2026
 
 ### 0.16.14 — Trust Tasks response threading

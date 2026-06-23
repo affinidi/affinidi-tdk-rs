@@ -44,3 +44,32 @@ async fn ping_trust_task_round_trips_through_the_mediator() {
         response.protocols
     );
 }
+
+#[tokio::test]
+async fn account_get_self_returns_the_callers_account() {
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+
+    // Alice fetches her OWN account — self-authorized, no admin rights needed.
+    let account = env
+        .atm
+        .trust_tasks()
+        .account_get(&alice.profile, None)
+        .await
+        .expect("alice reads her own account");
+
+    // Identity is carried as the mediator's account hash (a valid Vid per the
+    // messaging spec's privacy note), and the decoded view matches a standard
+    // allow-all account as minted by `add_user`.
+    assert_eq!(account.did.as_str(), alice.did_hash().as_str());
+    assert_eq!(account.account_type.to_string(), "standard");
+    assert_eq!(account.acl.send_messages, Some(true));
+    assert_eq!(account.acl.receive_messages, Some(true));
+}

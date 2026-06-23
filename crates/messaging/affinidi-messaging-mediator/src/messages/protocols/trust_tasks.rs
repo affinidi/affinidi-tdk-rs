@@ -15,12 +15,14 @@
 
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::types::accounts::{Account, AccountType};
+use affinidi_messaging_mediator_common::types::acls::{AccessListModeType, MediatorACLSet};
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use http::StatusCode;
 use serde_json::Value;
 use std::str::FromStr;
-use trust_tasks_rs::specs::messaging::ping;
+use trust_tasks_rs::specs::messaging::{account, ping};
 use trust_tasks_rs::{
     ConsumeOutcome, Payload, ProofPolicy, ProofVerifier, TransportContext, TransportHandler,
     TrustTask, TypeUri, VerificationError, consume_inbound,
@@ -29,6 +31,7 @@ use uuid::Uuid;
 
 use crate::SharedData;
 use crate::common::session::Session;
+use crate::messages::protocols::mediator::acls::check_permissions;
 use crate::messages::{ProcessMessageResponse, WrapperType};
 
 /// DIDComm `type` URI of a Trust Tasks binding envelope.
@@ -114,28 +117,24 @@ pub(crate) async fn process(
     let now_secs = state.clock.unix_secs();
     let now = chrono::DateTime::from_timestamp(now_secs as i64, 0).unwrap_or_else(chrono::Utc::now);
 
-    // Route by task type. (PR-T1: ping only; the account/acl/access-list families
-    // extend this match.)
-    let ping_type =
-        TypeUri::from_str(<ping::v0_1::Payload as Payload>::TYPE_URI).expect("valid const type URI");
-
-    let response_value: Value = if doc.type_uri == ping_type {
-        let typed: TrustTask<ping::v0_1::Payload> =
-            serde_json::from_value(serde_json::to_value(&doc).map_err(serialize_err)?)
-                .map_err(|e| {
-                    tt_problem(
-                        session,
-                        "message.trust_task.malformed",
-                        format!("not a valid ping payload: {e}"),
-                        StatusCode::BAD_REQUEST,
-                    )
-                })?;
-
-        match consume_ping(typed, &mediator_did, &sender_did, now).await? {
+    // Route by task type. (ping + account/get so far; the rest of the
+    // account / acl / access-list families extend this chain.)
+    let response_value: Value = if doc.type_uri == type_uri_of::<ping::v0_1::Payload>() {
+        match consume_ping(downcast(&doc, session)?, &mediator_did, &sender_did, now).await? {
             Some(value) => value,
             // identity_mismatch with no transport sender → emit nothing.
             None => return Ok(ProcessMessageResponse::default()),
         }
+    } else if doc.type_uri == type_uri_of::<account::get::v0_1::Payload>() {
+        consume_account_get(
+            downcast(&doc, session)?,
+            state,
+            session,
+            &Some(sender_kid.clone()),
+            &mediator_did,
+            now,
+        )
+        .await?
     } else {
         return Err(tt_problem(
             session,
@@ -162,6 +161,138 @@ pub(crate) async fn process(
         data: WrapperType::Message(Box::new(response_msg)),
         forward_message: false,
     })
+}
+
+/// The canonical request type URI of a generated payload `P`.
+fn type_uri_of<P: Payload>() -> TypeUri {
+    TypeUri::from_str(P::TYPE_URI).expect("generated payload has a valid type URI")
+}
+
+/// Re-deserialise a type-erased document into the typed payload `P`.
+fn downcast<P: serde::de::DeserializeOwned>(
+    doc: &TrustTask<Value>,
+    session: &Session,
+) -> Result<TrustTask<P>, MediatorError> {
+    serde_json::from_value(serde_json::to_value(doc).map_err(serialize_err)?).map_err(|e| {
+        tt_problem(
+            session,
+            "message.trust_task.malformed",
+            format!("payload does not match the task type: {e}"),
+            StatusCode::BAD_REQUEST,
+        )
+    })
+}
+
+/// Handle `messaging/account/get`: read-only, self-or-admin. Returns the
+/// mediator's view of the named account as a `TrustTask<Response>` JSON value.
+async fn consume_account_get(
+    typed: TrustTask<account::get::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    // Framework basics: addressed to this mediator and not expired.
+    typed.validate_basic(now, mediator_did).map_err(|reason| {
+        tt_problem(
+            session,
+            "message.trust_task.rejected",
+            format!("Trust Task failed basic validation: {reason:?}"),
+            StatusCode::BAD_REQUEST,
+        )
+    })?;
+
+    // Authz: the caller must be the target account itself, or an admin.
+    let target_hash = typed.payload.did.to_string();
+    if !check_permissions(
+        session,
+        std::slice::from_ref(&target_hash),
+        state.config.security.block_remote_admin_msgs,
+        sender_kid,
+    ) {
+        return Err(tt_problem(
+            session,
+            "authorization.account.denied",
+            format!("not permitted to read account {target_hash}"),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    let account = state
+        .database
+        .account_get(&target_hash)
+        .await?
+        .ok_or_else(|| {
+            tt_problem(
+                session,
+                "account.not_found",
+                format!("account {target_hash} not found"),
+                StatusCode::NOT_FOUND,
+            )
+        })?;
+
+    let response = account::get::v0_1::Response {
+        account: map_account(&account),
+        ext: None,
+    };
+    let response_doc = typed.respond_with(Uuid::new_v4().to_string(), response);
+    serde_json::to_value(&response_doc).map_err(serialize_err)
+}
+
+/// Map the mediator's internal [`Account`] to the wire `account/get` shape.
+///
+/// The DID is carried as the mediator's account hash — a valid `Vid` per the
+/// messaging spec's privacy note (the mediator never holds the full DID). The
+/// `u64` ACL bitfield is decoded into the spec's named booleans; `didcommEnabled`
+/// / `tspEnabled` have no bitfield slot and are reported as `None`.
+fn map_account(acc: &Account) -> account::get::v0_1::Account {
+    use account::get::v0_1::{
+        Account as WireAccount, AccountType as WireType, MediatorAcl, MediatorAclAccessListMode,
+        QueueLimits, Vid,
+    };
+
+    let acl = MediatorACLSet::from_u64(acc.acls);
+    let access_list_mode = match acl.get_access_list_mode().0 {
+        AccessListModeType::ExplicitAllow => MediatorAclAccessListMode::ExplicitAllow,
+        AccessListModeType::ExplicitDeny => MediatorAclAccessListMode::ExplicitDeny,
+    };
+
+    WireAccount {
+        did: Vid::from_str(&acc.did_hash).expect("an account hash is a non-empty Vid string"),
+        account_type: match acc._type {
+            AccountType::Standard => WireType::Standard,
+            AccountType::Admin => WireType::Admin,
+            AccountType::RootAdmin => WireType::RootAdmin,
+            AccountType::Mediator => WireType::Mediator,
+            AccountType::Unknown => WireType::Standard,
+        },
+        acl: MediatorAcl {
+            access_list_mode: Some(access_list_mode),
+            blocked: Some(acl.get_blocked()),
+            local: Some(acl.get_local()),
+            send_messages: Some(acl.get_send_messages().0),
+            receive_messages: Some(acl.get_receive_messages().0),
+            send_forwarded: Some(acl.get_send_forwarded().0),
+            receive_forwarded: Some(acl.get_receive_forwarded().0),
+            create_invites: Some(acl.get_create_invites().0),
+            anon_receive: Some(acl.get_anon_receive().0),
+            self_manage_list: Some(acl.get_self_manage_list()),
+            self_manage_send_queue_limit: Some(acl.get_self_manage_send_queue_limit()),
+            self_manage_receive_queue_limit: Some(acl.get_self_manage_receive_queue_limit()),
+            didcomm_enabled: None,
+            tsp_enabled: None,
+        },
+        access_list_count: Some(acc.access_list_count as u64),
+        queue_limits: Some(QueueLimits {
+            send_queue_limit: acc.queue_send_limit.map(|v| v as i64),
+            receive_queue_limit: acc.queue_receive_limit.map(|v| v as i64),
+        }),
+        send_queue_count: Some(acc.send_queue_count as u64),
+        send_queue_bytes: Some(acc.send_queue_bytes),
+        receive_queue_count: Some(acc.receive_queue_count as u64),
+        receive_queue_bytes: Some(acc.receive_queue_bytes),
+    }
 }
 
 fn tt_problem(

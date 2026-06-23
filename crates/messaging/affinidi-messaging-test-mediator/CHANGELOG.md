@@ -2,6 +2,15 @@
 
 ## Changelog history
 
+## 24th June 2026
+
+### 0.2.19 — Trust Tasks: account/get e2e
+
+- New `account_get_self_returns_the_callers_account` test: alice fetches her own
+  account via `atm.trust_tasks().account_get(.., None)` and asserts the identity
+  (hash as `Vid`), account type, and decoded ACL booleans round-trip through a live
+  mediator.
+
 ## 23rd June 2026
 
 ### 0.2.18 — Trust Tasks ping e2e
