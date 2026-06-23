@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.21] - 2026-06-23
+
+New `atm.trust_tasks()` accessor with `.ping(profile, nonce)` — sends a
+`messaging/ping` Trust Task to the mediator (over the DIDComm binding envelope) and
+returns the typed `ping` response (server time, status, supported protocols, echoed
+nonce). Additive — the first of the messaging Trust Tasks client surface; account /
+acl / access-list follow, and the legacy `atm.mediator()` / `atm.trust_ping()`
+methods will route through this core (the breaking change that lands then is
+signalled by a minor bump).
+
 ## [0.18.20] - 2026-06-23
 
 `MessageType` gains a `TrustTaskEnvelope` variant (the Trust Tasks DIDComm binding

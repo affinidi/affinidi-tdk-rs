@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.18.20"
+version = "0.18.21"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -24,6 +24,9 @@ tsp = ["dep:affinidi-tsp"]
 affinidi-tdk-common = "0.6"
 affinidi-crypto = { version = "0.2", features = ["jose"] }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15" }
+## Trust Tasks framework — typed request/response documents for the messaging
+## tasks (ping / account / acl / access-list), carried over the binding envelope.
+trust-tasks-rs = "0.2"
 ## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
 affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
 ## Source of truth for the mediator protocol vocabulary (ACLs, accounts,
