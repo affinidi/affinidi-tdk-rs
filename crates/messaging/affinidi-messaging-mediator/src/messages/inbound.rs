@@ -146,7 +146,7 @@ pub(crate) async fn handle_inbound_tsp(
                     remaining,
                     inner,
                 } if remaining.is_empty() => {
-                    deliver_opaque(state, session, &next, &meta.sender, &inner).await
+                    forward_to_next(state, session, &next, &meta.sender, &inner).await
                 }
                 // Intermediate hop: re-seal the onward route to the next hop,
                 // authenticating as this mediator, and forward.
@@ -175,7 +175,7 @@ pub(crate) async fn handle_inbound_tsp(
                         )
                     })?
                     .bytes;
-                    deliver_opaque(state, session, &next, &identity.vid, &resealed).await
+                    forward_to_next(state, session, &next, &identity.vid, &resealed).await
                 }
                 // Empty route: `inner` is sealed to its own final recipient —
                 // deliver by its (TSP) envelope.
@@ -301,6 +301,115 @@ async fn deliver_opaque(
 
     tracing::debug!(%to_vid, %from_vid, "TSP/bridged message stored for local recipient");
     store_message(state, session, &data, &UnpackMetadata::default()).await
+}
+
+/// Forward a relayed message to the next hop named in the route: deliver locally
+/// if it is a local account, otherwise enqueue it for delivery to the next hop's
+/// remote TSP endpoint.
+#[cfg(feature = "tsp")]
+async fn forward_to_next(
+    state: &SharedData,
+    session: &Session,
+    next: &str,
+    from_vid: &str,
+    bytes: &[u8],
+) -> Result<InboundMessageResponse, MediatorError> {
+    if state.database.account_exists(&digest(next.as_bytes())).await? {
+        deliver_opaque(state, session, next, from_vid, bytes).await
+    } else {
+        forward_tsp_remote(state, session, next, from_vid, bytes).await
+    }
+}
+
+/// Enqueue a relayed message for delivery to the next hop's **remote** TSP
+/// endpoint. The next hop's transport endpoint is read from its DID document
+/// (`TSPTransport` service); the message is queued (as base64url(qb2)) on the
+/// shared forwarding queue, and the forwarding processor POSTs the raw qb2 to the
+/// remote mediator's `/inbound`. A next hop that resolves back to this mediator is
+/// rejected as a loop.
+#[cfg(feature = "tsp")]
+async fn forward_tsp_remote(
+    state: &SharedData,
+    session: &Session,
+    next: &str,
+    from_vid: &str,
+    bytes: &[u8],
+) -> Result<InboundMessageResponse, MediatorError> {
+    use affinidi_messaging_mediator_common::store::types::ForwardQueueEntry;
+
+    let resolved = resolve_tsp_vid(state, next, &session.session_id).await?;
+    let endpoint_url = resolved
+        .endpoints
+        .first()
+        .map(|u| u.to_string())
+        .ok_or_else(|| {
+            tsp_problem(
+                session,
+                58,
+                "message.tsp.no_endpoint",
+                format!("next hop {next} publishes no TSP transport endpoint"),
+                StatusCode::NOT_FOUND,
+            )
+        })?;
+
+    // Loop guard: the next hop must not resolve back to this mediator.
+    if tsp_endpoint_is_self(&endpoint_url, &state.self_authorities) {
+        return Err(tsp_problem(
+            session,
+            94,
+            "protocol.forwarding.loop_detected",
+            format!("TSP next hop {next} resolves back to this mediator"),
+            StatusCode::LOOP_DETECTED,
+        ));
+    }
+
+    let entry = ForwardQueueEntry {
+        stream_id: String::new(),
+        message: BASE64_URL_SAFE_NO_PAD.encode(bytes),
+        to_did_hash: digest(next.as_bytes()),
+        from_did_hash: digest(from_vid.as_bytes()),
+        from_did: from_vid.to_string(),
+        to_did: next.to_string(),
+        endpoint_url: endpoint_url.clone(),
+        received_at_ms: state.clock.unix_millis(),
+        delay_milli: 0,
+        expires_at: state.clock.unix_secs() + state.config.limits.message_expiry_seconds,
+        retry_count: 0,
+        hop_count: 1,
+    };
+
+    state
+        .database
+        .forward_queue_enqueue(&entry, state.config.limits.forward_task_queue)
+        .await
+        .map_err(|e| {
+            tsp_problem(
+                session,
+                90,
+                "message.tsp.forward.enqueue",
+                format!("couldn't enqueue TSP message for remote forwarding: {e}"),
+                StatusCode::SERVICE_UNAVAILABLE,
+            )
+        })?;
+
+    tracing::info!(%next, %endpoint_url, "TSP message enqueued for remote forwarding");
+    Ok(InboundMessageResponse::Forwarded)
+}
+
+/// Whether `endpoint` resolves back to this mediator — the loop guard for remote
+/// TSP forwarding, mirroring the DIDComm forward path's self-detection.
+#[cfg(feature = "tsp")]
+fn tsp_endpoint_is_self(
+    endpoint: &str,
+    self_authorities: &std::collections::HashSet<(String, u16)>,
+) -> bool {
+    let Ok(url) = url::Url::parse(endpoint) else {
+        return false;
+    };
+    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
+        return false;
+    };
+    self_authorities.contains(&(host.to_lowercase(), port))
 }
 
 /// Resolve a DID-based TSP VID to its keys + endpoints.
