@@ -4,6 +4,18 @@
 
 ## 23rd June 2026
 
+### 0.16.13 — Trust Tasks consumer (ping)
+
+- The mediator now consumes **Trust Task** documents carried over the DIDComm
+  binding envelope (`https://trusttasks.org/binding/didcomm/0.1/envelope`), via
+  the `trust-tasks-rs` `consume_inbound` pipeline. This is the foundation of the
+  messaging Trust Tasks migration (single core; per-task handlers will delegate to
+  the same `state.database.*` methods the legacy DIDComm protocols use).
+- First task wired: **`messaging/ping`** — returns `server_time`, `ok` status, and
+  the supported `protocols`, echoing the request nonce. The response is packed back
+  through the existing outbound path (like the trust-ping pong). Account / ACL /
+  access-list follow. Existing DIDComm protocols are untouched.
+
 ### 0.16.12 — Tag message protocol on pickup
 
 - The fetch, list, and outbound pickup endpoints now tag each returned message

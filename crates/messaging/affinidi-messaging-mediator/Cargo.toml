@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.16.12"
+version = "0.16.13"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -39,7 +39,7 @@ memory-backend = []
 ## At least one of `didcomm` or `tsp` must be enabled (see the `compile_error!`
 ## in `lib.rs`); the two are NOT mutually exclusive — they are designed to run
 ## together (`--features didcomm,tsp`), which is the dual-protocol deployment.
-didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding", "dep:affinidi-crypto"]
+didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding", "dep:affinidi-crypto", "dep:trust-tasks-rs"]
 
 ## TSP (Trust Spanning Protocol) — additive alongside DIDComm.
 ## EXPERIMENTAL: TSP message handling is still being built; a `tsp`-only build
@@ -66,6 +66,9 @@ aws = ["dep:aws-config", "dep:aws-sdk-ssm"]
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.18" }
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", optional = true }
+## Trust Tasks framework core — consumes Trust Task documents (the messaging
+## ping / account / acl / access-list tasks) carried over the binding envelope.
+trust-tasks-rs = { version = "0.2", optional = true }
 ## Optional: JOSE key-agreement types for the didcomm compat layer (#327)
 affinidi-crypto = { version = "0.2", features = ["jose"], optional = true }
 ## Optional: Trust Spanning Protocol (activated by `tsp` feature)
