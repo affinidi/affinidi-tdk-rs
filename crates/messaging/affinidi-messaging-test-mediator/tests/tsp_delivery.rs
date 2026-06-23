@@ -8,6 +8,7 @@
 use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_sdk::messages::fetch::FetchOptions;
 use affinidi_messaging_test_mediator::TestEnvironment;
+use affinidi_tdk::dids::{DID, KeyType, PeerKeyRole, PeerService, PeerServiceEndpoint};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -190,4 +191,46 @@ async fn tsp_routed_bridges_a_didcomm_message_to_the_recipient() {
         Some(alice.did.as_str()),
         "DIDComm sender is recovered"
     );
+}
+
+/// End-to-end TSP **remote forwarding**: the final recipient lives on *another*
+/// mediator. Bob's `did:peer` advertises a TSP transport endpoint elsewhere (via
+/// a `tsp` service entry) and he is not a local account here. Alice routes a
+/// message through this mediator to Bob; the mediator resolves Bob's remote
+/// endpoint and enqueues the message for the forwarding processor to deliver over
+/// the wire (responding `Forwarded`). Exercises the did:peer `tsp` service
+/// resolution + the remote-forward enqueue path.
+#[tokio::test]
+async fn tsp_routed_forwards_to_a_remote_recipients_mediator() {
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    let mediator_did = env.mediator.did().to_string();
+
+    // Bob lives on another mediator: his DID advertises a TSP transport endpoint
+    // there (a `tsp` service, which resolves to type `TSPTransport`), and he is
+    // not registered locally here.
+    let (bob_remote, _secrets) = DID::generate_did_peer_with_services(
+        vec![
+            (PeerKeyRole::Verification, KeyType::Ed25519),
+            (PeerKeyRole::Encryption, KeyType::X25519),
+        ],
+        Some(vec![PeerService {
+            type_: "tsp".into(),
+            endpoint: PeerServiceEndpoint::Uri("https://remote.example/".into()),
+            id: None,
+        }]),
+    )
+    .expect("generate bob's remote DID");
+
+    // Alice routes to Bob via this mediator → the mediator resolves Bob's remote
+    // TSP endpoint and enqueues the message for forwarding (HTTP 200 Forwarded).
+    let route = vec![mediator_did, bob_remote];
+    env.atm
+        .tsp()
+        .send_routed(&alice.profile, &route, b"forward me onward")
+        .await
+        .expect("mediator resolves the remote endpoint and enqueues the forward");
 }

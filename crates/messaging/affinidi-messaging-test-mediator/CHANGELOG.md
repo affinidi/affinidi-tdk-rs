@@ -4,6 +4,14 @@
 
 ## 23rd June 2026
 
+### 0.2.16 — TSP remote-forwarding e2e
+
+- New `tsp_routed_forwards_to_a_remote_recipients_mediator` test: the recipient
+  lives on another mediator (his `did:peer` advertises a `tsp` transport endpoint
+  elsewhere). The mediator resolves the remote endpoint and enqueues the message
+  for forwarding. Unblocked by the `affinidi-did-common` 0.3.9 fix to `did:peer`
+  custom-service-type resolution.
+
 ### 0.2.15 — TSP↔DIDComm bridge e2e
 
 - New `tsp_routed_bridges_a_didcomm_message_to_the_recipient` test: Alice authcrypts
