@@ -4,6 +4,12 @@
 
 ## 23rd June 2026
 
+### 0.2.17 — Assert message-protocol tagging
+
+- The Direct and bridge e2e tests now assert the fetched message's `protocol`
+  field (TSP and DIDComm respectively) — proving the mediator tags the wire
+  protocol on pickup transparently.
+
 ### 0.2.16 — TSP remote-forwarding e2e
 
 - New `tsp_routed_forwards_to_a_remote_recipients_mediator` test: the recipient

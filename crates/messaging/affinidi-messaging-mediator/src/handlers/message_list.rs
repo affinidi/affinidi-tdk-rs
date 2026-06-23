@@ -83,7 +83,7 @@ pub async fn message_list_handler(
             .into());
         }
 
-        let messages = state
+        let mut messages = state
             .database
             .list_messages(
                 &did_hash,
@@ -92,6 +92,11 @@ pub async fn message_list_handler(
                 state.config.limits.listed_messages as u32,
             )
             .await?;
+
+        // Tag each message's wire protocol so the client can route it natively.
+        messages
+            .iter_mut()
+            .for_each(|m| m.detect_protocol_in_place());
 
         debug!("List contains ({}) messages", messages.len());
         Ok((

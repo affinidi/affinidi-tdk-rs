@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.18] - 2026-06-23
+
+Re-exports `MessageProtocol` (from `affinidi-messaging-mediator-common`).
+Fetched messages now carry a `protocol` field (`Some(MessageProtocol::DidComm |
+Tsp | …)`), tagged server-side, so a client can route each message natively
+without inspecting it. Additive; patch bump.
+
 ## [0.18.17] - 2026-06-23
 
 `atm.tsp().send_routed_opaque(profile, route, inner)` — route an **already-packed**

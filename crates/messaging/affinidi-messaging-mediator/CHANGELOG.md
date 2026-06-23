@@ -4,6 +4,15 @@
 
 ## 23rd June 2026
 
+### 0.16.12 — Tag message protocol on pickup
+
+- The fetch, list, and outbound pickup endpoints now tag each returned message
+  with its wire `protocol` (DIDComm / TSP / …), detected server-side. A client can
+  just fetch its messages and route each one natively from the metadata, without
+  inspecting the body or caring which protocols exist over time. Unified,
+  transparent, future-proof. No change to which messages are returned (no
+  filtering, no Lua/store-schema change).
+
 ### 0.16.11 — TSP remote forwarding
 
 - A routed TSP relay now forwards to a **remote** next hop. When the next hop is

@@ -20,7 +20,7 @@ pub mod unpack;
 // paths working unchanged.
 pub use affinidi_messaging_mediator_common::types::messages::{
     FetchDeletePolicy, Folder, GenericDataStruct, GetMessagesResponse, MessageList,
-    MessageListElement,
+    MessageListElement, MessageProtocol,
 };
 
 pub trait MessageDelete<T> {
