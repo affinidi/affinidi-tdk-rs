@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.19] - 2026-06-23
+
+WebSocket live-stream is now TSP-safe. An inbound frame is sniffed (the frame is
+self-describing CESR qb64); a TSP message is delivered **packed** — so the
+consumer unpacks it via `atm.tsp()` — instead of being routed into the DIDComm
+`unpack`, where it previously failed and was silently dropped. DIDComm frames are
+unchanged, and the sniff is gated on the `tsp` feature (no-op without it).
+
 ## [0.18.18] - 2026-06-23
 
 Re-exports `MessageProtocol` (from `affinidi-messaging-mediator-common`).
