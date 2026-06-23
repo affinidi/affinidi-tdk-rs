@@ -455,8 +455,17 @@ impl WebSocketTransport {
     async fn process_inbound_didcomm_message(&mut self, atm: &ATM, message: String) {
         debug!("Received text message ({})", message);
 
+        // A TSP message can't be DIDComm-unpacked. The live-stream frame is
+        // self-describing (CESR qb64), so sniff it and deliver TSP frames packed
+        // — the consumer unpacks them via `atm.tsp()`. Without this a TSP frame
+        // would fail the DIDComm `unpack` below and be silently dropped.
+        #[cfg(feature = "tsp")]
+        let force_packed = atm.tsp().is_tsp(&message);
+        #[cfg(not(feature = "tsp"))]
+        let force_packed = false;
+
         // If skip_unpack_messages is true, send the packed message directly
-        if self.skip_unpack_messages {
+        if self.skip_unpack_messages || force_packed {
             // for packed messages skip cache lookup
             if let Some(next_request) = self.next_requests_list.pop_front() {
                 debug!("Next message found, sending to requestor packed");
