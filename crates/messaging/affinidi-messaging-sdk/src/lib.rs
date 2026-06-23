@@ -182,7 +182,7 @@
 use crate::protocols::{
     discover_features::DiscoverfeaturesOps, mediator::administration::MediatorOps,
     message_pickup::MessagePickupOps, oob_discovery::OOBDiscoveryOps, routing::RoutingOps,
-    trust_ping::TrustPingOps,
+    trust_ping::TrustPingOps, trust_tasks::TrustTasksOps,
 };
 #[cfg(feature = "tsp")]
 use crate::protocols::tsp::TspOps;
@@ -313,6 +313,12 @@ impl ATM {
     /// Access Trust Ping protocol methods
     pub fn trust_ping(&self) -> TrustPingOps<'_> {
         TrustPingOps { atm: self }
+    }
+
+    /// Access Trust Tasks protocol methods (the messaging tasks: ping, account,
+    /// acl, access-list — carried over the framework binding envelope).
+    pub fn trust_tasks(&self) -> TrustTasksOps<'_> {
+        TrustTasksOps { atm: self }
     }
 
     /// Access Message Pickup 3.0 protocol methods

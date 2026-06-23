@@ -146,12 +146,15 @@ pub(crate) async fn process(
     };
 
     // Pack the response back through the mediator's existing outbound path.
-    let response_msg = Message::build(Uuid::new_v4().to_string(), ENVELOPE_TYPE.to_string(), response_value)
-        .to(sender_did)
-        .from(mediator_did)
-        .created_time(now_secs)
-        .expires_time(now_secs + 300)
-        .finalize();
+    // `thid` threads it to the request so the caller's live-stream correlates it.
+    let response_msg =
+        Message::build(Uuid::new_v4().to_string(), ENVELOPE_TYPE.to_string(), response_value)
+            .thid(message.id.clone())
+            .to(sender_did)
+            .from(mediator_did)
+            .created_time(now_secs)
+            .expires_time(now_secs + 300)
+            .finalize();
 
     Ok(ProcessMessageResponse {
         store_message: true,

@@ -4,6 +4,12 @@
 
 ## 23rd June 2026
 
+### 0.16.14 — Trust Tasks response threading
+
+- The Trust Tasks consumer now threads its response to the request (`thid`), so a
+  caller's live-stream correlates the reply by thread id — the round-trip the SDK's
+  `atm.trust_tasks().ping()` relies on.
+
 ### 0.16.13 — Trust Tasks consumer (ping)
 
 - The mediator now consumes **Trust Task** documents carried over the DIDComm

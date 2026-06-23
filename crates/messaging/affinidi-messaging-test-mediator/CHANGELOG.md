@@ -4,6 +4,12 @@
 
 ## 23rd June 2026
 
+### 0.2.18 — Trust Tasks ping e2e
+
+- New `trust_tasks` integration test: `atm.trust_tasks().ping()` round-trips through
+  a live mediator (SDK → DIDComm binding envelope → the mediator's Trust Tasks
+  consumer → typed response), asserting status, nonce echo, and advertised protocols.
+
 ### 0.2.17 — Assert message-protocol tagging
 
 - The Direct and bridge e2e tests now assert the fetched message's `protocol`
