@@ -6,6 +6,7 @@
 #![cfg(feature = "tsp")]
 
 use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_sdk::messages::MessageProtocol;
 use affinidi_messaging_sdk::messages::fetch::FetchOptions;
 use affinidi_messaging_test_mediator::TestEnvironment;
 use affinidi_tdk::dids::{DID, KeyType, PeerKeyRole, PeerService, PeerServiceEndpoint};
@@ -51,6 +52,13 @@ async fn tsp_direct_message_round_trips_through_the_mediator() {
     assert!(
         env.atm.tsp().is_tsp(stored),
         "the stored message is recognised as TSP"
+    );
+    // The mediator tags the wire protocol on pickup, so the client doesn't have
+    // to inspect the body itself.
+    assert_eq!(
+        element.protocol,
+        Some(MessageProtocol::Tsp),
+        "fetch tags the message as TSP"
     );
     let (recovered, sender) = env
         .atm
@@ -174,6 +182,13 @@ async fn tsp_routed_bridges_a_didcomm_message_to_the_recipient() {
     assert!(
         !env.atm.tsp().is_tsp(stored),
         "the bridged inner is a DIDComm message, not TSP"
+    );
+    // And the mediator tags it as DIDComm on pickup — a unified fetch, with the
+    // protocol surfaced transparently in the metadata.
+    assert_eq!(
+        element.protocol,
+        Some(MessageProtocol::DidComm),
+        "fetch tags the bridged message as DIDComm"
     );
 
     let (received, _meta) = env

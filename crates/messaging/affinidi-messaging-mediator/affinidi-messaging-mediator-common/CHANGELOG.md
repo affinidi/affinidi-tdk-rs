@@ -4,6 +4,17 @@
 
 ## 23rd June 2026
 
+### 0.15.17 — Message protocol metadata
+
+- New `MessageProtocol` enum (`DidComm` / `Tsp` / `Other`, `#[non_exhaustive]`)
+  with `MessageProtocol::detect(&str)`, and a `protocol: Option<MessageProtocol>`
+  field on `MessageListElement` (with `MessageListElement::detect_protocol_in_place`).
+  Lets pickup responses carry each message's wire protocol so clients can fetch
+  their messages and route each natively without inspecting it — additive and
+  future-proof (new protocols don't break consumers).
+
+## 23rd June 2026
+
 ### 0.15.16 — Forwarding processor: TSP-aware delivery
 
 - The forwarding processor now delivers **TSP** forwards correctly. A TSP forward
