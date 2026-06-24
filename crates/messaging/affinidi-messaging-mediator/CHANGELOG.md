@@ -4,6 +4,15 @@
 
 ## 24th June 2026
 
+### 0.16.17 — Trust Tasks: account/change-queue-limits
+
+- The Trust Tasks consumer now handles `messaging/account/change-queue-limits`
+  (self-or-admin). A standard account may only change a limit it self-manages, and
+  its values are capped at the mediator's hard maximum (the `-1`/`-2` sentinels pass
+  through); an admin sets any value. Records an audit entry and returns the updated
+  account view. Adds a reusable generic `to_wire_account` (replacing the list-only
+  helper).
+
 ### 0.16.16 — Trust Tasks: account/list
 
 - The Trust Tasks consumer now handles `messaging/account/list` (admin-only): it

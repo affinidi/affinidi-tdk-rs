@@ -17,6 +17,7 @@ use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_mediator_common::types::accounts::{Account, AccountType};
 use affinidi_messaging_mediator_common::types::acls::{AccessListModeType, MediatorACLSet};
+use affinidi_messaging_mediator_common::types::audit::AuditAction;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use http::StatusCode;
@@ -32,6 +33,7 @@ use uuid::Uuid;
 use crate::SharedData;
 use crate::common::session::Session;
 use crate::messages::protocols::mediator::acls::check_permissions;
+use crate::messages::protocols::mediator::record_audit;
 use crate::messages::{ProcessMessageResponse, WrapperType};
 
 /// DIDComm `type` URI of a Trust Tasks binding envelope.
@@ -137,6 +139,16 @@ pub(crate) async fn process(
         .await?
     } else if doc.type_uri == type_uri_of::<account::list::v0_1::Payload>() {
         consume_account_list(downcast(&doc, session)?, state, session, &mediator_did, now).await?
+    } else if doc.type_uri == type_uri_of::<account::change_queue_limits::v0_1::Payload>() {
+        consume_account_change_queue_limits(
+            downcast(&doc, session)?,
+            state,
+            session,
+            &Some(sender_kid.clone()),
+            &mediator_did,
+            now,
+        )
+        .await?
     } else {
         return Err(tt_problem(
             session,
@@ -283,7 +295,11 @@ async fn consume_account_list(
     let limit: u32 = typed.payload.limit.map(|n| n.get() as u32).unwrap_or(100);
 
     let page = state.database.account_list(cursor, limit).await?;
-    let accounts = page.accounts.iter().map(map_account_list).collect();
+    let accounts = page
+        .accounts
+        .iter()
+        .map(to_wire_account::<account::list::v0_1::Account>)
+        .collect();
     // The store returns cursor 0 when the listing is exhausted.
     let next_cursor = (page.cursor != 0)
         .then(|| account::list::v0_1::ResponseNextCursor::from_str(&page.cursor.to_string()))
@@ -304,6 +320,112 @@ async fn consume_account_list(
     };
     let response_doc = typed.respond_with(Uuid::new_v4().to_string(), response);
     serde_json::to_value(&response_doc).map_err(serialize_err)
+}
+
+/// Handle `messaging/account/change-queue-limits`: self-or-admin. A standard account
+/// may only change a limit it is permitted to self-manage, and its values are capped
+/// at the mediator's hard maximum; an admin sets any value. Returns the updated view.
+async fn consume_account_change_queue_limits(
+    typed: TrustTask<account::change_queue_limits::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    typed.validate_basic(now, mediator_did).map_err(|reason| {
+        tt_problem(
+            session,
+            "message.trust_task.rejected",
+            format!("Trust Task failed basic validation: {reason:?}"),
+            StatusCode::BAD_REQUEST,
+        )
+    })?;
+
+    let target_hash = typed.payload.did.to_string();
+    if !check_permissions(
+        session,
+        std::slice::from_ref(&target_hash),
+        state.config.security.block_remote_admin_msgs,
+        sender_kid,
+    ) {
+        return Err(tt_problem(
+            session,
+            "authorization.account.denied",
+            format!("not permitted to change queue limits for account {target_hash}"),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    // The wire carries i64; the store works in i32. A member omitted is unchanged.
+    let req_send = typed.payload.queue_limits.send_queue_limit.map(|v| v as i32);
+    let req_receive = typed.payload.queue_limits.receive_queue_limit.map(|v| v as i32);
+
+    // A standard account may only touch limits it self-manages, capped at the hard
+    // maximum; an admin sets any value.
+    let (send_queue_limit, receive_queue_limit) =
+        if session.account_type == AccountType::Standard {
+            (
+                gate_self_managed_limit(
+                    req_send,
+                    session.acls.get_self_manage_send_queue_limit(),
+                    state.config.limits.queued_send_messages_hard,
+                ),
+                gate_self_managed_limit(
+                    req_receive,
+                    session.acls.get_self_manage_receive_queue_limit(),
+                    state.config.limits.queued_receive_messages_hard,
+                ),
+            )
+        } else {
+            (req_send, req_receive)
+        };
+
+    state
+        .database
+        .account_change_queue_limits(&target_hash, send_queue_limit, receive_queue_limit)
+        .await?;
+    record_audit(
+        state,
+        session,
+        &target_hash,
+        AuditAction::AccountChangeQueueLimits,
+        format!("send={send_queue_limit:?} receive={receive_queue_limit:?}"),
+    )
+    .await;
+
+    let account = state
+        .database
+        .account_get(&target_hash)
+        .await?
+        .ok_or_else(|| {
+            tt_problem(
+                session,
+                "account.not_found",
+                format!("account {target_hash} not found"),
+                StatusCode::NOT_FOUND,
+            )
+        })?;
+    let response = account::change_queue_limits::v0_1::Response {
+        account: to_wire_account(&account),
+        ext: None,
+    };
+    let response_doc = typed.respond_with(Uuid::new_v4().to_string(), response);
+    serde_json::to_value(&response_doc).map_err(serialize_err)
+}
+
+/// A standard account may change a queue limit only if it self-manages that limit;
+/// the value is capped at the mediator's hard maximum. The `-1` (unlimited) and `-2`
+/// sentinels pass through unchanged. Not self-managed → leave the limit unchanged.
+fn gate_self_managed_limit(requested: Option<i32>, self_managed: bool, hard: i32) -> Option<i32> {
+    if !self_managed {
+        return None;
+    }
+    match requested {
+        Some(-1) | Some(-2) => requested,
+        Some(limit) if limit > hard => Some(hard),
+        other => other,
+    }
 }
 
 /// Map the mediator's internal [`Account`] to the wire `account/get` shape.
@@ -361,15 +483,13 @@ fn map_account_get(acc: &Account) -> account::get::v0_1::Account {
     }
 }
 
-/// Same mapping as [`map_account_get`] but for the `account/list` module's copy of
-/// the shared `Account` type. The two are generated from the one shared schema and
-/// are structurally identical, so we reuse the get mapping via a JSON round-trip
-/// rather than duplicate the bitfield decode.
-fn map_account_list(acc: &Account) -> account::list::v0_1::Account {
-    serde_json::from_value(
-        serde_json::to_value(map_account_get(acc)).expect("get Account serialises"),
-    )
-    .expect("get and list Account share the one shared schema")
+/// Re-shape [`map_account_get`]'s output into another `messaging/*` module's copy of
+/// the shared `Account` type. typify generates a structurally-identical `Account`
+/// per spec module; they all derive from the one shared schema, so a JSON round-trip
+/// converts between them without re-implementing the bitfield decode.
+fn to_wire_account<T: serde::de::DeserializeOwned>(acc: &Account) -> T {
+    serde_json::from_value(serde_json::to_value(map_account_get(acc)).expect("get Account serialises"))
+        .expect("messaging Account types share the one shared schema")
 }
 
 fn tt_problem(

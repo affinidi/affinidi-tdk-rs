@@ -4,6 +4,12 @@
 
 ## 24th June 2026
 
+### 0.2.21 — Trust Tasks: account/change-queue-limits e2e
+
+- New `account_change_queue_limits_self_applies_caps_and_persists` test: alice changes
+  her own limits (a value, and `-1` = unlimited), the change persists across a fresh
+  read, and an over-limit request from a standard account is capped at the hard maximum.
+
 ### 0.2.20 — Trust Tasks: account/list authz e2e
 
 - New `account_list_denies_a_non_admin` test: a standard account is refused
