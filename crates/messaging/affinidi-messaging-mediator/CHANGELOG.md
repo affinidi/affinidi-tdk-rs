@@ -4,6 +4,14 @@
 
 ## 24th June 2026
 
+### 0.16.19 — Trust Tasks: account/change-type
+
+- The Trust Tasks consumer now handles `messaging/account/change-type` (admin-only).
+  Faithfully ports the legacy admin-set transitions (promote / demote / switch) and
+  the root-admin guards — only a root admin may assign the root-admin role or modify
+  a root-admin account. Records an audit entry; returns the account's realized view
+  after the change.
+
 ### 0.16.18 — Trust Tasks: account/remove
 
 - The Trust Tasks consumer now handles `messaging/account/remove` (self-or-admin).

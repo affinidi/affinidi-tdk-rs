@@ -161,6 +161,9 @@ pub(crate) async fn process(
             now,
         )
         .await?
+    } else if doc.type_uri == type_uri_of::<account::change_type::v0_1::Payload>() {
+        consume_account_change_type(downcast(&doc, session)?, state, session, &mediator_did, now)
+            .await?
     } else {
         return Err(tt_problem(
             session,
@@ -517,6 +520,138 @@ async fn consume_account_remove(
     };
     let response_doc = typed.respond_with(Uuid::new_v4().to_string(), response);
     serde_json::to_value(&response_doc).map_err(serialize_err)
+}
+
+/// Handle `messaging/account/change-type`: admin-only, with root-admin guards —
+/// only a root admin may assign root-admin or modify a root-admin account. A
+/// faithful port of the legacy admin-set transitions (promote / demote / switch).
+/// Returns the account's realized view after the change.
+async fn consume_account_change_type(
+    typed: TrustTask<account::change_type::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    use account::change_type::v0_1::AccountType as WireType;
+
+    typed.validate_basic(now, mediator_did).map_err(|reason| {
+        tt_problem(
+            session,
+            "message.trust_task.rejected",
+            format!("Trust Task failed basic validation: {reason:?}"),
+            StatusCode::BAD_REQUEST,
+        )
+    })?;
+
+    let target_hash = typed.payload.did.to_string();
+    let new_type = match typed.payload.account_type {
+        WireType::Standard => AccountType::Standard,
+        WireType::Admin => AccountType::Admin,
+        WireType::RootAdmin => AccountType::RootAdmin,
+        WireType::Mediator => AccountType::Mediator,
+    };
+
+    let denied = |reason: &str| {
+        tt_problem(
+            session,
+            "authorization.permission",
+            reason.to_string(),
+            StatusCode::FORBIDDEN,
+        )
+    };
+
+    // Must be an admin to change types at all.
+    if !state.database.check_admin_account(&session.did_hash).await? {
+        return Err(denied("admin access is required to change account types"));
+    }
+    // Only a root admin may assign the root-admin role.
+    if new_type == AccountType::RootAdmin && session.account_type != AccountType::RootAdmin {
+        return Err(denied("root-admin access is required to assign the root-admin role"));
+    }
+
+    let current = state.database.account_get(&target_hash).await?;
+    if let Some(current) = &current {
+        if current._type == AccountType::RootAdmin && session.account_type != AccountType::RootAdmin
+        {
+            return Err(denied("root-admin access is required to modify a root-admin account"));
+        } else if current._type == new_type {
+            // No change — report the account as-is.
+            return change_type_response(&typed, current);
+        } else if current._type.is_admin() && new_type.is_admin() {
+            // Switching between admin roles is a plain set-role (below).
+        } else if current._type.is_admin() && !new_type.is_admin() {
+            // Demotion — strip admin rights first.
+            state
+                .database
+                .strip_admin_accounts(vec![target_hash.clone()])
+                .await?;
+        } else if !current._type.is_admin() && new_type.is_admin() {
+            // Promotion — add admin rights, carrying the existing ACL set.
+            state
+                .database
+                .setup_admin_account(&target_hash, new_type, &MediatorACLSet::from_u64(current.acls))
+                .await?;
+            record_audit(
+                state,
+                session,
+                &target_hash,
+                AuditAction::AccountChangeType,
+                format!("type -> {new_type}"),
+            )
+            .await;
+            return change_type_fetch_response(&typed, state, session, &target_hash).await;
+        }
+    }
+
+    state
+        .database
+        .account_set_role(&target_hash, &new_type)
+        .await?;
+    record_audit(
+        state,
+        session,
+        &target_hash,
+        AuditAction::AccountChangeType,
+        format!("type -> {new_type}"),
+    )
+    .await;
+    change_type_fetch_response(&typed, state, session, &target_hash).await
+}
+
+/// Build a `change-type` response from an account.
+fn change_type_response(
+    typed: &TrustTask<account::change_type::v0_1::Payload>,
+    account: &Account,
+) -> Result<Value, MediatorError> {
+    let response = account::change_type::v0_1::Response {
+        account: to_wire_account(account),
+        ext: None,
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Re-read the account after a change and build the `change-type` response.
+async fn change_type_fetch_response(
+    typed: &TrustTask<account::change_type::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    target_hash: &str,
+) -> Result<Value, MediatorError> {
+    let account = state
+        .database
+        .account_get(target_hash)
+        .await?
+        .ok_or_else(|| {
+            tt_problem(
+                session,
+                "account.not_found",
+                format!("account {target_hash} not found after change"),
+                StatusCode::NOT_FOUND,
+            )
+        })?;
+    change_type_response(typed, &account)
 }
 
 /// Map the mediator's internal [`Account`] to the wire `account/get` shape.

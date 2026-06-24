@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.26] - 2026-06-24
+
+`atm.trust_tasks().account_change_type(profile, did_hash, account_type)` (admin only) —
+change an account's role and return its realized view. Only a root admin may assign the
+root-admin role or modify a root-admin account. Additive.
+
 ## [0.18.25] - 2026-06-24
 
 `atm.trust_tasks().account_remove(profile, did_hash)` — remove an account (self-or-admin;
