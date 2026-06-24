@@ -31,9 +31,12 @@ pub async fn well_known_did_fetch_handler(
 }
 
 /// Serve the canonical mediator DID Document at `/.well-known/did.json`
-/// for did:web-style resolution. The body is the DID Document only —
-/// for did:webvh sources the loader extracts `state` from the original
-/// log entry so this handler returns the same shape for either source.
+/// for did:web-style resolution. The body is the DID Document only — for
+/// did:webvh sources the loader extracts `state` from the original log
+/// entry and rewrites its identifier from `did:webvh:{scid}:{domain}` to
+/// `did:web:{domain}` (id + every key / service self-reference), so a
+/// `did:web:{domain}` resolver receives a document whose `id` matches the
+/// DID it asked for. The verbatim webvh log stays at `did.jsonl`.
 pub async fn well_known_did_json_handler(
     State(state): State<SharedData>,
 ) -> Result<impl IntoResponse, AppError> {
