@@ -4,6 +4,16 @@
 
 ## 24th June 2026
 
+### 0.16.22 — Trust Tasks: access-list family (handlers complete)
+
+- `messaging/access-list/{add,remove,clear,get,list}`: self-or-admin, with the
+  `self_manage_list` capability required for a standard account's writes. `add`
+  truncates at the mediator limit and reports the inserted entries; `remove` reports
+  which requested entries were present; `get` partitions queried entries into
+  present/absent; `list` is cursor-paged (both `None` and `Some(0)` are terminal);
+  `clear` empties the list. Writes record audit entries. This completes every
+  messaging Trust Task handler (ping + account + acl + access-list).
+
 ### 0.16.21 — Trust Tasks: account/add (account family complete)
 
 - `messaging/account/add`: in `ExplicitAllow` mode only an admin may add accounts; in

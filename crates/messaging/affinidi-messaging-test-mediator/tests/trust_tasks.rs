@@ -319,3 +319,72 @@ async fn account_add_denies_a_non_admin_creating_an_admin() {
         .await;
     assert!(denied.is_err(), "a non-admin must not create an admin account");
 }
+
+#[tokio::test]
+async fn access_list_self_lifecycle() {
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+    let carol = env.add_user("carol").await.expect("add carol");
+
+    // Add bob + carol to alice's own access list (allow_all grants self-manage).
+    let added = env
+        .atm
+        .trust_tasks()
+        .access_list_add(&alice.profile, None, vec![bob.did_hash(), carol.did_hash()])
+        .await
+        .expect("add to access list");
+    assert_eq!(added.added.len(), 2);
+    assert_eq!(added.access_list_count, 2);
+
+    // Get: bob is present, an unknown hash is absent.
+    let got = env
+        .atm
+        .trust_tasks()
+        .access_list_get(
+            &alice.profile,
+            None,
+            vec![bob.did_hash(), "not-in-the-list".to_string()],
+        )
+        .await
+        .expect("query access list");
+    assert!(got.present.iter().any(|v| v.as_str() == bob.did_hash()));
+    assert!(got.absent.iter().any(|v| v.as_str() == "not-in-the-list"));
+
+    // List: both entries, single page.
+    let listed = env
+        .atm
+        .trust_tasks()
+        .access_list_list(&alice.profile, None, None, None)
+        .await
+        .expect("list access list");
+    assert_eq!(listed.access_list_count, 2);
+    assert_eq!(listed.entries.len(), 2);
+    assert!(listed.next_cursor.is_none());
+
+    // Remove bob.
+    let removed = env
+        .atm
+        .trust_tasks()
+        .access_list_remove(&alice.profile, None, vec![bob.did_hash()])
+        .await
+        .expect("remove from access list");
+    assert_eq!(removed.removed.len(), 1);
+    assert_eq!(removed.access_list_count, 1);
+
+    // Clear.
+    let cleared = env
+        .atm
+        .trust_tasks()
+        .access_list_clear(&alice.profile, None)
+        .await
+        .expect("clear access list");
+    assert_eq!(cleared.access_list_count, 0);
+}
