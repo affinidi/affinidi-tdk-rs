@@ -1,13 +1,8 @@
-#![allow(deprecated)] // legacy atm.mediator() methods deprecated for atm.trust_tasks(); migrate then drop
 //! Tries to Spoof a message from Mallory to Bob, but pretending to be Alice.
 //! Mallory send to Bob, but inner envelope pretends to be Alice
 
 use affinidi_messaging_didcomm::message::Message;
-use affinidi_messaging_sdk::{
-    errors::ATMError,
-    profiles::ATMProfile,
-    protocols::mediator::acls::{AccessListModeType, MediatorACLSet},
-};
+use affinidi_messaging_sdk::{errors::ATMError, profiles::ATMProfile};
 use affinidi_tdk::{TDK, common::config::TDKConfig};
 use clap::Parser;
 use serde_json::json;
@@ -17,6 +12,7 @@ use std::{
 };
 use tracing::{error, info};
 use tracing_subscriber::filter;
+use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
@@ -80,14 +76,12 @@ async fn main() -> Result<(), ATMError> {
         .profile_add(&ATMProfile::from_tdk_profile(&atm, tdk_alice).await?, true)
         .await?;
 
-    let Some(alice_info) = atm.mediator().account_get(&atm_alice, None).await? else {
+    let Ok(alice_info) = atm.trust_tasks().account_get(&atm_alice, None).await else {
         panic!("Alice account not found on mediator");
     };
 
     info!("Alice profile active: {:?}", alice_info);
-    let alice_acl_mode = MediatorACLSet::from_u64(alice_info.acls)
-        .get_access_list_mode()
-        .0;
+    let alice_acl_mode = alice_info.acl.access_list_mode;
     info!("Alice ACL Mode Type: {:?}", alice_acl_mode);
 
     // Activate Bob Profile
@@ -103,14 +97,12 @@ async fn main() -> Result<(), ATMError> {
         .profile_add(&ATMProfile::from_tdk_profile(&atm, tdk_bob).await?, true)
         .await?;
 
-    let Some(bob_info) = atm.mediator().account_get(&atm_bob, None).await? else {
+    let Ok(bob_info) = atm.trust_tasks().account_get(&atm_bob, None).await else {
         panic!("Bob account not found on mediator");
     };
 
     info!("Bob profile active: {:?}", bob_info);
-    let bob_acl_mode = MediatorACLSet::from_u64(bob_info.acls)
-        .get_access_list_mode()
-        .0;
+    let bob_acl_mode = bob_info.acl.access_list_mode;
     info!("Bob ACL Mode Type: {:?}", bob_acl_mode);
 
     // Activate Mallory Profile
@@ -130,61 +122,66 @@ async fn main() -> Result<(), ATMError> {
         )
         .await?;
 
-    let Some(mallory_info) = atm.mediator().account_get(&atm_mallory, None).await? else {
+    let Ok(mallory_info) = atm.trust_tasks().account_get(&atm_mallory, None).await else {
         panic!("Mallory account not found on mediator");
     };
 
     info!("Mallory profile active: {:?}", mallory_info);
-    let mallory_acl_mode = MediatorACLSet::from_u64(mallory_info.acls)
-        .get_access_list_mode()
-        .0;
+    let mallory_acl_mode = mallory_info.acl.access_list_mode;
     info!("Mallory ACL Mode Type: {:?}", mallory_acl_mode);
 
     // Reset ACL's as examples can get mixed up with back to back testing
     info!("Resetting Access Lists");
 
     // Reset Alice ACL's (who has no access to either Bob or Mallory)
-    if let AccessListModeType::ExplicitAllow = alice_acl_mode {
+    if let Some(MediatorAclAccessListMode::ExplicitAllow) = alice_acl_mode {
         // Ensure Bob and Mallory are removed from explicit allow list
-        atm.mediator()
-            .access_list_remove(&atm_alice, None, &[&mallory_info.did_hash])
+        atm.trust_tasks()
+            .access_list_remove(
+                &atm_alice,
+                None,
+                vec![mallory_info.did.as_str().to_string()],
+            )
             .await?;
     } else {
         // Ensure Mallory is removed from Bob explicit deny list
-        atm.mediator()
+        atm.trust_tasks()
             .access_list_add(
                 &atm_alice,
                 None,
-                &[&bob_info.did_hash, &mallory_info.did_hash],
+                vec![
+                    bob_info.did.as_str().to_string(),
+                    mallory_info.did.as_str().to_string(),
+                ],
             )
             .await?;
     }
     info!("Alice Access Lists reset");
 
     // Reset Bob ACL's
-    if let AccessListModeType::ExplicitAllow = bob_acl_mode {
+    if let Some(MediatorAclAccessListMode::ExplicitAllow) = bob_acl_mode {
         // Ensure Mallory is added to Bob explicit allow list
-        atm.mediator()
-            .access_list_add(&atm_bob, None, &[&mallory_info.did_hash])
+        atm.trust_tasks()
+            .access_list_add(&atm_bob, None, vec![mallory_info.did.as_str().to_string()])
             .await?;
     } else {
         // Ensure Mallory is removed from Bob explicit deny list
-        atm.mediator()
-            .access_list_remove(&atm_bob, None, &[&mallory_info.did_hash])
+        atm.trust_tasks()
+            .access_list_remove(&atm_bob, None, vec![mallory_info.did.as_str().to_string()])
             .await?;
     }
     info!("Bob Access Lists reset");
 
     // Reset Mallory ACL's
-    if let AccessListModeType::ExplicitAllow = mallory_acl_mode {
+    if let Some(MediatorAclAccessListMode::ExplicitAllow) = mallory_acl_mode {
         // Ensure Bob is added to Mallory explicit allow list
-        atm.mediator()
-            .access_list_add(&atm_mallory, None, &[&bob_info.did_hash])
+        atm.trust_tasks()
+            .access_list_add(&atm_mallory, None, vec![bob_info.did.as_str().to_string()])
             .await?;
     } else {
         // Ensure Bob is removed from Mallory explicit deny list
-        atm.mediator()
-            .access_list_remove(&atm_mallory, None, &[&bob_info.did_hash])
+        atm.trust_tasks()
+            .access_list_remove(&atm_mallory, None, vec![bob_info.did.as_str().to_string()])
             .await?;
     }
     info!("Mallory Access Lists reset");
