@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.30] - 2026-06-24
+
+`atm.trust_tasks()` gains the admin family: `admin_add` / `admin_strip` / `admin_list` /
+`admin_audit_log` / `admin_config` (all admin only). Completes the messaging Trust Tasks
+client surface. Additive.
+
 ## [0.18.29] - 2026-06-24
 
 `atm.trust_tasks()` gains the access-list family: `access_list_add` / `access_list_remove`

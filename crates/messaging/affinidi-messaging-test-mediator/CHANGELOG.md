@@ -4,6 +4,11 @@
 
 ## 24th June 2026
 
+### 0.2.27 — Trust Tasks: admin family denial e2e
+
+- `admin_family_denies_a_non_admin`: a standard account is refused all five
+  `messaging/admin/*` tasks.
+
 ### 0.2.26 — Trust Tasks: access-list lifecycle e2e
 
 - `access_list_self_lifecycle`: alice adds, queries, lists, removes, and clears entries

@@ -19,7 +19,8 @@ use affinidi_messaging_mediator_common::types::accounts::{Account, AccountType};
 use affinidi_messaging_mediator_common::types::acls::{
     ACLError, AccessListModeType, MediatorACLSet,
 };
-use affinidi_messaging_mediator_common::types::audit::AuditAction;
+use affinidi_messaging_mediator_common::types::administration::AdminAccount as MediatorAdminAccount;
+use affinidi_messaging_mediator_common::types::audit::{AuditAction, AuditLogEntry};
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use http::StatusCode;
@@ -28,7 +29,7 @@ use sha256::digest;
 use std::str::FromStr;
 use subtle::ConstantTimeEq;
 use std::collections::HashSet;
-use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping};
+use trust_tasks_rs::specs::messaging::{access_list, account, acl, admin, ping};
 use trust_tasks_rs::{
     ConsumeOutcome, Payload, ProofPolicy, ProofVerifier, TransportContext, TransportHandler,
     TrustTask, TypeUri, VerificationError, consume_inbound,
@@ -210,6 +211,16 @@ pub(crate) async fn process(
     } else if doc.type_uri == type_uri_of::<access_list::list::v0_1::Payload>() {
         consume_access_list_list(downcast(&doc, session)?, state, session, &sk, &mediator_did, now)
             .await?
+    } else if doc.type_uri == type_uri_of::<admin::add::v0_1::Payload>() {
+        consume_admin_add(downcast(&doc, session)?, state, session, &mediator_did, now).await?
+    } else if doc.type_uri == type_uri_of::<admin::strip::v0_1::Payload>() {
+        consume_admin_strip(downcast(&doc, session)?, state, session, &mediator_did, now).await?
+    } else if doc.type_uri == type_uri_of::<admin::list::v0_1::Payload>() {
+        consume_admin_list(downcast(&doc, session)?, state, session, &mediator_did, now).await?
+    } else if doc.type_uri == type_uri_of::<admin::audit_log::v0_1::Payload>() {
+        consume_admin_audit_log(downcast(&doc, session)?, state, session, &mediator_did, now).await?
+    } else if doc.type_uri == type_uri_of::<admin::config::v0_1::Payload>() {
+        consume_admin_config(downcast(&doc, session)?, state, session, &mediator_did, now).await?
     } else {
         return Err(tt_problem(
             session,
@@ -1172,6 +1183,218 @@ async fn consume_access_list_list(
     };
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
+}
+
+/// Reject a non-admin caller of an admin-only task.
+fn require_admin(session: &Session, task: &str) -> Result<(), MediatorError> {
+    if matches!(
+        session.account_type,
+        AccountType::Admin | AccountType::RootAdmin
+    ) {
+        Ok(())
+    } else {
+        Err(tt_problem(
+            session,
+            "authorization.admin_required",
+            format!("{task} requires an admin account"),
+            StatusCode::FORBIDDEN,
+        ))
+    }
+}
+
+/// Handle `messaging/admin/add`: admin-only. Grants admin rights to the named
+/// accounts (with the mediator's default ACL) and echoes the now-admin set.
+async fn consume_admin_add(
+    typed: TrustTask<admin::add::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    require_admin(session, "admin/add")?;
+
+    let dids: Vec<String> = typed.payload.dids.iter().map(|v| v.to_string()).collect();
+    state
+        .database
+        .add_admin_accounts(dids.clone(), &state.config.security.global_acl_default)
+        .await?;
+    for did in &dids {
+        record_audit(state, session, did, AuditAction::AdminAdd, "promoted to admin".to_string()).await;
+    }
+
+    let response = admin::add::v0_1::Response {
+        admins: typed.payload.dids.clone(),
+        ext: None,
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/admin/strip`: admin-only. Removes admin rights from the named
+/// accounts (demoting them to standard) and echoes the stripped set.
+async fn consume_admin_strip(
+    typed: TrustTask<admin::strip::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    require_admin(session, "admin/strip")?;
+
+    let dids: Vec<String> = typed.payload.dids.iter().map(|v| v.to_string()).collect();
+    state.database.strip_admin_accounts(dids.clone()).await?;
+    for did in &dids {
+        record_audit(state, session, did, AuditAction::AdminStrip, "admin rights stripped".to_string())
+            .await;
+    }
+
+    let response = admin::strip::v0_1::Response {
+        ext: None,
+        stripped: typed.payload.dids.clone(),
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/admin/list`: admin-only. Pages the mediator's admin accounts.
+async fn consume_admin_list(
+    typed: TrustTask<admin::list::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    use admin::list::v0_1::{Response, ResponseNextCursor};
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    require_admin(session, "admin/list")?;
+
+    let cursor: u32 = typed
+        .payload
+        .cursor
+        .as_ref()
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let limit: u32 = typed.payload.limit.map(|n| n.get() as u32).unwrap_or(100);
+
+    let page = state.database.list_admin_accounts(cursor, limit).await?;
+    let admins = page.accounts.iter().map(map_admin_account).collect();
+    let next_cursor = (page.cursor != 0)
+        .then(|| ResponseNextCursor::from_str(&page.cursor.to_string()))
+        .transpose()
+        .map_err(|e| serialize_err_msg(format!("cursor: {e}")))?;
+
+    let response = Response {
+        admins,
+        ext: None,
+        next_cursor,
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/admin/audit-log`: admin-only. Pages the privileged-change log.
+async fn consume_admin_audit_log(
+    typed: TrustTask<admin::audit_log::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    use admin::audit_log::v0_1::{Response, ResponseNextCursor};
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    require_admin(session, "admin/audit-log")?;
+
+    let cursor: u32 = typed
+        .payload
+        .cursor
+        .as_ref()
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let limit: u32 = typed.payload.limit.map(|n| n.get() as u32).unwrap_or(100);
+
+    let page = state.database.audit_log_list(cursor, limit).await?;
+    let entries = page.entries.iter().map(map_audit_entry).collect();
+    let next_cursor = (page.cursor != 0)
+        .then(|| ResponseNextCursor::from_str(&page.cursor.to_string()))
+        .transpose()
+        .map_err(|e| serialize_err_msg(format!("cursor: {e}")))?;
+
+    let response = Response {
+        entries,
+        ext: None,
+        next_cursor,
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/admin/config`: admin-only. Returns the mediator's software
+/// version and current configuration.
+async fn consume_admin_config(
+    typed: TrustTask<admin::config::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    require_admin(session, "admin/config")?;
+
+    let config = serde_json::to_value(&state.config)
+        .map_err(serialize_err)?
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let response = admin::config::v0_1::Response {
+        config,
+        ext: None,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+fn map_admin_account(a: &MediatorAdminAccount) -> admin::list::v0_1::AdminAccount {
+    use admin::list::v0_1::{AccountType as WireType, AdminAccount as Wire, Vid};
+    Wire {
+        account_type: match a._type {
+            AccountType::Standard => WireType::Standard,
+            AccountType::Admin => WireType::Admin,
+            AccountType::RootAdmin => WireType::RootAdmin,
+            AccountType::Mediator => WireType::Mediator,
+            AccountType::Unknown => WireType::Standard,
+        },
+        did: Vid::from_str(&a.did_hash).expect("an account hash is a valid Vid"),
+    }
+}
+
+fn map_audit_entry(e: &AuditLogEntry) -> admin::audit_log::v0_1::AuditEntry {
+    use admin::audit_log::v0_1::{AuditEntry as Wire, Vid};
+    Wire {
+        action: map_audit_action(e.action),
+        actor: Vid::from_str(&e.actor_did_hash).expect("an account hash is a valid Vid"),
+        detail: Some(e.detail.clone()),
+        target: Vid::from_str(&e.target_did_hash).expect("an account hash is a valid Vid"),
+        timestamp: e.timestamp,
+    }
+}
+
+fn map_audit_action(a: AuditAction) -> admin::audit_log::v0_1::AuditAction {
+    use admin::audit_log::v0_1::AuditAction as W;
+    match a {
+        AuditAction::SetAcl => W::SetAcl,
+        AuditAction::AccessListAdd => W::AccessListAdd,
+        AuditAction::AccessListRemove => W::AccessListRemove,
+        AuditAction::AccessListClear => W::AccessListClear,
+        AuditAction::AccountAdd => W::AccountAdd,
+        AuditAction::AccountRemove => W::AccountRemove,
+        AuditAction::AccountChangeType => W::AccountChangeType,
+        AuditAction::AccountChangeQueueLimits => W::AccountChangeQueueLimits,
+        AuditAction::AdminAdd => W::AdminAdd,
+        AuditAction::AdminStrip => W::AdminStrip,
+    }
 }
 
 /// Map the mediator's internal [`Account`] to the wire `account/get` shape.
