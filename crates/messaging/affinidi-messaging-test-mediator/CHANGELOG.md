@@ -4,6 +4,12 @@
 
 ## 24th June 2026
 
+### 0.2.25 — Trust Tasks: account/add e2e
+
+- `account_add_self_register_creates_a_standard_account` (a standard account adds a new
+  account under the default `ExplicitDeny` mode) and
+  `account_add_denies_a_non_admin_creating_an_admin`.
+
 ### 0.2.24 — Trust Tasks: acl/get + acl/set e2e
 
 - `acl_get_self_returns_the_decoded_acl` (alice reads her own ACL) and

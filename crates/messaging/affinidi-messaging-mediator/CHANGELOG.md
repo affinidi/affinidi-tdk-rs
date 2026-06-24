@@ -4,6 +4,17 @@
 
 ## 24th June 2026
 
+### 0.16.21 — Trust Tasks: account/add (account family complete)
+
+- `messaging/account/add`: in `ExplicitAllow` mode only an admin may add accounts; in
+  `ExplicitDeny` mode any authenticated account may. An admin may supply the new
+  account's ACL (applied onto the mediator default via the reverse map); a non-admin
+  gets the default. Creating an admin / root-admin account requires the matching
+  privilege. Records an audit entry; returns the created account's realized view.
+  Initial queue limits use the mediator default (adjust via change-queue-limits).
+  This completes the messaging account family (get / list / change-queue-limits /
+  remove / change-type / add).
+
 ### 0.16.20 — Trust Tasks: acl/get + acl/set
 
 - `messaging/acl/get` (self-or-admin, batched): returns the decoded `MediatorAcl` per

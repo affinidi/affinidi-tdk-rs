@@ -166,6 +166,8 @@ pub(crate) async fn process(
     } else if doc.type_uri == type_uri_of::<account::change_type::v0_1::Payload>() {
         consume_account_change_type(downcast(&doc, session)?, state, session, &mediator_did, now)
             .await?
+    } else if doc.type_uri == type_uri_of::<account::add::v0_1::Payload>() {
+        consume_account_add(downcast(&doc, session)?, state, session, &mediator_did, now).await?
     } else if doc.type_uri == type_uri_of::<acl::get::v0_1::Payload>() {
         consume_acl_get(
             downcast(&doc, session)?,
@@ -666,6 +668,105 @@ async fn change_type_fetch_response(
             )
         })?;
     change_type_response(typed, &account)
+}
+
+/// Handle `messaging/account/add`. In `ExplicitAllow` mode only an admin may add
+/// accounts; in `ExplicitDeny` mode any authenticated account may. An admin may
+/// supply the new account's ACL (applied onto the mediator default); a non-admin
+/// gets the default. Creating an admin / root-admin account requires admin /
+/// root-admin rights. Returns the created account's realized view.
+async fn consume_account_add(
+    typed: TrustTask<account::add::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    use account::add::v0_1::AccountType as WireType;
+
+    typed.validate_basic(now, mediator_did).map_err(|reason| {
+        tt_problem(
+            session,
+            "message.trust_task.rejected",
+            format!("Trust Task failed basic validation: {reason:?}"),
+            StatusCode::BAD_REQUEST,
+        )
+    })?;
+
+    let target_hash = typed.payload.did.to_string();
+    let new_type = match typed.payload.account_type {
+        WireType::Standard => AccountType::Standard,
+        WireType::Admin => AccountType::Admin,
+        WireType::RootAdmin => AccountType::RootAdmin,
+        WireType::Mediator => AccountType::Mediator,
+    };
+    let is_admin = matches!(
+        session.account_type,
+        AccountType::Admin | AccountType::RootAdmin
+    );
+
+    let denied = |reason: &str| {
+        tt_problem(
+            session,
+            "authorization.permission",
+            reason.to_string(),
+            StatusCode::FORBIDDEN,
+        )
+    };
+
+    // In allowlist mode only admins may add accounts.
+    if state.config.security.mediator_acl_mode == AccessListModeType::ExplicitAllow && !is_admin {
+        return Err(denied("admin access is required to add accounts"));
+    }
+    // Creating a privileged account requires the matching privilege.
+    if new_type == AccountType::RootAdmin && session.account_type != AccountType::RootAdmin {
+        return Err(denied("root-admin access is required to create a root-admin account"));
+    }
+    if new_type.is_admin() && !is_admin {
+        return Err(denied("admin access is required to create an admin account"));
+    }
+
+    // ACLs: an admin may supply them (applied onto the mediator default); a non-admin
+    // always gets the default.
+    let acls = match (is_admin, &typed.payload.acl) {
+        (true, Some(acl)) => merge_wire_acl(
+            serde_json::to_value(acl).map_err(serialize_err)?,
+            state.config.security.global_acl_default.clone(),
+        )?,
+        _ => state.config.security.global_acl_default.clone(),
+    };
+
+    let account = state.database.account_add(&target_hash, &acls, None).await?;
+    // Apply a non-standard role if requested (the guards above already authorized it).
+    let account = if new_type != AccountType::Standard {
+        state
+            .database
+            .account_set_role(&target_hash, &new_type)
+            .await?;
+        state
+            .database
+            .account_get(&target_hash)
+            .await?
+            .unwrap_or(account)
+    } else {
+        account
+    };
+
+    record_audit(
+        state,
+        session,
+        &target_hash,
+        AuditAction::AccountAdd,
+        "account created".to_string(),
+    )
+    .await;
+
+    let response = account::add::v0_1::Response {
+        account: to_wire_account(&account),
+        ext: None,
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
 }
 
 /// Handle `messaging/acl/get`: self-or-admin, read-only, batched. Returns one entry

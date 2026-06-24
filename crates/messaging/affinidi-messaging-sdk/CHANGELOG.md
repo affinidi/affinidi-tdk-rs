@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.28] - 2026-06-24
+
+`atm.trust_tasks().account_add(profile, did_hash, account_type, acl)` — create an
+account and return its realized view. Completes the account-family client surface.
+Additive.
+
 ## [0.18.27] - 2026-06-24
 
 `atm.trust_tasks()` gains `acl_get(profile, did_hashes)` (self-or-admin; batched ACL
