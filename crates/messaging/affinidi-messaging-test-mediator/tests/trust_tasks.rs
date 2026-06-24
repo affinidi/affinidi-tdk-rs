@@ -73,3 +73,31 @@ async fn account_get_self_returns_the_callers_account() {
     assert_eq!(account.acl.send_messages, Some(true));
     assert_eq!(account.acl.receive_messages, Some(true));
 }
+
+#[tokio::test]
+async fn account_list_denies_a_non_admin() {
+    // `account/list` is admin-only. A standard account must be refused — the
+    // mediator returns an error rather than leaking the account listing.
+    //
+    // (The admin happy-path listing isn't exercised here: an `add_admin` identity
+    // authenticates by DID resolution but isn't a streaming-registered account, so
+    // the synchronous WebSocket response path can't be established on the in-memory
+    // harness. The account view itself round-trips end-to-end via the `account/get`
+    // test above — `account/list` reuses the very same mapping.)
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+
+    let denied = env
+        .atm
+        .trust_tasks()
+        .account_list(&alice.profile, None, None)
+        .await;
+    assert!(denied.is_err(), "a non-admin must not list accounts");
+}

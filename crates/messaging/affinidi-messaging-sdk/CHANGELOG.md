@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.23] - 2026-06-24
+
+`atm.trust_tasks().account_list(profile, cursor, limit)` (admin only) — returns one
+page of accounts plus an opaque `next_cursor` (present only when more remain); pass
+it back to continue. Additive.
+
 ## [0.18.22] - 2026-06-24
 
 `atm.trust_tasks().account_get(profile, did_hash)` — fetch the mediator's view of an

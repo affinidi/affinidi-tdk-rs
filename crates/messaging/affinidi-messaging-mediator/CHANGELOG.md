@@ -4,6 +4,14 @@
 
 ## 24th June 2026
 
+### 0.16.16 — Trust Tasks: account/list
+
+- The Trust Tasks consumer now handles `messaging/account/list` (admin-only): it
+  pages `state.database.account_list`, maps each `Account` to the wire shape (reusing
+  the `account/get` mapping), and encodes the store's numeric cursor as the spec's
+  opaque `next_cursor` (omitted when the listing is exhausted). Non-admins are
+  refused.
+
 ### 0.16.15 — Trust Tasks: account/get
 
 - The Trust Tasks consumer now handles `messaging/account/get` (self-or-admin,
