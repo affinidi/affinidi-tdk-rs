@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.8] - 2026-06-24
+
+Migrated `set_acl_mode` off the deprecated `atm.mediator()` methods onto
+`atm.trust_tasks().acl_set` (a non-admin self-service ACL change, now supported by the
+mediator). The Trust Tasks partial-update model replaces the previous read-modify-write
+(no `account_get` / `MediatorACLSet` decode needed). Dropped the `#![allow(deprecated)]`.
+
 ## [0.3.7] - 2026-06-24
 
 Allows the now-`#[deprecated]` legacy `atm.mediator()` methods it still calls

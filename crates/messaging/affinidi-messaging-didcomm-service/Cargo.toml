@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-didcomm-service"
-version = "0.3.7"
+version = "0.3.8"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
 authors.workspace = true
@@ -16,6 +16,8 @@ rust-version.workspace = true
 affinidi-tdk-common = "0.6"
 affinidi-messaging-sdk = "0.18"
 affinidi-messaging-didcomm = "0.15"
+## Trust Tasks payload types (the atm.trust_tasks() surface accepts these).
+trust-tasks-rs = "0.2"
 affinidi-secrets-resolver = "0.5"
 
 async-trait = "0.1"
