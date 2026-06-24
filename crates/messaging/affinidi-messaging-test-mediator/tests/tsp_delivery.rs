@@ -122,6 +122,61 @@ async fn tsp_routed_message_relays_through_the_mediator() {
     assert_eq!(sender, alice.did, "original sender VID is recovered, not the relay");
 }
 
+/// End-to-end TSP **Nested** relay: Alice wraps an inner Direct message (sealed to
+/// Bob) in an outer **Nested** envelope sealed to the mediator — a metadata-privacy
+/// carriage where Bob's identity is hidden from anyone but the mediator. The
+/// mediator unwraps its outer layer and forwards the opaque inner to Bob (a local
+/// recipient). Proves the mediator's nested-relay path: derive its own TSP identity
+/// → unpack the layer sealed to it → route the inner by its own envelope → deliver.
+#[tokio::test]
+async fn tsp_nested_message_relays_through_the_mediator() {
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+    let mediator_did = env.mediator.did().to_string();
+
+    let payload = b"nested hello over TSP";
+
+    // Alice nests an inner Direct (sealed to bob) inside a Nested envelope sealed to
+    // the mediator, which unwraps its layer and forwards the inner to bob.
+    env.atm
+        .tsp()
+        .send_nested(&alice.profile, &mediator_did, &bob.did, payload)
+        .await
+        .expect("alice sends a nested TSP message via the mediator");
+
+    // Bob fetches the forwarded (now opaque Direct) message and unpacks it.
+    let fetched = env
+        .atm
+        .fetch_messages(&bob.profile, &FetchOptions::default())
+        .await
+        .expect("bob fetches messages");
+    let element = fetched
+        .success
+        .first()
+        .expect("bob has one forwarded message");
+    let stored = element
+        .msg
+        .as_ref()
+        .expect("forwarded message carries its body");
+
+    let (recovered, sender) = env
+        .atm
+        .tsp()
+        .unpack(&bob.profile, stored)
+        .await
+        .expect("bob unpacks the forwarded TSP message");
+
+    assert_eq!(recovered, payload, "payload survives the nested relay end to end");
+    assert_eq!(
+        sender, alice.did,
+        "original sender VID is recovered, not the intermediary"
+    );
+}
+
 /// End-to-end **TSP↔DIDComm bridge**: Alice sends a *DIDComm* message to Bob, but
 /// carried over TSP routing. She authcrypts a normal DIDComm message to Bob, then
 /// routes it through the mediator with `send_routed_opaque`. The mediator unwraps

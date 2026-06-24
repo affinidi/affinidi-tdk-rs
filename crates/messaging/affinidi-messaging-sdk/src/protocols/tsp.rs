@@ -169,6 +169,54 @@ impl TspOps<'_> {
         self.send_raw(profile, &routed.bytes).await
     }
 
+    /// Send a TSP message wrapped in a **Nested** metadata-privacy envelope.
+    ///
+    /// The payload is sealed end-to-end to `to_did` as an inner Direct message, then
+    /// wrapped in an outer Nested message sealed to `intermediary` — typically the
+    /// recipient's mediator, which unwraps the outer layer and forwards the inner
+    /// onward. On the wire the envelope is addressed to `intermediary`, so only it
+    /// learns `to_did`; the recipient still opens a plain Direct message.
+    pub async fn send_nested(
+        &self,
+        profile: &Arc<ATMProfile>,
+        intermediary: &str,
+        to_did: &str,
+        payload: &[u8],
+    ) -> Result<(), ATMError> {
+        // Inner Direct message sealed end-to-end to the final recipient.
+        let inner = self.pack(profile, to_did, payload).await?;
+        self.send_nested_opaque(profile, intermediary, &inner).await
+    }
+
+    /// Wrap an **already-packed** inner message in a Nested envelope to `intermediary`.
+    ///
+    /// Like [`send_nested`], but `inner` is a pre-built message sealed to its final
+    /// recipient — which may be a **DIDComm** message (the TSP↔DIDComm bridge): the
+    /// intermediary unwraps the Nested layer and forwards the opaque inner, blind to
+    /// its protocol.
+    pub async fn send_nested_opaque(
+        &self,
+        profile: &Arc<ATMProfile>,
+        intermediary: &str,
+        inner: &[u8],
+    ) -> Result<(), ATMError> {
+        let (from_did, _) = profile.dids()?;
+        let (signing_key, encryption_key) = self.profile_tsp_keys(from_did).await?;
+        let intermediary_vid = self.resolve_vid(intermediary).await?;
+        let nested = affinidi_tsp::message::direct::pack(
+            inner,
+            affinidi_tsp::MessageType::Nested,
+            from_did,
+            intermediary,
+            &signing_key,
+            &encryption_key,
+            &intermediary_vid.encryption_key,
+        )
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't pack nested TSP message: {e}")))?;
+
+        self.send_raw(profile, &nested.bytes).await
+    }
+
     /// POST an already-packed TSP message (raw qb2 bytes) to the mediator
     /// `/inbound`, reusing the profile's existing (DIDComm) authenticated session
     /// for the bearer token. The mediator sniffs the TSP magic byte and routes it

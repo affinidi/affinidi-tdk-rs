@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.33] - 2026-06-24
+
+New `atm.tsp().send_nested(profile, intermediary, to_did, payload)` and
+`send_nested_opaque(profile, intermediary, inner)`: send a TSP message wrapped in a
+**`Nested`** metadata-privacy envelope. The payload is sealed end-to-end to `to_did`,
+then wrapped in an outer `Nested` message sealed to `intermediary` (typically the
+recipient's mediator), which unwraps the outer layer and forwards the inner — so only
+the intermediary learns `to_did`. The `_opaque` form takes a pre-built inner (which may
+be a DIDComm message — the TSP↔DIDComm bridge). Additive; no existing API changed.
+
 ## [0.18.32] - 2026-06-24
 
 `atm.trust_tasks().acl_set` is no longer admin-only — a non-admin may set its own ACL
