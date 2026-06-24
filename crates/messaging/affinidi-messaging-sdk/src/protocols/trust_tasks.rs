@@ -150,6 +150,31 @@ impl TrustTasksOps<'_> {
         Ok(response.payload.account)
     }
 
+    /// Send a `messaging/account/remove` Trust Task and return whether a record was
+    /// removed. `did_hash` names the target; `None` removes the caller's own account.
+    /// Self-or-admin; the mediator's own and the root-admin accounts can't be removed.
+    pub async fn account_remove(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<String>,
+    ) -> Result<bool, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
+
+        let did = account::remove::v0_1::Vid::from_str(&target)
+            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
+        let mut task = TrustTask::for_payload(
+            new_id(),
+            account::remove::v0_1::Payload { did, ext: None },
+        );
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<account::remove::v0_1::Response> =
+            self.exchange(profile, &task).await?;
+        Ok(response.payload.removed)
+    }
+
     /// Wrap a `TrustTask<P>` in the DIDComm binding envelope, authcrypt + send it
     /// to the mediator, and decode the reply's body as a `TrustTask<R>`.
     async fn exchange<P, R>(

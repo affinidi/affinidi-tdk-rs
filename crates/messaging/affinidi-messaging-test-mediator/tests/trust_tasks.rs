@@ -148,3 +148,35 @@ async fn account_change_queue_limits_self_applies_caps_and_persists() {
         "a standard account is capped at the hard maximum"
     );
 }
+
+#[tokio::test]
+async fn account_remove_self_removes_the_account() {
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+
+    // Sanity: alice's account exists.
+    env.atm
+        .trust_tasks()
+        .account_get(&alice.profile, None)
+        .await
+        .expect("alice's account exists before removal");
+
+    // Alice removes her own account (self-authorized); the store reports a record
+    // was removed. (We don't assert a follow-up read fails: the mediator
+    // re-registers the sender's account on her next authenticated request, so alice
+    // sending anything else would re-create it — the removal itself is the contract.)
+    let removed = env
+        .atm
+        .trust_tasks()
+        .account_remove(&alice.profile, None)
+        .await
+        .expect("alice removes her own account");
+    assert!(removed, "a record should have been removed");
+}

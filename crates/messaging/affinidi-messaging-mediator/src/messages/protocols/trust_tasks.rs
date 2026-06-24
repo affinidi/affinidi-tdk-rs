@@ -22,7 +22,9 @@ use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use http::StatusCode;
 use serde_json::Value;
+use sha256::digest;
 use std::str::FromStr;
+use subtle::ConstantTimeEq;
 use trust_tasks_rs::specs::messaging::{account, ping};
 use trust_tasks_rs::{
     ConsumeOutcome, Payload, ProofPolicy, ProofVerifier, TransportContext, TransportHandler,
@@ -141,6 +143,16 @@ pub(crate) async fn process(
         consume_account_list(downcast(&doc, session)?, state, session, &mediator_did, now).await?
     } else if doc.type_uri == type_uri_of::<account::change_queue_limits::v0_1::Payload>() {
         consume_account_change_queue_limits(
+            downcast(&doc, session)?,
+            state,
+            session,
+            &Some(sender_kid.clone()),
+            &mediator_did,
+            now,
+        )
+        .await?
+    } else if doc.type_uri == type_uri_of::<account::remove::v0_1::Payload>() {
+        consume_account_remove(
             downcast(&doc, session)?,
             state,
             session,
@@ -426,6 +438,85 @@ fn gate_self_managed_limit(requested: Option<i32>, self_managed: bool, hard: i32
         Some(limit) if limit > hard => Some(hard),
         other => other,
     }
+}
+
+/// Handle `messaging/account/remove`: self-or-admin. Refuses to remove the
+/// mediator's own account or the root admin (both compared in constant time).
+/// Returns the target id and whether a record was removed.
+async fn consume_account_remove(
+    typed: TrustTask<account::remove::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    typed.validate_basic(now, mediator_did).map_err(|reason| {
+        tt_problem(
+            session,
+            "message.trust_task.rejected",
+            format!("Trust Task failed basic validation: {reason:?}"),
+            StatusCode::BAD_REQUEST,
+        )
+    })?;
+
+    let target_hash = typed.payload.did.to_string();
+    if !check_permissions(
+        session,
+        std::slice::from_ref(&target_hash),
+        state.config.security.block_remote_admin_msgs,
+        sender_kid,
+    ) {
+        return Err(tt_problem(
+            session,
+            "authorization.account.denied",
+            format!("not permitted to remove account {target_hash}"),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    // Never remove the mediator's own account or the root admin.
+    let protected = state
+        .config
+        .mediator_did_hash
+        .as_bytes()
+        .ct_eq(target_hash.as_bytes())
+        .unwrap_u8()
+        == 1
+        || digest(&state.config.admin_did)
+            .as_bytes()
+            .ct_eq(target_hash.as_bytes())
+            .unwrap_u8()
+            == 1;
+    if protected {
+        return Err(tt_problem(
+            session,
+            "account.remove.protected",
+            "the mediator and root-admin accounts cannot be removed".to_string(),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    let removed = state
+        .database
+        .account_remove(&session.to_store_session(), &target_hash)
+        .await?;
+    record_audit(
+        state,
+        session,
+        &target_hash,
+        AuditAction::AccountRemove,
+        "account removed".to_string(),
+    )
+    .await;
+
+    let response = account::remove::v0_1::Response {
+        did: typed.payload.did.clone(),
+        ext: None,
+        removed,
+    };
+    let response_doc = typed.respond_with(Uuid::new_v4().to_string(), response);
+    serde_json::to_value(&response_doc).map_err(serialize_err)
 }
 
 /// Map the mediator's internal [`Account`] to the wire `account/get` shape.
