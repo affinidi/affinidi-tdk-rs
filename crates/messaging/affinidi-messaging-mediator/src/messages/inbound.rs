@@ -237,14 +237,13 @@ pub(crate) async fn handle_inbound_tsp(
         // store it opaquely for them to unwrap and relay onward.
         TspMessageType::Nested => deliver_tsp_local(state, session, raw).await,
 
-        // TSP Control-message relay is not handled yet.
-        _ => Err(tsp_problem(
-            session,
-            37,
-            "protocol.tsp.unsupported",
-            "TSP Control messages are not handled yet".to_string(),
-            StatusCode::NOT_IMPLEMENTED,
-        )),
+        // Control (relationship invite / accept / cancel) addressed to a local
+        // account: relay it to its recipient, who applies the relationship transition
+        // on pickup. The relay is payload-agnostic — the mediator never inspects the
+        // control payload. (A Control message addressed to the mediator *itself* —
+        // the mediator as a relationship party — is not supported and fails cleanly
+        // at delivery, since the mediator's own VID is not a deliverable account.)
+        TspMessageType::Control => deliver_tsp_local(state, session, raw).await,
     }
 }
 

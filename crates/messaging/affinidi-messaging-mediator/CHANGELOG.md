@@ -4,6 +4,16 @@
 
 ## 24th June 2026
 
+### 0.16.26 — TSP: Control message relay
+
+- The TSP inbound handler now relays **`Control`** messages (relationship invite /
+  accept / cancel) to their recipient, like a `Direct` message — the relay is
+  payload-agnostic, the mediator never inspects the control payload. This completes the
+  mediator's TSP message-type coverage: **Direct, Routed, Nested, and Control** are all
+  carried (the previous `NotImplemented` fallback is gone). A `Control` message addressed
+  to the mediator *itself* (the mediator as a relationship party) remains unsupported and
+  fails cleanly at delivery.
+
 ### 0.16.25 — TSP: Nested message relay
 
 - The TSP inbound handler now carries **`Nested`** messages (TSP §5.5, the

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.2.29"
+version = "0.2.30"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -84,6 +84,8 @@ affinidi-messaging-didcomm = { version = "0.15", path = "../affinidi-messaging-d
 ## Used by integration tests to hit the mediator's HTTP endpoints
 ## without going through the SDK.
 reqwest = { version = "0.13", features = ["rustls", "json"] }
+## TSP control-message types named by the TSP control-relay integration test.
+affinidi-tsp = { version = "0.1", path = "../affinidi-tsp" }
 ## Trust Tasks payload types named by the Trust Tasks integration tests.
 trust-tasks-rs = "0.2"
 ## Tracing subscriber for test diagnostics.

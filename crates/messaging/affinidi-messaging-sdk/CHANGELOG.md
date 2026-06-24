@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.34] - 2026-06-24
+
+New `atm.tsp().send_control(profile, to_did, control)`: send a TSP **`Control`** message
+— a relationship-management message (invite / accept / cancel) to a peer. Build `control`
+with `affinidi_tsp::message::control::ControlMessage`'s `invite` / `accept` / `cancel`; it
+is sealed to `to_did` and carried with message type `Control`, which the mediator relays
+to the recipient like a Direct message. Additive; no existing API changed.
+
 ## [0.18.33] - 2026-06-24
 
 New `atm.tsp().send_nested(profile, intermediary, to_did, payload)` and
