@@ -1,17 +1,19 @@
 use crate::{SharedConfig, account_management::acl_management::manage_account_acls};
 use affinidi_messaging_helpers::common::did::manually_enter_did_or_hash;
-use affinidi_messaging_sdk::{
-    ATM,
-    profiles::ATMProfile,
-    protocols::mediator::{
-        accounts::{Account, AccountChangeQueueLimitsResponse, AccountType},
-        acls::MediatorACLSet,
-    },
-};
+use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use console::style;
 use dialoguer::{Input, Select, theme::ColorfulTheme};
 use regex::Regex;
 use std::sync::Arc;
+use trust_tasks_rs::specs::messaging::account;
+
+/// All the `messaging/account/*` Trust Tasks return a per-module `Account` struct,
+/// but they share one schema. This converts any of them back to the canonical
+/// `account::get::v0_1::Account` we hold across the screen.
+fn to_get_account<T: serde::Serialize>(a: &T) -> account::get::v0_1::Account {
+    serde_json::from_value(serde_json::to_value(a).expect("serialize"))
+        .expect("messaging Account types share one schema")
+}
 
 pub(crate) async fn account_management_menu(
     atm: &ATM,
@@ -58,12 +60,12 @@ pub(crate) async fn create_account_menu(
         return Ok(());
     };
 
-    // Does this account exist?
+    // Does this account exist? A missing account is an Err, so existence is is_ok().
     if atm
-        .mediator()
+        .trust_tasks()
         .account_get(profile, Some(new_did_hash.clone()))
-        .await?
-        .is_some()
+        .await
+        .is_ok()
     {
         println!(
             "{}",
@@ -74,13 +76,18 @@ pub(crate) async fn create_account_menu(
 
     // Create the account
     let account = atm
-        .mediator()
-        .account_add(profile, &new_did_hash, None)
+        .trust_tasks()
+        .account_add(
+            profile,
+            new_did_hash.clone(),
+            account::add::v0_1::AccountType::Standard,
+            None,
+        )
         .await?;
 
     println!("{}", style("Created account successfully").green());
 
-    manage_account_menu(atm, profile, theme, mediator_config, &account).await
+    manage_account_menu(atm, profile, theme, mediator_config, &to_get_account(&account)).await
 }
 
 pub(crate) async fn manage_account_menu(
@@ -88,7 +95,7 @@ pub(crate) async fn manage_account_menu(
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
     mediator_config: &SharedConfig,
-    account: &Account,
+    account: &account::get::v0_1::Account,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let selections = &[
         "Modify ACLs",
@@ -102,19 +109,19 @@ pub(crate) async fn manage_account_menu(
     loop {
         println!();
         println!(
-            "{} {}  {} {:064b} {} {}",
+            "{} {}  {} {} {} {}",
             style("Selected DID: ").yellow(),
-            style(&account.did_hash).color256(208),
+            style(account.did.as_str()).color256(208),
             style("ACL:").yellow(),
-            style(account.acls).blue().bold(),
+            style(format!("{:?}", account.acl)).blue().bold(),
             style("Access List Count:").yellow(),
-            style(account.access_list_count).blue().bold()
+            style(account.access_list_count.unwrap_or(0)).blue().bold()
         );
 
         println!(
             "{} {:<12} {} {} {} {}",
             style("Selected DID Account Type:").yellow(),
-            style(&account._type.to_string()).blue().bold(),
+            style(account.account_type.to_string()).blue().bold(),
             style("Mediator ACL Mode:").yellow(),
             style(&mediator_config.acl_mode).blue().bold(),
             style("Default ACL:").yellow(),
@@ -126,30 +133,37 @@ pub(crate) async fn manage_account_menu(
             .bold()
         );
 
+        let queue_send_limit = account
+            .queue_limits
+            .as_ref()
+            .and_then(|q| q.send_queue_limit);
+        let queue_receive_limit = account
+            .queue_limits
+            .as_ref()
+            .and_then(|q| q.receive_queue_limit);
+
         println!(
             "{} {} {} {} {} {} {} {} {} {} {} {} {}",
             style("Stats").yellow(),
             style("INBOX Count:").yellow(),
-            style(&account.receive_queue_count).blue().bold(),
+            style(account.receive_queue_count.unwrap_or(0)).blue().bold(),
             style("INBOX bytes").yellow(),
-            style(&account.receive_queue_bytes).blue().bold(),
+            style(account.receive_queue_bytes.unwrap_or(0)).blue().bold(),
             style("OUTBOX Count:").yellow(),
-            style(&account.receive_queue_count).blue().bold(),
+            style(account.receive_queue_count.unwrap_or(0)).blue().bold(),
             style("OUTBOX bytes").yellow(),
-            style(&account.receive_queue_bytes).blue().bold(),
+            style(account.receive_queue_bytes.unwrap_or(0)).blue().bold(),
             style("Send Q Limit:").yellow(),
             style(
-                &account
-                    .queue_send_limit
-                    .unwrap_or(mediator_config.queued_send_messages_soft)
+                queue_send_limit
+                    .unwrap_or(mediator_config.queued_send_messages_soft as i64)
             )
             .blue()
             .bold(),
             style("Receive Q Limit:").yellow(),
             style(
-                &account
-                    .queue_receive_limit
-                    .unwrap_or(mediator_config.queued_receive_messages_soft)
+                queue_receive_limit
+                    .unwrap_or(mediator_config.queued_receive_messages_soft as i64)
             )
             .blue()
             .bold()
@@ -178,8 +192,8 @@ pub(crate) async fn manage_account_menu(
             1 => {
                 // Change Account Type
                 match _change_account_type(atm, profile, theme, &account).await {
-                    Ok(_type) => {
-                        account._type = _type;
+                    Ok(updated) => {
+                        account = updated;
                     }
                     Err(err) => println!(
                         "{}",
@@ -190,24 +204,10 @@ pub(crate) async fn manage_account_menu(
             2 => {
                 // Change Queue Limits
                 match _change_account_queue_limit(atm, profile, theme, &account).await {
-                    Ok(response) => {
-                        if let Some(response) = response {
-                            if let Some(limit) = response.send_queue_limit {
-                                if limit == -2 {
-                                    account.queue_send_limit = None;
-                                } else {
-                                    account.queue_send_limit = response.send_queue_limit;
-                                }
-                            }
-                            if let Some(limit) = response.receive_queue_limit {
-                                if limit == -2 {
-                                    account.queue_receive_limit = None;
-                                } else {
-                                    account.queue_receive_limit = response.receive_queue_limit;
-                                }
-                            }
-                        }
+                    Ok(Some(updated)) => {
+                        account = updated;
                     }
+                    Ok(None) => {}
                     Err(err) => println!(
                         "{}",
                         style(format!("Error changing account queue_limit: {err}")).red()
@@ -217,8 +217,8 @@ pub(crate) async fn manage_account_menu(
             3 => {
                 // Delete Account
                 match atm
-                    .mediator()
-                    .account_remove(profile, Some(account.did_hash.clone()))
+                    .trust_tasks()
+                    .account_remove(profile, Some(account.did.as_str().to_string()))
                     .await
                 {
                     Ok(_) => {
@@ -245,9 +245,17 @@ async fn _change_account_type(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    account: &Account,
-) -> Result<AccountType, Box<dyn std::error::Error>> {
-    let mut selections = AccountType::iterator()
+    account: &account::get::v0_1::Account,
+) -> Result<account::get::v0_1::Account, Box<dyn std::error::Error>> {
+    let options = [
+        account::change_type::v0_1::AccountType::Standard,
+        account::change_type::v0_1::AccountType::Admin,
+        account::change_type::v0_1::AccountType::RootAdmin,
+        account::change_type::v0_1::AccountType::Mediator,
+    ];
+
+    let mut selections = options
+        .iter()
         .map(|t| t.to_string())
         .collect::<Vec<String>>();
 
@@ -262,22 +270,25 @@ async fn _change_account_type(
 
     if selection == selections.len() - 1 {
         // No change, exit gracefully
-        return Ok(account._type);
+        return Ok(account.clone());
     }
 
-    let new_type = AccountType::from(selection as u32);
+    let new_type = options[selection];
     println!("Changing account type to: {new_type}");
 
-    if new_type == account._type {
+    // Compare current account type to the requested one (variants are equivalent
+    // across modules, so compare via their string representation).
+    if new_type.to_string() == account.account_type.to_string() {
         // No change, exit gracefully
-        Ok(account._type)
+        Ok(account.clone())
     } else {
-        atm.mediator()
-            .account_change_type(profile, &account.did_hash, new_type)
+        let updated = atm
+            .trust_tasks()
+            .account_change_type(profile, account.did.as_str().to_string(), new_type)
             .await
             .map_err(|e| e.to_string())?;
         println!("{}", style("Account type changed successfully").green());
-        Ok(new_type)
+        Ok(to_get_account(&updated))
     }
 }
 
@@ -285,8 +296,8 @@ async fn _change_account_queue_limit(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    account: &Account,
-) -> Result<Option<AccountChangeQueueLimitsResponse>, Box<dyn std::error::Error>> {
+    account: &account::get::v0_1::Account,
+) -> Result<Option<account::get::v0_1::Account>, Box<dyn std::error::Error>> {
     let send_input = Input::with_theme(theme)
         .with_prompt("New Send Queue Limit? (-2 = Reset, -1 = Unlimited, n = limit, blank = no change, exit = cancel")
         .validate_with(|input: &String| -> Result<(), &str> {
@@ -294,7 +305,7 @@ async fn _change_account_queue_limit(
             if input == "exit" || input.is_empty() {
                 Ok(())
             } else if re.is_match(input) {
-                match input.parse::<i32>() {
+                match input.parse::<i64>() {
                     Ok(limit) => {
                         if limit < -2 {
                             Err("Invalid queue limit")
@@ -318,10 +329,10 @@ async fn _change_account_queue_limit(
     }
 
     println!("Changing account send queue_limit to: {send_input}");
-    let send_queue_limit: Option<i32> = if send_input.is_empty() {
+    let send_queue_limit: Option<i64> = if send_input.is_empty() {
         None
     } else {
-        match send_input.parse::<i32>() {
+        match send_input.parse::<i64>() {
             Ok(limit) => Some(limit),
             Err(e) => {
                 println!("{}", style(format!("Couldn't parse number: {e}")).red());
@@ -337,7 +348,7 @@ async fn _change_account_queue_limit(
             if input == "exit" || input.is_empty() {
                 Ok(())
             } else if re.is_match(input) {
-                match input.parse::<i32>() {
+                match input.parse::<i64>() {
                     Ok(limit) => {
                         if limit < -2 {
                             Err("Invalid queue limit")
@@ -361,10 +372,10 @@ async fn _change_account_queue_limit(
     }
 
     println!("Changing account receive queue_limit to: {receive_input}");
-    let receive_queue_limit: Option<i32> = if receive_input.is_empty() {
+    let receive_queue_limit: Option<i64> = if receive_input.is_empty() {
         None
     } else {
-        match receive_input.parse::<i32>() {
+        match receive_input.parse::<i64>() {
             Ok(limit) => Some(limit),
             Err(e) => {
                 println!("{}", style(format!("Couldn't parse number: {e}")).red());
@@ -373,11 +384,11 @@ async fn _change_account_queue_limit(
         }
     };
 
-    let response = atm
-        .mediator()
+    let updated = atm
+        .trust_tasks()
         .account_change_queue_limits(
             profile,
-            &account.did_hash,
+            Some(account.did.as_str().to_string()),
             send_queue_limit,
             receive_queue_limit,
         )
@@ -386,11 +397,11 @@ async fn _change_account_queue_limit(
     println!(
         "{}",
         style(format!(
-            "Account queue_limits changed successfully {response:#?}"
+            "Account queue_limits changed successfully {updated:#?}"
         ))
         .green()
     );
-    Ok(Some(response))
+    Ok(Some(to_get_account(&updated)))
 }
 
 /// Picks the target DID
@@ -426,9 +437,10 @@ pub(crate) async fn select_did(
             }
             1 => {
                 if let Some(did_hash) = manually_enter_did_or_hash(theme) {
-                    // Look up the Account for this DID
-                    let account = atm.mediator().account_get(profile, Some(did_hash)).await?;
-                    if let Some(account) = account {
+                    // Look up the Account for this DID (a missing account is an Err)
+                    if let Ok(account) =
+                        atm.trust_tasks().account_get(profile, Some(did_hash)).await
+                    {
                         manage_account_menu(atm, profile, theme, mediator_config, &account).await?;
                     }
                 }
@@ -445,12 +457,12 @@ async fn _select_from_existing_dids(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    cursor: Option<u32>,
+    cursor: Option<String>,
     mediator_config: &SharedConfig,
-) -> Result<Option<Account>, Box<dyn std::error::Error>> {
+) -> Result<Option<account::get::v0_1::Account>, Box<dyn std::error::Error>> {
     let dids = atm
-        .mediator()
-        .accounts_list(profile, cursor, Some(2))
+        .trust_tasks()
+        .account_list(profile, cursor, Some(2))
         .await?;
 
     if dids.accounts.is_empty() {
@@ -461,37 +473,29 @@ async fn _select_from_existing_dids(
 
     let mut did_list: Vec<String> = Vec::new();
     for account in &dids.accounts {
-        let acls = MediatorACLSet::from_u64(account.acls);
-        let acl_default_flag = account.acls == mediator_config.global_acl_default.to_u64();
+        let blocked = account.acl.blocked.unwrap_or(false);
+        let local = account.acl.local.unwrap_or(false);
 
         did_list.push(format!(
-            "{} {} {:^8} {:^6} {:064b} {}",
-            account.did_hash,
-            style(format!("{:^12}", account._type.to_string())).blue(),
-            if acls.get_blocked() {
+            "{} {} {:^8} {:^6} {:?}",
+            account.did.as_str(),
+            style(format!("{:^12}", account.account_type.to_string())).blue(),
+            if blocked {
                 style("Yes").red().bold()
             } else {
                 style("No").green()
             },
-            if acls.get_local() {
+            if local {
                 style("Yes").green().bold()
             } else {
                 style("No").red()
             },
-            if acl_default_flag {
-                style(account.acls).green()
-            } else {
-                style(account.acls).cyan()
-            },
-            if acl_default_flag {
-                style("Default").green()
-            } else {
-                style("Custom").cyan()
-            }
+            style(format!("{:?}", account.acl)).cyan(),
         ));
     }
     let mut load_more_flag = false;
-    if dids.cursor > 0 {
+    let next_cursor = dids.next_cursor.as_ref().map(|c| c.to_string());
+    if next_cursor.is_some() {
         did_list.push("Load more DIDs...".to_string());
         load_more_flag = true;
     }
@@ -512,7 +516,7 @@ async fn _select_from_existing_dids(
             atm,
             profile,
             theme,
-            Some(dids.cursor),
+            next_cursor,
             mediator_config,
         ))
         .await
@@ -520,6 +524,6 @@ async fn _select_from_existing_dids(
         // Exit gracefully
         Ok(None)
     } else {
-        Ok(Some(dids.accounts[selected].clone()))
+        Ok(Some(to_get_account(&dids.accounts[selected])))
     }
 }
