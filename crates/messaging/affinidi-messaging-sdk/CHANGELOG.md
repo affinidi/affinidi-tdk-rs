@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.18.23] - 2026-06-24
+
+`atm.trust_tasks().account_list(profile, cursor, limit)` (admin only) — returns one
+page of accounts plus an opaque `next_cursor` (present only when more remain); pass
+it back to continue. Additive.
+
+## [0.18.22] - 2026-06-24
+
+`atm.trust_tasks().account_get(profile, did_hash)` — fetch the mediator's view of an
+account as a typed `account/get` response. `None` requests the caller's own account
+(self; no admin rights needed). Shares the binding-envelope send path with `ping`
+(refactored into an internal `exchange` helper). Additive.
+
 ## [0.18.21] - 2026-06-23
 
 New `atm.trust_tasks()` accessor with `.ping(profile, nonce)` — sends a

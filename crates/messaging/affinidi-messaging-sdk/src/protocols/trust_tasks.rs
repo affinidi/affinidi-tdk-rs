@@ -6,18 +6,23 @@
 //! `type` is the [`ENVELOPE_TYPE`] and whose `body` is the document). The mediator
 //! consumes it through the Trust Tasks framework and returns a `TrustTask<R>`.
 //!
-//! This first cut exposes `ping`; account / acl / access-list follow, and the
-//! legacy `atm.mediator()` / `atm.trust_ping()` methods will route through this
-//! same core.
+//! This exposes `ping` and `account_get`; the rest of the account / acl /
+//! access-list families follow, and the legacy `atm.mediator()` / `atm.trust_ping()`
+//! methods will route through this same core.
 //!
 //! [Trust Tasks]: https://trusttasks.org
 
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use affinidi_messaging_didcomm::message::Message;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use sha256::digest;
 use trust_tasks_rs::TrustTask;
-use trust_tasks_rs::specs::messaging::ping;
+use trust_tasks_rs::specs::messaging::{account, ping};
 use uuid::Uuid;
 
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};
@@ -39,27 +44,99 @@ impl TrustTasksOps<'_> {
         profile: &Arc<ATMProfile>,
         nonce: Option<String>,
     ) -> Result<ping::v0_1::Response, ATMError> {
-        let atm = self.atm;
         let (profile_did, mediator_did) = profile.dids()?;
-
-        // Build the Trust Task document (in-band parties: me → the mediator).
         let mut task = TrustTask::for_payload(
-            format!("urn:uuid:{}", Uuid::new_v4()),
+            new_id(),
             ping::v0_1::Payload { ext: None, nonce },
         );
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
-        let body = serde_json::to_value(&task)
-            .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise ping Trust Task: {e}")))?;
+        let response: TrustTask<ping::v0_1::Response> = self.exchange(profile, &task).await?;
+        Ok(response.payload)
+    }
+
+    /// Send a `messaging/account/get` Trust Task and return the mediator's view of
+    /// the account. `did_hash` names the target account; `None` requests the
+    /// caller's own account (self). Self requests need no admin rights; fetching
+    /// another account requires an admin profile.
+    pub async fn account_get(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<String>,
+    ) -> Result<account::get::v0_1::Account, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
+
+        let did = account::get::v0_1::Vid::from_str(&target)
+            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
+        let mut task = TrustTask::for_payload(
+            new_id(),
+            account::get::v0_1::Payload { did, ext: None },
+        );
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<account::get::v0_1::Response> = self.exchange(profile, &task).await?;
+        Ok(response.payload.account)
+    }
+
+    /// Send a `messaging/account/list` Trust Task (admin only) and return one page
+    /// of accounts plus an opaque `next_cursor` (present only when more remain).
+    /// Pass the previous page's cursor to continue; `None` starts from the top.
+    pub async fn account_list(
+        &self,
+        profile: &Arc<ATMProfile>,
+        cursor: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<account::list::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+
+        let cursor = cursor
+            .map(|c| account::list::v0_1::PayloadCursor::from_str(&c))
+            .transpose()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid cursor: {e}")))?;
+        let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
+
+        let mut task = TrustTask::for_payload(
+            new_id(),
+            account::list::v0_1::Payload {
+                cursor,
+                ext: None,
+                limit,
+            },
+        );
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<account::list::v0_1::Response> =
+            self.exchange(profile, &task).await?;
+        Ok(response.payload)
+    }
+
+    /// Wrap a `TrustTask<P>` in the DIDComm binding envelope, authcrypt + send it
+    /// to the mediator, and decode the reply's body as a `TrustTask<R>`.
+    async fn exchange<P, R>(
+        &self,
+        profile: &Arc<ATMProfile>,
+        task: &TrustTask<P>,
+    ) -> Result<TrustTask<R>, ATMError>
+    where
+        P: Serialize,
+        R: DeserializeOwned,
+    {
+        let atm = self.atm;
+        let (profile_did, mediator_did) = profile.dids()?;
+
+        let body = serde_json::to_value(task)
+            .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))?;
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        // Wrap it in the DIDComm binding envelope and authcrypt it to the mediator.
-        let msg = Message::build(Uuid::new_v4().to_string(), ENVELOPE_TYPE.to_string(), body)
+        let msg = Message::build(new_id(), ENVELOPE_TYPE.to_string(), body)
             .to(mediator_did.into())
             .from(profile_did.into())
             .created_time(now)
@@ -71,21 +148,22 @@ impl TrustTasksOps<'_> {
             .inner
             .pack_encrypted(&msg, mediator_did, Some(profile_did))
             .await
-            .map_err(|e| ATMError::MsgSendError(format!("couldn't pack ping Trust Task: {e}")))?;
+            .map_err(|e| ATMError::MsgSendError(format!("couldn't pack Trust Task: {e}")))?;
 
         match atm.send_message(profile, &packed, &msg_id, true, true).await? {
-            SendMessageResponse::Message(response) => {
-                let doc: TrustTask<ping::v0_1::Response> =
-                    serde_json::from_value(response.body.clone()).map_err(|e| {
-                        ATMError::MsgReceiveError(format!(
-                            "ping response is not a Trust Task document: {e}"
-                        ))
-                    })?;
-                Ok(doc.payload)
-            }
+            SendMessageResponse::Message(response) => decode_body(&response.body),
             _ => Err(ATMError::MsgReceiveError(
-                "no response from mediator for the ping Trust Task".to_owned(),
+                "no response from mediator for the Trust Task".to_owned(),
             )),
         }
     }
+}
+
+fn new_id() -> String {
+    format!("urn:uuid:{}", Uuid::new_v4())
+}
+
+fn decode_body<R: DeserializeOwned>(body: &Value) -> Result<TrustTask<R>, ATMError> {
+    serde_json::from_value(body.clone())
+        .map_err(|e| ATMError::MsgReceiveError(format!("response is not a Trust Task document: {e}")))
 }

@@ -2,6 +2,23 @@
 
 ## Changelog history
 
+## 24th June 2026
+
+### 0.2.20 — Trust Tasks: account/list authz e2e
+
+- New `account_list_denies_a_non_admin` test: a standard account is refused
+  `account/list`. (The admin happy-path listing isn't exercised end-to-end — an
+  `add_admin` identity isn't a streaming-registered account, so the synchronous
+  WebSocket response can't be established on the in-memory harness; the account view
+  itself round-trips via the `account/get` test, which `account/list` reuses.)
+
+### 0.2.19 — Trust Tasks: account/get e2e
+
+- New `account_get_self_returns_the_callers_account` test: alice fetches her own
+  account via `atm.trust_tasks().account_get(.., None)` and asserts the identity
+  (hash as `Vid`), account type, and decoded ACL booleans round-trip through a live
+  mediator.
+
 ## 23rd June 2026
 
 ### 0.2.18 — Trust Tasks ping e2e
