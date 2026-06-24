@@ -265,3 +265,57 @@ async fn acl_set_denies_a_non_admin() {
         .await;
     assert!(denied.is_err(), "a non-admin must not set ACLs");
 }
+
+#[tokio::test]
+async fn account_add_self_register_creates_a_standard_account() {
+    use trust_tasks_rs::specs::messaging::account::add::v0_1::AccountType;
+
+    // The fixture defaults to `ExplicitDeny`, so a standard account may add accounts.
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+
+    let new_hash = "tt-add-standard-account".to_string();
+    let account = env
+        .atm
+        .trust_tasks()
+        .account_add(&alice.profile, new_hash.clone(), AccountType::Standard, None)
+        .await
+        .expect("alice adds a new standard account");
+
+    assert_eq!(account.did.as_str(), new_hash);
+    assert_eq!(account.account_type.to_string(), "standard");
+}
+
+#[tokio::test]
+async fn account_add_denies_a_non_admin_creating_an_admin() {
+    use trust_tasks_rs::specs::messaging::account::add::v0_1::AccountType;
+
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+
+    let denied = env
+        .atm
+        .trust_tasks()
+        .account_add(
+            &alice.profile,
+            "tt-add-admin-attempt".to_string(),
+            AccountType::Admin,
+            None,
+        )
+        .await;
+    assert!(denied.is_err(), "a non-admin must not create an admin account");
+}

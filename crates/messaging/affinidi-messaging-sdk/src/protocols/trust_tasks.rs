@@ -250,6 +250,42 @@ impl TrustTasksOps<'_> {
         Ok(response.payload.acl)
     }
 
+    /// Send a `messaging/account/add` Trust Task and return the created account's view.
+    /// In allowlist mode only an admin may add accounts; in denylist mode any
+    /// authenticated account may. `acl` is optional — an admin's is applied onto the
+    /// mediator default, a non-admin's is ignored (the default is used). Creating an
+    /// admin / root-admin account requires the matching privilege.
+    pub async fn account_add(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: String,
+        account_type: account::add::v0_1::AccountType,
+        acl: Option<account::add::v0_1::MediatorAcl>,
+    ) -> Result<account::add::v0_1::Account, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+
+        let did = account::add::v0_1::Vid::from_str(&did_hash)
+            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
+        let mut task = TrustTask::for_payload(
+            new_id(),
+            account::add::v0_1::Payload {
+                account_type,
+                acl,
+                did,
+                ext: None,
+                // Initial queue limits use the mediator default; adjust with
+                // `account_change_queue_limits` after creation.
+                queue_limits: None,
+            },
+        );
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<account::add::v0_1::Response> =
+            self.exchange(profile, &task).await?;
+        Ok(response.payload.account)
+    }
+
     /// Wrap a `TrustTask<P>` in the DIDComm binding envelope, authcrypt + send it
     /// to the mediator, and decode the reply's body as a `TrustTask<R>`.
     async fn exchange<P, R>(
