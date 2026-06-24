@@ -4,6 +4,18 @@
 
 ## 24th June 2026
 
+### 0.16.20 — Trust Tasks: acl/get + acl/set
+
+- `messaging/acl/get` (self-or-admin, batched): returns the decoded `MediatorAcl` per
+  known DID and lists unknown DIDs separately.
+- `messaging/acl/set` (admin-only): applies the wire ACL as a **partial update** onto
+  the account's current ACL — the **reverse** of the bitfield decode. The wire form
+  doesn't carry the per-capability self-change bits, so they're preserved from the
+  current set; absent flags are left unchanged. Records an audit entry; returns the
+  realized ACL. Backed by an `acl_reverse_map_round_trips` unit test (decode→merge
+  reproduces the original `u64` across value, change, and self-manage bits). Non-admin
+  self-service ACL changes aren't supported here.
+
 ### 0.16.19 — Trust Tasks: account/change-type
 
 - The Trust Tasks consumer now handles `messaging/account/change-type` (admin-only).
