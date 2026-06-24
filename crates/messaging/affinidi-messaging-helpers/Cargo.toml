@@ -22,6 +22,8 @@ path = "src/mediator_administration/main.rs"
 # ── Affinidi Crates ──────────────────────────────────────────────────────
 ## SDK for connecting to and communicating with a running mediator
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.18" }
+## Trust Tasks payload types (the atm.trust_tasks() surface returns/accepts these).
+trust-tasks-rs = "0.2"
 ## TDK for DID resolution and crypto utilities
 affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.8" }
 ## DIDComm message types — used by example binaries
