@@ -208,3 +208,60 @@ async fn account_change_type_denies_a_non_admin() {
         .await;
     assert!(denied.is_err(), "a non-admin must not change account types");
 }
+
+#[tokio::test]
+async fn acl_get_self_returns_the_decoded_acl() {
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+
+    let page = env
+        .atm
+        .trust_tasks()
+        .acl_get(&alice.profile, vec![alice.did_hash()])
+        .await
+        .expect("alice reads her own ACL");
+
+    assert!(page.unknown.is_empty(), "alice's account is known");
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].did.as_str(), alice.did_hash());
+    // add_user grants allow_all → the decoded flags reflect it.
+    assert_eq!(page.entries[0].acl.send_messages, Some(true));
+    assert_eq!(page.entries[0].acl.receive_messages, Some(true));
+}
+
+#[tokio::test]
+async fn acl_set_denies_a_non_admin() {
+    use trust_tasks_rs::specs::messaging::acl::set::v0_1::MediatorAcl;
+
+    // `acl/set` is admin-only here (non-admin self-service ACL changes aren't
+    // supported). The reverse mapping itself is covered by the mediator's
+    // `acl_reverse_map_round_trips` unit test.
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+
+    let acl = MediatorAcl {
+        blocked: Some(true),
+        ..Default::default()
+    };
+    let denied = env
+        .atm
+        .trust_tasks()
+        .acl_set(&alice.profile, bob.did_hash(), acl)
+        .await;
+    assert!(denied.is_err(), "a non-admin must not set ACLs");
+}

@@ -16,7 +16,9 @@
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_mediator_common::types::accounts::{Account, AccountType};
-use affinidi_messaging_mediator_common::types::acls::{AccessListModeType, MediatorACLSet};
+use affinidi_messaging_mediator_common::types::acls::{
+    ACLError, AccessListModeType, MediatorACLSet,
+};
 use affinidi_messaging_mediator_common::types::audit::AuditAction;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
@@ -25,7 +27,7 @@ use serde_json::Value;
 use sha256::digest;
 use std::str::FromStr;
 use subtle::ConstantTimeEq;
-use trust_tasks_rs::specs::messaging::{account, ping};
+use trust_tasks_rs::specs::messaging::{account, acl, ping};
 use trust_tasks_rs::{
     ConsumeOutcome, Payload, ProofPolicy, ProofVerifier, TransportContext, TransportHandler,
     TrustTask, TypeUri, VerificationError, consume_inbound,
@@ -164,6 +166,18 @@ pub(crate) async fn process(
     } else if doc.type_uri == type_uri_of::<account::change_type::v0_1::Payload>() {
         consume_account_change_type(downcast(&doc, session)?, state, session, &mediator_did, now)
             .await?
+    } else if doc.type_uri == type_uri_of::<acl::get::v0_1::Payload>() {
+        consume_acl_get(
+            downcast(&doc, session)?,
+            state,
+            session,
+            &Some(sender_kid.clone()),
+            &mediator_did,
+            now,
+        )
+        .await?
+    } else if doc.type_uri == type_uri_of::<acl::set::v0_1::Payload>() {
+        consume_acl_set(downcast(&doc, session)?, state, session, &mediator_did, now).await?
     } else {
         return Err(tt_problem(
             session,
@@ -654,6 +668,124 @@ async fn change_type_fetch_response(
     change_type_response(typed, &account)
 }
 
+/// Handle `messaging/acl/get`: self-or-admin, read-only, batched. Returns one entry
+/// per known DID and lists any unknown DIDs separately.
+async fn consume_acl_get(
+    typed: TrustTask<acl::get::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    use acl::get::v0_1::{Entry, Response, Vid};
+
+    typed.validate_basic(now, mediator_did).map_err(|reason| {
+        tt_problem(
+            session,
+            "message.trust_task.rejected",
+            format!("Trust Task failed basic validation: {reason:?}"),
+            StatusCode::BAD_REQUEST,
+        )
+    })?;
+
+    let dids: Vec<String> = typed.payload.dids.iter().map(|v| v.to_string()).collect();
+    if !check_permissions(
+        session,
+        &dids,
+        state.config.security.block_remote_admin_msgs,
+        sender_kid,
+    ) {
+        return Err(tt_problem(
+            session,
+            "authorization.account.denied",
+            "not permitted to read one or more of the requested ACLs".to_string(),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    let mut entries = Vec::new();
+    let mut unknown = Vec::new();
+    for did in &dids {
+        let vid = Vid::from_str(did).expect("a requested DID is a valid Vid");
+        match state.database.get_did_acl(did).await? {
+            Some(aclset) => entries.push(Entry {
+                acl: to_wire_acl(&aclset),
+                did: vid,
+            }),
+            None => unknown.push(vid),
+        }
+    }
+
+    let response = Response {
+        entries,
+        ext: None,
+        unknown,
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/acl/set`: admin-only. Applies the wire ACL as a partial update
+/// onto the account's current ACL (the reverse map preserves the per-capability
+/// change bits) and returns the realized ACL. Non-admin self-service ACL changes are
+/// not supported here — they are refused.
+async fn consume_acl_set(
+    typed: TrustTask<acl::set::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    typed.validate_basic(now, mediator_did).map_err(|reason| {
+        tt_problem(
+            session,
+            "message.trust_task.rejected",
+            format!("Trust Task failed basic validation: {reason:?}"),
+            StatusCode::BAD_REQUEST,
+        )
+    })?;
+
+    if !matches!(
+        session.account_type,
+        AccountType::Admin | AccountType::RootAdmin
+    ) {
+        return Err(tt_problem(
+            session,
+            "authorization.admin_required",
+            "acl/set requires an admin account".to_string(),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    let target_hash = typed.payload.did.to_string();
+    let base = state
+        .database
+        .get_did_acl(&target_hash)
+        .await?
+        .unwrap_or_default();
+    let acl_value = serde_json::to_value(&typed.payload.acl).map_err(serialize_err)?;
+    let merged = merge_wire_acl(acl_value, base)?;
+
+    let stored = state.database.set_did_acl(&target_hash, &merged).await?;
+    record_audit(
+        state,
+        session,
+        &target_hash,
+        AuditAction::SetAcl,
+        format!("acl -> {:#018x}", stored.to_u64()),
+    )
+    .await;
+
+    let response = acl::set::v0_1::Response {
+        acl: to_wire_acl(&stored),
+        did: typed.payload.did.clone(),
+        ext: None,
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
 /// Map the mediator's internal [`Account`] to the wire `account/get` shape.
 ///
 /// The DID is carried as the mediator's account hash — a valid `Vid` per the
@@ -661,16 +793,7 @@ async fn change_type_fetch_response(
 /// `u64` ACL bitfield is decoded into the spec's named booleans; `didcommEnabled`
 /// / `tspEnabled` have no bitfield slot and are reported as `None`.
 fn map_account_get(acc: &Account) -> account::get::v0_1::Account {
-    use account::get::v0_1::{
-        Account as WireAccount, AccountType as WireType, MediatorAcl, MediatorAclAccessListMode,
-        QueueLimits, Vid,
-    };
-
-    let acl = MediatorACLSet::from_u64(acc.acls);
-    let access_list_mode = match acl.get_access_list_mode().0 {
-        AccessListModeType::ExplicitAllow => MediatorAclAccessListMode::ExplicitAllow,
-        AccessListModeType::ExplicitDeny => MediatorAclAccessListMode::ExplicitDeny,
-    };
+    use account::get::v0_1::{Account as WireAccount, AccountType as WireType, QueueLimits, Vid};
 
     WireAccount {
         did: Vid::from_str(&acc.did_hash).expect("an account hash is a non-empty Vid string"),
@@ -681,22 +804,7 @@ fn map_account_get(acc: &Account) -> account::get::v0_1::Account {
             AccountType::Mediator => WireType::Mediator,
             AccountType::Unknown => WireType::Standard,
         },
-        acl: MediatorAcl {
-            access_list_mode: Some(access_list_mode),
-            blocked: Some(acl.get_blocked()),
-            local: Some(acl.get_local()),
-            send_messages: Some(acl.get_send_messages().0),
-            receive_messages: Some(acl.get_receive_messages().0),
-            send_forwarded: Some(acl.get_send_forwarded().0),
-            receive_forwarded: Some(acl.get_receive_forwarded().0),
-            create_invites: Some(acl.get_create_invites().0),
-            anon_receive: Some(acl.get_anon_receive().0),
-            self_manage_list: Some(acl.get_self_manage_list()),
-            self_manage_send_queue_limit: Some(acl.get_self_manage_send_queue_limit()),
-            self_manage_receive_queue_limit: Some(acl.get_self_manage_receive_queue_limit()),
-            didcomm_enabled: None,
-            tsp_enabled: None,
-        },
+        acl: decode_acl_canonical(&MediatorACLSet::from_u64(acc.acls)),
         access_list_count: Some(acc.access_list_count as u64),
         queue_limits: Some(QueueLimits {
             send_queue_limit: acc.queue_send_limit.map(|v| v as i64),
@@ -713,6 +821,98 @@ fn map_account_get(acc: &Account) -> account::get::v0_1::Account {
 /// the shared `Account` type. typify generates a structurally-identical `Account`
 /// per spec module; they all derive from the one shared schema, so a JSON round-trip
 /// converts between them without re-implementing the bitfield decode.
+fn decode_acl_canonical(acl: &MediatorACLSet) -> account::get::v0_1::MediatorAcl {
+    use account::get::v0_1::{MediatorAcl, MediatorAclAccessListMode};
+    MediatorAcl {
+        access_list_mode: Some(match acl.get_access_list_mode().0 {
+            AccessListModeType::ExplicitAllow => MediatorAclAccessListMode::ExplicitAllow,
+            AccessListModeType::ExplicitDeny => MediatorAclAccessListMode::ExplicitDeny,
+        }),
+        blocked: Some(acl.get_blocked()),
+        local: Some(acl.get_local()),
+        send_messages: Some(acl.get_send_messages().0),
+        receive_messages: Some(acl.get_receive_messages().0),
+        send_forwarded: Some(acl.get_send_forwarded().0),
+        receive_forwarded: Some(acl.get_receive_forwarded().0),
+        create_invites: Some(acl.get_create_invites().0),
+        anon_receive: Some(acl.get_anon_receive().0),
+        self_manage_list: Some(acl.get_self_manage_list()),
+        self_manage_send_queue_limit: Some(acl.get_self_manage_send_queue_limit()),
+        self_manage_receive_queue_limit: Some(acl.get_self_manage_receive_queue_limit()),
+        didcomm_enabled: None,
+        tsp_enabled: None,
+    }
+}
+
+/// Decode an ACL set into any `messaging/*` module's copy of `MediatorAcl`.
+fn to_wire_acl<T: serde::de::DeserializeOwned>(acl: &MediatorACLSet) -> T {
+    serde_json::from_value(serde_json::to_value(decode_acl_canonical(acl)).expect("acl serialises"))
+        .expect("messaging MediatorAcl types share the one shared schema")
+}
+
+/// Apply a wire `MediatorAcl` (from any module, passed as JSON) onto a base ACL set
+/// as a **partial update**: each present value flag is set; absent flags and the
+/// per-capability "self-change" bits — which the wire form does not carry — are left
+/// as they are in `base`. `didcommEnabled`/`tspEnabled` have no bitfield slot and are
+/// ignored. This is the reverse of [`decode_acl_canonical`].
+fn merge_wire_acl(acl_value: Value, mut base: MediatorACLSet) -> Result<MediatorACLSet, MediatorError> {
+    use account::get::v0_1::{MediatorAcl, MediatorAclAccessListMode};
+    let acl: MediatorAcl = serde_json::from_value(acl_value).map_err(|e| {
+        MediatorError::InternalError(14, "NA".to_string(), format!("invalid ACL payload: {e}"))
+    })?;
+    let acl_err =
+        |e: ACLError| MediatorError::InternalError(14, "NA".to_string(), format!("ACL update rejected: {e}"));
+
+    if let Some(mode) = acl.access_list_mode {
+        let mode = match mode {
+            MediatorAclAccessListMode::ExplicitAllow => AccessListModeType::ExplicitAllow,
+            MediatorAclAccessListMode::ExplicitDeny => AccessListModeType::ExplicitDeny,
+        };
+        let self_change = base.get_access_list_mode().1;
+        base.set_access_list_mode(mode, self_change, true).map_err(acl_err)?;
+    }
+    if let Some(v) = acl.blocked {
+        base.set_blocked(v);
+    }
+    if let Some(v) = acl.local {
+        base.set_local(v);
+    }
+    if let Some(v) = acl.send_messages {
+        let sc = base.get_send_messages().1;
+        base.set_send_messages(v, sc, true).map_err(acl_err)?;
+    }
+    if let Some(v) = acl.receive_messages {
+        let sc = base.get_receive_messages().1;
+        base.set_receive_messages(v, sc, true).map_err(acl_err)?;
+    }
+    if let Some(v) = acl.send_forwarded {
+        let sc = base.get_send_forwarded().1;
+        base.set_send_forwarded(v, sc, true).map_err(acl_err)?;
+    }
+    if let Some(v) = acl.receive_forwarded {
+        let sc = base.get_receive_forwarded().1;
+        base.set_receive_forwarded(v, sc, true).map_err(acl_err)?;
+    }
+    if let Some(v) = acl.create_invites {
+        let sc = base.get_create_invites().1;
+        base.set_create_invites(v, sc, true).map_err(acl_err)?;
+    }
+    if let Some(v) = acl.anon_receive {
+        let sc = base.get_anon_receive().1;
+        base.set_anon_receive(v, sc, true).map_err(acl_err)?;
+    }
+    if let Some(v) = acl.self_manage_list {
+        base.set_self_manage_list(v);
+    }
+    if let Some(v) = acl.self_manage_send_queue_limit {
+        base.set_self_manage_send_queue_limit(v);
+    }
+    if let Some(v) = acl.self_manage_receive_queue_limit {
+        base.set_self_manage_receive_queue_limit(v);
+    }
+    Ok(base)
+}
+
 fn to_wire_account<T: serde::de::DeserializeOwned>(acc: &Account) -> T {
     serde_json::from_value(serde_json::to_value(map_account_get(acc)).expect("get Account serialises"))
         .expect("messaging Account types share the one shared schema")
@@ -787,6 +987,37 @@ async fn consume_ping(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The reverse ACL map (`merge_wire_acl`) must exactly invert the decode
+    /// (`decode_acl_canonical`): decoding a bitfield to the wire form and merging it
+    /// back onto the same base must reproduce the original `u64`. Covers the value
+    /// bits, the preserved per-capability change bits, and the self-manage flags.
+    #[test]
+    fn acl_reverse_map_round_trips() {
+        let cases = [
+            MediatorACLSet::default().to_u64(),
+            MediatorACLSet::from_string_ruleset("ALLOW_ALL")
+                .expect("ALLOW_ALL ruleset")
+                .to_u64(),
+            MediatorACLSet::from_string_ruleset("DENY_ALL")
+                .expect("DENY_ALL ruleset")
+                .to_u64(),
+            MediatorACLSet::from_string_ruleset("ALLOW_ALL, ALLOW_ALL_SELF_CHANGE")
+                .expect("mixed ruleset")
+                .to_u64(),
+        ];
+        for bits in cases {
+            let decoded = decode_acl_canonical(&MediatorACLSet::from_u64(bits));
+            let value = serde_json::to_value(&decoded).expect("acl serialises");
+            let merged = merge_wire_acl(value, MediatorACLSet::from_u64(bits))
+                .expect("merge succeeds");
+            assert_eq!(
+                merged.to_u64(),
+                bits,
+                "decode→merge must reproduce {bits:#018x}"
+            );
+        }
+    }
     use trust_tasks_rs::TrustTask;
 
     #[tokio::test]

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.27] - 2026-06-24
+
+`atm.trust_tasks()` gains `acl_get(profile, did_hashes)` (self-or-admin; batched ACL
+read → entries + unknown) and `acl_set(profile, did_hash, acl)` (admin only; partial
+ACL update → realized ACL). Additive.
+
 ## [0.18.26] - 2026-06-24
 
 `atm.trust_tasks().account_change_type(profile, did_hash, account_type)` (admin only) —

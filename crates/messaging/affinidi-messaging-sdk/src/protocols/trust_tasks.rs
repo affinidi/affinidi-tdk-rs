@@ -22,7 +22,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sha256::digest;
 use trust_tasks_rs::TrustTask;
-use trust_tasks_rs::specs::messaging::{account, ping};
+use trust_tasks_rs::specs::messaging::{account, acl, ping};
 use uuid::Uuid;
 
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};
@@ -203,6 +203,51 @@ impl TrustTasksOps<'_> {
         let response: TrustTask<account::change_type::v0_1::Response> =
             self.exchange(profile, &task).await?;
         Ok(response.payload.account)
+    }
+
+    /// Send a `messaging/acl/get` Trust Task (self-or-admin) for one or more accounts.
+    /// Returns the per-DID ACL entries plus the DIDs the mediator didn't recognise.
+    pub async fn acl_get(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hashes: Vec<String>,
+    ) -> Result<acl::get::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+
+        let dids = did_hashes
+            .iter()
+            .map(|d| acl::get::v0_1::Vid::from_str(d))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
+        let mut task =
+            TrustTask::for_payload(new_id(), acl::get::v0_1::Payload { dids, ext: None });
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<acl::get::v0_1::Response> = self.exchange(profile, &task).await?;
+        Ok(response.payload)
+    }
+
+    /// Send a `messaging/acl/set` Trust Task (admin only). The `acl` is applied as a
+    /// partial update — flags present are set, flags absent are left unchanged — and
+    /// the realized ACL is returned.
+    pub async fn acl_set(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: String,
+        acl: acl::set::v0_1::MediatorAcl,
+    ) -> Result<acl::set::v0_1::MediatorAcl, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+
+        let did = acl::set::v0_1::Vid::from_str(&did_hash)
+            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
+        let mut task =
+            TrustTask::for_payload(new_id(), acl::set::v0_1::Payload { acl, did, ext: None });
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<acl::set::v0_1::Response> = self.exchange(profile, &task).await?;
+        Ok(response.payload.acl)
     }
 
     /// Wrap a `TrustTask<P>` in the DIDComm binding envelope, authcrypt + send it

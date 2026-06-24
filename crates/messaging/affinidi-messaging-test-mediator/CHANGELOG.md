@@ -4,6 +4,11 @@
 
 ## 24th June 2026
 
+### 0.2.24 — Trust Tasks: acl/get + acl/set e2e
+
+- `acl_get_self_returns_the_decoded_acl` (alice reads her own ACL) and
+  `acl_set_denies_a_non_admin` (a standard account can't set ACLs).
+
 ### 0.2.23 — Trust Tasks: account/change-type denial e2e
 
 - New `account_change_type_denies_a_non_admin` test. Adds a `trust-tasks-rs` dev-dep so
