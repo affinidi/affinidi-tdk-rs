@@ -241,8 +241,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("{}", style("Admin account connected...").green());
 
     println!("{}", style("Fetching Mediator Configuration...").blue());
-    let shared_config: HashMap<String, Value> =
-        serde_json::from_value(atm.mediator().get_config(&admin).await?)?;
+    let config_response = atm.trust_tasks().admin_config(&admin).await?;
+    let shared_config: HashMap<String, Value> = serde_json::from_value(serde_json::json!({
+        "version": config_response.version,
+        "config": config_response.config,
+    }))?;
     let mut mediator_config = SharedConfig::new(shared_config)?;
     println!(
         "{}{}{}{}{}",
