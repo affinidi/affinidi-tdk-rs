@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.7] - 2026-06-24
+
+Allows the now-`#[deprecated]` legacy `atm.mediator()` methods it still calls
+(`#![allow(deprecated)]` in `service/mediator.rs`) so the build stays clean under
+`-D warnings`. No behaviour change; migration to `atm.trust_tasks()` is a follow-up.
+
 ## [0.3.6] - 2026-06-14
 
 ### Changed

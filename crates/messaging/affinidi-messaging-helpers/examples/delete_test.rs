@@ -1,3 +1,4 @@
+#![allow(deprecated)] // legacy atm.mediator() methods deprecated for atm.trust_tasks(); migrate then drop
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_sdk::{
     errors::ATMError,

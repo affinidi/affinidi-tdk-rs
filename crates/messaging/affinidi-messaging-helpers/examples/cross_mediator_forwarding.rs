@@ -1,3 +1,4 @@
+#![allow(deprecated)] // legacy atm.mediator() methods deprecated for atm.trust_tasks(); migrate then drop
 //! Cross-Mediator Forwarding Example
 //!
 //! Demonstrates DIDComm message forwarding between two *different* mediators.

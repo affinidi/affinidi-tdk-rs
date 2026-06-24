@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.18.31] - 2026-06-24
+
+The legacy `atm.mediator()` management methods are now `#[deprecated]` in favour of the
+`atm.trust_tasks()` core: `account_get`/`account_add`/`account_remove`/`accounts_list`/
+`account_change_type`/`account_change_queue_limits`, `acls_get`/`acls_set`,
+`access_list_{list,add,remove,clear,get}`, and `get_config`/`add_admins`/`strip_admins`/
+`list_admins`/`list_audit_log` — each points to its `atm.trust_tasks().*` replacement.
+The methods still work (legacy DIDComm wire); they will be removed in a future major
+release (the breaking change). **Additive — patch bump, `0.18` pin stays valid.** (The
+deliberately-louder minor/major bump is reserved for the removal, per the workspace's
+patch-not-minor convention.)
+
 ## [0.18.30] - 2026-06-24
 
 `atm.trust_tasks()` gains the admin family: `admin_add` / `admin_strip` / `admin_list` /
