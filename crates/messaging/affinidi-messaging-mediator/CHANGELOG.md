@@ -4,6 +4,17 @@
 
 ## 24th June 2026
 
+### 0.16.25 — TSP: Nested message relay
+
+- The TSP inbound handler now carries **`Nested`** messages (TSP §5.5, the
+  metadata-privacy wrapper), where previously only `Direct` and `Routed` were handled.
+  A `Nested` envelope addressed to **this mediator** is unwrapped (the outer layer is
+  sealed to us) to reveal the inner message — itself sealed end-to-end to its final
+  recipient — which is then routed by its own envelope, delivered to a local account or
+  forwarded to a remote mediator (and may be TSP or an opaque DIDComm bridge payload). A
+  `Nested` envelope addressed to a **local account** is delivered opaquely for that
+  account to unwrap. TSP `Control` relay remains unimplemented.
+
 ### 0.16.24 — Trust Tasks: acl/set non-admin self-service
 
 - `messaging/acl/set` now supports non-admin **self-service** (it was admin-only). A

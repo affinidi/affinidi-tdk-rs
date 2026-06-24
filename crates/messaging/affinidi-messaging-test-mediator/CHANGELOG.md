@@ -4,6 +4,12 @@
 
 ## 24th June 2026
 
+### 0.2.29 — TSP: Nested relay e2e
+
+- New `tsp_nested_message_relays_through_the_mediator`: Alice wraps an inner Direct
+  (sealed to Bob) in a `Nested` envelope sealed to the mediator; the mediator unwraps
+  its layer and forwards the inner to Bob, who unpacks the original payload + sender.
+
 ### 0.2.28 — Trust Tasks: acl/set self-service e2e
 
 - New `acl_set_self_service_changes_a_self_manageable_flag` (alice changes her own

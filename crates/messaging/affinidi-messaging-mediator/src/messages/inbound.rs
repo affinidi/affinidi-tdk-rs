@@ -187,12 +187,62 @@ pub(crate) async fn handle_inbound_tsp(
         // store it opaquely for them to pick up and relay onward.
         TspMessageType::Routed => deliver_tsp_local(state, session, raw).await,
 
-        // Nested / Control relay are not handled yet.
+        // Nested addressed to *this mediator*: we are the intermediary of a
+        // metadata-privacy wrapper (TSP §5.5). Unwrap our outer layer (sealed to us)
+        // to reveal the inner message — which is itself a packed TSP message sealed
+        // end-to-end to its final recipient — then route the inner by its own
+        // envelope, delivering locally or forwarding to a remote mediator.
+        TspMessageType::Nested if meta.receiver == state.config.mediator_did => {
+            let identity = state.tsp_identity().await?;
+            let sender = resolve_tsp_vid(state, &meta.sender, &session.session_id).await?;
+            let unpacked = affinidi_tsp::message::direct::unpack(
+                raw,
+                &identity.decryption_key,
+                &sender.encryption_key,
+                &sender.signing_key,
+            )
+            .map_err(|e| {
+                tsp_problem(
+                    session,
+                    37,
+                    "message.tsp.unpack",
+                    format!("couldn't unpack nested TSP layer: {e}"),
+                    StatusCode::BAD_REQUEST,
+                )
+            })?;
+
+            // The unpacked payload IS the inner packed message. Route it by its own
+            // (sealed) envelope — its recipient may be local or on another mediator,
+            // and the inner may be TSP or an opaque DIDComm bridge payload.
+            let inner_meta = TspMetaEnvelope::parse(&unpacked.payload).map_err(|e| {
+                tsp_problem(
+                    session,
+                    37,
+                    "message.tsp.malformed",
+                    format!("malformed nested inner TSP envelope: {e}"),
+                    StatusCode::BAD_REQUEST,
+                )
+            })?;
+            forward_to_next(
+                state,
+                session,
+                &inner_meta.receiver,
+                &meta.sender,
+                &unpacked.payload,
+            )
+            .await
+        }
+
+        // Nested addressed to a *local account*: that account is the intermediary —
+        // store it opaquely for them to unwrap and relay onward.
+        TspMessageType::Nested => deliver_tsp_local(state, session, raw).await,
+
+        // TSP Control-message relay is not handled yet.
         _ => Err(tsp_problem(
             session,
             37,
             "protocol.tsp.unsupported",
-            "Only TSP Direct and Routed messages are handled so far".to_string(),
+            "TSP Control messages are not handled yet".to_string(),
             StatusCode::NOT_IMPLEMENTED,
         )),
     }
