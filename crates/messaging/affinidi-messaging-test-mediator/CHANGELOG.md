@@ -4,6 +4,11 @@
 
 ## 24th June 2026
 
+### 0.2.26 — Trust Tasks: access-list lifecycle e2e
+
+- `access_list_self_lifecycle`: alice adds, queries, lists, removes, and clears entries
+  on her own access list, asserting counts and present/absent partitioning throughout.
+
 ### 0.2.25 — Trust Tasks: account/add e2e
 
 - `account_add_self_register_creates_a_standard_account` (a standard account adds a new

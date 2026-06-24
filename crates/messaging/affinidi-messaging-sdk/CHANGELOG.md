@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.29] - 2026-06-24
+
+`atm.trust_tasks()` gains the access-list family: `access_list_add` / `access_list_remove`
+/ `access_list_clear` / `access_list_get` / `access_list_list` (self-or-admin; `None` =
+own list). Completes the messaging Trust Tasks client surface. Additive.
+
 ## [0.18.28] - 2026-06-24
 
 `atm.trust_tasks().account_add(profile, did_hash, account_type, acl)` — create an

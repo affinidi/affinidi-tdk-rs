@@ -27,7 +27,8 @@ use serde_json::Value;
 use sha256::digest;
 use std::str::FromStr;
 use subtle::ConstantTimeEq;
-use trust_tasks_rs::specs::messaging::{account, acl, ping};
+use std::collections::HashSet;
+use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping};
 use trust_tasks_rs::{
     ConsumeOutcome, Payload, ProofPolicy, ProofVerifier, TransportContext, TransportHandler,
     TrustTask, TypeUri, VerificationError, consume_inbound,
@@ -123,8 +124,8 @@ pub(crate) async fn process(
     let now_secs = state.clock.unix_secs();
     let now = chrono::DateTime::from_timestamp(now_secs as i64, 0).unwrap_or_else(chrono::Utc::now);
 
-    // Route by task type. (ping + account/get so far; the rest of the
-    // account / acl / access-list families extend this chain.)
+    // Route by task type across the ping / account / acl / access-list families.
+    let sk = Some(sender_kid.clone());
     let response_value: Value = if doc.type_uri == type_uri_of::<ping::v0_1::Payload>() {
         match consume_ping(downcast(&doc, session)?, &mediator_did, &sender_did, now).await? {
             Some(value) => value,
@@ -180,6 +181,35 @@ pub(crate) async fn process(
         .await?
     } else if doc.type_uri == type_uri_of::<acl::set::v0_1::Payload>() {
         consume_acl_set(downcast(&doc, session)?, state, session, &mediator_did, now).await?
+    } else if doc.type_uri == type_uri_of::<access_list::add::v0_1::Payload>() {
+        consume_access_list_add(downcast(&doc, session)?, state, session, &sk, &mediator_did, now)
+            .await?
+    } else if doc.type_uri == type_uri_of::<access_list::remove::v0_1::Payload>() {
+        consume_access_list_remove(
+            downcast(&doc, session)?,
+            state,
+            session,
+            &sk,
+            &mediator_did,
+            now,
+        )
+        .await?
+    } else if doc.type_uri == type_uri_of::<access_list::clear::v0_1::Payload>() {
+        consume_access_list_clear(
+            downcast(&doc, session)?,
+            state,
+            session,
+            &sk,
+            &mediator_did,
+            now,
+        )
+        .await?
+    } else if doc.type_uri == type_uri_of::<access_list::get::v0_1::Payload>() {
+        consume_access_list_get(downcast(&doc, session)?, state, session, &sk, &mediator_did, now)
+            .await?
+    } else if doc.type_uri == type_uri_of::<access_list::list::v0_1::Payload>() {
+        consume_access_list_list(downcast(&doc, session)?, state, session, &sk, &mediator_did, now)
+            .await?
     } else {
         return Err(tt_problem(
             session,
@@ -887,6 +917,263 @@ async fn consume_acl_set(
         .map_err(serialize_err)
 }
 
+/// Access-list authz: self-or-admin for the target, plus the `self_manage_list`
+/// capability for a standard account performing a write.
+fn authorize_access_list(
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    target_hash: &str,
+    write: bool,
+) -> Result<(), MediatorError> {
+    if !check_permissions(
+        session,
+        std::slice::from_ref(&target_hash.to_string()),
+        state.config.security.block_remote_admin_msgs,
+        sender_kid,
+    ) {
+        return Err(tt_problem(
+            session,
+            "authorization.account.denied",
+            format!("not permitted to access the access list for {target_hash}"),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+    if write
+        && session.account_type == AccountType::Standard
+        && !session.acls.get_self_manage_list()
+    {
+        return Err(tt_problem(
+            session,
+            "authorization.account.denied",
+            "this account may not self-manage its access list".to_string(),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+    Ok(())
+}
+
+/// The current size of a DID's access list (0 if the account is unknown).
+async fn access_list_count(state: &SharedData, target_hash: &str) -> u64 {
+    state
+        .database
+        .account_get(target_hash)
+        .await
+        .ok()
+        .flatten()
+        .map(|a| a.access_list_count as u64)
+        .unwrap_or(0)
+}
+
+/// Handle `messaging/access-list/add`: self-or-admin (+ `self_manage_list` for a
+/// standard account). Adds entries (truncated at the mediator limit); reports those
+/// actually inserted and the new count.
+async fn consume_access_list_add(
+    typed: TrustTask<access_list::add::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    use access_list::add::v0_1::{Response, Vid};
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    let target_hash = typed.payload.did.to_string();
+    authorize_access_list(state, session, sender_kid, &target_hash, true)?;
+
+    let hashes: Vec<String> = typed.payload.entries.iter().map(|v| v.to_string()).collect();
+    let result = state
+        .database
+        .access_list_add(state.config.limits.access_list_limit, &target_hash, &hashes)
+        .await?;
+    record_audit(
+        state,
+        session,
+        &target_hash,
+        AuditAction::AccessListAdd,
+        format!("added {} entries", result.did_hashes.len()),
+    )
+    .await;
+
+    let added = result
+        .did_hashes
+        .iter()
+        .map(|h| Vid::from_str(h).expect("a stored hash is a valid Vid"))
+        .collect();
+    let response = Response {
+        access_list_count: access_list_count(state, &target_hash).await,
+        added,
+        did: typed.payload.did.clone(),
+        ext: None,
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/access-list/remove`: self-or-admin (+ `self_manage_list`).
+/// Reports which of the requested entries were present (and thus removed).
+async fn consume_access_list_remove(
+    typed: TrustTask<access_list::remove::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    use access_list::remove::v0_1::{Response, Vid};
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    let target_hash = typed.payload.did.to_string();
+    authorize_access_list(state, session, sender_kid, &target_hash, true)?;
+
+    let hashes: Vec<String> = typed.payload.entries.iter().map(|v| v.to_string()).collect();
+    // Those present before removal are exactly those removed.
+    let present = state.database.access_list_get(&target_hash, &hashes).await?.did_hashes;
+    state.database.access_list_remove(&target_hash, &hashes).await?;
+    record_audit(
+        state,
+        session,
+        &target_hash,
+        AuditAction::AccessListRemove,
+        format!("removed {} entries", present.len()),
+    )
+    .await;
+
+    let removed = present
+        .iter()
+        .map(|h| Vid::from_str(h).expect("a stored hash is a valid Vid"))
+        .collect();
+    let response = Response {
+        access_list_count: access_list_count(state, &target_hash).await,
+        did: typed.payload.did.clone(),
+        ext: None,
+        removed,
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/access-list/clear`: self-or-admin (+ `self_manage_list`).
+async fn consume_access_list_clear(
+    typed: TrustTask<access_list::clear::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    let target_hash = typed.payload.did.to_string();
+    authorize_access_list(state, session, sender_kid, &target_hash, true)?;
+
+    state.database.access_list_clear(&target_hash).await?;
+    record_audit(
+        state,
+        session,
+        &target_hash,
+        AuditAction::AccessListClear,
+        "access list cleared".to_string(),
+    )
+    .await;
+
+    let response = access_list::clear::v0_1::Response {
+        access_list_count: access_list_count(state, &target_hash).await,
+        did: typed.payload.did.clone(),
+        ext: None,
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/access-list/get`: self-or-admin, read-only. Partitions the
+/// requested entries into those present in the list and those absent.
+async fn consume_access_list_get(
+    typed: TrustTask<access_list::get::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    use access_list::get::v0_1::Response;
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    let target_hash = typed.payload.did.to_string();
+    authorize_access_list(state, session, sender_kid, &target_hash, false)?;
+
+    let hashes: Vec<String> = typed.payload.entries.iter().map(|v| v.to_string()).collect();
+    let present: HashSet<String> = state
+        .database
+        .access_list_get(&target_hash, &hashes)
+        .await?
+        .did_hashes
+        .into_iter()
+        .collect();
+
+    let mut present_vids = Vec::new();
+    let mut absent_vids = Vec::new();
+    for v in &typed.payload.entries {
+        if present.contains(v.as_str()) {
+            present_vids.push(v.clone());
+        } else {
+            absent_vids.push(v.clone());
+        }
+    }
+
+    let response = Response {
+        absent: absent_vids,
+        did: typed.payload.did.clone(),
+        ext: None,
+        present: present_vids,
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/access-list/list`: self-or-admin, read-only, cursor-paged.
+async fn consume_access_list_list(
+    typed: TrustTask<access_list::list::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    use access_list::list::v0_1::{Response, ResponseNextCursor, Vid};
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    let target_hash = typed.payload.did.to_string();
+    authorize_access_list(state, session, sender_kid, &target_hash, false)?;
+
+    let cursor: u64 = typed
+        .payload
+        .cursor
+        .as_ref()
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let page = state.database.access_list_list(&target_hash, cursor).await?;
+    let entries = page
+        .did_hashes
+        .iter()
+        .map(|h| Vid::from_str(h).expect("a stored hash is a valid Vid"))
+        .collect();
+    // Both `None` and `Some(0)` mean the listing is exhausted.
+    let next_cursor = match page.cursor {
+        None | Some(0) => None,
+        Some(c) => Some(
+            ResponseNextCursor::from_str(&c.to_string())
+                .map_err(|e| serialize_err_msg(format!("cursor: {e}")))?,
+        ),
+    };
+
+    let response = Response {
+        access_list_count: access_list_count(state, &target_hash).await,
+        did: typed.payload.did.clone(),
+        entries,
+        ext: None,
+        next_cursor,
+    };
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
 /// Map the mediator's internal [`Account`] to the wire `account/get` shape.
 ///
 /// The DID is carried as the mediator's account hash — a valid `Vid` per the
@@ -1036,6 +1323,27 @@ fn tt_problem(
         vec![],
         status,
     )
+}
+
+/// Framework basics: the request is addressed to this mediator and not expired.
+fn validate_tt_basic<P>(
+    typed: &TrustTask<P>,
+    session: &Session,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), MediatorError> {
+    typed.validate_basic(now, mediator_did).map_err(|reason| {
+        tt_problem(
+            session,
+            "message.trust_task.rejected",
+            format!("Trust Task failed basic validation: {reason:?}"),
+            StatusCode::BAD_REQUEST,
+        )
+    })
+}
+
+fn serialize_err_msg(msg: String) -> MediatorError {
+    MediatorError::InternalError(14, "NA".to_string(), msg)
 }
 
 fn serialize_err(e: serde_json::Error) -> MediatorError {
