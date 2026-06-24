@@ -4,6 +4,11 @@
 
 ## 24th June 2026
 
+### 0.2.23 — Trust Tasks: account/change-type denial e2e
+
+- New `account_change_type_denies_a_non_admin` test. Adds a `trust-tasks-rs` dev-dep so
+  tests can name Trust Task payload types (e.g. `AccountType`).
+
 ### 0.2.22 — Trust Tasks: account/remove e2e
 
 - New `account_remove_self_removes_the_account` test: alice removes her own account

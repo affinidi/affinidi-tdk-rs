@@ -180,3 +180,31 @@ async fn account_remove_self_removes_the_account() {
         .expect("alice removes her own account");
     assert!(removed, "a record should have been removed");
 }
+
+#[tokio::test]
+async fn account_change_type_denies_a_non_admin() {
+    use trust_tasks_rs::specs::messaging::account::change_type::v0_1::AccountType;
+
+    // `account/change-type` is admin-only. A standard account must be refused.
+    // (The admin happy-path — promotion/demotion across the admin set — isn't driven
+    // here: an admin authenticates by DID resolution but isn't a streaming-registered
+    // account, so the synchronous WebSocket response can't be established on the
+    // in-memory harness. The handler is a faithful port of the legacy admin-set logic.)
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+
+    let denied = env
+        .atm
+        .trust_tasks()
+        .account_change_type(&alice.profile, bob.did_hash(), AccountType::Admin)
+        .await;
+    assert!(denied.is_err(), "a non-admin must not change account types");
+}

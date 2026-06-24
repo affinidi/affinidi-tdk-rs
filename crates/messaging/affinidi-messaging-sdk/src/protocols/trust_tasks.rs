@@ -175,6 +175,36 @@ impl TrustTasksOps<'_> {
         Ok(response.payload.removed)
     }
 
+    /// Send a `messaging/account/change-type` Trust Task (admin only) and return the
+    /// account's realized view after the role change. Only a root admin may assign the
+    /// root-admin role or modify a root-admin account. `account_type` is the
+    /// [`account::change_type::v0_1::AccountType`] to set.
+    pub async fn account_change_type(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: String,
+        account_type: account::change_type::v0_1::AccountType,
+    ) -> Result<account::change_type::v0_1::Account, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+
+        let did = account::change_type::v0_1::Vid::from_str(&did_hash)
+            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
+        let mut task = TrustTask::for_payload(
+            new_id(),
+            account::change_type::v0_1::Payload {
+                account_type,
+                did,
+                ext: None,
+            },
+        );
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<account::change_type::v0_1::Response> =
+            self.exchange(profile, &task).await?;
+        Ok(response.payload.account)
+    }
+
     /// Wrap a `TrustTask<P>` in the DIDComm binding envelope, authcrypt + send it
     /// to the mediator, and decode the reply's body as a `TrustTask<R>`.
     async fn exchange<P, R>(
