@@ -1,4 +1,3 @@
-#![allow(deprecated)] // legacy atm.mediator() methods deprecated for atm.trust_tasks(); migrate then drop
 use affinidi_tdk::common::TDKSharedState;
 use log::LevelFilter;
 use state_store::StateStore;
