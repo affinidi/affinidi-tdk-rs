@@ -1,3 +1,4 @@
+#![allow(deprecated)] // legacy atm.mediator() methods deprecated for atm.trust_tasks(); migrate then drop
 //! Tries to Spoof a message from Mallory to Bob, but pretending to be Alice.
 //! Mallory send to Bob, but inner envelope pretends to be Alice
 

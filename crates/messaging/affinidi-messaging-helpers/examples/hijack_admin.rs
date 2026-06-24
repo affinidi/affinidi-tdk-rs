@@ -1,3 +1,4 @@
+#![allow(deprecated)] // legacy atm.mediator() methods deprecated for atm.trust_tasks(); migrate then drop
 /*! Reproducible attack vector to hijack an admin account
  *
  * This is a demonstration of a potential attack vector that can be used to hijack an admin account.

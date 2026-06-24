@@ -1,3 +1,4 @@
+#![allow(deprecated)] // legacy atm.mediator() methods deprecated for atm.trust_tasks(); migrate then drop
 //! Example of how to manage administration accounts for the mediator
 use account_management::account_management::account_management_menu;
 use affinidi_messaging_helpers::common::{affinidi_logo::print_logo, check_path};

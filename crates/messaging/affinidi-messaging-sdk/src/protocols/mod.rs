@@ -7,7 +7,7 @@
 //! ```rust,ignore
 //! atm.trust_ping().send_ping(&profile, &did, true, true, false).await?;
 //! atm.message_pickup().live_stream_get(&profile, &msg_id, dur, true).await?;
-//! atm.mediator().get_config(&profile).await?;
+//! atm.trust_tasks().admin_config(&profile).await?;
 //! ```
 
 use mediator::administration::Mediator;

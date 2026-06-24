@@ -1,3 +1,4 @@
+#![allow(deprecated)] // legacy atm.mediator() methods deprecated for atm.trust_tasks(); migrate then drop
 //! Sends a message from Alice to Bob and then retrieves it.
 
 use affinidi_messaging_didcomm::message::Message;

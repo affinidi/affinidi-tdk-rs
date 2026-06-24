@@ -1,3 +1,4 @@
+#![allow(deprecated)] // legacy atm.mediator() methods deprecated for atm.trust_tasks(); migrate then drop
 use std::sync::Arc;
 use std::time::Duration;
 
