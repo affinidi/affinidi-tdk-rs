@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.32] - 2026-06-24
+
+`atm.trust_tasks().acl_set` is no longer admin-only — a non-admin may set its own ACL
+(the self-manageable capabilities); docs updated. (Server-side change in the mediator;
+the SDK call is unchanged.)
+
 ## [0.18.31] - 2026-06-24
 
 The legacy `atm.mediator()` management methods are now `#[deprecated]` in favour of the

@@ -240,9 +240,9 @@ async fn acl_get_self_returns_the_decoded_acl() {
 async fn acl_set_denies_a_non_admin() {
     use trust_tasks_rs::specs::messaging::acl::set::v0_1::MediatorAcl;
 
-    // `acl/set` is admin-only here (non-admin self-service ACL changes aren't
-    // supported). The reverse mapping itself is covered by the mediator's
-    // `acl_reverse_map_round_trips` unit test.
+    // A non-admin may set its *own* ACL (self-service, covered below), but never
+    // another account's. (The reverse mapping is covered by the mediator's
+    // `acl_reverse_map_round_trips` unit test.)
     let env = TestEnvironment::spawn()
         .await
         .expect("spawn test environment");
@@ -426,4 +426,69 @@ async fn admin_family_denies_a_non_admin() {
         env.atm.trust_tasks().admin_config(&alice.profile).await.is_err(),
         "non-admin admin/config must be refused"
     );
+}
+
+#[tokio::test]
+async fn acl_set_self_service_changes_a_self_manageable_flag() {
+    use trust_tasks_rs::specs::messaging::acl::set::v0_1::MediatorAcl;
+
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+
+    // allow_all grants alice the self-change bits, so she may change her own
+    // `anonReceive` (a self-manageable capability) from true to false.
+    let acl = MediatorAcl {
+        anon_receive: Some(false),
+        ..Default::default()
+    };
+    let updated = env
+        .atm
+        .trust_tasks()
+        .acl_set(&alice.profile, alice.did_hash(), acl)
+        .await
+        .expect("alice self-manages her own ACL");
+    assert_eq!(updated.anon_receive, Some(false));
+
+    // Persisted across a fresh read.
+    let got = env
+        .atm
+        .trust_tasks()
+        .acl_get(&alice.profile, vec![alice.did_hash()])
+        .await
+        .expect("re-read alice's ACL");
+    assert_eq!(got.entries[0].acl.anon_receive, Some(false));
+}
+
+#[tokio::test]
+async fn acl_set_self_service_refuses_an_admin_only_flag() {
+    use trust_tasks_rs::specs::messaging::acl::set::v0_1::MediatorAcl;
+
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+
+    // `blocked` is admin-only — alice may not set it even on her own account.
+    let acl = MediatorAcl {
+        blocked: Some(true),
+        ..Default::default()
+    };
+    let denied = env
+        .atm
+        .trust_tasks()
+        .acl_set(&alice.profile, alice.did_hash(), acl)
+        .await;
+    assert!(denied.is_err(), "a non-admin may not change an admin-only flag");
 }

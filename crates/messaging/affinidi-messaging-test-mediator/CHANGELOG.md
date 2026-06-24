@@ -4,6 +4,12 @@
 
 ## 24th June 2026
 
+### 0.2.28 — Trust Tasks: acl/set self-service e2e
+
+- New `acl_set_self_service_changes_a_self_manageable_flag` (alice changes her own
+  `anonReceive`) and `acl_set_self_service_refuses_an_admin_only_flag` (alice can't set
+  `blocked`); the cross-account denial test is reframed accordingly.
+
 ### 0.2.27 — Trust Tasks: admin family denial e2e
 
 - `admin_family_denies_a_non_admin`: a standard account is refused all five
