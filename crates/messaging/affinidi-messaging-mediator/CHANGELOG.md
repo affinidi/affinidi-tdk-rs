@@ -4,6 +4,13 @@
 
 ## 24th June 2026
 
+### 0.16.18 — Trust Tasks: account/remove
+
+- The Trust Tasks consumer now handles `messaging/account/remove` (self-or-admin).
+  Refuses to remove the mediator's own account or the root admin (both compared in
+  constant time), records an audit entry, and returns the target id plus whether a
+  record was removed.
+
 ### 0.16.17 — Trust Tasks: account/change-queue-limits
 
 - The Trust Tasks consumer now handles `messaging/account/change-queue-limits`

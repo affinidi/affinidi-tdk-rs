@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.25] - 2026-06-24
+
+`atm.trust_tasks().account_remove(profile, did_hash)` — remove an account (self-or-admin;
+`None` = self) and return whether a record was removed. The mediator's own and the
+root-admin accounts can't be removed. Additive.
+
 ## [0.18.24] - 2026-06-24
 
 `atm.trust_tasks().account_change_queue_limits(profile, did_hash, send, receive)` —

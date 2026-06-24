@@ -4,6 +4,11 @@
 
 ## 24th June 2026
 
+### 0.2.22 — Trust Tasks: account/remove e2e
+
+- New `account_remove_self_removes_the_account` test: alice removes her own account
+  and the store reports a record was removed.
+
 ### 0.2.21 — Trust Tasks: account/change-queue-limits e2e
 
 - New `account_change_queue_limits_self_applies_caps_and_persists` test: alice changes
