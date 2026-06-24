@@ -217,6 +217,37 @@ impl TspOps<'_> {
         self.send_raw(profile, &nested.bytes).await
     }
 
+    /// Send a TSP **Control** message — a relationship-management message (invite /
+    /// accept / cancel) to a peer.
+    ///
+    /// Build `control` with [`affinidi_tsp::message::control::ControlMessage`]'s
+    /// `invite` / `accept` / `cancel`. It is sealed to `to_did` and carried with
+    /// message type `Control`; the mediator relays it to the recipient like a Direct
+    /// message (it never inspects the control payload), and the recipient applies the
+    /// relationship transition on receipt.
+    pub async fn send_control(
+        &self,
+        profile: &Arc<ATMProfile>,
+        to_did: &str,
+        control: &affinidi_tsp::message::control::ControlMessage,
+    ) -> Result<(), ATMError> {
+        let (from_did, _) = profile.dids()?;
+        let (signing_key, encryption_key) = self.profile_tsp_keys(from_did).await?;
+        let to_vid = self.resolve_vid(to_did).await?;
+        let packed = affinidi_tsp::message::direct::pack(
+            &control.encode(),
+            affinidi_tsp::MessageType::Control,
+            from_did,
+            to_did,
+            &signing_key,
+            &encryption_key,
+            &to_vid.encryption_key,
+        )
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't pack control TSP message: {e}")))?;
+
+        self.send_raw(profile, &packed.bytes).await
+    }
+
     /// POST an already-packed TSP message (raw qb2 bytes) to the mediator
     /// `/inbound`, reusing the profile's existing (DIDComm) authenticated session
     /// for the bearer token. The mediator sniffs the TSP magic byte and routes it

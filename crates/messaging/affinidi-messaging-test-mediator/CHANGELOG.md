@@ -4,6 +4,13 @@
 
 ## 24th June 2026
 
+### 0.2.30 — TSP: Control relay e2e
+
+- New `tsp_control_message_relays_through_the_mediator`: Alice sends a relationship-
+  forming invite (a `Control` message) to Bob via `atm.tsp().send_control`; the mediator
+  relays it, and Bob unpacks + decodes the invite. Adds `affinidi-tsp` as a dev-dep for
+  the `ControlMessage` types.
+
 ### 0.2.29 — TSP: Nested relay e2e
 
 - New `tsp_nested_message_relays_through_the_mediator`: Alice wraps an inner Direct

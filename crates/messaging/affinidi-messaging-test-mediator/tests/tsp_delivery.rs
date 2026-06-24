@@ -7,6 +7,7 @@
 
 use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_sdk::messages::MessageProtocol;
+use affinidi_tsp::message::control::{ControlMessage, ControlType};
 use affinidi_messaging_sdk::messages::fetch::FetchOptions;
 use affinidi_messaging_test_mediator::TestEnvironment;
 use affinidi_tdk::dids::{DID, KeyType, PeerKeyRole, PeerService, PeerServiceEndpoint};
@@ -174,6 +175,62 @@ async fn tsp_nested_message_relays_through_the_mediator() {
     assert_eq!(
         sender, alice.did,
         "original sender VID is recovered, not the intermediary"
+    );
+}
+
+/// End-to-end TSP **Control** relay: Alice sends a relationship-forming *invite* (a
+/// `Control` message) to Bob through the mediator. The mediator relays it like a
+/// Direct message — payload-agnostic, never inspecting the control payload — and Bob
+/// unpacks it and decodes the invite. Completes the mediator's TSP message-type
+/// coverage (Direct / Routed / Nested / Control).
+#[tokio::test]
+async fn tsp_control_message_relays_through_the_mediator() {
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+
+    // Alice sends a relationship-forming invite (a Control message) to Bob.
+    let invite = ControlMessage::invite();
+    env.atm
+        .tsp()
+        .send_control(&alice.profile, &bob.did, &invite)
+        .await
+        .expect("alice sends a TSP control message via the mediator");
+
+    // Bob fetches the relayed control message and unpacks it.
+    let fetched = env
+        .atm
+        .fetch_messages(&bob.profile, &FetchOptions::default())
+        .await
+        .expect("bob fetches messages");
+    let element = fetched
+        .success
+        .first()
+        .expect("bob has one control message");
+    let stored = element
+        .msg
+        .as_ref()
+        .expect("control message carries its body");
+
+    let (payload, sender) = env
+        .atm
+        .tsp()
+        .unpack(&bob.profile, stored)
+        .await
+        .expect("bob unpacks the relayed control message");
+
+    assert_eq!(
+        sender, alice.did,
+        "control message is authenticated from alice"
+    );
+    let control = ControlMessage::decode(&payload).expect("payload decodes as a control message");
+    assert_eq!(
+        control.control_type,
+        ControlType::RelationshipFormingInvite,
+        "the relayed control message is the invite alice sent"
     );
 }
 
