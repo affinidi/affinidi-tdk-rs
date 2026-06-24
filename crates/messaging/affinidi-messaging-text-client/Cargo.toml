@@ -17,6 +17,8 @@ repository.workspace = true
 affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.8" }
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.18" }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15" }
+## Trust Tasks payload types (the new atm.trust_tasks() surface returns/accepts these).
+trust-tasks-rs = "0.2"
 affinidi-did-resolver-cache-sdk = "0.8"
 
 # External Crates
