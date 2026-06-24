@@ -388,3 +388,42 @@ async fn access_list_self_lifecycle() {
         .expect("clear access list");
     assert_eq!(cleared.access_list_count, 0);
 }
+
+#[tokio::test]
+async fn admin_family_denies_a_non_admin() {
+    // Every messaging/admin/* task is admin-only. A standard account must be refused
+    // for all of them. (The admin happy paths aren't exercised: an add_admin identity
+    // isn't a streaming-registered account, so admin-over-WS doesn't run on the
+    // in-memory harness — the handlers mirror the legacy admin-management protocol.)
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+
+    assert!(
+        env.atm.trust_tasks().admin_add(&alice.profile, vec![bob.did_hash()]).await.is_err(),
+        "non-admin admin/add must be refused"
+    );
+    assert!(
+        env.atm.trust_tasks().admin_strip(&alice.profile, vec![bob.did_hash()]).await.is_err(),
+        "non-admin admin/strip must be refused"
+    );
+    assert!(
+        env.atm.trust_tasks().admin_list(&alice.profile, None, None).await.is_err(),
+        "non-admin admin/list must be refused"
+    );
+    assert!(
+        env.atm.trust_tasks().admin_audit_log(&alice.profile, None, None).await.is_err(),
+        "non-admin admin/audit-log must be refused"
+    );
+    assert!(
+        env.atm.trust_tasks().admin_config(&alice.profile).await.is_err(),
+        "non-admin admin/config must be refused"
+    );
+}

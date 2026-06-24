@@ -4,6 +4,16 @@
 
 ## 24th June 2026
 
+### 0.16.23 — Trust Tasks: admin family (all messaging tasks complete)
+
+- `messaging/admin/{add,strip,list,audit-log,config}`: admin-only. `add`/`strip` grant
+  and revoke admin rights (auditing each); `list` pages the admin accounts; `audit-log`
+  pages the privileged-change log (mapping the mediator's internal `AuditLogEntry` /
+  `AuditAction` to the wire shapes); `config` returns the mediator version + its
+  configuration object. Picks up the published `trust-tasks-rs` 0.2.11 (the admin
+  family specs). This completes every messaging Trust Task — the four legacy mediator
+  management protocols are now fully expressible as Trust Tasks.
+
 ### 0.16.22 — Trust Tasks: access-list family (handlers complete)
 
 - `messaging/access-list/{add,remove,clear,get,list}`: self-or-admin, with the

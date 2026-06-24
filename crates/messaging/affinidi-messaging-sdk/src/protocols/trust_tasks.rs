@@ -22,7 +22,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sha256::digest;
 use trust_tasks_rs::TrustTask;
-use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping};
+use trust_tasks_rs::specs::messaging::{access_list, account, acl, admin, ping};
 use uuid::Uuid;
 
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};
@@ -417,6 +417,110 @@ impl TrustTasksOps<'_> {
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
         let response: TrustTask<access_list::list::v0_1::Response> =
+            self.exchange(profile, &task).await?;
+        Ok(response.payload)
+    }
+
+    /// `messaging/admin/add` (admin only) — grant admin rights to the named accounts.
+    /// Returns the now-admin account identifiers.
+    pub async fn admin_add(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hashes: Vec<String>,
+    ) -> Result<Vec<String>, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let dids = did_hashes
+            .iter()
+            .map(|d| admin::add::v0_1::Vid::from_str(d))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
+        let mut task = TrustTask::for_payload(new_id(), admin::add::v0_1::Payload { dids, ext: None });
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+        let response: TrustTask<admin::add::v0_1::Response> = self.exchange(profile, &task).await?;
+        Ok(response.payload.admins.iter().map(|v| v.to_string()).collect())
+    }
+
+    /// `messaging/admin/strip` (admin only) — revoke admin rights from the named
+    /// accounts. Returns the stripped account identifiers.
+    pub async fn admin_strip(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hashes: Vec<String>,
+    ) -> Result<Vec<String>, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let dids = did_hashes
+            .iter()
+            .map(|d| admin::strip::v0_1::Vid::from_str(d))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
+        let mut task =
+            TrustTask::for_payload(new_id(), admin::strip::v0_1::Payload { dids, ext: None });
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+        let response: TrustTask<admin::strip::v0_1::Response> =
+            self.exchange(profile, &task).await?;
+        Ok(response.payload.stripped.iter().map(|v| v.to_string()).collect())
+    }
+
+    /// `messaging/admin/list` (admin only) — page the mediator's admin accounts.
+    pub async fn admin_list(
+        &self,
+        profile: &Arc<ATMProfile>,
+        cursor: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<admin::list::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let cursor = cursor
+            .map(|c| admin::list::v0_1::PayloadCursor::from_str(&c))
+            .transpose()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid cursor: {e}")))?;
+        let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
+        let mut task = TrustTask::for_payload(
+            new_id(),
+            admin::list::v0_1::Payload { cursor, ext: None, limit },
+        );
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+        let response: TrustTask<admin::list::v0_1::Response> = self.exchange(profile, &task).await?;
+        Ok(response.payload)
+    }
+
+    /// `messaging/admin/audit-log` (admin only) — page the privileged-change log,
+    /// newest first.
+    pub async fn admin_audit_log(
+        &self,
+        profile: &Arc<ATMProfile>,
+        cursor: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<admin::audit_log::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let cursor = cursor
+            .map(|c| admin::audit_log::v0_1::PayloadCursor::from_str(&c))
+            .transpose()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid cursor: {e}")))?;
+        let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
+        let mut task = TrustTask::for_payload(
+            new_id(),
+            admin::audit_log::v0_1::Payload { cursor, ext: None, limit },
+        );
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+        let response: TrustTask<admin::audit_log::v0_1::Response> =
+            self.exchange(profile, &task).await?;
+        Ok(response.payload)
+    }
+
+    /// `messaging/admin/config` (admin only) — read the mediator's version + config.
+    pub async fn admin_config(
+        &self,
+        profile: &Arc<ATMProfile>,
+    ) -> Result<admin::config::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let mut task = TrustTask::for_payload(new_id(), admin::config::v0_1::Payload { ext: None });
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+        let response: TrustTask<admin::config::v0_1::Response> =
             self.exchange(profile, &task).await?;
         Ok(response.payload)
     }
