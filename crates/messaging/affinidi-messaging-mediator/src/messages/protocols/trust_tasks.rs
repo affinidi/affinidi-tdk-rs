@@ -181,7 +181,7 @@ pub(crate) async fn process(
         )
         .await?
     } else if doc.type_uri == type_uri_of::<acl::set::v0_1::Payload>() {
-        consume_acl_set(downcast(&doc, session)?, state, session, &mediator_did, now).await?
+        consume_acl_set(downcast(&doc, session)?, state, session, &sk, &mediator_did, now).await?
     } else if doc.type_uri == type_uri_of::<access_list::add::v0_1::Payload>() {
         consume_access_list_add(downcast(&doc, session)?, state, session, &sk, &mediator_did, now)
             .await?
@@ -876,37 +876,45 @@ async fn consume_acl_set(
     typed: TrustTask<acl::set::v0_1::Payload>,
     state: &SharedData,
     session: &Session,
+    sender_kid: &Option<String>,
     mediator_did: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, MediatorError> {
-    typed.validate_basic(now, mediator_did).map_err(|reason| {
-        tt_problem(
-            session,
-            "message.trust_task.rejected",
-            format!("Trust Task failed basic validation: {reason:?}"),
-            StatusCode::BAD_REQUEST,
-        )
-    })?;
+    validate_tt_basic(&typed, session, mediator_did, now)?;
 
-    if !matches!(
+    let target_hash = typed.payload.did.to_string();
+    let is_admin = matches!(
         session.account_type,
         AccountType::Admin | AccountType::RootAdmin
+    );
+
+    // Self-or-admin: a non-admin may only set its own ACL.
+    if !check_permissions(
+        session,
+        std::slice::from_ref(&target_hash),
+        state.config.security.block_remote_admin_msgs,
+        sender_kid,
     ) {
         return Err(tt_problem(
             session,
-            "authorization.admin_required",
-            "acl/set requires an admin account".to_string(),
+            "authorization.account.denied",
+            format!("not permitted to set the ACL for {target_hash}"),
             StatusCode::FORBIDDEN,
         ));
     }
 
-    let target_hash = typed.payload.did.to_string();
     let base = state
         .database
         .get_did_acl(&target_hash)
         .await?
         .unwrap_or_default();
     let acl_value = serde_json::to_value(&typed.payload.acl).map_err(serialize_err)?;
+
+    // A non-admin may only change flags it is permitted to self-manage.
+    if !is_admin {
+        ensure_self_manageable(&acl_value, &base, session)?;
+    }
+
     let merged = merge_wire_acl(acl_value, base)?;
 
     let stored = state.database.set_did_acl(&target_hash, &merged).await?;
@@ -974,6 +982,96 @@ async fn access_list_count(state: &SharedData, target_hash: &str) -> u64 {
         .flatten()
         .map(|a| a.access_list_count as u64)
         .unwrap_or(0)
+}
+
+/// Gate a non-admin `acl/set`: a standard account may change a capability only when
+/// its per-capability self-change bit is set, and may never touch the admin-only flags
+/// (`blocked`, `local`, the `selfManage*` bits). A flag whose requested value equals
+/// the current value is not a change. Faithful to the legacy `acls_set` self-service
+/// rules.
+fn ensure_self_manageable(
+    acl_value: &Value,
+    base: &MediatorACLSet,
+    session: &Session,
+) -> Result<(), MediatorError> {
+    let req: account::get::v0_1::MediatorAcl = serde_json::from_value(acl_value.clone())
+        .map_err(|e| serialize_err_msg(format!("invalid ACL payload: {e}")))?;
+    let cur = decode_acl_canonical(base);
+    let deny = |flag: &str| -> Result<(), MediatorError> {
+        Err(tt_problem(
+            session,
+            "authorization.acl.not_self_manageable",
+            format!("this account may not change `{flag}`"),
+            StatusCode::FORBIDDEN,
+        ))
+    };
+
+    // Capabilities self-manageable when the account's self-change bit is set.
+    if req.access_list_mode.is_some()
+        && req.access_list_mode != cur.access_list_mode
+        && !base.get_access_list_mode().1
+    {
+        return deny("accessListMode");
+    }
+    if req.send_messages.is_some()
+        && req.send_messages != cur.send_messages
+        && !base.get_send_messages().1
+    {
+        return deny("sendMessages");
+    }
+    if req.receive_messages.is_some()
+        && req.receive_messages != cur.receive_messages
+        && !base.get_receive_messages().1
+    {
+        return deny("receiveMessages");
+    }
+    if req.send_forwarded.is_some()
+        && req.send_forwarded != cur.send_forwarded
+        && !base.get_send_forwarded().1
+    {
+        return deny("sendForwarded");
+    }
+    if req.receive_forwarded.is_some()
+        && req.receive_forwarded != cur.receive_forwarded
+        && !base.get_receive_forwarded().1
+    {
+        return deny("receiveForwarded");
+    }
+    if req.create_invites.is_some()
+        && req.create_invites != cur.create_invites
+        && !base.get_create_invites().1
+    {
+        return deny("createInvites");
+    }
+    if req.anon_receive.is_some()
+        && req.anon_receive != cur.anon_receive
+        && !base.get_anon_receive().1
+    {
+        return deny("anonReceive");
+    }
+
+    // Admin-only flags: a non-admin may never change these.
+    if req.blocked.is_some() && req.blocked != cur.blocked {
+        return deny("blocked");
+    }
+    if req.local.is_some() && req.local != cur.local {
+        return deny("local");
+    }
+    if req.self_manage_list.is_some() && req.self_manage_list != cur.self_manage_list {
+        return deny("selfManageList");
+    }
+    if req.self_manage_send_queue_limit.is_some()
+        && req.self_manage_send_queue_limit != cur.self_manage_send_queue_limit
+    {
+        return deny("selfManageSendQueueLimit");
+    }
+    if req.self_manage_receive_queue_limit.is_some()
+        && req.self_manage_receive_queue_limit != cur.self_manage_receive_queue_limit
+    {
+        return deny("selfManageReceiveQueueLimit");
+    }
+
+    Ok(())
 }
 
 /// Handle `messaging/access-list/add`: self-or-admin (+ `self_manage_list` for a

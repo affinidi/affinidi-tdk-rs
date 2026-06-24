@@ -4,6 +4,15 @@
 
 ## 24th June 2026
 
+### 0.16.24 — Trust Tasks: acl/set non-admin self-service
+
+- `messaging/acl/set` now supports non-admin **self-service** (it was admin-only). A
+  standard account may set its **own** ACL, but only the capabilities it is permitted
+  to self-manage (per the per-capability self-change bits); the admin-only flags
+  (`blocked`, `local`, the `selfManage*` bits) are refused, as is setting any other
+  account's ACL. Faithful to the legacy `acls_set` rules — making `acl/set` a full
+  replacement for the legacy method (unblocks migrating self-service consumers).
+
 ### 0.16.23 — Trust Tasks: admin family (all messaging tasks complete)
 
 - `messaging/admin/{add,strip,list,audit-log,config}`: admin-only. `add`/`strip` grant

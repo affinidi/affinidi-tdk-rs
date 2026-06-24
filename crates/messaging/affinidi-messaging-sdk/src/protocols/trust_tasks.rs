@@ -228,9 +228,11 @@ impl TrustTasksOps<'_> {
         Ok(response.payload)
     }
 
-    /// Send a `messaging/acl/set` Trust Task (admin only). The `acl` is applied as a
-    /// partial update — flags present are set, flags absent are left unchanged — and
-    /// the realized ACL is returned.
+    /// Send a `messaging/acl/set` Trust Task. The `acl` is applied as a partial update
+    /// — flags present are set, flags absent are left unchanged — and the realized ACL
+    /// is returned. An admin may set any account's ACL; a non-admin may set its own,
+    /// but only the capabilities it is permitted to self-manage (the admin-only flags
+    /// `blocked` / `local` / `selfManage*` are refused).
     pub async fn acl_set(
         &self,
         profile: &Arc<ATMProfile>,
