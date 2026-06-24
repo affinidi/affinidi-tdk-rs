@@ -1,4 +1,3 @@
-#![allow(deprecated)] // legacy atm.mediator() methods deprecated for atm.trust_tasks(); migrate then drop
 //! Cross-Mediator Forwarding Example
 //!
 //! Demonstrates DIDComm message forwarding between two *different* mediators.
@@ -38,12 +37,7 @@
 //! exchange with a compact round-trip latency measurement loop.
 
 use affinidi_messaging_didcomm::message::Message;
-use affinidi_messaging_sdk::{
-    ATM,
-    errors::ATMError,
-    profiles::ATMProfile,
-    protocols::mediator::acls::{AccessListModeType, MediatorACLSet},
-};
+use affinidi_messaging_sdk::{ATM, errors::ATMError, profiles::ATMProfile};
 use affinidi_tdk::{
     TDK,
     common::{config::TDKConfig, profiles::TDKProfile},
@@ -58,6 +52,7 @@ use std::{
 };
 use tracing::info;
 use tracing_subscriber::filter;
+use trust_tasks_rs::specs::messaging::account::{self, get::v0_1::MediatorAclAccessListMode};
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
@@ -333,41 +328,64 @@ async fn setup_acls(alice: &Party, bob: &Party) -> Result<(), ATMError> {
 }
 
 /// Fetch the party's mediator account (creating it if the mediator allows
-/// self-registration). Returns (did_hash, acls).
-async fn ensure_account(party: &Party) -> Result<(String, u64), ATMError> {
-    match party
-        .atm
-        .mediator()
-        .account_get(&party.profile, None)
-        .await?
-    {
-        Some(account) => Ok((account.did_hash, account.acls)),
-        None => {
+/// self-registration). Returns (did_hash, access_list_mode).
+async fn ensure_account(
+    party: &Party,
+) -> Result<(String, Option<MediatorAclAccessListMode>), ATMError> {
+    // A missing account is an Err (not Ok(None)) under the Trust Tasks API.
+    match party.atm.trust_tasks().account_get(&party.profile, None).await {
+        Ok(account) => Ok((
+            account.did.as_str().to_string(),
+            account.acl.access_list_mode,
+        )),
+        Err(_) => {
             let hash = sha256::digest(party.profile.inner.did.as_str());
             let account = party
                 .atm
-                .mediator()
-                .account_add(&party.profile, &hash, None)
+                .trust_tasks()
+                .account_add(
+                    &party.profile,
+                    hash,
+                    account::add::v0_1::AccountType::Standard,
+                    None,
+                )
                 .await?;
-            Ok((account.did_hash, account.acls))
+            // The per-module `add` Account shares one schema with `get`; normalise
+            // it so the access_list_mode enum type matches across the helper.
+            let account = to_get_account(&account);
+            Ok((
+                account.did.as_str().to_string(),
+                account.acl.access_list_mode,
+            ))
         }
     }
 }
 
+/// All the `messaging/account/*` Trust Tasks return a per-module `Account`
+/// struct, but they share one schema. Converts any of them back to the
+/// canonical `account::get::v0_1::Account`.
+fn to_get_account<T: serde::Serialize>(a: &T) -> account::get::v0_1::Account {
+    serde_json::from_value(serde_json::to_value(a).expect("serialize"))
+        .expect("messaging Account types share one schema")
+}
+
 /// Allow `peer_hash` to reach `party` regardless of the mediator's ACL mode.
-async fn apply_access(party: &Party, acls: u64, peer_hash: &str) -> Result<(), ATMError> {
-    let mode = MediatorACLSet::from_u64(acls).get_access_list_mode().0;
-    if let AccessListModeType::ExplicitAllow = mode {
+async fn apply_access(
+    party: &Party,
+    mode: Option<MediatorAclAccessListMode>,
+    peer_hash: &str,
+) -> Result<(), ATMError> {
+    if let Some(MediatorAclAccessListMode::ExplicitAllow) = mode {
         party
             .atm
-            .mediator()
-            .access_list_add(&party.profile, None, &[peer_hash])
+            .trust_tasks()
+            .access_list_add(&party.profile, None, vec![peer_hash.to_string()])
             .await?;
     } else {
         party
             .atm
-            .mediator()
-            .access_list_remove(&party.profile, None, &[peer_hash])
+            .trust_tasks()
+            .access_list_remove(&party.profile, None, vec![peer_hash.to_string()])
             .await?;
     }
     Ok(())

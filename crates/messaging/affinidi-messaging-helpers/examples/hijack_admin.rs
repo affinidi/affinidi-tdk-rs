@@ -1,4 +1,3 @@
-#![allow(deprecated)] // legacy atm.mediator() methods deprecated for atm.trust_tasks(); migrate then drop
 /*! Reproducible attack vector to hijack an admin account
  *
  * This is a demonstration of a potential attack vector that can be used to hijack an admin account.
@@ -24,6 +23,7 @@ use sha256::digest;
 use std::{env, sync::Arc, time::SystemTime};
 use tracing::{info, warn};
 use tracing_subscriber::filter;
+use trust_tasks_rs::specs::messaging::account::get::v0_1::AccountType;
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
@@ -88,19 +88,19 @@ async fn main() -> Result<(), ATMError> {
         .await?;
     info!("Admin profile active");
 
-    // Check if actually admin?
-    match atm.mediator().account_get(&atm_admin, None).await {
-        Ok(Some(account)) => {
-            if account._type.is_admin() {
+    // Check if actually admin? (a missing account is an Err under Trust Tasks)
+    match atm.trust_tasks().account_get(&atm_admin, None).await {
+        Ok(account) => {
+            if matches!(
+                account.account_type,
+                AccountType::Admin | AccountType::RootAdmin
+            ) {
                 info!("Verified Admin account - OK");
             } else {
                 return Err(ATMError::ConfigError(
                     "Admin account is actually not an ADMIN level account!!!".to_string(),
                 ));
             }
-        }
-        Ok(None) => {
-            return Err(ATMError::ConfigError("Admin account not found".to_string()));
         }
         Err(e) => {
             return Err(ATMError::ConfigError(
@@ -126,21 +126,19 @@ async fn main() -> Result<(), ATMError> {
         .await?;
     info!("Mallory profile active");
 
-    // Check if actually not-admin?
-    match atm.mediator().account_get(&atm_mallory, None).await {
-        Ok(Some(account)) => {
-            if !account._type.is_admin() {
+    // Check if actually not-admin? (a missing account is an Err under Trust Tasks)
+    match atm.trust_tasks().account_get(&atm_mallory, None).await {
+        Ok(account) => {
+            if !matches!(
+                account.account_type,
+                AccountType::Admin | AccountType::RootAdmin
+            ) {
                 info!("Verified Non-Admin account - OK");
             } else {
                 return Err(ATMError::ConfigError(
                     "Mallory is an ADMIN level account!!!".to_string(),
                 ));
             }
-        }
-        Ok(None) => {
-            return Err(ATMError::ConfigError(
-                "Mallory account not found".to_string(),
-            ));
         }
         Err(e) => {
             return Err(ATMError::ConfigError(
@@ -161,7 +159,7 @@ async fn main() -> Result<(), ATMError> {
 
     // Try and do an admin function with Mallory
     info!("Trying to access an admin function with Mallory");
-    match atm.mediator().accounts_list(&atm_mallory, None, None).await {
+    match atm.trust_tasks().account_list(&atm_mallory, None, None).await {
         Ok(_) => {
             warn!("Mallory was able to access an admin function - NOT OK");
         }
@@ -218,19 +216,17 @@ async fn main() -> Result<(), ATMError> {
     info!("Sending bad admin message to mediator");
     http_post(&tdk, &atm_mallory, &msg, &admin_tokens).await;
 
-    // Lets check if Mallory is an admin?
-    match atm.mediator().account_get(&atm_mallory, None).await {
-        Ok(Some(account)) => {
-            if account._type.is_admin() {
+    // Lets check if Mallory is an admin? (a missing account is an Err under Trust Tasks)
+    match atm.trust_tasks().account_get(&atm_mallory, None).await {
+        Ok(account) => {
+            if matches!(
+                account.account_type,
+                AccountType::Admin | AccountType::RootAdmin
+            ) {
                 warn!("Mallory is now an ADMIN level account - NOT OK!!!!");
             } else {
                 info!("Mallory is still a non admin... Phew....");
             }
-        }
-        Ok(None) => {
-            return Err(ATMError::ConfigError(
-                "Mallory account not found".to_string(),
-            ));
         }
         Err(e) => {
             return Err(ATMError::ConfigError(
@@ -278,19 +274,17 @@ async fn main() -> Result<(), ATMError> {
     info!("Sending bad admin message to mediator");
     http_post(&tdk, &atm_mallory, &msg, &admin_tokens).await;
 
-    // Lets check if Mallory is an admin?
-    match atm.mediator().account_get(&atm_mallory, None).await {
-        Ok(Some(account)) => {
-            if account._type.is_admin() {
+    // Lets check if Mallory is an admin? (a missing account is an Err under Trust Tasks)
+    match atm.trust_tasks().account_get(&atm_mallory, None).await {
+        Ok(account) => {
+            if matches!(
+                account.account_type,
+                AccountType::Admin | AccountType::RootAdmin
+            ) {
                 warn!("Mallory is now an ADMIN level account - NOT OK!!!!");
             } else {
                 info!("Mallory is still a non admin... Phew....");
             }
-        }
-        Ok(None) => {
-            return Err(ATMError::ConfigError(
-                "Mallory account not found".to_string(),
-            ));
         }
         Err(e) => {
             return Err(ATMError::ConfigError(
@@ -347,19 +341,17 @@ async fn main() -> Result<(), ATMError> {
         }
     }
 
-    // Lets check if Mallory is an admin?
-    match atm.mediator().account_get(&atm_mallory, None).await {
-        Ok(Some(account)) => {
-            if account._type.is_admin() {
+    // Lets check if Mallory is an admin? (a missing account is an Err under Trust Tasks)
+    match atm.trust_tasks().account_get(&atm_mallory, None).await {
+        Ok(account) => {
+            if matches!(
+                account.account_type,
+                AccountType::Admin | AccountType::RootAdmin
+            ) {
                 warn!("Mallory is now an ADMIN level account - NOT OK!!!!");
             } else {
                 info!("Mallory is still a non admin... Phew....");
             }
-        }
-        Ok(None) => {
-            return Err(ATMError::ConfigError(
-                "Mallory account not found".to_string(),
-            ));
         }
         Err(e) => {
             return Err(ATMError::ConfigError(
