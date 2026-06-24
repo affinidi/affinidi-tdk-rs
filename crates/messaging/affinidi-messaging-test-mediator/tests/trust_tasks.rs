@@ -101,3 +101,50 @@ async fn account_list_denies_a_non_admin() {
         .await;
     assert!(denied.is_err(), "a non-admin must not list accounts");
 }
+
+#[tokio::test]
+async fn account_change_queue_limits_self_applies_caps_and_persists() {
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+
+    // Alice self-manages her queue limits (allow_all). A normal value is applied;
+    // `-1` means unlimited.
+    let updated = env
+        .atm
+        .trust_tasks()
+        .account_change_queue_limits(&alice.profile, None, Some(42), Some(-1))
+        .await
+        .expect("alice changes her own queue limits");
+    let q = updated.queue_limits.expect("queue limits present");
+    assert_eq!(q.send_queue_limit, Some(42));
+    assert_eq!(q.receive_queue_limit, Some(-1));
+
+    // Persisted across a fresh read.
+    let account = env
+        .atm
+        .trust_tasks()
+        .account_get(&alice.profile, None)
+        .await
+        .expect("re-read alice's account");
+    assert_eq!(account.queue_limits.and_then(|q| q.send_queue_limit), Some(42));
+
+    // A standard account's request above the hard maximum (1000) is capped.
+    let capped = env
+        .atm
+        .trust_tasks()
+        .account_change_queue_limits(&alice.profile, None, Some(5000), None)
+        .await
+        .expect("over-limit request is accepted but capped");
+    assert_eq!(
+        capped.queue_limits.and_then(|q| q.send_queue_limit),
+        Some(1000),
+        "a standard account is capped at the hard maximum"
+    );
+}

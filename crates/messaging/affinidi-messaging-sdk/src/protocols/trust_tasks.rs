@@ -114,6 +114,42 @@ impl TrustTasksOps<'_> {
         Ok(response.payload)
     }
 
+    /// Send a `messaging/account/change-queue-limits` Trust Task and return the
+    /// updated account view. `did_hash` names the target; `None` is the caller's own
+    /// account. Each limit is an `Option`: `Some(-1)` = unlimited, `Some(n)` = a cap,
+    /// `None` = leave that limit unchanged. A standard account may only change limits
+    /// it self-manages (others are silently left unchanged).
+    pub async fn account_change_queue_limits(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<String>,
+        send_queue_limit: Option<i64>,
+        receive_queue_limit: Option<i64>,
+    ) -> Result<account::change_queue_limits::v0_1::Account, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
+
+        let did = account::change_queue_limits::v0_1::Vid::from_str(&target)
+            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
+        let mut task = TrustTask::for_payload(
+            new_id(),
+            account::change_queue_limits::v0_1::Payload {
+                did,
+                ext: None,
+                queue_limits: account::change_queue_limits::v0_1::QueueLimits {
+                    receive_queue_limit,
+                    send_queue_limit,
+                },
+            },
+        );
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<account::change_queue_limits::v0_1::Response> =
+            self.exchange(profile, &task).await?;
+        Ok(response.payload.account)
+    }
+
     /// Wrap a `TrustTask<P>` in the DIDComm binding envelope, authcrypt + send it
     /// to the mediator, and decode the reply's body as a `TrustTask<R>`.
     async fn exchange<P, R>(

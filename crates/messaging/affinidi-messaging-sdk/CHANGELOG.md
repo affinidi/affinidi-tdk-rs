@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.24] - 2026-06-24
+
+`atm.trust_tasks().account_change_queue_limits(profile, did_hash, send, receive)` —
+change an account's queued-message limits and return the updated view. `None` target
+= self; each limit is `Some(-1)` (unlimited) / `Some(n)` / `None` (unchanged). Additive.
+
 ## [0.18.23] - 2026-06-24
 
 `atm.trust_tasks().account_list(profile, cursor, limit)` (admin only) — returns one
