@@ -81,6 +81,39 @@ impl TrustTasksOps<'_> {
         Ok(response.payload.account)
     }
 
+    /// Send a `messaging/account/list` Trust Task (admin only) and return one page
+    /// of accounts plus an opaque `next_cursor` (present only when more remain).
+    /// Pass the previous page's cursor to continue; `None` starts from the top.
+    pub async fn account_list(
+        &self,
+        profile: &Arc<ATMProfile>,
+        cursor: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<account::list::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+
+        let cursor = cursor
+            .map(|c| account::list::v0_1::PayloadCursor::from_str(&c))
+            .transpose()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid cursor: {e}")))?;
+        let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
+
+        let mut task = TrustTask::for_payload(
+            new_id(),
+            account::list::v0_1::Payload {
+                cursor,
+                ext: None,
+                limit,
+            },
+        );
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<account::list::v0_1::Response> =
+            self.exchange(profile, &task).await?;
+        Ok(response.payload)
+    }
+
     /// Wrap a `TrustTask<P>` in the DIDComm binding envelope, authcrypt + send it
     /// to the mediator, and decode the reply's body as a `TrustTask<R>`.
     async fn exchange<P, R>(

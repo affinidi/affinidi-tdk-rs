@@ -135,6 +135,8 @@ pub(crate) async fn process(
             now,
         )
         .await?
+    } else if doc.type_uri == type_uri_of::<account::list::v0_1::Payload>() {
+        consume_account_list(downcast(&doc, session)?, state, session, &mediator_did, now).await?
     } else {
         return Err(tt_problem(
             session,
@@ -233,7 +235,71 @@ async fn consume_account_get(
         })?;
 
     let response = account::get::v0_1::Response {
-        account: map_account(&account),
+        account: map_account_get(&account),
+        ext: None,
+    };
+    let response_doc = typed.respond_with(Uuid::new_v4().to_string(), response);
+    serde_json::to_value(&response_doc).map_err(serialize_err)
+}
+
+/// Handle `messaging/account/list`: admin-only, read-only. Returns one page of the
+/// mediator's accounts (with an opaque continuation cursor) as a `TrustTask<Response>`.
+async fn consume_account_list(
+    typed: TrustTask<account::list::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, MediatorError> {
+    typed.validate_basic(now, mediator_did).map_err(|reason| {
+        tt_problem(
+            session,
+            "message.trust_task.rejected",
+            format!("Trust Task failed basic validation: {reason:?}"),
+            StatusCode::BAD_REQUEST,
+        )
+    })?;
+
+    // Authz: admin-only (listing every account is an administrative action).
+    if !matches!(
+        session.account_type,
+        AccountType::Admin | AccountType::RootAdmin
+    ) {
+        return Err(tt_problem(
+            session,
+            "authorization.admin_required",
+            "account/list requires an admin account".to_string(),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    // The wire cursor is an opaque string over the store's numeric cursor.
+    let cursor: u32 = typed
+        .payload
+        .cursor
+        .as_ref()
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let limit: u32 = typed.payload.limit.map(|n| n.get() as u32).unwrap_or(100);
+
+    let page = state.database.account_list(cursor, limit).await?;
+    let accounts = page.accounts.iter().map(map_account_list).collect();
+    // The store returns cursor 0 when the listing is exhausted.
+    let next_cursor = (page.cursor != 0)
+        .then(|| account::list::v0_1::ResponseNextCursor::from_str(&page.cursor.to_string()))
+        .transpose()
+        .map_err(|e| {
+            tt_problem(
+                session,
+                "account.list.cursor",
+                format!("couldn't encode the continuation cursor: {e}"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        })?;
+
+    let response = account::list::v0_1::Response {
+        accounts,
+        next_cursor,
         ext: None,
     };
     let response_doc = typed.respond_with(Uuid::new_v4().to_string(), response);
@@ -246,7 +312,7 @@ async fn consume_account_get(
 /// messaging spec's privacy note (the mediator never holds the full DID). The
 /// `u64` ACL bitfield is decoded into the spec's named booleans; `didcommEnabled`
 /// / `tspEnabled` have no bitfield slot and are reported as `None`.
-fn map_account(acc: &Account) -> account::get::v0_1::Account {
+fn map_account_get(acc: &Account) -> account::get::v0_1::Account {
     use account::get::v0_1::{
         Account as WireAccount, AccountType as WireType, MediatorAcl, MediatorAclAccessListMode,
         QueueLimits, Vid,
@@ -293,6 +359,17 @@ fn map_account(acc: &Account) -> account::get::v0_1::Account {
         receive_queue_count: Some(acc.receive_queue_count as u64),
         receive_queue_bytes: Some(acc.receive_queue_bytes),
     }
+}
+
+/// Same mapping as [`map_account_get`] but for the `account/list` module's copy of
+/// the shared `Account` type. The two are generated from the one shared schema and
+/// are structurally identical, so we reuse the get mapping via a JSON round-trip
+/// rather than duplicate the bitfield decode.
+fn map_account_list(acc: &Account) -> account::list::v0_1::Account {
+    serde_json::from_value(
+        serde_json::to_value(map_account_get(acc)).expect("get Account serialises"),
+    )
+    .expect("get and list Account share the one shared schema")
 }
 
 fn tt_problem(
