@@ -7,7 +7,6 @@ use affinidi_messaging_didcomm::message::{Attachment, Message};
 use affinidi_messaging_sdk::ATM;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::problem_report::ProblemReport;
-use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
 use affinidi_messaging_sdk::protocols::message_pickup::{MessagePickup, MessagePickupStatusReply};
 use base64::prelude::*;
 use rand::RngExt;
@@ -17,6 +16,7 @@ use serde_json::json;
 use sha256::digest;
 use tracing::error;
 use tracing::{info, warn};
+use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -670,17 +670,20 @@ pub async fn handle_message(
             };
 
             // Set up the ACL for the remote secure DID.
-            let local_secure_profile_info =
-                match atm.trust_tasks().account_get(&our_secure_profile, None).await {
-                    Ok(info) => info,
-                    Err(e) => {
-                        warn!(
-                            "Failed to get local secure profile info from mediator: {}",
-                            e
-                        );
-                        return;
-                    }
-                };
+            let local_secure_profile_info = match atm
+                .trust_tasks()
+                .account_get(&our_secure_profile, None)
+                .await
+            {
+                Ok(info) => info,
+                Err(e) => {
+                    warn!(
+                        "Failed to get local secure profile info from mediator: {}",
+                        e
+                    );
+                    return;
+                }
+            };
 
             if local_secure_profile_info.acl.access_list_mode
                 == Some(MediatorAclAccessListMode::ExplicitAllow)

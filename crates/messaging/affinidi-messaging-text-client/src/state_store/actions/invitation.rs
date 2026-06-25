@@ -1,7 +1,5 @@
 use affinidi_messaging_didcomm::message::{Attachment, Message};
 use affinidi_messaging_sdk::{ATM, messages::SuccessResponse, profiles::ATMProfile};
-use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
-use trust_tasks_rs::specs::messaging::acl;
 use affinidi_tdk::dids::{DID as DIDKey, KeyType};
 use affinidi_tdk::secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
@@ -20,6 +18,8 @@ use std::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::warn;
+use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
+use trust_tasks_rs::specs::messaging::acl;
 use uuid::Uuid;
 
 use crate::state_store::{
@@ -472,10 +472,7 @@ pub async fn create_invitation(
                         state_tx.send(state.clone())?;
 
                         // Ensure Mediator ACL set up is correctly setup
-                        let profile_info = match atm
-                            .trust_tasks()
-                            .account_get(&profile, None)
-                            .await
+                        let profile_info = match atm.trust_tasks().account_get(&profile, None).await
                         {
                             Ok(info) => info,
                             Err(e) => {

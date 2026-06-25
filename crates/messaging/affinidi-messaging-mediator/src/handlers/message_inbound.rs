@@ -1,11 +1,11 @@
+#[cfg(feature = "tsp")]
+use crate::messages::inbound::handle_inbound_tsp;
 use crate::{
     SharedData,
     common::authz::{self, Capability},
     common::jwt_auth::MaybeSession,
     messages::inbound::handle_inbound,
 };
-#[cfg(feature = "tsp")]
-use crate::messages::inbound::handle_inbound_tsp;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::messages::{
     problem_report::{ProblemReportScope, ProblemReportSorter},

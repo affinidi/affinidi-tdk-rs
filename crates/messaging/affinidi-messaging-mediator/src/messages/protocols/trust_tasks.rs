@@ -26,9 +26,9 @@ use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, Probl
 use http::StatusCode;
 use serde_json::Value;
 use sha256::digest;
+use std::collections::HashSet;
 use std::str::FromStr;
 use subtle::ConstantTimeEq;
-use std::collections::HashSet;
 use trust_tasks_rs::specs::messaging::{access_list, account, acl, admin, ping};
 use trust_tasks_rs::{
     ConsumeOutcome, Payload, ProofPolicy, ProofVerifier, TransportContext, TransportHandler,
@@ -181,10 +181,25 @@ pub(crate) async fn process(
         )
         .await?
     } else if doc.type_uri == type_uri_of::<acl::set::v0_1::Payload>() {
-        consume_acl_set(downcast(&doc, session)?, state, session, &sk, &mediator_did, now).await?
+        consume_acl_set(
+            downcast(&doc, session)?,
+            state,
+            session,
+            &sk,
+            &mediator_did,
+            now,
+        )
+        .await?
     } else if doc.type_uri == type_uri_of::<access_list::add::v0_1::Payload>() {
-        consume_access_list_add(downcast(&doc, session)?, state, session, &sk, &mediator_did, now)
-            .await?
+        consume_access_list_add(
+            downcast(&doc, session)?,
+            state,
+            session,
+            &sk,
+            &mediator_did,
+            now,
+        )
+        .await?
     } else if doc.type_uri == type_uri_of::<access_list::remove::v0_1::Payload>() {
         consume_access_list_remove(
             downcast(&doc, session)?,
@@ -206,11 +221,25 @@ pub(crate) async fn process(
         )
         .await?
     } else if doc.type_uri == type_uri_of::<access_list::get::v0_1::Payload>() {
-        consume_access_list_get(downcast(&doc, session)?, state, session, &sk, &mediator_did, now)
-            .await?
+        consume_access_list_get(
+            downcast(&doc, session)?,
+            state,
+            session,
+            &sk,
+            &mediator_did,
+            now,
+        )
+        .await?
     } else if doc.type_uri == type_uri_of::<access_list::list::v0_1::Payload>() {
-        consume_access_list_list(downcast(&doc, session)?, state, session, &sk, &mediator_did, now)
-            .await?
+        consume_access_list_list(
+            downcast(&doc, session)?,
+            state,
+            session,
+            &sk,
+            &mediator_did,
+            now,
+        )
+        .await?
     } else if doc.type_uri == type_uri_of::<admin::add::v0_1::Payload>() {
         consume_admin_add(downcast(&doc, session)?, state, session, &mediator_did, now).await?
     } else if doc.type_uri == type_uri_of::<admin::strip::v0_1::Payload>() {
@@ -218,7 +247,8 @@ pub(crate) async fn process(
     } else if doc.type_uri == type_uri_of::<admin::list::v0_1::Payload>() {
         consume_admin_list(downcast(&doc, session)?, state, session, &mediator_did, now).await?
     } else if doc.type_uri == type_uri_of::<admin::audit_log::v0_1::Payload>() {
-        consume_admin_audit_log(downcast(&doc, session)?, state, session, &mediator_did, now).await?
+        consume_admin_audit_log(downcast(&doc, session)?, state, session, &mediator_did, now)
+            .await?
     } else if doc.type_uri == type_uri_of::<admin::config::v0_1::Payload>() {
         consume_admin_config(downcast(&doc, session)?, state, session, &mediator_did, now).await?
     } else {
@@ -232,14 +262,17 @@ pub(crate) async fn process(
 
     // Pack the response back through the mediator's existing outbound path.
     // `thid` threads it to the request so the caller's live-stream correlates it.
-    let response_msg =
-        Message::build(Uuid::new_v4().to_string(), ENVELOPE_TYPE.to_string(), response_value)
-            .thid(message.id.clone())
-            .to(sender_did)
-            .from(mediator_did)
-            .created_time(now_secs)
-            .expires_time(now_secs + 300)
-            .finalize();
+    let response_msg = Message::build(
+        Uuid::new_v4().to_string(),
+        ENVELOPE_TYPE.to_string(),
+        response_value,
+    )
+    .thid(message.id.clone())
+    .to(sender_did)
+    .from(mediator_did)
+    .created_time(now_secs)
+    .expires_time(now_secs + 300)
+    .finalize();
 
     Ok(ProcessMessageResponse {
         store_message: true,
@@ -430,28 +463,35 @@ async fn consume_account_change_queue_limits(
     }
 
     // The wire carries i64; the store works in i32. A member omitted is unchanged.
-    let req_send = typed.payload.queue_limits.send_queue_limit.map(|v| v as i32);
-    let req_receive = typed.payload.queue_limits.receive_queue_limit.map(|v| v as i32);
+    let req_send = typed
+        .payload
+        .queue_limits
+        .send_queue_limit
+        .map(|v| v as i32);
+    let req_receive = typed
+        .payload
+        .queue_limits
+        .receive_queue_limit
+        .map(|v| v as i32);
 
     // A standard account may only touch limits it self-manages, capped at the hard
     // maximum; an admin sets any value.
-    let (send_queue_limit, receive_queue_limit) =
-        if session.account_type == AccountType::Standard {
-            (
-                gate_self_managed_limit(
-                    req_send,
-                    session.acls.get_self_manage_send_queue_limit(),
-                    state.config.limits.queued_send_messages_hard,
-                ),
-                gate_self_managed_limit(
-                    req_receive,
-                    session.acls.get_self_manage_receive_queue_limit(),
-                    state.config.limits.queued_receive_messages_hard,
-                ),
-            )
-        } else {
-            (req_send, req_receive)
-        };
+    let (send_queue_limit, receive_queue_limit) = if session.account_type == AccountType::Standard {
+        (
+            gate_self_managed_limit(
+                req_send,
+                session.acls.get_self_manage_send_queue_limit(),
+                state.config.limits.queued_send_messages_hard,
+            ),
+            gate_self_managed_limit(
+                req_receive,
+                session.acls.get_self_manage_receive_queue_limit(),
+                state.config.limits.queued_receive_messages_hard,
+            ),
+        )
+    } else {
+        (req_send, req_receive)
+    };
 
     state
         .database
@@ -619,19 +659,27 @@ async fn consume_account_change_type(
     };
 
     // Must be an admin to change types at all.
-    if !state.database.check_admin_account(&session.did_hash).await? {
+    if !state
+        .database
+        .check_admin_account(&session.did_hash)
+        .await?
+    {
         return Err(denied("admin access is required to change account types"));
     }
     // Only a root admin may assign the root-admin role.
     if new_type == AccountType::RootAdmin && session.account_type != AccountType::RootAdmin {
-        return Err(denied("root-admin access is required to assign the root-admin role"));
+        return Err(denied(
+            "root-admin access is required to assign the root-admin role",
+        ));
     }
 
     let current = state.database.account_get(&target_hash).await?;
     if let Some(current) = &current {
         if current._type == AccountType::RootAdmin && session.account_type != AccountType::RootAdmin
         {
-            return Err(denied("root-admin access is required to modify a root-admin account"));
+            return Err(denied(
+                "root-admin access is required to modify a root-admin account",
+            ));
         } else if current._type == new_type {
             // No change — report the account as-is.
             return change_type_response(&typed, current);
@@ -647,7 +695,11 @@ async fn consume_account_change_type(
             // Promotion — add admin rights, carrying the existing ACL set.
             state
                 .database
-                .setup_admin_account(&target_hash, new_type, &MediatorACLSet::from_u64(current.acls))
+                .setup_admin_account(
+                    &target_hash,
+                    new_type,
+                    &MediatorACLSet::from_u64(current.acls),
+                )
                 .await?;
             record_audit(
                 state,
@@ -761,10 +813,14 @@ async fn consume_account_add(
     }
     // Creating a privileged account requires the matching privilege.
     if new_type == AccountType::RootAdmin && session.account_type != AccountType::RootAdmin {
-        return Err(denied("root-admin access is required to create a root-admin account"));
+        return Err(denied(
+            "root-admin access is required to create a root-admin account",
+        ));
     }
     if new_type.is_admin() && !is_admin {
-        return Err(denied("admin access is required to create an admin account"));
+        return Err(denied(
+            "admin access is required to create an admin account",
+        ));
     }
 
     // ACLs: an admin may supply them (applied onto the mediator default); a non-admin
@@ -777,7 +833,10 @@ async fn consume_account_add(
         _ => state.config.security.global_acl_default.clone(),
     };
 
-    let account = state.database.account_add(&target_hash, &acls, None).await?;
+    let account = state
+        .database
+        .account_add(&target_hash, &acls, None)
+        .await?;
     // Apply a non-standard role if requested (the guards above already authorized it).
     let account = if new_type != AccountType::Standard {
         state
@@ -1090,7 +1149,12 @@ async fn consume_access_list_add(
     let target_hash = typed.payload.did.to_string();
     authorize_access_list(state, session, sender_kid, &target_hash, true)?;
 
-    let hashes: Vec<String> = typed.payload.entries.iter().map(|v| v.to_string()).collect();
+    let hashes: Vec<String> = typed
+        .payload
+        .entries
+        .iter()
+        .map(|v| v.to_string())
+        .collect();
     let result = state
         .database
         .access_list_add(state.config.limits.access_list_limit, &target_hash, &hashes)
@@ -1134,10 +1198,22 @@ async fn consume_access_list_remove(
     let target_hash = typed.payload.did.to_string();
     authorize_access_list(state, session, sender_kid, &target_hash, true)?;
 
-    let hashes: Vec<String> = typed.payload.entries.iter().map(|v| v.to_string()).collect();
+    let hashes: Vec<String> = typed
+        .payload
+        .entries
+        .iter()
+        .map(|v| v.to_string())
+        .collect();
     // Those present before removal are exactly those removed.
-    let present = state.database.access_list_get(&target_hash, &hashes).await?.did_hashes;
-    state.database.access_list_remove(&target_hash, &hashes).await?;
+    let present = state
+        .database
+        .access_list_get(&target_hash, &hashes)
+        .await?
+        .did_hashes;
+    state
+        .database
+        .access_list_remove(&target_hash, &hashes)
+        .await?;
     record_audit(
         state,
         session,
@@ -1208,7 +1284,12 @@ async fn consume_access_list_get(
     let target_hash = typed.payload.did.to_string();
     authorize_access_list(state, session, sender_kid, &target_hash, false)?;
 
-    let hashes: Vec<String> = typed.payload.entries.iter().map(|v| v.to_string()).collect();
+    let hashes: Vec<String> = typed
+        .payload
+        .entries
+        .iter()
+        .map(|v| v.to_string())
+        .collect();
     let present: HashSet<String> = state
         .database
         .access_list_get(&target_hash, &hashes)
@@ -1257,7 +1338,10 @@ async fn consume_access_list_list(
         .as_ref()
         .and_then(|c| c.parse().ok())
         .unwrap_or(0);
-    let page = state.database.access_list_list(&target_hash, cursor).await?;
+    let page = state
+        .database
+        .access_list_list(&target_hash, cursor)
+        .await?;
     let entries = page
         .did_hashes
         .iter()
@@ -1318,7 +1402,14 @@ async fn consume_admin_add(
         .add_admin_accounts(dids.clone(), &state.config.security.global_acl_default)
         .await?;
     for did in &dids {
-        record_audit(state, session, did, AuditAction::AdminAdd, "promoted to admin".to_string()).await;
+        record_audit(
+            state,
+            session,
+            did,
+            AuditAction::AdminAdd,
+            "promoted to admin".to_string(),
+        )
+        .await;
     }
 
     let response = admin::add::v0_1::Response {
@@ -1344,8 +1435,14 @@ async fn consume_admin_strip(
     let dids: Vec<String> = typed.payload.dids.iter().map(|v| v.to_string()).collect();
     state.database.strip_admin_accounts(dids.clone()).await?;
     for did in &dids {
-        record_audit(state, session, did, AuditAction::AdminStrip, "admin rights stripped".to_string())
-            .await;
+        record_audit(
+            state,
+            session,
+            did,
+            AuditAction::AdminStrip,
+            "admin rights stripped".to_string(),
+        )
+        .await;
     }
 
     let response = admin::strip::v0_1::Response {
@@ -1564,13 +1661,17 @@ fn to_wire_acl<T: serde::de::DeserializeOwned>(acl: &MediatorACLSet) -> T {
 /// per-capability "self-change" bits — which the wire form does not carry — are left
 /// as they are in `base`. `didcommEnabled`/`tspEnabled` have no bitfield slot and are
 /// ignored. This is the reverse of [`decode_acl_canonical`].
-fn merge_wire_acl(acl_value: Value, mut base: MediatorACLSet) -> Result<MediatorACLSet, MediatorError> {
+fn merge_wire_acl(
+    acl_value: Value,
+    mut base: MediatorACLSet,
+) -> Result<MediatorACLSet, MediatorError> {
     use account::get::v0_1::{MediatorAcl, MediatorAclAccessListMode};
     let acl: MediatorAcl = serde_json::from_value(acl_value).map_err(|e| {
         MediatorError::InternalError(14, "NA".to_string(), format!("invalid ACL payload: {e}"))
     })?;
-    let acl_err =
-        |e: ACLError| MediatorError::InternalError(14, "NA".to_string(), format!("ACL update rejected: {e}"));
+    let acl_err = |e: ACLError| {
+        MediatorError::InternalError(14, "NA".to_string(), format!("ACL update rejected: {e}"))
+    };
 
     if let Some(mode) = acl.access_list_mode {
         let mode = match mode {
@@ -1578,7 +1679,8 @@ fn merge_wire_acl(acl_value: Value, mut base: MediatorACLSet) -> Result<Mediator
             MediatorAclAccessListMode::ExplicitDeny => AccessListModeType::ExplicitDeny,
         };
         let self_change = base.get_access_list_mode().1;
-        base.set_access_list_mode(mode, self_change, true).map_err(acl_err)?;
+        base.set_access_list_mode(mode, self_change, true)
+            .map_err(acl_err)?;
     }
     if let Some(v) = acl.blocked {
         base.set_blocked(v);
@@ -1623,16 +1725,13 @@ fn merge_wire_acl(acl_value: Value, mut base: MediatorACLSet) -> Result<Mediator
 }
 
 fn to_wire_account<T: serde::de::DeserializeOwned>(acc: &Account) -> T {
-    serde_json::from_value(serde_json::to_value(map_account_get(acc)).expect("get Account serialises"))
-        .expect("messaging Account types share the one shared schema")
+    serde_json::from_value(
+        serde_json::to_value(map_account_get(acc)).expect("get Account serialises"),
+    )
+    .expect("messaging Account types share the one shared schema")
 }
 
-fn tt_problem(
-    session: &Session,
-    code: &str,
-    message: String,
-    status: StatusCode,
-) -> MediatorError {
+fn tt_problem(session: &Session, code: &str, message: String, status: StatusCode) -> MediatorError {
     MediatorError::problem(
         37,
         &session.session_id,
@@ -1739,8 +1838,8 @@ mod tests {
         for bits in cases {
             let decoded = decode_acl_canonical(&MediatorACLSet::from_u64(bits));
             let value = serde_json::to_value(&decoded).expect("acl serialises");
-            let merged = merge_wire_acl(value, MediatorACLSet::from_u64(bits))
-                .expect("merge succeeds");
+            let merged =
+                merge_wire_acl(value, MediatorACLSet::from_u64(bits)).expect("merge succeeds");
             assert_eq!(
                 merged.to_u64(),
                 bits,
@@ -1762,15 +1861,22 @@ mod tests {
         doc.issuer = Some("did:example:alice".to_string());
         doc.recipient = Some("did:example:mediator".to_string());
 
-        let value =
-            consume_ping(doc, "did:example:mediator", "did:example:alice", chrono::Utc::now())
-                .await
-                .expect("consume ok")
-                .expect("a response, not suppressed");
+        let value = consume_ping(
+            doc,
+            "did:example:mediator",
+            "did:example:alice",
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("consume ok")
+        .expect("a response, not suppressed");
 
         let resp: TrustTask<ping::v0_1::Response> =
             serde_json::from_value(value).expect("ping response document");
-        assert!(matches!(resp.payload.status, ping::v0_1::ResponseStatus::Ok));
+        assert!(matches!(
+            resp.payload.status,
+            ping::v0_1::ResponseStatus::Ok
+        ));
         assert_eq!(resp.payload.nonce.as_deref(), Some("nonce-xyz"));
         assert!(resp.payload.protocols.iter().any(|p| p == "tsp"));
         // respond_with swaps the parties: the mediator answers alice.

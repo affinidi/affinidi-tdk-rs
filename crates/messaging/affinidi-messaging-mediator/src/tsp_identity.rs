@@ -48,15 +48,18 @@ impl MediatorTspIdentity {
             })?
             .doc;
 
-        let signing_key = first_private_key(doc.find_authentication(None), secrets, KeyType::Ed25519)
-            .await
-            .ok_or_else(|| {
-                MediatorError::ConfigError(
-                    12,
-                    "NA".into(),
-                    format!("mediator DID {did} has no Ed25519 authentication key for TSP relay"),
-                )
-            })?;
+        let signing_key =
+            first_private_key(doc.find_authentication(None), secrets, KeyType::Ed25519)
+                .await
+                .ok_or_else(|| {
+                    MediatorError::ConfigError(
+                        12,
+                        "NA".into(),
+                        format!(
+                            "mediator DID {did} has no Ed25519 authentication key for TSP relay"
+                        ),
+                    )
+                })?;
         let decryption_key =
             first_private_key(doc.find_key_agreement(None), secrets, KeyType::X25519)
                 .await
@@ -137,8 +140,14 @@ mod tests {
             .expect("derive the mediator TSP identity");
 
         assert_eq!(identity.vid, DID_KEY);
-        assert_eq!(identity.signing_key, expected_signing, "Ed25519 from authentication");
-        assert_eq!(identity.decryption_key, expected_decryption, "X25519 from keyAgreement");
+        assert_eq!(
+            identity.signing_key, expected_signing,
+            "Ed25519 from authentication"
+        );
+        assert_eq!(
+            identity.decryption_key, expected_decryption,
+            "X25519 from keyAgreement"
+        );
     }
 
     /// A document whose keys the mediator doesn't hold yields a clear config error.

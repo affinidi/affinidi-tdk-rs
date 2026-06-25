@@ -7,10 +7,10 @@
 
 use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_sdk::messages::MessageProtocol;
-use affinidi_tsp::message::control::{ControlMessage, ControlType};
 use affinidi_messaging_sdk::messages::fetch::FetchOptions;
 use affinidi_messaging_test_mediator::TestEnvironment;
 use affinidi_tdk::dids::{DID, KeyType, PeerKeyRole, PeerService, PeerServiceEndpoint};
+use affinidi_tsp::message::control::{ControlMessage, ControlType};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -120,7 +120,10 @@ async fn tsp_routed_message_relays_through_the_mediator() {
         .expect("bob unpacks the relayed TSP message");
 
     assert_eq!(recovered, payload, "payload survives the relay end to end");
-    assert_eq!(sender, alice.did, "original sender VID is recovered, not the relay");
+    assert_eq!(
+        sender, alice.did,
+        "original sender VID is recovered, not the relay"
+    );
 }
 
 /// End-to-end TSP **Nested** relay: Alice wraps an inner Direct message (sealed to
@@ -171,7 +174,10 @@ async fn tsp_nested_message_relays_through_the_mediator() {
         .await
         .expect("bob unpacks the forwarded TSP message");
 
-    assert_eq!(recovered, payload, "payload survives the nested relay end to end");
+    assert_eq!(
+        recovered, payload,
+        "payload survives the nested relay end to end"
+    );
     assert_eq!(
         sender, alice.did,
         "original sender VID is recovered, not the intermediary"
