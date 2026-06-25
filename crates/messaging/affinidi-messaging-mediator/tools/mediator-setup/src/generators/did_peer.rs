@@ -3,13 +3,24 @@ use affinidi_tdk::dids::{
     DID, KeyType, OneOrMany, PeerKeyRole, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
 };
 
+use crate::cli::KeySuite;
+
 /// Generate a did:peer for the mediator with Ed25519 (signing) + X25519 (encryption) keys,
-/// plus an optional DIDComm service endpoint.
-pub fn generate_did_peer(service_uri: Option<String>) -> anyhow::Result<(String, Vec<Secret>)> {
-    let keys = vec![
+/// plus an optional DIDComm service endpoint. Any opt-in `key_suites` append
+/// extra key pairs after the mandatory Curve25519 pair — e.g. `p256` adds a
+/// P-256 verification key and a P-256 encryption key.
+pub fn generate_did_peer(
+    service_uri: Option<String>,
+    key_suites: &[KeySuite],
+) -> anyhow::Result<(String, Vec<Secret>)> {
+    let mut keys = vec![
         (PeerKeyRole::Verification, KeyType::Ed25519),
         (PeerKeyRole::Encryption, KeyType::X25519),
     ];
+    if key_suites.contains(&KeySuite::P256) {
+        keys.push((PeerKeyRole::Verification, KeyType::P256));
+        keys.push((PeerKeyRole::Encryption, KeyType::P256));
+    }
 
     let services = service_uri.as_deref().map(mediator_services).transpose()?;
 
@@ -91,7 +102,7 @@ mod tests {
 
     #[test]
     fn test_generate_did_peer() {
-        let (did, secrets) = generate_did_peer(None).unwrap();
+        let (did, secrets) = generate_did_peer(None, &[]).unwrap();
         assert!(did.starts_with("did:peer:2.V"));
         assert_eq!(secrets.len(), 2);
         assert!(secrets[0].id.contains("#key-1"));
@@ -99,9 +110,25 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_did_peer_with_p256_suite() {
+        // P-256 appends a verification key (`#key-3`) and an encryption key
+        // (`#key-4`) after the mandatory Ed25519 + X25519 pair.
+        let (did, secrets) = generate_did_peer(None, &[KeySuite::P256]).unwrap();
+        // Two verification segments (Ed25519, P-256) and two encryption.
+        assert_eq!(did.matches(".V").count(), 2);
+        assert_eq!(did.matches(".E").count(), 2);
+        assert_eq!(secrets.len(), 4);
+        assert!(secrets[2].id.contains("#key-3"));
+        assert!(secrets[3].id.contains("#key-4"));
+        use affinidi_secrets_resolver::secrets::KeyType;
+        assert!(matches!(secrets[2].get_key_type(), KeyType::P256));
+        assert!(matches!(secrets[3].get_key_type(), KeyType::P256));
+    }
+
+    #[test]
     fn test_generate_did_peer_with_service() {
         let (did, secrets) =
-            generate_did_peer(Some("http://localhost:7037/mediator/v1/".into())).unwrap();
+            generate_did_peer(Some("http://localhost:7037/mediator/v1/".into()), &[]).unwrap();
         assert!(did.starts_with("did:peer:2.V"));
         assert_eq!(did.matches(".S").count(), 2);
         assert_eq!(secrets.len(), 2);

@@ -361,6 +361,12 @@ pub struct WizardConfig {
     /// of the DID document to `did-web.json`. Collected via the
     /// `DidPhase::SaveDidWebChoice` prompt or the `--save-did-web` flag.
     pub save_did_web: bool,
+    /// Extra key suites (beyond the mandatory Ed25519 + X25519 pair) to mint
+    /// for the mediator identity. Empty by default. Only consulted by the
+    /// local generators (`did:peer`, `did:webvh`); VTA-managed DIDs derive
+    /// their key set from the VTA template. Populated from the `--key-suite`
+    /// flag or the recipe's `[identity] extra_key_suites`.
+    pub key_suite: Vec<crate::cli::KeySuite>,
     pub secret_storage: String,
     // Per-backend config fields. Only the set relevant to `secret_storage`
     // is meaningful; others stay at defaults. Storing them as flat strings
@@ -527,6 +533,7 @@ impl Default for WizardConfig {
             did_method: String::new(),
             public_url: String::new(),
             save_did_web: false,
+            key_suite: Vec::new(),
             secret_storage: String::new(),
             secret_file_path: DEFAULT_SECRET_FILE_PATH.into(),
             secret_keyring_service: DEFAULT_KEYRING_SERVICE.into(),
