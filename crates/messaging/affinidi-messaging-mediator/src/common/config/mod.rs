@@ -29,7 +29,8 @@ use affinidi_did_resolver_cache_sdk::{
     config::{DIDCacheConfig, DIDCacheConfigBuilder},
 };
 use affinidi_messaging_mediator_common::{
-    MediatorSecrets, database::config::DatabaseConfig, errors::MediatorError, secrets::open_store,
+    MediatorSecrets, database::config::DatabaseConfig, did_web::rewrite_did_document_to_web,
+    errors::MediatorError, secrets::open_store,
 };
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
 use async_convert::{TryFrom, async_trait};
@@ -738,69 +739,10 @@ impl TryFrom<ConfigRaw> for Config {
         if let Some(path) = raw.server.did_web_self_hosted {
             let document_json = read_document(&path, &aws_config).await?;
 
-            // Validate and parse as LogEntry (webvh format) first, then fall back to direct
-            // Document. We split the canonical DID Document (served at `did.json`) from the
-            // raw log entry stream (served at `did.jsonl`) so each well-known route returns
-            // the correct shape — the previous version served the raw input verbatim at both
-            // routes, which meant `did.jsonl` returned a DID Document for did:web sources and
-            // `did.json` returned a log envelope for did:webvh sources.
-            let parsed_document = match LogEntry::deserialize_string(&document_json, None) {
-                Ok(log_entry) => {
-                    // did:webvh source — extract the DID document for `did.json`, keep the
-                    // raw log entry for `did.jsonl`.
-                    let did_doc_value = log_entry.get_did_document().map_err(|err| {
-                        error!("Couldn't extract DID Document from LogEntry: {err}");
-                        MediatorError::ConfigError(
-                            12,
-                            "NA".into(),
-                            format!("Couldn't extract DID Document from LogEntry: {err}"),
-                        )
-                    })?;
-
-                    // Serialise the extracted DID document for the did.json handler. The
-                    // resolver receives the typed `Document` below (parsed from the same
-                    // value) so we don't pay double parse costs at request time.
-                    let extracted_json = serde_json::to_string(&did_doc_value).map_err(|err| {
-                        error!("Couldn't serialise extracted DID Document as JSON. Reason: {err}");
-                        MediatorError::ConfigError(
-                            12,
-                            "NA".into(),
-                            format!(
-                                "Couldn't serialise extracted DID Document as JSON. Reason: {err}"
-                            ),
-                        )
-                    })?;
-
-                    config.mediator_did_doc = Some(extracted_json);
-                    config.mediator_did_log = Some(document_json);
-
-                    serde_json::from_value(did_doc_value).map_err(|err| {
-                        error!("Couldn't convert DID Document value to Document struct. Reason: {err}");
-                        MediatorError::ConfigError(
-                            12,
-                            "NA".into(),
-                            format!("Couldn't convert DID Document value to Document struct. Reason: {err}"),
-                        )
-                    })?
-                }
-                Err(_log_entry_err) => {
-                    // did:web source — the raw input is the DID document; no log entry to serve.
-                    let parsed =
-                        serde_json::from_str::<Document>(&document_json).map_err(|err| {
-                            error!("Couldn't parse content as LogEntry or Document. Reason: {err}");
-                            MediatorError::ConfigError(
-                                12,
-                                "NA".into(),
-                                format!(
-                                    "Couldn't parse content as LogEntry or Document. Reason: {err}"
-                                ),
-                            )
-                        })?;
-                    config.mediator_did_doc = Some(document_json);
-                    config.mediator_did_log = None;
-                    parsed
-                }
-            };
+            let (did_json, did_jsonl, parsed_document) =
+                split_self_hosted_did_source(document_json)?;
+            config.mediator_did_doc = Some(did_json);
+            config.mediator_did_log = did_jsonl;
 
             // Store the parsed Document for later use
             did_document = Some(parsed_document);
@@ -893,6 +835,109 @@ impl TryFrom<ConfigRaw> for Config {
     }
 }
 
+/// Split a self-hosted DID source into the bodies served at the well-known
+/// routes, returning `(did.json body, did.jsonl body, typed Document)`.
+///
+/// We split the canonical DID Document (served at `did.json`) from the raw
+/// log entry stream (served at `did.jsonl`) so each well-known route returns
+/// the correct shape — an earlier version served the raw input verbatim at
+/// both routes, which meant `did.jsonl` returned a DID Document for did:web
+/// sources and `did.json` returned a log envelope for did:webvh sources.
+///
+/// For did:webvh sources the `did.json` body's identifier is additionally
+/// rewritten from `did:webvh:{scid}:{domain}` to `did:web:{domain}` (id,
+/// controller, key and service self-references). `did.json` is the did:web
+/// resolution surface; without the rewrite a `did:web:{domain}` resolver
+/// receives a document whose id and `#key-…` references all live under
+/// `did:webvh:`, so they can't be dereferenced. The `did.jsonl` body
+/// (`Some` only for did:webvh sources) and the typed Document both stay
+/// verbatim (real did:webvh) for did:webvh resolvers and the mediator's own
+/// DID.
+fn split_self_hosted_did_source(
+    document_json: String,
+) -> Result<(String, Option<String>, Document), MediatorError> {
+    // Validate and parse as LogEntry (webvh format) first, then fall back to
+    // a direct DID Document (did:web source).
+    match LogEntry::deserialize_string(&document_json, None) {
+        Ok(log_entry) => {
+            // did:webvh source — extract the DID document for `did.json`, keep the
+            // raw log entry for `did.jsonl`.
+            let did_doc_value = log_entry.get_did_document().map_err(|err| {
+                error!("Couldn't extract DID Document from LogEntry: {err}");
+                MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    format!("Couldn't extract DID Document from LogEntry: {err}"),
+                )
+            })?;
+
+            // The extracted state's `id` is the did:webvh DID; rewrite it (and every
+            // self-reference) to the did:web form for the `did.json` handler. The
+            // typed `Document` below is parsed from the original `did:webvh` value so
+            // the resolver preload keeps the mediator's real DID.
+            let webvh_did = did_doc_value
+                .get("id")
+                .and_then(|id| id.as_str())
+                .ok_or_else(|| {
+                    error!("Extracted DID Document from LogEntry is missing an `id`");
+                    MediatorError::ConfigError(
+                        12,
+                        "NA".into(),
+                        "Extracted DID Document from LogEntry is missing an `id`".into(),
+                    )
+                })?
+                .to_string();
+
+            let (_web_did, web_doc_value) = rewrite_did_document_to_web(&did_doc_value, &webvh_did)
+                .map_err(|err| {
+                    error!("Couldn't rewrite did:webvh document to did:web. Reason: {err}");
+                    MediatorError::ConfigError(
+                        12,
+                        "NA".into(),
+                        format!("Couldn't rewrite did:webvh document to did:web. Reason: {err}"),
+                    )
+                })?;
+
+            // Serialise the rewritten did:web document for the did.json handler. The
+            // resolver receives the typed `Document` below (parsed from the original
+            // did:webvh value) so we don't pay double parse costs at request time.
+            let did_json = serde_json::to_string(&web_doc_value).map_err(|err| {
+                error!("Couldn't serialise extracted DID Document as JSON. Reason: {err}");
+                MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    format!("Couldn't serialise extracted DID Document as JSON. Reason: {err}"),
+                )
+            })?;
+
+            let typed = serde_json::from_value(did_doc_value).map_err(|err| {
+                error!("Couldn't convert DID Document value to Document struct. Reason: {err}");
+                MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    format!(
+                        "Couldn't convert DID Document value to Document struct. Reason: {err}"
+                    ),
+                )
+            })?;
+
+            Ok((did_json, Some(document_json), typed))
+        }
+        Err(_log_entry_err) => {
+            // did:web source — the raw input is the DID document; no log entry to serve.
+            let typed = serde_json::from_str::<Document>(&document_json).map_err(|err| {
+                error!("Couldn't parse content as LogEntry or Document. Reason: {err}");
+                MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    format!("Couldn't parse content as LogEntry or Document. Reason: {err}"),
+                )
+            })?;
+            Ok((document_json, None, typed))
+        }
+    }
+}
+
 /// Ensure the mediator's DID document advertises a `TSPTransport` service so peers can
 /// discover its TSP endpoint (remote routed/nested forwarding resolves it from the DID
 /// document). For **did:web** the service is added automatically, mirroring the
@@ -921,12 +966,11 @@ pub(crate) fn apply_tsp_did_advertisement(config: &mut Config) {
     };
 
     // did:web (no webvh log) is the only form we may safely mutate in place.
-    if config.mediator_did_log.is_none() {
-        if let Some(augmented) = augment_did_web_doc_with_tsp_service(&mut doc, &config.mediator_did)
-        {
-            config.mediator_did_doc = Some(augmented);
-            config.mediator_did_document = Some(doc.clone());
-        }
+    if config.mediator_did_log.is_none()
+        && let Some(augmented) = augment_did_web_doc_with_tsp_service(&mut doc, &config.mediator_did)
+    {
+        config.mediator_did_doc = Some(augmented);
+        config.mediator_did_document = Some(doc.clone());
     }
 
     if !doc
@@ -1050,6 +1094,62 @@ pub async fn init(config_file: &str, with_ansi: bool) -> Result<Config, Mediator
             Ok(config)
         }
         Err(err) => Err(err),
+    }
+}
+
+#[cfg(test)]
+mod self_hosted_did_tests {
+    use super::*;
+
+    // A real did:webvh log entry (didwebvh-rs `basic-create` test vector).
+    // `state.id` is `did:webvh:{scid}:example.com`.
+    const WEBVH_LOG: &str = r#"{"versionId":"1-QmPFhMuZH9gjY2JZgyyrgRuFTywQ4mDhoKGVoGE8uy7hFD","versionTime":"2000-01-01T00:00:00Z","parameters":{"method":"did:webvh:1.0","scid":"Qmdxt11AjZewCNXX69bpEDobgjySeZ7eFwjf4tgpF6p2Dg","updateKeys":["z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG"],"portable":false,"nextKeyHashes":[],"watchers":[],"witness":{},"deactivated":false},"state":{"@context":["https://www.w3.org/ns/did/v1","https://w3id.org/security/multikey/v1"],"id":"did:webvh:Qmdxt11AjZewCNXX69bpEDobgjySeZ7eFwjf4tgpF6p2Dg:example.com","controller":"did:webvh:Qmdxt11AjZewCNXX69bpEDobgjySeZ7eFwjf4tgpF6p2Dg:example.com","verificationMethod":[{"type":"Multikey","controller":"did:webvh:Qmdxt11AjZewCNXX69bpEDobgjySeZ7eFwjf4tgpF6p2Dg:example.com","publicKeyMultibase":"z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG","id":"did:webvh:Qmdxt11AjZewCNXX69bpEDobgjySeZ7eFwjf4tgpF6p2Dg:example.com#P5RDjVJG"}],"authentication":["did:webvh:Qmdxt11AjZewCNXX69bpEDobgjySeZ7eFwjf4tgpF6p2Dg:example.com#P5RDjVJG"],"assertionMethod":[],"keyAgreement":[],"capabilityDelegation":[],"capabilityInvocation":[]},"proof":[{"type":"DataIntegrityProof","cryptosuite":"eddsa-jcs-2022","verificationMethod":"did:key:z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG#z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG","created":"2000-01-01T00:00:00Z","proofPurpose":"assertionMethod","proofValue":"z3gfipj528cwTsP7aSSWMsPzA5uqSUGSN7WNzJQFf1WTvjpHf9Ftjk6StQmqqzjyjQT9xyqTjEsRp2jw4DBjcyqac"}]}"#;
+
+    // A plain did:web DID document (no webvh log envelope).
+    const WEB_DOC: &str = r#"{"@context":["https://www.w3.org/ns/did/v1","https://w3id.org/security/multikey/v1"],"id":"did:web:example.com","controller":"did:web:example.com","verificationMethod":[{"type":"Multikey","controller":"did:web:example.com","publicKeyMultibase":"z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG","id":"did:web:example.com#P5RDjVJG"}],"authentication":["did:web:example.com#P5RDjVJG"]}"#;
+
+    /// did:webvh source: the did.json body must have its id (and every
+    /// self-reference) rewritten to did:web, while the did.jsonl body stays
+    /// the verbatim webvh log and the typed Document keeps the real did:webvh
+    /// id.
+    #[test]
+    fn webvh_source_rewrites_did_json_only() {
+        let (did_json, did_jsonl, typed) =
+            split_self_hosted_did_source(WEBVH_LOG.to_string()).unwrap();
+
+        // did.json: rewritten to did:web, no webvh traces anywhere.
+        let doc: serde_json::Value = serde_json::from_str(&did_json).unwrap();
+        assert_eq!(doc["id"], "did:web:example.com");
+        assert_eq!(doc["controller"], "did:web:example.com");
+        assert!(!did_json.contains("did:webvh:"));
+        for vm in doc["verificationMethod"].as_array().unwrap() {
+            assert!(
+                vm["id"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("did:web:example.com#")
+            );
+        }
+
+        // did.jsonl: verbatim webvh log, unchanged.
+        assert_eq!(did_jsonl.as_deref(), Some(WEBVH_LOG));
+
+        // typed Document: the mediator's real did:webvh identity.
+        assert_eq!(
+            typed.id.as_str(),
+            "did:webvh:Qmdxt11AjZewCNXX69bpEDobgjySeZ7eFwjf4tgpF6p2Dg:example.com"
+        );
+    }
+
+    /// did:web source: served verbatim at did.json, no did.jsonl log.
+    #[test]
+    fn web_source_served_verbatim_without_log() {
+        let (did_json, did_jsonl, typed) =
+            split_self_hosted_did_source(WEB_DOC.to_string()).unwrap();
+
+        assert_eq!(did_json, WEB_DOC);
+        assert!(did_jsonl.is_none());
+        assert_eq!(typed.id.as_str(), "did:web:example.com");
     }
 }
 

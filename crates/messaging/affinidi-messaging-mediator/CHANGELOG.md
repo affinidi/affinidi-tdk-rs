@@ -4,6 +4,23 @@
 
 ## 25th June 2026
 
+### 0.16.28 — did:web self-hosting: serve a valid did:web document
+
+- A self-hosted `did:webvh` mediator (`did_web_self_hosted = file://.../did.jsonl`)
+  now serves a **did:web-native** document at `/.well-known/did.json`: its identifier
+  (and every verification-method and service self-reference) is rewritten from
+  `did:webvh:{scid}:{domain}` to `did:web:{domain}`. Previously the extracted log
+  `state` was served verbatim, so a `did:web:{domain}` resolver received a document
+  whose `id` didn't match the DID it resolved and whose `#key-…` references couldn't
+  be dereferenced. The `/.well-known/did.jsonl` log stream and the mediator's internal
+  `did:webvh` identity are unchanged. Automatic — no new config key.
+- The rewrite is **structured** (not a blind string replace): only DID-URL
+  self-references of the document's own DID — the bare DID and `{did}#frag` /
+  `{did}?query` / `{did}/path` forms — are rewritten. Foreign `did:webvh:` DIDs, longer
+  DIDs sharing the prefix (`{did}:tenant`), and values that merely embed the DID as a
+  substring (e.g. a `serviceEndpoint` URL) are left verbatim; identifiers with an empty
+  SCID are rejected.
+
 ### 0.16.27 — TSP: advertise a TSPTransport service in the DID document
 
 - When TSP is enabled, the mediator now advertises a `TSPTransport` service in its DID
