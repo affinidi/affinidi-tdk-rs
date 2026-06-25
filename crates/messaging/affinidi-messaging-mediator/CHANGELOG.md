@@ -2,6 +2,20 @@
 
 ## Changelog history
 
+## 26th June 2026
+
+### 0.16.31 — TSP: raw-TSP WebSocket delivery mode
+
+- A WebSocket client may now opt into a **raw-TSP delivery mode** by adding a `tsp`
+  entry to `Sec-WebSocket-Protocol` (alongside `bearer.<jwt>`). In this mode the socket
+  uses a **flush-on-connect + delete-on-successful-send** contract instead of the DIDComm
+  message-pickup delete-to-ack: on connect the mediator drains the inbox, sending each
+  message as a raw-TSP `Binary` frame and deleting it once the send succeeds; a live
+  notification re-drains the same way. The client owns its own failure handling (a send
+  error leaves the message in the inbox for the next connection). Inbound raw TSP over the
+  socket (`Binary` → the TSP handler) is unchanged. DIDComm sockets are byte-for-byte
+  unchanged; the whole path is gated on the `tsp` feature.
+
 ## 25th June 2026
 
 ### 0.16.29 — TSP graduated from experimental to supported

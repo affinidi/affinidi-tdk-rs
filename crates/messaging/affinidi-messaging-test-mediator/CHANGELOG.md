@@ -2,6 +2,16 @@
 
 ## Changelog history
 
+## 26th June 2026
+
+### 0.2.31 — TSP: WebSocket delivery e2e
+
+- New `tsp_websocket` test: Alice sends a TSP Direct message to Bob, Bob opens a raw
+  WebSocket with the `tsp` subprotocol, and the test asserts the queued message is flushed
+  on connect as a raw-TSP `Binary` frame (decodes to the original payload + sender) and is
+  deleted afterwards (a subsequent fetch is empty). Adds `base64` as a dev-dep to re-encode
+  the raw frame for `atm.tsp().unpack`.
+
 ## 24th June 2026
 
 ### 0.2.30 — TSP: Control relay e2e
