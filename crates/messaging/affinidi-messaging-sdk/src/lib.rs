@@ -185,6 +185,10 @@ use crate::protocols::tsp::TspOps;
 /// durable store or select one via the config builder.
 #[cfg(feature = "tsp")]
 pub use crate::protocols::tsp::{InMemoryRelationshipStore, RelationshipStore};
+/// Re-export of the pure-TSP authentication handler so a TSP-only client can
+/// register it on the TDK in place of the built-in DIDComm auth flow.
+#[cfg(feature = "tsp")]
+pub use crate::protocols::tsp_auth::TspAuthHandler;
 use crate::protocols::{
     discover_features::DiscoverfeaturesOps, mediator::administration::MediatorOps,
     message_pickup::MessagePickupOps, oob_discovery::OOBDiscoveryOps, routing::RoutingOps,

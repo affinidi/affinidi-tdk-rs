@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.18.38] - 2026-06-26
+
+Formatting only (`cargo fmt --all`); no functional or API change. Patch bump
+required by the release guard because the crate source changed. Reconciles the
+version after the pure-TSP-auth `0.18.37` release landed on `main`.
+
+## [0.18.37] - 2026-06-26
+
+Pure-TSP client authentication: `TspAuthHandler` lets a TSP-only client (no DIDComm)
+authenticate to the mediator's `POST /tsp/authenticate` and obtain the same JWT session.
+
+- New `TspAuthHandler` (impl `affinidi_did_authentication::CustomAuthHandler`): resolves the
+  mediator's `#auth` service, `POST {base}/challenge`, signs the challenge with the profile's
+  Ed25519 VID key, then `POST {base}/tsp/authenticate {vid, session_id, signature}` and returns
+  the access/refresh `AuthorizationTokens`. Register it via
+  `CustomAuthHandlers::default().with_auth_handler(Arc::new(TspAuthHandler::new(secrets)))` when
+  building the TDK; the existing `atm.tsp()` / cache / `send_raw` path then authenticates over
+  TSP transparently.
+- Adds `affinidi-did-resolver-cache-sdk` + `reqwest` as optional deps behind the `tsp` feature
+  (named directly by the `CustomAuthHandler` trait signature). Additive; no existing API changed.
+
 ## [0.18.36] - 2026-06-25
 
 TSP **relationship management** — drive the TSP relationship lifecycle (RFI/RFA: invite /
