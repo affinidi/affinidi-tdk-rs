@@ -2,6 +2,24 @@
 
 ## Changelog history
 
+## 25th June 2026
+
+### 0.16.27 — TSP: advertise a TSPTransport service in the DID document
+
+- When TSP is enabled, the mediator now advertises a `TSPTransport` service in its DID
+  document so other mediators can **discover its TSP endpoint** — remote routed/nested
+  forwarding resolves the next hop's endpoint from its DID document, and previously
+  failed with "publishes no TSP transport endpoint" against a mediator that didn't
+  advertise one.
+- For **did:web** the service is added automatically at startup, mirroring the
+  `DIDCommMessaging` endpoint (TSP and DIDComm share the mediator's `/inbound`). Applied
+  on the owned config in `serve_internal`, so it covers both the config-file and builder
+  startup paths.
+- **did:peer** and **did:webvh** bind the document to the DID (peer encodes it; webvh
+  hashes it), so their `TSPTransport` service must be baked in at DID generation. When
+  TSP is enabled but no `TSPTransport` service is advertised, the mediator logs an
+  actionable warning at startup instead of failing silently at the first remote forward.
+
 ## 24th June 2026
 
 ### 0.16.26 — TSP: Control message relay

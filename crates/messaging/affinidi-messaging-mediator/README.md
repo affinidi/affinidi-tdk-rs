@@ -121,6 +121,15 @@ least one secret backend must be enabled. Defaults are
 | `didcomm` | Yes | DIDComm v2 — production protocol |
 | `tsp` | No | Trust Spanning Protocol — experimental |
 
+> **TSP endpoint advertisement.** For other mediators to route/forward TSP messages
+> to this one, this mediator's DID document must advertise a `TSPTransport` service
+> pointing at its inbound endpoint. With the `tsp` feature enabled:
+> - **did:web** — added automatically at startup, mirroring the `DIDCommMessaging`
+>   service endpoint (TSP and DIDComm share `/inbound`). No action needed.
+> - **did:peer / did:webvh** — the document is bound to the DID, so add the
+>   `TSPTransport` service **when generating the DID**. The mediator logs a startup
+>   warning if TSP is enabled but no `TSPTransport` service is advertised.
+
 ### Storage backend (pick one)
 
 | Feature | Default | Use case |

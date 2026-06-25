@@ -203,7 +203,7 @@ pub async fn start(config_path: &str) -> Result<(), MediatorError> {
 /// Returns once the listener is bound. The actual server runs in a
 /// `tokio::spawn`-ed task whose handle lives on [`MediatorHandle`].
 pub async fn serve_internal(
-    config: Config,
+    #[cfg_attr(not(feature = "tsp"), allow(unused_mut))] mut config: Config,
     opts: StartOpts,
     shutdown_token: CancellationToken,
     pre_built_store: Option<Arc<dyn affinidi_messaging_mediator_common::store::MediatorStore>>,
@@ -494,6 +494,13 @@ pub async fn serve_internal(
                 format!("Failed to create DID resolver: {e}"),
             )
         })?;
+
+    // If TSP is enabled, make sure our served DID document advertises a
+    // `TSPTransport` service so peers can discover our TSP endpoint. Runs here, on the
+    // owned `config`, so it covers both the config-file and builder paths before the
+    // document is preloaded + served below.
+    #[cfg(feature = "tsp")]
+    crate::common::config::apply_tsp_did_advertisement(&mut config);
 
     // Preload the mediator's own DID document so it can pack/unpack DIDComm
     // messages without hitting the network (did:web/did:webvh self-resolution
