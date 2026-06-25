@@ -938,6 +938,97 @@ fn split_self_hosted_did_source(
     }
 }
 
+/// Ensure the mediator's DID document advertises a `TSPTransport` service so peers can
+/// discover its TSP endpoint (remote routed/nested forwarding resolves it from the DID
+/// document). For **did:web** the service is added automatically, mirroring the
+/// `DIDCommMessaging` endpoint (TSP and DIDComm share `/inbound`); **did:peer** and
+/// **did:webvh** bind the document to the DID, so their service must be baked in at DID
+/// generation — there we only warn. A no-op unless the `tsp` feature is on.
+///
+/// Called once at startup ([`crate::server::serve_internal`]) so it covers both the
+/// config-file path (typed `mediator_did_document`) and the builder path (served JSON
+/// only).
+#[cfg(feature = "tsp")]
+pub(crate) fn apply_tsp_did_advertisement(config: &mut Config) {
+    // Work from the typed document if we have it (config-file path), else parse the
+    // served JSON (builder path). No self-hosted document (e.g. a network-published
+    // did:peer) → nothing to advertise here.
+    let mut doc = match config.mediator_did_document.clone() {
+        Some(doc) => doc,
+        None => match config
+            .mediator_did_doc
+            .as_ref()
+            .and_then(|json| serde_json::from_str::<Document>(json).ok())
+        {
+            Some(doc) => doc,
+            None => return,
+        },
+    };
+
+    // did:web (no webvh log) is the only form we may safely mutate in place.
+    if config.mediator_did_log.is_none()
+        && let Some(augmented) = augment_did_web_doc_with_tsp_service(&mut doc, &config.mediator_did)
+    {
+        config.mediator_did_doc = Some(augmented);
+        config.mediator_did_document = Some(doc.clone());
+    }
+
+    if !doc
+        .service
+        .iter()
+        .any(|s| s.type_.iter().any(|t| t == affinidi_tsp::TSP_SERVICE_TYPE))
+    {
+        warn!(
+            "TSP is enabled but the mediator DID document advertises no '{}' service; \
+             other mediators cannot discover this mediator's TSP endpoint for routed/nested \
+             forwarding. For did:web it is added automatically from the DIDCommMessaging \
+             endpoint (is one present?); for did:peer / did:webvh add the service at DID \
+             generation.",
+            affinidi_tsp::TSP_SERVICE_TYPE
+        );
+    }
+}
+
+/// Ensure a self-hosted **did:web** document advertises a `TSPTransport` service,
+/// mirroring the `DIDCommMessaging` endpoint (TSP and DIDComm share the mediator's
+/// `/inbound`). Returns the re-serialised document JSON when a service was added, or
+/// `None` if the document already advertises TSP or has no DIDComm endpoint to mirror.
+///
+/// Only safe for did:web, where the served document is authoritative — did:peer and
+/// did:webvh bind the document to the DID, so their service must be set at generation.
+#[cfg(feature = "tsp")]
+fn augment_did_web_doc_with_tsp_service(doc: &mut Document, did: &str) -> Option<String> {
+    use affinidi_did_common::ServiceBuilder;
+    use affinidi_did_common::service::Endpoint;
+
+    let tsp_type = affinidi_tsp::TSP_SERVICE_TYPE;
+
+    // Already advertised — nothing to do.
+    if doc
+        .service
+        .iter()
+        .any(|s| s.type_.iter().any(|t| t == tsp_type))
+    {
+        return None;
+    }
+
+    // Mirror the first DIDCommMessaging endpoint URI — TSP lands on the same `/inbound`.
+    let uri = doc
+        .service
+        .iter()
+        .find(|s| s.type_.iter().any(|t| t == "DIDCommMessaging"))
+        .and_then(|s| s.service_endpoint.get_uri())?;
+    let endpoint = url::Url::parse(uri.trim_matches('"')).ok()?;
+
+    let service = ServiceBuilder::new(tsp_type, Endpoint::Url(endpoint))
+        .id(&format!("{did}#tsp"))
+        .ok()?
+        .build();
+    doc.service.push(service);
+
+    serde_json::to_string(doc).ok()
+}
+
 pub async fn init(config_file: &str, with_ansi: bool) -> Result<Config, MediatorError> {
     // Read configuration file parameters. `read_config_file` lives in the config
     // crate now (returns its lean `ConfigError`); map it back to MediatorError.
@@ -1059,5 +1150,69 @@ mod self_hosted_did_tests {
         assert_eq!(did_json, WEB_DOC);
         assert!(did_jsonl.is_none());
         assert_eq!(typed.id.as_str(), "did:web:example.com");
+    }
+}
+
+#[cfg(all(test, feature = "tsp"))]
+mod tsp_advertise_tests {
+    use super::*;
+
+    fn did_doc(services: &str) -> Document {
+        let json = format!(
+            r#"{{ "id": "did:web:mediator.example.com", "service": [{services}] }}"#
+        );
+        serde_json::from_str(&json).expect("valid DID document")
+    }
+
+    const DIDCOMM: &str = r#"{
+        "id": "did:web:mediator.example.com#didcomm",
+        "type": "DIDCommMessaging",
+        "serviceEndpoint": "https://mediator.example.com/inbound"
+    }"#;
+
+    #[test]
+    fn adds_tsp_service_mirroring_the_didcomm_endpoint() {
+        let mut doc = did_doc(DIDCOMM);
+        let out = augment_did_web_doc_with_tsp_service(&mut doc, "did:web:mediator.example.com");
+        assert!(out.is_some(), "a TSPTransport service should have been added");
+
+        let tsp: Vec<_> = doc
+            .service
+            .iter()
+            .filter(|s| s.type_.iter().any(|t| t == affinidi_tsp::TSP_SERVICE_TYPE))
+            .collect();
+        assert_eq!(tsp.len(), 1, "exactly one TSPTransport service");
+        assert_eq!(
+            tsp[0].service_endpoint.get_uri().as_deref(),
+            Some("https://mediator.example.com/inbound"),
+            "the TSP endpoint mirrors the DIDCommMessaging endpoint"
+        );
+        // The re-serialised JSON carries the new service.
+        assert!(out.unwrap().contains(affinidi_tsp::TSP_SERVICE_TYPE));
+    }
+
+    #[test]
+    fn no_change_when_tsp_already_advertised() {
+        let tsp = r#"{
+            "id": "did:web:mediator.example.com#tsp",
+            "type": "TSPTransport",
+            "serviceEndpoint": "https://mediator.example.com/inbound"
+        }"#;
+        let mut doc = did_doc(&format!("{DIDCOMM},{tsp}"));
+        let out = augment_did_web_doc_with_tsp_service(&mut doc, "did:web:mediator.example.com");
+        assert!(out.is_none(), "already advertised — no mutation");
+        assert_eq!(doc.service.len(), 2, "no extra service appended");
+    }
+
+    #[test]
+    fn no_change_without_a_didcomm_endpoint_to_mirror() {
+        let other = r#"{
+            "id": "did:web:mediator.example.com#other",
+            "type": "SomeOtherService",
+            "serviceEndpoint": "https://mediator.example.com/other"
+        }"#;
+        let mut doc = did_doc(other);
+        let out = augment_did_web_doc_with_tsp_service(&mut doc, "did:web:mediator.example.com");
+        assert!(out.is_none(), "no DIDComm endpoint to mirror — no mutation");
     }
 }

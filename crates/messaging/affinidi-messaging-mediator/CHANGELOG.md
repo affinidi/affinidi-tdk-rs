@@ -2,9 +2,9 @@
 
 ## Changelog history
 
-## 24th June 2026
+## 25th June 2026
 
-### 0.16.27 — did:web self-hosting: serve a valid did:web document
+### 0.16.28 — did:web self-hosting: serve a valid did:web document
 
 - A self-hosted `did:webvh` mediator (`did_web_self_hosted = file://.../did.jsonl`)
   now serves a **did:web-native** document at `/.well-known/did.json`: its identifier
@@ -14,6 +14,28 @@
   whose `id` didn't match the DID it resolved and whose `#key-…` references couldn't
   be dereferenced. The `/.well-known/did.jsonl` log stream and the mediator's internal
   `did:webvh` identity are unchanged. Automatic — no new config key.
+- The rewrite is **structured** (not a blind string replace): only DID-URL
+  self-references of the document's own DID — the bare DID and `{did}#frag` /
+  `{did}?query` / `{did}/path` forms — are rewritten. Foreign `did:webvh:` DIDs, longer
+  DIDs sharing the prefix (`{did}:tenant`), and values that merely embed the DID as a
+  substring (e.g. a `serviceEndpoint` URL) are left verbatim; identifiers with an empty
+  SCID are rejected.
+
+### 0.16.27 — TSP: advertise a TSPTransport service in the DID document
+
+- When TSP is enabled, the mediator now advertises a `TSPTransport` service in its DID
+  document so other mediators can **discover its TSP endpoint** — remote routed/nested
+  forwarding resolves the next hop's endpoint from its DID document, and previously
+  failed with "publishes no TSP transport endpoint" against a mediator that didn't
+  advertise one.
+- For **did:web** the service is added automatically at startup, mirroring the
+  `DIDCommMessaging` endpoint (TSP and DIDComm share the mediator's `/inbound`). Applied
+  on the owned config in `serve_internal`, so it covers both the config-file and builder
+  startup paths.
+- **did:peer** and **did:webvh** bind the document to the DID (peer encodes it; webvh
+  hashes it), so their `TSPTransport` service must be baked in at DID generation. When
+  TSP is enabled but no `TSPTransport` service is advertised, the mediator logs an
+  actionable warning at startup instead of failing silently at the first remote forward.
 
 ## 24th June 2026
 
