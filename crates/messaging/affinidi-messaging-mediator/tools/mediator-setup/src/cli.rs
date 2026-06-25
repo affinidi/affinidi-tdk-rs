@@ -39,6 +39,15 @@ pub struct Args {
     #[arg(long)]
     pub save_did_web: bool,
 
+    /// Extra cryptographic key suite(s) to provision *in addition to* the
+    /// mandatory Ed25519 (signing) + X25519 (key-agreement) pair.
+    /// Repeatable: `--key-suite p256`. Counterparties that can't speak
+    /// Curve25519 (JOSE-first stacks, hardware wallets, ES256 issuers) need
+    /// these. Applies to the locally-generated did:peer / did:webvh methods;
+    /// VTA-managed DIDs take their key set from the VTA's template.
+    #[arg(long, value_enum, value_name = "SUITE")]
+    pub key_suite: Vec<KeySuite>,
+
     /// Secret storage backend
     #[arg(long, value_enum)]
     pub secret_storage: Option<SecretStorage>,
@@ -199,6 +208,24 @@ impl std::fmt::Display for DidMethod {
             Self::Peer => write!(f, "did:peer"),
             Self::Webvh => write!(f, "did:webvh"),
             Self::Vta => write!(f, "VTA managed"),
+        }
+    }
+}
+
+/// Optional extra key suites layered on top of the always-present Ed25519 +
+/// X25519 mediator identity keys. Each suite contributes a signing key plus a
+/// key-agreement key so the mediator can both authenticate and receive
+/// authcrypt traffic on that curve family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum KeySuite {
+    /// NIST P-256 — ES256 signing + ECDH-ES (P-256) key agreement.
+    P256,
+}
+
+impl std::fmt::Display for KeySuite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::P256 => write!(f, "p256"),
         }
     }
 }
