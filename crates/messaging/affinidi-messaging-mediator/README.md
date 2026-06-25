@@ -32,7 +32,7 @@ cargo run --bin mediator-setup
 The interactive TUI guides you through:
 
 1. **Deployment type** — local dev, headless server, or container
-2. **Protocol** — DIDComm v2 (recommended) or TSP (experimental)
+2. **Protocol** — DIDComm v2, TSP, or both (dual-protocol)
 3. **DID configuration** — did:peer, did:webvh, or VTA-managed
 4. **Key storage** — file (`?encrypt=1` opt-in), OS keyring, AWS
    Secrets Manager, GCP Secret Manager, Azure Key Vault, or
@@ -119,7 +119,7 @@ least one secret backend must be enabled. Defaults are
 | Feature | Default | Description |
 |---|---|---|
 | `didcomm` | Yes | DIDComm v2 — production protocol |
-| `tsp` | No | Trust Spanning Protocol — experimental |
+| `tsp` | No | Trust Spanning Protocol — supported; run with `didcomm` (dual-protocol) |
 
 > **TSP endpoint advertisement.** For other mediators to route/forward TSP messages
 > to this one, this mediator's DID document must advertise a `TSPTransport` service

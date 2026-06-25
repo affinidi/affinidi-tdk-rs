@@ -4,6 +4,17 @@
 
 ## 25th June 2026
 
+### 0.16.29 — TSP graduated from experimental to supported
+
+- The `tsp` feature is no longer marked **experimental**. The dual-protocol mediator
+  carries TSP Direct / Routed / Nested / Control messages, bridges TSP↔DIDComm, runs
+  Trust Tasks over TSP, and advertises a `TSPTransport` service for discovery — the
+  feature set is complete and exercised by the e2e suite. Documentation/labelling only;
+  no behaviour change.
+- Caveat carried in the feature docs: TSP currently reuses the DIDComm-authenticated
+  session, so run `tsp` together with `didcomm`. A pure-TSP auth path
+  (`/tsp/authenticate`) and SDK relationship management are tracked follow-ups.
+
 ### 0.16.28 — did:web self-hosting: serve a valid did:web document
 
 - A self-hosted `did:webvh` mediator (`did_web_self_hosted = file://.../did.jsonl`)
