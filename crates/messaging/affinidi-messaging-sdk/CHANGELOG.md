@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.35] - 2026-06-25
+
+The `tsp` feature is no longer marked **experimental** — `atm.tsp()` (pack / send /
+send_routed / send_nested / send_control / unpack) is supported. Documentation/labelling
+only; no behaviour change. Caveat: pure-TSP client auth (`/tsp/authenticate`) is still
+pending, so `atm.tsp()` reuses the profile's DIDComm-authenticated session for now.
+
 ## [0.18.34] - 2026-06-24
 
 New `atm.tsp().send_control(profile, to_did, control)`: send a TSP **`Control`** message

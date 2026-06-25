@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.18.34"
+version = "0.18.35"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -14,9 +14,10 @@ repository.workspace = true
 
 [features]
 default = []
-## Trust Spanning Protocol (TSP) client support — `atm.tsp()` ops, alongside the
-## always-on DIDComm support. EXPERIMENTAL: the message-construction (pack/send)
-## and receive (fetch/unpack) paths are still being built.
+## Trust Spanning Protocol (TSP) client support — the `atm.tsp()` ops (pack / send /
+## send_routed / send_nested / send_control / unpack), alongside the always-on DIDComm
+## support. Supported; pure-TSP client auth (`/tsp/authenticate`) is still pending, so
+## today `atm.tsp()` reuses the profile's DIDComm-authenticated session.
 tsp = ["dep:affinidi-tsp"]
 
 [dependencies]

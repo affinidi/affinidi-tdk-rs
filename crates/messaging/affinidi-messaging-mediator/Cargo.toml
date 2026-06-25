@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.16.28"
+version = "0.16.29"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -41,10 +41,11 @@ memory-backend = []
 ## together (`--features didcomm,tsp`), which is the dual-protocol deployment.
 didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding", "dep:affinidi-crypto", "dep:trust-tasks-rs"]
 
-## TSP (Trust Spanning Protocol) — additive alongside DIDComm.
-## EXPERIMENTAL: TSP message handling is still being built; a `tsp`-only build
-## compiles but is not yet functional (no auth/inbound). Run it together with
-## `didcomm` for a dual-protocol mediator.
+## TSP (Trust Spanning Protocol) — supported, additive alongside DIDComm. Carries TSP
+## Direct / Routed / Nested / Control messages, the TSP↔DIDComm bridge, Trust Tasks over
+## TSP, and advertises a TSPTransport service for discovery. Run together with `didcomm`:
+## TSP currently reuses the DIDComm-authenticated session, so a `tsp`-only build has no
+## auth path yet (pure-TSP `/tsp/authenticate` is pending).
 tsp = ["dep:affinidi-tsp"]
 
 ## Secret storage backends — forwarded to `mediator-common`'s `secrets-*`
