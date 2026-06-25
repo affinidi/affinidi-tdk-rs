@@ -8,9 +8,13 @@
 
 - New always-built `did_web` module: `webvh_did_to_web`, `rewrite_did_document_to_web`,
   and `webvh_log_to_did_web` convert a `did:webvh:{scid}:{domain}` DID document into its
-  wire-compatible `did:web:{domain}` form (id, controller, key and service
-  self-references rewritten). Pure (`serde_json` only), shared by the mediator runtime
-  (serving `/.well-known/did.json`) and the `mediator-setup` wizard (writing the
+  wire-compatible `did:web:{domain}` form. The rewrite is structured: only DID-URL
+  *self-references* of the document's own DID (the bare DID and `{did}#frag` / `{did}?query`
+  / `{did}/path` forms — id, controller, key and service references) are rewritten. Foreign
+  DIDs, longer DIDs sharing the prefix (`{did}:tenant`), and values that merely embed the
+  DID as a substring (e.g. a `serviceEndpoint` URL) are left verbatim. `webvh_did_to_web`
+  also rejects an empty SCID segment. Pure (`serde_json` only), shared by the mediator
+  runtime (serving `/.well-known/did.json`) and the `mediator-setup` wizard (writing the
   `did-web.json` operator artefact) so both use one tested implementation.
 
 ## 23rd June 2026
