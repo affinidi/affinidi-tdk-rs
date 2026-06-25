@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.18.36] - 2026-06-25
+
+TSP **relationship management** — drive the TSP relationship lifecycle (RFI/RFA: invite /
+accept / cancel) through `atm.tsp()`, backed by a pluggable store.
+
+- New `atm.tsp()` methods: `form_relationship`, `accept_relationship`,
+  `cancel_relationship`, `relationship_state`, and `record_incoming_control` (advance the
+  FSM for a received control message). Each drives the pure
+  `affinidi_tsp::relationship::RelationshipState` state machine
+  (None → Pending / InviteReceived → Bidirectional) and sends via the existing
+  `send_control`; outbound state is persisted only **after** the control message is sent.
+- New `RelationshipStore` trait — pluggable persistence (consumers implement it against
+  durable storage) — plus an ephemeral `InMemoryRelationshipStore` default. Select one via
+  `ATMConfigBuilder::with_relationship_store`; defaults to in-memory (wiped on restart).
+- Adds `async-trait` behind the `tsp` feature. Additive; no existing API changed.
+
 ## [0.18.35] - 2026-06-25
 
 The `tsp` feature is no longer marked **experimental** — `atm.tsp()` (pack / send /

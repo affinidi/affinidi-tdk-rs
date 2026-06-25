@@ -20,18 +20,125 @@
 //! reverses a fetched message: decode → resolve the sender → decrypt + verify
 //! with the profile's key.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use affinidi_did_common::DocumentExt;
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_secrets_resolver::secrets::KeyType;
-use affinidi_tsp::message::direct;
+use affinidi_tsp::message::control::{ControlMessage, ControlType};
+use affinidi_tsp::message::direct::{self, PackedMessage};
+use affinidi_tsp::relationship::{InvalidTransition, RelationshipEvent, RelationshipState};
 use affinidi_tsp::{DidVidResolver, MessageType, MetaEnvelope};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+use tokio::sync::RwLock;
 
 use crate::ATM;
 use crate::errors::ATMError;
 use crate::profiles::ATMProfile;
+
+/// Pluggable backing store for TSP relationship state.
+///
+/// The relationship state machine (invite → accept → bidirectional, plus
+/// cancel) is keyed on the `(our_vid, their_vid)` DID pair. The SDK drives the
+/// pure FSM in [`affinidi_tsp::relationship::RelationshipState`] and persists
+/// each new state through this trait, so where the state lives (memory, a
+/// database, …) is up to the consumer.
+///
+/// The default implementation is [`InMemoryRelationshipStore`]; supply a
+/// durable one via
+/// [`crate::config::ATMConfigBuilder::with_relationship_store`].
+#[async_trait::async_trait]
+pub trait RelationshipStore: Send + Sync {
+    /// Current relationship state for the `(our_vid, their_vid)` pair.
+    /// Returns [`RelationshipState::None`] for an unknown pair.
+    async fn get(&self, our_vid: &str, their_vid: &str) -> Result<RelationshipState, ATMError>;
+
+    /// Persist the new state for the `(our_vid, their_vid)` pair.
+    async fn set(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        state: RelationshipState,
+    ) -> Result<(), ATMError>;
+}
+
+/// Default, ephemeral [`RelationshipStore`] backed by an in-memory map.
+///
+/// State is held in a `tokio::sync::RwLock<HashMap<(String, String),
+/// RelationshipState>>` and is **wiped on process restart** — it is intended
+/// for tests and single-process clients that don't need durability. Consumers
+/// who need relationship state to survive restarts should implement
+/// [`RelationshipStore`] against durable storage and inject it via
+/// [`crate::config::ATMConfigBuilder::with_relationship_store`].
+#[derive(Default)]
+pub struct InMemoryRelationshipStore {
+    inner: RwLock<HashMap<(String, String), RelationshipState>>,
+}
+
+#[async_trait::async_trait]
+impl RelationshipStore for InMemoryRelationshipStore {
+    async fn get(&self, our_vid: &str, their_vid: &str) -> Result<RelationshipState, ATMError> {
+        let key = (our_vid.to_string(), their_vid.to_string());
+        Ok(self
+            .inner
+            .read()
+            .await
+            .get(&key)
+            .copied()
+            .unwrap_or(RelationshipState::None))
+    }
+
+    async fn set(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        state: RelationshipState,
+    ) -> Result<(), ATMError> {
+        let key = (our_vid.to_string(), their_vid.to_string());
+        self.inner.write().await.insert(key, state);
+        Ok(())
+    }
+}
+
+/// Map an FSM [`InvalidTransition`] onto an [`ATMError`].
+fn invalid_transition(e: InvalidTransition) -> ATMError {
+    ATMError::ConfigError(format!("invalid relationship transition: {e}"))
+}
+
+/// Compute (but do not persist) the next state for the `(our_vid, their_vid)`
+/// pair after applying `event`. Used by the outbound (`Send*`) methods, which
+/// validate the transition up front and only persist the result **after** the
+/// wire `send_control` succeeds.
+async fn next_state(
+    store: &Arc<dyn RelationshipStore>,
+    our_vid: &str,
+    their_vid: &str,
+    event: RelationshipEvent,
+) -> Result<RelationshipState, ATMError> {
+    let current = store.get(our_vid, their_vid).await?;
+    current.transition(event).map_err(invalid_transition)
+}
+
+/// Apply a relationship `event` to the state currently held for the
+/// `(our_vid, their_vid)` pair in `store`, persist the new state, and return
+/// it. Used by [`TspOps::record_incoming_control`] for inbound (`Receive*`)
+/// events, where there is no outbound send to gate the persist on.
+///
+/// Unit-tested directly (see this module's tests) against an
+/// [`InMemoryRelationshipStore`]; the wire `send_control` path the outbound
+/// public methods add on top requires a live mediator and is covered by the
+/// end-to-end test in `affinidi-messaging-test-mediator`.
+async fn advance_state(
+    store: &Arc<dyn RelationshipStore>,
+    our_vid: &str,
+    their_vid: &str,
+    event: RelationshipEvent,
+) -> Result<RelationshipState, ATMError> {
+    let next = next_state(store, our_vid, their_vid, event).await?;
+    store.set(our_vid, their_vid, next).await?;
+    Ok(next)
+}
 
 /// TSP protocol operations, obtained from [`crate::ATM::tsp`].
 pub struct TspOps<'a> {
@@ -248,6 +355,127 @@ impl TspOps<'_> {
         self.send_raw(profile, &packed.bytes).await
     }
 
+    // ── Relationship management ───────────────────────────────────────────────
+
+    /// The configured [`RelationshipStore`] backing relationship state.
+    fn relationship_store(&self) -> &Arc<dyn RelationshipStore> {
+        self.atm.inner.config.relationship_store()
+    }
+
+    /// Begin forming a relationship with `their_did`: advance the FSM with
+    /// `SendInvite` (from [`RelationshipState::None`] → [`Pending`]), send a
+    /// Relationship Forming Invite control message, then persist the new state.
+    ///
+    /// State is only persisted after the invite is successfully sent. Returns
+    /// the new state ([`RelationshipState::Pending`]).
+    ///
+    /// [`Pending`]: RelationshipState::Pending
+    pub async fn form_relationship(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+    ) -> Result<RelationshipState, ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let store = self.relationship_store();
+        let next = next_state(store, our_did, their_did, RelationshipEvent::SendInvite).await?;
+        self.send_control(profile, their_did, &ControlMessage::invite())
+            .await?;
+        store.set(our_did, their_did, next).await?;
+        Ok(next)
+    }
+
+    /// Accept an invite previously received from `their_did`: advance the FSM
+    /// with `SendAccept` (from [`RelationshipState::InviteReceived`] →
+    /// [`Bidirectional`]), send a Relationship Forming Accept referencing the
+    /// invite, then persist.
+    ///
+    /// `invite_wire` is the raw qb2 bytes of the received invite message (as
+    /// returned by [`TspOps::decode`]); its BLAKE2s-256 digest is carried in the
+    /// accept as the thread reference. State is only persisted after the accept
+    /// is successfully sent. Returns the new state ([`Bidirectional`]).
+    ///
+    /// [`Bidirectional`]: RelationshipState::Bidirectional
+    pub async fn accept_relationship(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        invite_wire: &[u8],
+    ) -> Result<RelationshipState, ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let store = self.relationship_store();
+        let next = next_state(store, our_did, their_did, RelationshipEvent::SendAccept).await?;
+        // `direct::message_digest` takes a `PackedMessage`; wrap the wire bytes.
+        let digest = direct::message_digest(&PackedMessage {
+            bytes: invite_wire.to_vec(),
+        })
+        .to_vec();
+        self.send_control(profile, their_did, &ControlMessage::accept(digest))
+            .await?;
+        store.set(our_did, their_did, next).await?;
+        Ok(next)
+    }
+
+    /// Cancel/terminate the relationship with `their_did`: advance the FSM with
+    /// `SendCancel` (valid from [`Pending`], [`InviteReceived`], or
+    /// [`Bidirectional`] → [`RelationshipState::None`]), send a Relationship
+    /// Cancel control message, then persist.
+    ///
+    /// State is only persisted after the cancel is successfully sent. Returns
+    /// the new state ([`RelationshipState::None`]).
+    ///
+    /// [`Pending`]: RelationshipState::Pending
+    /// [`InviteReceived`]: RelationshipState::InviteReceived
+    /// [`Bidirectional`]: RelationshipState::Bidirectional
+    pub async fn cancel_relationship(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+    ) -> Result<RelationshipState, ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let store = self.relationship_store();
+        let next = next_state(store, our_did, their_did, RelationshipEvent::SendCancel).await?;
+        self.send_control(profile, their_did, &ControlMessage::cancel())
+            .await?;
+        store.set(our_did, their_did, next).await?;
+        Ok(next)
+    }
+
+    /// The current relationship state for the `(profile, their_did)` pair, read
+    /// from the configured [`RelationshipStore`]. Returns
+    /// [`RelationshipState::None`] for an unknown pair.
+    pub async fn relationship_state(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+    ) -> Result<RelationshipState, ATMError> {
+        let (our_did, _) = profile.dids()?;
+        self.relationship_store().get(our_did, their_did).await
+    }
+
+    /// Advance the relationship FSM for a **received** control message from
+    /// `peer_did` and persist the result.
+    ///
+    /// The caller decodes a fetched TSP control message — `unpack` it, then
+    /// `ControlMessage::decode(payload)` — and passes the decoded `control`
+    /// here. Its [`ControlType`] is mapped to the matching `Receive*` event
+    /// (invite → `ReceiveInvite`, accept → `ReceiveAccept`, cancel →
+    /// `ReceiveCancel`), the transition is applied, persisted, and the new
+    /// state returned.
+    pub async fn record_incoming_control(
+        &self,
+        profile: &Arc<ATMProfile>,
+        peer_did: &str,
+        control: &ControlMessage,
+    ) -> Result<RelationshipState, ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let event = match control.control_type {
+            ControlType::RelationshipFormingInvite => RelationshipEvent::ReceiveInvite,
+            ControlType::RelationshipFormingAccept => RelationshipEvent::ReceiveAccept,
+            ControlType::RelationshipCancel => RelationshipEvent::ReceiveCancel,
+        };
+        advance_state(self.relationship_store(), our_did, peer_did, event).await
+    }
+
     /// POST an already-packed TSP message (raw qb2 bytes) to the mediator
     /// `/inbound`, reusing the profile's existing (DIDComm) authenticated session
     /// for the bearer token. The mediator sniffs the TSP magic byte and routes it
@@ -429,5 +657,151 @@ mod tests {
         assert!(!is_tsp("{\"protected\":\"...\"}"));
         assert!(!is_tsp("eyJhbGciOiJ..."));
         assert!(!is_tsp(""));
+    }
+
+    // ── Relationship store + FSM ──────────────────────────────────────────────
+    //
+    // These exercise the store contract and the store-and-FSM helpers
+    // (`next_state` / `advance_state`) directly — the same logic the public
+    // `TspOps` relationship methods run, minus the wire `send_control` call,
+    // which needs a live mediator and is covered by the end-to-end test in
+    // `affinidi-messaging-test-mediator`.
+
+    use super::{
+        InMemoryRelationshipStore, RelationshipEvent, RelationshipState, RelationshipStore,
+        advance_state, next_state,
+    };
+    use std::sync::Arc;
+
+    const ALICE: &str = "did:example:alice";
+    const BOB: &str = "did:example:bob";
+
+    #[tokio::test]
+    async fn in_memory_store_get_set_roundtrip() {
+        let store = InMemoryRelationshipStore::default();
+        // Unknown pair defaults to None.
+        assert_eq!(
+            store.get(ALICE, BOB).await.unwrap(),
+            RelationshipState::None
+        );
+
+        store
+            .set(ALICE, BOB, RelationshipState::Pending)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get(ALICE, BOB).await.unwrap(),
+            RelationshipState::Pending
+        );
+
+        // Keys are directional: (bob, alice) is a separate, still-unknown pair.
+        assert_eq!(
+            store.get(BOB, ALICE).await.unwrap(),
+            RelationshipState::None
+        );
+    }
+
+    /// Outbound initiator happy path: None →(SendInvite)→ Pending
+    /// →(ReceiveAccept)→ Bidirectional, driven through the store the way the
+    /// public methods do (validate via `next_state`, then persist).
+    #[tokio::test]
+    async fn outbound_happy_path_through_store() {
+        let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+
+        // form_relationship's store step.
+        let next = next_state(&store, ALICE, BOB, RelationshipEvent::SendInvite)
+            .await
+            .unwrap();
+        assert_eq!(next, RelationshipState::Pending);
+        store.set(ALICE, BOB, next).await.unwrap();
+        assert_eq!(
+            store.get(ALICE, BOB).await.unwrap(),
+            RelationshipState::Pending
+        );
+
+        // record_incoming_control(accept) step.
+        let next = advance_state(&store, ALICE, BOB, RelationshipEvent::ReceiveAccept)
+            .await
+            .unwrap();
+        assert_eq!(next, RelationshipState::Bidirectional);
+        assert_eq!(
+            store.get(ALICE, BOB).await.unwrap(),
+            RelationshipState::Bidirectional
+        );
+    }
+
+    /// Inbound responder happy path: None →(ReceiveInvite)→ InviteReceived
+    /// →(SendAccept)→ Bidirectional.
+    #[tokio::test]
+    async fn inbound_happy_path_through_store() {
+        let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+
+        // record_incoming_control(invite).
+        let next = advance_state(&store, BOB, ALICE, RelationshipEvent::ReceiveInvite)
+            .await
+            .unwrap();
+        assert_eq!(next, RelationshipState::InviteReceived);
+
+        // accept_relationship's store step.
+        let next = next_state(&store, BOB, ALICE, RelationshipEvent::SendAccept)
+            .await
+            .unwrap();
+        assert_eq!(next, RelationshipState::Bidirectional);
+        store.set(BOB, ALICE, next).await.unwrap();
+        assert_eq!(
+            store.get(BOB, ALICE).await.unwrap(),
+            RelationshipState::Bidirectional
+        );
+    }
+
+    /// An invalid event for the current state surfaces as an `ATMError` and
+    /// leaves the stored state untouched.
+    #[tokio::test]
+    async fn invalid_transition_is_rejected() {
+        let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+        // SendAccept from None is not a valid edge.
+        assert!(
+            next_state(&store, ALICE, BOB, RelationshipEvent::SendAccept)
+                .await
+                .is_err()
+        );
+        // advance_state must not persist on a rejected transition.
+        assert!(
+            advance_state(&store, ALICE, BOB, RelationshipEvent::ReceiveAccept)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store.get(ALICE, BOB).await.unwrap(),
+            RelationshipState::None
+        );
+    }
+
+    /// `record_incoming_control`'s ControlType → RelationshipEvent mapping,
+    /// validated by running each mapped event through the FSM from a state where
+    /// it is legal.
+    #[test]
+    fn control_type_event_mapping() {
+        use affinidi_tsp::message::control::ControlType;
+        // invite → ReceiveInvite (legal from None).
+        let e = match ControlType::RelationshipFormingInvite {
+            ControlType::RelationshipFormingInvite => RelationshipEvent::ReceiveInvite,
+            _ => unreachable!(),
+        };
+        assert!(RelationshipState::None.transition(e).is_ok());
+
+        // accept → ReceiveAccept (legal from Pending).
+        let e = match ControlType::RelationshipFormingAccept {
+            ControlType::RelationshipFormingAccept => RelationshipEvent::ReceiveAccept,
+            _ => unreachable!(),
+        };
+        assert!(RelationshipState::Pending.transition(e).is_ok());
+
+        // cancel → ReceiveCancel (legal from Bidirectional).
+        let e = match ControlType::RelationshipCancel {
+            ControlType::RelationshipCancel => RelationshipEvent::ReceiveCancel,
+            _ => unreachable!(),
+        };
+        assert!(RelationshipState::Bidirectional.transition(e).is_ok());
     }
 }

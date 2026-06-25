@@ -186,6 +186,10 @@ use crate::protocols::{
 };
 #[cfg(feature = "tsp")]
 use crate::protocols::tsp::TspOps;
+/// Re-exports of the TSP relationship-store API so consumers can implement a
+/// durable store or select one via the config builder.
+#[cfg(feature = "tsp")]
+pub use crate::protocols::tsp::{InMemoryRelationshipStore, RelationshipStore};
 use affinidi_task_utils::CancellationToken;
 use affinidi_tdk_common::TDKSharedState;
 use config::ATMConfig;
