@@ -159,7 +159,11 @@ async fn main() -> Result<(), ATMError> {
 
     // Try and do an admin function with Mallory
     info!("Trying to access an admin function with Mallory");
-    match atm.trust_tasks().account_list(&atm_mallory, None, None).await {
+    match atm
+        .trust_tasks()
+        .account_list(&atm_mallory, None, None)
+        .await
+    {
         Ok(_) => {
             warn!("Mallory was able to access an admin function - NOT OK");
         }

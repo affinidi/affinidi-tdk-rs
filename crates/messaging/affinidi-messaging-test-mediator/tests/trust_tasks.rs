@@ -133,7 +133,10 @@ async fn account_change_queue_limits_self_applies_caps_and_persists() {
         .account_get(&alice.profile, None)
         .await
         .expect("re-read alice's account");
-    assert_eq!(account.queue_limits.and_then(|q| q.send_queue_limit), Some(42));
+    assert_eq!(
+        account.queue_limits.and_then(|q| q.send_queue_limit),
+        Some(42)
+    );
 
     // A standard account's request above the hard maximum (1000) is capped.
     let capped = env
@@ -285,7 +288,12 @@ async fn account_add_self_register_creates_a_standard_account() {
     let account = env
         .atm
         .trust_tasks()
-        .account_add(&alice.profile, new_hash.clone(), AccountType::Standard, None)
+        .account_add(
+            &alice.profile,
+            new_hash.clone(),
+            AccountType::Standard,
+            None,
+        )
         .await
         .expect("alice adds a new standard account");
 
@@ -317,7 +325,10 @@ async fn account_add_denies_a_non_admin_creating_an_admin() {
             None,
         )
         .await;
-    assert!(denied.is_err(), "a non-admin must not create an admin account");
+    assert!(
+        denied.is_err(),
+        "a non-admin must not create an admin account"
+    );
 }
 
 #[tokio::test]
@@ -407,23 +418,43 @@ async fn admin_family_denies_a_non_admin() {
     let bob = env.add_user("bob").await.expect("add bob");
 
     assert!(
-        env.atm.trust_tasks().admin_add(&alice.profile, vec![bob.did_hash()]).await.is_err(),
+        env.atm
+            .trust_tasks()
+            .admin_add(&alice.profile, vec![bob.did_hash()])
+            .await
+            .is_err(),
         "non-admin admin/add must be refused"
     );
     assert!(
-        env.atm.trust_tasks().admin_strip(&alice.profile, vec![bob.did_hash()]).await.is_err(),
+        env.atm
+            .trust_tasks()
+            .admin_strip(&alice.profile, vec![bob.did_hash()])
+            .await
+            .is_err(),
         "non-admin admin/strip must be refused"
     );
     assert!(
-        env.atm.trust_tasks().admin_list(&alice.profile, None, None).await.is_err(),
+        env.atm
+            .trust_tasks()
+            .admin_list(&alice.profile, None, None)
+            .await
+            .is_err(),
         "non-admin admin/list must be refused"
     );
     assert!(
-        env.atm.trust_tasks().admin_audit_log(&alice.profile, None, None).await.is_err(),
+        env.atm
+            .trust_tasks()
+            .admin_audit_log(&alice.profile, None, None)
+            .await
+            .is_err(),
         "non-admin admin/audit-log must be refused"
     );
     assert!(
-        env.atm.trust_tasks().admin_config(&alice.profile).await.is_err(),
+        env.atm
+            .trust_tasks()
+            .admin_config(&alice.profile)
+            .await
+            .is_err(),
         "non-admin admin/config must be refused"
     );
 }
@@ -490,5 +521,8 @@ async fn acl_set_self_service_refuses_an_admin_only_flag() {
         .trust_tasks()
         .acl_set(&alice.profile, alice.did_hash(), acl)
         .await;
-    assert!(denied.is_err(), "a non-admin may not change an admin-only flag");
+    assert!(
+        denied.is_err(),
+        "a non-admin may not change an admin-only flag"
+    );
 }

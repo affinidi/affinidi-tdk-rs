@@ -1,7 +1,6 @@
 use super::chat_list::ChatStatus;
 use crate::state_store::State;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
-use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
 use affinidi_tdk::{
     dids::{DID, KeyType, PeerKeyRole},
     secrets_resolver::SecretsResolver,
@@ -9,6 +8,7 @@ use affinidi_tdk::{
 use anyhow::anyhow;
 use sha256::digest;
 use tracing::warn;
+use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
 
 pub async fn manual_connect_setup(
     state: &mut State,

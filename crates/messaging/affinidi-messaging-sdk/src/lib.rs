@@ -179,11 +179,6 @@
 //! export RUST_LOG=none,affinidi_messaging_sdk=debug
 //! ```
 
-use crate::protocols::{
-    discover_features::DiscoverfeaturesOps, mediator::administration::MediatorOps,
-    message_pickup::MessagePickupOps, oob_discovery::OOBDiscoveryOps, routing::RoutingOps,
-    trust_ping::TrustPingOps, trust_tasks::TrustTasksOps,
-};
 #[cfg(feature = "tsp")]
 use crate::protocols::tsp::TspOps;
 /// Re-exports of the TSP relationship-store API so consumers can implement a
@@ -194,6 +189,11 @@ pub use crate::protocols::tsp::{InMemoryRelationshipStore, RelationshipStore};
 /// register it on the TDK in place of the built-in DIDComm auth flow.
 #[cfg(feature = "tsp")]
 pub use crate::protocols::tsp_auth::TspAuthHandler;
+use crate::protocols::{
+    discover_features::DiscoverfeaturesOps, mediator::administration::MediatorOps,
+    message_pickup::MessagePickupOps, oob_discovery::OOBDiscoveryOps, routing::RoutingOps,
+    trust_ping::TrustPingOps, trust_tasks::TrustTasksOps,
+};
 use affinidi_task_utils::CancellationToken;
 use affinidi_tdk_common::TDKSharedState;
 use config::ATMConfig;

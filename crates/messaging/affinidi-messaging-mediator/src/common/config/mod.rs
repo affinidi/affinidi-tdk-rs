@@ -967,7 +967,8 @@ pub(crate) fn apply_tsp_did_advertisement(config: &mut Config) {
 
     // did:web (no webvh log) is the only form we may safely mutate in place.
     if config.mediator_did_log.is_none()
-        && let Some(augmented) = augment_did_web_doc_with_tsp_service(&mut doc, &config.mediator_did)
+        && let Some(augmented) =
+            augment_did_web_doc_with_tsp_service(&mut doc, &config.mediator_did)
     {
         config.mediator_did_doc = Some(augmented);
         config.mediator_did_document = Some(doc.clone());
@@ -1158,9 +1159,8 @@ mod tsp_advertise_tests {
     use super::*;
 
     fn did_doc(services: &str) -> Document {
-        let json = format!(
-            r#"{{ "id": "did:web:mediator.example.com", "service": [{services}] }}"#
-        );
+        let json =
+            format!(r#"{{ "id": "did:web:mediator.example.com", "service": [{services}] }}"#);
         serde_json::from_str(&json).expect("valid DID document")
     }
 
@@ -1174,7 +1174,10 @@ mod tsp_advertise_tests {
     fn adds_tsp_service_mirroring_the_didcomm_endpoint() {
         let mut doc = did_doc(DIDCOMM);
         let out = augment_did_web_doc_with_tsp_service(&mut doc, "did:web:mediator.example.com");
-        assert!(out.is_some(), "a TSPTransport service should have been added");
+        assert!(
+            out.is_some(),
+            "a TSPTransport service should have been added"
+        );
 
         let tsp: Vec<_> = doc
             .service

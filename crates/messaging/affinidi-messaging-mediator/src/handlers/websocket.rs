@@ -1,6 +1,8 @@
 use crate::common::metrics::names::ACTIVE_WEBSOCKET_CONNECTIONS;
 #[cfg(feature = "didcomm")]
 use crate::didcomm_compat;
+#[cfg(feature = "tsp")]
+use crate::messages::inbound::handle_inbound_tsp;
 use crate::{
     SharedData,
     common::config::{CorsOriginPolicy, origin_matches},
@@ -9,8 +11,6 @@ use crate::{
     messages::inbound::handle_inbound,
     tasks::websocket_streaming::{StreamingUpdate, StreamingUpdateState, WebSocketCommands},
 };
-#[cfg(feature = "tsp")]
-use crate::messages::inbound::handle_inbound_tsp;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_didcomm::message::Message as DidcommMessage;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError};

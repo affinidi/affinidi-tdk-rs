@@ -1,11 +1,11 @@
 //! UI Related functions
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
-use trust_tasks_rs::specs::messaging::admin::list::v0_1::AccountType;
 use console::style;
 use dialoguer::{Confirm, Input, MultiSelect, Select, theme::ColorfulTheme};
 use regex::Regex;
 use sha256::digest;
 use std::sync::Arc;
+use trust_tasks_rs::specs::messaging::admin::list::v0_1::AccountType;
 
 use crate::SharedConfig;
 

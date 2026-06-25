@@ -407,14 +407,20 @@ pub struct MediatorOps<'a> {
 impl<'a> MediatorOps<'a> {
     /// Get mediator configuration
     /// See [`Mediator::get_config`] for full documentation
-    #[deprecated(since = "0.18.31", note = "use `atm.trust_tasks().admin_config()` instead")]
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().admin_config()` instead"
+    )]
     pub async fn get_config(&self, profile: &Arc<ATMProfile>) -> Result<Value, ATMError> {
         Mediator::default().get_config(self.atm, profile).await
     }
 
     /// Adds a number of admins to the mediator
     /// See [`Mediator::add_admins`] for full documentation
-    #[deprecated(since = "0.18.31", note = "use `atm.trust_tasks().admin_add()` instead")]
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().admin_add()` instead"
+    )]
     pub async fn add_admins(
         &self,
         profile: &Arc<ATMProfile>,
@@ -427,7 +433,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Strips admin rights from a number of accounts from the mediator
     /// See [`Mediator::strip_admins`] for full documentation
-    #[deprecated(since = "0.18.31", note = "use `atm.trust_tasks().admin_strip()` instead")]
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().admin_strip()` instead"
+    )]
     pub async fn strip_admins(
         &self,
         profile: &Arc<ATMProfile>,
@@ -440,7 +449,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Lists all the admins in the mediator
     /// See [`Mediator::list_admins`] for full documentation
-    #[deprecated(since = "0.18.31", note = "use `atm.trust_tasks().admin_list()` instead")]
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().admin_list()` instead"
+    )]
     pub async fn list_admins(
         &self,
         profile: &Arc<ATMProfile>,
@@ -454,7 +466,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Pages through the mediator's privileged-change audit log
     /// See [`Mediator::list_audit_log`] for full documentation
-    #[deprecated(since = "0.18.31", note = "use `atm.trust_tasks().admin_audit_log()` instead")]
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().admin_audit_log()` instead"
+    )]
     pub async fn list_audit_log(
         &self,
         profile: &Arc<ATMProfile>,

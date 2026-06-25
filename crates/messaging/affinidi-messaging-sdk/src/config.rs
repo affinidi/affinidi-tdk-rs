@@ -292,9 +292,9 @@ impl ATMConfigBuilder {
             request_timeout: self.request_timeout,
             clock: self.clock.unwrap_or_else(|| Arc::new(SystemClock)),
             #[cfg(feature = "tsp")]
-            relationship_store: self
-                .relationship_store
-                .unwrap_or_else(|| Arc::new(crate::protocols::tsp::InMemoryRelationshipStore::default())),
+            relationship_store: self.relationship_store.unwrap_or_else(|| {
+                Arc::new(crate::protocols::tsp::InMemoryRelationshipStore::default())
+            }),
         })
     }
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.38] - 2026-06-26
+
+Formatting only (`cargo fmt --all`); no functional or API change. Patch bump
+required by the release guard because the crate source changed. Reconciles the
+version after the pure-TSP-auth `0.18.37` release landed on `main`.
+
 ## [0.18.37] - 2026-06-26
 
 Pure-TSP client authentication: `TspAuthHandler` lets a TSP-only client (no DIDComm)

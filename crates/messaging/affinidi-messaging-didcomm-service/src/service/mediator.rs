@@ -4,10 +4,10 @@ use std::time::Duration;
 use affinidi_messaging_sdk::errors::ATMError;
 use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
-use trust_tasks_rs::specs::messaging::acl;
 use sha256::digest;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
+use trust_tasks_rs::specs::messaging::acl;
 
 use super::listener::Listener;
 use crate::error::{DIDCommServiceError, StartupError};

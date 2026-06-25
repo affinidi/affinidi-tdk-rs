@@ -239,7 +239,10 @@ mod tests {
     async fn resolve_then_verify_challenge_signature() {
         // The client's VID and keys.
         let vid_keys = PrivateVid::generate("placeholder");
-        let did = format!("did:key:{}", encode_multikey(ED25519_PUB, &vid_keys.verifying_key));
+        let did = format!(
+            "did:key:{}",
+            encode_multikey(ED25519_PUB, &vid_keys.verifying_key)
+        );
 
         // The client signs the server-issued challenge.
         let challenge = "a-random-32-char-challenge-string";

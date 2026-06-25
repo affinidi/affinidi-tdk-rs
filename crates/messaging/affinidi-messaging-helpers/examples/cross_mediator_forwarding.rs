@@ -333,7 +333,12 @@ async fn ensure_account(
     party: &Party,
 ) -> Result<(String, Option<MediatorAclAccessListMode>), ATMError> {
     // A missing account is an Err (not Ok(None)) under the Trust Tasks API.
-    match party.atm.trust_tasks().account_get(&party.profile, None).await {
+    match party
+        .atm
+        .trust_tasks()
+        .account_get(&party.profile, None)
+        .await
+    {
         Ok(account) => Ok((
             account.did.as_str().to_string(),
             account.acl.access_list_mode,

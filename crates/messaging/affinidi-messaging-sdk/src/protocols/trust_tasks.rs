@@ -45,10 +45,7 @@ impl TrustTasksOps<'_> {
         nonce: Option<String>,
     ) -> Result<ping::v0_1::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            ping::v0_1::Payload { ext: None, nonce },
-        );
+        let mut task = TrustTask::for_payload(new_id(), ping::v0_1::Payload { ext: None, nonce });
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
@@ -70,14 +67,13 @@ impl TrustTasksOps<'_> {
 
         let did = account::get::v0_1::Vid::from_str(&target)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            account::get::v0_1::Payload { did, ext: None },
-        );
+        let mut task =
+            TrustTask::for_payload(new_id(), account::get::v0_1::Payload { did, ext: None });
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
-        let response: TrustTask<account::get::v0_1::Response> = self.exchange(profile, &task).await?;
+        let response: TrustTask<account::get::v0_1::Response> =
+            self.exchange(profile, &task).await?;
         Ok(response.payload.account)
     }
 
@@ -163,10 +159,8 @@ impl TrustTasksOps<'_> {
 
         let did = account::remove::v0_1::Vid::from_str(&target)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            account::remove::v0_1::Payload { did, ext: None },
-        );
+        let mut task =
+            TrustTask::for_payload(new_id(), account::remove::v0_1::Payload { did, ext: None });
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
@@ -243,8 +237,14 @@ impl TrustTasksOps<'_> {
 
         let did = acl::set::v0_1::Vid::from_str(&did_hash)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task =
-            TrustTask::for_payload(new_id(), acl::set::v0_1::Payload { acl, did, ext: None });
+        let mut task = TrustTask::for_payload(
+            new_id(),
+            acl::set::v0_1::Payload {
+                acl,
+                did,
+                ext: None,
+            },
+        );
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
@@ -307,7 +307,11 @@ impl TrustTasksOps<'_> {
             .map_err(|e| ATMError::MsgSendError(format!("invalid access-list entry: {e}")))?;
         let mut task = TrustTask::for_payload(
             new_id(),
-            access_list::add::v0_1::Payload { did, entries, ext: None },
+            access_list::add::v0_1::Payload {
+                did,
+                entries,
+                ext: None,
+            },
         );
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
@@ -335,7 +339,11 @@ impl TrustTasksOps<'_> {
             .map_err(|e| ATMError::MsgSendError(format!("invalid access-list entry: {e}")))?;
         let mut task = TrustTask::for_payload(
             new_id(),
-            access_list::remove::v0_1::Payload { did, entries, ext: None },
+            access_list::remove::v0_1::Payload {
+                did,
+                entries,
+                ext: None,
+            },
         );
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
@@ -385,7 +393,11 @@ impl TrustTasksOps<'_> {
             .map_err(|e| ATMError::MsgSendError(format!("invalid access-list entry: {e}")))?;
         let mut task = TrustTask::for_payload(
             new_id(),
-            access_list::get::v0_1::Payload { did, entries, ext: None },
+            access_list::get::v0_1::Payload {
+                did,
+                entries,
+                ext: None,
+            },
         );
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
@@ -414,7 +426,12 @@ impl TrustTasksOps<'_> {
         let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
         let mut task = TrustTask::for_payload(
             new_id(),
-            access_list::list::v0_1::Payload { cursor, did, ext: None, limit },
+            access_list::list::v0_1::Payload {
+                cursor,
+                did,
+                ext: None,
+                limit,
+            },
         );
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
@@ -436,11 +453,17 @@ impl TrustTasksOps<'_> {
             .map(|d| admin::add::v0_1::Vid::from_str(d))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task = TrustTask::for_payload(new_id(), admin::add::v0_1::Payload { dids, ext: None });
+        let mut task =
+            TrustTask::for_payload(new_id(), admin::add::v0_1::Payload { dids, ext: None });
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
         let response: TrustTask<admin::add::v0_1::Response> = self.exchange(profile, &task).await?;
-        Ok(response.payload.admins.iter().map(|v| v.to_string()).collect())
+        Ok(response
+            .payload
+            .admins
+            .iter()
+            .map(|v| v.to_string())
+            .collect())
     }
 
     /// `messaging/admin/strip` (admin only) — revoke admin rights from the named
@@ -462,7 +485,12 @@ impl TrustTasksOps<'_> {
         task.recipient = Some(mediator_did.to_string());
         let response: TrustTask<admin::strip::v0_1::Response> =
             self.exchange(profile, &task).await?;
-        Ok(response.payload.stripped.iter().map(|v| v.to_string()).collect())
+        Ok(response
+            .payload
+            .stripped
+            .iter()
+            .map(|v| v.to_string())
+            .collect())
     }
 
     /// `messaging/admin/list` (admin only) — page the mediator's admin accounts.
@@ -480,11 +508,16 @@ impl TrustTasksOps<'_> {
         let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
         let mut task = TrustTask::for_payload(
             new_id(),
-            admin::list::v0_1::Payload { cursor, ext: None, limit },
+            admin::list::v0_1::Payload {
+                cursor,
+                ext: None,
+                limit,
+            },
         );
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
-        let response: TrustTask<admin::list::v0_1::Response> = self.exchange(profile, &task).await?;
+        let response: TrustTask<admin::list::v0_1::Response> =
+            self.exchange(profile, &task).await?;
         Ok(response.payload)
     }
 
@@ -504,7 +537,11 @@ impl TrustTasksOps<'_> {
         let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
         let mut task = TrustTask::for_payload(
             new_id(),
-            admin::audit_log::v0_1::Payload { cursor, ext: None, limit },
+            admin::audit_log::v0_1::Payload {
+                cursor,
+                ext: None,
+                limit,
+            },
         );
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
@@ -563,7 +600,10 @@ impl TrustTasksOps<'_> {
             .await
             .map_err(|e| ATMError::MsgSendError(format!("couldn't pack Trust Task: {e}")))?;
 
-        match atm.send_message(profile, &packed, &msg_id, true, true).await? {
+        match atm
+            .send_message(profile, &packed, &msg_id, true, true)
+            .await?
+        {
             SendMessageResponse::Message(response) => decode_body(&response.body),
             _ => Err(ATMError::MsgReceiveError(
                 "no response from mediator for the Trust Task".to_owned(),
@@ -577,6 +617,7 @@ fn new_id() -> String {
 }
 
 fn decode_body<R: DeserializeOwned>(body: &Value) -> Result<TrustTask<R>, ATMError> {
-    serde_json::from_value(body.clone())
-        .map_err(|e| ATMError::MsgReceiveError(format!("response is not a Trust Task document: {e}")))
+    serde_json::from_value(body.clone()).map_err(|e| {
+        ATMError::MsgReceiveError(format!("response is not a Trust Task document: {e}"))
+    })
 }

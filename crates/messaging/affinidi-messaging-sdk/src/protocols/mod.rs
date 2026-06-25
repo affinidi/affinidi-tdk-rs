@@ -30,12 +30,12 @@ pub mod mediator;
 pub mod message_pickup;
 pub mod oob_discovery;
 pub mod routing;
+pub mod trust_ping;
+pub mod trust_tasks;
 #[cfg(feature = "tsp")]
 pub mod tsp;
 #[cfg(feature = "tsp")]
 pub mod tsp_auth;
-pub mod trust_ping;
-pub mod trust_tasks;
 
 // `String` implements `GenericDataStruct` via an impl in
 // `affinidi-messaging-mediator-common::types::messages` — the orphan

@@ -6,12 +6,10 @@ use crate::messages::MessageHandler;
 use crate::messages::protocols::routing::{relay_peer_trusted, rewrap_inner_attachment};
 use crate::{SharedData, common::session::Session};
 // Shared by both the DIDComm direct-delivery path and the TSP delivery path.
-#[cfg(any(feature = "didcomm", feature = "tsp"))]
-use crate::{common::authz, messages::store::store_message};
 #[cfg(feature = "didcomm")]
 use crate::common::authz::Capability;
-#[cfg(feature = "tsp")]
-use affinidi_tsp::MetaEnvelope as TspMetaEnvelope;
+#[cfg(any(feature = "didcomm", feature = "tsp"))]
+use crate::{common::authz, messages::store::store_message};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_mediator_common::tasks::forwarding::RelayMode;
@@ -21,6 +19,8 @@ use affinidi_messaging_sdk::messages::{
     problem_report::{ProblemReportScope, ProblemReportSorter},
     sending::InboundMessageResponse,
 };
+#[cfg(feature = "tsp")]
+use affinidi_tsp::MetaEnvelope as TspMetaEnvelope;
 #[cfg(feature = "tsp")]
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use http::StatusCode;
@@ -363,7 +363,11 @@ async fn forward_to_next(
     from_vid: &str,
     bytes: &[u8],
 ) -> Result<InboundMessageResponse, MediatorError> {
-    if state.database.account_exists(&digest(next.as_bytes())).await? {
+    if state
+        .database
+        .account_exists(&digest(next.as_bytes()))
+        .await?
+    {
         deliver_opaque(state, session, next, from_vid, bytes).await
     } else {
         forward_tsp_remote(state, session, next, from_vid, bytes).await
@@ -1074,11 +1078,17 @@ mod tsp_tests {
 
         // The stored form is CESR qb64 text and is unambiguously not DIDComm JSON.
         assert!(stored.starts_with("1AAF"), "qb64 envelope-code prefix");
-        assert!(!stored.starts_with('{'), "distinct from a DIDComm JSON envelope");
+        assert!(
+            !stored.starts_with('{'),
+            "distinct from a DIDComm JSON envelope"
+        );
 
         // A pickup client base64url-decodes back to the exact original bytes.
         let decoded = BASE64_URL_SAFE_NO_PAD.decode(stored.as_bytes()).unwrap();
         assert_eq!(&decoded, raw, "decode round-trips the qb2 bytes exactly");
-        assert!(is_tsp(&decoded), "decoded bytes are a recognisable TSP message");
+        assert!(
+            is_tsp(&decoded),
+            "decoded bytes are a recognisable TSP message"
+        );
     }
 }

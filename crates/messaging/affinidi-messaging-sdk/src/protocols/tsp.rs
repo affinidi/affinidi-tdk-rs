@@ -593,7 +593,13 @@ impl TspOps<'_> {
     /// 32-byte private key.
     async fn first_private_key(&self, kids: Vec<&str>, want: KeyType) -> Option<[u8; 32]> {
         for kid in kids {
-            if let Some(secret) = self.atm.inner.tdk_common.secrets_resolver().get_secret(kid).await
+            if let Some(secret) = self
+                .atm
+                .inner
+                .tdk_common
+                .secrets_resolver()
+                .get_secret(kid)
+                .await
                 && secret.get_key_type() == want
                 && let Ok(bytes) = <[u8; 32]>::try_from(secret.get_private_bytes())
             {
@@ -644,9 +650,13 @@ mod tests {
         let qb2 = BASE64_URL_SAFE_NO_PAD.decode(stored.as_bytes()).unwrap();
 
         // bob unpacks (as TspOps::unpack does, with direct::unpack).
-        let unpacked =
-            direct::unpack(&qb2, &bob.decryption_key, &alice.encryption_key, &alice.verifying_key)
-                .unwrap();
+        let unpacked = direct::unpack(
+            &qb2,
+            &bob.decryption_key,
+            &alice.encryption_key,
+            &alice.verifying_key,
+        )
+        .unwrap();
         assert_eq!(unpacked.payload, b"secret payload");
         assert_eq!(unpacked.sender, "did:example:alice");
         assert_eq!(unpacked.receiver, "did:example:bob");

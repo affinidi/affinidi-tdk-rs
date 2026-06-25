@@ -92,8 +92,12 @@ pub(crate) async fn manage_account_acls(
             3 => {
                 // Access List - Remove
                 let removed = _access_list_remove(atm, profile, theme, &account).await? as u64;
-                account.access_list_count =
-                    Some(account.access_list_count.unwrap_or(0).saturating_sub(removed));
+                account.access_list_count = Some(
+                    account
+                        .access_list_count
+                        .unwrap_or(0)
+                        .saturating_sub(removed),
+                );
             }
             4 => {
                 // Access List - Search
@@ -145,10 +149,7 @@ async fn _modify_acl_flags(
             acl.receive_forwarded.unwrap_or(false),
         ),
         ("create_invites?", acl.create_invites.unwrap_or(false)),
-        (
-            "anon_receive_messages?",
-            acl.anon_receive.unwrap_or(false),
-        ),
+        ("anon_receive_messages?", acl.anon_receive.unwrap_or(false)),
         (
             "access_list self-change?",
             acl.self_manage_list.unwrap_or(false),
@@ -200,9 +201,7 @@ async fn _modify_acl_flags(
 
     // Compare against the current ACL (both normalised to JSON; MediatorAcl
     // does not derive PartialEq).
-    if serde_json::to_value(to_get_acl(&new_acl)).ok()
-        == serde_json::to_value(&account.acl).ok()
-    {
+    if serde_json::to_value(to_get_acl(&new_acl)).ok() == serde_json::to_value(&account.acl).ok() {
         println!("{}", style("No changes made").yellow());
         return Ok(account.acl.clone());
     }
@@ -233,7 +232,12 @@ async fn _access_list_list(
     loop {
         let list = atm
             .trust_tasks()
-            .access_list_list(profile, Some(account.did.as_str().to_string()), cursor, None)
+            .access_list_list(
+                profile,
+                Some(account.did.as_str().to_string()),
+                cursor,
+                None,
+            )
             .await?;
 
         for hash in &list.entries {
@@ -278,11 +282,7 @@ async fn _access_list_remove(
     if let Some(hash) = manually_enter_did_or_hash(theme) {
         let response = atm
             .trust_tasks()
-            .access_list_remove(
-                profile,
-                Some(account.did.as_str().to_string()),
-                vec![hash],
-            )
+            .access_list_remove(profile, Some(account.did.as_str().to_string()), vec![hash])
             .await?;
         Ok(response.removed.len())
     } else {
@@ -299,11 +299,7 @@ async fn _access_list_get(
     if let Some(hash) = manually_enter_did_or_hash(theme) {
         let result = atm
             .trust_tasks()
-            .access_list_get(
-                profile,
-                Some(account.did.as_str().to_string()),
-                vec![hash],
-            )
+            .access_list_get(profile, Some(account.did.as_str().to_string()), vec![hash])
             .await?;
 
         println!("{}", style("DID Hashes Found:").blue());

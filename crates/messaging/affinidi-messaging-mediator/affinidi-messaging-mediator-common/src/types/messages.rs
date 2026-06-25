@@ -174,15 +174,24 @@ mod protocol_tests {
     #[test]
     fn detect_classifies_the_wire_protocol() {
         // TSP is stored as CESR qb64 text (begins `1AAF`).
-        assert_eq!(MessageProtocol::detect("1AAFsomeqb64"), MessageProtocol::Tsp);
+        assert_eq!(
+            MessageProtocol::detect("1AAFsomeqb64"),
+            MessageProtocol::Tsp
+        );
         // DIDComm: JSON JWE or compact JWS/JWE.
         assert_eq!(
             MessageProtocol::detect(r#"{"protected":"..."}"#),
             MessageProtocol::DidComm
         );
-        assert_eq!(MessageProtocol::detect("eyJhbGciOiJ"), MessageProtocol::DidComm);
+        assert_eq!(
+            MessageProtocol::detect("eyJhbGciOiJ"),
+            MessageProtocol::DidComm
+        );
         // Anything else is Other.
-        assert_eq!(MessageProtocol::detect("not a message"), MessageProtocol::Other);
+        assert_eq!(
+            MessageProtocol::detect("not a message"),
+            MessageProtocol::Other
+        );
         assert_eq!(MessageProtocol::detect(""), MessageProtocol::Other);
     }
 }

@@ -354,8 +354,13 @@ impl CustomAuthHandler for TspAuthHandler {
         endpoint_did: &'a str,
         did_resolver: &'a DIDCacheClient,
         client: &'a Client,
-    ) -> Pin<Box<dyn Future<Output = affinidi_did_authentication::errors::Result<AuthorizationTokens>> + Send + 'a>>
-    {
+    ) -> Pin<
+        Box<
+            dyn Future<Output = affinidi_did_authentication::errors::Result<AuthorizationTokens>>
+                + Send
+                + 'a,
+        >,
+    > {
         Box::pin(async move {
             self.run(profile_did, endpoint_did, did_resolver, client)
                 .await
@@ -417,7 +422,8 @@ mod tests {
     #[test]
     fn authenticate_body_shape() {
         let v: serde_json::Value =
-            serde_json::from_str(&authenticate_body("did:example:alice", "sess-123", "c2ln")).unwrap();
+            serde_json::from_str(&authenticate_body("did:example:alice", "sess-123", "c2ln"))
+                .unwrap();
         assert_eq!(
             v,
             json!({

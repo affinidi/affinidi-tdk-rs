@@ -87,7 +87,14 @@ pub(crate) async fn create_account_menu(
 
     println!("{}", style("Created account successfully").green());
 
-    manage_account_menu(atm, profile, theme, mediator_config, &to_get_account(&account)).await
+    manage_account_menu(
+        atm,
+        profile,
+        theme,
+        mediator_config,
+        &to_get_account(&account),
+    )
+    .await
 }
 
 pub(crate) async fn manage_account_menu(
@@ -146,24 +153,28 @@ pub(crate) async fn manage_account_menu(
             "{} {} {} {} {} {} {} {} {} {} {} {} {}",
             style("Stats").yellow(),
             style("INBOX Count:").yellow(),
-            style(account.receive_queue_count.unwrap_or(0)).blue().bold(),
+            style(account.receive_queue_count.unwrap_or(0))
+                .blue()
+                .bold(),
             style("INBOX bytes").yellow(),
-            style(account.receive_queue_bytes.unwrap_or(0)).blue().bold(),
+            style(account.receive_queue_bytes.unwrap_or(0))
+                .blue()
+                .bold(),
             style("OUTBOX Count:").yellow(),
-            style(account.receive_queue_count.unwrap_or(0)).blue().bold(),
+            style(account.receive_queue_count.unwrap_or(0))
+                .blue()
+                .bold(),
             style("OUTBOX bytes").yellow(),
-            style(account.receive_queue_bytes.unwrap_or(0)).blue().bold(),
+            style(account.receive_queue_bytes.unwrap_or(0))
+                .blue()
+                .bold(),
             style("Send Q Limit:").yellow(),
-            style(
-                queue_send_limit
-                    .unwrap_or(mediator_config.queued_send_messages_soft as i64)
-            )
-            .blue()
-            .bold(),
+            style(queue_send_limit.unwrap_or(mediator_config.queued_send_messages_soft as i64))
+                .blue()
+                .bold(),
             style("Receive Q Limit:").yellow(),
             style(
-                queue_receive_limit
-                    .unwrap_or(mediator_config.queued_receive_messages_soft as i64)
+                queue_receive_limit.unwrap_or(mediator_config.queued_receive_messages_soft as i64)
             )
             .blue()
             .bold()
