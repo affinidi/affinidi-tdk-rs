@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.2.30"
+version = "0.2.31"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -86,6 +86,9 @@ affinidi-messaging-didcomm = { version = "0.15", path = "../affinidi-messaging-d
 reqwest = { version = "0.13", features = ["rustls", "json"] }
 ## TSP control-message types named by the TSP control-relay integration test.
 affinidi-tsp = { version = "0.1", path = "../affinidi-tsp" }
+## Re-encode raw qb2 bytes from a flushed TSP websocket Binary frame back to
+## the stored base64url form so the SDK can unpack it (tsp_websocket test).
+base64 = "0.22"
 ## Trust Tasks payload types named by the Trust Tasks integration tests.
 trust-tasks-rs = "0.2"
 ## Tracing subscriber for test diagnostics.

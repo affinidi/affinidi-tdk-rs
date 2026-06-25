@@ -11,6 +11,14 @@ use crate::{
     messages::inbound::handle_inbound,
     tasks::websocket_streaming::{StreamingUpdate, StreamingUpdateState, WebSocketCommands},
 };
+#[cfg(feature = "tsp")]
+use affinidi_messaging_mediator_common::store::DeletionAuthority;
+#[cfg(feature = "tsp")]
+use affinidi_messaging_mediator_common::types::messages::FetchOptions;
+#[cfg(feature = "tsp")]
+use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+#[cfg(feature = "tsp")]
+use std::ops::ControlFlow;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_didcomm::message::Message as DidcommMessage;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError};
@@ -225,6 +233,15 @@ pub async fn websocket_handler(
     //    carries no `Sec-WebSocket-Protocol` header (RFC 6455 permits
     //    this; browsers accept it).
     let app_protocols = app_subprotocols(headers.get_all(SEC_WEBSOCKET_PROTOCOL).iter());
+
+    // A client opts into raw-TSP WebSocket delivery by offering a `tsp`
+    // subprotocol alongside `bearer.<jwt>`. The `tsp` marker is echoed back to
+    // the client via the `app_protocols` path below (it's a genuine app
+    // subprotocol, not the bearer entry), so the client learns the mode was
+    // accepted from the 101 response's `Sec-WebSocket-Protocol` header.
+    #[cfg(feature = "tsp")]
+    let tsp_mode = app_protocols.iter().any(|p| p == "tsp");
+
     let ws = if app_protocols.is_empty() {
         ws
     } else {
@@ -237,9 +254,20 @@ pub async fn websocket_handler(
     let ws_size = state.config.limits.ws_size;
     let ws = ws.max_message_size(ws_size).max_frame_size(ws_size);
 
-    async move { ws.on_upgrade(move |socket| handle_socket(socket, state, session)) }
+    #[cfg(feature = "tsp")]
+    {
+        async move {
+            ws.on_upgrade(move |socket| handle_socket(socket, state, session, tsp_mode))
+        }
         .instrument(_span)
         .await
+    }
+    #[cfg(not(feature = "tsp"))]
+    {
+        async move { ws.on_upgrade(move |socket| handle_socket(socket, state, session)) }
+            .instrument(_span)
+            .await
+    }
 }
 
 /// Releases a DID's reserved per-DID WebSocket slot on drop, so the count is
@@ -285,7 +313,12 @@ fn close_with(code: u16, reason: &'static str) -> Message {
 }
 
 /// WebSocket state machine. This is spawned per connection.
-async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Session) {
+async fn handle_socket(
+    mut socket: WebSocket,
+    state: SharedData,
+    session: Session,
+    #[cfg(feature = "tsp")] tsp_mode: bool,
+) {
     let _span = span!(
         tracing::Level::INFO,
         "handle_socket",
@@ -388,6 +421,28 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         // Periodic ping to detect dead connections
         let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
         ping_interval.reset(); // Skip the immediate first tick
+
+        // Flush-on-connect for raw-TSP delivery: drain whatever is already queued
+        // for this DID straight onto the socket (delete-on-send) before entering
+        // the live-delivery loop. If the socket is already gone, exit cleanly.
+        #[cfg(feature = "tsp")]
+        if tsp_mode && drain_tsp_inbox(&state, &session, &mut socket).await.is_break() {
+            if let Some(streaming) = &state.streaming_task {
+                let stop = StreamingUpdate {
+                    did_hash: session.did_hash.clone(),
+                    state: StreamingUpdateState::Deregister,
+                };
+                let _ = streaming.channel.send(stop).await;
+            }
+            state.active_websocket_count.fetch_sub(1, Ordering::Relaxed);
+            metrics::gauge!(ACTIVE_WEBSOCKET_CONNECTIONS).decrement(1.0);
+            let _ = state
+                .database
+                .stats_increment(StatCounter::WebsocketClose, 1)
+                .await;
+            info!("Websocket connection closed during TSP flush-on-connect");
+            return;
+        }
 
         // Flag to prevent double deregistration
         // This can occur because in some situations the streaming-task will send a close message
@@ -510,6 +565,19 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                         match msg {
                             WebSocketCommands::Message(msg) => {
                                 debug!("ws: Received message from streaming task");
+                                // In raw-TSP mode the notification body carries no id we can
+                                // delete by, so it's just a wake-up: re-drain the inbox (which
+                                // re-fetches with ids, sends Binary, and deletes-on-send). The
+                                // DIDComm path is unchanged — send the body as Text.
+                                #[cfg(feature = "tsp")]
+                                if tsp_mode {
+                                    let _ = &msg; // body intentionally ignored in TSP mode
+                                    if drain_tsp_inbox(&state, &session, &mut socket).await.is_break() {
+                                        close_reason = (close_code::GOING_AWAY, "client disconnected");
+                                        break;
+                                    }
+                                    continue;
+                                }
                                 if let Err(e) = socket.send(Message::Text(msg.into())).await {
                                     warn!("Failed to send message to WebSocket client: {e}");
                                 }
@@ -566,6 +634,138 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
     }
     .instrument(_span)
     .await
+}
+
+/// Page size for the TSP inbox drain — reuses the same shape as
+/// [`crate::tasks::websocket_streaming`]'s redelivery drain.
+#[cfg(feature = "tsp")]
+const TSP_DRAIN_PAGE: usize = 50;
+
+/// Safety bound on how many messages a single TSP drain will push, so a
+/// pathologically large inbox can't pin the socket loop. If hit, the
+/// remainder is left for the next drain (the next live-delivery wake-up
+/// re-fetches from the head of the inbox).
+#[cfg(feature = "tsp")]
+const TSP_DRAIN_MAX: usize = 1000;
+
+/// Drain the recipient's undelivered inbox to a **raw TSP** WebSocket,
+/// inline on the connection, with a *delete-on-successful-send* contract.
+///
+/// This is the outbound (delivery) half of the TSP WebSocket mode. Unlike
+/// the DIDComm message-pickup path (delete-to-ack) or the streaming
+/// redelivery (notification re-cover with `DoNotDelete`), here the socket
+/// itself is the ack: each stored TSP message is decoded to its raw qb2
+/// bytes, sent as a `Binary` frame, and only then deleted. If the send
+/// fails the socket is gone — the message (and the rest of the inbox) is
+/// left intact for the next connection, so delivery is at-least-once.
+///
+/// Returns:
+/// - [`ControlFlow::Break`] when the socket send failed (caller should
+///   tear the connection down).
+/// - [`ControlFlow::Continue`] when the inbox is drained (or the safety
+///   cap was hit) and the connection should keep running.
+#[cfg(feature = "tsp")]
+async fn drain_tsp_inbox(
+    state: &SharedData,
+    session: &Session,
+    socket: &mut WebSocket,
+) -> ControlFlow<(), ()> {
+    let mut start_id: Option<String> = None;
+    let mut total: usize = 0;
+
+    loop {
+        let options = FetchOptions {
+            limit: TSP_DRAIN_PAGE,
+            start_id: start_id.clone(),
+            ..Default::default() // delete_policy defaults to DoNotDelete; we delete explicitly.
+        };
+        let page = match state
+            .database
+            .fetch_messages(&session.session_id, &session.did_hash, &options)
+            .await
+        {
+            Ok(page) => page,
+            Err(err) => {
+                warn!(
+                    did_hash = %session.did_hash,
+                    "TSP inbox drain fetch failed, aborting drain: {err}"
+                );
+                return ControlFlow::Continue(());
+            }
+        };
+        if page.success.is_empty() {
+            break;
+        }
+
+        for element in page.success {
+            // Advance the cursor regardless of body presence so a missing body
+            // can't pin the drain on the same page forever. `receive_id` is the
+            // inbox stream id, used as the exclusive fetch cursor.
+            start_id = element.receive_id.clone();
+
+            let Some(body) = element.msg else { continue };
+            // Deletion keys on `msg_id` (the message hash) — the same key the
+            // optimistic-delete fetch path uses; `receive_id` is only the stream
+            // cursor, not a valid delete key.
+            let id = element.msg_id;
+
+            // Stored body is base64url(qb2). Decode back to raw qb2 bytes for
+            // the wire. A malformed entry is skipped (not deleted) so it can be
+            // inspected rather than silently dropped.
+            let qb2 = match BASE64_URL_SAFE_NO_PAD.decode(&body) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    warn!(
+                        did_hash = %session.did_hash,
+                        message_id = %id,
+                        "Skipping inbox entry that isn't valid base64url: {err}"
+                    );
+                    continue;
+                }
+            };
+
+            if let Err(e) = socket.send(Message::Binary(qb2.into())).await {
+                // The socket is gone — leave this message and the rest of the
+                // inbox in place for the next connection (do NOT delete).
+                warn!("Failed to send TSP message to WebSocket client: {e}");
+                return ControlFlow::Break(());
+            }
+
+            // Delivered — delete it. A delete error is logged but not fatal: the
+            // message was already delivered, so we continue.
+            if let Err(err) = state
+                .database
+                .delete_message(
+                    &id,
+                    DeletionAuthority::Owner {
+                        did_hash: session.did_hash.clone(),
+                    },
+                )
+                .await
+            {
+                warn!(
+                    did_hash = %session.did_hash,
+                    message_id = %id,
+                    "Failed to delete delivered TSP message: {err}"
+                );
+            }
+
+            total += 1;
+            if total >= TSP_DRAIN_MAX {
+                warn!(
+                    did_hash = %session.did_hash,
+                    max = TSP_DRAIN_MAX,
+                    "TSP inbox drain hit its safety cap; remaining messages left for the next drain"
+                );
+                return ControlFlow::Continue(());
+            }
+        }
+    }
+
+    if total > 0 {
+        debug!(did_hash = %session.did_hash, total, "TSP inbox drain complete");
+    }
+    ControlFlow::Continue(())
 }
 
 /// Generates a problem report for a duplicate websocket connection
