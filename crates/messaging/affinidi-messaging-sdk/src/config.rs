@@ -49,6 +49,14 @@ pub struct ATMConfig {
     /// Defaults to the real [`SystemClock`]; tests inject a `TestClock` via
     /// [`ATMConfigBuilder::with_clock`] to drive those reads deterministically.
     pub(crate) clock: Arc<dyn Clock>,
+
+    /// Pluggable backing store for TSP relationship state (the FSM behind
+    /// `atm.tsp().form_relationship` / `accept_relationship` / etc.). Defaults
+    /// to an ephemeral [`crate::protocols::tsp::InMemoryRelationshipStore`];
+    /// inject a durable implementation via
+    /// [`ATMConfigBuilder::with_relationship_store`].
+    #[cfg(feature = "tsp")]
+    pub(crate) relationship_store: Arc<dyn crate::protocols::tsp::RelationshipStore>,
 }
 
 impl ATMConfig {
@@ -66,6 +74,12 @@ impl ATMConfig {
     /// The clock backing the SDK's expiry / TTL decisions.
     pub(crate) fn clock(&self) -> &Arc<dyn Clock> {
         &self.clock
+    }
+
+    /// The pluggable store backing TSP relationship state.
+    #[cfg(feature = "tsp")]
+    pub(crate) fn relationship_store(&self) -> &Arc<dyn crate::protocols::tsp::RelationshipStore> {
+        &self.relationship_store
     }
 
     /// Returns a builder for `ATMConfig`
@@ -102,6 +116,8 @@ pub struct ATMConfigBuilder {
     curve_preference: Option<Vec<Curve>>,
     request_timeout: Duration,
     clock: Option<Arc<dyn Clock>>,
+    #[cfg(feature = "tsp")]
+    relationship_store: Option<Arc<dyn crate::protocols::tsp::RelationshipStore>>,
 }
 
 impl Default for ATMConfigBuilder {
@@ -116,6 +132,8 @@ impl Default for ATMConfigBuilder {
             curve_preference: None,
             request_timeout: Duration::from_secs(15),
             clock: None,
+            #[cfg(feature = "tsp")]
+            relationship_store: None,
         }
     }
 }
@@ -219,6 +237,22 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// Inject a pluggable backing store for TSP relationship state.
+    ///
+    /// Defaults to an ephemeral
+    /// [`crate::protocols::tsp::InMemoryRelationshipStore`] (wiped on process
+    /// restart); pass a durable implementation of
+    /// [`crate::protocols::tsp::RelationshipStore`] to persist relationship
+    /// state across restarts.
+    #[cfg(feature = "tsp")]
+    pub fn with_relationship_store(
+        mut self,
+        store: Arc<dyn crate::protocols::tsp::RelationshipStore>,
+    ) -> Self {
+        self.relationship_store = Some(store);
+        self
+    }
+
     pub fn build(self) -> Result<ATMConfig, ATMError> {
         // Process any custom SSL certificates
         let mut certs = vec![];
@@ -257,6 +291,10 @@ impl ATMConfigBuilder {
             curve_preference: self.curve_preference,
             request_timeout: self.request_timeout,
             clock: self.clock.unwrap_or_else(|| Arc::new(SystemClock)),
+            #[cfg(feature = "tsp")]
+            relationship_store: self
+                .relationship_store
+                .unwrap_or_else(|| Arc::new(crate::protocols::tsp::InMemoryRelationshipStore::default())),
         })
     }
 }

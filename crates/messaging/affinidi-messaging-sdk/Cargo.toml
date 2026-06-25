@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.18.35"
+version = "0.18.36"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -18,7 +18,7 @@ default = []
 ## send_routed / send_nested / send_control / unpack), alongside the always-on DIDComm
 ## support. Supported; pure-TSP client auth (`/tsp/authenticate`) is still pending, so
 ## today `atm.tsp()` reuses the profile's DIDComm-authenticated session.
-tsp = ["dep:affinidi-tsp"]
+tsp = ["dep:affinidi-tsp", "dep:async-trait"]
 
 [dependencies]
 # Affinidi Crates
@@ -30,6 +30,8 @@ affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version =
 trust-tasks-rs = "0.2"
 ## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
 affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
+## Async trait support for the pluggable TSP `RelationshipStore` (tsp feature only).
+async-trait = { version = "0.1", optional = true }
 ## Source of truth for the mediator protocol vocabulary (ACLs, accounts,
 ## message types, problem reports). The SDK re-exports these so existing
 ## call sites continue to resolve their old paths.
