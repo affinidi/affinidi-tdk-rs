@@ -32,6 +32,8 @@ pub mod oob_discovery;
 pub mod routing;
 #[cfg(feature = "tsp")]
 pub mod tsp;
+#[cfg(feature = "tsp")]
+pub mod tsp_auth;
 pub mod trust_ping;
 pub mod trust_tasks;
 
