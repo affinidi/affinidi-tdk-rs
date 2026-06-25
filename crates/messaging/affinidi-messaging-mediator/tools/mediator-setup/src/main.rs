@@ -233,6 +233,9 @@ fn apply_cli_args(args: &Args, config: &mut WizardConfig) {
     if args.save_did_web {
         config.save_did_web = true;
     }
+    if !args.key_suite.is_empty() {
+        config.key_suite = args.key_suite.clone();
+    }
     if let Some(ref secret_storage) = args.secret_storage {
         config.secret_storage = secret_storage.to_string();
     }
@@ -1229,7 +1232,8 @@ async fn mint_did_material(
     let (did, secrets, did_log, authorization_vc) = match config.did_method.as_str() {
         DID_PEER => {
             let service_uri = did_peer_service_url(&config.public_url, &config.api_prefix);
-            let (did, secrets) = generators::did_peer::generate_did_peer(service_uri)?;
+            let (did, secrets) =
+                generators::did_peer::generate_did_peer(service_uri, &config.key_suite)?;
             (did, secrets, None, None)
         }
         DID_WEBVH => {
@@ -1246,7 +1250,12 @@ async fn mint_did_material(
             };
             let address = strip_url_path_owned(&raw_url);
             let service_url = combine_url_prefix(&address, &config.api_prefix);
-            let result = generators::did_webvh::generate_did_webvh(&address, &service_url).await?;
+            let result = generators::did_webvh::generate_did_webvh(
+                &address,
+                &service_url,
+                &config.key_suite,
+            )
+            .await?;
             (result.did, result.secrets, Some(result.did_doc), None)
         }
         DID_VTA => {

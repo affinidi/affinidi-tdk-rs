@@ -122,10 +122,30 @@ pub struct IdentitySection {
     /// DIDs; ignored otherwise.
     #[serde(default)]
     pub save_did_web: bool,
+    /// Extra key suites to mint alongside the mandatory Ed25519 + X25519
+    /// pair, e.g. `["p256"]`. Empty by default (Curve25519 only). Applies
+    /// to the local `did:peer` / `did:webvh` generators.
+    #[serde(default)]
+    pub extra_key_suites: Vec<String>,
 }
 
 fn default_did_method() -> String {
     "vta".into()
+}
+
+/// Map recipe `extra_key_suites` strings (e.g. `["p256"]`) to typed
+/// [`crate::cli::KeySuite`] values, mirroring the `--key-suite` CLI flag.
+/// Case-insensitive; unknown suites are a hard error so a typo in a recipe
+/// fails fast instead of silently provisioning Curve25519-only keys.
+fn parse_extra_key_suites(raw: &[String]) -> anyhow::Result<Vec<crate::cli::KeySuite>> {
+    raw.iter()
+        .map(|s| match s.trim().to_ascii_lowercase().as_str() {
+            "p256" | "p-256" | "es256" => Ok(crate::cli::KeySuite::P256),
+            other => anyhow::bail!(
+                "Invalid identity.extra_key_suites entry '{other}': supported suites are 'p256'"
+            ),
+        })
+        .collect()
 }
 
 impl Default for IdentitySection {
@@ -134,6 +154,7 @@ impl Default for IdentitySection {
             did_method: default_did_method(),
             public_url: None,
             save_did_web: false,
+            extra_key_suites: Vec::new(),
         }
     }
 }
@@ -490,6 +511,7 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         config.public_url = url.clone();
     }
     config.save_did_web = recipe.identity.save_did_web;
+    config.key_suite = parse_extra_key_suites(&recipe.identity.extra_key_suites)?;
 
     // Secrets — accept either the bare scheme (backward compat with
     // pre-cloud-config recipes) or a fully-formed URL. A full URL gets
