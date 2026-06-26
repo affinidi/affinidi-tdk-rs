@@ -11,18 +11,14 @@ use crate::{
     messages::inbound::handle_inbound,
     tasks::websocket_streaming::{StreamingUpdate, StreamingUpdateState, WebSocketCommands},
 };
-#[cfg(feature = "tsp")]
-use affinidi_messaging_mediator_common::store::DeletionAuthority;
-#[cfg(feature = "tsp")]
-use affinidi_messaging_mediator_common::types::messages::FetchOptions;
-#[cfg(feature = "tsp")]
-use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-#[cfg(feature = "tsp")]
-use std::ops::ControlFlow;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_didcomm::message::Message as DidcommMessage;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError};
+#[cfg(feature = "tsp")]
+use affinidi_messaging_mediator_common::store::DeletionAuthority;
 use affinidi_messaging_mediator_common::store::StatCounter;
+#[cfg(feature = "tsp")]
+use affinidi_messaging_mediator_common::types::messages::FetchOptions;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::messages::problem_report::ProblemReport;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
@@ -37,10 +33,14 @@ use axum_extra::{
     TypedHeader,
     headers::{Authorization, authorization::Bearer},
 };
+#[cfg(feature = "tsp")]
+use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use dashmap::DashMap;
 use http::{HeaderMap, HeaderValue, StatusCode, header::ORIGIN, header::SEC_WEBSOCKET_PROTOCOL};
 #[cfg(feature = "didcomm")]
 use serde_json::json;
+#[cfg(feature = "tsp")]
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -256,11 +256,9 @@ pub async fn websocket_handler(
 
     #[cfg(feature = "tsp")]
     {
-        async move {
-            ws.on_upgrade(move |socket| handle_socket(socket, state, session, tsp_mode))
-        }
-        .instrument(_span)
-        .await
+        async move { ws.on_upgrade(move |socket| handle_socket(socket, state, session, tsp_mode)) }
+            .instrument(_span)
+            .await
     }
     #[cfg(not(feature = "tsp"))]
     {
