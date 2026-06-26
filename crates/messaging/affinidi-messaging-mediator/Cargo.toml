@@ -96,7 +96,7 @@ affinidi-secrets-resolver = "0.5"
 ## Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"
 ## VTA SDK for centralized DID/key management via Verifiable Trust Agent
-vta-sdk = { version = "0.16", features = ["integration"] }
+vta-sdk = { version = "0.18", features = ["integration"] }
 
 # ── Web Framework ────────────────────────────────────────────────────────
 axum = { version = "0.8", features = ["ws"] }
