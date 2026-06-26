@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.18.39] - 2026-06-27
+
+SDK consumer for the mediator's raw-TSP WebSocket mode.
+
+- New `atm.tsp().connect_websocket(profile)` → `TspWebSocket`: opens a WebSocket to the
+  mediator offering the `tsp` subprotocol (alongside the bearer token), so the socket runs
+  in raw-TSP mode (flush-on-connect + delete-on-successful-send, server-side). `TspWebSocket`
+  has `recv()` (next raw qb2 TSP message, `None` on close — skips ping/pong), `send(&[u8])`
+  (send a raw TSP message inbound), and `close()`.
+- New `atm.tsp().unpack_bytes(profile, qb2)` — unpack a raw qb2 TSP message (what `recv`
+  returns) without the base64 round-trip; `unpack(stored)` now decodes then delegates to it
+  (its signature + behaviour are unchanged).
+- Re-exports `TspWebSocket`. Additive; no existing API changed.
+
 ## [0.18.38] - 2026-06-26
 
 Formatting only (`cargo fmt --all`); no functional or API change. Patch bump

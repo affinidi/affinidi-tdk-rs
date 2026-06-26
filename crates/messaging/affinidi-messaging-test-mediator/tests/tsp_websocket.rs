@@ -153,3 +153,68 @@ async fn tsp_websocket_flushes_and_deletes_queued_message() {
     drop(stream);
     env.shutdown().await.expect("shutdown");
 }
+
+/// The same flush-on-connect + delete-on-send contract, but driven through the
+/// SDK's ergonomic `atm.tsp().connect_websocket()` consumer instead of a raw
+/// tungstenite client. This covers the public SDK API surface (the test above
+/// covers the wire contract directly).
+#[tokio::test]
+async fn tsp_websocket_sdk_consumer_flushes_and_deletes() {
+    init_tracing();
+
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+
+    let payload = b"hello over the SDK TSP websocket";
+
+    // Alice queues a TSP Direct message to Bob (no socket open yet).
+    env.atm
+        .tsp()
+        .send(&alice.profile, &bob.did, payload)
+        .await
+        .expect("alice sends a TSP message to bob");
+
+    // Bob opens the raw-TSP websocket via the SDK consumer.
+    let mut ws = env
+        .atm
+        .tsp()
+        .connect_websocket(&bob.profile)
+        .await
+        .expect("bob opens the TSP websocket");
+
+    // Flush-on-connect: the queued message arrives as the next frame.
+    let qb2 = timeout(Duration::from_secs(5), ws.recv())
+        .await
+        .expect("a frame arrives within the timeout")
+        .expect("recv succeeds")
+        .expect("a flushed frame");
+
+    // Unpack the raw qb2 directly (no re-encode to base64url needed).
+    let (recovered, sender) = env
+        .atm
+        .tsp()
+        .unpack_bytes(&bob.profile, &qb2)
+        .await
+        .expect("bob unpacks the flushed TSP message");
+    assert_eq!(recovered, payload, "payload round-trips over the websocket");
+    assert_eq!(sender, alice.did, "sender VID is recovered");
+
+    // Delete-on-send: Bob's mailbox is empty after the flush.
+    let fetched = env
+        .atm
+        .fetch_messages(&bob.profile, &FetchOptions::default())
+        .await
+        .expect("bob fetches messages");
+    assert!(
+        fetched.success.is_empty(),
+        "the delivered TSP message must be deleted on send (inbox is empty), got {} message(s)",
+        fetched.success.len()
+    );
+
+    ws.close().await.ok();
+    env.shutdown().await.expect("shutdown");
+}

@@ -2,6 +2,15 @@
 
 ## Changelog history
 
+## 27th June 2026
+
+### 0.2.32 — TSP: WebSocket SDK-consumer e2e
+
+- New `tsp_websocket_sdk_consumer_flushes_and_deletes`: drives the SDK's
+  `atm.tsp().connect_websocket` + `recv` + `unpack_bytes` (rather than a raw tungstenite
+  client) against the embedded mediator — asserts the queued TSP is flushed, unpacks to the
+  payload + sender, and is deleted afterwards. The raw-wire test is retained alongside it.
+
 ## 26th June 2026
 
 ### 0.2.31 — TSP: WebSocket delivery e2e
