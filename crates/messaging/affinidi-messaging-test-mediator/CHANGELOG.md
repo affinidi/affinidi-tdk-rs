@@ -4,6 +4,17 @@
 
 ## 27th June 2026
 
+### 0.2.33 — TSP: pure-TSP authentication e2e
+
+- New `TestEnvironment::spawn_with_tsp_auth()` (tsp-gated): builds the TDK with a shared
+  secrets resolver + a registered `TspAuthHandler`, so every profile authenticates over
+  TSP (`/tsp/authenticate`) instead of DIDComm. `new()` was refactored to delegate to a
+  private `new_with_config` — `spawn()` behaviour is unchanged.
+- New `tsp_auth` e2e (`pure_tsp_authentication_round_trips_a_direct_message`): a pure-TSP
+  client sends + fetches a TSP Direct message; both legs require a JWT minted by the
+  `TspAuthHandler` (challenge → Ed25519-sign → `/tsp/authenticate`), so a green round-trip
+  proves the full pure-TSP auth chain.
+
 ### 0.2.32 — TSP: WebSocket SDK-consumer e2e
 
 - New `tsp_websocket_sdk_consumer_flushes_and_deletes`: drives the SDK's

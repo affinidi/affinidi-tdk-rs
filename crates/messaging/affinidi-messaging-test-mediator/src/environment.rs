@@ -123,12 +123,67 @@ impl TestEnvironment {
         Self::new(TestMediator::spawn().await?).await
     }
 
+    /// Spawn the default mediator (with the `tsp` feature) and wire up
+    /// the SDK to authenticate every profile over **pure TSP** instead
+    /// of the built-in DIDComm flow.
+    ///
+    /// The shared [`ThreadedSecretsResolver`] is constructed up front and
+    /// handed BOTH to the TDK (via
+    /// [`with_secrets_resolver`](affinidi_tdk::common::config::TDKConfigBuilder::with_secrets_resolver))
+    /// and to the [`TspAuthHandler`](affinidi_messaging_sdk::TspAuthHandler).
+    /// This is the load-bearing difference from [`spawn`](Self::spawn):
+    /// the handler must hold the *same* resolver instance that
+    /// [`add_user`](Self::add_user) later populates, otherwise it can't
+    /// load each user's Ed25519 VID key to sign the auth challenge.
+    ///
+    /// With a [`CustomAuthHandlers`] bundle set, the TDK's
+    /// `AuthenticationCache` routes every profile authentication through
+    /// the custom handler, so the whole environment authenticates over
+    /// `POST /tsp/authenticate`.
+    #[cfg(feature = "tsp")]
+    pub async fn spawn_with_tsp_auth() -> Result<Self, TestEnvironmentError> {
+        use affinidi_secrets_resolver::ThreadedSecretsResolver;
+        use affinidi_tdk::did_authentication::CustomAuthHandlers;
+
+        let mediator = TestMediator::spawn().await?;
+
+        // Build the shared resolver exactly as `TDKSharedState::new`
+        // does when the config doesn't supply one. We need a handle to
+        // it up front so the `TspAuthHandler` and the TDK share the same
+        // instance — that's where `add_user` later inserts user keys.
+        let (secrets, _task) = ThreadedSecretsResolver::new(None).await;
+
+        let handlers = CustomAuthHandlers::default().with_auth_handler(Arc::new(
+            affinidi_messaging_sdk::TspAuthHandler::new(secrets.clone()),
+        ));
+        let tdk_config = TDKConfig::builder()
+            .with_load_environment(false)
+            .with_use_atm(false)
+            .with_secrets_resolver(secrets)
+            .with_custom_auth_handlers(handlers)
+            .build()
+            .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+
+        Self::new_with_config(mediator, tdk_config).await
+    }
+
     /// Use an existing [`TestMediatorHandle`] — for tests that want
     /// custom mediator config (e.g. enable forwarding, override the
     /// Redis URL) via [`TestMediator::builder`].
     pub async fn new(mediator: TestMediatorHandle) -> Result<Self, TestEnvironmentError> {
         let tdk_config =
             TDKConfig::headless().map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+        Self::new_with_config(mediator, tdk_config).await
+    }
+
+    /// Shared constructor: wire the SDK + TDK against `mediator` using
+    /// the supplied `tdk_config`. The only difference between
+    /// [`new`](Self::new) and [`spawn_with_tsp_auth`](Self::spawn_with_tsp_auth)
+    /// is which config is passed here.
+    async fn new_with_config(
+        mediator: TestMediatorHandle,
+        tdk_config: TDKConfig,
+    ) -> Result<Self, TestEnvironmentError> {
         let tdk = Arc::new(
             TDKSharedState::new(tdk_config)
                 .await
