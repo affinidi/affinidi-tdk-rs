@@ -524,7 +524,21 @@ impl TspOps<'_> {
         stored: &str,
     ) -> Result<(Vec<u8>, String), ATMError> {
         let qb2 = self.decode(stored)?;
-        let meta = MetaEnvelope::parse(&qb2)
+        self.unpack_bytes(profile, &qb2).await
+    }
+
+    /// Unpack a raw qb2 TSP message (the bytes a [`TspWebSocket::recv`] yields, or
+    /// the result of [`TspOps::decode`]): resolve the sender's keys, then decrypt +
+    /// verify with the profile's decryption key. Returns `(payload, sender_vid)`.
+    ///
+    /// This is the shared core of [`TspOps::unpack`]; WS consumers that already hold
+    /// raw qb2 bytes call this directly instead of re-encoding to base64url.
+    pub async fn unpack_bytes(
+        &self,
+        profile: &Arc<ATMProfile>,
+        qb2: &[u8],
+    ) -> Result<(Vec<u8>, String), ATMError> {
+        let meta = MetaEnvelope::parse(qb2)
             .map_err(|e| ATMError::MsgReceiveError(format!("couldn't parse TSP envelope: {e}")))?;
 
         let (profile_did, _) = profile.dids()?;
@@ -539,7 +553,7 @@ impl TspOps<'_> {
         let sender = self.resolve_vid(&meta.sender).await?;
 
         let unpacked = direct::unpack(
-            &qb2,
+            qb2,
             &decryption_key,
             &sender.encryption_key,
             &sender.signing_key,
@@ -547,6 +561,99 @@ impl TspOps<'_> {
         .map_err(|e| ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}")))?;
 
         Ok((unpacked.payload, unpacked.sender))
+    }
+
+    // ── WebSocket (raw-TSP) delivery ──────────────────────────────────────────
+
+    /// Open the mediator's **raw-TSP WebSocket** for `profile`.
+    ///
+    /// Authenticates the profile, upgrades the mediator `/ws` endpoint offering
+    /// the `tsp` subprotocol (alongside the `bearer.<jwt>` auth subprotocol), and
+    /// returns a [`TspWebSocket`] for reading/writing raw qb2 TSP frames.
+    ///
+    /// The mediator's raw-TSP mode is *flush-on-connect + delete-on-send*: any
+    /// queued TSP messages for `profile` are flushed onto the socket the instant
+    /// it connects, and each is deleted server-side once it has been sent. This
+    /// is distinct from the DIDComm message-pickup delete-to-ack contract.
+    ///
+    /// Frames are raw qb2 TSP bytes; unpack a received frame with
+    /// [`TspOps::unpack_bytes`].
+    pub async fn connect_websocket(
+        &self,
+        profile: &Arc<ATMProfile>,
+    ) -> Result<TspWebSocket, ATMError> {
+        use tokio_tungstenite::tungstenite::{ClientRequestBuilder, http::Uri};
+
+        let (profile_did, mediator_did) = profile.dids()?;
+        let tokens = self
+            .atm
+            .get_tdk()
+            .authentication()
+            .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
+            .await?;
+        let access_token = tokens.access_token;
+
+        // Resolve the WS endpoint from the profile's mediator config (mirrors
+        // the DIDComm transport's two checks).
+        let Some(mediator) = &*profile.inner.mediator else {
+            return Err(ATMError::ConfigError(format!(
+                "Profile ({}) is missing a valid mediator configuration!",
+                profile.inner.alias
+            )));
+        };
+        let Some(address) = &mediator.websocket_endpoint else {
+            return Err(ATMError::ConfigError(format!(
+                "Profile ({}) is missing a valid websocket endpoint!",
+                profile.inner.alias
+            )));
+        };
+
+        let uri: Uri = address.parse().map_err(|e| {
+            ATMError::TransportError(format!(
+                "Mediator {}: Invalid websocket endpoint {address}: {e}",
+                mediator.did
+            ))
+        })?;
+        let host = uri.host().unwrap_or_default().to_string();
+        let port = uri
+            .port_u16()
+            .unwrap_or(if uri.scheme_str() == Some("wss") {
+                443
+            } else {
+                80
+            });
+
+        // Offer `bearer.<jwt>` (auth) + `tsp` (raw-TSP mode) subprotocols.
+        let builder = ClientRequestBuilder::new(uri)
+            .with_sub_protocol(format!("bearer.{access_token}"))
+            .with_sub_protocol("tsp");
+
+        let (ws, response) =
+            crate::transports::websockets::proxy::connect_websocket(builder, &host, port)
+                .await
+                .map_err(|e| {
+                    ATMError::TransportError(format!(
+                        "Profile '{}' → mediator {} TSP websocket {address} ({host}:{port}): {e}",
+                        profile.inner.alias, mediator.did
+                    ))
+                })?;
+
+        // The 101 should echo `tsp`, confirming the mode was accepted.
+        // tokio-tungstenite already enforces subprotocol agreement, so a
+        // mismatch here is informational only — warn, don't hard-fail.
+        match response
+            .headers()
+            .get("sec-websocket-protocol")
+            .and_then(|v| v.to_str().ok())
+        {
+            Some("tsp") => {}
+            other => tracing::warn!(
+                "TSP websocket did not echo the `tsp` subprotocol (got {other:?}); \
+                 raw-TSP mode may not be active"
+            ),
+        }
+
+        Ok(TspWebSocket { ws })
     }
 
     // ── Internal helpers ────────────────────────────────────────────────────
@@ -607,6 +714,71 @@ impl TspOps<'_> {
             }
         }
         None
+    }
+}
+
+/// An open **raw-TSP WebSocket** to the mediator, obtained from
+/// [`TspOps::connect_websocket`].
+///
+/// Frames are raw qb2 TSP bytes (the same wire form [`TspOps::decode`] yields).
+/// Receive the next message with [`recv`](TspWebSocket::recv) and unpack it with
+/// [`TspOps::unpack_bytes`]; send a raw TSP message with
+/// [`send`](TspWebSocket::send).
+///
+/// Delivery is *flush-on-connect + delete-on-send* (server-side): queued
+/// messages are flushed onto the socket on connect and deleted once sent. The
+/// client therefore owns its own failure handling — a dropped socket after a
+/// frame was sent means that message is already gone from the mailbox.
+pub struct TspWebSocket {
+    ws: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+}
+
+impl TspWebSocket {
+    /// Receive the next raw qb2 TSP frame.
+    ///
+    /// Returns `Ok(Some(bytes))` for a delivered message (unpack it with
+    /// [`TspOps::unpack_bytes`]), or `Ok(None)` when the socket closes / the
+    /// stream ends. Control frames (`Ping`/`Pong`) and any `Text` frames are
+    /// skipped transparently.
+    pub async fn recv(&mut self) -> Result<Option<Vec<u8>>, ATMError> {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        loop {
+            match self.ws.next().await {
+                Some(Ok(Message::Binary(bytes))) => return Ok(Some(bytes.to_vec())),
+                Some(Ok(Message::Close(_))) | None => return Ok(None),
+                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Text(_))) => continue,
+                Some(Ok(Message::Frame(_))) => continue,
+                Some(Err(e)) => {
+                    return Err(ATMError::TransportError(format!(
+                        "TSP websocket receive error: {e}"
+                    )));
+                }
+            }
+        }
+    }
+
+    /// Send a raw qb2 TSP message inbound. The mediator routes it via its TSP
+    /// inbound handler (the same path as [`TspOps::send_raw`], over the socket).
+    pub async fn send(&mut self, tsp_message: &[u8]) -> Result<(), ATMError> {
+        use futures_util::SinkExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        self.ws
+            .send(Message::Binary(tsp_message.to_vec().into()))
+            .await
+            .map_err(|e| ATMError::TransportError(format!("TSP websocket send error: {e}")))
+    }
+
+    /// Close the socket gracefully.
+    pub async fn close(mut self) -> Result<(), ATMError> {
+        self.ws
+            .close(None)
+            .await
+            .map_err(|e| ATMError::TransportError(format!("TSP websocket close error: {e}")))
     }
 }
 
