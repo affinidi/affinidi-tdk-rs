@@ -130,6 +130,9 @@ least one secret backend must be enabled. Defaults are
 >   `TSPTransport` service **when generating the DID**. The mediator logs a startup
 >   warning if TSP is enabled but no `TSPTransport` service is advertised.
 
+For end-to-end TSP usage (sending, receiving, relationships, WebSocket, auth), see
+the **[TSP cookbook](../../../docs/tsp/cookbook.md)**.
+
 ### Storage backend (pick one)
 
 | Feature | Default | Use case |

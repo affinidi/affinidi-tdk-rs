@@ -14,6 +14,8 @@ docs/*
 !docs/migration/
 # Testing guide + composed-stack docs are tracked.
 !docs/testing/
+# TSP usage cookbook is tracked.
+!docs/tsp/
 
 # mediator-setup wizard generated artifacts (may land in any directory)
 **/conf/secrets.json

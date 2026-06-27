@@ -13,6 +13,10 @@ Verifiable Identifiers (VIDs).
 > This crate provides an independent implementation tailored for the Affinidi TDK
 > ecosystem.
 
+> **Using TSP through the TDK?** This crate is the low-level protocol. For sending,
+> receiving, relationships, WebSocket delivery, and authentication via the
+> messaging SDK (`atm.tsp()`), see the **[TSP cookbook](../../../docs/tsp/cookbook.md)**.
+
 ## Feature Flags
 
 | Feature | Default | Description |
