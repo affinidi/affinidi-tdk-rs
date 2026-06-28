@@ -1,0 +1,14 @@
+/Users/glenngore/devel/affinidi-tdk-rs/interop/target/debug/deps/affinidi_cesr-dd9d61cbbbf26b49.d: /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/lib.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/codec.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/counter.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/error.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/indexer.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/matter.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/sniff.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/tables.rs
+
+/Users/glenngore/devel/affinidi-tdk-rs/interop/target/debug/deps/libaffinidi_cesr-dd9d61cbbbf26b49.rlib: /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/lib.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/codec.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/counter.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/error.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/indexer.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/matter.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/sniff.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/tables.rs
+
+/Users/glenngore/devel/affinidi-tdk-rs/interop/target/debug/deps/libaffinidi_cesr-dd9d61cbbbf26b49.rmeta: /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/lib.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/codec.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/counter.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/error.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/indexer.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/matter.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/sniff.rs /Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/tables.rs
+
+/Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/lib.rs:
+/Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/codec.rs:
+/Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/counter.rs:
+/Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/error.rs:
+/Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/indexer.rs:
+/Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/matter.rs:
+/Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/sniff.rs:
+/Users/glenngore/devel/affinidi-tdk-rs/crates/core/affinidi-cesr/src/tables.rs:
