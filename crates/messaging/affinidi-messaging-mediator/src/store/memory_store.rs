@@ -380,7 +380,7 @@ impl MediatorStore for MemoryStore {
         let msg_id = digest(message.as_bytes());
         let bytes = message.len();
         let ts_ms = now_ms() as u128;
-        let from = from_hash.unwrap_or("ANONYMOUS").to_string();
+        let from = from_hash.filter(|s| !s.is_empty()).unwrap_or("ANONYMOUS").to_string();
 
         let mut state = self.state.lock().await;
 
