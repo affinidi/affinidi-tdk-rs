@@ -37,6 +37,29 @@ The two implementations share only the **KEM and KDF**. They disagree on the
 AEAD, the entire CESR envelope framing, the payload encoding, the HPKE info/AAD
 bytes, and the signature framing.
 
+## Which side is spec-correct?
+
+Adjudicated against the **TSP specification, v1.0 Experimental Implementor's Draft
+Rev 2** ([trustoverip.github.io/tswg-tsp-specification](https://trustoverip.github.io/tswg-tsp-specification/))
+— the same revision `affinidi-tsp` claims to target. On every clear point, the
+reference (`tsp-sdk`) conforms and **`affinidi-tsp` diverges**:
+
+| Mismatch | Spec says | `affinidi-tsp` | `tsp-sdk` | Conformant |
+|---|---|---|---|---|
+| AEAD | **ChaCha20Poly1305** only (code 0x0003); AES-GCM is not mentioned, no negotiation | AES-128-GCM | ChaCha20Poly1305 | **tsp-sdk** |
+| HPKE `info` | **`NULL`** (empty) in `TSP_SEAL`/`TSP_OPEN` | `b"TSP-v1-direct"` | empty | **tsp-sdk** |
+| Envelope framing | **CESR**: `TSP_Tag` count code `-E##` + `TSP_Version` `YTSP-###` + `VID_sndr`/`VID_rcvr` var-data codes | one `Matter`/Tag1 (`D4 00 05`) + bespoke non-CESR body, no `YTSP` version | CESR `-E`/`YTSP`/VID codes | **tsp-sdk** |
+| Payload framing | CESR control codes incl. `XSCS` for the payload | raw payload, no CESR frame | `-Z … XSCS …` | **tsp-sdk** |
+| Version marker | mandatory `TSP_Version` (`YTSP-###`) | none (a byte in the Matter raw) | `YTSP` marker | **tsp-sdk** |
+| KEM / KDF | X25519 / HKDF-SHA256 | ✅ | ✅ | both |
+| Signature algorithm | Ed25519 | ✅ | ✅ | both (framing differs; spec's sig **framing** is incomplete in this draft) |
+
+**Conclusion: `affinidi-tsp` is the non-conformant side.** Its AEAD choice, HPKE
+`info`, and CESR envelope/version framing are not what the TSP Rev 2 spec mandates
+— they read as independent implementation choices, not spec-grounded ones. The
+reference implements the spec. So the interop failure isn't a "two valid dialects"
+situation: it's `affinidi-tsp` deviating from the standard it targets.
+
 ## Effort to close
 
 There is **no small change** that yields a green round-trip. The smallest viable
@@ -59,17 +82,38 @@ and `didwebvh-rs` bumped. **Its wire format and dependency set are both unstable
 
 ## Recommendation
 
-**Defer interop.** It is not achievable without a wire-breaking rewrite of
-`affinidi-tsp`, and it is premature to target an alpha whose wire format isn't
-frozen and whose published crate doesn't build. Revisit once `tsp-sdk` ships a
-**stable (non-alpha) release** with a frozen wire format and a clean dependency
-graph.
+Because `affinidi-tsp` is the **non-conformant** side, the fix and the interop are
+the same task: bring `affinidi-tsp` into line with the TSP Rev 2 spec, which the
+reference already implements. This is a **correctness** issue (we don't match the
+standard we claim to target), not merely a missing nice-to-have.
 
-If/when interop becomes a goal, two options:
-1. **Re-implement `tsp-sdk`'s wire format in `affinidi-tsp`** (large; keeps our
-   lean dependency tree).
-2. **Depend on `tsp-sdk` directly** for the wire layer (smaller code, but pulls
-   its heavyweight deps — askar, sqlx, reqwest, quinn — versus our lean stack).
+Sequence it by how stable each gap is:
+
+1. **Now — the unambiguous, low-risk crypto fixes.** Switch the HPKE AEAD to
+   **ChaCha20Poly1305** and set the HPKE `info` to **empty/NULL**. These are clear,
+   stable spec requirements unlikely to change, and they're small, self-contained
+   edits in `affinidi-tsp`'s `crypto`/`direct` layer. (Both are wire-breaking, but
+   `affinidi-tsp` is `0.1.x` and pre-adoption, so the break is cheap now and only
+   gets more expensive later.)
+2. **Later — the CESR envelope/payload/signature rewrite.** Replacing the
+   bespoke `Matter`/Tag1 framing with the spec's count-code groups (`-E`/`-Z`/
+   `-C`/`-K`) + `YTSP` version + var-data VID/payload/signature codes is the large
+   change. Do it once (a) the spec's **signature framing** is complete (it is
+   *incomplete* in Rev 2's current draft) and (b) `tsp-sdk` is **buildable +
+   stable** so the round-trip can be the conformance test. Rewriting the framing
+   now, against an incomplete draft with no working reference to test against,
+   risks doing it twice.
+
+Two ways to land step 2 when the time comes:
+- **Re-implement the spec's wire format in `affinidi-tsp`** — keeps our lean
+  dependency tree; we own the conformance.
+- **Depend on `tsp-sdk` directly** for the wire layer — guaranteed conformance and
+  interop, but pulls its heavyweight deps (askar, sqlx, reqwest, quinn) versus our
+  lean stack, and it must build cleanly first.
+
+Until step 2 lands, `affinidi-tsp` remains a **self-consistent but non-standard**
+TSP — fine for TDK-internal use, but it will not interoperate with spec-compliant
+TSP peers. That limitation should be stated wherever TSP support is advertised.
 
 ## Reproducing this verdict
 
