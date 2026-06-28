@@ -56,13 +56,14 @@ pub fn pack(
     let envelope = Envelope::new(message_type, sender_vid, receiver_vid);
     let envelope_bytes = envelope.encode()?;
 
-    // 2. HPKE-Auth seal: encrypt payload with envelope as AAD
+    // 2. HPKE-Auth seal: encrypt payload with envelope as AAD. The TSP spec sets
+    // the HPKE `info` to NULL (empty), so pass no context string.
     let sealed = hpke::seal(
         payload,
         &envelope_bytes,
         sender_encryption_key,
         receiver_encryption_key,
-        b"TSP-v1-direct",
+        b"",
     )?;
 
     // 3. Build wire format: envelope || enc || ciphertext_len || ciphertext || signature
@@ -155,7 +156,7 @@ pub fn unpack(
         &enc,
         receiver_decryption_key,
         sender_encryption_key,
-        b"TSP-v1-direct",
+        b"",
     )?;
 
     Ok(UnpackedMessage {

@@ -1,5 +1,22 @@
 # Affinidi TSP Changelog
 
+## 28th June 2026
+
+### 0.1.7 — spec conformance (1/2): ChaCha20Poly1305 HPKE AEAD + empty HPKE info
+
+- The HPKE AEAD is now **ChaCha20Poly1305** (was AES-128-GCM) and the HPKE `info` is
+  now empty/`NULL` (was `"TSP-v1-direct"`), matching the TSP spec (v1.0 Implementor's
+  Draft Rev 2), which mandates ChaCha20Poly1305 and `info = NULL`. The HPKE suite ID's
+  AEAD code is updated `0x0001 → 0x0003` accordingly.
+- **Wire-breaking:** the ciphertext format changed; messages packed by 0.1.6 (or any
+  AES-GCM build) will not decrypt under 0.1.7. TSP is pre-adoption / experimental, so
+  no migration is provided. The public API is unchanged (`seal`/`open`/`pack`/`unpack`
+  signatures identical), so consumers need no code changes.
+- This is the first of two spec-conformance steps. The CESR envelope / payload /
+  signature **framing** is still being brought to spec (a follow-up); full interop with
+  the reference (`tsp-sdk`) lands once both are done. See
+  [`docs/tsp/interop.md`](../../../docs/tsp/interop.md).
+
 ## 22nd June 2026
 
 ### 0.1.6 — ingress sniff + keys-free envelope metadata
