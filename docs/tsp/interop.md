@@ -19,6 +19,14 @@ Both failures happen at the **first parse step (outer framing)** — neither sid
 even reaches the other's crypto. And even if framing matched, the AEAD differs, so
 decryption would still fail.
 
+> **Status update (as of `affinidi-tsp` 0.1.7).** The **crypto** mismatches below —
+> the AEAD and the HPKE `info` — are now **fixed** (the AEAD is ChaCha20Poly1305 and
+> `info` is empty, per the spec; see the changelog / #540). The **CESR framing**
+> mismatches remain, and a framing rewrite to the spec/reference format is in
+> progress. The headline "no interop" verdict therefore still holds until the
+> framing work lands; the field tables below describe the original 0.1.6 divergence,
+> with the crypto rows now resolved.
+
 ## Where they agree, and where they don't
 
 | Aspect | `affinidi-tsp` | `tsp-sdk` 0.9.0-alpha2 | Match |
