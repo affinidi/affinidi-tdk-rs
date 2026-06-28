@@ -141,13 +141,13 @@ fn auth_encap(
     dh[..32].copy_from_slice(dh_eph.as_bytes());
     dh[32..].copy_from_slice(dh_sender.as_bytes());
 
-    // Build KEM context: enc || pkS || pkR
+    // Build KEM context: enc || pkRm || pkSm (RFC 9180 §4.1 — recipient then sender)
     let enc = pk_e.to_bytes();
     let pk_s = PublicKey::from(sk_s);
     let mut kem_context = [0u8; 96]; // 32 + 32 + 32
     kem_context[..32].copy_from_slice(&enc);
-    kem_context[32..64].copy_from_slice(pk_s.as_bytes());
-    kem_context[64..].copy_from_slice(pk_r.as_bytes());
+    kem_context[32..64].copy_from_slice(pk_r.as_bytes());
+    kem_context[64..].copy_from_slice(pk_s.as_bytes());
 
     let shared_secret = extract_and_expand(&dh, &kem_context)?;
     dh.zeroize();
@@ -172,11 +172,11 @@ fn auth_decap(
     dh[..32].copy_from_slice(dh_eph.as_bytes());
     dh[32..].copy_from_slice(dh_sender.as_bytes());
 
-    // Build KEM context: enc || pkS || pkR
+    // Build KEM context: enc || pkRm || pkSm (RFC 9180 §4.1 — recipient then sender)
     let mut kem_context = [0u8; 96];
     kem_context[..32].copy_from_slice(enc);
-    kem_context[32..64].copy_from_slice(pk_s.as_bytes());
-    kem_context[64..].copy_from_slice(pk_r.as_bytes());
+    kem_context[32..64].copy_from_slice(pk_r.as_bytes());
+    kem_context[64..].copy_from_slice(pk_s.as_bytes());
 
     let shared_secret = extract_and_expand(&dh, &kem_context)?;
     dh.zeroize();
@@ -188,12 +188,18 @@ fn auth_decap(
 fn extract_and_expand(dh: &[u8], kem_context: &[u8]) -> Result<[u8; N_SECRET], TspError> {
     let kem_suite_id = KEM_SUITE_ID;
 
-    // prk = LabeledExtract("", "shared_secret", dh)
-    let prk = labeled_extract(kem_suite_id, &[], b"shared_secret", dh)?;
+    // eae_prk = LabeledExtract("", "eae_prk", dh)  (RFC 9180 §4.1)
+    let prk = labeled_extract(kem_suite_id, &[], b"eae_prk", dh)?;
 
-    // shared_secret = LabeledExpand(prk, "ss", kem_context, Nsecret)
+    // shared_secret = LabeledExpand(eae_prk, "shared_secret", kem_context, Nsecret)
     let mut shared_secret = [0u8; N_SECRET];
-    labeled_expand(kem_suite_id, &prk, b"ss", kem_context, &mut shared_secret)?;
+    labeled_expand(
+        kem_suite_id,
+        &prk,
+        b"shared_secret",
+        kem_context,
+        &mut shared_secret,
+    )?;
 
     Ok(shared_secret)
 }
@@ -256,18 +262,13 @@ fn labeled_extract(
     labeled_ikm.extend_from_slice(label);
     labeled_ikm.extend_from_slice(ikm);
 
-    // HKDF-Extract
-    let hkdf = Hkdf::<Sha256>::new(Some(salt), &labeled_ikm);
-    let mut prk = [0u8; N_H];
-    // The PRK is the internal state of HKDF after extraction
-    // We need to expand with empty info to get it
-    // Actually, Hkdf::new() does the extract. We just need the PRK.
-    // The `hkdf` crate's Hkdf::new() does Extract internally.
-    // To get the raw PRK, we expand with empty info and N_H length.
-    hkdf.expand(&[], &mut prk)
-        .map_err(|e| TspError::Hpke(format!("HKDF extract failed: {e}")))?;
+    // HKDF-Extract: RFC 9180 LabeledExtract returns the PRK = Extract(salt, labeled_ikm)
+    // directly (NOT Expand(PRK, "")). Use Hkdf::extract to get the raw PRK.
+    let (prk, _) = Hkdf::<Sha256>::extract(Some(salt), &labeled_ikm);
+    let mut out = [0u8; N_H];
+    out.copy_from_slice(&prk);
 
-    Ok(prk)
+    Ok(out)
 }
 
 /// LabeledExpand (RFC 9180 §4)
