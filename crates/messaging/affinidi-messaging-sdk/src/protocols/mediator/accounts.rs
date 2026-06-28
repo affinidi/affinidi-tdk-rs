@@ -453,6 +453,10 @@ impl Mediator {
 impl<'a> MediatorOps<'a> {
     /// Fetch an account information from the mediator
     /// See [`Mediator::account_get`] for full documentation
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().account_get()` instead"
+    )]
     pub async fn account_get(
         &self,
         profile: &Arc<ATMProfile>,
@@ -465,6 +469,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Create a new account on the Mediator for a given DID
     /// See [`Mediator::account_add`] for full documentation
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().account_add()` instead"
+    )]
     pub async fn account_add(
         &self,
         profile: &Arc<ATMProfile>,
@@ -478,6 +486,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Removes an account from the mediator
     /// See [`Mediator::account_remove`] for full documentation
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().account_remove()` instead"
+    )]
     pub async fn account_remove(
         &self,
         profile: &Arc<ATMProfile>,
@@ -490,6 +502,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Lists known DID accounts in the mediator
     /// See [`Mediator::accounts_list`] for full documentation
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().account_list()` instead"
+    )]
     pub async fn accounts_list(
         &self,
         profile: &Arc<ATMProfile>,
@@ -503,6 +519,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Change the Account Type for a DID
     /// See [`Mediator::account_change_type`] for full documentation
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().account_change_type()` instead"
+    )]
     pub async fn account_change_type(
         &self,
         profile: &Arc<ATMProfile>,
@@ -516,6 +536,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Change the Queue Limits for a DID
     /// See [`Mediator::account_change_queue_limits`] for full documentation
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().account_change_queue_limits()` instead"
+    )]
     pub async fn account_change_queue_limits(
         &self,
         profile: &Arc<ATMProfile>,

@@ -2,6 +2,342 @@
 
 ## Changelog history
 
+## 26th June 2026
+
+### 0.16.32 — Bump vta-sdk to 0.18 (enables did:webvh P-256 rendering)
+
+- Bumped the `vta-sdk` dependency from `0.16` to `0.18`, whose embedded
+  `didcomm-mediator` template carries the optional P-256 verification-method slots
+  (`OpenVTC/verifiable-trust-infrastructure#587`). This is what lets
+  `mediator-setup --did-method webvh --key-suite p256` actually emit the P-256
+  signing/key-agreement keys; the renderer itself already shipped in #531. No
+  behavioural change to the mediator runtime — the default DID document is byte-for-byte
+  unchanged when the P-256 suite is not requested.
+
+### 0.16.31 — TSP: raw-TSP WebSocket delivery mode
+
+- A WebSocket client may now opt into a **raw-TSP delivery mode** by adding a `tsp`
+  entry to `Sec-WebSocket-Protocol` (alongside `bearer.<jwt>`). In this mode the socket
+  uses a **flush-on-connect + delete-on-successful-send** contract instead of the DIDComm
+  message-pickup delete-to-ack: on connect the mediator drains the inbox, sending each
+  message as a raw-TSP `Binary` frame and deleting it once the send succeeds; a live
+  notification re-drains the same way. The client owns its own failure handling (a send
+  error leaves the message in the inbox for the next connection). Inbound raw TSP over the
+  socket (`Binary` → the TSP handler) is unchanged. DIDComm sockets are byte-for-byte
+  unchanged; the whole path is gated on the `tsp` feature.
+
+## 25th June 2026
+
+### 0.16.29 — TSP graduated from experimental to supported
+
+- The `tsp` feature is no longer marked **experimental**. The dual-protocol mediator
+  carries TSP Direct / Routed / Nested / Control messages, bridges TSP↔DIDComm, runs
+  Trust Tasks over TSP, and advertises a `TSPTransport` service for discovery — the
+  feature set is complete and exercised by the e2e suite. Documentation/labelling only;
+  no behaviour change.
+- Caveat carried in the feature docs: TSP currently reuses the DIDComm-authenticated
+  session, so run `tsp` together with `didcomm`. A pure-TSP auth path
+  (`/tsp/authenticate`) and SDK relationship management are tracked follow-ups.
+
+### 0.16.28 — did:web self-hosting: serve a valid did:web document
+
+- A self-hosted `did:webvh` mediator (`did_web_self_hosted = file://.../did.jsonl`)
+  now serves a **did:web-native** document at `/.well-known/did.json`: its identifier
+  (and every verification-method and service self-reference) is rewritten from
+  `did:webvh:{scid}:{domain}` to `did:web:{domain}`. Previously the extracted log
+  `state` was served verbatim, so a `did:web:{domain}` resolver received a document
+  whose `id` didn't match the DID it resolved and whose `#key-…` references couldn't
+  be dereferenced. The `/.well-known/did.jsonl` log stream and the mediator's internal
+  `did:webvh` identity are unchanged. Automatic — no new config key.
+- The rewrite is **structured** (not a blind string replace): only DID-URL
+  self-references of the document's own DID — the bare DID and `{did}#frag` /
+  `{did}?query` / `{did}/path` forms — are rewritten. Foreign `did:webvh:` DIDs, longer
+  DIDs sharing the prefix (`{did}:tenant`), and values that merely embed the DID as a
+  substring (e.g. a `serviceEndpoint` URL) are left verbatim; identifiers with an empty
+  SCID are rejected.
+
+### 0.16.27 — TSP: advertise a TSPTransport service in the DID document
+
+- When TSP is enabled, the mediator now advertises a `TSPTransport` service in its DID
+  document so other mediators can **discover its TSP endpoint** — remote routed/nested
+  forwarding resolves the next hop's endpoint from its DID document, and previously
+  failed with "publishes no TSP transport endpoint" against a mediator that didn't
+  advertise one.
+- For **did:web** the service is added automatically at startup, mirroring the
+  `DIDCommMessaging` endpoint (TSP and DIDComm share the mediator's `/inbound`). Applied
+  on the owned config in `serve_internal`, so it covers both the config-file and builder
+  startup paths.
+- **did:peer** and **did:webvh** bind the document to the DID (peer encodes it; webvh
+  hashes it), so their `TSPTransport` service must be baked in at DID generation. When
+  TSP is enabled but no `TSPTransport` service is advertised, the mediator logs an
+  actionable warning at startup instead of failing silently at the first remote forward.
+
+## 24th June 2026
+
+### 0.16.26 — TSP: Control message relay
+
+- The TSP inbound handler now relays **`Control`** messages (relationship invite /
+  accept / cancel) to their recipient, like a `Direct` message — the relay is
+  payload-agnostic, the mediator never inspects the control payload. This completes the
+  mediator's TSP message-type coverage: **Direct, Routed, Nested, and Control** are all
+  carried (the previous `NotImplemented` fallback is gone). A `Control` message addressed
+  to the mediator *itself* (the mediator as a relationship party) remains unsupported and
+  fails cleanly at delivery.
+
+### 0.16.25 — TSP: Nested message relay
+
+- The TSP inbound handler now carries **`Nested`** messages (TSP §5.5, the
+  metadata-privacy wrapper), where previously only `Direct` and `Routed` were handled.
+  A `Nested` envelope addressed to **this mediator** is unwrapped (the outer layer is
+  sealed to us) to reveal the inner message — itself sealed end-to-end to its final
+  recipient — which is then routed by its own envelope, delivered to a local account or
+  forwarded to a remote mediator (and may be TSP or an opaque DIDComm bridge payload). A
+  `Nested` envelope addressed to a **local account** is delivered opaquely for that
+  account to unwrap. TSP `Control` relay remains unimplemented.
+
+### 0.16.24 — Trust Tasks: acl/set non-admin self-service
+
+- `messaging/acl/set` now supports non-admin **self-service** (it was admin-only). A
+  standard account may set its **own** ACL, but only the capabilities it is permitted
+  to self-manage (per the per-capability self-change bits); the admin-only flags
+  (`blocked`, `local`, the `selfManage*` bits) are refused, as is setting any other
+  account's ACL. Faithful to the legacy `acls_set` rules — making `acl/set` a full
+  replacement for the legacy method (unblocks migrating self-service consumers).
+
+### 0.16.23 — Trust Tasks: admin family (all messaging tasks complete)
+
+- `messaging/admin/{add,strip,list,audit-log,config}`: admin-only. `add`/`strip` grant
+  and revoke admin rights (auditing each); `list` pages the admin accounts; `audit-log`
+  pages the privileged-change log (mapping the mediator's internal `AuditLogEntry` /
+  `AuditAction` to the wire shapes); `config` returns the mediator version + its
+  configuration object. Picks up the published `trust-tasks-rs` 0.2.11 (the admin
+  family specs). This completes every messaging Trust Task — the four legacy mediator
+  management protocols are now fully expressible as Trust Tasks.
+
+### 0.16.22 — Trust Tasks: access-list family (handlers complete)
+
+- `messaging/access-list/{add,remove,clear,get,list}`: self-or-admin, with the
+  `self_manage_list` capability required for a standard account's writes. `add`
+  truncates at the mediator limit and reports the inserted entries; `remove` reports
+  which requested entries were present; `get` partitions queried entries into
+  present/absent; `list` is cursor-paged (both `None` and `Some(0)` are terminal);
+  `clear` empties the list. Writes record audit entries. This completes every
+  messaging Trust Task handler (ping + account + acl + access-list).
+
+### 0.16.21 — Trust Tasks: account/add (account family complete)
+
+- `messaging/account/add`: in `ExplicitAllow` mode only an admin may add accounts; in
+  `ExplicitDeny` mode any authenticated account may. An admin may supply the new
+  account's ACL (applied onto the mediator default via the reverse map); a non-admin
+  gets the default. Creating an admin / root-admin account requires the matching
+  privilege. Records an audit entry; returns the created account's realized view.
+  Initial queue limits use the mediator default (adjust via change-queue-limits).
+  This completes the messaging account family (get / list / change-queue-limits /
+  remove / change-type / add).
+
+### 0.16.20 — Trust Tasks: acl/get + acl/set
+
+- `messaging/acl/get` (self-or-admin, batched): returns the decoded `MediatorAcl` per
+  known DID and lists unknown DIDs separately.
+- `messaging/acl/set` (admin-only): applies the wire ACL as a **partial update** onto
+  the account's current ACL — the **reverse** of the bitfield decode. The wire form
+  doesn't carry the per-capability self-change bits, so they're preserved from the
+  current set; absent flags are left unchanged. Records an audit entry; returns the
+  realized ACL. Backed by an `acl_reverse_map_round_trips` unit test (decode→merge
+  reproduces the original `u64` across value, change, and self-manage bits). Non-admin
+  self-service ACL changes aren't supported here.
+
+### 0.16.19 — Trust Tasks: account/change-type
+
+- The Trust Tasks consumer now handles `messaging/account/change-type` (admin-only).
+  Faithfully ports the legacy admin-set transitions (promote / demote / switch) and
+  the root-admin guards — only a root admin may assign the root-admin role or modify
+  a root-admin account. Records an audit entry; returns the account's realized view
+  after the change.
+
+### 0.16.18 — Trust Tasks: account/remove
+
+- The Trust Tasks consumer now handles `messaging/account/remove` (self-or-admin).
+  Refuses to remove the mediator's own account or the root admin (both compared in
+  constant time), records an audit entry, and returns the target id plus whether a
+  record was removed.
+
+### 0.16.17 — Trust Tasks: account/change-queue-limits
+
+- The Trust Tasks consumer now handles `messaging/account/change-queue-limits`
+  (self-or-admin). A standard account may only change a limit it self-manages, and
+  its values are capped at the mediator's hard maximum (the `-1`/`-2` sentinels pass
+  through); an admin sets any value. Records an audit entry and returns the updated
+  account view. Adds a reusable generic `to_wire_account` (replacing the list-only
+  helper).
+
+### 0.16.16 — Trust Tasks: account/list
+
+- The Trust Tasks consumer now handles `messaging/account/list` (admin-only): it
+  pages `state.database.account_list`, maps each `Account` to the wire shape (reusing
+  the `account/get` mapping), and encodes the store's numeric cursor as the spec's
+  opaque `next_cursor` (omitted when the listing is exhausted). Non-admins are
+  refused.
+
+### 0.16.15 — Trust Tasks: account/get
+
+- The Trust Tasks consumer now handles `messaging/account/get` (self-or-admin,
+  read-only): it authorizes via the existing `check_permissions`, reads
+  `state.database.account_get`, and maps the mediator's internal `Account` to the
+  wire shape — the account hash as the `Vid` (per the messaging spec's privacy
+  note) and the `u64` ACL bitfield decoded into the spec's named booleans
+  (`didcommEnabled`/`tspEnabled` have no bitfield slot, reported as `null`). Adds
+  a reusable `type_uri_of` / `downcast` routing pair. Existing protocols untouched.
+
+## 23rd June 2026
+
+### 0.16.14 — Trust Tasks response threading
+
+- The Trust Tasks consumer now threads its response to the request (`thid`), so a
+  caller's live-stream correlates the reply by thread id — the round-trip the SDK's
+  `atm.trust_tasks().ping()` relies on.
+
+### 0.16.13 — Trust Tasks consumer (ping)
+
+- The mediator now consumes **Trust Task** documents carried over the DIDComm
+  binding envelope (`https://trusttasks.org/binding/didcomm/0.1/envelope`), via
+  the `trust-tasks-rs` `consume_inbound` pipeline. This is the foundation of the
+  messaging Trust Tasks migration (single core; per-task handlers will delegate to
+  the same `state.database.*` methods the legacy DIDComm protocols use).
+- First task wired: **`messaging/ping`** — returns `server_time`, `ok` status, and
+  the supported `protocols`, echoing the request nonce. The response is packed back
+  through the existing outbound path (like the trust-ping pong). Account / ACL /
+  access-list follow. Existing DIDComm protocols are untouched.
+
+### 0.16.12 — Tag message protocol on pickup
+
+- The fetch, list, and outbound pickup endpoints now tag each returned message
+  with its wire `protocol` (DIDComm / TSP / …), detected server-side. A client can
+  just fetch its messages and route each one natively from the metadata, without
+  inspecting the body or caring which protocols exist over time. Unified,
+  transparent, future-proof. No change to which messages are returned (no
+  filtering, no Lua/store-schema change).
+
+### 0.16.11 — TSP remote forwarding
+
+- A routed TSP relay now forwards to a **remote** next hop. When the next hop is
+  not a local account, the mediator reads its `TSPTransport` endpoint from its DID
+  document and enqueues the message on the shared forwarding queue; the forwarding
+  processor (mediator-common 0.15.16) POSTs the raw qb2 to the remote mediator's
+  `/inbound`. A next hop that resolves back to this mediator is rejected as a loop.
+- The relay's hop delivery now dispatches via `forward_to_next`: local recipient →
+  store (`deliver_opaque`); remote → enqueue (`forward_tsp_remote`).
+- Note: the wire path is exercised by the existing DIDComm cross-mediator suite
+  (same processor); a TSP-specific two-mediator e2e awaits `did:web` TSP-endpoint
+  test fixtures (a `did:peer` does not surface a custom `TSPTransport` service to
+  the resolver).
+
+### 0.16.10 — TSP↔DIDComm bridge
+
+- A routed TSP relay now bridges protocols. At the exit hop the mediator delivers
+  the **opaque inner** to the recipient *named in the route* (not parsed from the
+  inner's envelope), so the inner may be a TSP **or** a DIDComm message — the
+  recipient recognises and unpacks it natively. The mediator never reads it.
+- `deliver_opaque` is the bridge primitive: known recipient + authenticated
+  routing-layer sender for the access-list, store for pickup. It stores a TSP
+  inner as base64url(qb2) (`1AAF…` qb64) and a DIDComm inner as its plain JWE/JWS
+  text, so a pickup client sniffs the prefix and decodes correctly.
+  `deliver_tsp_local` (Direct + empty-route `Deliver`) now parses the envelope and
+  delegates to it.
+
+### 0.16.9 — TSP routed relay
+
+- The mediator now acts as a **routed TSP relay hop**. A `Routed` message sealed
+  to the mediator is unwrapped using its own TSP identity (0.16.8), the next hop
+  is read (`next_hop`), and the onward message is forwarded — re-sealed as this
+  mediator for an intermediate hop, or forwarded opaquely when this is the last
+  hop (the inner is already sealed end-to-end to the final recipient).
+- Direct delivery and the final hop of a relay now share one `deliver_tsp_local`
+  path: check the recipient is local, apply its access-list against the envelope
+  sender, store for pickup.
+- A `Routed` message addressed to a *local account* (the account is itself a hop)
+  is stored opaquely for it. Remote next-hops (forwarding to another mediator) and
+  Nested/Control messages return a clear problem report — they land later.
+
+## 22nd June 2026
+
+### 0.16.8 — Mediator TSP identity (relay foundation)
+
+- `SharedData::tsp_identity()` derives (and caches, lazily) the mediator's own TSP
+  keys — the Ed25519 signing key from its DID's `authentication` and the X25519
+  decryption key from its `keyAgreement` — from the configured DID document and
+  the operating secrets it already uses to decrypt inbound DIDComm. No new key
+  management.
+- This is the foundation for acting as a **routed relay hop** (unpack a `Routed`
+  message sealed to the mediator, re-seal it onward), landing next. TSP **Direct**
+  delivery is a blind store-and-forward and never touches this. Purely additive;
+  derived only on first use.
+
+### 0.16.7 — TSP client authentication
+
+- New `POST /tsp/authenticate` endpoint (dual `didcomm,tsp` build) lets a TSP
+  client obtain a mailbox/WS session. The client reuses the protocol-agnostic
+  `POST /authenticate/challenge` for a challenge, signs it with its VID's Ed25519
+  key, and posts the signature here; the mediator resolves the VID's signing key
+  from its DID document and verifies it — no mediator TSP keys, no decryption.
+- On success the mediator mints the **identical** EdDSA `SessionClaims`
+  access+refresh JWT pair the DIDComm path issues, so every downstream
+  ACL/pickup/WS gate is reused unchanged (the session is DID-keyed and
+  protocol-agnostic). This is what lets a TSP client pick up the Direct messages
+  the mediator now stores (0.16.6).
+- VID must be a `did:` (phase-1 DID-VID constraint). No change to the DIDComm
+  auth path.
+
+### 0.16.6 — TSP Direct local delivery
+
+- `handle_inbound_tsp` now stores an inbound TSP **Direct** message addressed to
+  a **locally-served** recipient, for pickup — reusing the protocol-neutral store
+  path that DIDComm direct delivery uses (recipient-is-local + access-list checks
+  mirror the DIDComm path).
+- **Storage format**: the TSP message is stored `base64url(qb2)` — which is its
+  CESR **qb64** text form (`1AAF…`) — so it rides the existing UTF-8 string
+  store/pickup/stream pipeline with **no store-schema change and DIDComm storage
+  byte-identical**. A pickup client recognises it by the qb64 prefix (vs DIDComm
+  JSON `{`) and base64url-decodes back to qb2. (Future: a raw-byte store can be
+  introduced later as a self-migrating change — messages are transient, so the
+  old string store drains over one message-TTL window with no backfill.)
+- Routed/Nested/Control message types, remote recipients (routing/relay), and the
+  TSP↔DIDComm bridge are rejected with clear problem reports until later PRs. The
+  mediator does not decrypt or verify the message; the recipient authenticates the
+  sender end-to-end on unpack.
+
+### 0.16.5 — ingress protocol dispatcher (sniff DIDComm vs TSP)
+
+- Inbound messages are now sniffed at ingress: a TSP message (CESR `1AAF` magic
+  byte `0xD4`) is routed to the TSP handler, everything else to DIDComm. Active
+  only in a dual `didcomm,tsp` build.
+- `POST /inbound` now takes the raw request body (`Bytes`) and sniffs it. **The
+  DIDComm path is byte-identical**: the JWE envelope is parsed and re-serialised
+  to the same canonical string as before, so the stored blob and its sha256
+  message-id are unchanged for existing clients (regression-tested, and verified
+  by the full end-to-end integration suite). The only behavior change is that a
+  malformed request body returns the mediator's own problem-report 400 instead of
+  the axum `Json`-extractor 400; the success path is unchanged.
+- The WebSocket frame loop routes a `Binary` frame leading with `0xD4` to the TSP
+  handler; all other frames are handled as DIDComm exactly as before.
+- TSP ingress is the **seam only**: a sniffed TSP message is parsed (cleartext
+  envelope, no keys) and then rejected with a clear problem report — TSP message
+  delivery (store / relay / bridge) lands in later PRs.
+
+### 0.16.4 — TSP coexistence groundwork
+
+- Groundwork for the dual-protocol (DIDComm + TSP) mediator. **No behavior
+  change** to the supported `didcomm` and `didcomm,tsp` builds.
+- The `didcomm` and `tsp` features are NOT mutually exclusive — corrected the
+  stale Cargo.toml comments. The dual build (`--features didcomm,tsp`) is the
+  intended dual-protocol deployment and compiles cleanly under `-D warnings`.
+- A `tsp`-only build (`--no-default-features --features tsp,<backend>`) now
+  compiles: DIDComm-only imports/helpers (the OOB encoders in `store::mod`,
+  problem-report/forward imports on the inbound/websocket paths) are gated to
+  `#[cfg(feature = "didcomm")]`. Such a build remains non-functional (no
+  auth/inbound) until the TSP message-handling path lands in later PRs; the
+  shared authz/store machinery it will reuse is intentionally left ungated.
+
 ## 14th June 2026
 
 ### 0.16.2 — bump vta-sdk to 0.13

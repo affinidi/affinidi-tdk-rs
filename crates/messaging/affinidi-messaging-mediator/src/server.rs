@@ -203,7 +203,7 @@ pub async fn start(config_path: &str) -> Result<(), MediatorError> {
 /// Returns once the listener is bound. The actual server runs in a
 /// `tokio::spawn`-ed task whose handle lives on [`MediatorHandle`].
 pub async fn serve_internal(
-    config: Config,
+    #[cfg_attr(not(feature = "tsp"), allow(unused_mut))] mut config: Config,
     opts: StartOpts,
     shutdown_token: CancellationToken,
     pre_built_store: Option<Arc<dyn affinidi_messaging_mediator_common::store::MediatorStore>>,
@@ -495,6 +495,13 @@ pub async fn serve_internal(
             )
         })?;
 
+    // If TSP is enabled, make sure our served DID document advertises a
+    // `TSPTransport` service so peers can discover our TSP endpoint. Runs here, on the
+    // owned `config`, so it covers both the config-file and builder paths before the
+    // document is preloaded + served below.
+    #[cfg(feature = "tsp")]
+    crate::common::config::apply_tsp_did_advertisement(&mut config);
+
     // Preload the mediator's own DID document so it can pack/unpack DIDComm
     // messages without hitting the network (did:web/did:webvh self-resolution
     // needs HTTPS, which may be unreachable from the mediator's own network).
@@ -588,6 +595,8 @@ pub async fn serve_internal(
         self_authorities: Arc::new(self_authorities),
         component_health: supervisor.registry(),
         clock,
+        #[cfg(feature = "tsp")]
+        tsp_identity: Arc::new(tokio::sync::OnceCell::new()),
     };
 
     let app: Router = application_routes(&api_prefix, &shared_state);

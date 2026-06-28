@@ -38,8 +38,12 @@ pub mod vid;
 
 pub use error::TspError;
 pub use message::MessageType;
+pub use message::meta::{MetaEnvelope, TSP_MAGIC_BYTE, is_tsp};
+pub use message::routed::{MAX_HOPS, RouteStep};
 pub use relationship::RelationshipState;
 pub use vid::resolver::VidResolver;
+#[cfg(feature = "did-resolver")]
+pub use vid::{DidVidResolver, TSP_SERVICE_TYPE};
 pub use vid::{PrivateVid, ResolvedVid};
 
 use message::control::ControlMessage;
@@ -230,6 +234,140 @@ impl TspAgent {
         })
     }
 
+    // --- Routed / nested messaging (§5.3 / §5.5) ---
+
+    /// Send a message to `final_vid` routed through `intermediaries` (in order).
+    ///
+    /// The payload is sealed end-to-end to `final_vid` (so intermediaries cannot
+    /// read it), then wrapped in a routed layer addressed to the first
+    /// intermediary. Each intermediary calls [`TspAgent::forward_routed`] to
+    /// advance the message. With an empty `intermediaries` list this is an
+    /// ordinary direct send.
+    ///
+    /// Requires a `Bidirectional` relationship with `final_vid` (the inner is a
+    /// direct message); resolution of every hop's keys is via the agent resolver.
+    pub fn send_routed(
+        &self,
+        our_vid: &str,
+        final_vid: &str,
+        intermediaries: &[&str],
+        payload: &[u8],
+    ) -> Result<PackedMessage, TspError> {
+        // Inner: end-to-end sealed to the final recipient.
+        let inner = self.pack_message(our_vid, final_vid, payload, MessageType::Direct)?;
+
+        if intermediaries.is_empty() {
+            return Ok(inner);
+        }
+
+        // Route is the intermediaries followed by the final recipient, so the
+        // last intermediary forwards the inner directly to `final_vid`.
+        let mut route: Vec<String> = intermediaries[1..].iter().map(|s| s.to_string()).collect();
+        route.push(final_vid.to_string());
+
+        let first_hop = intermediaries[0];
+        let our_private = self.store.get_private_vid(our_vid)?;
+        let first_resolved = self.resolver.resolve(first_hop)?;
+
+        message::routed::pack_routed(
+            &inner.bytes,
+            &route,
+            our_vid,
+            first_hop,
+            &our_private.signing_key,
+            &our_private.decryption_key,
+            &first_resolved.encryption_key,
+        )
+    }
+
+    /// Wrap an already-packed message inside a nested outer message addressed to
+    /// `intermediary_vid`, for metadata privacy (§5.5). The intermediary can
+    /// open the outer but not the opaque inner.
+    pub fn send_nested(
+        &self,
+        our_vid: &str,
+        intermediary_vid: &str,
+        inner: &PackedMessage,
+    ) -> Result<PackedMessage, TspError> {
+        let our_private = self.store.get_private_vid(our_vid)?;
+        let intermediary = self.resolver.resolve(intermediary_vid)?;
+        message::routed::pack_nested(
+            inner,
+            our_vid,
+            intermediary_vid,
+            &our_private.signing_key,
+            &our_private.decryption_key,
+            &intermediary.encryption_key,
+        )
+    }
+
+    /// Process a routed message addressed to `our_vid` as an intermediary:
+    /// open our routing layer, then either re-seal the remaining route to the
+    /// next intermediary, or hand the opaque inner to the final recipient.
+    pub fn forward_routed(&self, our_vid: &str, wire: &[u8]) -> Result<ForwardOutcome, TspError> {
+        // Parse the envelope to authenticate the previous hop (the sender).
+        let (envelope, _) = message::envelope::Envelope::decode(wire)?;
+        if envelope.receiver != our_vid {
+            return Err(TspError::InvalidMessage(format!(
+                "routed message addressed to {}, not {our_vid}",
+                envelope.receiver
+            )));
+        }
+        if envelope.message_type != MessageType::Routed {
+            return Err(TspError::InvalidMessage(format!(
+                "expected a Routed message, got {:?}",
+                envelope.message_type
+            )));
+        }
+
+        let our_private = self.store.get_private_vid(our_vid)?;
+        let prev = self.resolver.resolve(&envelope.sender)?;
+        let unpacked = direct::unpack(
+            wire,
+            &our_private.decryption_key,
+            &prev.encryption_key,
+            &prev.signing_key,
+        )?;
+
+        match message::routed::next_hop(&unpacked.payload)? {
+            // Last intermediary: deliver the opaque inner to the final recipient.
+            message::routed::RouteStep::Forward {
+                next,
+                remaining,
+                inner,
+            } if remaining.is_empty() => Ok(ForwardOutcome::Deliver {
+                to: next,
+                message: inner,
+            }),
+            // Re-seal the remaining route to the next intermediary.
+            message::routed::RouteStep::Forward {
+                next,
+                remaining,
+                inner,
+            } => {
+                let next_resolved = self.resolver.resolve(&next)?;
+                let relayed = message::routed::pack_routed(
+                    &inner,
+                    &remaining,
+                    our_vid,
+                    &next,
+                    &our_private.signing_key,
+                    &our_private.decryption_key,
+                    &next_resolved.encryption_key,
+                )?;
+                Ok(ForwardOutcome::Relay {
+                    to: next,
+                    message: relayed,
+                })
+            }
+            // Empty route: the inner is for us to consume.
+            message::routed::RouteStep::Deliver { inner } => Ok(ForwardOutcome::Deliver {
+                to: our_vid.to_string(),
+                message: inner,
+            }),
+        }
+    }
+
     // --- Internal helpers ---
 
     fn pack_message(
@@ -321,6 +459,26 @@ pub struct ReceivedMessage {
     pub control: Option<ControlMessage>,
 }
 
+/// The result of forwarding a routed message at an intermediary
+/// ([`TspAgent::forward_routed`]).
+#[derive(Debug, Clone)]
+pub enum ForwardOutcome {
+    /// A re-sealed routed layer to relay onward to the next intermediary.
+    Relay {
+        /// The next intermediary's VID (the new envelope receiver).
+        to: String,
+        /// The packed routed layer to send to `to`.
+        message: PackedMessage,
+    },
+    /// The opaque inner message to deliver to the final recipient (last hop).
+    Deliver {
+        /// The final recipient's VID.
+        to: String,
+        /// The opaque inner message bytes (sealed to the final recipient).
+        message: Vec<u8>,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,6 +506,75 @@ mod tests {
             "did:example:alice".to_string(),
             "did:example:bob".to_string(),
         )
+    }
+
+    #[test]
+    fn routed_through_two_intermediaries() {
+        let alice = TspAgent::new();
+        let m1 = TspAgent::new();
+        let m2 = TspAgent::new();
+        let bob = TspAgent::new();
+
+        let alice_v = PrivateVid::generate("did:example:alice");
+        let m1_v = PrivateVid::generate("did:example:m1");
+        let m2_v = PrivateVid::generate("did:example:m2");
+        let bob_v = PrivateVid::generate("did:example:bob");
+        let (a, m1p, m2p, b) = (
+            alice_v.to_resolved(),
+            m1_v.to_resolved(),
+            m2_v.to_resolved(),
+            bob_v.to_resolved(),
+        );
+
+        // Each party knows the VIDs it must resolve along the route.
+        alice.add_private_vid(alice_v);
+        alice.add_verified_vid(m1p.clone()); // first hop
+        alice.add_verified_vid(b.clone()); // final (inner seal)
+
+        m1.add_private_vid(m1_v);
+        m1.add_verified_vid(a.clone()); // previous hop
+        m1.add_verified_vid(m2p.clone()); // next hop
+
+        m2.add_private_vid(m2_v);
+        m2.add_verified_vid(m1p.clone()); // previous hop
+        m2.add_verified_vid(b.clone()); // final
+
+        bob.add_private_vid(bob_v);
+        bob.add_verified_vid(a.clone()); // inner sender
+
+        // Alice routes a message to Bob through m1 then m2.
+        let layer1 = alice
+            .send_routed(
+                "did:example:alice",
+                "did:example:bob",
+                &["did:example:m1", "did:example:m2"],
+                b"hi bob",
+            )
+            .unwrap();
+
+        // m1 relays to m2.
+        let layer2 = match m1.forward_routed("did:example:m1", &layer1.bytes).unwrap() {
+            ForwardOutcome::Relay { to, message } => {
+                assert_eq!(to, "did:example:m2");
+                message
+            }
+            other => panic!("m1 expected Relay, got {other:?}"),
+        };
+
+        // m2 is the last hop: it delivers the opaque inner to bob.
+        let inner = match m2.forward_routed("did:example:m2", &layer2.bytes).unwrap() {
+            ForwardOutcome::Deliver { to, message } => {
+                assert_eq!(to, "did:example:bob");
+                message
+            }
+            other => panic!("m2 expected Deliver, got {other:?}"),
+        };
+
+        // Bob recovers the plaintext; only he could (the inner was sealed to him).
+        let received = bob.receive("did:example:bob", &inner).unwrap();
+        assert_eq!(received.payload, b"hi bob");
+        assert_eq!(received.sender, "did:example:alice");
+        assert_eq!(received.message_type, MessageType::Direct);
     }
 
     #[test]

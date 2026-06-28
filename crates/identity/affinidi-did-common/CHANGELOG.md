@@ -4,6 +4,31 @@ All notable changes to `affinidi-did-common` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] - 2026-06-23
+
+### Fixed
+
+- `did:peer` resolution dropped **non-DIDComm service types**:
+  `PeerService::to_did_service` hardcoded the resolved service type to
+  `DIDCommMessaging` regardless of the encoded `t` value, so a `did:peer` that
+  published e.g. a TSP transport endpoint resolved to a `DIDCommMessaging` service
+  and the original type was lost. The service type is now expanded properly: `dm`
+  → `DIDCommMessaging`, `tsp` → `TSPTransport`, and any other type is preserved
+  verbatim. Existing `dm` services are unchanged.
+
+## [0.3.8] - 2026-06-22
+
+### Fixed
+
+- `DocumentExt::find_authentication(None)` returned the document's **`keyAgreement`**
+  ids instead of its **`authentication`** ids (a copy-paste of `find_key_agreement`).
+  Callers asking for the default authentication keys got key-agreement (X25519)
+  keys. Fixed to return `authentication`, and the regression test now asserts the
+  returned ids rather than only their count (the old count-only assertion passed
+  coincidentally because the test document had equal numbers of each). This also
+  fixes `affinidi-messaging-sdk`'s DIDComm signed-message verification for the
+  bare-DID `kid` case, which depends on this method.
+
 ## [0.3.7] - 2026-06-14
 
 ### Changed

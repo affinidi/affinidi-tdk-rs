@@ -2,11 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use affinidi_messaging_sdk::errors::ATMError;
-use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, MediatorACLSet};
+use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use sha256::digest;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
+use trust_tasks_rs::specs::messaging::acl;
 
 use super::listener::Listener;
 use crate::error::{DIDCommServiceError, StartupError};
@@ -26,22 +27,24 @@ impl Listener {
         let atm = self.atm()?;
         let profile = self.profile()?;
 
-        let account_info = atm
-            .mediator()
-            .account_get(profile, None)
-            .await
-            .map_err(StartupError::AccountInfo)?
-            .ok_or(StartupError::NoAccountInfo)?;
-
-        let mut acls = MediatorACLSet::from_u64(account_info.acls);
-
         info!(acl_mode = ?acl_mode, "ACL mode configured");
 
-        acls.set_access_list_mode(acl_mode.clone(), true, false)
-            .map_err(|e| StartupError::AclMode(e.into()))?;
-
-        atm.mediator()
-            .acls_set(profile, &digest(&profile.inner.did), &acls)
+        // A partial ACL update setting only the access-list mode; the mediator's
+        // self-service gating applies it (the rest of the ACL is left unchanged).
+        let mode = match acl_mode {
+            AccessListModeType::ExplicitAllow => {
+                acl::set::v0_1::MediatorAclAccessListMode::ExplicitAllow
+            }
+            AccessListModeType::ExplicitDeny => {
+                acl::set::v0_1::MediatorAclAccessListMode::ExplicitDeny
+            }
+        };
+        let acl = acl::set::v0_1::MediatorAcl {
+            access_list_mode: Some(mode),
+            ..Default::default()
+        };
+        atm.trust_tasks()
+            .acl_set(profile, digest(&profile.inner.did), acl)
             .await
             .map_err(StartupError::AclApply)?;
 

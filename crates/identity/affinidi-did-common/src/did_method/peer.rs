@@ -367,9 +367,20 @@ impl PeerService {
             }
         };
 
+        // Expand the abbreviated did:peer service type. `dm` is the spec-defined
+        // abbreviation for `DIDCommMessaging`; we likewise treat `tsp` as
+        // `TSPTransport`. Any other value is preserved verbatim — previously every
+        // service type was silently rewritten to `DIDCommMessaging`, which dropped
+        // custom service entries (e.g. a TSP transport endpoint).
+        let type_ = match self.type_.as_str() {
+            "dm" => "DIDCommMessaging".to_string(),
+            "tsp" => "TSPTransport".to_string(),
+            other => other.to_string(),
+        };
+
         Ok(crate::service::Service {
             id: Some(id),
-            type_: vec!["DIDCommMessaging".to_string()],
+            type_: vec![type_],
             service_endpoint,
             property_set: HashMap::new(),
         })
@@ -605,6 +616,33 @@ mod tests {
         let did_svc = svc.to_did_service("did:peer:2abc", 0).unwrap();
         assert_eq!(did_svc.id.unwrap().as_str(), "did:peer:2abc#service");
         assert_eq!(did_svc.type_, vec!["DIDCommMessaging"]);
+    }
+
+    #[test]
+    fn to_did_service_expands_service_type() {
+        // `dm` → DIDCommMessaging, `tsp` → TSPTransport, and any other type is
+        // preserved verbatim (regression: every type was once forced to
+        // DIDCommMessaging, dropping custom service entries).
+        let svc = |t: &str| PeerService {
+            type_: t.to_string(),
+            endpoint: PeerServiceEndpoint::Uri("https://example.com".to_string()),
+            id: None,
+        };
+        assert_eq!(
+            svc("dm").to_did_service("did:peer:2abc", 0).unwrap().type_,
+            vec!["DIDCommMessaging"]
+        );
+        assert_eq!(
+            svc("tsp").to_did_service("did:peer:2abc", 0).unwrap().type_,
+            vec!["TSPTransport"]
+        );
+        assert_eq!(
+            svc("CustomType")
+                .to_did_service("did:peer:2abc", 0)
+                .unwrap()
+                .type_,
+            vec!["CustomType"]
+        );
     }
 
     #[test]

@@ -550,6 +550,11 @@ impl MediatorStore for MemoryStore {
             to_address: Some(record.to_did_hash.clone()),
             from_address: record.from_did_hash.clone(),
             msg: Some(record.body.clone()),
+            protocol: Some(
+                affinidi_messaging_mediator_common::types::messages::MessageProtocol::detect(
+                    &record.body,
+                ),
+            ),
         }))
     }
 

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.18.12"
+version = "0.18.39"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -12,11 +12,38 @@ readme = "README.md"
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+## Trust Spanning Protocol (TSP) client support — the `atm.tsp()` ops (pack / send /
+## send_routed / send_nested / send_control / unpack), alongside the always-on DIDComm
+## support. Supported; pure-TSP client auth (`/tsp/authenticate`) is still pending, so
+## today `atm.tsp()` reuses the profile's DIDComm-authenticated session.
+tsp = [
+  "dep:affinidi-tsp",
+  "dep:async-trait",
+  "dep:affinidi-did-resolver-cache-sdk",
+  "dep:reqwest",
+]
+
 [dependencies]
 # Affinidi Crates
 affinidi-tdk-common = "0.6"
 affinidi-crypto = { version = "0.2", features = ["jose"] }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15" }
+## Trust Tasks framework — typed request/response documents for the messaging
+## tasks (ping / account / acl / access-list), carried over the binding envelope.
+trust-tasks-rs = "0.2"
+## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
+affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
+## Async trait support for the pluggable TSP `RelationshipStore` (tsp feature only).
+async-trait = { version = "0.1", optional = true }
+## Pure-TSP auth handler needs the resolver-cache + HTTP client types named by the
+## `CustomAuthHandler` trait it implements (tsp feature only).
+affinidi-did-resolver-cache-sdk = { version = "0.8", optional = true }
+reqwest = { version = "0.13", features = [
+  "rustls",
+  "json",
+], optional = true }
 ## Source of truth for the mediator protocol vocabulary (ACLs, accounts,
 ## message types, problem reports). The SDK re-exports these so existing
 ## call sites continue to resolve their old paths.

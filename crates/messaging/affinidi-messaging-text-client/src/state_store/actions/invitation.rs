@@ -1,10 +1,5 @@
 use affinidi_messaging_didcomm::message::{Attachment, Message};
-use affinidi_messaging_sdk::{
-    ATM,
-    messages::SuccessResponse,
-    profiles::ATMProfile,
-    protocols::mediator::acls::{AccessListModeType, MediatorACLSet},
-};
+use affinidi_messaging_sdk::{ATM, messages::SuccessResponse, profiles::ATMProfile};
 use affinidi_tdk::dids::{DID as DIDKey, KeyType};
 use affinidi_tdk::secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
@@ -23,6 +18,8 @@ use std::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::warn;
+use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
+use trust_tasks_rs::specs::messaging::acl;
 use uuid::Uuid;
 
 use crate::state_store::{
@@ -197,32 +194,34 @@ pub async fn send_invitation_accept(
     let accept_temp_profile = atm.profile_add(&accept_temp_profile, true).await?;
 
     // Set up the ACL for the temporary profile. Allow the invite DID to send messages to this DID
-    let Some(accept_temp_profile_info) = atm
-        .mediator()
+    let accept_temp_profile_info = match atm
+        .trust_tasks()
         .account_get(&accept_temp_profile, None)
-        .await?
-    else {
-        state.invite_popup.messages.push(Line::from(Span::styled(
-            "Failed to get temp invite response profile info from mediator",
-            Style::default().fg(Color::Red),
-        )));
-        state_tx.send(state.clone())?;
+        .await
+    {
+        Ok(info) => info,
+        Err(e) => {
+            state.invite_popup.messages.push(Line::from(Span::styled(
+                "Failed to get temp invite response profile info from mediator",
+                Style::default().fg(Color::Red),
+            )));
+            state_tx.send(state.clone())?;
 
-        warn!("Failed to get temp invite response profile info from mediator");
-        return Err(anyhow::anyhow!(
-            "Failed to get temp invite response profile info from mediator"
-        ));
+            warn!("Failed to get temp invite response profile info from mediator: {e}");
+            return Err(anyhow::anyhow!(
+                "Failed to get temp invite response profile info from mediator"
+            ));
+        }
     };
 
     info!("temp invite response profile info: {accept_temp_profile_info:?}");
-    let accept_temp_profile_acl_flags = MediatorACLSet::from_u64(accept_temp_profile_info.acls);
-    if let AccessListModeType::ExplicitAllow =
-        accept_temp_profile_acl_flags.get_access_list_mode().0
+    if accept_temp_profile_info.acl.access_list_mode
+        == Some(MediatorAclAccessListMode::ExplicitAllow)
     {
         // Add the invite DID to this profile's ACL
         match atm
-            .mediator()
-            .access_list_add(&accept_temp_profile, None, &[&digest(&invite_did)])
+            .trust_tasks()
+            .access_list_add(&accept_temp_profile, None, vec![digest(&invite_did)])
             .await
         {
             Ok(_) => {}
@@ -473,42 +472,47 @@ pub async fn create_invitation(
                         state_tx.send(state.clone())?;
 
                         // Ensure Mediator ACL set up is correctly setup
-                        let Some(profile_info) = atm.mediator().account_get(&profile, None).await?
-                        else {
-                            state.invite_popup.messages.push(Line::from(Span::styled(
-                                "Failed to get profile info from mediator",
-                                Style::default().fg(Color::Red),
-                            )));
-                            state_tx.send(state.clone())?;
+                        let profile_info = match atm.trust_tasks().account_get(&profile, None).await
+                        {
+                            Ok(info) => info,
+                            Err(e) => {
+                                state.invite_popup.messages.push(Line::from(Span::styled(
+                                    "Failed to get profile info from mediator",
+                                    Style::default().fg(Color::Red),
+                                )));
+                                state_tx.send(state.clone())?;
 
-                            warn!("Failed to get profile info from mediator");
-                            return Err(anyhow::anyhow!(
-                                "Failed to get profile info from mediator"
-                            ));
+                                warn!("Failed to get profile info from mediator: {e}");
+                                return Err(anyhow::anyhow!(
+                                    "Failed to get profile info from mediator"
+                                ));
+                            }
                         };
                         info!("Profile info: {profile_info:?}");
 
-                        let profile_acl_flags = MediatorACLSet::from_u64(profile_info.acls);
-                        if let AccessListModeType::ExplicitAllow =
-                            profile_acl_flags.get_access_list_mode().0
+                        if profile_info.acl.access_list_mode
+                            == Some(MediatorAclAccessListMode::ExplicitAllow)
                         {
-                            // Need to set invitation DID to explicit_deny
-                            if profile_acl_flags.get_access_list_mode_admin_change() {
-                                let mut new_acl = profile_acl_flags;
-                                new_acl.set_access_list_mode(
-                                    AccessListModeType::ExplicitDeny,
-                                    true,
-                                    false,
-                                )?;
-                                atm.mediator()
-                                    .acls_set(&profile, &digest(&profile.inner.did), &new_acl)
-                                    .await?;
-                            } else {
+                            // Flip the access-list mode to explicit_deny. This is a
+                            // self-service change; the mediator refuses it if this account
+                            // may not self-manage its access-list mode.
+                            let new_acl = acl::set::v0_1::MediatorAcl {
+                                access_list_mode: Some(
+                                    acl::set::v0_1::MediatorAclAccessListMode::ExplicitDeny,
+                                ),
+                                ..Default::default()
+                            };
+                            if let Err(e) = atm
+                                .trust_tasks()
+                                .acl_set(&profile, digest(&profile.inner.did), new_acl)
+                                .await
+                            {
                                 state.invite_popup.messages.push(Line::from(Span::styled(
                                     "Mediator is not allowing DID owners to change their Access List Mode! Contact support.",
                                     Style::default().fg(Color::Red),
                                 )));
                                 state_tx.send(state.clone())?;
+                                warn!("Failed to set access-list mode: {e}");
                                 return Err(anyhow::anyhow!(
                                     "Mediator is not allowing DID owners to change their Access List Mode! Contact support."
                                 ));

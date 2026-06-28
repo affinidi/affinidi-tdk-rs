@@ -11,7 +11,13 @@ Verifiable Identifiers (VIDs).
 > **Reference Implementation:** The official TSP reference implementation is
 > maintained at [github.com/trustoverip/tsp](https://github.com/trustoverip/tsp).
 > This crate provides an independent implementation tailored for the Affinidi TDK
-> ecosystem.
+> ecosystem. It does **not** currently wire-interoperate with the reference
+> (`tsp-sdk`) — see the [interop status](../../../docs/tsp/interop.md) for the
+> field-by-field comparison and why interop is deferred.
+
+> **Using TSP through the TDK?** This crate is the low-level protocol. For sending,
+> receiving, relationships, WebSocket delivery, and authentication via the
+> messaging SDK (`atm.tsp()`), see the **[TSP cookbook](../../../docs/tsp/cookbook.md)**.
 
 ## Feature Flags
 
@@ -24,7 +30,7 @@ Verifiable Identifiers (VIDs).
 
 | Operation | Algorithm |
 |---|---|
-| Authenticated encryption | HPKE-Auth (DHKEM(X25519) + HKDF-SHA256 + AES-128-GCM) per [RFC 9180](https://www.rfc-editor.org/rfc/rfc9180) |
+| Authenticated encryption | HPKE-Auth (DHKEM(X25519) + HKDF-SHA256 + ChaCha20Poly1305) per [RFC 9180](https://www.rfc-editor.org/rfc/rfc9180) |
 | Signing | Ed25519 |
 | Message digest | BLAKE2s-256 |
 | Encoding | CESR (Composable Event Streaming Representation) |

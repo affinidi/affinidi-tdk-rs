@@ -10,6 +10,40 @@ use std::fmt::Display;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+/// The wire protocol of a stored message.
+///
+/// Surfaced in fetch/pickup responses so a client can hand each message to the
+/// right handler without inspecting it itself — fetch your messages and let the
+/// metadata tell you what each one is. New protocols can be added over time
+/// without breaking consumers: it is `#[non_exhaustive]`, so match with a
+/// wildcard arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum MessageProtocol {
+    /// A DIDComm message (JWE / JWS).
+    DidComm,
+    /// A Trust Spanning Protocol message (CESR qb64).
+    Tsp,
+    /// An unrecognised or future protocol.
+    Other,
+}
+
+impl MessageProtocol {
+    /// Detect the protocol of a stored message from its on-the-wire form. TSP is
+    /// stored as CESR qb64 text (begins `1AAF`); a DIDComm JWE/JWS is JSON (`{`)
+    /// or compact (`ey`). Anything else is [`MessageProtocol::Other`].
+    pub fn detect(message: &str) -> Self {
+        if message.starts_with("1AAF") {
+            MessageProtocol::Tsp
+        } else if message.starts_with('{') || message.starts_with("ey") {
+            MessageProtocol::DidComm
+        } else {
+            MessageProtocol::Other
+        }
+    }
+}
+
 /// A list of messages stored for a given DID.
 ///
 /// - `msg_id`        : The unique identifier of the message
@@ -20,6 +54,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 /// - `to_address`    : Address the message was sent to
 /// - `from_address`  : Address the message was sent from (if applicable)
 /// - `msg`           : The message itself
+/// - `protocol`      : The detected wire protocol of `msg` (DIDComm, TSP, …)
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MessageListElement {
@@ -36,6 +71,16 @@ pub struct MessageListElement {
     pub from_address: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub msg: Option<String>,
+    /// The detected wire protocol of `msg`, set server-side on pickup so clients
+    /// don't have to inspect the message. `None` when there is no body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<MessageProtocol>,
+}
+impl MessageListElement {
+    /// Populate [`protocol`](Self::protocol) by detecting it from the message body.
+    pub fn detect_protocol_in_place(&mut self) {
+        self.protocol = self.msg.as_deref().map(MessageProtocol::detect);
+    }
 }
 impl GenericDataStruct for MessageListElement {}
 
@@ -119,5 +164,34 @@ impl Default for FetchOptions {
             start_id: None,
             delete_policy: FetchDeletePolicy::DoNotDelete,
         }
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::MessageProtocol;
+
+    #[test]
+    fn detect_classifies_the_wire_protocol() {
+        // TSP is stored as CESR qb64 text (begins `1AAF`).
+        assert_eq!(
+            MessageProtocol::detect("1AAFsomeqb64"),
+            MessageProtocol::Tsp
+        );
+        // DIDComm: JSON JWE or compact JWS/JWE.
+        assert_eq!(
+            MessageProtocol::detect(r#"{"protected":"..."}"#),
+            MessageProtocol::DidComm
+        );
+        assert_eq!(
+            MessageProtocol::detect("eyJhbGciOiJ"),
+            MessageProtocol::DidComm
+        );
+        // Anything else is Other.
+        assert_eq!(
+            MessageProtocol::detect("not a message"),
+            MessageProtocol::Other
+        );
+        assert_eq!(MessageProtocol::detect(""), MessageProtocol::Other);
     }
 }

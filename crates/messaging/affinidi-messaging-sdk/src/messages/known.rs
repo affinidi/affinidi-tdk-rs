@@ -17,6 +17,7 @@ pub enum MessageType {
     MessagePickupLiveDeliveryChange, // Message Pickup 3.0 Live-delivery-change (Streaming enabled)
     ProblemReport,                   // Problem Report Protocol
     TrustPing,                       // Trust Ping Protocol
+    TrustTaskEnvelope,               // Trust Tasks framework — DIDComm binding envelope
     DiscoverFeaturesQueries,         // Discover Features 2.0 Protocol - Queries
     DiscoverFeaturesDisclose,        // Discover Features 2.0 Protocol - Disclose
     Other(String),                   // Other message type
@@ -28,6 +29,7 @@ impl FromStr for MessageType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "https://didcomm.org/trust-ping/2.0/ping" => Ok(Self::TrustPing),
+            "https://trusttasks.org/binding/didcomm/0.1/envelope" => Ok(Self::TrustTaskEnvelope),
             "https://affinidi.com/atm/1.0/authenticate" => Ok(Self::AffinidiAuthenticate),
             "https://affinidi.com/atm/1.0/authenticate/refresh" => {
                 Ok(Self::AffinidiAuthenticateRefresh)

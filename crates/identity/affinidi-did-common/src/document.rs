@@ -59,7 +59,7 @@ impl DocumentExt for Document {
                 vec![]
             }
         } else {
-            self.key_agreement.iter().map(|ka| ka.get_id()).collect()
+            self.authentication.iter().map(|a| a.get_id()).collect()
         }
     }
 
@@ -244,7 +244,14 @@ mod tests {
         assert!(!doc.contains_authentication("did:test:1234#auth_missing"));
         assert!(doc.contains_authentication("did:test:1234#auth_vm"));
 
-        assert_eq!(doc.find_authentication(None).len(), 2);
+        // `None` returns the *authentication* ids — not keyAgreement (regression
+        // guard: this method was once a copy-paste of `find_key_agreement`).
+        let all = doc.find_authentication(None);
+        assert_eq!(all.len(), 2);
+        assert!(all.contains(&"did:test:1234#auth_ref"));
+        assert!(all.contains(&"did:test:1234#auth_vm"));
+        assert!(!all.contains(&"did:test:1234#key_ref"));
+        assert!(!all.contains(&"did:test:1234#key_vm"));
         assert_eq!(
             doc.find_authentication(Some("did:test:1234#auth_ref"))
                 .len(),

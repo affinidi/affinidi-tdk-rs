@@ -6,3 +6,4 @@ pub(crate) mod mediator;
 pub mod message_pickup;
 pub mod ping;
 pub mod routing;
+pub mod trust_tasks;

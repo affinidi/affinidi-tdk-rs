@@ -76,7 +76,7 @@ pub async fn inbox_fetch_handler(
             }
 
         // Fetch messages if possible
-        let results = state.database.fetch_messages(&session.session_id, &session.did_hash, &body).await.map_err(|e| {MediatorError::problem_with_log(
+        let mut results = state.database.fetch_messages(&session.session_id, &session.did_hash, &body).await.map_err(|e| {MediatorError::problem_with_log(
             14, session.session_id.clone(), None,
             ProblemReportSorter::Error, ProblemReportScope::Protocol,
             "me.res.storage.error",
@@ -84,6 +84,13 @@ pub async fn inbox_fetch_handler(
             vec![e.to_string()], StatusCode::SERVICE_UNAVAILABLE,
             format!("Database transaction error: {e}"),
         )})?;
+
+        // Tag each message's wire protocol (DIDComm / TSP / …) so the client can
+        // route it without inspecting the body itself.
+        results
+            .success
+            .iter_mut()
+            .for_each(|m| m.detect_protocol_in_place());
 
         Ok((
             StatusCode::OK,

@@ -578,6 +578,7 @@ impl Mediator {
 impl<'a> MediatorOps<'a> {
     /// Get the ACL's set for a list of DIDs
     /// See [`Mediator::acls_get`] for full documentation
+    #[deprecated(since = "0.18.31", note = "use `atm.trust_tasks().acl_get()` instead")]
     pub async fn acls_get(
         &self,
         profile: &Arc<ATMProfile>,
@@ -588,6 +589,7 @@ impl<'a> MediatorOps<'a> {
 
     /// Set the ACL's for a DID
     /// See [`Mediator::acls_set`] for full documentation
+    #[deprecated(since = "0.18.31", note = "use `atm.trust_tasks().acl_set()` instead")]
     pub async fn acls_set(
         &self,
         profile: &Arc<ATMProfile>,
@@ -601,6 +603,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Access List List: Lists hash of DID's in the Access Control List for a given DID
     /// See [`Mediator::access_list_list`] for full documentation
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().access_list_list()` instead"
+    )]
     pub async fn access_list_list(
         &self,
         profile: &Arc<ATMProfile>,
@@ -614,6 +620,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Access List Add: Adds one or more DIDs to a Access Control List for a given DID
     /// See [`Mediator::access_list_add`] for full documentation
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().access_list_add()` instead"
+    )]
     pub async fn access_list_add(
         &self,
         profile: &Arc<ATMProfile>,
@@ -627,6 +637,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Access List Remove: Removes one or more DIDs from a Access Control List for a given DID
     /// See [`Mediator::access_list_remove`] for full documentation
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().access_list_remove()` instead"
+    )]
     pub async fn access_list_remove(
         &self,
         profile: &Arc<ATMProfile>,
@@ -640,6 +654,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Access List Clear: Clears Access Control List for a given DID
     /// See [`Mediator::access_list_clear`] for full documentation
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().access_list_clear()` instead"
+    )]
     pub async fn access_list_clear(
         &self,
         profile: &Arc<ATMProfile>,
@@ -652,6 +670,10 @@ impl<'a> MediatorOps<'a> {
 
     /// Access List Get: Searches for one or more DID's in the Access Control List for a given DID
     /// See [`Mediator::access_list_get`] for full documentation
+    #[deprecated(
+        since = "0.18.31",
+        note = "use `atm.trust_tasks().access_list_get()` instead"
+    )]
     pub async fn access_list_get(
         &self,
         profile: &Arc<ATMProfile>,

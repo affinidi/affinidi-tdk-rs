@@ -7,7 +7,6 @@ use affinidi_messaging_didcomm::message::{Attachment, Message};
 use affinidi_messaging_sdk::ATM;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::problem_report::ProblemReport;
-use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, MediatorACLSet};
 use affinidi_messaging_sdk::protocols::message_pickup::{MessagePickup, MessagePickupStatusReply};
 use base64::prelude::*;
 use rand::RngExt;
@@ -17,6 +16,7 @@ use serde_json::json;
 use sha256::digest;
 use tracing::error;
 use tracing::{info, warn};
+use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -194,15 +194,8 @@ async fn _handle_connection_setup(
     info!("Added new profile to ATM");
 
     // Add the remote secure DID to the our new secure profile
-    let our_new_profile_info = match atm.mediator().account_get(&our_new_profile, None).await {
-        Ok(Some(info)) => info,
-        Ok(None) => {
-            warn!(
-                "No profile info found for local secure DID ({})",
-                &our_new_profile.inner.did
-            );
-            return;
-        }
+    let our_new_profile_info = match atm.trust_tasks().account_get(&our_new_profile, None).await {
+        Ok(info) => info,
         Err(e) => {
             warn!(
                 "Failed to get temp invite response profile info from mediator: {}",
@@ -212,12 +205,11 @@ async fn _handle_connection_setup(
         }
     };
 
-    let our_new_profile_acl_flags = MediatorACLSet::from_u64(our_new_profile_info.acls);
-    if let AccessListModeType::ExplicitAllow = our_new_profile_acl_flags.get_access_list_mode().0 {
+    if our_new_profile_info.acl.access_list_mode == Some(MediatorAclAccessListMode::ExplicitAllow) {
         // Add the new remote secure DID to our new secure DID
         match atm
-            .mediator()
-            .access_list_add(&our_new_profile, None, &[&digest(&remote_secure_did)])
+            .trust_tasks()
+            .access_list_add(&our_new_profile, None, vec![digest(&remote_secure_did)])
             .await
         {
             Ok(_) => {}
@@ -678,34 +670,28 @@ pub async fn handle_message(
             };
 
             // Set up the ACL for the remote secure DID.
-            let local_secure_profile_info =
-                match atm.mediator().account_get(&our_secure_profile, None).await {
-                    Ok(Some(info)) => info,
-                    Ok(None) => {
-                        warn!(
-                            "No profile info found for local secure DID ({})",
-                            &profile.inner.did
-                        );
-                        return;
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to get local secure profile info from mediator: {}",
-                            e
-                        );
-                        return;
-                    }
-                };
+            let local_secure_profile_info = match atm
+                .trust_tasks()
+                .account_get(&our_secure_profile, None)
+                .await
+            {
+                Ok(info) => info,
+                Err(e) => {
+                    warn!(
+                        "Failed to get local secure profile info from mediator: {}",
+                        e
+                    );
+                    return;
+                }
+            };
 
-            let local_secure_profile_acl_flags =
-                MediatorACLSet::from_u64(local_secure_profile_info.acls);
-            if let AccessListModeType::ExplicitAllow =
-                local_secure_profile_acl_flags.get_access_list_mode().0
+            if local_secure_profile_info.acl.access_list_mode
+                == Some(MediatorAclAccessListMode::ExplicitAllow)
             {
                 // Add the remote secure DID to this profile's ACL
                 match atm
-                    .mediator()
-                    .access_list_add(&our_secure_profile, None, &[&digest(&remote_secure_did)])
+                    .trust_tasks()
+                    .access_list_add(&our_secure_profile, None, vec![digest(&remote_secure_did)])
                     .await
                 {
                     Ok(_) => {

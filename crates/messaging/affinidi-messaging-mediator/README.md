@@ -32,7 +32,7 @@ cargo run --bin mediator-setup
 The interactive TUI guides you through:
 
 1. **Deployment type** — local dev, headless server, or container
-2. **Protocol** — DIDComm v2 (recommended) or TSP (experimental)
+2. **Protocol** — DIDComm v2, TSP, or both (dual-protocol)
 3. **DID configuration** — did:peer, did:webvh, or VTA-managed
 4. **Key storage** — file (`?encrypt=1` opt-in), OS keyring, AWS
    Secrets Manager, GCP Secret Manager, Azure Key Vault, or
@@ -119,7 +119,19 @@ least one secret backend must be enabled. Defaults are
 | Feature | Default | Description |
 |---|---|---|
 | `didcomm` | Yes | DIDComm v2 — production protocol |
-| `tsp` | No | Trust Spanning Protocol — experimental |
+| `tsp` | No | Trust Spanning Protocol — supported; run with `didcomm` (dual-protocol) |
+
+> **TSP endpoint advertisement.** For other mediators to route/forward TSP messages
+> to this one, this mediator's DID document must advertise a `TSPTransport` service
+> pointing at its inbound endpoint. With the `tsp` feature enabled:
+> - **did:web** — added automatically at startup, mirroring the `DIDCommMessaging`
+>   service endpoint (TSP and DIDComm share `/inbound`). No action needed.
+> - **did:peer / did:webvh** — the document is bound to the DID, so add the
+>   `TSPTransport` service **when generating the DID**. The mediator logs a startup
+>   warning if TSP is enabled but no `TSPTransport` service is advertised.
+
+For end-to-end TSP usage (sending, receiving, relationships, WebSocket, auth), see
+the **[TSP cookbook](../../../docs/tsp/cookbook.md)**.
 
 ### Storage backend (pick one)
 

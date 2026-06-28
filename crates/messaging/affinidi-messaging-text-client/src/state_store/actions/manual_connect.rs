@@ -1,10 +1,6 @@
 use super::chat_list::ChatStatus;
 use crate::state_store::State;
-use affinidi_messaging_sdk::{
-    ATM,
-    profiles::ATMProfile,
-    protocols::mediator::acls::{AccessListModeType, MediatorACLSet},
-};
+use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use affinidi_tdk::{
     dids::{DID, KeyType, PeerKeyRole},
     secrets_resolver::SecretsResolver,
@@ -12,6 +8,7 @@ use affinidi_tdk::{
 use anyhow::anyhow;
 use sha256::digest;
 use tracing::warn;
+use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
 
 pub async fn manual_connect_setup(
     state: &mut State,
@@ -48,36 +45,28 @@ pub async fn manual_connect_setup(
 
     // Setup Access List Setup
     // Add the remote secure DID to the our new secure profile
-    let profile_info = match atm.mediator().account_get(&profile, None).await {
-        Ok(Some(info)) => info,
-        Ok(None) => {
-            warn!("No profile info found ({})", &profile.inner.did);
-            return Err(anyhow!("No profile info found"));
-        }
+    let profile_info = match atm.trust_tasks().account_get(&profile, None).await {
+        Ok(info) => info,
         Err(e) => {
             warn!("Failed to get profile info from mediator: {}", e);
             return Err(anyhow!("Failed to get profile info from mediator: {e}"));
         }
     };
 
-    let profile_acl_flags = MediatorACLSet::from_u64(profile_info.acls);
-    if let AccessListModeType::ExplicitAllow = profile_acl_flags.get_access_list_mode().0 {
+    if profile_info.acl.access_list_mode == Some(MediatorAclAccessListMode::ExplicitAllow) {
         // Add the remote secure DID to our secure DID
-        match atm
-            .mediator()
-            .access_list_add(&profile, None, &[&digest(remote_did)])
+        if let Err(e) = atm
+            .trust_tasks()
+            .access_list_add(&profile, None, vec![digest(remote_did)])
             .await
         {
-            Ok(_) => {}
-            Err(e) => {
-                warn!(
-                    "Failed to add {} to ACL of our secure profile: {}",
-                    remote_did, e
-                );
-                return Err(anyhow!(
-                    "Failed to add {remote_did} to ACL of our secure profile: {e}"
-                ));
-            }
+            warn!(
+                "Failed to add {} to ACL of our secure profile: {}",
+                remote_did, e
+            );
+            return Err(anyhow!(
+                "Failed to add {remote_did} to ACL of our secure profile: {e}"
+            ));
         }
     }
 

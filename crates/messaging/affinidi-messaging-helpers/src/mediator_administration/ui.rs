@@ -1,12 +1,11 @@
 //! UI Related functions
-use affinidi_messaging_sdk::{
-    ATM, profiles::ATMProfile, protocols::mediator::accounts::AccountType,
-};
+use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use console::style;
 use dialoguer::{Confirm, Input, MultiSelect, Select, theme::ColorfulTheme};
 use regex::Regex;
 use sha256::digest;
-use std::{slice, sync::Arc};
+use std::sync::Arc;
+use trust_tasks_rs::specs::messaging::admin::list::v0_1::AccountType;
 
 use crate::SharedConfig;
 
@@ -49,26 +48,26 @@ pub(crate) async fn administration_accounts_menu(
 
 /// List first 100 Administration DIDs
 pub(crate) async fn list_admins(atm: &ATM, profile: &Arc<ATMProfile>, config: &SharedConfig) {
-    match atm.mediator().list_admins(profile, None, None).await {
-        Ok(admins) => {
+    match atm.trust_tasks().admin_list(profile, None, None).await {
+        Ok(response) => {
             println!(
                 "{}",
                 style("Listing Administration DIDs (SHA256 Hashed DID's). NOTE: Will only list first 100 admin accounts!").green()
             );
 
-            for (idx, admin) in admins.accounts.iter().enumerate() {
+            for (idx, admin) in response.admins.iter().enumerate() {
                 print!(
                     "  {}",
-                    style(format!("{}: {}", idx, admin.did_hash)).yellow(),
+                    style(format!("{}: {}", idx, admin.did.as_str())).yellow(),
                 );
-                let (role, color) = match admin._type {
-                    AccountType::Mediator => (admin._type.to_string(), 27_u8),
-                    AccountType::RootAdmin => (admin._type.to_string(), 127_u8),
-                    AccountType::Admin => (admin._type.to_string(), 129_u8),
+                let (role, color) = match admin.account_type {
+                    AccountType::Mediator => (admin.account_type.to_string(), 27_u8),
+                    AccountType::RootAdmin => (admin.account_type.to_string(), 127_u8),
+                    AccountType::Admin => (admin.account_type.to_string(), 129_u8),
                     _ => ("Unknown".into(), 1_u8),
                 };
                 print!(" {}", style(format!("({role})")).color256(color));
-                if admin.did_hash.as_bytes() == config.our_admin_hash.as_bytes() {
+                if admin.did.as_str() == config.our_admin_hash.as_str() {
                     print!(" {}", style("(our Admin account)").color256(208));
                 }
 
@@ -108,27 +107,20 @@ pub(crate) async fn add_admin(atm: &ATM, profile: &Arc<ATMProfile>, theme: &Colo
         .unwrap()
     {
         match atm
-            .mediator()
-            .add_admins(profile, slice::from_ref(&input))
+            .trust_tasks()
+            .admin_add(profile, vec![input.clone()])
             .await
         {
-            Ok(result) => {
-                if result == 1 {
-                    println!(
-                        "{}",
-                        style(format!("Successfully added DID ({})", &input)).green()
-                    );
-                    println!(
-                        "  {}{}",
-                        style("DID Hash: ").green(),
-                        style(digest(&input)).yellow()
-                    );
-                } else {
-                    println!(
-                        "{}",
-                        style(format!("DID ({}) already exists", &input)).color256(208)
-                    );
-                }
+            Ok(_admins) => {
+                println!(
+                    "{}",
+                    style(format!("DID ({}) is now an administrator", &input)).green()
+                );
+                println!(
+                    "  {}{}",
+                    style("DID Hash: ").green(),
+                    style(digest(&input)).yellow()
+                );
             }
             Err(e) => {
                 println!("{}", style(format!("Error: {e}")).red());
@@ -143,17 +135,17 @@ pub(crate) async fn strip_admins(
     config: &SharedConfig,
     theme: &ColorfulTheme,
 ) {
-    match atm.mediator().list_admins(profile, None, None).await {
-        Ok(admins) => {
+    match atm.trust_tasks().admin_list(profile, None, None).await {
+        Ok(response) => {
             // remove the mediator administrator account from the list
-            let admins: Vec<String> = admins
-                .accounts
+            let admins: Vec<String> = response
+                .admins
                 .iter()
                 .filter_map(|x| {
-                    if x.did_hash.as_bytes() != config.our_admin_hash.as_bytes()
-                        && x.did_hash.as_bytes() != config.mediator_did_hash.as_bytes()
+                    if x.did.as_str() != config.our_admin_hash.as_str()
+                        && x.did.as_str() != config.mediator_did_hash.as_str()
                     {
-                        Some(x.did_hash.clone())
+                        Some(x.did.as_str().to_string())
                     } else {
                         None
                     }
@@ -195,11 +187,12 @@ pub(crate) async fn strip_admins(
                     .iter()
                     .map(|&idx| admins[idx].clone())
                     .collect::<Vec<_>>();
-                match atm.mediator().strip_admins(profile, &admins).await {
+                match atm.trust_tasks().admin_strip(profile, admins).await {
                     Ok(result) => {
                         println!(
                             "{}",
-                            style(format!("Stripped admin rights from {result} DIDs")).green()
+                            style(format!("Stripped admin rights from {} DIDs", result.len()))
+                                .green()
                         );
                     }
                     Err(e) => {

@@ -22,6 +22,11 @@
 
 pub mod types;
 
+/// `did:webvh` → `did:web` document rewriting. Pure (`serde_json` only),
+/// always built: shared by the mediator runtime (serving `did.json`) and
+/// the `mediator-setup` wizard (writing the `did-web.json` artefact).
+pub mod did_web;
+
 #[cfg(feature = "server")]
 pub mod circuit_breaker;
 /// Database wiring: the lean `DatabaseConfig` serde struct is always

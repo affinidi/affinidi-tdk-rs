@@ -4,25 +4,26 @@
 
 use crate::SharedConfig;
 use affinidi_messaging_helpers::common::did::manually_enter_did_or_hash;
-use affinidi_messaging_sdk::{
-    ATM,
-    profiles::ATMProfile,
-    protocols::mediator::{
-        accounts::Account,
-        acls::{AccessListModeType, MediatorACLSet},
-    },
-};
+use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use console::style;
 use dialoguer::{MultiSelect, Select, theme::ColorfulTheme};
 use std::sync::Arc;
+use trust_tasks_rs::specs::messaging::{account, acl};
+
+/// Convert a partial / per-module `MediatorAcl` into the canonical
+/// `account::get::v0_1::MediatorAcl` we hold on the account across the screen.
+fn to_get_acl<T: serde::Serialize>(acl: &T) -> account::get::v0_1::MediatorAcl {
+    serde_json::from_value(serde_json::to_value(acl).expect("serialize"))
+        .expect("messaging MediatorAcl types share one schema")
+}
 
 pub(crate) async fn manage_account_acls(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
     mediator_config: &SharedConfig,
-    account: &Account,
-) -> Result<Account, Box<dyn std::error::Error>> {
+    account: &account::get::v0_1::Account,
+) -> Result<account::get::v0_1::Account, Box<dyn std::error::Error>> {
     let selections = &[
         "Modify ACL Flags",
         "Access List - List",
@@ -37,19 +38,19 @@ pub(crate) async fn manage_account_acls(
     loop {
         println!();
         println!(
-            "{} {}  {} {:064b} {} {}",
+            "{} {}  {} {} {} {}",
             style("Selected DID: ").yellow(),
-            style(&account.did_hash).color256(208),
+            style(account.did.as_str()).color256(208),
             style("ACL:").yellow(),
-            style(account.acls).blue().bold(),
+            style(format!("{:?}", account.acl)).blue().bold(),
             style("Access List Count:").yellow(),
-            style(account.access_list_count).blue().bold()
+            style(account.access_list_count.unwrap_or(0)).blue().bold()
         );
 
         println!(
             "{} {:<12} {} {} {} {}",
             style("Selected DID Account Type:").yellow(),
-            style(&account._type.to_string()).blue().bold(),
+            style(account.account_type.to_string()).blue().bold(),
             style("Mediator ACL Mode:").yellow(),
             style(&mediator_config.acl_mode).blue().bold(),
             style("Default ACL:").yellow(),
@@ -73,9 +74,7 @@ pub(crate) async fn manage_account_acls(
         match selection {
             0 => {
                 // Modify ACL Flags
-                account.acls = _modify_acl_flags(atm, profile, theme, &account)
-                    .await?
-                    .to_u64();
+                account.acl = _modify_acl_flags(atm, profile, theme, &account).await?;
             }
             1 => {
                 // Access List - List
@@ -87,13 +86,18 @@ pub(crate) async fn manage_account_acls(
                     .await?
                     .is_some()
                 {
-                    account.access_list_count += 1;
+                    account.access_list_count = Some(account.access_list_count.unwrap_or(0) + 1);
                 }
             }
             3 => {
                 // Access List - Remove
-                account.access_list_count -=
-                    _access_list_remove(atm, profile, theme, &account).await? as u32;
+                let removed = _access_list_remove(atm, profile, theme, &account).await? as u64;
+                account.access_list_count = Some(
+                    account
+                        .access_list_count
+                        .unwrap_or(0)
+                        .saturating_sub(removed),
+                );
             }
             4 => {
                 // Access List - Search
@@ -102,7 +106,7 @@ pub(crate) async fn manage_account_acls(
             5 => {
                 // Access List - Clear
                 _access_list_clear(atm, profile, &account).await?;
-                account.access_list_count = 0;
+                account.access_list_count = Some(0);
             }
             6 => break,
             _ => println!("Invalid selection"),
@@ -115,63 +119,48 @@ async fn _modify_acl_flags(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    account: &Account,
-) -> Result<MediatorACLSet, Box<dyn std::error::Error>> {
+    account: &account::get::v0_1::Account,
+) -> Result<account::get::v0_1::MediatorAcl, Box<dyn std::error::Error>> {
     println!("self-change? : If set, allows the DID to change its own ACL flag");
 
-    let acls = MediatorACLSet::from_u64(account.acls);
+    let acl = &account.acl;
     let selections = [
         (
             "Access List Mode: explicit_deny if set, explicit_allow if not",
-            acls.get_access_list_mode().0 == AccessListModeType::ExplicitDeny,
-        ),
-        (
-            "Access List Mode self-change?",
-            acls.get_access_list_mode().1,
+            acl.access_list_mode
+                == Some(account::get::v0_1::MediatorAclAccessListMode::ExplicitDeny),
         ),
         (
             "blocked - DID is blocked from authentication?",
-            acls.get_blocked(),
+            acl.blocked.unwrap_or(false),
         ),
         (
             "local - DID is able to store messages locally?",
-            acls.get_local(),
+            acl.local.unwrap_or(false),
         ),
-        ("send_messages?", acls.get_send_messages().0),
-        ("send_messages self-change?", acls.get_send_messages().1),
-        ("receive_messages?", acls.get_receive_messages().0),
+        ("send_messages?", acl.send_messages.unwrap_or(false)),
+        ("receive_messages?", acl.receive_messages.unwrap_or(false)),
         (
-            "receive_messages self-change?",
-            acls.get_receive_messages().1,
-        ),
-        ("send_forwarded_messages?", acls.get_send_forwarded().0),
-        (
-            "send_forwarded_messages self-change?",
-            acls.get_send_forwarded().1,
+            "send_forwarded_messages?",
+            acl.send_forwarded.unwrap_or(false),
         ),
         (
             "receive_forwarded_messages?",
-            acls.get_receive_forwarded().0,
+            acl.receive_forwarded.unwrap_or(false),
         ),
+        ("create_invites?", acl.create_invites.unwrap_or(false)),
+        ("anon_receive_messages?", acl.anon_receive.unwrap_or(false)),
         (
-            "receive_forwarded_messages self-change?",
-            acls.get_receive_forwarded().1,
+            "access_list self-change?",
+            acl.self_manage_list.unwrap_or(false),
         ),
-        ("create_invites?", acls.get_create_invites().0),
-        ("create_invites self-change?", acls.get_create_invites().1),
-        ("anon_receive_messages?", acls.get_anon_receive().0),
-        (
-            "anon_receive_messages self-change?",
-            acls.get_anon_receive().1,
-        ),
-        ("access_list self-change?", acls.get_self_manage_list()),
         (
             "queue send limits self-change?",
-            acls.get_self_manage_send_queue_limit(),
+            acl.self_manage_send_queue_limit.unwrap_or(false),
         ),
         (
             "queue receive limits self-change?",
-            acls.get_self_manage_receive_queue_limit(),
+            acl.self_manage_receive_queue_limit.unwrap_or(false),
         ),
     ];
 
@@ -184,74 +173,79 @@ async fn _modify_acl_flags(
         .unwrap();
 
     // convert the selection to an array of bools
-    let mut flags = [false; 19];
+    let mut flags = [false; 12];
     for s in selection {
         flags[s] = true;
     }
 
-    // Create a new ACL set from the values
-    let mut new_acls = MediatorACLSet::default();
-    let _ = new_acls.set_access_list_mode(
-        if flags[0] {
-            AccessListModeType::ExplicitDeny
+    // Build a full ACL set from the chosen flags.
+    let new_acl = acl::set::v0_1::MediatorAcl {
+        access_list_mode: Some(if flags[0] {
+            acl::set::v0_1::MediatorAclAccessListMode::ExplicitDeny
         } else {
-            AccessListModeType::ExplicitAllow
-        },
-        flags[1],
-        true,
-    );
-    new_acls.set_blocked(flags[2]);
-    new_acls.set_local(flags[3]);
-    let _ = new_acls.set_send_messages(flags[4], flags[5], true);
-    let _ = new_acls.set_receive_messages(flags[6], flags[7], true);
-    let _ = new_acls.set_send_forwarded(flags[8], flags[9], true);
-    let _ = new_acls.set_receive_forwarded(flags[10], flags[11], true);
-    let _ = new_acls.set_create_invites(flags[12], flags[13], true);
-    let _ = new_acls.set_anon_receive(flags[14], flags[15], true);
-    new_acls.set_self_manage_list(flags[16]);
-    new_acls.set_self_manage_send_queue_limit(flags[17]);
-    new_acls.set_self_manage_receive_queue_limit(flags[18]);
+            acl::set::v0_1::MediatorAclAccessListMode::ExplicitAllow
+        }),
+        blocked: Some(flags[1]),
+        local: Some(flags[2]),
+        send_messages: Some(flags[3]),
+        receive_messages: Some(flags[4]),
+        send_forwarded: Some(flags[5]),
+        receive_forwarded: Some(flags[6]),
+        create_invites: Some(flags[7]),
+        anon_receive: Some(flags[8]),
+        self_manage_list: Some(flags[9]),
+        self_manage_send_queue_limit: Some(flags[10]),
+        self_manage_receive_queue_limit: Some(flags[11]),
+        ..Default::default()
+    };
 
-    if new_acls == acls {
+    // Compare against the current ACL (both normalised to JSON; MediatorAcl
+    // does not derive PartialEq).
+    if serde_json::to_value(to_get_acl(&new_acl)).ok() == serde_json::to_value(&account.acl).ok() {
         println!("{}", style("No changes made").yellow());
-        return Ok(acls);
+        return Ok(account.acl.clone());
     }
-    println!("New ACLs: {:064b}", new_acls.to_u64());
+    println!("New ACLs: {new_acl:?}");
 
     match atm
-        .mediator()
-        .acls_set(profile, &account.did_hash, &new_acls)
+        .trust_tasks()
+        .acl_set(profile, account.did.as_str().to_string(), new_acl.clone())
         .await
     {
-        Ok(_) => println!("{}", style("ACLs updated").green()),
-        Err(e) => println!("{}", style(format!("Error updating ACLs: {e}")).red()),
+        Ok(updated) => {
+            println!("{}", style("ACLs updated").green());
+            Ok(to_get_acl(&updated))
+        }
+        Err(e) => {
+            println!("{}", style(format!("Error updating ACLs: {e}")).red());
+            Ok(to_get_acl(&new_acl))
+        }
     }
-
-    Ok(new_acls)
 }
 
 async fn _access_list_list(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    account: &Account,
+    account: &account::get::v0_1::Account,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cursor: Option<u64> = None;
+    let mut cursor: Option<String> = None;
     loop {
         let list = atm
-            .mediator()
-            .access_list_list(profile, Some(&account.did_hash), cursor)
+            .trust_tasks()
+            .access_list_list(
+                profile,
+                Some(account.did.as_str().to_string()),
+                cursor,
+                None,
+            )
             .await?;
 
-        for hash in list.did_hashes {
-            println!("{}", style(hash).blue());
+        for hash in &list.entries {
+            println!("{}", style(hash.as_str()).blue());
         }
 
-        if let Some(_cursor) = list.cursor {
-            if _cursor == 0 {
-                break;
-            } else {
-                cursor = Some(_cursor);
-            }
+        if let Some(next_cursor) = list.next_cursor {
+            cursor = Some(next_cursor.to_string());
         } else {
             break;
         }
@@ -263,11 +257,15 @@ async fn _access_list_add(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    account: &Account,
+    account: &account::get::v0_1::Account,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     if let Some(hash) = manually_enter_did_or_hash(theme) {
-        atm.mediator()
-            .access_list_add(profile, Some(&account.did_hash), &[hash.as_str()])
+        atm.trust_tasks()
+            .access_list_add(
+                profile,
+                Some(account.did.as_str().to_string()),
+                vec![hash.clone()],
+            )
             .await?;
         Ok(Some(hash))
     } else {
@@ -279,13 +277,14 @@ async fn _access_list_remove(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    account: &Account,
+    account: &account::get::v0_1::Account,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     if let Some(hash) = manually_enter_did_or_hash(theme) {
-        Ok(atm
-            .mediator()
-            .access_list_remove(profile, Some(&account.did_hash), &[hash.as_str()])
-            .await?)
+        let response = atm
+            .trust_tasks()
+            .access_list_remove(profile, Some(account.did.as_str().to_string()), vec![hash])
+            .await?;
+        Ok(response.removed.len())
     } else {
         Ok(0)
     }
@@ -295,19 +294,19 @@ async fn _access_list_get(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    account: &Account,
+    account: &account::get::v0_1::Account,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(hash) = manually_enter_did_or_hash(theme) {
         let result = atm
-            .mediator()
-            .access_list_get(profile, Some(&account.did_hash), &[hash.as_str()])
+            .trust_tasks()
+            .access_list_get(profile, Some(account.did.as_str().to_string()), vec![hash])
             .await?;
 
         println!("{}", style("DID Hashes Found:").blue());
-        for hash in &result.did_hashes {
-            println!("  {}", style(hash).blue());
+        for hash in &result.present {
+            println!("  {}", style(hash.as_str()).blue());
         }
-        if result.did_hashes.is_empty() {
+        if result.present.is_empty() {
             println!("{}", style("No DID Hashes found").yellow());
         }
     }
@@ -317,10 +316,10 @@ async fn _access_list_get(
 async fn _access_list_clear(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    account: &Account,
+    account: &account::get::v0_1::Account,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    Ok(atm
-        .mediator()
-        .access_list_clear(profile, Some(&account.did_hash))
-        .await?)
+    atm.trust_tasks()
+        .access_list_clear(profile, Some(account.did.as_str().to_string()))
+        .await?;
+    Ok(())
 }

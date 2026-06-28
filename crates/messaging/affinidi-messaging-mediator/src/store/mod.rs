@@ -35,8 +35,13 @@ pub use memory_store::MemoryStore;
 // in `redis_store.rs`) so non-Redis builds can still call them from
 // the OOB discovery handler.
 
+// These OOB helpers operate on the DIDComm `Message` type and are only called
+// from the (DIDComm-only) OOB discovery handler, so they are gated to `didcomm`.
+#[cfg(feature = "didcomm")]
 use affinidi_messaging_didcomm::message::Message;
+#[cfg(feature = "didcomm")]
 use affinidi_messaging_mediator_common::errors::MediatorError;
+#[cfg(feature = "didcomm")]
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 
 /// Build the absolute `expires_at` for an OOB invitation given the
@@ -44,6 +49,7 @@ use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 /// the current time `now` (from the caller's injected clock). Mirrors the legacy
 /// computation so handlers can produce the same value before calling the trait
 /// method.
+#[cfg(feature = "didcomm")]
 pub fn oob_expires_at(invite: &Message, oob_invite_ttl: u64, now: u64) -> u64 {
     match invite.expires_time {
         Some(expiry) if expiry > now + oob_invite_ttl => now + oob_invite_ttl,
@@ -55,6 +61,7 @@ pub fn oob_expires_at(invite: &Message, oob_invite_ttl: u64, now: u64) -> u64 {
 /// Encode a DIDComm `Message` to the base64-url form the trait
 /// expects. Mirrors the legacy serialisation so callers don't have to
 /// know the encoding.
+#[cfg(feature = "didcomm")]
 pub fn encode_oob_invite(invite: &Message) -> Result<String, MediatorError> {
     let json = serde_json::to_string(invite).map_err(|err| {
         MediatorError::InternalError(

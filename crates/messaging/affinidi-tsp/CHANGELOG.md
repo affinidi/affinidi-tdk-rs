@@ -1,5 +1,68 @@
 # Affinidi TSP Changelog
 
+## 28th June 2026
+
+### 0.1.7 — spec conformance (1/2): ChaCha20Poly1305 HPKE AEAD + empty HPKE info
+
+- The HPKE AEAD is now **ChaCha20Poly1305** (was AES-128-GCM) and the HPKE `info` is
+  now empty/`NULL` (was `"TSP-v1-direct"`), matching the TSP spec (v1.0 Implementor's
+  Draft Rev 2), which mandates ChaCha20Poly1305 and `info = NULL`. The HPKE suite ID's
+  AEAD code is updated `0x0001 → 0x0003` accordingly.
+- **Wire-breaking:** the ciphertext format changed; messages packed by 0.1.6 (or any
+  AES-GCM build) will not decrypt under 0.1.7. TSP is pre-adoption / experimental, so
+  no migration is provided. The public API is unchanged (`seal`/`open`/`pack`/`unpack`
+  signatures identical), so consumers need no code changes.
+- This is the first of two spec-conformance steps. The CESR envelope / payload /
+  signature **framing** is still being brought to spec (a follow-up); full interop with
+  the reference (`tsp-sdk`) lands once both are done. See
+  [`docs/tsp/interop.md`](../../../docs/tsp/interop.md).
+
+## 22nd June 2026
+
+### 0.1.6 — ingress sniff + keys-free envelope metadata
+
+- New `message::meta` module for relays/mediators that must route a message
+  without holding keys: `is_tsp` (cheap first-byte classifier — every TSP
+  message starts with the CESR `1AAF` magic byte `0xD4`, vs DIDComm's `{`/`ey`),
+  the `TSP_MAGIC_BYTE` constant, and `MetaEnvelope::parse` which reads the
+  cleartext sender/receiver VIDs + message type and computes the SHA-256 message
+  id without decrypting the payload.
+- Re-exported at the crate root (`is_tsp`, `MetaEnvelope`, `TSP_MAGIC_BYTE`).
+- Purely additive; patch bump 0.1.5 → 0.1.6.
+
+### 0.1.5 — routed & nested message modes (§5.3 / §5.5)
+
+- New `message::routed` module implementing TSP routed mode (multi-hop relay
+  through intermediaries, with the remaining route carried inside each
+  HPKE-sealed routing layer and re-sealed/re-authenticated at every hop) and the
+  nested metadata-privacy wrapper. The inner message stays opaque to every
+  intermediary. Replaces the previous `MessageType::Nested`/`Routed`
+  recognized-but-unimplemented stubs.
+- Public primitives `pack_routed`, `pack_nested`, `next_hop`, and the `RouteStep`
+  / `MAX_HOPS` exports.
+- New high-level `TspAgent` methods `send_routed`, `send_nested`, and
+  `forward_routed` (returning `ForwardOutcome::{Relay, Deliver}`), which resolve
+  each hop's keys via the agent resolver.
+- `TspAdapter::wrap_for_relay` (messaging-core) now implemented (was
+  `NotSupported`): relays an opaque packed message to the next hop toward the
+  final recipient, as the adapter's default VID.
+- Purely additive; patch bump 0.1.4 → 0.1.5. 84 tests incl. a full multi-hop
+  crypto round-trip and a two-intermediary agent-level relay.
+
+### 0.1.4 — DID-document VID resolver
+
+- New `DidVidResolver` (behind the existing `did-resolver` feature): resolves a
+  DID (`did:web` / `did:webvh` / `did:peer` / `did:key`) to a `ResolvedVid` via
+  `DIDCacheClient`, reading the Ed25519 signing key from `authentication`, the
+  X25519 encryption key from `keyAgreement`, and TSP transport endpoint(s) from a
+  `TSPTransport` service entry. DID resolution is async (`resolve_did`) and cached;
+  the synchronous `VidResolver` trait serves from that cache.
+- New `TspError::DidResolution` variant (additive — `TspError` is already
+  `#[non_exhaustive]`) and a new optional `affinidi-encoding` dependency pulled in
+  only by the `did-resolver` feature.
+- Purely additive; patch bump keeps the `0.1` pin valid. No behaviour change to
+  existing APIs.
+
 ## 14th June 2026
 
 ### 0.1.3 — non_exhaustive TspError (W7 sweep)

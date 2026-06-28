@@ -304,6 +304,10 @@ pub struct TestMediatorBuilder {
     /// is reachable via additional hostnames or ports beyond
     /// `listen_addr`.
     local_endpoints: Vec<String>,
+    /// Host to advertise in the mediator's DID service endpoint instead of the
+    /// bound address — see [`TestMediatorBuilder::advertise_host`]. `None`
+    /// (default) advertises the bound address.
+    advertise_host: Option<String>,
     /// Override for `SecurityConfig.mediator_acl_mode`. `None` keeps the
     /// production default (`ExplicitDeny`).
     acl_mode: Option<AccessListModeType>,
@@ -356,6 +360,7 @@ impl Default for TestMediatorBuilder {
             enable_streaming: true,
             local_dids: Vec::new(),
             local_endpoints: Vec::new(),
+            advertise_host: None,
             acl_mode: None,
             global_acl_default: None,
             local_direct_delivery_allowed: None,
@@ -606,6 +611,56 @@ impl TestMediatorBuilder {
         self
     }
 
+    /// Advertise `host` (with the bound port) in the mediator's DID service
+    /// endpoint instead of the bound address.
+    ///
+    /// # When to use this
+    ///
+    /// The fixture binds an ephemeral port on the address passed to
+    /// [`listen_addr`](Self::listen_addr) (default `127.0.0.1`) and builds the
+    /// mediator's `did:peer` service endpoint from that **bound** address. A
+    /// bound address is only useful to clients that share the host's loopback —
+    /// it breaks any test client that resolves the mediator's DID from a
+    /// **different network namespace**:
+    ///
+    /// - a client inside a **Docker container** (reaches the host via
+    ///   `host.docker.internal`, not `127.0.0.1`);
+    /// - a client on **another machine or CI runner** on the same network;
+    /// - any harness where the bound IP is not a routable thing to put in a DID
+    ///   (e.g. `0.0.0.0`, or a churning DHCP LAN IP).
+    ///
+    /// For those, bind all interfaces and advertise a stable, client-reachable
+    /// hostname:
+    ///
+    /// ```ignore
+    /// let mediator = TestMediator::builder()
+    ///     .listen_addr("0.0.0.0:0".parse().unwrap()) // bind every interface
+    ///     .advertise_host("host.docker.internal")    // ...but tell clients this
+    ///     .spawn()
+    ///     .await?;
+    /// ```
+    ///
+    /// # What it does
+    ///
+    /// The advertised host (with the bound port) is used for the mediator's DID
+    /// service endpoint **and** is registered as a local authority (as if passed
+    /// to [`local_endpoints`](Self::local_endpoints)). The second part is
+    /// essential: routing 2.0 decides local-vs-remote delivery by comparing a
+    /// recipient's service-endpoint authority against the mediator's own. Once
+    /// you advertise a non-bound host, *connected clients* whose own DID service
+    /// endpoint uses that host would otherwise be classified as a **remote
+    /// mediator** and have their messages pushed to the forward queue — silently
+    /// dropping request/response round-trips. Registering the advertised host as
+    /// a local authority keeps those deliveries local.
+    ///
+    /// This changes only the advertised endpoint and routing — it does **not**
+    /// change which interfaces are bound (that is solely
+    /// [`listen_addr`](Self::listen_addr)) and has **no** effect on auth/ACL.
+    pub fn advertise_host(mut self, host: impl Into<String>) -> Self {
+        self.advertise_host = Some(host.into());
+        self
+    }
+
     // ─── Admin identity ──────────────────────────────────────────────
 
     /// Use a specific admin identity. Defaults to a random
@@ -661,7 +716,20 @@ impl TestMediatorBuilder {
 
         let bound_addr = bind_ephemeral_listener(self.listen_addr)?;
         let api_prefix = "/mediator/v1/".to_string();
-        let service_uri = format!("http://{bound_addr}{api_prefix}");
+        // When `advertise_host` is set, the mediator's DID service endpoint uses
+        // that host (with the bound port) so clients in other network namespaces
+        // can reach it, and the advertised endpoint is registered as a local
+        // authority so their deliveries stay local rather than being forwarded
+        // away. See [`TestMediatorBuilder::advertise_host`].
+        let mut local_endpoints = self.local_endpoints.clone();
+        let service_uri = match &self.advertise_host {
+            Some(host) => {
+                let uri = format!("http://{host}:{}{api_prefix}", bound_addr.port());
+                local_endpoints.push(uri.clone());
+                uri
+            }
+            None => format!("http://{bound_addr}{api_prefix}"),
+        };
 
         let (mediator_did, mediator_secrets, secrets_resolver) =
             generate_mediator_identity(&service_uri).await?;
@@ -757,7 +825,7 @@ impl TestMediatorBuilder {
             .limits(limits)
             .processors(processors)
             .streaming_enabled(self.enable_streaming)
-            .local_endpoints(self.local_endpoints.clone())
+            .local_endpoints(local_endpoints)
             .tls(TlsMode::Plain);
         if let Some(clock) = self.clock.clone() {
             builder = builder.clock(clock);
@@ -1153,5 +1221,43 @@ mod tests {
         let (did, secrets, _resolver) = result.expect("identity generation");
         assert!(did.starts_with("did:peer:2."), "expected did:peer:2.*");
         assert_eq!(secrets.len(), 2, "expected verification + encryption keys");
+    }
+
+    #[tokio::test]
+    async fn advertise_host_rewrites_did_service_endpoint() {
+        use base64::Engine;
+        // Bind all interfaces but advertise a stable, client-reachable host.
+        let mediator = TestMediator::builder()
+            .listen_addr("0.0.0.0:0".parse().unwrap())
+            .advertise_host("host.docker.internal")
+            .spawn()
+            .await
+            .expect("spawn");
+
+        // The mediator's did:peer:2 encodes its service endpoint(s) in base64url
+        // `.S<...>` segments — decode them and confirm the advertised host is the
+        // service host, and the bound `0.0.0.0` was NOT leaked into the DID.
+        let did = mediator.did();
+        let mut saw_advertised = false;
+        for seg in did.split('.') {
+            let Some(rest) = seg.strip_prefix('S') else {
+                continue;
+            };
+            let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(rest)
+                .expect("service segment is base64url");
+            let txt = String::from_utf8(bytes).expect("service segment is utf8");
+            assert!(
+                !txt.contains("0.0.0.0"),
+                "advertised DID service must not leak the bound 0.0.0.0: {txt}"
+            );
+            if txt.contains("host.docker.internal") {
+                saw_advertised = true;
+            }
+        }
+        assert!(
+            saw_advertised,
+            "advertised host missing from DID service endpoint: {did}"
+        );
     }
 }

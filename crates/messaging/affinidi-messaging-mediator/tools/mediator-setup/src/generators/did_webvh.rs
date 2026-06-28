@@ -21,13 +21,17 @@ use didwebvh_rs::{
     create::{CreateDIDConfig, create_did},
     parameters::Parameters,
 };
+use serde_json::json;
 use vta_sdk::did_templates::{TemplateVars, load_embedded};
+
+use crate::cli::KeySuite;
 
 pub struct DidWebvhResult {
     /// The final DID string (resolved from the WebVH log entry).
     pub did: String,
     /// Private keys the mediator needs at runtime — Ed25519 signing, X25519
-    /// key-agreement.
+    /// key-agreement, plus any opt-in extra-suite keys (e.g. P-256 signing +
+    /// P-256 key-agreement when `p256` is requested).
     pub secrets: Vec<Secret>,
     /// The DID document log entry in JSONL form, ready for the operator to
     /// host at the webvh URL.
@@ -51,6 +55,7 @@ pub struct DidWebvhResult {
 pub async fn generate_did_webvh(
     address: &str,
     service_url: &str,
+    key_suites: &[KeySuite],
 ) -> anyhow::Result<DidWebvhResult> {
     let address = if address.starts_with("http://") || address.starts_with("https://") {
         address.to_string()
@@ -72,6 +77,30 @@ pub async fn generate_did_webvh(
         .get_public_keymultibase()
         .map_err(|e| anyhow::anyhow!("Failed to get X25519 public key: {e}"))?;
 
+    // ── Opt-in extra key suites ────────────────────────────────────
+    // Each requested suite contributes a signing key (`#key-2`) + a
+    // key-agreement key (`#key-3`) advertised through the template's
+    // optional P-256 slots. Only P-256 is supported today. When no suite
+    // is requested the slots stay pruned, so the default document is
+    // byte-identical to before.
+    let include_p256 = key_suites.contains(&KeySuite::P256);
+    let mut p256_signing = if include_p256 {
+        Some(
+            Secret::generate_p256(None, None)
+                .map_err(|e| anyhow::anyhow!("Failed to generate P-256 signing key: {e}"))?,
+        )
+    } else {
+        None
+    };
+    let mut p256_key_agreement = if include_p256 {
+        Some(
+            Secret::generate_p256(None, None)
+                .map_err(|e| anyhow::anyhow!("Failed to generate P-256 key-agreement key: {e}"))?,
+        )
+    } else {
+        None
+    };
+
     // ── Render template ─────────────────────────────────────────────
     let template = load_embedded("didcomm-mediator")
         .map_err(|e| anyhow::anyhow!("Failed to load mediator template: {e}"))?;
@@ -84,6 +113,41 @@ pub async fn generate_did_webvh(
     vars.insert_string("URL", service_url);
     vars.insert_string("SIGNING_KEY_MB", &signing_mb);
     vars.insert_string("KA_KEY_MB", &ka_mb);
+    // Opt-in P-256 verification methods. The supplied objects keep the
+    // `{DID}` sentinel — didwebvh-rs resolves it across the whole document
+    // after SCID computation, including these var-injected methods (they
+    // are not recursively re-substituted by the template renderer). When no
+    // P-256 suite is requested these vars stay unset and the renderer prunes
+    // the corresponding null slots.
+    if let (Some(p256_sign), Some(p256_ka)) = (p256_signing.as_ref(), p256_key_agreement.as_ref()) {
+        let p256_sign_mb = p256_sign
+            .get_public_keymultibase()
+            .map_err(|e| anyhow::anyhow!("Failed to get P-256 signing public key: {e}"))?;
+        let p256_ka_mb = p256_ka
+            .get_public_keymultibase()
+            .map_err(|e| anyhow::anyhow!("Failed to get P-256 key-agreement public key: {e}"))?;
+        vars.insert(
+            "VM_P256_SIGNING",
+            json!({
+                "id": "{DID}#key-2",
+                "type": "Multikey",
+                "controller": "{DID}",
+                "publicKeyMultibase": p256_sign_mb,
+            }),
+        );
+        vars.insert(
+            "VM_P256_KA",
+            json!({
+                "id": "{DID}#key-3",
+                "type": "Multikey",
+                "controller": "{DID}",
+                "publicKeyMultibase": p256_ka_mb,
+            }),
+        );
+        vars.insert_string("AUTH_P256", "{DID}#key-2");
+        vars.insert_string("ASSERTION_P256", "{DID}#key-2");
+        vars.insert_string("KEYAGREEMENT_P256", "{DID}#key-3");
+    }
     // `{DID}` is a sentinel — we declare it as "provided" so the renderer
     // doesn't flag it as unresolved; `didwebvh-rs` substitutes the actual
     // DID string after SCID computation.
@@ -131,68 +195,40 @@ pub async fn generate_did_webvh(
     signing.id = format!("{final_did}#key-0");
     key_agreement.id = format!("{final_did}#key-1");
 
+    // Opt-in P-256 keys occupy `#key-2` (signing / assertion) and `#key-3`
+    // (key agreement), matching the slots advertised in the rendered DID
+    // document above.
+    let mut secrets = vec![signing, key_agreement];
+    if let Some(mut p256_sign) = p256_signing.take() {
+        p256_sign.id = format!("{final_did}#key-2");
+        secrets.push(p256_sign);
+    }
+    if let Some(mut p256_ka) = p256_key_agreement.take() {
+        p256_ka.id = format!("{final_did}#key-3");
+        secrets.push(p256_ka);
+    }
+
     let did_doc = serde_json::to_string(result.log_entry())?;
 
     Ok(DidWebvhResult {
         did: final_did,
-        secrets: vec![signing, key_agreement],
+        secrets,
         did_doc,
     })
 }
 
 /// Convert a did:webvh log entry into the equivalent did:web DID document.
 ///
-/// `did:webvh` and `did:web` are wire-compatible by design: a
-/// `did:webvh:{scid}:{domain}` DID resolves to the same document as
-/// `did:web:{domain}` once the self-certifying identifier (SCID) is
-/// dropped and every self-reference in the document is rewritten. This
-/// takes the resolved DID document — the log entry's `state` — and
-/// rewrites every reference to the webvh DID into its did:web form,
-/// returning `(did:web identifier, pretty-printed did.json document)`.
+/// Re-exported from `affinidi-messaging-mediator-common` so the wizard's
+/// `did-web.json` operator artefact and the mediator runtime's
+/// `/.well-known/did.json` body share one tested rewrite implementation.
+/// Returns `(did:web identifier, pretty-printed did.json document)`.
 ///
 /// The returned document is an operator artefact for hosting the DID
 /// under did:web (e.g. at a web server's `/.well-known/did.json`). It is
 /// **not** consumed by the mediator runtime, which serves its own DID
 /// document from the webvh log (`did_web_self_hosted` → `did.jsonl`).
-pub fn webvh_log_to_did_web(
-    log_entry_json: &str,
-    webvh_did: &str,
-) -> anyhow::Result<(String, String)> {
-    let web_did = webvh_did_to_web(webvh_did)?;
-
-    let entry: serde_json::Value = serde_json::from_str(log_entry_json)
-        .map_err(|e| anyhow::anyhow!("Failed to parse did:webvh log entry: {e}"))?;
-    let state = entry
-        .get("state")
-        .ok_or_else(|| anyhow::anyhow!("did:webvh log entry has no `state` (DID document)"))?;
-
-    // Rewrite every self-reference. In the resolved state the DID always
-    // appears in full (`id`, `controller`, `{did}#key-0`, service ids …),
-    // so a whole-string swap of the webvh DID for its did:web form
-    // rewrites them all without touching unrelated values. `web_did`
-    // never contains `webvh_did`, so the replacement can't recurse.
-    let rewritten = serde_json::to_string(state)?.replace(webvh_did, &web_did);
-    let doc: serde_json::Value = serde_json::from_str(&rewritten)?;
-    let pretty = serde_json::to_string_pretty(&doc)?;
-
-    Ok((web_did, pretty))
-}
-
-/// Map a `did:webvh:{scid}:{domain}[:path…]` identifier to its
-/// `did:web:{domain}[:path…]` equivalent by dropping the SCID segment.
-/// Path segments (`:`-separated, did:web style) are preserved verbatim.
-fn webvh_did_to_web(webvh_did: &str) -> anyhow::Result<String> {
-    let rest = webvh_did
-        .strip_prefix("did:webvh:")
-        .ok_or_else(|| anyhow::anyhow!("not a did:webvh DID: {webvh_did}"))?;
-    let (_scid, domain_and_path) = rest
-        .split_once(':')
-        .ok_or_else(|| anyhow::anyhow!("malformed did:webvh DID (missing domain): {webvh_did}"))?;
-    if domain_and_path.is_empty() {
-        anyhow::bail!("did:webvh DID has an empty domain: {webvh_did}");
-    }
-    Ok(format!("did:web:{domain_and_path}"))
-}
+pub use affinidi_messaging_mediator_common::did_web::webvh_log_to_did_web;
 
 #[cfg(test)]
 mod tests {
@@ -204,6 +240,7 @@ mod tests {
         let result = generate_did_webvh(
             "https://mediator.example.com",
             "https://mediator.example.com/mediator/v1",
+            &[],
         )
         .await
         .unwrap();
@@ -230,13 +267,19 @@ mod tests {
         assert_eq!(doc["authentication"].as_array().unwrap().len(), 1);
         assert_eq!(doc["keyAgreement"].as_array().unwrap().len(), 1);
 
+        // Locate services by `type` rather than position — the template may
+        // advertise additional transports (e.g. a `#tsp` TSPTransport entry)
+        // ahead of the DIDComm one, and the canonical preference order is not
+        // this test's concern.
         let services = doc["service"].as_array().unwrap();
-        assert_eq!(services.len(), 2);
-        // `type` is now an array (`["DIDCommMessaging"]`) per the
-        // multi-transport template, and the id is `#service`.
-        assert_eq!(services[0]["type"][0], "DIDCommMessaging");
-        assert!(services[0]["id"].as_str().unwrap().ends_with("#service"));
-        let endpoints = services[0]["serviceEndpoint"].as_array().unwrap();
+        let service_type_is =
+            |svc: &Value, want: &str| svc["type"] == json!([want]) || svc["type"] == json!(want);
+        let didcomm = services
+            .iter()
+            .find(|svc| service_type_is(svc, "DIDCommMessaging"))
+            .expect("DIDCommMessaging service present");
+        assert!(didcomm["id"].as_str().unwrap().ends_with("#service"));
+        let endpoints = didcomm["serviceEndpoint"].as_array().unwrap();
         assert_eq!(endpoints.len(), 2);
         assert_eq!(
             endpoints[0]["uri"].as_str().unwrap(),
@@ -252,19 +295,82 @@ mod tests {
         assert_eq!(accept.len(), 1);
         assert_eq!(accept[0], "didcomm/v2");
 
-        assert_eq!(services[1]["type"][0], "Authentication");
-        assert!(services[1]["id"].as_str().unwrap().ends_with("#auth"));
+        let auth = services
+            .iter()
+            .find(|svc| service_type_is(svc, "Authentication"))
+            .expect("Authentication service present");
+        assert!(auth["id"].as_str().unwrap().ends_with("#auth"));
         assert_eq!(
-            services[1]["serviceEndpoint"].as_str().unwrap(),
+            auth["serviceEndpoint"].as_str().unwrap(),
             "https://mediator.example.com/mediator/v1/authenticate"
         );
     }
 
     #[tokio::test]
+    async fn webvh_p256_suite_adds_signing_and_key_agreement_keys() {
+        let result = generate_did_webvh(
+            "https://mediator.example.com",
+            "https://mediator.example.com/mediator/v1",
+            &[KeySuite::P256],
+        )
+        .await
+        .unwrap();
+
+        // Four runtime secrets now: Ed25519 + X25519 + P-256 signing + P-256 KA.
+        assert_eq!(result.secrets.len(), 4);
+        assert!(result.secrets[0].id.ends_with("#key-0"));
+        assert!(result.secrets[1].id.ends_with("#key-1"));
+        assert!(result.secrets[2].id.ends_with("#key-2"));
+        assert!(result.secrets[3].id.ends_with("#key-3"));
+        use affinidi_secrets_resolver::secrets::KeyType;
+        assert!(matches!(result.secrets[2].get_key_type(), KeyType::P256));
+        assert!(matches!(result.secrets[3].get_key_type(), KeyType::P256));
+
+        let entry: Value = serde_json::from_str(&result.did_doc).unwrap();
+        let doc = &entry["state"];
+
+        // Four verification methods; the P-256 pair are `#key-2` / `#key-3`,
+        // both `Multikey`, and the relationship arrays grew to two entries.
+        let vms = doc["verificationMethod"].as_array().unwrap();
+        assert_eq!(vms.len(), 4);
+        assert!(vms.iter().all(|vm| vm["type"] == "Multikey"));
+        assert!(vms[2]["id"].as_str().unwrap().ends_with("#key-2"));
+        assert!(vms[3]["id"].as_str().unwrap().ends_with("#key-3"));
+        // P-256 Multikey multibase uses the `zDna…` (0x1200) prefix.
+        assert!(
+            vms[2]["publicKeyMultibase"]
+                .as_str()
+                .unwrap()
+                .starts_with("zDn")
+        );
+        assert!(
+            vms[3]["publicKeyMultibase"]
+                .as_str()
+                .unwrap()
+                .starts_with("zDn")
+        );
+
+        let auth = doc["authentication"].as_array().unwrap();
+        assert_eq!(auth.len(), 2);
+        assert!(auth[1].as_str().unwrap().ends_with("#key-2"));
+        let assertion = doc["assertionMethod"].as_array().unwrap();
+        assert_eq!(assertion.len(), 2);
+        assert!(assertion[1].as_str().unwrap().ends_with("#key-2"));
+        let ka = doc["keyAgreement"].as_array().unwrap();
+        assert_eq!(ka.len(), 2);
+        assert!(ka[1].as_str().unwrap().ends_with("#key-3"));
+
+        // The webvh SCID sentinel must be fully resolved — no `{DID}` token
+        // survives in the var-injected P-256 methods.
+        assert!(!result.did_doc.contains("{DID}"));
+    }
+
+    #[tokio::test]
     async fn webvh_key_ids_match_final_did() {
-        let result = generate_did_webvh("mediator.example.com", "https://mediator.example.com")
-            .await
-            .unwrap();
+        let result =
+            generate_did_webvh("mediator.example.com", "https://mediator.example.com", &[])
+                .await
+                .unwrap();
         for secret in &result.secrets {
             assert!(secret.id.starts_with(&result.did));
         }
@@ -272,35 +378,12 @@ mod tests {
         assert!(result.secrets[1].id.ends_with("#key-1"));
     }
 
-    #[test]
-    fn webvh_did_to_web_drops_scid() {
-        assert_eq!(
-            webvh_did_to_web("did:webvh:QmScId:mediator.example.com").unwrap(),
-            "did:web:mediator.example.com"
-        );
-    }
-
-    #[test]
-    fn webvh_did_to_web_preserves_path_segments() {
-        // did:web path style: `:`-separated segments after the domain.
-        assert_eq!(
-            webvh_did_to_web("did:webvh:QmScId:example.com:mediators:m1").unwrap(),
-            "did:web:example.com:mediators:m1"
-        );
-    }
-
-    #[test]
-    fn webvh_did_to_web_rejects_non_webvh_and_malformed() {
-        assert!(webvh_did_to_web("did:web:example.com").is_err());
-        assert!(webvh_did_to_web("did:webvh:QmScId").is_err()); // no domain
-        assert!(webvh_did_to_web("did:webvh:QmScId:").is_err()); // empty domain
-    }
-
     #[tokio::test]
     async fn did_web_export_rewrites_every_self_reference() {
         let result = generate_did_webvh(
             "https://mediator.example.com",
             "https://mediator.example.com/mediator/v1",
+            &[],
         )
         .await
         .unwrap();

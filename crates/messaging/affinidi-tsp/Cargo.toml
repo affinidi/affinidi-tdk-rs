@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-tsp"
 description = "Trust Spanning Protocol (TSP) implementation for the Affinidi TDK"
-version = "0.1.3"
+version = "0.1.7"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -17,6 +17,7 @@ default = ["did-resolver"]
 did-resolver = [
     "dep:affinidi-did-resolver-cache-sdk",
     "dep:affinidi-did-common",
+    "dep:affinidi-encoding",
     "dep:tokio",
 ]
 messaging-core = ["dep:affinidi-messaging-core", "dep:async-trait"]
@@ -29,13 +30,15 @@ affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1"
 # Optional Affinidi crates (for DID-based VID resolution)
 affinidi-did-resolver-cache-sdk = { path = "../../identity/affinidi-did-resolver-cache-sdk", version = "0.8", optional = true }
 affinidi-did-common = { path = "../../identity/affinidi-did-common", version = "0.3", optional = true }
+affinidi-encoding = { path = "../../core/affinidi-encoding", version = "0.1", optional = true }
 
 # Crypto
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 hkdf = "0.12"
 sha2 = "0.10"
-aes-gcm = "0.10"
+## TSP mandates ChaCha20Poly1305 as the HPKE AEAD (spec Rev 2); see docs/tsp/interop.md.
+chacha20poly1305 = "0.10"
 rand_core = { version = "0.6", features = ["getrandom"] }
 zeroize = { version = "1", features = ["derive"] }
 blake2 = "0.10"

@@ -1,5 +1,251 @@
 # Changelog
 
+## [0.18.39] - 2026-06-27
+
+SDK consumer for the mediator's raw-TSP WebSocket mode.
+
+- New `atm.tsp().connect_websocket(profile)` → `TspWebSocket`: opens a WebSocket to the
+  mediator offering the `tsp` subprotocol (alongside the bearer token), so the socket runs
+  in raw-TSP mode (flush-on-connect + delete-on-successful-send, server-side). `TspWebSocket`
+  has `recv()` (next raw qb2 TSP message, `None` on close — skips ping/pong), `send(&[u8])`
+  (send a raw TSP message inbound), and `close()`.
+- New `atm.tsp().unpack_bytes(profile, qb2)` — unpack a raw qb2 TSP message (what `recv`
+  returns) without the base64 round-trip; `unpack(stored)` now decodes then delegates to it
+  (its signature + behaviour are unchanged).
+- Re-exports `TspWebSocket`. Additive; no existing API changed.
+
+## [0.18.38] - 2026-06-26
+
+Formatting only (`cargo fmt --all`); no functional or API change. Patch bump
+required by the release guard because the crate source changed. Reconciles the
+version after the pure-TSP-auth `0.18.37` release landed on `main`.
+
+## [0.18.37] - 2026-06-26
+
+Pure-TSP client authentication: `TspAuthHandler` lets a TSP-only client (no DIDComm)
+authenticate to the mediator's `POST /tsp/authenticate` and obtain the same JWT session.
+
+- New `TspAuthHandler` (impl `affinidi_did_authentication::CustomAuthHandler`): resolves the
+  mediator's `#auth` service, `POST {base}/challenge`, signs the challenge with the profile's
+  Ed25519 VID key, then `POST {base}/tsp/authenticate {vid, session_id, signature}` and returns
+  the access/refresh `AuthorizationTokens`. Register it via
+  `CustomAuthHandlers::default().with_auth_handler(Arc::new(TspAuthHandler::new(secrets)))` when
+  building the TDK; the existing `atm.tsp()` / cache / `send_raw` path then authenticates over
+  TSP transparently.
+- Adds `affinidi-did-resolver-cache-sdk` + `reqwest` as optional deps behind the `tsp` feature
+  (named directly by the `CustomAuthHandler` trait signature). Additive; no existing API changed.
+
+## [0.18.36] - 2026-06-25
+
+TSP **relationship management** — drive the TSP relationship lifecycle (RFI/RFA: invite /
+accept / cancel) through `atm.tsp()`, backed by a pluggable store.
+
+- New `atm.tsp()` methods: `form_relationship`, `accept_relationship`,
+  `cancel_relationship`, `relationship_state`, and `record_incoming_control` (advance the
+  FSM for a received control message). Each drives the pure
+  `affinidi_tsp::relationship::RelationshipState` state machine
+  (None → Pending / InviteReceived → Bidirectional) and sends via the existing
+  `send_control`; outbound state is persisted only **after** the control message is sent.
+- New `RelationshipStore` trait — pluggable persistence (consumers implement it against
+  durable storage) — plus an ephemeral `InMemoryRelationshipStore` default. Select one via
+  `ATMConfigBuilder::with_relationship_store`; defaults to in-memory (wiped on restart).
+- Adds `async-trait` behind the `tsp` feature. Additive; no existing API changed.
+
+## [0.18.35] - 2026-06-25
+
+The `tsp` feature is no longer marked **experimental** — `atm.tsp()` (pack / send /
+send_routed / send_nested / send_control / unpack) is supported. Documentation/labelling
+only; no behaviour change. Caveat: pure-TSP client auth (`/tsp/authenticate`) is still
+pending, so `atm.tsp()` reuses the profile's DIDComm-authenticated session for now.
+
+## [0.18.34] - 2026-06-24
+
+New `atm.tsp().send_control(profile, to_did, control)`: send a TSP **`Control`** message
+— a relationship-management message (invite / accept / cancel) to a peer. Build `control`
+with `affinidi_tsp::message::control::ControlMessage`'s `invite` / `accept` / `cancel`; it
+is sealed to `to_did` and carried with message type `Control`, which the mediator relays
+to the recipient like a Direct message. Additive; no existing API changed.
+
+## [0.18.33] - 2026-06-24
+
+New `atm.tsp().send_nested(profile, intermediary, to_did, payload)` and
+`send_nested_opaque(profile, intermediary, inner)`: send a TSP message wrapped in a
+**`Nested`** metadata-privacy envelope. The payload is sealed end-to-end to `to_did`,
+then wrapped in an outer `Nested` message sealed to `intermediary` (typically the
+recipient's mediator), which unwraps the outer layer and forwards the inner — so only
+the intermediary learns `to_did`. The `_opaque` form takes a pre-built inner (which may
+be a DIDComm message — the TSP↔DIDComm bridge). Additive; no existing API changed.
+
+## [0.18.32] - 2026-06-24
+
+`atm.trust_tasks().acl_set` is no longer admin-only — a non-admin may set its own ACL
+(the self-manageable capabilities); docs updated. (Server-side change in the mediator;
+the SDK call is unchanged.)
+
+## [0.18.31] - 2026-06-24
+
+The legacy `atm.mediator()` management methods are now `#[deprecated]` in favour of the
+`atm.trust_tasks()` core: `account_get`/`account_add`/`account_remove`/`accounts_list`/
+`account_change_type`/`account_change_queue_limits`, `acls_get`/`acls_set`,
+`access_list_{list,add,remove,clear,get}`, and `get_config`/`add_admins`/`strip_admins`/
+`list_admins`/`list_audit_log` — each points to its `atm.trust_tasks().*` replacement.
+The methods still work (legacy DIDComm wire); they will be removed in a future major
+release (the breaking change). **Additive — patch bump, `0.18` pin stays valid.** (The
+deliberately-louder minor/major bump is reserved for the removal, per the workspace's
+patch-not-minor convention.)
+
+## [0.18.30] - 2026-06-24
+
+`atm.trust_tasks()` gains the admin family: `admin_add` / `admin_strip` / `admin_list` /
+`admin_audit_log` / `admin_config` (all admin only). Completes the messaging Trust Tasks
+client surface. Additive.
+
+## [0.18.29] - 2026-06-24
+
+`atm.trust_tasks()` gains the access-list family: `access_list_add` / `access_list_remove`
+/ `access_list_clear` / `access_list_get` / `access_list_list` (self-or-admin; `None` =
+own list). Completes the messaging Trust Tasks client surface. Additive.
+
+## [0.18.28] - 2026-06-24
+
+`atm.trust_tasks().account_add(profile, did_hash, account_type, acl)` — create an
+account and return its realized view. Completes the account-family client surface.
+Additive.
+
+## [0.18.27] - 2026-06-24
+
+`atm.trust_tasks()` gains `acl_get(profile, did_hashes)` (self-or-admin; batched ACL
+read → entries + unknown) and `acl_set(profile, did_hash, acl)` (admin only; partial
+ACL update → realized ACL). Additive.
+
+## [0.18.26] - 2026-06-24
+
+`atm.trust_tasks().account_change_type(profile, did_hash, account_type)` (admin only) —
+change an account's role and return its realized view. Only a root admin may assign the
+root-admin role or modify a root-admin account. Additive.
+
+## [0.18.25] - 2026-06-24
+
+`atm.trust_tasks().account_remove(profile, did_hash)` — remove an account (self-or-admin;
+`None` = self) and return whether a record was removed. The mediator's own and the
+root-admin accounts can't be removed. Additive.
+
+## [0.18.24] - 2026-06-24
+
+`atm.trust_tasks().account_change_queue_limits(profile, did_hash, send, receive)` —
+change an account's queued-message limits and return the updated view. `None` target
+= self; each limit is `Some(-1)` (unlimited) / `Some(n)` / `None` (unchanged). Additive.
+
+## [0.18.23] - 2026-06-24
+
+`atm.trust_tasks().account_list(profile, cursor, limit)` (admin only) — returns one
+page of accounts plus an opaque `next_cursor` (present only when more remain); pass
+it back to continue. Additive.
+
+## [0.18.22] - 2026-06-24
+
+`atm.trust_tasks().account_get(profile, did_hash)` — fetch the mediator's view of an
+account as a typed `account/get` response. `None` requests the caller's own account
+(self; no admin rights needed). Shares the binding-envelope send path with `ping`
+(refactored into an internal `exchange` helper). Additive.
+
+## [0.18.21] - 2026-06-23
+
+New `atm.trust_tasks()` accessor with `.ping(profile, nonce)` — sends a
+`messaging/ping` Trust Task to the mediator (over the DIDComm binding envelope) and
+returns the typed `ping` response (server time, status, supported protocols, echoed
+nonce). Additive — the first of the messaging Trust Tasks client surface; account /
+acl / access-list follow, and the legacy `atm.mediator()` / `atm.trust_ping()`
+methods will route through this core (the breaking change that lands then is
+signalled by a minor bump).
+
+## [0.18.20] - 2026-06-23
+
+`MessageType` gains a `TrustTaskEnvelope` variant (the Trust Tasks DIDComm binding
+envelope `type`), so the mediator can route Trust Task documents. Additive
+scaffolding for the messaging Trust Tasks migration; no API change. The deliberate
+minor bump that signals the migration's breaking client changes lands with
+`atm.trust_tasks()` (next).
+
+## [0.18.19] - 2026-06-23
+
+WebSocket live-stream is now TSP-safe. An inbound frame is sniffed (the frame is
+self-describing CESR qb64); a TSP message is delivered **packed** — so the
+consumer unpacks it via `atm.tsp()` — instead of being routed into the DIDComm
+`unpack`, where it previously failed and was silently dropped. DIDComm frames are
+unchanged, and the sniff is gated on the `tsp` feature (no-op without it).
+
+## [0.18.18] - 2026-06-23
+
+Re-exports `MessageProtocol` (from `affinidi-messaging-mediator-common`).
+Fetched messages now carry a `protocol` field (`Some(MessageProtocol::DidComm |
+Tsp | …)`), tagged server-side, so a client can route each message natively
+without inspecting it. Additive; patch bump.
+
+## [0.18.17] - 2026-06-23
+
+`atm.tsp().send_routed_opaque(profile, route, inner)` — route an **already-packed**
+inner message through TSP relay hops. The inner may be a **DIDComm** message (the
+TSP↔DIDComm bridge): pack it with `atm.pack_encrypted`, then route it over TSP to a
+recipient who unpacks it natively. `send_routed` now builds on this. Additive;
+patch bump.
+
+## [0.18.16] - 2026-06-23
+
+`atm.tsp()` gains routed send:
+- `send_routed(profile, route, payload)` — send a TSP message through one or more
+  relay hops. The payload is sealed end-to-end to the final recipient
+  (`route.last()`), wrapped in a routing layer sealed to the first hop
+  (`route[0]`, a TSP-routing mediator); each hop unwraps and forwards onward.
+- `send_raw(profile, bytes)` — POST an already-packed TSP message to `/inbound`
+  (the shared transport `send()` now builds on this).
+
+Verified end to end against a live mediator relay in
+`affinidi-messaging-test-mediator`. Additive; patch bump.
+
+## [0.18.15] - 2026-06-22
+
+Picks up the `affinidi-did-common` 0.3.8 fix for
+`DocumentExt::find_authentication`, which **fixes DIDComm signed-message
+verification when the signer's `kid` is a bare DID** (no fragment): the unpack
+path looked up the first authentication key via that method and previously got a
+keyAgreement (X25519) key, so verification failed. Fragment-qualified kids were
+unaffected. Also drops the local workaround in `atm.tsp()` (now that
+`find_authentication` is correct). No API change; patch bump.
+
+## [0.18.14] - 2026-06-22
+
+TSP send/receive — `atm.tsp()` can now pack, send, and unpack TSP **Direct**
+messages end to end:
+
+- `pack(profile, to_did, payload)` builds a TSP Direct message — extracting the
+  profile's Ed25519 signing key (from its `authentication`) and X25519 encryption
+  key (from its `keyAgreement`) via the secrets resolver, and resolving the
+  recipient's keys from its DID document.
+- `send(profile, to_did, payload)` packs and POSTs to the mediator `/inbound`,
+  reusing the profile's existing (DIDComm) authenticated session for the bearer
+  token; the mediator sniffs the TSP magic byte and stores it for pickup.
+- `unpack(profile, stored)` decodes a fetched message, resolves the sender, and
+  decrypts + verifies with the profile's key, returning `(payload, sender_vid)`.
+
+Verified end to end against a live mediator in
+`affinidi-messaging-test-mediator` (alice packs → mediator stores → bob unpacks).
+Additive (no `tsp` feature = no change); patch bump keeps the `0.18` pin valid.
+
+NB: works around a copy-paste bug in `affinidi-did-common`'s
+`DocumentExt::find_authentication(None)` (it returns `keyAgreement` ids) by
+reading `doc.authentication` directly.
+
+## [0.18.13] - 2026-06-22
+
+TSP client support — foundation. New optional `tsp` feature and an `atm.tsp()`
+ops accessor (the TSP sibling of `atm.routing()` etc.). This first slice adds the
+**storage-format codec** a client needs on pickup: a mediator stores a TSP message
+`base64url(qb2)` (its CESR qb64 text form, `1AAF…`), so `atm.tsp().is_tsp()`
+distinguishes it from a DIDComm JSON envelope and `decode()`/`encode()` convert
+to/from the raw qb2 bytes. Purely additive (no `tsp` feature = no change); patch
+bump keeps the `0.18` pin valid. The pack/send and fetch/unpack paths land next.
+
 ## [0.18.12] - 2026-06-14
 
 `ATMError` is now `#[non_exhaustive]` (ADR-0003) so new variants land additively.

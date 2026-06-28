@@ -5,6 +5,11 @@
 
 pub mod resolver;
 
+#[cfg(feature = "did-resolver")]
+pub mod did_resolver;
+#[cfg(feature = "did-resolver")]
+pub use did_resolver::{DidVidResolver, TSP_SERVICE_TYPE};
+
 use serde::{Deserialize, Serialize};
 use url::Url;
 use zeroize::{Zeroize, ZeroizeOnDrop};

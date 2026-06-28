@@ -179,10 +179,20 @@
 //! export RUST_LOG=none,affinidi_messaging_sdk=debug
 //! ```
 
+#[cfg(feature = "tsp")]
+use crate::protocols::tsp::TspOps;
+/// Re-exports of the TSP relationship-store API so consumers can implement a
+/// durable store or select one via the config builder.
+#[cfg(feature = "tsp")]
+pub use crate::protocols::tsp::{InMemoryRelationshipStore, RelationshipStore, TspWebSocket};
+/// Re-export of the pure-TSP authentication handler so a TSP-only client can
+/// register it on the TDK in place of the built-in DIDComm auth flow.
+#[cfg(feature = "tsp")]
+pub use crate::protocols::tsp_auth::TspAuthHandler;
 use crate::protocols::{
     discover_features::DiscoverfeaturesOps, mediator::administration::MediatorOps,
     message_pickup::MessagePickupOps, oob_discovery::OOBDiscoveryOps, routing::RoutingOps,
-    trust_ping::TrustPingOps,
+    trust_ping::TrustPingOps, trust_tasks::TrustTasksOps,
 };
 use affinidi_task_utils::CancellationToken;
 use affinidi_tdk_common::TDKSharedState;
@@ -313,6 +323,12 @@ impl ATM {
         TrustPingOps { atm: self }
     }
 
+    /// Access Trust Tasks protocol methods (the messaging tasks: ping, account,
+    /// acl, access-list — carried over the framework binding envelope).
+    pub fn trust_tasks(&self) -> TrustTasksOps<'_> {
+        TrustTasksOps { atm: self }
+    }
+
     /// Access Message Pickup 3.0 protocol methods
     pub fn message_pickup(&self) -> MessagePickupOps<'_> {
         MessagePickupOps { atm: self }
@@ -336,5 +352,11 @@ impl ATM {
     /// Access Discover Features protocol methods
     pub fn discover_features(&self) -> DiscoverfeaturesOps<'_> {
         DiscoverfeaturesOps { atm: self }
+    }
+
+    /// Access Trust Spanning Protocol (TSP) client methods.
+    #[cfg(feature = "tsp")]
+    pub fn tsp(&self) -> TspOps<'_> {
+        TspOps { atm: self }
     }
 }

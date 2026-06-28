@@ -7,7 +7,7 @@
 //! ```rust,ignore
 //! atm.trust_ping().send_ping(&profile, &did, true, true, false).await?;
 //! atm.message_pickup().live_stream_get(&profile, &msg_id, dur, true).await?;
-//! atm.mediator().get_config(&profile).await?;
+//! atm.trust_tasks().admin_config(&profile).await?;
 //! ```
 
 use mediator::administration::Mediator;
@@ -31,6 +31,11 @@ pub mod message_pickup;
 pub mod oob_discovery;
 pub mod routing;
 pub mod trust_ping;
+pub mod trust_tasks;
+#[cfg(feature = "tsp")]
+pub mod tsp;
+#[cfg(feature = "tsp")]
+pub mod tsp_auth;
 
 // `String` implements `GenericDataStruct` via an impl in
 // `affinidi-messaging-mediator-common::types::messages` — the orphan

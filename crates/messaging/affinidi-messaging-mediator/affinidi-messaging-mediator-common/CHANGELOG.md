@@ -2,6 +2,43 @@
 
 ## Changelog history
 
+## 24th June 2026
+
+### 0.15.18 — did:webvh → did:web document rewriting
+
+- New always-built `did_web` module: `webvh_did_to_web`, `rewrite_did_document_to_web`,
+  and `webvh_log_to_did_web` convert a `did:webvh:{scid}:{domain}` DID document into its
+  wire-compatible `did:web:{domain}` form. The rewrite is structured: only DID-URL
+  *self-references* of the document's own DID (the bare DID and `{did}#frag` / `{did}?query`
+  / `{did}/path` forms — id, controller, key and service references) are rewritten. Foreign
+  DIDs, longer DIDs sharing the prefix (`{did}:tenant`), and values that merely embed the
+  DID as a substring (e.g. a `serviceEndpoint` URL) are left verbatim. `webvh_did_to_web`
+  also rejects an empty SCID segment. Pure (`serde_json` only), shared by the mediator
+  runtime (serving `/.well-known/did.json`) and the `mediator-setup` wizard (writing the
+  `did-web.json` operator artefact) so both use one tested implementation.
+
+## 23rd June 2026
+
+### 0.15.17 — Message protocol metadata
+
+- New `MessageProtocol` enum (`DidComm` / `Tsp` / `Other`, `#[non_exhaustive]`)
+  with `MessageProtocol::detect(&str)`, and a `protocol: Option<MessageProtocol>`
+  field on `MessageListElement` (with `MessageListElement::detect_protocol_in_place`).
+  Lets pickup responses carry each message's wire protocol so clients can fetch
+  their messages and route each natively without inspecting it — additive and
+  future-proof (new protocols don't break consumers).
+
+## 23rd June 2026
+
+### 0.15.16 — Forwarding processor: TSP-aware delivery
+
+- The forwarding processor now delivers **TSP** forwards correctly. A TSP forward
+  is queued as `base64url(qb2)` text; `deliver_via_rest` decodes it back to the raw
+  qb2 bytes and POSTs with `Content-Type: application/tsp` so the remote mediator's
+  ingress recognises the TSP magic byte. TSP forwards always use REST (the WebSocket
+  relay path is DIDComm-text oriented). DIDComm forwarding is unchanged — a DIDComm
+  message is not valid base64url of a TSP message, so it is sent verbatim as before.
+
 ## 14th June 2026
 
 ### 0.15.15 — non_exhaustive ProcessorError + SecretStoreError (W7 sweep)

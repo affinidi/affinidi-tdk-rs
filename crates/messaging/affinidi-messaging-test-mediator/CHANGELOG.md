@@ -2,6 +2,156 @@
 
 ## Changelog history
 
+## 27th June 2026
+
+### 0.2.33 — TSP: pure-TSP authentication e2e
+
+- New `TestEnvironment::spawn_with_tsp_auth()` (tsp-gated): builds the TDK with a shared
+  secrets resolver + a registered `TspAuthHandler`, so every profile authenticates over
+  TSP (`/tsp/authenticate`) instead of DIDComm. `new()` was refactored to delegate to a
+  private `new_with_config` — `spawn()` behaviour is unchanged.
+- New `tsp_auth` e2e (`pure_tsp_authentication_round_trips_a_direct_message`): a pure-TSP
+  client sends + fetches a TSP Direct message; both legs require a JWT minted by the
+  `TspAuthHandler` (challenge → Ed25519-sign → `/tsp/authenticate`), so a green round-trip
+  proves the full pure-TSP auth chain.
+
+### 0.2.32 — TSP: WebSocket SDK-consumer e2e
+
+- New `tsp_websocket_sdk_consumer_flushes_and_deletes`: drives the SDK's
+  `atm.tsp().connect_websocket` + `recv` + `unpack_bytes` (rather than a raw tungstenite
+  client) against the embedded mediator — asserts the queued TSP is flushed, unpacks to the
+  payload + sender, and is deleted afterwards. The raw-wire test is retained alongside it.
+
+## 26th June 2026
+
+### 0.2.31 — TSP: WebSocket delivery e2e
+
+- New `tsp_websocket` test: Alice sends a TSP Direct message to Bob, Bob opens a raw
+  WebSocket with the `tsp` subprotocol, and the test asserts the queued message is flushed
+  on connect as a raw-TSP `Binary` frame (decodes to the original payload + sender) and is
+  deleted afterwards (a subsequent fetch is empty). Adds `base64` as a dev-dep to re-encode
+  the raw frame for `atm.tsp().unpack`.
+
+## 24th June 2026
+
+### 0.2.30 — TSP: Control relay e2e
+
+- New `tsp_control_message_relays_through_the_mediator`: Alice sends a relationship-
+  forming invite (a `Control` message) to Bob via `atm.tsp().send_control`; the mediator
+  relays it, and Bob unpacks + decodes the invite. Adds `affinidi-tsp` as a dev-dep for
+  the `ControlMessage` types.
+
+### 0.2.29 — TSP: Nested relay e2e
+
+- New `tsp_nested_message_relays_through_the_mediator`: Alice wraps an inner Direct
+  (sealed to Bob) in a `Nested` envelope sealed to the mediator; the mediator unwraps
+  its layer and forwards the inner to Bob, who unpacks the original payload + sender.
+
+### 0.2.28 — Trust Tasks: acl/set self-service e2e
+
+- New `acl_set_self_service_changes_a_self_manageable_flag` (alice changes her own
+  `anonReceive`) and `acl_set_self_service_refuses_an_admin_only_flag` (alice can't set
+  `blocked`); the cross-account denial test is reframed accordingly.
+
+### 0.2.27 — Trust Tasks: admin family denial e2e
+
+- `admin_family_denies_a_non_admin`: a standard account is refused all five
+  `messaging/admin/*` tasks.
+
+### 0.2.26 — Trust Tasks: access-list lifecycle e2e
+
+- `access_list_self_lifecycle`: alice adds, queries, lists, removes, and clears entries
+  on her own access list, asserting counts and present/absent partitioning throughout.
+
+### 0.2.25 — Trust Tasks: account/add e2e
+
+- `account_add_self_register_creates_a_standard_account` (a standard account adds a new
+  account under the default `ExplicitDeny` mode) and
+  `account_add_denies_a_non_admin_creating_an_admin`.
+
+### 0.2.24 — Trust Tasks: acl/get + acl/set e2e
+
+- `acl_get_self_returns_the_decoded_acl` (alice reads her own ACL) and
+  `acl_set_denies_a_non_admin` (a standard account can't set ACLs).
+
+### 0.2.23 — Trust Tasks: account/change-type denial e2e
+
+- New `account_change_type_denies_a_non_admin` test. Adds a `trust-tasks-rs` dev-dep so
+  tests can name Trust Task payload types (e.g. `AccountType`).
+
+### 0.2.22 — Trust Tasks: account/remove e2e
+
+- New `account_remove_self_removes_the_account` test: alice removes her own account
+  and the store reports a record was removed.
+
+### 0.2.21 — Trust Tasks: account/change-queue-limits e2e
+
+- New `account_change_queue_limits_self_applies_caps_and_persists` test: alice changes
+  her own limits (a value, and `-1` = unlimited), the change persists across a fresh
+  read, and an over-limit request from a standard account is capped at the hard maximum.
+
+### 0.2.20 — Trust Tasks: account/list authz e2e
+
+- New `account_list_denies_a_non_admin` test: a standard account is refused
+  `account/list`. (The admin happy-path listing isn't exercised end-to-end — an
+  `add_admin` identity isn't a streaming-registered account, so the synchronous
+  WebSocket response can't be established on the in-memory harness; the account view
+  itself round-trips via the `account/get` test, which `account/list` reuses.)
+
+### 0.2.19 — Trust Tasks: account/get e2e
+
+- New `account_get_self_returns_the_callers_account` test: alice fetches her own
+  account via `atm.trust_tasks().account_get(.., None)` and asserts the identity
+  (hash as `Vid`), account type, and decoded ACL booleans round-trip through a live
+  mediator.
+
+## 23rd June 2026
+
+### 0.2.18 — Trust Tasks ping e2e
+
+- New `trust_tasks` integration test: `atm.trust_tasks().ping()` round-trips through
+  a live mediator (SDK → DIDComm binding envelope → the mediator's Trust Tasks
+  consumer → typed response), asserting status, nonce echo, and advertised protocols.
+
+### 0.2.17 — Assert message-protocol tagging
+
+- The Direct and bridge e2e tests now assert the fetched message's `protocol`
+  field (TSP and DIDComm respectively) — proving the mediator tags the wire
+  protocol on pickup transparently.
+
+### 0.2.16 — TSP remote-forwarding e2e
+
+- New `tsp_routed_forwards_to_a_remote_recipients_mediator` test: the recipient
+  lives on another mediator (his `did:peer` advertises a `tsp` transport endpoint
+  elsewhere). The mediator resolves the remote endpoint and enqueues the message
+  for forwarding. Unblocked by the `affinidi-did-common` 0.3.9 fix to `did:peer`
+  custom-service-type resolution.
+
+### 0.2.15 — TSP↔DIDComm bridge e2e
+
+- New `tsp_routed_bridges_a_didcomm_message_to_the_recipient` test: Alice authcrypts
+  a DIDComm message to Bob and routes it over TSP through the mediator; the mediator
+  delivers the opaque DIDComm inner and Bob unpacks it natively. Proves protocol
+  bridging end to end.
+
+### 0.2.14 — TSP routed relay e2e
+
+- New `tsp_routed_message_relays_through_the_mediator` test: Alice sends a TSP
+  message routed through the mediator (as a relay hop) to Bob, asserting the
+  payload survives the relay and the original sender is recovered. Complements the
+  existing Direct delivery test.
+
+## 22nd June 2026
+
+### 0.2.13 — TSP end-to-end fixture
+
+- New opt-in `tsp` feature spawns the mediator with TSP support and enables the
+  SDK's `atm.tsp()`, so the suite can exercise dual-protocol (DIDComm + TSP)
+  flows.
+- New `tsp_delivery` integration test: a full TSP Direct round-trip through the
+  mediator driven by the SDK (alice packs → `/inbound` sniff + store → bob fetches
+  + unpacks), asserting payload and sender are recovered. DIDComm suite unchanged.
+
 ## 14th June 2026
 
 ### 0.2.12 — non_exhaustive error enums (W7 sweep)

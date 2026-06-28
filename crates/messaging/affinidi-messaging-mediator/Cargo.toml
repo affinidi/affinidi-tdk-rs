@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.16.3"
+version = "0.16.32"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -36,12 +36,16 @@ memory-backend = []
 
 ## DIDComm v2 — industry-standard DID-based secure messaging.
 ## Enables inbound/outbound message handling, authentication, and OOB discovery.
-## Mutually exclusive with `tsp` at runtime (only one protocol active).
-didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding", "dep:affinidi-crypto"]
+## At least one of `didcomm` or `tsp` must be enabled (see the `compile_error!`
+## in `lib.rs`); the two are NOT mutually exclusive — they are designed to run
+## together (`--features didcomm,tsp`), which is the dual-protocol deployment.
+didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding", "dep:affinidi-crypto", "dep:trust-tasks-rs"]
 
-## TSP (Trust Spanning Protocol) — lightweight alternative to DIDComm.
-## EXPERIMENTAL: not all mediator features are supported yet.
-## Mutually exclusive with `didcomm` at runtime.
+## TSP (Trust Spanning Protocol) — supported, additive alongside DIDComm. Carries TSP
+## Direct / Routed / Nested / Control messages, the TSP↔DIDComm bridge, Trust Tasks over
+## TSP, and advertises a TSPTransport service for discovery. Run together with `didcomm`:
+## TSP currently reuses the DIDComm-authenticated session, so a `tsp`-only build has no
+## auth path yet (pure-TSP `/tsp/authenticate` is pending).
 tsp = ["dep:affinidi-tsp"]
 
 ## Secret storage backends — forwarded to `mediator-common`'s `secrets-*`
@@ -63,6 +67,9 @@ aws = ["dep:aws-config", "dep:aws-sdk-ssm"]
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.18" }
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", optional = true }
+## Trust Tasks framework core — consumes Trust Task documents (the messaging
+## ping / account / acl / access-list tasks) carried over the binding envelope.
+trust-tasks-rs = { version = "0.2", optional = true }
 ## Optional: JOSE key-agreement types for the didcomm compat layer (#327)
 affinidi-crypto = { version = "0.2", features = ["jose"], optional = true }
 ## Optional: Trust Spanning Protocol (activated by `tsp` feature)
@@ -89,7 +96,7 @@ affinidi-secrets-resolver = "0.5"
 ## Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"
 ## VTA SDK for centralized DID/key management via Verifiable Trust Agent
-vta-sdk = { version = "0.16", features = ["integration"] }
+vta-sdk = { version = "0.18", features = ["integration"] }
 
 # ── Web Framework ────────────────────────────────────────────────────────
 axum = { version = "0.8", features = ["ws"] }
