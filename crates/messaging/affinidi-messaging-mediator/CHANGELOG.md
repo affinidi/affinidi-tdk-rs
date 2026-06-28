@@ -4,6 +4,16 @@
 
 ## 26th June 2026
 
+### 0.16.32 — Bump vta-sdk to 0.18 (enables did:webvh P-256 rendering)
+
+- Bumped the `vta-sdk` dependency from `0.16` to `0.18`, whose embedded
+  `didcomm-mediator` template carries the optional P-256 verification-method slots
+  (`OpenVTC/verifiable-trust-infrastructure#587`). This is what lets
+  `mediator-setup --did-method webvh --key-suite p256` actually emit the P-256
+  signing/key-agreement keys; the renderer itself already shipped in #531. No
+  behavioural change to the mediator runtime — the default DID document is byte-for-byte
+  unchanged when the P-256 suite is not requested.
+
 ### 0.16.31 — TSP: raw-TSP WebSocket delivery mode
 
 - A WebSocket client may now opt into a **raw-TSP delivery mode** by adding a `tsp`

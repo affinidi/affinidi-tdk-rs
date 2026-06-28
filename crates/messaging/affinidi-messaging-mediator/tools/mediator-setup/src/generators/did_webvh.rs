@@ -307,9 +307,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires a vta-sdk release carrying the didcomm-mediator P-256 template slots \
-                (OpenVTC/verifiable-trust-infrastructure#587). Un-ignore once the vta-sdk \
-                dependency is bumped to that release."]
     async fn webvh_p256_suite_adds_signing_and_key_agreement_keys() {
         let result = generate_did_webvh(
             "https://mediator.example.com",
