@@ -1,27 +1,55 @@
-//! TSP message envelope — CESR-encoded header with sender/receiver VIDs.
+//! TSP message envelope — the binary-CESR `-E` (encrypted-then-signed) header.
 //!
-//! The envelope is used as Additional Authenticated Data (AAD) for HPKE,
-//! binding the sender and receiver identities to the ciphertext.
-
-use affinidi_cesr::Matter;
+//! The envelope is the cleartext outer frame of a TSP message. It carries the
+//! TSP version, the sender VID and receiver VID, and is byte-compatible with the
+//! ToIP `tsp-sdk` reference. The encoded envelope frame is used verbatim as the
+//! HPKE Additional Authenticated Data (AAD), binding sender/receiver identities
+//! to the ciphertext.
+//!
+//! Wire layout of the envelope (the `-E` count-code group):
+//! ```text
+//! -E<count>                       (TSP_ETS_WRAPPER count code; count = quadlets)
+//!   YTSP <version-count>          (encode_version)
+//!   <var-data B> sender-VID       (encode_variable_data TSP_VID)
+//!   <var-data B> receiver-VID     (encode_variable_data TSP_VID)
+//!   X 00 00                       (encode_fixed_data TSP_TMP, 2 zero bytes)
+//! ```
+//!
+//! Note: unlike the previous bespoke format, the message *kind*
+//! (Direct/Nested/Routed/Control) is **not** carried in the cleartext envelope.
+//! In TSP the kind lives in the encrypted payload frame (see [`crate::message::direct`]).
+//! For the Direct-only interop scope, [`Envelope::decode`] reports
+//! [`MessageType::Direct`]; carrying the other kinds is a follow-up.
 
 use crate::error::TspError;
 use crate::message::MessageType;
+use crate::message::wire;
 
-/// TSP protocol version.
+/// TSP protocol version (major) advertised on the wire.
 pub const TSP_VERSION: u8 = 1;
 
-/// A TSP message envelope containing the message metadata.
+/// A TSP message envelope (cleartext header).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Envelope {
-    /// Protocol version.
+    /// Protocol version (major).
     pub version: u8,
-    /// Message type.
+    /// Message type. Not carried in the cleartext interop envelope; kept for API
+    /// stability and populated from the decrypted payload on unpack.
     pub message_type: MessageType,
     /// Sender VID string.
     pub sender: String,
     /// Receiver VID string.
     pub receiver: String,
+}
+
+/// A decoded envelope plus the exact byte range of its encoded `-E` frame, which
+/// is the HPKE AAD (`raw_header`).
+#[derive(Debug, Clone)]
+pub struct DecodedEnvelope {
+    /// The parsed envelope.
+    pub envelope: Envelope,
+    /// Number of bytes consumed by the `-E` envelope frame (the AAD length).
+    pub header_len: usize,
 }
 
 impl Envelope {
@@ -39,90 +67,74 @@ impl Envelope {
         }
     }
 
-    /// Encode the envelope to CESR qb2 (binary) bytes.
+    /// Encode the envelope to its binary-CESR `-E` frame bytes.
     ///
-    /// Wire format (all CESR qb2-encoded, concatenated):
-    /// 1. Header Matter (code `"1AAF"` / Tag1, 3 raw bytes):
-    ///    `[version, message_type, 0x00]`
-    /// 2. Sender VID Matter (code `"4B"`, variable-length raw bytes)
-    /// 3. Receiver VID Matter (code `"4B"`, variable-length raw bytes)
+    /// The returned bytes are exactly the HPKE AAD for the message.
     pub fn encode(&self) -> Result<Vec<u8>, TspError> {
-        // Header: version + message_type + padding byte → 3 raw bytes in Tag1
-        let header = Matter::new("1AAF", vec![self.version, self.message_type as u8, 0x00])?;
-        let sender = Matter::new("4B", self.sender.as_bytes().to_vec())?;
-        let receiver = Matter::new("4B", self.receiver.as_bytes().to_vec())?;
+        // Build the envelope body first so we can prefix it with the count code.
+        let mut body = Vec::new();
+        wire::encode_version(&mut body);
+        wire::encode_variable_data(wire::TSP_VID, self.sender.as_bytes(), &mut body);
+        wire::encode_variable_data(wire::TSP_VID, self.receiver.as_bytes(), &mut body);
+        wire::encode_fixed_data(wire::TSP_TMP, &[0u8, 0u8], &mut body);
 
-        let header_qb2 = header.qb2()?;
-        let sender_qb2 = sender.qb2()?;
-        let receiver_qb2 = receiver.qb2()?;
+        if !body.len().is_multiple_of(3) {
+            return Err(TspError::InvalidMessage(
+                "envelope body not a multiple of 3 bytes".into(),
+            ));
+        }
 
-        let mut buf = Vec::with_capacity(header_qb2.len() + sender_qb2.len() + receiver_qb2.len());
-        buf.extend_from_slice(&header_qb2);
-        buf.extend_from_slice(&sender_qb2);
-        buf.extend_from_slice(&receiver_qb2);
-
-        Ok(buf)
+        let mut out = Vec::with_capacity(3 + body.len());
+        wire::encode_count(wire::TSP_ETS_WRAPPER, (body.len() / 3) as u32, &mut out);
+        out.extend_from_slice(&body);
+        Ok(out)
     }
 
-    /// Decode an envelope from CESR qb2 bytes. Returns (envelope, bytes_consumed).
+    /// Decode an envelope from the start of `data`. Returns the envelope and the
+    /// number of bytes consumed (the AAD length).
     pub fn decode(data: &[u8]) -> Result<(Self, usize), TspError> {
-        // 1. Parse header Matter (fixed-length Tag1: 6 qb2 bytes)
-        let header = Matter::from_qb2(data)
-            .map_err(|e| TspError::InvalidMessage(format!("envelope header: {e}")))?;
-        if header.code() != "1AAF" {
-            return Err(TspError::InvalidMessage(format!(
-                "expected header code 1AAF, got {}",
-                header.code()
-            )));
-        }
-        let header_raw = header.raw();
-        if header_raw.len() < 2 {
-            return Err(TspError::InvalidMessage("header raw too short".into()));
-        }
-        let version = header_raw[0];
-        if version != TSP_VERSION {
-            return Err(TspError::InvalidMessage(format!(
-                "unsupported TSP version: {version}"
-            )));
-        }
-        let message_type = MessageType::from_byte(header_raw[1])?;
-        let mut pos = header.full_size_qb2();
+        let decoded = Self::decode_full(data)?;
+        Ok((decoded.envelope, decoded.header_len))
+    }
 
-        // 2. Parse sender VID Matter (variable-length)
-        let sender_matter = Matter::from_qb2(&data[pos..])
-            .map_err(|e| TspError::InvalidMessage(format!("sender VID: {e}")))?;
-        let sender = std::str::from_utf8(sender_matter.raw())
-            .map_err(|_| TspError::InvalidMessage("invalid sender VID encoding".into()))?
-            .to_string();
-        pos += sender_matter.full_size_qb2();
+    /// Decode an envelope and report the AAD (`-E` frame) byte length.
+    pub fn decode_full(data: &[u8]) -> Result<DecodedEnvelope, TspError> {
+        let mut pos = 0usize;
 
-        // 3. Parse receiver VID Matter (variable-length)
-        let receiver_matter = Matter::from_qb2(&data[pos..])
-            .map_err(|e| TspError::InvalidMessage(format!("receiver VID: {e}")))?;
-        let receiver = std::str::from_utf8(receiver_matter.raw())
-            .map_err(|_| TspError::InvalidMessage("invalid receiver VID encoding".into()))?
-            .to_string();
-        pos += receiver_matter.full_size_qb2();
+        // Outer ETS wrapper count code (we don't need the count value: we parse
+        // the fields directly, matching the reference decoder).
+        wire::decode_count(wire::TSP_ETS_WRAPPER, data, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing -E envelope wrapper".into()))?;
 
-        Ok((
-            Envelope {
-                version,
-                message_type,
+        // Version marker.
+        wire::decode_version(data, &mut pos)?;
+
+        // Sender VID.
+        let sender_bytes = wire::decode_variable_data(wire::TSP_VID, data, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing sender VID".into()))?;
+        let sender = String::from_utf8(sender_bytes)
+            .map_err(|_| TspError::InvalidMessage("invalid sender VID encoding".into()))?;
+
+        // Receiver VID.
+        let receiver_bytes = wire::decode_variable_data(wire::TSP_VID, data, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing receiver VID".into()))?;
+        let receiver = String::from_utf8(receiver_bytes)
+            .map_err(|_| TspError::InvalidMessage("invalid receiver VID encoding".into()))?;
+
+        // The 2-byte TMP marker (consumed if present; the reference emits it
+        // unconditionally for encrypted messages).
+        let _ = wire::decode_fixed_data::<2>(wire::TSP_TMP, data, &mut pos);
+
+        Ok(DecodedEnvelope {
+            envelope: Envelope {
+                version: TSP_VERSION,
+                // Not on the wire; populated from the payload frame on unpack.
+                message_type: MessageType::Direct,
                 sender,
                 receiver,
             },
-            pos,
-        ))
-    }
-
-    /// Encode the sender VID as a CESR Matter primitive (qb64).
-    pub fn sender_matter(&self) -> Result<Matter, TspError> {
-        Ok(Matter::new("4B", self.sender.as_bytes().to_vec())?)
-    }
-
-    /// Encode the receiver VID as a CESR Matter primitive (qb64).
-    pub fn receiver_matter(&self) -> Result<Matter, TspError> {
-        Ok(Matter::new("4B", self.receiver.as_bytes().to_vec())?)
+            header_len: pos,
+        })
     }
 }
 
@@ -132,53 +144,45 @@ mod tests {
 
     #[test]
     fn envelope_encode_decode_roundtrip() {
-        let env = Envelope::new(MessageType::Direct, "did:example:alice", "did:example:bob");
-
+        let env = Envelope::new(MessageType::Direct, "did:web:alice.example", "did:web:bob.example");
         let encoded = env.encode().unwrap();
         let (decoded, consumed) = Envelope::decode(&encoded).unwrap();
-
-        assert_eq!(decoded, env);
+        assert_eq!(decoded.sender, env.sender);
+        assert_eq!(decoded.receiver, env.receiver);
         assert_eq!(consumed, encoded.len());
     }
 
     #[test]
-    fn envelope_version() {
-        let env = Envelope::new(MessageType::Direct, "alice", "bob");
-        assert_eq!(env.version, TSP_VERSION);
+    fn envelope_first_byte_is_count_code() {
+        let env = Envelope::new(MessageType::Direct, "a", "b");
+        let encoded = env.encode().unwrap();
+        // -E count code => first byte 0xf8.
+        assert_eq!(encoded[0], 0xf8);
     }
 
     #[test]
-    fn envelope_invalid_version() {
-        let env = Envelope::new(MessageType::Direct, "a", "b");
-        let mut data = env.encode().unwrap();
-        // The version byte is inside the Tag1 Matter's raw payload.
-        // Easiest way to test: construct a valid CESR envelope with bad version.
-        let bad_header = Matter::new("1AAF", vec![99, 0x00, 0x00]).unwrap();
-        let bad_qb2 = bad_header.qb2().unwrap();
-        // Replace the header portion (first 6 bytes for Tag1 qb2)
-        data[..bad_qb2.len()].copy_from_slice(&bad_qb2);
-        assert!(Envelope::decode(&data).is_err());
+    fn envelope_matches_reference_header() {
+        // Reference bytes from tsp-sdk seal(Bob->Alice) for these exact VIDs.
+        let env = Envelope::new(
+            MessageType::Direct,
+            "did:web:bob.example",
+            "did:web:alice.example",
+        );
+        let encoded = env.encode().unwrap();
+        let expected: &[u8] = &[
+            0xf8, 0x40, 0x13, // -E count 19
+            0x61, 0x34, 0x8f, // YTSP
+            0xf8, 0x00, 0x01, // version count
+            0xe8, 0x10, 0x07, 0x00, 0x00, // sender var-data header + 2 lead
+        ];
+        assert_eq!(&encoded[..expected.len()], expected);
+        // The whole header is 19 quadlets * 3 + 3 (count) = 60 bytes.
+        assert_eq!(encoded.len(), 60);
     }
 
     #[test]
     fn envelope_truncated() {
-        // Too short to contain even the header Matter
+        assert!(Envelope::decode(&[0xf8, 0x40]).is_err());
         assert!(Envelope::decode(&[1, 0]).is_err());
-    }
-
-    #[test]
-    fn envelope_cesr_matter() {
-        let env = Envelope::new(MessageType::Direct, "did:example:alice", "did:example:bob");
-        let sender_m = env.sender_matter().unwrap();
-        assert_eq!(sender_m.code(), "4B");
-        assert_eq!(sender_m.raw(), b"did:example:alice");
-    }
-
-    #[test]
-    fn envelope_control_type() {
-        let env = Envelope::new(MessageType::Control, "alice", "bob");
-        let encoded = env.encode().unwrap();
-        let (decoded, _) = Envelope::decode(&encoded).unwrap();
-        assert_eq!(decoded.message_type, MessageType::Control);
     }
 }

@@ -15,11 +15,12 @@ use crate::error::TspError;
 use crate::message::MessageType;
 use crate::message::envelope::Envelope;
 
-/// The leading byte of every TSP message: the CESR Tag1 qb2 magic for code
-/// `1AAF` (the full 3-byte magic is `D4 00 05`). DIDComm — being JSON or
-/// compact-JWS — starts with `{` (`0x7B`) or `ey…` instead, so this byte is an
-/// unambiguous discriminator.
-pub const TSP_MAGIC_BYTE: u8 = 0xD4;
+/// The leading byte of every TSP message: the first byte of the binary-CESR
+/// `-E` count code (`TSP_ETS_WRAPPER`), which is `0xF8`. The `-E` count code
+/// triplet is `f8 4X XX` — the `f8` comes from the `-` (DASH) selector packed
+/// with the `E` identifier. DIDComm — being JSON or compact-JWS — starts with
+/// `{` (`0x7B`) or `ey…` instead, so this byte is an unambiguous discriminator.
+pub const TSP_MAGIC_BYTE: u8 = 0xF8;
 
 /// Cheap classifier: does `bytes` look like a TSP message?
 ///
@@ -34,17 +35,23 @@ pub fn is_tsp(bytes: &[u8]) -> bool {
 
 /// Cleartext metadata of a TSP message, parsed without any keys.
 ///
-/// The TSP envelope carries the sender VID, receiver VID, version, and message
-/// type in the clear (they are HPKE additional-authenticated data, bound to the
-/// ciphertext but readable). This lets a relay route and account for a message
-/// without being able to decrypt its payload.
+/// The TSP envelope carries the sender VID and receiver VID in the clear (they
+/// are bound to the ciphertext via the HPKE `info`, but readable). This lets a
+/// relay route and account for a message without being able to decrypt it.
+///
+/// Note: in the interop wire format the message *kind* (Direct/Nested/Routed/
+/// Control) is **not** in the cleartext envelope — it lives in the encrypted
+/// payload. [`MetaEnvelope::message_type`] therefore always reports
+/// [`MessageType::Direct`] as a keys-free placeholder; a relay that needs the
+/// real kind must open the message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetaEnvelope {
     /// The sender VID.
     pub sender: String,
     /// The receiver VID (the next hop / addressee).
     pub receiver: String,
-    /// The message type (Direct / Nested / Routed / Control).
+    /// Placeholder message type; always [`MessageType::Direct`] from a keys-free
+    /// parse (the real kind is encrypted — see the struct docs).
     pub message_type: MessageType,
     /// SHA-256 of the full wire bytes — the message id used for storage and
     /// idempotency (matches the convention of DIDComm-based mediators).
@@ -126,7 +133,9 @@ mod tests {
     }
 
     #[test]
-    fn meta_envelope_reads_routed_type() {
+    fn meta_envelope_reads_addressing_for_routed_message() {
+        // In the interop format the kind is encrypted, so a keys-free parse only
+        // recovers addressing (and reports Direct as a placeholder kind).
         let sign = SigningKey::generate(&mut OsRng);
         let sender_enc = StaticSecret::random_from_rng(OsRng);
         let recv_enc = StaticSecret::random_from_rng(OsRng);
@@ -141,7 +150,9 @@ mod tests {
         )
         .unwrap();
         let meta = MetaEnvelope::parse(&msg.bytes).unwrap();
-        assert_eq!(meta.message_type, MessageType::Routed);
         assert_eq!(meta.receiver, "did:web:mediator");
+        assert_eq!(meta.sender, "did:web:alice");
+        // Kind is not in cleartext: keys-free parse reports the Direct placeholder.
+        assert_eq!(meta.message_type, MessageType::Direct);
     }
 }
