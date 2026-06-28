@@ -114,18 +114,18 @@ fn now_epoch_secs() -> u64 {
 /// the wire; a DIDComm message does not (and is sent as text, unchanged).
 ///
 /// TSP forwards are queued as `base64url(qb2)` — the CESR qb64 text form, which
-/// begins `1AAF` (the TSP envelope code) and decodes to bytes leading with the
-/// `0xD4` magic byte. A DIDComm JWE/JWS is not valid base64url of such bytes, so
-/// this returns `None` and the message is sent verbatim.
+/// begins `-E` (the TSP envelope's `-E` count code) and decodes to bytes leading
+/// with the `0xF8` magic byte. A DIDComm JWE/JWS is not valid base64url of such
+/// bytes, so this returns `None` and the message is sent verbatim.
 fn decode_tsp_forward(message: &str) -> Option<Vec<u8>> {
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-    if !message.starts_with("1AAF") {
+    if !message.starts_with("-E") {
         return None;
     }
     BASE64_URL_SAFE_NO_PAD
         .decode(message)
         .ok()
-        .filter(|bytes| bytes.first() == Some(&0xD4))
+        .filter(|bytes| bytes.first() == Some(&0xF8))
 }
 
 /// State for a connection to a remote mediator endpoint
@@ -799,10 +799,10 @@ mod tests {
     fn decode_tsp_forward_recovers_qb2_and_passes_didcomm_through() {
         use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 
-        // A TSP message (leads with the 0xD4 magic byte) queued as base64url(qb2).
-        let qb2 = [0xD4u8, 0x00, 0x05, 1, 2, 3, 4];
+        // A TSP message (leads with the 0xF8 -E count-code magic byte) queued as base64url(qb2).
+        let qb2 = [0xF8u8, 0x40, 0x13, 1, 2, 3, 4];
         let queued = BASE64_URL_SAFE_NO_PAD.encode(qb2);
-        assert!(queued.starts_with("1AAF"), "qb64 envelope-code prefix");
+        assert!(queued.starts_with("-E"), "qb64 envelope-code prefix");
         assert_eq!(
             decode_tsp_forward(&queued).as_deref(),
             Some(&qb2[..]),

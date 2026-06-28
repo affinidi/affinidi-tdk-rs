@@ -79,8 +79,8 @@ pub async fn message_inbound_handler(
             .into());
         }
 
-        // Protocol sniff: a TSP message leads with the CESR `1AAF` magic byte
-        // (0xD4); a DIDComm JWE/JWS is JSON (`{` / `ey…`). Only compiled into a
+        // Protocol sniff: a TSP message leads with the CESR `-E` magic byte
+        // (0xF8); a DIDComm JWE/JWS is JSON (`{` / `ey…`). Only compiled into a
         // dual didcomm+tsp build. DIDComm bytes fall through to the unchanged path.
         #[cfg(feature = "tsp")]
         if affinidi_tsp::is_tsp(&body) {
