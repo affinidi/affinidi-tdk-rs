@@ -24,7 +24,7 @@ Verifiable Identifiers (VIDs).
 
 | Operation | Algorithm |
 |---|---|
-| Authenticated encryption | HPKE-Auth (DHKEM(X25519) + HKDF-SHA256 + AES-128-GCM) per [RFC 9180](https://www.rfc-editor.org/rfc/rfc9180) |
+| Authenticated encryption | HPKE-Auth (DHKEM(X25519) + HKDF-SHA256 + ChaCha20Poly1305) per [RFC 9180](https://www.rfc-editor.org/rfc/rfc9180) |
 | Signing | Ed25519 |
 | Message digest | BLAKE2s-256 |
 | Encoding | CESR (Composable Event Streaming Representation) |

@@ -1,11 +1,12 @@
 //! HPKE-Auth (RFC 9180) implementation using primitives.
 //!
-//! Suite: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-128-GCM, Auth mode.
+//! Suite: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20Poly1305, Auth mode —
+//! the cipher suite the TSP spec (v1.0 Implementor's Draft Rev 2) mandates.
 //!
 //! This implements only the specific HPKE suite required by TSP, built from
 //! standard cryptographic primitives rather than a generic HPKE library.
 
-use aes_gcm::{AeadInPlace, Aes128Gcm, KeyInit, aead::generic_array::GenericArray};
+use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, KeyInit, aead::generic_array::GenericArray};
 use hkdf::Hkdf;
 use rand_core::OsRng;
 use sha2::Sha256;
@@ -18,15 +19,15 @@ use crate::error::TspError;
 const MODE_AUTH: u8 = 0x02;
 
 const N_SECRET: usize = 32; // KEM shared secret size
-const N_K: usize = 16; // AES-128-GCM key size
-const N_N: usize = 12; // AES-128-GCM nonce size
+const N_K: usize = 32; // ChaCha20Poly1305 key size
+const N_N: usize = 12; // ChaCha20Poly1305 nonce size
 const N_H: usize = 32; // HKDF-SHA256 hash output size
 
 /// Result of HPKE-Auth sealing (encryption + sender authentication).
 pub struct SealResult {
     /// The encapsulated key (32 bytes, X25519 ephemeral public key).
     pub enc: [u8; 32],
-    /// The ciphertext (plaintext + 16-byte AES-GCM tag).
+    /// The ciphertext (plaintext + 16-byte Poly1305 tag).
     pub ciphertext: Vec<u8>,
 }
 
@@ -64,12 +65,12 @@ pub fn seal(
     let (key, base_nonce) = key_schedule(&shared_secret, info)?;
 
     let mut ciphertext = plaintext.to_vec();
-    let cipher = Aes128Gcm::new_from_slice(&key)
-        .map_err(|e| TspError::Hpke(format!("AES-GCM invalid key: {e}")))?;
+    let cipher = ChaCha20Poly1305::new_from_slice(&key)
+        .map_err(|e| TspError::Hpke(format!("ChaCha20Poly1305 invalid key: {e}")))?;
     let nonce = GenericArray::from(base_nonce);
     cipher
         .encrypt_in_place(&nonce, aad, &mut ciphertext)
-        .map_err(|e| TspError::Hpke(format!("AES-GCM seal failed: {e}")))?;
+        .map_err(|e| TspError::Hpke(format!("ChaCha20Poly1305 seal failed: {e}")))?;
 
     Ok(SealResult { enc, ciphertext })
 }
@@ -84,7 +85,7 @@ pub fn seal(
 /// equally unique and used only once.
 ///
 /// # Arguments
-/// * `ciphertext` - The encrypted data (including 16-byte AES-GCM tag)
+/// * `ciphertext` - The encrypted data (including 16-byte Poly1305 tag)
 /// * `aad` - Additional authenticated data (must match what was used in seal)
 /// * `enc` - The encapsulated key from the sender
 /// * `recipient_sk` - Recipient's X25519 private key (32 bytes)
@@ -105,12 +106,14 @@ pub fn open(
     let (key, base_nonce) = key_schedule(&shared_secret, info)?;
 
     let mut plaintext = ciphertext.to_vec();
-    let cipher = Aes128Gcm::new_from_slice(&key)
-        .map_err(|e| TspError::Hpke(format!("AES-GCM invalid key: {e}")))?;
+    let cipher = ChaCha20Poly1305::new_from_slice(&key)
+        .map_err(|e| TspError::Hpke(format!("ChaCha20Poly1305 invalid key: {e}")))?;
     let nonce = GenericArray::from(base_nonce);
     cipher
         .decrypt_in_place(&nonce, aad, &mut plaintext)
-        .map_err(|_| TspError::Hpke("AES-GCM open failed: authentication tag mismatch".into()))?;
+        .map_err(|_| {
+            TspError::Hpke("ChaCha20Poly1305 open failed: authentication tag mismatch".into())
+        })?;
 
     Ok(plaintext)
 }
@@ -299,7 +302,8 @@ fn labeled_expand(
 const KEM_SUITE_ID: &[u8] = b"KEM\x00\x20";
 
 /// HPKE suite ID: "HPKE" || I2OSP(kem_id, 2) || I2OSP(kdf_id, 2) || I2OSP(aead_id, 2)
-const HPKE_SUITE_ID: &[u8] = b"HPKE\x00\x20\x00\x01\x00\x01";
+/// = HPKE || 0x0020 (DHKEM X25519) || 0x0001 (HKDF-SHA256) || 0x0003 (ChaCha20Poly1305).
+const HPKE_SUITE_ID: &[u8] = b"HPKE\x00\x20\x00\x01\x00\x03";
 
 #[cfg(test)]
 mod tests {
@@ -325,7 +329,7 @@ mod tests {
         )
         .unwrap();
 
-        // Ciphertext should be plaintext + 16-byte AES-GCM tag
+        // Ciphertext should be plaintext + 16-byte Poly1305 tag
         assert_eq!(sealed.ciphertext.len(), plaintext.len() + 16);
 
         let opened = open(
