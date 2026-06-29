@@ -1,5 +1,24 @@
 # Affinidi TSP Changelog
 
+## 29th June 2026
+
+### 0.1.8 — spec conformance (2/2): CESR wire framing + RFC-9180 HPKE (tsp-sdk interop)
+
+- Rewrote the Direct-message wire format to the TSP spec's CESR framing (the `-E` envelope
+  frame, `YTSP` version, var-data VID codes, `G` ciphertext code, `-Z`/`XSCS` payload frame,
+  `-C`/`-K` signature framing). The magic byte is now `0xF8` (the `-E` count code), was
+  `0xD4`. The message kind (Direct/Routed/Nested/Control) now travels in the *encrypted*
+  payload, not the cleartext envelope (`MetaEnvelope` reports a Direct placeholder).
+- Corrected four RFC 9180 deviations in the hand-rolled HPKE — DHKEM KEM context order
+  (`enc‖pkR‖pkS`), `LabeledExtract` returning the real PRK, and the DHKEM `eae_prk` /
+  `shared_secret` labels. These were latent correctness bugs (the prior output was
+  non-standard, only self-consistent).
+- With both, a Direct message now round-trips **both directions** against the ToIP reference
+  `tsp_sdk` 0.9.0-alpha2 (verified by the `interop/` harness). Routed/Nested/Control build on
+  the same framing.
+- Wire-breaking but API-stable (`pack`/`unpack`/`pack_routed`/`pack_nested` signatures
+  unchanged), so consumers need no code changes beyond rebuilding.
+
 ## 28th June 2026
 
 ### 0.1.7 — spec conformance (1/2): ChaCha20Poly1305 HPKE AEAD + empty HPKE info

@@ -139,7 +139,7 @@ fn decode_payload_frame(frame: &[u8]) -> Result<(Vec<u8>, MessageType), TspError
 
 /// Encode the signature frame: `-C<n> -K<n> <fixed B> sig`.
 fn encode_signature_frame(signature: &[u8; SIG_LEN], out: &mut Vec<u8>) {
-    let quadlets = (signature.len().next_multiple_of(3) / 3) as u32;
+    let quadlets = signature.len().div_ceil(3) as u32;
     wire::encode_count(wire::TSP_ATTACH_GRP, quadlets, out);
     wire::encode_count(wire::TSP_INDEX_SIG_GRP, quadlets, out);
     wire::encode_fixed_data(wire::ED25519_SIGNATURE, signature, out);
@@ -151,7 +151,7 @@ fn decode_signature_frame(data: &[u8], pos: &mut usize) -> Result<[u8; SIG_LEN],
         .ok_or_else(|| TspError::InvalidMessage("missing -C signature group".into()))?;
     let k = wire::decode_count(wire::TSP_INDEX_SIG_GRP, data, pos)
         .ok_or_else(|| TspError::InvalidMessage("missing -K signature group".into()))?;
-    let want = (SIG_LEN.next_multiple_of(3) / 3) as u32;
+    let want = SIG_LEN.div_ceil(3) as u32;
     if a != want || k != want {
         return Err(TspError::InvalidMessage(
             "unexpected signature group size".into(),
