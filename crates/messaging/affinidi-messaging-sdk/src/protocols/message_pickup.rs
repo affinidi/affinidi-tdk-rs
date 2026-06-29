@@ -33,6 +33,24 @@ use crate::{
 #[derive(Default)]
 pub struct MessagePickup {}
 
+/// A single inbound frame off the live-delivery stream, tagged by transport.
+///
+/// `live_stream_next` yields only DIDComm and errors on a TSP frame;
+/// `live_stream_next_packed` yields only TSP and errors on a DIDComm frame. A
+/// node that speaks **both** protocols over one websocket can't know which will
+/// arrive next, so neither single-protocol method fits. `live_stream_next_frame`
+/// returns whichever arrives, tagged here, so a multiplexing consumer (e.g.
+/// `AffinidiMessageService`) can route by transport off a single stream.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum InboundFrame {
+    /// An unpacked DIDComm message and its unpack metadata.
+    DidComm(Box<Message>, Box<UnpackMetadata>),
+    /// A still-packed TSP frame (CESR/qb64), to be handed to
+    /// `atm.tsp().unpack_bytes`. Carried opaquely — the SDK does not unpack it.
+    Tsp(Box<String>),
+}
+
 // Reads the body of an incoming Message Pickup 3.0 Status Request Message
 #[derive(Default, Deserialize)]
 pub struct MessagePickupStatusRequest {
@@ -290,6 +308,101 @@ impl MessagePickup {
                             warn!("Error receiving message: {:?}", e);
                             Err(ATMError::MsgReceiveError(format!(
                                 "Error receiving message: {e:?}"
+                            )))
+                        }
+                    }
+                }
+            }
+        }
+        .instrument(_span)
+        .await
+    }
+
+    /// Waits for the next inbound frame — **DIDComm or TSP** — via websocket
+    /// live delivery, returning it tagged as an [`InboundFrame`].
+    ///
+    /// Unlike [`live_stream_next`](Self::live_stream_next) (DIDComm-only, errors
+    /// on a TSP frame) and [`live_stream_next_packed`](Self::live_stream_next_packed)
+    /// (TSP-only, errors on a DIDComm frame), this accepts **both** off the one
+    /// stream so a multiplexing consumer can route by transport. `auto_delete`
+    /// deletes the received message in the background (by unpack `sha256_hash`
+    /// for DIDComm, by hash of the packed frame for TSP), matching the two
+    /// single-protocol methods.
+    pub async fn live_stream_next_frame(
+        &self,
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        wait: Option<Duration>,
+        auto_delete: bool,
+    ) -> Result<Option<InboundFrame>, ATMError> {
+        let _span = span!(Level::DEBUG, "live_stream_next_frame");
+
+        async move {
+            let Some(mediator) = &*profile.inner.mediator else {
+                warn!("Mediator not set for profile {}", profile.inner.alias);
+                return Err(ATMError::ProfileError("No Mediator set for profile".into()));
+            };
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let Some(ws_channel) = &*mediator.ws_channel_tx.read().await else {
+                warn!(
+                    "WebSocket channel not set for profile {}",
+                    profile.inner.alias
+                );
+                return Err(ATMError::ProfileError(
+                    "No WebSocket channel set for profile".into(),
+                ));
+            };
+
+            let tx_uuid = mediator.get_tx_uuid();
+            ws_channel
+                .send(WebSocketCommands::Next(tx_uuid, tx))
+                .await
+                .map_err(|err| {
+                    ATMError::TransportError(format!(
+                        "Could not send Next command to websocket: {err:?}"
+                    ))
+                })?;
+            debug!("sent next request to websocket for inbound frame");
+
+            let sleep: tokio::time::Sleep = tokio::time::sleep(wait.unwrap_or(Duration::MAX));
+
+            select! {
+                _ = sleep, if wait.is_some() => {
+                    debug!("Timeout reached, no message received");
+                    ws_channel.send(WebSocketCommands::CancelNext(tx_uuid)).await.map_err(|err| {
+                        ATMError::TransportError(format!(
+                            "Could not send CancelNext command to websocket: {err:?}"
+                        ))
+                    })?;
+                    Ok(None)
+                }
+                value = rx => {
+                    match value {
+                        Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
+                            if auto_delete {
+                                atm.delete_message_background(profile, &meta.sha256_hash).await?;
+                            }
+                            Ok(Some(InboundFrame::DidComm(msg, meta)))
+                        }
+                        Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
+                            if auto_delete {
+                                let sha256_hash = sha256::digest(packed_msg.as_str());
+                                atm.delete_message_background(profile, &sha256_hash).await?;
+                            }
+                            Ok(Some(InboundFrame::Tsp(packed_msg)))
+                        }
+                        Ok(WebSocketResponses::Disconnected) => {
+                            // Connection dropped while waiting — treat as "no
+                            // message right now" so the consumer's loop quietly
+                            // retries on the reconnected socket.
+                            debug!("WebSocket disconnected while awaiting next frame");
+                            Ok(None)
+                        }
+                        Err(e) => {
+                            warn!("Error receiving frame: {:?}", e);
+                            Err(ATMError::MsgReceiveError(format!(
+                                "Error receiving frame: {e:?}"
                             )))
                         }
                     }
@@ -817,6 +930,19 @@ impl<'a> MessagePickupOps<'a> {
     ) -> Result<Option<String>, ATMError> {
         MessagePickup::default()
             .live_stream_next_packed(self.atm, profile, wait, auto_delete)
+            .await
+    }
+
+    /// Waits for the next inbound frame (DIDComm or TSP) via websocket live delivery
+    /// See [`MessagePickup::live_stream_next_frame`] for full documentation
+    pub async fn live_stream_next_frame(
+        &self,
+        profile: &Arc<ATMProfile>,
+        wait: Option<Duration>,
+        auto_delete: bool,
+    ) -> Result<Option<InboundFrame>, ATMError> {
+        MessagePickup::default()
+            .live_stream_next_frame(self.atm, profile, wait, auto_delete)
             .await
     }
 }
