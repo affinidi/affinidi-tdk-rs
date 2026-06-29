@@ -8,9 +8,12 @@
 //! itself. The **inner** message is opaque to every intermediary: it is sealed
 //! end-to-end to the exit/recipient and merely carried.
 //!
-//! Routing-layer wire layout (the plaintext sealed to each hop):
+//! Routing-layer wire layout: the remaining hop list and the opaque inner
+//! message are carried as separate fields of the CESR payload frame (see
+//! [`crate::message::direct`]), byte-compatible with the `tsp_sdk` reference's
+//! `Payload::RoutedMessage(hops, inner)`:
 //! ```text
-//! [hop_count:u16] ( [vid_len:u16][vid utf8] )*  [inner_len:u32][inner bytes]
+//! -Z<count> XHOP -J<n> (B hop)*  <var-data B> inner
 //! ```
 //!
 //! **Nested mode** is the degenerate metadata-privacy wrapper: an inner packed
@@ -25,106 +28,17 @@
 
 use crate::error::TspError;
 use crate::message::MessageType;
-use crate::message::direct::{self, PackedMessage};
+use crate::message::direct::{self, PackedMessage, UnpackedMessage};
 
 /// Maximum number of hops in a route, bounding both memory and forwarding loops.
 pub const MAX_HOPS: usize = 16;
-
-/// Maximum inner-message size carried in a routing layer (mirrors direct mode).
-const MAX_INNER_SIZE: usize = 1_048_576;
-
-/// Encode a routing payload: the remaining hop list followed by the opaque inner
-/// message. This is the plaintext that gets HPKE-sealed to the addressed hop.
-pub(crate) fn encode_route(remaining: &[String], inner: &[u8]) -> Result<Vec<u8>, TspError> {
-    if remaining.len() > MAX_HOPS {
-        return Err(TspError::InvalidMessage(format!(
-            "route has {} hops, exceeds maximum of {MAX_HOPS}",
-            remaining.len()
-        )));
-    }
-    if inner.len() > MAX_INNER_SIZE {
-        return Err(TspError::InvalidMessage(format!(
-            "inner message {} bytes exceeds maximum of {MAX_INNER_SIZE}",
-            inner.len()
-        )));
-    }
-
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&(remaining.len() as u16).to_be_bytes());
-    for vid in remaining {
-        let bytes = vid.as_bytes();
-        let len = u16::try_from(bytes.len())
-            .map_err(|_| TspError::InvalidMessage("hop VID too long".into()))?;
-        buf.extend_from_slice(&len.to_be_bytes());
-        buf.extend_from_slice(bytes);
-    }
-    buf.extend_from_slice(&(inner.len() as u32).to_be_bytes());
-    buf.extend_from_slice(inner);
-    Ok(buf)
-}
-
-/// Decode a routing payload into `(remaining_route, inner)`.
-pub(crate) fn decode_route(bytes: &[u8]) -> Result<(Vec<String>, Vec<u8>), TspError> {
-    let mut pos = 0usize;
-    let hop_count = read_u16(bytes, &mut pos)? as usize;
-    if hop_count > MAX_HOPS {
-        return Err(TspError::InvalidMessage(format!(
-            "routing header claims {hop_count} hops, exceeds maximum of {MAX_HOPS}"
-        )));
-    }
-
-    let mut route = Vec::with_capacity(hop_count);
-    for _ in 0..hop_count {
-        let len = read_u16(bytes, &mut pos)? as usize;
-        let end = pos
-            .checked_add(len)
-            .filter(|e| *e <= bytes.len())
-            .ok_or_else(|| TspError::InvalidMessage("routing hop VID truncated".into()))?;
-        let vid = std::str::from_utf8(&bytes[pos..end])
-            .map_err(|_| TspError::InvalidMessage("routing hop VID not UTF-8".into()))?
-            .to_string();
-        route.push(vid);
-        pos = end;
-    }
-
-    let inner_len = read_u32(bytes, &mut pos)? as usize;
-    if inner_len > MAX_INNER_SIZE {
-        return Err(TspError::InvalidMessage(format!(
-            "inner message length {inner_len} exceeds maximum of {MAX_INNER_SIZE}"
-        )));
-    }
-    let end = pos
-        .checked_add(inner_len)
-        .filter(|e| *e <= bytes.len())
-        .ok_or_else(|| TspError::InvalidMessage("inner message truncated".into()))?;
-    let inner = bytes[pos..end].to_vec();
-    Ok((route, inner))
-}
-
-fn read_u16(bytes: &[u8], pos: &mut usize) -> Result<u16, TspError> {
-    let end = pos
-        .checked_add(2)
-        .filter(|e| *e <= bytes.len())
-        .ok_or_else(|| TspError::InvalidMessage("routing payload truncated (u16)".into()))?;
-    let v = u16::from_be_bytes(bytes[*pos..end].try_into().unwrap());
-    *pos = end;
-    Ok(v)
-}
-
-fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, TspError> {
-    let end = pos
-        .checked_add(4)
-        .filter(|e| *e <= bytes.len())
-        .ok_or_else(|| TspError::InvalidMessage("routing payload truncated (u32)".into()))?;
-    let v = u32::from_be_bytes(bytes[*pos..end].try_into().unwrap());
-    *pos = end;
-    Ok(v)
-}
 
 /// Pack a routed message addressed to `first_hop`, carrying `remaining_route`
 /// (the hops to visit after `first_hop`, in order) and the opaque `inner`
 /// message (already sealed end-to-end to the exit/recipient).
 ///
+/// The route + inner travel as separate CESR fields of the payload frame (the
+/// `tsp_sdk` `RoutedMessage(hops, inner)` framing), not baked into the plaintext.
 /// The full path is `[first_hop] ++ remaining_route`; when an intermediary's
 /// remaining route is empty it is the exit and consumes `inner`.
 #[allow(clippy::too_many_arguments)]
@@ -137,10 +51,21 @@ pub fn pack_routed(
     sender_encryption_key: &[u8; 32],
     first_hop_encryption_key: &[u8; 32],
 ) -> Result<PackedMessage, TspError> {
-    let routing = encode_route(remaining_route, inner)?;
-    direct::pack(
-        &routing,
+    if remaining_route.is_empty() {
+        return Err(TspError::InvalidMessage(
+            "a routed message requires at least one onward hop".into(),
+        ));
+    }
+    if remaining_route.len() > MAX_HOPS {
+        return Err(TspError::InvalidMessage(format!(
+            "route has {} hops, exceeds maximum of {MAX_HOPS}",
+            remaining_route.len()
+        )));
+    }
+    direct::pack_with_hops(
+        inner,
         MessageType::Routed,
+        remaining_route,
         sender_vid,
         first_hop_vid,
         sender_signing_key,
@@ -190,16 +115,24 @@ pub enum RouteStep {
     },
 }
 
-/// Determine the next routing step from a decrypted routed payload (the
-/// `payload` returned by unpacking a [`MessageType::Routed`] message).
-pub fn next_hop(routing_payload: &[u8]) -> Result<RouteStep, TspError> {
-    let (route, inner) = decode_route(routing_payload)?;
-    match route.split_first() {
-        None => Ok(RouteStep::Deliver { inner }),
+/// Determine the next routing step from an unpacked [`MessageType::Routed`]
+/// message: its `hops` are the remaining route and its `payload` is the opaque
+/// inner message.
+pub fn next_hop(unpacked: &UnpackedMessage) -> Result<RouteStep, TspError> {
+    next_hop_parts(&unpacked.hops, &unpacked.payload)
+}
+
+/// Variant of [`next_hop`] that takes the remaining route and inner message
+/// directly (the route VIDs and the opaque inner bytes).
+pub fn next_hop_parts(hops: &[String], inner: &[u8]) -> Result<RouteStep, TspError> {
+    match hops.split_first() {
+        None => Ok(RouteStep::Deliver {
+            inner: inner.to_vec(),
+        }),
         Some((next, rest)) => Ok(RouteStep::Forward {
             next: next.clone(),
             remaining: rest.to_vec(),
-            inner,
+            inner: inner.to_vec(),
         }),
     }
 }
@@ -233,26 +166,40 @@ mod tests {
     }
 
     #[test]
-    fn encode_decode_route_roundtrip() {
-        let route = vec!["did:web:hop2".to_string(), "did:web:exit".to_string()];
-        let inner = b"opaque inner message".to_vec();
-        let encoded = encode_route(&route, &inner).unwrap();
-        let (decoded_route, decoded_inner) = decode_route(&encoded).unwrap();
-        assert_eq!(decoded_route, route);
-        assert_eq!(decoded_inner, inner);
+    fn pack_routed_rejects_empty_route() {
+        let alice = party("did:web:alice");
+        let hop1 = party("did:web:hop1");
+        assert!(
+            pack_routed(
+                b"inner",
+                &[],
+                &alice.vid,
+                &hop1.vid,
+                &alice.sign_sk,
+                &alice.enc_sk,
+                &hop1.enc_pk,
+            )
+            .is_err()
+        );
     }
 
     #[test]
-    fn decode_route_rejects_truncation() {
-        assert!(decode_route(&[0x00]).is_err()); // not even a full hop_count
-        // hop_count = 1 but no hop follows
-        assert!(decode_route(&[0x00, 0x01]).is_err());
-    }
-
-    #[test]
-    fn encode_route_rejects_too_many_hops() {
+    fn pack_routed_rejects_too_many_hops() {
+        let alice = party("did:web:alice");
+        let hop1 = party("did:web:hop1");
         let route: Vec<String> = (0..MAX_HOPS + 1).map(|i| format!("did:web:h{i}")).collect();
-        assert!(encode_route(&route, b"x").is_err());
+        assert!(
+            pack_routed(
+                b"x",
+                &route,
+                &alice.vid,
+                &hop1.vid,
+                &alice.sign_sk,
+                &alice.enc_sk,
+                &hop1.enc_pk,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -260,8 +207,7 @@ mod tests {
         // route [hop2, exit]: first step forwards to hop2 leaving [exit];
         // then [exit] forwards to exit leaving []; then [] delivers.
         let inner = b"payload".to_vec();
-        let p1 = encode_route(&["hop2".into(), "exit".into()], &inner).unwrap();
-        match next_hop(&p1).unwrap() {
+        match next_hop_parts(&["hop2".into(), "exit".into()], &inner).unwrap() {
             RouteStep::Forward {
                 next,
                 remaining,
@@ -274,8 +220,10 @@ mod tests {
             other => panic!("expected Forward, got {other:?}"),
         }
 
-        let p_exit = encode_route(&[], &inner).unwrap();
-        assert_eq!(next_hop(&p_exit).unwrap(), RouteStep::Deliver { inner });
+        assert_eq!(
+            next_hop_parts(&[], &inner).unwrap(),
+            RouteStep::Deliver { inner }
+        );
     }
 
     /// Full multi-hop crypto round-trip: alice → hop1 → hop2 (exit) carrying an
@@ -317,7 +265,7 @@ mod tests {
         // 3. hop1 opens its layer (it is the receiver), reads the route.
         let at_hop1 = unpack(&layer1.bytes, &hop1.enc_sk, &alice.enc_pk, &alice.sign_pk).unwrap();
         assert_eq!(at_hop1.message_type, MessageType::Routed);
-        let step1 = next_hop(&at_hop1.payload).unwrap();
+        let step1 = next_hop(&at_hop1).unwrap();
         let (next1, rest1, carried1) = match step1 {
             RouteStep::Forward {
                 next,
@@ -345,7 +293,7 @@ mod tests {
 
         // 5. hop2 opens its layer, sees route [final] → forward/deliver to final.
         let at_hop2 = unpack(&layer2.bytes, &hop2.enc_sk, &hop1.enc_pk, &hop1.sign_pk).unwrap();
-        let step2 = next_hop(&at_hop2.payload).unwrap();
+        let step2 = next_hop(&at_hop2).unwrap();
         let (next2, rest2, carried2) = match step2 {
             RouteStep::Forward {
                 next,
