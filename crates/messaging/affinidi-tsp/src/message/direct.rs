@@ -27,6 +27,7 @@
 use crate::crypto::{hpke, signing};
 use crate::error::TspError;
 use crate::message::MessageType;
+use crate::message::control::{ControlMessage, ControlType, DIGEST_LEN};
 use crate::message::envelope::Envelope;
 use crate::message::wire;
 
@@ -47,6 +48,13 @@ const SIG_LEN: usize = 64;
 pub struct PackedMessage {
     /// The raw wire-format bytes.
     pub bytes: Vec<u8>,
+    /// `SHA256` of the plaintext CESR payload frame (the `-Z…` bytes before
+    /// sealing). This is the TSP **thread digest** used to correlate
+    /// relationship control messages: an accept's `reply` is the invite's
+    /// `thread_digest`, and a cancel's `reply` is the relationship-forming
+    /// message's `thread_digest`. The reference (`tsp_sdk`) computes the same
+    /// value (`sha256` of the decrypted payload frame) on open.
+    pub thread_digest: [u8; DIGEST_LEN],
 }
 
 /// Result of unpacking a TSP message.
@@ -65,24 +73,48 @@ pub struct UnpackedMessage {
     pub receiver: String,
     /// The message type, recovered from the encrypted payload frame.
     pub message_type: MessageType,
+    /// `SHA256` of the decrypted plaintext CESR payload frame — the TSP
+    /// **thread digest** (see [`PackedMessage::thread_digest`]). Always present;
+    /// the FSM uses it to correlate a received accept/cancel back to the
+    /// relationship-forming message it replies to.
+    pub thread_digest: [u8; DIGEST_LEN],
+    /// For a [`MessageType::Control`] message, the decoded control payload
+    /// (invite / accept / cancel). `None` for all other message types.
+    pub control: Option<ControlMessage>,
 }
 
-/// Payload-type markers. Direct/Nested/Routed use the reference `tsp-sdk`
-/// framing verbatim (so they are byte-compatible with `tsp-sdk`):
+/// Payload-type markers, all using the reference `tsp-sdk` framing verbatim so
+/// they are byte-compatible with `tsp-sdk`:
 ///
 ///   * Direct → `XSCS`
 ///   * Nested → `XHOP` + empty hop list
 ///   * Routed → `XHOP` + non-empty hop list
-///
-/// Control stays on an affinidi-private `ACT` marker (the reference's
-/// relationship/control payloads — `XRFI`/`XRFA`/`XRFD` — are out of scope).
+///   * Control(invite) → `XRFI` + hops + `A` nonce(32) + empty `B` VID
+///   * Control(accept) → `XRFA` + `I` SHA-256 reply(32)
+///   * Control(cancel) → `XRFD` + `I` SHA-256 reply(32)
 mod payload_marker {
     /// Generic message (Direct) — the reference `XSCS` marker, byte-exact.
     pub const DIRECT: [u8; 3] = crate::message::wire::XSCS;
     /// Hop-carrying payload (Nested or Routed) — the reference `XHOP` marker.
     pub const HOP: [u8; 3] = crate::message::wire::XHOP;
-    /// Affinidi-private marker for a Control payload (out of interop scope).
-    pub const CONTROL: [u8; 3] = *b"ACT";
+    /// Relationship-forming invite (`DirectRelationProposal`).
+    pub const INVITE: [u8; 3] = crate::message::wire::XRFI;
+    /// Relationship-forming accept (`DirectRelationAffirm`).
+    pub const ACCEPT: [u8; 3] = crate::message::wire::XRFA;
+    /// Relationship cancel (`RelationshipCancel`).
+    pub const CANCEL: [u8; 3] = crate::message::wire::XRFD;
+}
+
+/// Encode a SHA-256 digest as the reference's `encode_digest` does: a fixed-data
+/// field under the `I` (SHA-256) id.
+fn encode_sha256_digest(digest: &[u8; DIGEST_LEN], out: &mut Vec<u8>) {
+    wire::encode_fixed_data(wire::TSP_SHA256, digest, out);
+}
+
+/// Decode a SHA-256 digest (`I`-coded 32-byte fixed-data field).
+fn decode_sha256_digest(frame: &[u8], pos: &mut usize) -> Result<[u8; DIGEST_LEN], TspError> {
+    wire::decode_fixed_data::<DIGEST_LEN>(wire::TSP_SHA256, frame, pos)
+        .ok_or_else(|| TspError::InvalidMessage("missing or non-SHA256 reply digest".into()))
 }
 
 /// Build the CESR payload frame that is encrypted (the HPKE plaintext).
@@ -91,43 +123,94 @@ mod payload_marker {
 ///   * Direct  → `-Z<count> XSCS <var-data B> body`
 ///   * Nested  → `-Z<count> XHOP -J0 <var-data B> body`
 ///   * Routed  → `-Z<count> XHOP -J<n> (B hop)* <var-data B> body`
-///   * Control → `-Z<count> ACT <var-data B> body` (affinidi-private)
-fn encode_payload_frame(body: &[u8], kind: MessageType, hops: &[String]) -> Vec<u8> {
+///   * Control(invite) → `-Z<count> XRFI -J<n> (B hop)* A nonce(32) B(empty)`
+///   * Control(accept) → `-Z<count> XRFA I reply(32)`
+///   * Control(cancel) → `-Z<count> XRFD I reply(32)`
+///
+/// For Control, `body` is a [`ControlMessage::encode`] blob; it is decoded back
+/// to the structured control so the spec CESR fields can be emitted.
+fn encode_payload_frame(
+    body: &[u8],
+    kind: MessageType,
+    hops: &[String],
+) -> Result<Vec<u8>, TspError> {
     let mut frame_body = Vec::with_capacity(3 + body.len() + 3);
     match kind {
         MessageType::Direct => {
             frame_body.extend_from_slice(&payload_marker::DIRECT);
+            wire::encode_variable_data(wire::TSP_PLAINTEXT, body, &mut frame_body);
         }
         MessageType::Nested => {
             frame_body.extend_from_slice(&payload_marker::HOP);
             let no_hops: [&[u8]; 0] = [];
             wire::encode_hops(&no_hops, &mut frame_body);
+            wire::encode_variable_data(wire::TSP_PLAINTEXT, body, &mut frame_body);
         }
         MessageType::Routed => {
             frame_body.extend_from_slice(&payload_marker::HOP);
             wire::encode_hops(hops, &mut frame_body);
+            wire::encode_variable_data(wire::TSP_PLAINTEXT, body, &mut frame_body);
         }
         MessageType::Control => {
-            frame_body.extend_from_slice(&payload_marker::CONTROL);
+            let control = ControlMessage::decode(body)?;
+            match control.control_type {
+                ControlType::RelationshipFormingInvite => {
+                    frame_body.extend_from_slice(&payload_marker::INVITE);
+                    wire::encode_hops(&control.route, &mut frame_body);
+                    wire::encode_fixed_data(
+                        wire::TSP_NONCE,
+                        control.require_nonce()?,
+                        &mut frame_body,
+                    );
+                    // empty VID (a direct-relationship invite carries no new VID)
+                    wire::encode_variable_data(wire::TSP_VID, &[], &mut frame_body);
+                }
+                ControlType::RelationshipFormingAccept => {
+                    frame_body.extend_from_slice(&payload_marker::ACCEPT);
+                    encode_sha256_digest(control.require_reply()?, &mut frame_body);
+                }
+                ControlType::RelationshipCancel => {
+                    frame_body.extend_from_slice(&payload_marker::CANCEL);
+                    encode_sha256_digest(control.require_reply()?, &mut frame_body);
+                }
+            }
         }
     }
-    wire::encode_variable_data(wire::TSP_PLAINTEXT, body, &mut frame_body);
 
     debug_assert!(frame_body.len().is_multiple_of(3));
     let mut out = Vec::with_capacity(3 + frame_body.len());
     wire::encode_count(wire::TSP_PAYLOAD, (frame_body.len() / 3) as u32, &mut out);
     out.extend_from_slice(&frame_body);
-    out
+    Ok(out)
 }
 
-/// Decode a CESR payload frame, returning `(kind, hops, body)`.
+/// A decoded payload frame: its message kind, the remaining hop list (Routed
+/// only), the plaintext body, and — for Control — the structured control.
+struct DecodedFrame {
+    kind: MessageType,
+    hops: Vec<String>,
+    body: Vec<u8>,
+    control: Option<ControlMessage>,
+}
+
+/// Decode hop VID byte vectors into UTF-8 VID strings.
+fn hops_to_strings(hop_bytes: Vec<Vec<u8>>) -> Result<Vec<String>, TspError> {
+    hop_bytes
+        .into_iter()
+        .map(|h| {
+            String::from_utf8(h).map_err(|_| TspError::InvalidMessage("hop VID not UTF-8".into()))
+        })
+        .collect()
+}
+
+/// Decode a CESR payload frame into a [`DecodedFrame`].
 ///
-/// `XSCS` → `(Direct, [], body)`; `XHOP` → decode the hop list, an empty list is
-/// `(Nested, [], body)` and a non-empty one is `(Routed, hops, body)`; `ACT` →
-/// `(Control, [], body)`.
-fn decode_payload_frame(
-    frame: &[u8],
-) -> Result<(MessageType, Vec<String>, Vec<u8>), TspError> {
+/// `XSCS` → Direct; `XHOP` → Nested (empty hops) or Routed (non-empty);
+/// `XRFI`/`XRFA`/`XRFD` → Control (invite / accept / cancel). For Control the
+/// `body` is set to the control's [`ControlMessage::encode`] form (so the SDK,
+/// which only sees the `payload` bytes, can recover it) and `control` carries
+/// the structured message.
+fn decode_payload_frame(frame: &[u8]) -> Result<DecodedFrame, TspError> {
     let mut pos = 0usize;
     wire::decode_count(wire::TSP_PAYLOAD, frame, &mut pos)
         .ok_or_else(|| TspError::InvalidMessage("missing -Z payload frame".into()))?;
@@ -140,36 +223,78 @@ fn decode_payload_frame(
         .get(pos..pos + 3)
         .ok_or_else(|| TspError::InvalidMessage("missing payload type marker".into()))?;
 
-    let (kind, hops) = if marker == payload_marker::DIRECT {
+    if marker == payload_marker::DIRECT {
         pos += 3;
-        (MessageType::Direct, Vec::new())
+        let body = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing payload plaintext".into()))?;
+        Ok(DecodedFrame {
+            kind: MessageType::Direct,
+            hops: Vec::new(),
+            body,
+            control: None,
+        })
     } else if marker == payload_marker::HOP {
         pos += 3;
-        let hop_bytes = wire::decode_hops(frame, &mut pos)?;
-        let hops = hop_bytes
-            .into_iter()
-            .map(|h| {
-                String::from_utf8(h)
-                    .map_err(|_| TspError::InvalidMessage("hop VID not UTF-8".into()))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if hops.is_empty() {
-            (MessageType::Nested, hops)
+        let hops = hops_to_strings(wire::decode_hops(frame, &mut pos)?)?;
+        let body = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing payload plaintext".into()))?;
+        let kind = if hops.is_empty() {
+            MessageType::Nested
         } else {
-            (MessageType::Routed, hops)
-        }
-    } else if marker == payload_marker::CONTROL {
+            MessageType::Routed
+        };
+        Ok(DecodedFrame {
+            kind,
+            hops,
+            body,
+            control: None,
+        })
+    } else if marker == payload_marker::INVITE {
         pos += 3;
-        (MessageType::Control, Vec::new())
+        let route = hops_to_strings(wire::decode_hops(frame, &mut pos)?)?;
+        let nonce = wire::decode_fixed_data::<DIGEST_LEN>(wire::TSP_NONCE, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing or malformed invite nonce".into()))?;
+        // empty (or new-VID) `B` field; we only support the direct-relationship
+        // form, so the VID is expected to be empty.
+        let _new_vid = wire::decode_variable_data(wire::TSP_VID, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing invite VID field".into()))?;
+        let control = ControlMessage {
+            control_type: ControlType::RelationshipFormingInvite,
+            nonce: Some(nonce),
+            reply: None,
+            route,
+        };
+        Ok(DecodedFrame {
+            kind: MessageType::Control,
+            hops: Vec::new(),
+            body: control.encode(),
+            control: Some(control),
+        })
+    } else if marker == payload_marker::ACCEPT || marker == payload_marker::CANCEL {
+        let control_type = if marker == payload_marker::ACCEPT {
+            ControlType::RelationshipFormingAccept
+        } else {
+            ControlType::RelationshipCancel
+        };
+        pos += 3;
+        let reply = decode_sha256_digest(frame, &mut pos)?;
+        let control = ControlMessage {
+            control_type,
+            nonce: None,
+            reply: Some(reply),
+            route: Vec::new(),
+        };
+        Ok(DecodedFrame {
+            kind: MessageType::Control,
+            hops: Vec::new(),
+            body: control.encode(),
+            control: Some(control),
+        })
     } else {
-        return Err(TspError::InvalidMessage(
+        Err(TspError::InvalidMessage(
             "unsupported TSP payload type marker".into(),
-        ));
-    };
-
-    let body = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
-        .ok_or_else(|| TspError::InvalidMessage("missing payload plaintext".into()))?;
-    Ok((kind, hops, body))
+        ))
+    }
 }
 
 /// Encode the signature frame: `-C<n> -K<n> <fixed B> sig`.
@@ -243,8 +368,11 @@ pub fn pack_with_hops(
     let envelope = Envelope::new(message_type, sender_vid, receiver_vid);
     let envelope_bytes = envelope.encode()?;
 
-    // 2. CESR payload frame, then HPKE-Auth seal it.
-    let payload_frame = encode_payload_frame(body, message_type, hops);
+    // 2. CESR payload frame, then HPKE-Auth seal it. The thread digest is
+    //    SHA256 of this plaintext frame (computed before sealing, matching the
+    //    reference's seal-time hash).
+    let payload_frame = encode_payload_frame(body, message_type, hops)?;
+    let thread_digest = sha256(&payload_frame);
     let sealed = hpke::seal(
         &payload_frame,
         b"", // AAD is empty in the reference
@@ -266,7 +394,10 @@ pub fn pack_with_hops(
     let signature = signing::sign(&wire_bytes, sender_signing_key)?;
     encode_signature_frame(&signature, &mut wire_bytes);
 
-    Ok(PackedMessage { bytes: wire_bytes })
+    Ok(PackedMessage {
+        bytes: wire_bytes,
+        thread_digest,
+    })
 }
 
 /// Unpack a direct TSP message.
@@ -332,8 +463,18 @@ pub fn unpack(
         envelope_bytes, // envelope frame is the HPKE `info`
     )?;
 
-    // 5. Decode the CESR payload frame.
-    let (message_type, hops, payload) = decode_payload_frame(&payload_frame)?;
+    // 5. The thread digest is SHA256 of the decrypted plaintext frame (computed
+    //    here, after decrypt — identical to the reference's open-time hash and
+    //    to the sender's seal-time `PackedMessage::thread_digest`).
+    let thread_digest = sha256(&payload_frame);
+
+    // 6. Decode the CESR payload frame.
+    let DecodedFrame {
+        kind: message_type,
+        hops,
+        body: payload,
+        control,
+    } = decode_payload_frame(&payload_frame)?;
 
     Ok(UnpackedMessage {
         payload,
@@ -341,15 +482,35 @@ pub fn unpack(
         sender: envelope.sender,
         receiver: envelope.receiver,
         message_type,
+        thread_digest,
+        control,
     })
 }
 
-/// Compute a BLAKE2s-256 digest of a packed message (used as message ID).
-pub fn message_digest(packed: &PackedMessage) -> [u8; 32] {
+/// Compute a SHA-256 digest (the TSP thread-digest hash).
+pub fn sha256(data: &[u8]) -> [u8; DIGEST_LEN] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().into()
+}
+
+/// Compute a BLAKE2s-256 digest of raw wire bytes (used as an opaque message ID,
+/// e.g. for the mediator adapter). This is **not** the TSP thread digest — use
+/// [`PackedMessage::thread_digest`] / [`UnpackedMessage::thread_digest`] for
+/// relationship correlation.
+pub fn message_digest_bytes(bytes: &[u8]) -> [u8; 32] {
     use blake2::{Blake2s256, Digest};
     let mut hasher = Blake2s256::new();
-    hasher.update(&packed.bytes);
+    hasher.update(bytes);
     hasher.finalize().into()
+}
+
+/// Compute a BLAKE2s-256 digest of a packed message (used as an opaque message
+/// ID). For relationship correlation use the TSP thread digest instead
+/// ([`PackedMessage::thread_digest`]).
+pub fn message_digest(packed: &PackedMessage) -> [u8; 32] {
+    message_digest_bytes(&packed.bytes)
 }
 
 #[cfg(test)]

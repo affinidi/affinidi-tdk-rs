@@ -38,6 +38,12 @@ pub struct TspStore {
     remote_vids: RwLock<HashMap<String, ResolvedVid>>,
     /// Relationship states between VID pairs. Key format: "{our_vid}\0{their_vid}".
     relationships: RwLock<HashMap<String, RelationshipState>>,
+    /// The thread digest (`SHA256` of the relationship-forming message's
+    /// plaintext frame) outstanding for each VID pair. The inviter stores its
+    /// invite digest here; the accepter stores the received invite's digest.
+    /// Used to correlate a later accept/cancel back to the forming message.
+    /// Key format: "{our_vid}\0{their_vid}".
+    thread_digests: RwLock<HashMap<String, [u8; 32]>>,
 }
 
 impl TspStore {
@@ -46,7 +52,28 @@ impl TspStore {
             private_vids: RwLock::new(HashMap::new()),
             remote_vids: RwLock::new(HashMap::new()),
             relationships: RwLock::new(HashMap::new()),
+            thread_digests: RwLock::new(HashMap::new()),
         }
+    }
+
+    // --- Thread-digest correlation ---
+
+    /// Remember the thread digest of the relationship-forming message for a pair.
+    pub fn set_thread_digest(&self, our_vid: &str, their_vid: &str, digest: [u8; 32]) {
+        let key = relationship_key(our_vid, their_vid);
+        self.thread_digests.write().unwrap().insert(key, digest);
+    }
+
+    /// Get the remembered thread digest for a pair, if any.
+    pub fn thread_digest(&self, our_vid: &str, their_vid: &str) -> Option<[u8; 32]> {
+        let key = relationship_key(our_vid, their_vid);
+        self.thread_digests.read().unwrap().get(&key).copied()
+    }
+
+    /// Forget the remembered thread digest for a pair (on cancel / teardown).
+    pub fn clear_thread_digest(&self, our_vid: &str, their_vid: &str) {
+        let key = relationship_key(our_vid, their_vid);
+        self.thread_digests.write().unwrap().remove(&key);
     }
 
     // --- Private VID management ---

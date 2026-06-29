@@ -109,6 +109,11 @@ pub const TSP_HPKEAUTH_CIPHERTEXT: u32 = cesr_int("G") as u32;
 pub const ED25519_SIGNATURE: u32 = cesr_int("B") as u32;
 /// `X`: a 2-byte fixed-data marker emitted after the envelope VIDs.
 pub const TSP_TMP: u32 = cesr_int("X") as u32;
+/// `A`: fixed-data id for a relationship nonce (32 bytes).
+pub const TSP_NONCE: u32 = cesr_int("A") as u32;
+/// `I`: fixed-data id for a SHA-256 digest (32 bytes) — the relationship
+/// thread reference (`reply`) carried by accept / cancel.
+pub const TSP_SHA256: u32 = cesr_int("I") as u32;
 
 /// `-E`: outer count-code wrapper for an encrypted-then-signed (ETS) envelope.
 pub const TSP_ETS_WRAPPER: u16 = cesr_int("E") as u16;
@@ -126,6 +131,15 @@ pub const XSCS: [u8; 3] = cesr_data("XSCS");
 /// 3-byte payload-type marker for a hop-carrying payload (Nested when the hop
 /// list is empty, Routed otherwise).
 pub const XHOP: [u8; 3] = cesr_data("XHOP");
+/// 3-byte payload-type marker for a relationship-forming invite
+/// (`DirectRelationProposal`).
+pub const XRFI: [u8; 3] = cesr_data("XRFI");
+/// 3-byte payload-type marker for a relationship-forming accept
+/// (`DirectRelationAffirm`).
+pub const XRFA: [u8; 3] = cesr_data("XRFA");
+/// 3-byte payload-type marker for a relationship cancel
+/// (`RelationshipCancel`).
+pub const XRFD: [u8; 3] = cesr_data("XRFD");
 /// 3-byte TSP version genus marker.
 pub const YTSP: [u8; 3] = cesr_data("YTSP");
 
@@ -353,6 +367,17 @@ mod tests {
         assert_eq!(TSP_PAYLOAD, 25);
         assert_eq!(TSP_ATTACH_GRP, 2);
         assert_eq!(TSP_INDEX_SIG_GRP, 10);
+        // cesr!("A")=0, cesr!("I")=8.
+        assert_eq!(TSP_NONCE, 0);
+        assert_eq!(TSP_SHA256, 8);
+    }
+
+    #[test]
+    fn relationship_markers_match_reference() {
+        // cesr_data("XRFI"/"XRFA"/"XRFD") — relationship payload-type markers.
+        assert_eq!(XRFI, cesr_data::<3>("XRFI"));
+        assert_eq!(XRFA, cesr_data::<3>("XRFA"));
+        assert_eq!(XRFD, cesr_data::<3>("XRFD"));
     }
 
     #[test]

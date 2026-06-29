@@ -1,5 +1,26 @@
 # Affinidi TSP Changelog
 
+## 29th June 2026 (control)
+
+### 0.1.10 — spec-compliant relationship Control (full tsp_sdk wire parity)
+
+- **Relationship Control (invite / accept / cancel) now matches the ToIP reference and
+  interoperates both directions** — completing full TSP wire parity (Direct/Routed/Nested/
+  Control all interop with `tsp_sdk`). Control payloads are now CESR-coded per the spec:
+  invite → `XRFI` + hop list + 32-byte `TSP_NONCE` + empty VID; accept → `XRFA` + 32-byte
+  SHA-256 `reply`; cancel → `XRFD` + 32-byte SHA-256 `reply`. Replaces the previous
+  serde-serialized `ACT` marker and 16-byte nonce.
+- **Correlation digest = `SHA256(plaintext payload frame)`** (`thread_digest`), computed at
+  `pack` (before sealing) and `unpack` (after decrypt), byte-identical to the reference's
+  `thread_id`. The accept/cancel `reply` references the invite's `thread_digest`. (BLAKE2s
+  `message_digest` is retained only as an opaque message id.)
+- `ControlMessage` is now `{ control_type, nonce: Option<[u8;32]>, reply: Option<[u8;32]>,
+  route }`; `PackedMessage`/`UnpackedMessage` expose `thread_digest`. The relationship FSM
+  records the invite digest per `(our, their)` and verifies an accept's `reply` against the
+  invite it sent. States/transitions unchanged.
+- Wire-breaking for Control (Direct/Routed/Nested unchanged); accept/cancel APIs now take the
+  thread digest.
+
 ## 29th June 2026 (later)
 
 ### 0.1.9 — spec-compliant Routed/Nested payloads + reference-aligned size cap

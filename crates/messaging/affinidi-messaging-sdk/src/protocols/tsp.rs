@@ -27,7 +27,7 @@ use affinidi_did_common::DocumentExt;
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_secrets_resolver::secrets::KeyType;
 use affinidi_tsp::message::control::{ControlMessage, ControlType};
-use affinidi_tsp::message::direct::{self, PackedMessage};
+use affinidi_tsp::message::direct;
 use affinidi_tsp::relationship::{InvalidTransition, RelationshipEvent, RelationshipState};
 use affinidi_tsp::{DidVidResolver, MessageType, MetaEnvelope};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
@@ -389,28 +389,29 @@ impl TspOps<'_> {
     /// [`Bidirectional`]), send a Relationship Forming Accept referencing the
     /// invite, then persist.
     ///
-    /// `invite_wire` is the raw qb2 bytes of the received invite message (as
-    /// returned by [`TspOps::decode`]); its BLAKE2s-256 digest is carried in the
-    /// accept as the thread reference. State is only persisted after the accept
-    /// is successfully sent. Returns the new state ([`Bidirectional`]).
+    /// `invite_thread_digest` is the received invite's TSP **thread digest** —
+    /// the `SHA256` of its plaintext payload frame, which the recipient obtains
+    /// by unpacking the invite (see [`TspOps::unpack_control`]). It is carried in
+    /// the accept as the `reply` digest, byte-compatible with the reference's
+    /// `AcceptRelationship { thread_id }`. State is only persisted after the
+    /// accept is successfully sent. Returns the new state ([`Bidirectional`]).
     ///
     /// [`Bidirectional`]: RelationshipState::Bidirectional
     pub async fn accept_relationship(
         &self,
         profile: &Arc<ATMProfile>,
         their_did: &str,
-        invite_wire: &[u8],
+        invite_thread_digest: [u8; 32],
     ) -> Result<RelationshipState, ATMError> {
         let (our_did, _) = profile.dids()?;
         let store = self.relationship_store();
         let next = next_state(store, our_did, their_did, RelationshipEvent::SendAccept).await?;
-        // `direct::message_digest` takes a `PackedMessage`; wrap the wire bytes.
-        let digest = direct::message_digest(&PackedMessage {
-            bytes: invite_wire.to_vec(),
-        })
-        .to_vec();
-        self.send_control(profile, their_did, &ControlMessage::accept(digest))
-            .await?;
+        self.send_control(
+            profile,
+            their_did,
+            &ControlMessage::accept(invite_thread_digest),
+        )
+        .await?;
         store.set(our_did, their_did, next).await?;
         Ok(next)
     }
@@ -420,8 +421,11 @@ impl TspOps<'_> {
     /// [`Bidirectional`] → [`RelationshipState::None`]), send a Relationship
     /// Cancel control message, then persist.
     ///
-    /// State is only persisted after the cancel is successfully sent. Returns
-    /// the new state ([`RelationshipState::None`]).
+    /// `thread_digest` is the relationship-forming message's thread digest (the
+    /// invite's `SHA256` plaintext-frame digest) referenced as the cancel
+    /// `reply`, byte-compatible with the reference's `CancelRelationship {
+    /// thread_id }`. State is only persisted after the cancel is successfully
+    /// sent. Returns the new state ([`RelationshipState::None`]).
     ///
     /// [`Pending`]: RelationshipState::Pending
     /// [`InviteReceived`]: RelationshipState::InviteReceived
@@ -430,11 +434,12 @@ impl TspOps<'_> {
         &self,
         profile: &Arc<ATMProfile>,
         their_did: &str,
+        thread_digest: [u8; 32],
     ) -> Result<RelationshipState, ATMError> {
         let (our_did, _) = profile.dids()?;
         let store = self.relationship_store();
         let next = next_state(store, our_did, their_did, RelationshipEvent::SendCancel).await?;
-        self.send_control(profile, their_did, &ControlMessage::cancel())
+        self.send_control(profile, their_did, &ControlMessage::cancel(thread_digest))
             .await?;
         store.set(our_did, their_did, next).await?;
         Ok(next)
@@ -561,6 +566,45 @@ impl TspOps<'_> {
         .map_err(|e| ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}")))?;
 
         Ok((unpacked.payload, unpacked.sender))
+    }
+
+    /// Unpack a fetched TSP **control** message (raw qb2 bytes), returning the
+    /// decoded [`ControlMessage`], the sender VID, and the message's TSP
+    /// **thread digest** (`SHA256` of its plaintext frame).
+    ///
+    /// For an invite, the returned `thread_digest` is the value to pass to
+    /// [`TspOps::accept_relationship`] (and, later,
+    /// [`TspOps::cancel_relationship`]) as the relationship reference.
+    pub async fn unpack_control(
+        &self,
+        profile: &Arc<ATMProfile>,
+        qb2: &[u8],
+    ) -> Result<(ControlMessage, String, [u8; 32]), ATMError> {
+        let meta = MetaEnvelope::parse(qb2)
+            .map_err(|e| ATMError::MsgReceiveError(format!("couldn't parse TSP envelope: {e}")))?;
+
+        let (profile_did, _) = profile.dids()?;
+        if meta.receiver != profile_did {
+            return Err(ATMError::MsgReceiveError(format!(
+                "TSP message addressed to {}, not this profile ({profile_did})",
+                meta.receiver
+            )));
+        }
+
+        let (_signing_key, decryption_key) = self.profile_tsp_keys(profile_did).await?;
+        let sender = self.resolve_vid(&meta.sender).await?;
+        let unpacked = direct::unpack(
+            qb2,
+            &decryption_key,
+            &sender.encryption_key,
+            &sender.signing_key,
+        )
+        .map_err(|e| ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}")))?;
+
+        let control = unpacked.control.ok_or_else(|| {
+            ATMError::MsgReceiveError("TSP message is not a control message".into())
+        })?;
+        Ok((control, unpacked.sender, unpacked.thread_digest))
     }
 
     // ── WebSocket (raw-TSP) delivery ──────────────────────────────────────────

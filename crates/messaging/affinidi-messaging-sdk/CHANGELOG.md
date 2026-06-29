@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.41] - 2026-06-29
+
+- TSP relationship methods follow affinidi-tsp 0.1.10's spec-compliant Control encoding:
+  `accept_relationship` / `cancel_relationship` now take the invite's thread digest (the
+  SHA-256 of the invite's payload frame) for cross-impl correlation, and a new
+  `TspOps::unpack_control` returns `(ControlMessage, sender, thread_digest)`.
+
 ## [0.18.40] - 2026-06-29
 
 - Doc/comment updates for affinidi-tsp 0.1.8's new `-E` CESR wire framing. No functional

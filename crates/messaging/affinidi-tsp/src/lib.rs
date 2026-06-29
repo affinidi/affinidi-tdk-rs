@@ -114,7 +114,9 @@ impl TspAgent {
 
     /// Build and pack a Relationship Forming Invite (RFI).
     ///
-    /// This sends a control message to initiate a relationship.
+    /// This sends a control message to initiate a relationship. The invite's
+    /// thread digest (`SHA256` of its plaintext frame) is remembered so a later
+    /// accept can be correlated, and is used as the cancel reference.
     pub fn send_relationship_invite(
         &self,
         our_vid: &str,
@@ -125,19 +127,31 @@ impl TspAgent {
 
         self.store
             .transition_relationship(our_vid, their_vid, RelationshipEvent::SendInvite)?;
+        // Remember the invite's thread digest to correlate the accept and to
+        // reference on cancel.
+        self.store
+            .set_thread_digest(our_vid, their_vid, packed.thread_digest);
 
         Ok(packed)
     }
 
     /// Build and pack a Relationship Forming Accept (RFA).
     ///
-    /// `invite_digest` is the BLAKE2s-256 digest of the received invite message.
+    /// The accept's `reply` is the thread digest of the invite being accepted
+    /// — the `thread_digest` of the received invite (see
+    /// [`ReceivedMessage::thread_digest`]), which the FSM remembers when it
+    /// transitions to [`RelationshipState::InviteReceived`]. The accept's own
+    /// thread digest then becomes the relationship reference for cancel.
     pub fn send_relationship_accept(
         &self,
         our_vid: &str,
         their_vid: &str,
-        invite_digest: Vec<u8>,
     ) -> Result<PackedMessage, TspError> {
+        let invite_digest = self.store.thread_digest(our_vid, their_vid).ok_or_else(|| {
+            TspError::Relationship(format!(
+                "no invite on record from {their_vid} to accept"
+            ))
+        })?;
         let control = ControlMessage::accept(invite_digest);
         let packed = self.pack_control(our_vid, their_vid, &control)?;
 
@@ -148,16 +162,25 @@ impl TspAgent {
     }
 
     /// Build and pack a Relationship Cancel (RFD).
+    ///
+    /// The cancel's `reply` references the relationship-forming message's thread
+    /// digest (the remembered invite digest); if none is on record (e.g. a
+    /// degenerate teardown) a zero digest is used.
     pub fn send_relationship_cancel(
         &self,
         our_vid: &str,
         their_vid: &str,
     ) -> Result<PackedMessage, TspError> {
-        let control = ControlMessage::cancel();
+        let reply = self
+            .store
+            .thread_digest(our_vid, their_vid)
+            .unwrap_or([0u8; 32]);
+        let control = ControlMessage::cancel(reply);
         let packed = self.pack_control(our_vid, their_vid, &control)?;
 
         self.store
             .transition_relationship(our_vid, their_vid, RelationshipEvent::SendCancel)?;
+        self.store.clear_thread_digest(our_vid, their_vid);
 
         Ok(packed)
     }
@@ -213,14 +236,18 @@ impl TspAgent {
 
         // Handle control messages
         if unpacked.message_type == MessageType::Control {
-            let control = ControlMessage::decode(&unpacked.payload)?;
-            self.handle_control(our_vid, &unpacked.sender, &control, wire)?;
+            let control = unpacked
+                .control
+                .clone()
+                .ok_or_else(|| TspError::InvalidMessage("control message has no payload".into()))?;
+            self.handle_control(our_vid, &unpacked.sender, &control, unpacked.thread_digest)?;
 
             return Ok(ReceivedMessage {
                 payload: unpacked.payload,
                 sender: unpacked.sender,
                 receiver: unpacked.receiver,
                 message_type: unpacked.message_type,
+                thread_digest: unpacked.thread_digest,
                 control: Some(control),
             });
         }
@@ -230,6 +257,7 @@ impl TspAgent {
             sender: unpacked.sender,
             receiver: unpacked.receiver,
             message_type: unpacked.message_type,
+            thread_digest: unpacked.thread_digest,
             control: None,
         })
     }
@@ -403,12 +431,17 @@ impl TspAgent {
         self.pack_message(our_vid, their_vid, &payload, MessageType::Control)
     }
 
+    /// Apply a received control message to the relationship FSM, correlating it
+    /// to the relationship-forming message via the thread digest.
+    ///
+    /// `thread_digest` is the `SHA256` of the received message's plaintext frame
+    /// (for an invite it is the value the accepter must echo back as `reply`).
     fn handle_control(
         &self,
         our_vid: &str,
         their_vid: &str,
         control: &ControlMessage,
-        _wire: &[u8],
+        thread_digest: [u8; 32],
     ) -> Result<(), TspError> {
         use message::control::ControlType;
 
@@ -419,8 +452,21 @@ impl TspAgent {
                     their_vid,
                     RelationshipEvent::ReceiveInvite,
                 )?;
+                // Remember the invite's thread digest so our accept can echo it
+                // back as `reply`, and so it serves as the cancel reference.
+                self.store
+                    .set_thread_digest(our_vid, their_vid, thread_digest);
             }
             ControlType::RelationshipFormingAccept => {
+                // The accept's `reply` must match the invite we sent.
+                let reply = control.require_reply()?;
+                if let Some(expected) = self.store.thread_digest(our_vid, their_vid)
+                    && reply != &expected
+                {
+                    return Err(TspError::Relationship(format!(
+                        "accept from {their_vid} references an unknown invite (reply mismatch)"
+                    )));
+                }
                 self.store.transition_relationship(
                     our_vid,
                     their_vid,
@@ -433,6 +479,7 @@ impl TspAgent {
                     their_vid,
                     RelationshipEvent::ReceiveCancel,
                 )?;
+                self.store.clear_thread_digest(our_vid, their_vid);
             }
         }
 
@@ -457,6 +504,9 @@ pub struct ReceivedMessage {
     pub receiver: String,
     /// The message type.
     pub message_type: MessageType,
+    /// `SHA256` of the decrypted plaintext payload frame — the TSP thread
+    /// digest. For an invite this is the value an accept must echo as `reply`.
+    pub thread_digest: [u8; 32],
     /// If this is a control message, the parsed control payload.
     pub control: Option<ControlMessage>,
 }
@@ -599,9 +649,8 @@ mod tests {
         );
 
         // Bob sends RFA back to Alice
-        let digest = direct::message_digest(&rfi).to_vec();
         let rfa = bob
-            .send_relationship_accept(&bob_id, &alice_id, digest)
+            .send_relationship_accept(&bob_id, &alice_id)
             .unwrap();
         assert_eq!(
             bob.relationship_state(&bob_id, &alice_id),
@@ -623,9 +672,8 @@ mod tests {
         // Establish relationship
         let rfi = alice.send_relationship_invite(&alice_id, &bob_id).unwrap();
         bob.receive(&bob_id, &rfi.bytes).unwrap();
-        let digest = direct::message_digest(&rfi).to_vec();
         let rfa = bob
-            .send_relationship_accept(&bob_id, &alice_id, digest)
+            .send_relationship_accept(&bob_id, &alice_id)
             .unwrap();
         alice.receive(&alice_id, &rfa.bytes).unwrap();
 
@@ -653,9 +701,8 @@ mod tests {
         // Establish relationship
         let rfi = alice.send_relationship_invite(&alice_id, &bob_id).unwrap();
         bob.receive(&bob_id, &rfi.bytes).unwrap();
-        let digest = direct::message_digest(&rfi).to_vec();
         let rfa = bob
-            .send_relationship_accept(&bob_id, &alice_id, digest)
+            .send_relationship_accept(&bob_id, &alice_id)
             .unwrap();
         alice.receive(&alice_id, &rfa.bytes).unwrap();
 
