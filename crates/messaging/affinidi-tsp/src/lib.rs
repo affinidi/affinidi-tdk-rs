@@ -331,7 +331,7 @@ impl TspAgent {
             )));
         }
 
-        match message::routed::next_hop(&unpacked.payload)? {
+        match message::routed::next_hop(&unpacked)? {
             // Last intermediary: deliver the opaque inner to the final recipient.
             message::routed::RouteStep::Forward {
                 next,

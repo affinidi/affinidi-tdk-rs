@@ -2,6 +2,14 @@
 
 ## Changelog history
 
+## 29th June 2026 (later)
+
+### 0.16.34 — follow affinidi-tsp's new routed `next_hop` signature
+
+- The TSP relay now calls `routed::next_hop(&unpacked)` (affinidi-tsp 0.1.9 moved the route
+  into the CESR hop list, so the next hop is derived from the unpacked message rather than
+  re-parsing the payload bytes). No change to the receiver-based dispatch or relay behaviour.
+
 ## 29th June 2026
 
 ### 0.16.33 — TSP routed-by-receiver + new `-E` framing detection

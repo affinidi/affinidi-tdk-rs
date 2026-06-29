@@ -5,6 +5,7 @@
 //! directions.
 
 use affinidi_tsp::message::direct as atsp;
+use affinidi_tsp::message::routed as artd;
 use affinidi_tsp::message::MessageType;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use ed25519_dalek::SigningKey;
@@ -142,8 +143,234 @@ fn main() {
     }
     println!();
 
+    // A running PASS/FAIL tally for the four interop gate cases (Routed/Nested
+    // both directions). Direct is exercised above and re-checked here.
+    let mut results: Vec<(&str, bool)> = Vec::new();
+
+    // Re-run the two Direct cases into the tally so the gate report is complete.
+    {
+        let mut buf = a_packed.bytes.clone();
+        let ok = matches!(
+            tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf),
+            Ok((_, Payload::Content(c), _, _)) if c == payload
+        );
+        results.push(("Direct A->R", ok));
+    }
+    {
+        let sealed = tsp_sdk::crypto::seal(
+            &alice_vid,
+            bob_vid.vid(),
+            None,
+            Payload::Content(payload.as_slice()),
+        )
+        .expect("tsp_sdk seal");
+        let ok = matches!(
+            atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk),
+            Ok(u) if u.payload == payload
+        );
+        results.push(("Direct R->A", ok));
+    }
+
+    // Large-payload Direct: 2 MiB exercises the *large* CESR variable-data code
+    // (>12 KiB) AND proves the raised MAX_FIELD_SIZE accepts what the old 1 MiB
+    // cap would have rejected. Confirms the size-cap alignment interoperates.
+    {
+        let big = vec![0x5au8; 2 * 1024 * 1024];
+        let packed = atsp::pack(
+            &big,
+            MessageType::Direct,
+            alice_id,
+            bob_id,
+            &alice.sign_sk,
+            &alice.enc_sk,
+            &bob.enc_pk,
+        )
+        .expect("affinidi pack 2MiB");
+        let mut buf = packed.bytes.clone();
+        let ar = matches!(
+            tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf),
+            Ok((_, Payload::Content(c), _, _)) if c == big.as_slice()
+        );
+        results.push(("Direct(2MiB) A->R", ar));
+
+        let sealed = tsp_sdk::crypto::seal(
+            &alice_vid,
+            bob_vid.vid(),
+            None,
+            Payload::Content(big.as_slice()),
+        )
+        .expect("tsp_sdk seal 2MiB");
+        let ra = matches!(
+            atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk),
+            Ok(u) if u.payload == big
+        );
+        results.push(("Direct(2MiB) R->A", ra));
+    }
+
+    // The route hops carried inside the payload frame. They are arbitrary VID
+    // byte strings as far as the framing is concerned.
+    let route_strs = vec!["did:web:hop2.example".to_string(), bob_id.to_string()];
+    let route_bytes: Vec<&[u8]> = route_strs.iter().map(|s| s.as_bytes()).collect();
+    let inner = b"opaque inner message";
+
+    // ================= ROUTED =================
+    println!("\n========== ROUTED ==========");
+
+    // ---- A->R: affinidi pack_routed -> tsp_sdk open (expect RoutedMessage) ----
+    println!("--- A->R: affinidi pack_routed -> tsp_sdk open ---");
+    {
+        let packed = artd::pack_routed(
+            inner,
+            &route_strs,
+            alice_id,
+            bob_id,
+            &alice.sign_sk,
+            &alice.enc_sk,
+            &bob.enc_pk,
+        )
+        .expect("affinidi pack_routed");
+        let mut buf = packed.bytes.clone();
+        let ok = match tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf) {
+            Ok((_ncd, Payload::RoutedMessage(hops, body), ct, st)) => {
+                let hops_match = hops == route_bytes;
+                let body_match = body == inner;
+                println!(
+                    "  RESULT: OK crypto={ct:?} sig={st:?} hops_match={hops_match} body_match={body_match}"
+                );
+                hops_match && body_match
+            }
+            Ok((_, other, _, _)) => {
+                println!("  RESULT: FAIL -> unexpected payload kind: {other:?}");
+                false
+            }
+            Err(e) => {
+                println!("  RESULT: FAIL -> {e:?}");
+                false
+            }
+        };
+        results.push(("Routed A->R", ok));
+    }
+
+    // ---- R->A: tsp_sdk seal RoutedMessage -> affinidi unpack ----
+    println!("--- R->A: tsp_sdk seal RoutedMessage -> affinidi unpack ---");
+    {
+        let sealed = tsp_sdk::crypto::seal(
+            &alice_vid,
+            bob_vid.vid(),
+            None,
+            Payload::RoutedMessage(route_bytes.clone(), inner.as_slice()),
+        )
+        .expect("tsp_sdk seal routed");
+        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk) {
+            Ok(u) => {
+                let kind_ok = u.message_type == MessageType::Routed;
+                let hops_match = u.hops == route_strs;
+                let body_match = u.payload == inner;
+                println!(
+                    "  RESULT: OK kind={:?} hops_match={hops_match} body_match={body_match}",
+                    u.message_type
+                );
+                kind_ok && hops_match && body_match
+            }
+            Err(e) => {
+                println!("  RESULT: FAIL -> {e:?}");
+                false
+            }
+        };
+        results.push(("Routed R->A", ok));
+    }
+
+    // ================= NESTED =================
+    println!("\n========== NESTED ==========");
+
+    // ---- A->R: affinidi pack_nested -> tsp_sdk open (expect NestedMessage) ----
+    println!("--- A->R: affinidi pack_nested -> tsp_sdk open ---");
+    {
+        // pack_nested wraps an already-packed PackedMessage; for a framing test we
+        // can wrap any opaque bytes by constructing a PackedMessage via a Direct
+        // pack so the inner is a real TSP message.
+        let inner_packed = atsp::pack(
+            b"for bob only",
+            MessageType::Direct,
+            alice_id,
+            bob_id,
+            &alice.sign_sk,
+            &alice.enc_sk,
+            &bob.enc_pk,
+        )
+        .expect("inner pack");
+        let packed = artd::pack_nested(
+            &inner_packed,
+            alice_id,
+            bob_id,
+            &alice.sign_sk,
+            &alice.enc_sk,
+            &bob.enc_pk,
+        )
+        .expect("affinidi pack_nested");
+        let mut buf = packed.bytes.clone();
+        let ok = match tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf) {
+            Ok((_ncd, Payload::NestedMessage(body), ct, st)) => {
+                let body_match = body.as_ref() == inner_packed.bytes.as_slice();
+                println!("  RESULT: OK crypto={ct:?} sig={st:?} body_match={body_match}");
+                body_match
+            }
+            Ok((_, other, _, _)) => {
+                println!("  RESULT: FAIL -> unexpected payload kind: {other:?}");
+                false
+            }
+            Err(e) => {
+                println!("  RESULT: FAIL -> {e:?}");
+                false
+            }
+        };
+        results.push(("Nested A->R", ok));
+    }
+
+    // ---- R->A: tsp_sdk seal NestedMessage -> affinidi unpack ----
+    println!("--- R->A: tsp_sdk seal NestedMessage -> affinidi unpack ---");
+    {
+        let nested_inner = b"nested inner bytes";
+        let sealed = tsp_sdk::crypto::seal(
+            &alice_vid,
+            bob_vid.vid(),
+            None,
+            Payload::NestedMessage(nested_inner.as_slice()),
+        )
+        .expect("tsp_sdk seal nested");
+        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk) {
+            Ok(u) => {
+                let kind_ok = u.message_type == MessageType::Nested;
+                let body_match = u.payload == nested_inner;
+                let hops_empty = u.hops.is_empty();
+                println!(
+                    "  RESULT: OK kind={:?} body_match={body_match} hops_empty={hops_empty}",
+                    u.message_type
+                );
+                kind_ok && body_match && hops_empty
+            }
+            Err(e) => {
+                println!("  RESULT: FAIL -> {e:?}");
+                false
+            }
+        };
+        results.push(("Nested R->A", ok));
+    }
+
+    // ================= SUMMARY =================
+    println!("\n========== INTEROP GATE SUMMARY ==========");
+    let mut all_ok = true;
+    for (name, ok) in &results {
+        println!("  {:<14} {}", name, if *ok { "PASS" } else { "FAIL" });
+        all_ok &= ok;
+    }
+    println!(
+        "  ----\n  OVERALL: {}",
+        if all_ok { "PASS" } else { "FAIL" }
+    );
+
     // ---- Diagnostic: does tsp_sdk round-trip with itself using these keys? ----
-    println!("--- Sanity: tsp_sdk self round-trip with the same raw keys ---");
+    println!("\n--- Sanity: tsp_sdk self round-trip with the same raw keys ---");
     {
         let mut sealed = tsp_sdk::crypto::seal(
             &alice_vid,

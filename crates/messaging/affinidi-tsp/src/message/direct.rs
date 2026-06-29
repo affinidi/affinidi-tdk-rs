@@ -30,9 +30,10 @@ use crate::message::MessageType;
 use crate::message::envelope::Envelope;
 use crate::message::wire;
 
-/// Maximum allowed message size (1 MB) to prevent memory exhaustion from
-/// maliciously crafted length fields on the wire.
-const MAX_MESSAGE_SIZE: usize = 1_048_576;
+/// Maximum allowed ciphertext size, kept in lock-step with the variable-data
+/// field cap (which mirrors the ToIP reference's `DATA_LIMIT`). The ciphertext is
+/// itself a `G` variable-data field, so this matches what the wire layer accepts.
+const MAX_MESSAGE_SIZE: usize = crate::message::wire::MAX_FIELD_SIZE;
 
 /// X25519 encapsulated-key length appended to the ciphertext.
 const ENC_LEN: usize = 32;
@@ -51,71 +52,82 @@ pub struct PackedMessage {
 /// Result of unpacking a TSP message.
 #[derive(Debug, Clone)]
 pub struct UnpackedMessage {
-    /// The decrypted payload.
+    /// The decrypted payload. For Direct/Control this is the message body; for
+    /// Nested it is the opaque inner packed message; for Routed it is the opaque
+    /// inner message (the route travels in [`UnpackedMessage::hops`]).
     pub payload: Vec<u8>,
+    /// The remaining hop list for a Routed message (empty for Direct, Nested and
+    /// Control).
+    pub hops: Vec<String>,
     /// The sender's VID.
     pub sender: String,
     /// The receiver's VID.
     pub receiver: String,
-    /// The message type (currently always [`MessageType::Direct`] for the
-    /// interop-format Direct payload; other kinds are a follow-up).
+    /// The message type, recovered from the encrypted payload frame.
     pub message_type: MessageType,
 }
 
-/// Affinidi-internal payload-type markers for the message kinds that are not yet
-/// interop-framed. Direct uses the reference's `XSCS` marker verbatim (so a
-/// Direct message is byte-compatible with `tsp-sdk`). The other kinds are
-/// affinidi-private 3-byte markers so [`unpack`] can recover the kind; bringing
-/// them to the reference's `XHOP`/`XRFI`/… framing is a tracked follow-up.
+/// Payload-type markers. Direct/Nested/Routed use the reference `tsp-sdk`
+/// framing verbatim (so they are byte-compatible with `tsp-sdk`):
+///
+///   * Direct → `XSCS`
+///   * Nested → `XHOP` + empty hop list
+///   * Routed → `XHOP` + non-empty hop list
+///
+/// Control stays on an affinidi-private `ACT` marker (the reference's
+/// relationship/control payloads — `XRFI`/`XRFA`/`XRFD` — are out of scope).
 mod payload_marker {
     /// Generic message (Direct) — the reference `XSCS` marker, byte-exact.
     pub const DIRECT: [u8; 3] = crate::message::wire::XSCS;
-    /// Affinidi-private marker for a Nested wrapper payload.
-    pub const NESTED: [u8; 3] = *b"ANS";
-    /// Affinidi-private marker for a Routed-layer payload.
-    pub const ROUTED: [u8; 3] = *b"ART";
-    /// Affinidi-private marker for a Control payload.
+    /// Hop-carrying payload (Nested or Routed) — the reference `XHOP` marker.
+    pub const HOP: [u8; 3] = crate::message::wire::XHOP;
+    /// Affinidi-private marker for a Control payload (out of interop scope).
     pub const CONTROL: [u8; 3] = *b"ACT";
-}
-
-fn marker_for(kind: MessageType) -> [u8; 3] {
-    match kind {
-        MessageType::Direct => payload_marker::DIRECT,
-        MessageType::Nested => payload_marker::NESTED,
-        MessageType::Routed => payload_marker::ROUTED,
-        MessageType::Control => payload_marker::CONTROL,
-    }
-}
-
-fn kind_for(marker: &[u8]) -> Option<MessageType> {
-    match marker {
-        m if m == payload_marker::DIRECT => Some(MessageType::Direct),
-        m if m == payload_marker::NESTED => Some(MessageType::Nested),
-        m if m == payload_marker::ROUTED => Some(MessageType::Routed),
-        m if m == payload_marker::CONTROL => Some(MessageType::Control),
-        _ => None,
-    }
 }
 
 /// Build the CESR payload frame that is encrypted (the HPKE plaintext).
 ///
-/// `-Z<count> <marker> <var-data B> plaintext`. For [`MessageType::Direct`] the
-/// marker is `XSCS`, making the whole frame byte-compatible with `tsp-sdk`'s
-/// generic-message payload.
-fn encode_payload_frame(plaintext: &[u8], kind: MessageType) -> Vec<u8> {
-    let mut body = Vec::with_capacity(3 + plaintext.len() + 3);
-    body.extend_from_slice(&marker_for(kind));
-    wire::encode_variable_data(wire::TSP_PLAINTEXT, plaintext, &mut body);
+/// Layout matches the `tsp_sdk` reference's `encode_payload`:
+///   * Direct  → `-Z<count> XSCS <var-data B> body`
+///   * Nested  → `-Z<count> XHOP -J0 <var-data B> body`
+///   * Routed  → `-Z<count> XHOP -J<n> (B hop)* <var-data B> body`
+///   * Control → `-Z<count> ACT <var-data B> body` (affinidi-private)
+fn encode_payload_frame(body: &[u8], kind: MessageType, hops: &[String]) -> Vec<u8> {
+    let mut frame_body = Vec::with_capacity(3 + body.len() + 3);
+    match kind {
+        MessageType::Direct => {
+            frame_body.extend_from_slice(&payload_marker::DIRECT);
+        }
+        MessageType::Nested => {
+            frame_body.extend_from_slice(&payload_marker::HOP);
+            let no_hops: [&[u8]; 0] = [];
+            wire::encode_hops(&no_hops, &mut frame_body);
+        }
+        MessageType::Routed => {
+            frame_body.extend_from_slice(&payload_marker::HOP);
+            wire::encode_hops(hops, &mut frame_body);
+        }
+        MessageType::Control => {
+            frame_body.extend_from_slice(&payload_marker::CONTROL);
+        }
+    }
+    wire::encode_variable_data(wire::TSP_PLAINTEXT, body, &mut frame_body);
 
-    debug_assert!(body.len().is_multiple_of(3));
-    let mut out = Vec::with_capacity(3 + body.len());
-    wire::encode_count(wire::TSP_PAYLOAD, (body.len() / 3) as u32, &mut out);
-    out.extend_from_slice(&body);
+    debug_assert!(frame_body.len().is_multiple_of(3));
+    let mut out = Vec::with_capacity(3 + frame_body.len());
+    wire::encode_count(wire::TSP_PAYLOAD, (frame_body.len() / 3) as u32, &mut out);
+    out.extend_from_slice(&frame_body);
     out
 }
 
-/// Decode a CESR payload frame, returning the plaintext and message kind.
-fn decode_payload_frame(frame: &[u8]) -> Result<(Vec<u8>, MessageType), TspError> {
+/// Decode a CESR payload frame, returning `(kind, hops, body)`.
+///
+/// `XSCS` → `(Direct, [], body)`; `XHOP` → decode the hop list, an empty list is
+/// `(Nested, [], body)` and a non-empty one is `(Routed, hops, body)`; `ACT` →
+/// `(Control, [], body)`.
+fn decode_payload_frame(
+    frame: &[u8],
+) -> Result<(MessageType, Vec<String>, Vec<u8>), TspError> {
     let mut pos = 0usize;
     wire::decode_count(wire::TSP_PAYLOAD, frame, &mut pos)
         .ok_or_else(|| TspError::InvalidMessage("missing -Z payload frame".into()))?;
@@ -127,14 +139,37 @@ fn decode_payload_frame(frame: &[u8]) -> Result<(Vec<u8>, MessageType), TspError
     let marker = frame
         .get(pos..pos + 3)
         .ok_or_else(|| TspError::InvalidMessage("missing payload type marker".into()))?;
-    let kind = kind_for(marker).ok_or_else(|| {
-        TspError::InvalidMessage("unsupported TSP payload type marker".into())
-    })?;
-    pos += 3;
 
-    let plaintext = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
+    let (kind, hops) = if marker == payload_marker::DIRECT {
+        pos += 3;
+        (MessageType::Direct, Vec::new())
+    } else if marker == payload_marker::HOP {
+        pos += 3;
+        let hop_bytes = wire::decode_hops(frame, &mut pos)?;
+        let hops = hop_bytes
+            .into_iter()
+            .map(|h| {
+                String::from_utf8(h)
+                    .map_err(|_| TspError::InvalidMessage("hop VID not UTF-8".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if hops.is_empty() {
+            (MessageType::Nested, hops)
+        } else {
+            (MessageType::Routed, hops)
+        }
+    } else if marker == payload_marker::CONTROL {
+        pos += 3;
+        (MessageType::Control, Vec::new())
+    } else {
+        return Err(TspError::InvalidMessage(
+            "unsupported TSP payload type marker".into(),
+        ));
+    };
+
+    let body = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
         .ok_or_else(|| TspError::InvalidMessage("missing payload plaintext".into()))?;
-    Ok((plaintext, kind))
+    Ok((kind, hops, body))
 }
 
 /// Encode the signature frame: `-C<n> -K<n> <fixed B> sig`.
@@ -178,12 +213,38 @@ pub fn pack(
     sender_encryption_key: &[u8; 32],
     receiver_encryption_key: &[u8; 32],
 ) -> Result<PackedMessage, TspError> {
+    pack_with_hops(
+        payload,
+        message_type,
+        &[],
+        sender_vid,
+        receiver_vid,
+        sender_signing_key,
+        sender_encryption_key,
+        receiver_encryption_key,
+    )
+}
+
+/// Like [`pack`] but carries a routing `hops` list in the payload frame (used by
+/// [`crate::message::routed::pack_routed`] for [`MessageType::Routed`]). For all
+/// other kinds `hops` must be empty.
+#[allow(clippy::too_many_arguments)]
+pub fn pack_with_hops(
+    body: &[u8],
+    message_type: MessageType,
+    hops: &[String],
+    sender_vid: &str,
+    receiver_vid: &str,
+    sender_signing_key: &[u8; 32],
+    sender_encryption_key: &[u8; 32],
+    receiver_encryption_key: &[u8; 32],
+) -> Result<PackedMessage, TspError> {
     // 1. Envelope frame = HPKE info.
     let envelope = Envelope::new(message_type, sender_vid, receiver_vid);
     let envelope_bytes = envelope.encode()?;
 
     // 2. CESR payload frame, then HPKE-Auth seal it.
-    let payload_frame = encode_payload_frame(payload, message_type);
+    let payload_frame = encode_payload_frame(body, message_type, hops);
     let sealed = hpke::seal(
         &payload_frame,
         b"", // AAD is empty in the reference
@@ -272,10 +333,11 @@ pub fn unpack(
     )?;
 
     // 5. Decode the CESR payload frame.
-    let (payload, message_type) = decode_payload_frame(&payload_frame)?;
+    let (message_type, hops, payload) = decode_payload_frame(&payload_frame)?;
 
     Ok(UnpackedMessage {
         payload,
+        hops,
         sender: envelope.sender,
         receiver: envelope.receiver,
         message_type,

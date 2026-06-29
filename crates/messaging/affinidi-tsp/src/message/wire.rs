@@ -35,9 +35,10 @@ const D8: u32 = D0 + 8;
 const D9: u32 = D0 + 9;
 const DASH: u32 = 62;
 
-/// Maximum size we will allocate / accept for a single variable-data field
-/// (1 MiB), guarding against hostile size headers.
-pub const MAX_FIELD_SIZE: usize = 1_048_576;
+/// Maximum size we accept for a single variable-data field, mirroring the ToIP
+/// reference (`tsp_sdk`'s `DATA_LIMIT = 3 * (1 << 24)`, ~48 MiB) so we accept any
+/// field the reference can validly produce. Guards against hostile size headers.
+pub const MAX_FIELD_SIZE: usize = 3 * (1 << 24);
 
 /// Interpret a base64url string as a big-endian integer of its 6-bit symbols.
 /// Used to derive the numeric identifier of single/short CESR codes (e.g. the
@@ -113,13 +114,18 @@ pub const TSP_TMP: u32 = cesr_int("X") as u32;
 pub const TSP_ETS_WRAPPER: u16 = cesr_int("E") as u16;
 /// `-Z`: count-code wrapper for the (to-be-encrypted) CESR payload frame.
 pub const TSP_PAYLOAD: u16 = cesr_int("Z") as u16;
+/// `-J`: count-code group for a hop (routing) list.
+pub const TSP_HOP_LIST: u16 = cesr_int("J") as u16;
 /// `-C`: count-code attach group for the signature.
 pub const TSP_ATTACH_GRP: u16 = cesr_int("C") as u16;
 /// `-K`: count-code indexed-signature group for the signature.
 pub const TSP_INDEX_SIG_GRP: u16 = cesr_int("K") as u16;
 
-/// 3-byte payload-type marker for a generic (GenericMessage) payload.
+/// 3-byte payload-type marker for a generic (GenericMessage / Content) payload.
 pub const XSCS: [u8; 3] = cesr_data("XSCS");
+/// 3-byte payload-type marker for a hop-carrying payload (Nested when the hop
+/// list is empty, Routed otherwise).
+pub const XHOP: [u8; 3] = cesr_data("XHOP");
 /// 3-byte TSP version genus marker.
 pub const YTSP: [u8; 3] = cesr_data("YTSP");
 
@@ -184,6 +190,36 @@ pub fn encode_count(identifier: u16, count: u32, out: &mut Vec<u8>) {
 pub fn encode_version(out: &mut Vec<u8>) {
     out.extend_from_slice(&YTSP);
     encode_count(TSP_VERSION.0, encoded_version() as u32, out);
+}
+
+/// Encode a hop (routing) list: a `-J<count>` group header followed by one
+/// `B` var-data field per hop VID. Byte-compatible with `tsp_sdk`'s
+/// `encode_hops`. An empty list encodes to just the `-J0` header (this is how
+/// a Nested payload is distinguished from a Routed one).
+pub fn encode_hops(hops: &[impl AsRef<[u8]>], out: &mut Vec<u8>) {
+    encode_count(TSP_HOP_LIST, hops.len() as u32, out);
+    for hop in hops {
+        encode_variable_data(TSP_VID, hop.as_ref(), out);
+    }
+}
+
+/// Decode a hop (routing) list at `*pos`. On success advances `*pos` past the
+/// `-J` group + every hop field and returns the hop VID byte vectors.
+pub fn decode_hops(stream: &[u8], pos: &mut usize) -> Result<Vec<Vec<u8>>, TspError> {
+    let count = decode_count(TSP_HOP_LIST, stream, pos)
+        .ok_or_else(|| TspError::InvalidMessage("missing -J hop list".into()))?;
+    // The hop list is a route; bound the count by the route limit (not the much
+    // larger field-size cap) so a hostile count can't pre-allocate gigabytes.
+    if count as usize > crate::message::routed::MAX_HOPS {
+        return Err(TspError::InvalidMessage("hop list too long".into()));
+    }
+    let mut hops = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let hop = decode_variable_data(TSP_VID, stream, pos)
+            .ok_or_else(|| TspError::InvalidMessage("malformed hop VID".into()))?;
+        hops.push(hop);
+    }
+    Ok(hops)
 }
 
 // ---- Decoding ----
@@ -389,6 +425,29 @@ mod tests {
         let got = decode_fixed_data::<2>(TSP_TMP, &buf, &mut pos).unwrap();
         assert_eq!(got, [0, 0]);
         assert_eq!(pos, 3);
+    }
+
+    #[test]
+    fn hops_empty_roundtrip() {
+        let mut buf = Vec::new();
+        let no_hops: [&[u8]; 0] = [];
+        encode_hops(&no_hops, &mut buf);
+        // Just the -J0 count header.
+        let mut pos = 0;
+        let got = decode_hops(&buf, &mut pos).unwrap();
+        assert!(got.is_empty());
+        assert_eq!(pos, buf.len());
+    }
+
+    #[test]
+    fn hops_roundtrip() {
+        let hops = [b"did:web:hop1".as_slice(), b"did:web:exit".as_slice()];
+        let mut buf = Vec::new();
+        encode_hops(&hops, &mut buf);
+        let mut pos = 0;
+        let got = decode_hops(&buf, &mut pos).unwrap();
+        assert_eq!(got, vec![b"did:web:hop1".to_vec(), b"did:web:exit".to_vec()]);
+        assert_eq!(pos, buf.len());
     }
 
     #[test]

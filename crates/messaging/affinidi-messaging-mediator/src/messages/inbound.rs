@@ -131,7 +131,7 @@ pub(crate) async fn handle_inbound_tsp(
         // message, re-sealing as this mediator unless we are the last hop (the
         // opaque inner is already sealed to the final recipient).
         TspMessageType::Routed => {
-            let step = next_hop(&unpacked.payload).map_err(|e| {
+            let step = next_hop(&unpacked).map_err(|e| {
                 tsp_problem(
                     session,
                     37,
