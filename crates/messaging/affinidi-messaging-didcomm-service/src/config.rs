@@ -1,9 +1,58 @@
 use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
 use affinidi_tdk_common::{config::TDKConfig, profiles::TDKProfile};
 
+use crate::error::ConfigError;
+
 #[derive(Debug)]
 pub struct DIDCommServiceConfig {
     pub listeners: Vec<ListenerConfig>,
+}
+
+/// Which transport protocols a message service handles on its single per-DID
+/// websocket.
+///
+/// The mediator allows one websocket per DID, so a node speaking both protocols
+/// multiplexes them on the same socket rather than opening a second one. At
+/// least one protocol must be enabled — an empty set is rejected at
+/// construction ([`ConfigError::NoProtocolEnabled`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Protocols {
+    pub didcomm: bool,
+    pub tsp: bool,
+}
+
+impl Protocols {
+    /// DIDComm only — the historical `DIDCommService` behaviour (and the
+    /// [`Default`]).
+    pub const DIDCOMM_ONLY: Protocols = Protocols {
+        didcomm: true,
+        tsp: false,
+    };
+    /// TSP only — a node with no DIDComm pickup; the socket carries only TSP.
+    pub const TSP_ONLY: Protocols = Protocols {
+        didcomm: false,
+        tsp: true,
+    };
+    /// Both protocols multiplexed on one socket.
+    pub const BOTH: Protocols = Protocols {
+        didcomm: true,
+        tsp: true,
+    };
+
+    /// Construct from flags, rejecting the empty set.
+    pub fn new(didcomm: bool, tsp: bool) -> Result<Self, ConfigError> {
+        if !didcomm && !tsp {
+            return Err(ConfigError::NoProtocolEnabled);
+        }
+        Ok(Self { didcomm, tsp })
+    }
+}
+
+impl Default for Protocols {
+    /// DIDComm-only, so existing `ListenerConfig` consumers keep their behaviour.
+    fn default() -> Self {
+        Protocols::DIDCOMM_ONLY
+    }
 }
 
 pub struct ListenerConfig {
@@ -14,6 +63,9 @@ pub struct ListenerConfig {
     pub message_wait_duration_secs: u64,
     pub auto_delete: bool,
     pub tdk_config: Option<TDKConfig>,
+    /// Which protocols this listener handles on its socket. Defaults to
+    /// [`Protocols::DIDCOMM_ONLY`].
+    pub protocols: Protocols,
 }
 
 impl std::fmt::Debug for ListenerConfig {
@@ -28,6 +80,7 @@ impl std::fmt::Debug for ListenerConfig {
             )
             .field("auto_delete", &self.auto_delete)
             .field("tdk_config", &self.tdk_config.as_ref().map(|_| "..."))
+            .field("protocols", &self.protocols)
             .finish()
     }
 }
@@ -54,6 +107,7 @@ impl Default for ListenerConfig {
             message_wait_duration_secs: 5,
             auto_delete: true,
             tdk_config: None,
+            protocols: Protocols::default(),
         }
     }
 }
@@ -99,6 +153,31 @@ mod tests {
         assert!(lc.acl_mode.is_none());
         assert!(matches!(lc.restart_policy, RestartPolicy::Never));
         assert!(lc.tdk_config.is_none());
+        // Back-compat: a listener defaults to DIDComm-only.
+        assert_eq!(lc.protocols, Protocols::DIDCOMM_ONLY);
+    }
+
+    #[test]
+    fn protocols_default_is_didcomm_only() {
+        assert_eq!(Protocols::default(), Protocols::DIDCOMM_ONLY);
+        assert!(Protocols::default().didcomm);
+        assert!(!Protocols::default().tsp);
+    }
+
+    #[test]
+    fn protocols_new_rejects_empty_set() {
+        let err = Protocols::new(false, false).unwrap_err();
+        assert!(matches!(err, ConfigError::NoProtocolEnabled));
+    }
+
+    #[test]
+    fn protocols_new_accepts_each_non_empty_combination() {
+        assert_eq!(
+            Protocols::new(true, false).unwrap(),
+            Protocols::DIDCOMM_ONLY
+        );
+        assert_eq!(Protocols::new(false, true).unwrap(), Protocols::TSP_ONLY);
+        assert_eq!(Protocols::new(true, true).unwrap(), Protocols::BOTH);
     }
 
     #[test]

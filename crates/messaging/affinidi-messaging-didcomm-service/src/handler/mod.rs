@@ -35,6 +35,42 @@ pub trait DIDCommHandler: Send + Sync + 'static {
     ) -> Result<Option<DIDCommResponse>, DIDCommServiceError>;
 }
 
+/// Top-level handler for incoming **TSP** messages.
+///
+/// The message service unpacks the TSP frame off the shared websocket and
+/// invokes this with the cleartext `payload` and the cryptographically
+/// authenticated `sender_vid` (a DID). TSP inbound is one-way at this layer (no
+/// reply is packed here, mirroring how a TSP frame carries a Trust Task into the
+/// application spine), so the handler returns `Ok(())` on success.
+///
+/// Symmetric with [`DIDCommHandler`]: a multiplexing service routes DIDComm
+/// frames to the `DIDCommHandler` and TSP frames to the `TspHandler`.
+#[async_trait]
+pub trait TspHandler: Send + Sync + 'static {
+    async fn handle(
+        &self,
+        ctx: HandlerContext,
+        payload: Vec<u8>,
+        sender_vid: String,
+    ) -> Result<(), DIDCommServiceError>;
+}
+
+/// No-op [`TspHandler`] that silently drops TSP messages — the TSP analogue of
+/// [`ignore_handler`]. Directly usable as `Arc<dyn TspHandler>`.
+pub struct IgnoreTspHandler;
+
+#[async_trait]
+impl TspHandler for IgnoreTspHandler {
+    async fn handle(
+        &self,
+        _ctx: HandlerContext,
+        _payload: Vec<u8>,
+        _sender_vid: String,
+    ) -> Result<(), DIDCommServiceError> {
+        Ok(())
+    }
+}
+
 /// Handler invoked when a route handler returns an error.
 ///
 /// Return `Some(response)` to send a reply (e.g., a problem report) back to the

@@ -344,7 +344,7 @@ impl DIDCommService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ListenerConfig, RestartPolicy};
+    use crate::config::{ListenerConfig, Protocols, RestartPolicy};
     use affinidi_messaging_didcomm::Message;
     use affinidi_tdk_common::profiles::TDKProfile;
     use serde_json::json;
@@ -458,6 +458,7 @@ mod tests {
             message_wait_duration_secs: 5,
             auto_delete: true,
             tdk_config: None,
+            protocols: Protocols::default(),
         };
 
         let result = service.add_listener(config).await;

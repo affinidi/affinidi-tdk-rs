@@ -50,6 +50,18 @@ pub enum StartupError {
     AclApply(#[source] affinidi_messaging_sdk::errors::ATMError),
 }
 
+/// Errors constructing service configuration.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ConfigError {
+    /// A message service must handle at least one transport. An empty
+    /// `Protocols` (neither DIDComm nor TSP) is a no-op and almost certainly a
+    /// config bug — the service-level analogue of "advertise at least one
+    /// transport".
+    #[error("at least one protocol (DIDComm or TSP) must be enabled")]
+    NoProtocolEnabled,
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DIDCommServiceError {
