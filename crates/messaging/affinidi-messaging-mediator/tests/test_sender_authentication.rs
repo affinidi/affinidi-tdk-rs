@@ -378,3 +378,152 @@ async fn meta_envelope_detects_anoncrypt_no_sender() {
         "anoncrypt envelope should not have from_did"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Regression: nested-envelope classification.
+//
+// The compat unpack used to decrypt only ONE outer JWE layer and never
+// populate `sign_from` / never recurse, so it mis-classified several valid
+// sender-authenticated wrappings as anonymous (rejected by inbound.rs).
+//
+// For the SAME Alice→Bob DIDs/keys, pack all four wrappings and assert that
+// unpack now populates `authenticated`/`sign_from` correctly, so the inbound.rs
+// anonymous-block decision accepts the first three and blocks only the fourth.
+// ---------------------------------------------------------------------------
+
+use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
+use affinidi_did_common::document::DocumentExt;
+use affinidi_messaging_didcomm::{jwe::encrypt, jws::sign::sign_ed25519};
+use base64::Engine;
+
+/// Resolve a DID's first key-agreement public key (mirrors what the compat
+/// layer does internally) so the test can build inner JWE layers.
+async fn resolve_ka_public(did: &str, resolver: &DIDCacheClient) -> (String, PublicKeyAgreement) {
+    let doc = resolver.resolve(did).await.unwrap();
+    let kids = doc.doc.find_key_agreement(None);
+    let kid = kids.first().unwrap().to_string();
+    let vm = doc.doc.get_verification_method(&kid).unwrap();
+    let multibase = vm.property_set["publicKeyMultibase"].as_str().unwrap();
+    let (codec, bytes) = affinidi_encoding::decode_multikey_with_codec(multibase).unwrap();
+    let curve = match codec {
+        affinidi_encoding::X25519_PUB => Curve::X25519,
+        affinidi_encoding::P256_PUB => Curve::P256,
+        affinidi_encoding::SECP256K1_PUB => Curve::K256,
+        affinidi_encoding::P384_PUB => Curve::P384,
+        affinidi_encoding::P521_PUB => Curve::P521,
+        other => panic!("unexpected KA codec {other:#x}"),
+    };
+    (kid, PublicKeyAgreement::from_raw_bytes(curve, &bytes).unwrap())
+}
+
+/// Decode the 32-byte `d` of an OKP/EC JWK (the JWKs here use url-safe base64).
+fn jwk_d_bytes(jwk: &serde_json::Value) -> Vec<u8> {
+    let d = jwk["d"].as_str().unwrap();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(d)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn nested_wrappings_classified_correctly() {
+    let (resolver, _alice_secrets, bob_secrets) = setup().await;
+
+    let alice_ka_kid = format!("{ALICE_DID}#key-2");
+    let alice_sign_kid = format!("{ALICE_DID}#key-1");
+    let (bob_ka_kid, bob_ka_pub) = resolve_ka_public(BOB_DID, &resolver).await;
+
+    // Alice's sender keys: key-agreement (secp256k1, ALICE_E1) for authcrypt,
+    // Ed25519 (ALICE_V1) for signing.
+    let alice_ka_priv =
+        PrivateKeyAgreement::from_raw_bytes(Curve::K256, &jwk_d_bytes(&ALICE_E1)).unwrap();
+    let alice_ed: [u8; 32] = jwk_d_bytes(&ALICE_V1).try_into().unwrap();
+
+    let msg = build_test_message(ALICE_DID, BOB_DID, "https://example.com/test");
+    let plaintext = msg.to_json().unwrap();
+
+    // 1. authcrypt(plaintext)
+    let authcrypt = encrypt::authcrypt(
+        &plaintext,
+        &alice_ka_kid,
+        &alice_ka_priv,
+        &[(&bob_ka_kid, &bob_ka_pub)],
+    )
+    .unwrap();
+
+    // 2. anoncrypt(signed(plaintext))
+    let inner_jws = sign_ed25519(&plaintext, &alice_sign_kid, &alice_ed).unwrap();
+    let anon_signed =
+        encrypt::anoncrypt(inner_jws.as_bytes(), &[(&bob_ka_kid, &bob_ka_pub)]).unwrap();
+
+    // 3. anoncrypt(authcrypt(plaintext))
+    let anon_auth = encrypt::anoncrypt(authcrypt.as_bytes(), &[(&bob_ka_kid, &bob_ka_pub)]).unwrap();
+
+    // 4. anoncrypt(plaintext)
+    let anon_plain = encrypt::anoncrypt(&plaintext, &[(&bob_ka_kid, &bob_ka_pub)]).unwrap();
+
+    let (_, m_authcrypt) = didcomm_compat::unpack(&authcrypt, &resolver, &bob_secrets)
+        .await
+        .expect("authcrypt(plaintext) must unpack");
+    let (_, m_anon_signed) = didcomm_compat::unpack(&anon_signed, &resolver, &bob_secrets)
+        .await
+        .expect("anoncrypt(signed(plaintext)) must unpack");
+    let (_, m_anon_auth) = didcomm_compat::unpack(&anon_auth, &resolver, &bob_secrets)
+        .await
+        .expect("anoncrypt(authcrypt(plaintext)) must unpack");
+    let (_, m_anon_plain) = didcomm_compat::unpack(&anon_plain, &resolver, &bob_secrets)
+        .await
+        .expect("anoncrypt(plaintext) must unpack");
+
+    // Metadata assertions per wrapping.
+    assert!(
+        m_authcrypt.authenticated,
+        "authcrypt(plaintext) must be authenticated"
+    );
+    assert!(
+        m_anon_signed.sign_from.is_some(),
+        "anoncrypt(signed) must surface a verified signer (sign_from)"
+    );
+    assert!(
+        m_anon_auth.authenticated,
+        "anoncrypt(authcrypt) must recover inner authentication"
+    );
+    assert!(
+        !m_anon_plain.authenticated && m_anon_plain.sign_from.is_none(),
+        "pure anoncrypt must remain anonymous"
+    );
+
+    // The exact inbound.rs anonymous-block decision.
+    let blocked =
+        |m: &affinidi_messaging_sdk::messages::compat::UnpackMetadata| {
+            !m.authenticated && m.sign_from.is_none()
+        };
+    assert!(!blocked(&m_authcrypt), "authcrypt must be accepted");
+    assert!(!blocked(&m_anon_signed), "anoncrypt(signed) must be accepted");
+    assert!(!blocked(&m_anon_auth), "anoncrypt(authcrypt) must be accepted");
+    assert!(blocked(&m_anon_plain), "pure anoncrypt must be blocked");
+}
+
+/// A nested signed JWS with a BAD signature must NOT be accepted — verification
+/// must fail (we never trust an unverified signer kid).
+#[tokio::test]
+async fn nested_signed_with_bad_signature_is_rejected() {
+    let (resolver, _alice_secrets, bob_secrets) = setup().await;
+
+    let alice_sign_kid = format!("{ALICE_DID}#key-1");
+    let (bob_ka_kid, bob_ka_pub) = resolve_ka_public(BOB_DID, &resolver).await;
+
+    // Sign with a DIFFERENT key (arbitrary 32-byte seed) but claim Alice's
+    // kid — the resolver will fetch Alice's REAL Ed25519 key, so verification
+    // against this forged signature must fail.
+    let wrong_key: [u8; 32] = [7u8; 32];
+    let msg = build_test_message(ALICE_DID, BOB_DID, "https://example.com/test");
+    let forged_jws = sign_ed25519(&msg.to_json().unwrap(), &alice_sign_kid, &wrong_key).unwrap();
+    let anon_forged =
+        encrypt::anoncrypt(forged_jws.as_bytes(), &[(&bob_ka_kid, &bob_ka_pub)]).unwrap();
+
+    let result = didcomm_compat::unpack(&anon_forged, &resolver, &bob_secrets).await;
+    assert!(
+        result.is_err(),
+        "a forged inner signature must be rejected, not pass as authenticated"
+    );
+}

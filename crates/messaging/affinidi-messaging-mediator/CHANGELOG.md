@@ -4,6 +4,23 @@
 
 ## 30th June 2026
 
+### 0.16.36 — fix: accept sender-authenticated nested DIDComm envelopes again
+
+- The DIDComm unpack (`didcomm_compat`) only inspected the outermost layer, so it never
+  populated `sign_from` and never recursed — making `anoncrypt(signed(..))`,
+  `anoncrypt(authcrypt(..))`, and top-level signed messages look anonymous and get rejected
+  by the `block_anonymous_outer_envelope` check (only single-layer `authcrypt` survived).
+  This was a regression from the full recursive unpack the mediator previously used.
+- Fix: after decrypting a JWE, recurse into a nested envelope — verify a nested/top-level
+  JWS against the signer's resolved Ed25519 key (from the signer DID's `authentication`
+  relationship) and set `sign_from`; decrypt a nested authcrypt and set `authenticated`.
+  Signatures are **verified** (a forged signature errors, never passes), and recursion is
+  bounded (`MAX_NEST_DEPTH = 8`). The `block_anonymous_outer_envelope` check and its default
+  are unchanged — only the metadata feeding it is now correct, so genuinely-anonymous
+  `anoncrypt(plaintext)` is still blocked.
+- Adds `tests/test_sender_authentication.rs` covering all four wrappings + a forged-signature
+  case.
+
 ### 0.16.35 — store conformance: OOB discovery round-trip; rustfmt
 
 - `tests/store_conformance.rs` gains an `oob_discovery_roundtrip` check (store → get →
