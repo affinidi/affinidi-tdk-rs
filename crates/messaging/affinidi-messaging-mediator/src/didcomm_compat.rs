@@ -16,6 +16,7 @@ use affinidi_did_common::{document::DocumentExt, verification_method::Verificati
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_didcomm::{
     jwe::decrypt::decrypt,
+    jws::verify::verify_ed25519,
     message::{
         Message,
         pack::{pack_encrypted_anoncrypt, pack_encrypted_authcrypt},
@@ -184,7 +185,7 @@ impl MetaEnvelope {
         if self.parsed.get("ciphertext").is_some() && self.parsed.get("recipients").is_some() {
             self.unpack_jwe(did_resolver, secrets_resolver).await
         } else if self.parsed.get("payload").is_some() && self.parsed.get("signatures").is_some() {
-            unpack_jws(&self.raw, &self.sha256_hash)
+            unpack_jws(&self.raw, &self.sha256_hash, did_resolver).await
         } else if self.parsed.get("type").is_some() {
             let msg = Message::from_json(self.raw.as_bytes())
                 .map_err(|e| format!("Cannot parse plaintext message: {e}"))?;
@@ -255,10 +256,11 @@ impl MetaEnvelope {
         )
         .map_err(|e| format!("Couldn't decrypt message: {e}"))?;
 
-        let msg = Message::from_json(&decrypted.plaintext)
-            .map_err(|e| format!("Cannot parse decrypted message: {e}"))?;
-
-        let metadata = UnpackMetadata {
+        // Seed metadata from the OUTER JWE layer. `authenticated`/`sign_from`
+        // may be promoted below if the decrypted plaintext is itself a signed
+        // JWS or a nested authcrypt JWE (the regression this fixes: the old
+        // shim stopped here and mis-classified those as anonymous).
+        let mut metadata = UnpackMetadata {
             encrypted: true,
             authenticated: decrypted.authenticated,
             anonymous_sender: !decrypted.authenticated,
@@ -268,7 +270,167 @@ impl MetaEnvelope {
             ..Default::default()
         };
 
+        let msg = recurse_decrypted_plaintext(
+            &decrypted.plaintext,
+            &recipient_kid_str,
+            &recipient_private,
+            did_resolver,
+            &mut metadata,
+            0,
+        )
+        .await?;
+
         Ok((msg, metadata))
+    }
+}
+
+/// Maximum nested-envelope depth we will peel, bounding decrypt/verify work
+/// against a maliciously deeply-nested message.
+const MAX_NEST_DEPTH: u8 = 8;
+
+/// Interpret a decrypted JWE plaintext and recurse into any nested envelope,
+/// promoting `metadata` as authentication/signature evidence is recovered.
+///
+/// Three shapes can appear inside a decrypted JWE:
+/// - a plaintext DIDComm `Message` (has `type`),
+/// - a JWS (sign-then-encrypt — has `payload`+`signatures`), or
+/// - another JWE (anoncrypt(authcrypt(..)) — has `ciphertext`+`recipients`).
+///
+/// `recipient_private`/`recipient_kid` are the SAME local recipient key used
+/// for the outer layer, reused to peel a nested JWE addressed to us.
+async fn recurse_decrypted_plaintext(
+    plaintext: &[u8],
+    recipient_kid: &str,
+    recipient_private: &PrivateKeyAgreement,
+    did_resolver: &DIDCacheClient,
+    metadata: &mut UnpackMetadata,
+    depth: u8,
+) -> Result<Message, String> {
+    if depth >= MAX_NEST_DEPTH {
+        return Err(format!(
+            "nested DIDComm envelope exceeds max depth {MAX_NEST_DEPTH}"
+        ));
+    }
+    // Anything that isn't valid JSON can only be a bare Message attempt.
+    let value: serde_json::Value = match serde_json::from_slice(plaintext) {
+        Ok(v) => v,
+        Err(_) => {
+            return Message::from_json(plaintext)
+                .map_err(|e| format!("Cannot parse decrypted message: {e}"));
+        }
+    };
+
+    if value.get("payload").is_some() && value.get("signatures").is_some() {
+        // Nested JWS: sign-then-encrypt. Verify the inner signature with the
+        // signer's resolved Ed25519 key and attribute non-repudiation. Never
+        // trust the kid without verifying — a bad signature must error.
+        let jws_str = std::str::from_utf8(plaintext)
+            .map_err(|e| format!("Inner JWS is not valid UTF-8: {e}"))?;
+        let signer_kid = extract_jws_signer_kid(&value)
+            .ok_or("Inner JWS has no signer kid to resolve a verification key")?;
+        let signer_did = did_part(&signer_kid);
+        let pubkey = resolve_did_ed25519_verification(&signer_did, Some(&signer_kid), did_resolver)
+            .await
+            .ok_or_else(|| {
+                format!("Could not resolve Ed25519 verification key for signer {signer_kid}")
+            })?;
+        let verified = verify_ed25519(jws_str, &pubkey)
+            .map_err(|e| format!("Inner JWS signature verification failed: {e}"))?;
+        metadata.non_repudiation = true;
+        metadata.sign_from = verified.signer_kid.or(Some(signer_kid));
+        return Message::from_json(&verified.payload)
+            .map_err(|e| format!("Cannot parse verified JWS payload: {e}"));
+    }
+
+    if value.get("ciphertext").is_some() && value.get("recipients").is_some() {
+        // Nested JWE: anoncrypt(authcrypt(..)). Decrypt the inner layer with
+        // the same local recipient key, resolving the inner sender's
+        // key-agreement key (from skid/apu) so ECDH-1PU authcrypt is recovered.
+        let inner_str = std::str::from_utf8(plaintext)
+            .map_err(|e| format!("Inner JWE is not valid UTF-8: {e}"))?;
+        let inner_sender_did = inner_jwe_sender_did(&value);
+        let inner_sender_public = if let Some(did) = &inner_sender_did {
+            resolve_did_key_agreement(did, did_resolver).await
+        } else {
+            None
+        };
+        let inner = decrypt(
+            inner_str,
+            recipient_kid,
+            recipient_private,
+            inner_sender_public.as_ref(),
+        )
+        .map_err(|e| format!("Couldn't decrypt nested JWE: {e}"))?;
+
+        if inner.authenticated {
+            metadata.authenticated = true;
+            metadata.anonymous_sender = false;
+            metadata.encrypted_from_kid = inner.sender_kid.clone();
+        }
+
+        // The inner plaintext may itself be a Message or a JWS — recurse.
+        return Box::pin(recurse_decrypted_plaintext(
+            &inner.plaintext,
+            recipient_kid,
+            recipient_private,
+            did_resolver,
+            metadata,
+            depth + 1,
+        ))
+        .await;
+    }
+
+    // Plaintext DIDComm message (`type`), or a best-effort parse otherwise.
+    Message::from_json(plaintext).map_err(|e| format!("Cannot parse decrypted message: {e}"))
+}
+
+/// Extract the signer kid from a parsed JWS (General JSON Serialization).
+/// Prefers the integrity-protected header, falling back to the per-signature
+/// unprotected header (where credo-ts / didcomm-python place the kid).
+fn extract_jws_signer_kid(jws: &serde_json::Value) -> Option<String> {
+    let sig = jws.get("signatures")?.as_array()?.first()?;
+
+    // Protected header (base64url-encoded JSON) takes precedence.
+    if let Some(protected_b64) = sig.get("protected").and_then(|p| p.as_str())
+        && let Ok(bytes) = BASE64_URL_SAFE_NO_PAD.decode(protected_b64)
+        && let Ok(header) = serde_json::from_slice::<serde_json::Value>(&bytes)
+        && let Some(kid) = header.get("kid").and_then(|k| k.as_str())
+    {
+        return Some(kid.to_string());
+    }
+
+    // Fall back to the unprotected per-signature header.
+    sig.get("header")
+        .and_then(|h| h.get("kid"))
+        .and_then(|k| k.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Extract the inner JWE's sender DID from its protected header (`skid`, or
+/// `apu` fallback), mirroring the outer-layer logic in `MetaEnvelope::new`.
+fn inner_jwe_sender_did(jwe: &serde_json::Value) -> Option<String> {
+    let protected_b64 = jwe.get("protected").and_then(|p| p.as_str())?;
+    let bytes = BASE64_URL_SAFE_NO_PAD.decode(protected_b64).ok()?;
+    let header: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+
+    if let Some(skid) = header.get("skid").and_then(|s| s.as_str()) {
+        return Some(did_part(skid));
+    }
+    if let Some(apu) = header.get("apu").and_then(|a| a.as_str())
+        && let Ok(apu_bytes) = BASE64_URL_SAFE_NO_PAD.decode(apu)
+        && let Ok(apu_str) = String::from_utf8(apu_bytes)
+        && apu_str.contains('#')
+    {
+        return Some(did_part(&apu_str));
+    }
+    None
+}
+
+/// Strip the `#fragment` from a DID URL, yielding the bare DID.
+fn did_part(kid: &str) -> String {
+    match kid.find('#') {
+        Some(pos) => kid[..pos].to_string(),
+        None => kid.to_string(),
     }
 }
 
@@ -282,28 +444,87 @@ pub async fn unpack<S: SecretsResolver>(
     envelope.unpack(did_resolver, secrets_resolver).await
 }
 
-fn unpack_jws(msg_string: &str, sha256_hash: &str) -> Result<(Message, UnpackMetadata), String> {
+/// Unpack a top-level (unencrypted) JWS. Resolves the signer's Ed25519 key,
+/// verifies the signature, and records `sign_from` — without this the message
+/// is sender-authenticated but `sign_from` stays `None`, so the inbound
+/// anonymous-envelope check wrongly rejects it.
+async fn unpack_jws(
+    msg_string: &str,
+    sha256_hash: &str,
+    did_resolver: &DIDCacheClient,
+) -> Result<(Message, UnpackMetadata), String> {
     let value: serde_json::Value =
         serde_json::from_str(msg_string).map_err(|e| format!("Cannot parse JWS: {e}"))?;
 
-    let payload_b64 = value["payload"]
-        .as_str()
-        .ok_or("Invalid JWS: missing payload")?;
+    let signer_kid =
+        extract_jws_signer_kid(&value).ok_or("JWS has no signer kid to resolve a key")?;
+    let signer_did = did_part(&signer_kid);
+    let pubkey = resolve_did_ed25519_verification(&signer_did, Some(&signer_kid), did_resolver)
+        .await
+        .ok_or_else(|| {
+            format!("Could not resolve Ed25519 verification key for signer {signer_kid}")
+        })?;
 
-    let payload_bytes = BASE64_URL_SAFE_NO_PAD
-        .decode(payload_b64)
-        .map_err(|e| format!("Invalid JWS payload base64: {e}"))?;
+    let verified = verify_ed25519(msg_string, &pubkey)
+        .map_err(|e| format!("JWS signature verification failed: {e}"))?;
 
-    let msg =
-        Message::from_json(&payload_bytes).map_err(|e| format!("Cannot parse JWS payload: {e}"))?;
+    let msg = Message::from_json(&verified.payload)
+        .map_err(|e| format!("Cannot parse JWS payload: {e}"))?;
 
     let metadata = UnpackMetadata {
         non_repudiation: true,
+        sign_from: verified.signer_kid.or(Some(signer_kid)),
         sha256_hash: sha256_hash.to_string(),
         ..Default::default()
     };
 
     Ok((msg, metadata))
+}
+
+/// Resolve a DID's Ed25519 verification (signing) public key as raw 32 bytes.
+///
+/// Picks the verification method named by `prefer_kid` when present in the
+/// authentication relationship, otherwise the DID's first authentication key.
+/// Supports `publicKeyMultibase` (multikey, `ed25519-pub` codec) and
+/// `publicKeyJwk` (`OKP`/`Ed25519`).
+async fn resolve_did_ed25519_verification(
+    did: &str,
+    prefer_kid: Option<&str>,
+    did_resolver: &DIDCacheClient,
+) -> Option<[u8; 32]> {
+    let doc = did_resolver.resolve(did).await.ok()?;
+
+    // Prefer the exact authentication kid the signer claimed; fall back to the
+    // DID's first authentication key.
+    let auth = doc.doc.find_authentication(None);
+    let kid = prefer_kid
+        .filter(|k| auth.iter().any(|a| a == k))
+        .map(|k| k.to_string())
+        .or_else(|| auth.first().map(|k| k.to_string()))?;
+
+    let vm = doc.doc.get_verification_method(&kid)?;
+
+    if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
+        && let Some(multibase_str) = multibase_value.as_str()
+        && let Ok((codec, key_bytes)) =
+            affinidi_encoding::decode_multikey_with_codec(multibase_str)
+        && codec == affinidi_encoding::ED25519_PUB
+        && key_bytes.len() == 32
+    {
+        return key_bytes.try_into().ok();
+    }
+
+    if let Some(jwk_value) = vm.property_set.get("publicKeyJwk")
+        && jwk_value.get("kty").and_then(|v| v.as_str()) == Some("OKP")
+        && jwk_value.get("crv").and_then(|v| v.as_str()) == Some("Ed25519")
+        && let Some(x_b64) = jwk_value.get("x").and_then(|v| v.as_str())
+        && let Ok(x_bytes) = BASE64_URL_SAFE_NO_PAD.decode(x_b64)
+        && x_bytes.len() == 32
+    {
+        return x_bytes.try_into().ok();
+    }
+
+    None
 }
 
 /// Resolve a DID's first key agreement public key.
