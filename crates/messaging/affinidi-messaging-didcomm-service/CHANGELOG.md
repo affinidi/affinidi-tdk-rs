@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.12] - 2026-06-30
+
+Fixes the publish-verify failure that has blocked the release pipeline since the listener
+multiplex landed. The `Listener::tsp_handler` field is only read by `process_next_frame`,
+which is `#[cfg(feature = "tsp")]`; `cargo publish` verifies the packaged tarball with
+**default features** under `-D warnings`, where the field is set but never read, so the
+`dead_code` lint became a hard error (`field tsp_handler is never read`). Gated the lint
+with `#[cfg_attr(not(feature = "tsp"), allow(dead_code))]`. No behaviour change; the `tsp`
+build is unaffected.
+
 ## [0.3.8] - 2026-06-24
 
 Migrated `set_acl_mode` off the deprecated `atm.mediator()` methods onto
