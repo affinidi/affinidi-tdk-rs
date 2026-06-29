@@ -67,7 +67,7 @@ pub(crate) async fn handle_inbound(
 /// the protocol-neutral store path that DIDComm direct delivery uses. The TSP
 /// message is base64url-encoded for storage (which is its CESR qb64 text form),
 /// so it rides the existing UTF-8 string store/pickup pipeline; a pickup client
-/// recognises it by the qb64 (`1AAF…`) prefix and decodes it back to qb2.
+/// recognises it by the qb64 (`-E…`) prefix and decodes it back to qb2.
 ///
 /// Routed/Nested/Control message types, remote recipients (routing/relay), and
 /// the TSP↔DIDComm bridge land in later PRs. The mediator does not decrypt or
@@ -97,33 +97,40 @@ pub(crate) async fn handle_inbound_tsp(
 
     use affinidi_tsp::message::routed::{RouteStep, next_hop, pack_routed};
 
-    match meta.message_type {
-        // Direct: deliver to the (local) recipient named in the envelope.
-        TspMessageType::Direct => deliver_tsp_local(state, session, raw).await,
+    // The message kind (Direct/Routed/Nested/Control) now lives in the ENCRYPTED
+    // payload, not the cleartext envelope, so a keys-free relay can no longer
+    // dispatch on it. Route on the cleartext *receiver* instead:
+    //   * receiver != this mediator → opaque pass-through: store for the local
+    //     recipient to pick up (Direct/Routed/Nested/Control are all just carried).
+    //   * receiver == this mediator → we hold the key, so unpack to learn the kind
+    //     and act as the relay hop (Routed) / metadata-privacy intermediary (Nested).
+    if meta.receiver != state.config.mediator_did {
+        return deliver_tsp_local(state, session, raw).await;
+    }
 
-        // Routed addressed to *this mediator*: we are a relay hop. Unwrap our
-        // routing layer (sealed to us) and forward the onward message to the next
-        // hop, re-sealing as this mediator unless we are the last hop (in which
-        // case the opaque inner is already sealed to the final recipient).
-        TspMessageType::Routed if meta.receiver == state.config.mediator_did => {
-            let identity = state.tsp_identity().await?;
-            let sender = resolve_tsp_vid(state, &meta.sender, &session.session_id).await?;
-            let unpacked = affinidi_tsp::message::direct::unpack(
-                raw,
-                &identity.decryption_key,
-                &sender.encryption_key,
-                &sender.signing_key,
-            )
-            .map_err(|e| {
-                tsp_problem(
-                    session,
-                    37,
-                    "message.tsp.unpack",
-                    format!("couldn't unpack routed TSP layer: {e}"),
-                    StatusCode::BAD_REQUEST,
-                )
-            })?;
+    let identity = state.tsp_identity().await?;
+    let sender = resolve_tsp_vid(state, &meta.sender, &session.session_id).await?;
+    let unpacked = affinidi_tsp::message::direct::unpack(
+        raw,
+        &identity.decryption_key,
+        &sender.encryption_key,
+        &sender.signing_key,
+    )
+    .map_err(|e| {
+        tsp_problem(
+            session,
+            37,
+            "message.tsp.unpack",
+            format!("couldn't unpack TSP layer addressed to mediator: {e}"),
+            StatusCode::BAD_REQUEST,
+        )
+    })?;
 
+    match unpacked.message_type {
+        // We are a relay hop: unwrap our routing layer and forward the onward
+        // message, re-sealing as this mediator unless we are the last hop (the
+        // opaque inner is already sealed to the final recipient).
+        TspMessageType::Routed => {
             let step = next_hop(&unpacked.payload).map_err(|e| {
                 tsp_problem(
                     session,
@@ -183,34 +190,10 @@ pub(crate) async fn handle_inbound_tsp(
             }
         }
 
-        // Routed addressed to a *local account* (that account is itself the hop):
-        // store it opaquely for them to pick up and relay onward.
-        TspMessageType::Routed => deliver_tsp_local(state, session, raw).await,
-
-        // Nested addressed to *this mediator*: we are the intermediary of a
-        // metadata-privacy wrapper (TSP §5.5). Unwrap our outer layer (sealed to us)
-        // to reveal the inner message — which is itself a packed TSP message sealed
-        // end-to-end to its final recipient — then route the inner by its own
-        // envelope, delivering locally or forwarding to a remote mediator.
-        TspMessageType::Nested if meta.receiver == state.config.mediator_did => {
-            let identity = state.tsp_identity().await?;
-            let sender = resolve_tsp_vid(state, &meta.sender, &session.session_id).await?;
-            let unpacked = affinidi_tsp::message::direct::unpack(
-                raw,
-                &identity.decryption_key,
-                &sender.encryption_key,
-                &sender.signing_key,
-            )
-            .map_err(|e| {
-                tsp_problem(
-                    session,
-                    37,
-                    "message.tsp.unpack",
-                    format!("couldn't unpack nested TSP layer: {e}"),
-                    StatusCode::BAD_REQUEST,
-                )
-            })?;
-
+        // We are the metadata-privacy intermediary (TSP §5.5): reveal the inner
+        // message — itself a packed TSP message sealed end-to-end to its final
+        // recipient — and route it by its own (sealed) envelope.
+        TspMessageType::Nested => {
             // The unpacked payload IS the inner packed message. Route it by its own
             // (sealed) envelope — its recipient may be local or on another mediator,
             // and the inner may be TSP or an opaque DIDComm bridge payload.
@@ -233,17 +216,13 @@ pub(crate) async fn handle_inbound_tsp(
             .await
         }
 
-        // Nested addressed to a *local account*: that account is the intermediary —
-        // store it opaquely for them to unwrap and relay onward.
-        TspMessageType::Nested => deliver_tsp_local(state, session, raw).await,
-
-        // Control (relationship invite / accept / cancel) addressed to a local
-        // account: relay it to its recipient, who applies the relationship transition
-        // on pickup. The relay is payload-agnostic — the mediator never inspects the
-        // control payload. (A Control message addressed to the mediator *itself* —
-        // the mediator as a relationship party — is not supported and fails cleanly
-        // at delivery, since the mediator's own VID is not a deliverable account.)
-        TspMessageType::Control => deliver_tsp_local(state, session, raw).await,
+        // Direct or Control addressed to the mediator itself: store it for the
+        // mediator's own pickup (the mediator is the addressed recipient). Direct
+        // and Control messages destined for *local accounts* never reach here —
+        // they took the `receiver != mediator` opaque pass-through above.
+        TspMessageType::Direct | TspMessageType::Control => {
+            deliver_tsp_local(state, session, raw).await
+        }
     }
 }
 
@@ -319,7 +298,7 @@ async fn deliver_opaque(
 
     // Store in the form the recipient's protocol expects, so a pickup client can
     // recognise and decode it. A TSP message is stored as base64url(qb2) = its
-    // CESR qb64 text (`1AAF…`); a bridged DIDComm message is stored as its plain
+    // CESR qb64 text (`-E…`); a bridged DIDComm message is stored as its plain
     // JWE/JWS text. Both ride the same UTF-8 string store; the client sniffs the
     // prefix (qb64 vs `{`/`ey`) on pickup.
     let encoded = if affinidi_tsp::is_tsp(bytes) {
@@ -1052,7 +1031,7 @@ mod tsp_tests {
 
     /// The storage-format contract for TSP messages: a TSP message (raw CESR
     /// qb2, leads with the `0xD4` magic byte) is stored base64url-encoded, which
-    /// is its CESR qb64 text form (`1AAF…`). This must round-trip exactly, stay
+    /// is its CESR qb64 text form (`-E…`). This must round-trip exactly, stay
     /// distinguishable from a DIDComm JSON envelope (`{`), and decode back to a
     /// recognisable TSP message — so a pickup client can identify and decode it.
     #[test]
@@ -1077,7 +1056,7 @@ mod tsp_tests {
         let stored = BASE64_URL_SAFE_NO_PAD.encode(raw);
 
         // The stored form is CESR qb64 text and is unambiguously not DIDComm JSON.
-        assert!(stored.starts_with("1AAF"), "qb64 envelope-code prefix");
+        assert!(stored.starts_with("-E"), "qb64 envelope-code prefix");
         assert!(
             !stored.starts_with('{'),
             "distinct from a DIDComm JSON envelope"

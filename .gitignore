@@ -39,3 +39,6 @@ CLAUDE.md
 # Secrets and credentials
 .env
 .env.*
+
+# TSP interop harness build artifacts (standalone workspace)
+interop/target/

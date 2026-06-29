@@ -5,7 +5,7 @@
 //! ## Storage-format codec
 //!
 //! A mediator stores a TSP message `base64url(qb2)` — its CESR **qb64** text form
-//! (`1AAF…`) — so it rides the same string store/pickup pipeline as a DIDComm
+//! (`-E…`) — so it rides the same string store/pickup pipeline as a DIDComm
 //! JSON envelope. [`TspOps::is_tsp`] / [`TspOps::decode`] / [`TspOps::encode`]
 //! convert a fetched message to/from raw qb2 bytes.
 //!

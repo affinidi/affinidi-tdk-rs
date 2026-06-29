@@ -313,13 +313,6 @@ impl TspAgent {
                 envelope.receiver
             )));
         }
-        if envelope.message_type != MessageType::Routed {
-            return Err(TspError::InvalidMessage(format!(
-                "expected a Routed message, got {:?}",
-                envelope.message_type
-            )));
-        }
-
         let our_private = self.store.get_private_vid(our_vid)?;
         let prev = self.resolver.resolve(&envelope.sender)?;
         let unpacked = direct::unpack(
@@ -328,6 +321,15 @@ impl TspAgent {
             &prev.encryption_key,
             &prev.signing_key,
         )?;
+
+        // The message kind lives in the encrypted payload (the cleartext envelope
+        // reports a Direct placeholder), so verify it after unpacking.
+        if unpacked.message_type != MessageType::Routed {
+            return Err(TspError::InvalidMessage(format!(
+                "expected a Routed message, got {:?}",
+                unpacked.message_type
+            )));
+        }
 
         match message::routed::next_hop(&unpacked.payload)? {
             // Last intermediary: deliver the opaque inner to the final recipient.
