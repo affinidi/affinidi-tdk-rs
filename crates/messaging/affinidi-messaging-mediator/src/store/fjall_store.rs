@@ -685,7 +685,7 @@ impl MediatorStore for FjallStore {
     ) -> Result<String, MediatorError> {
         let msg_id = digest(message.as_bytes());
         let bytes = message.len();
-        let from = from_hash.unwrap_or("ANONYMOUS").to_string();
+        let from = from_hash.filter(|s| !s.is_empty()).unwrap_or("ANONYMOUS").to_string();
 
         let _guard = self.write_lock.lock().await;
 
@@ -3354,6 +3354,21 @@ mod tests {
         let stats = store.get_global_stats().await.expect("stats");
         assert_eq!(stats.websocket_open, 3);
         assert_eq!(stats.sent_bytes, 100);
+    }
+
+    #[tokio::test]
+    async fn store_message_empty_from_treated_as_anonymous() {
+        // Regression: an anonymous routing/2.0/forward reaches store_message with
+        // an EMPTY from_hash (`Some("")`) rather than `None`. Before the fix the
+        // empty string built an empty store key and fjall asserted `!k.is_empty()`
+        // → panic. The guard now maps an empty hash to ANONYMOUS, so the write
+        // succeeds (redis/memory tolerated the empty key but stored it malformed).
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        store
+            .store_message("sess", "ciphertext", &hash("recipient"), Some(""), 0, 0)
+            .await
+            .expect("empty from_hash must not panic — treated as anonymous");
     }
 
     #[tokio::test]

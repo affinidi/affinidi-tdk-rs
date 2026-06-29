@@ -42,7 +42,7 @@ impl Database {
         async move {
             let message_hash = digest(message.as_bytes());
 
-            let from_hash = from_hash.unwrap_or("ANONYMOUS");
+            let from_hash = from_hash.filter(|s| !s.is_empty()).unwrap_or("ANONYMOUS");
             debug!(
                 "trying to store msg_id({}), from_hash({:?}) to_hash({}), bytes({})",
                 message_hash,
