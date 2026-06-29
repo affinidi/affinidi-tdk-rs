@@ -11,9 +11,9 @@ Verifiable Identifiers (VIDs).
 > **Reference Implementation:** The official TSP reference implementation is
 > maintained at [github.com/trustoverip/tsp](https://github.com/trustoverip/tsp).
 > This crate provides an independent implementation tailored for the Affinidi TDK
-> ecosystem. It does **not** currently wire-interoperate with the reference
-> (`tsp-sdk`) — see the [interop status](../../../docs/tsp/interop.md) for the
-> field-by-field comparison and why interop is deferred.
+> ecosystem. It **wire-interoperates** with the reference (`tsp-sdk`) for every
+> TSP message type (Direct, Routed, Nested, Control), both directions — see the
+> [interop status](../../../docs/tsp/interop.md) and the `interop/` harness.
 
 > **Using TSP through the TDK?** This crate is the low-level protocol. For sending,
 > receiving, relationships, WebSocket delivery, and authentication via the
