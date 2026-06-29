@@ -54,6 +54,12 @@ pub(crate) struct Listener {
     /// Optional TSP handler. When set and `config.protocols.tsp` is on, inbound
     /// TSP frames off the shared socket are routed here. `None` → TSP frames are
     /// dropped with a warning.
+    ///
+    /// Only read by `process_next_frame`, which is `#[cfg(feature = "tsp")]`.
+    /// In a default (non-`tsp`) build the field is still set by `new()` but
+    /// never read, so silence the dead-code lint there — otherwise the
+    /// default-feature publish-verify build fails under `-D warnings`.
+    #[cfg_attr(not(feature = "tsp"), allow(dead_code))]
     pub tsp_handler: Option<Arc<dyn TspHandler>>,
     pub shutdown: CancellationToken,
     atm: Option<ATM>,
