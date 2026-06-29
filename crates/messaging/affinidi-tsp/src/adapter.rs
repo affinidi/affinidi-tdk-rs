@@ -88,9 +88,7 @@ impl MessagingProtocol for TspAdapter {
             .map_err(|e| MessagingError::Unpack(e.to_string()))?;
 
         Ok(ReceivedMessage {
-            id: hex::encode(direct::message_digest(&direct::PackedMessage {
-                bytes: packed.to_vec(),
-            })),
+            id: hex::encode(direct::message_digest_bytes(packed)),
             sender: Some(received.sender),
             recipient: received.receiver,
             payload: received.payload,
@@ -172,10 +170,12 @@ impl RelationshipManager for TspAdapter {
         &self,
         my_id: &str,
         their_id: &str,
-        request_id: &[u8],
+        _request_id: &[u8],
     ) -> Result<RelationshipState, MessagingError> {
+        // The TSP agent correlates the accept to the received invite via the
+        // thread digest it recorded on receipt, so `request_id` is unused here.
         self.agent
-            .send_relationship_accept(my_id, their_id, request_id.to_vec())
+            .send_relationship_accept(my_id, their_id)
             .map_err(|e| MessagingError::Relationship(e.to_string()))?;
 
         Ok(RelationshipState::Bidirectional)
@@ -267,27 +267,26 @@ mod tests {
             .unwrap();
         assert_eq!(state, RelationshipState::None);
 
-        // Alice requests relationship (sends RFI)
-        let state = alice
-            .request_relationship("did:example:alice", "did:example:bob")
-            .await
+        // Alice sends the RFI (via the agent so we can transport the wire bytes).
+        let rfi = alice
+            .agent()
+            .send_relationship_invite("did:example:alice", "did:example:bob")
             .unwrap();
-        assert_eq!(state, RelationshipState::Pending);
+        assert_eq!(
+            alice
+                .relationship_state("did:example:alice", "did:example:bob")
+                .await
+                .unwrap(),
+            RelationshipState::Pending
+        );
 
-        // Bob receives the invite via the agent to update his state
-        // (In real usage, the RFI wire bytes would be transported and received)
-        bob.agent()
-            .store
-            .transition_relationship(
-                "did:example:bob",
-                "did:example:alice",
-                crate::relationship::RelationshipEvent::ReceiveInvite,
-            )
-            .unwrap();
+        // Bob receives the invite — this records the invite's thread digest so
+        // his accept can reference it.
+        bob.agent().receive("did:example:bob", &rfi.bytes).unwrap();
 
-        // Now Bob can accept
+        // Now Bob can accept (the agent looks up the recorded invite digest).
         let state = bob
-            .accept_relationship("did:example:bob", "did:example:alice", b"digest")
+            .accept_relationship("did:example:bob", "did:example:alice", b"unused")
             .await
             .unwrap();
         assert_eq!(state, RelationshipState::Bidirectional);

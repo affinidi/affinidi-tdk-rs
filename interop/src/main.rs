@@ -4,6 +4,7 @@
 //! bytes to both libraries, then attempts a Direct-message round-trip both
 //! directions.
 
+use affinidi_tsp::message::control::ControlMessage;
 use affinidi_tsp::message::direct as atsp;
 use affinidi_tsp::message::routed as artd;
 use affinidi_tsp::message::MessageType;
@@ -355,6 +356,227 @@ fn main() {
             }
         };
         results.push(("Nested R->A", ok));
+    }
+
+    // ================= RELATIONSHIP CONTROL =================
+    // Invite (XRFI / RequestRelationship), Accept (XRFA / AcceptRelationship),
+    // Cancel (XRFD / CancelRelationship). The correlation key is the TSP thread
+    // digest: SHA256 of the plaintext payload frame. affinidi exposes it as
+    // `PackedMessage::thread_digest` / `UnpackedMessage::thread_digest`; the
+    // reference exposes it as `seal_and_hash`'s `digest` out-param and as the
+    // `thread_id` it derives when opening a proposal.
+    println!("\n========== RELATIONSHIP CONTROL ==========");
+
+    // ---- INVITE A->R: affinidi invite -> tsp_sdk open (RequestRelationship) ----
+    println!("--- Invite A->R: affinidi pack -> tsp_sdk open ---");
+    {
+        let invite = ControlMessage::invite();
+        let packed = atsp::pack(
+            &invite.encode(),
+            MessageType::Control,
+            alice_id,
+            bob_id,
+            &alice.sign_sk,
+            &alice.enc_sk,
+            &bob.enc_pk,
+        )
+        .expect("affinidi pack invite");
+        let mut buf = packed.bytes.clone();
+        let ok = match tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf) {
+            Ok((_ncd, Payload::RequestRelationship { route, thread_id }, ct, st)) => {
+                let route_empty = route.is_none();
+                // The reference's derived thread_id must equal affinidi's
+                // thread_digest for the same invite message.
+                let digest_match = thread_id == packed.thread_digest;
+                println!(
+                    "  RESULT: OK crypto={ct:?} sig={st:?} route_empty={route_empty} thread_id_match={digest_match}"
+                );
+                route_empty && digest_match
+            }
+            Ok((_, other, _, _)) => {
+                println!("  RESULT: FAIL -> unexpected payload kind: {other:?}");
+                false
+            }
+            Err(e) => {
+                println!("  RESULT: FAIL -> {e:?}");
+                false
+            }
+        };
+        results.push(("Invite A->R", ok));
+    }
+
+    // ---- INVITE R->A: tsp_sdk seal RequestRelationship -> affinidi unpack ----
+    println!("--- Invite R->A: tsp_sdk seal -> affinidi unpack ---");
+    {
+        let mut ref_digest = [0u8; 32];
+        let sealed = tsp_sdk::crypto::seal_and_hash(
+            &alice_vid,
+            bob_vid.vid(),
+            None,
+            Payload::RequestRelationship {
+                route: None,
+                thread_id: [0u8; 32],
+            },
+            Some(&mut ref_digest),
+        )
+        .expect("tsp_sdk seal invite");
+        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk) {
+            Ok(u) => {
+                let is_control = u.message_type == MessageType::Control;
+                let control = u.control.as_ref();
+                let nonce_ok = control
+                    .and_then(|c| c.nonce.as_ref())
+                    .map(|n| n.len() == 32)
+                    .unwrap_or(false);
+                // affinidi's thread_digest must equal the reference's seal-time
+                // digest of the same message.
+                let digest_match = u.thread_digest == ref_digest;
+                println!(
+                    "  RESULT: OK kind={:?} nonce_32={nonce_ok} thread_digest_match={digest_match}",
+                    u.message_type
+                );
+                is_control && nonce_ok && digest_match
+            }
+            Err(e) => {
+                println!("  RESULT: FAIL -> {e:?}");
+                false
+            }
+        };
+        results.push(("Invite R->A", ok));
+    }
+
+    // A fixed 32-byte digest used as the accept/cancel `reply` (thread_id) so we
+    // can assert the value survives the round-trip in both directions.
+    let reply_digest: [u8; 32] = {
+        let mut d = [0u8; 32];
+        for (i, b) in d.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        d
+    };
+
+    // ---- ACCEPT A->R: affinidi accept -> tsp_sdk open (AcceptRelationship) ----
+    println!("--- Accept A->R: affinidi pack -> tsp_sdk open ---");
+    {
+        let accept = ControlMessage::accept(reply_digest);
+        let packed = atsp::pack(
+            &accept.encode(),
+            MessageType::Control,
+            alice_id,
+            bob_id,
+            &alice.sign_sk,
+            &alice.enc_sk,
+            &bob.enc_pk,
+        )
+        .expect("affinidi pack accept");
+        let mut buf = packed.bytes.clone();
+        let ok = match tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf) {
+            Ok((_ncd, Payload::AcceptRelationship { thread_id }, ct, st)) => {
+                let digest_match = thread_id == reply_digest;
+                println!("  RESULT: OK crypto={ct:?} sig={st:?} reply_match={digest_match}");
+                digest_match
+            }
+            Ok((_, other, _, _)) => {
+                println!("  RESULT: FAIL -> unexpected payload kind: {other:?}");
+                false
+            }
+            Err(e) => {
+                println!("  RESULT: FAIL -> {e:?}");
+                false
+            }
+        };
+        results.push(("Accept A->R", ok));
+    }
+
+    // ---- ACCEPT R->A: tsp_sdk seal AcceptRelationship -> affinidi unpack ----
+    println!("--- Accept R->A: tsp_sdk seal -> affinidi unpack ---");
+    {
+        let sealed = tsp_sdk::crypto::seal(
+            &alice_vid,
+            bob_vid.vid(),
+            None,
+            Payload::AcceptRelationship {
+                thread_id: reply_digest,
+            },
+        )
+        .expect("tsp_sdk seal accept");
+        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk) {
+            Ok(u) => {
+                let reply_match = u.control.as_ref().and_then(|c| c.reply) == Some(reply_digest);
+                println!(
+                    "  RESULT: OK kind={:?} reply_match={reply_match}",
+                    u.message_type
+                );
+                u.message_type == MessageType::Control && reply_match
+            }
+            Err(e) => {
+                println!("  RESULT: FAIL -> {e:?}");
+                false
+            }
+        };
+        results.push(("Accept R->A", ok));
+    }
+
+    // ---- CANCEL A->R: affinidi cancel -> tsp_sdk open (CancelRelationship) ----
+    println!("--- Cancel A->R: affinidi pack -> tsp_sdk open ---");
+    {
+        let cancel = ControlMessage::cancel(reply_digest);
+        let packed = atsp::pack(
+            &cancel.encode(),
+            MessageType::Control,
+            alice_id,
+            bob_id,
+            &alice.sign_sk,
+            &alice.enc_sk,
+            &bob.enc_pk,
+        )
+        .expect("affinidi pack cancel");
+        let mut buf = packed.bytes.clone();
+        let ok = match tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf) {
+            Ok((_ncd, Payload::CancelRelationship { thread_id }, ct, st)) => {
+                let digest_match = thread_id == reply_digest;
+                println!("  RESULT: OK crypto={ct:?} sig={st:?} reply_match={digest_match}");
+                digest_match
+            }
+            Ok((_, other, _, _)) => {
+                println!("  RESULT: FAIL -> unexpected payload kind: {other:?}");
+                false
+            }
+            Err(e) => {
+                println!("  RESULT: FAIL -> {e:?}");
+                false
+            }
+        };
+        results.push(("Cancel A->R", ok));
+    }
+
+    // ---- CANCEL R->A: tsp_sdk seal CancelRelationship -> affinidi unpack ----
+    println!("--- Cancel R->A: tsp_sdk seal -> affinidi unpack ---");
+    {
+        let sealed = tsp_sdk::crypto::seal(
+            &alice_vid,
+            bob_vid.vid(),
+            None,
+            Payload::CancelRelationship {
+                thread_id: reply_digest,
+            },
+        )
+        .expect("tsp_sdk seal cancel");
+        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk) {
+            Ok(u) => {
+                let reply_match = u.control.as_ref().and_then(|c| c.reply) == Some(reply_digest);
+                println!(
+                    "  RESULT: OK kind={:?} reply_match={reply_match}",
+                    u.message_type
+                );
+                u.message_type == MessageType::Control && reply_match
+            }
+            Err(e) => {
+                println!("  RESULT: FAIL -> {e:?}");
+                false
+            }
+        };
+        results.push(("Cancel R->A", ok));
     }
 
     // ================= SUMMARY =================

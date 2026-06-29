@@ -37,7 +37,7 @@
 
 use affinidi_tsp::{
     TspAgent,
-    message::{MessageType, direct},
+    message::MessageType,
     relationship::RelationshipState,
     vid::PrivateVid,
 };
@@ -141,11 +141,11 @@ fn main() {
     );
 
     // Bob accepts the invite by sending a Relationship Forming Accept (RFA).
-    // The accept references the invite via its cryptographic digest (BLAKE2s-256),
-    // binding the accept to the specific invite it responds to.
-    let rfi_digest = direct::message_digest(&rfi_packed).to_vec();
+    // The accept references the invite via its TSP thread digest (SHA-256 of the
+    // invite's plaintext frame), which the agent recorded when Bob received the
+    // invite — so it binds the accept to the specific invite it responds to.
     let rfa_packed = bob_agent
-        .send_relationship_accept("did:example:bob", "did:example:alice", rfi_digest)
+        .send_relationship_accept("did:example:bob", "did:example:alice")
         .expect("Failed to create relationship accept");
 
     println!(
