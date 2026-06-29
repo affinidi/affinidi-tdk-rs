@@ -329,11 +329,7 @@ pub fn decode_variable_data_range(
 }
 
 /// Decode variable-size data with a known identifier, returning a copy.
-pub fn decode_variable_data(
-    identifier: u32,
-    stream: &[u8],
-    pos: &mut usize,
-) -> Option<Vec<u8>> {
+pub fn decode_variable_data(identifier: u32, stream: &[u8], pos: &mut usize) -> Option<Vec<u8>> {
     let range = decode_variable_data_range(identifier, stream, pos)?;
     Some(stream[range].to_vec())
 }
@@ -471,7 +467,10 @@ mod tests {
         encode_hops(&hops, &mut buf);
         let mut pos = 0;
         let got = decode_hops(&buf, &mut pos).unwrap();
-        assert_eq!(got, vec![b"did:web:hop1".to_vec(), b"did:web:exit".to_vec()]);
+        assert_eq!(
+            got,
+            vec![b"did:web:hop1".to_vec(), b"did:web:exit".to_vec()]
+        );
         assert_eq!(pos, buf.len());
     }
 

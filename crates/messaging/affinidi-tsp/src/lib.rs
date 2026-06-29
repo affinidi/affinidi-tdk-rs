@@ -147,11 +147,12 @@ impl TspAgent {
         our_vid: &str,
         their_vid: &str,
     ) -> Result<PackedMessage, TspError> {
-        let invite_digest = self.store.thread_digest(our_vid, their_vid).ok_or_else(|| {
-            TspError::Relationship(format!(
-                "no invite on record from {their_vid} to accept"
-            ))
-        })?;
+        let invite_digest = self
+            .store
+            .thread_digest(our_vid, their_vid)
+            .ok_or_else(|| {
+                TspError::Relationship(format!("no invite on record from {their_vid} to accept"))
+            })?;
         let control = ControlMessage::accept(invite_digest);
         let packed = self.pack_control(our_vid, their_vid, &control)?;
 
@@ -649,9 +650,7 @@ mod tests {
         );
 
         // Bob sends RFA back to Alice
-        let rfa = bob
-            .send_relationship_accept(&bob_id, &alice_id)
-            .unwrap();
+        let rfa = bob.send_relationship_accept(&bob_id, &alice_id).unwrap();
         assert_eq!(
             bob.relationship_state(&bob_id, &alice_id),
             RelationshipState::Bidirectional
@@ -672,9 +671,7 @@ mod tests {
         // Establish relationship
         let rfi = alice.send_relationship_invite(&alice_id, &bob_id).unwrap();
         bob.receive(&bob_id, &rfi.bytes).unwrap();
-        let rfa = bob
-            .send_relationship_accept(&bob_id, &alice_id)
-            .unwrap();
+        let rfa = bob.send_relationship_accept(&bob_id, &alice_id).unwrap();
         alice.receive(&alice_id, &rfa.bytes).unwrap();
 
         // Now Alice can send a message
@@ -701,9 +698,7 @@ mod tests {
         // Establish relationship
         let rfi = alice.send_relationship_invite(&alice_id, &bob_id).unwrap();
         bob.receive(&bob_id, &rfi.bytes).unwrap();
-        let rfa = bob
-            .send_relationship_accept(&bob_id, &alice_id)
-            .unwrap();
+        let rfa = bob.send_relationship_accept(&bob_id, &alice_id).unwrap();
         alice.receive(&alice_id, &rfa.bytes).unwrap();
 
         // Alice cancels
