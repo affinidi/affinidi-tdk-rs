@@ -717,6 +717,64 @@ async fn check_audit_log_lifecycle(store: Arc<dyn MediatorStore>) {
     assert_eq!(p2.cursor, 0, "last page is terminal");
 }
 
+/// OOB discovery invitation: store → get (round-trips invite + DID) → delete →
+/// get-is-gone, plus delete-of-missing reports `false`.
+///
+/// Regression guard for the Redis backend: its `oob_discovery_get` and
+/// `oob_discovery_delete` trait methods previously recursed into themselves
+/// (no inherent method of the same name existed), so the first call to either
+/// stack-overflowed. Driving the round-trip against every backend — Redis
+/// included — would have surfaced that immediately.
+async fn check_oob_discovery_roundtrip(store: Arc<dyn MediatorStore>) {
+    let did_hash = "did_hash_oob_roundtrip";
+    let invite_b64 = "eyJvb2IiOiJpbnZpdGUtcGF5bG9hZCJ9";
+    // Far-future absolute expiry (year 2100) so the invite is live on every
+    // backend: Redis stamps it with `EXPIREAT`, the in-process backends keep it
+    // while `expires_at > now`.
+    let expires_at = 4_102_444_800u64;
+
+    let oob_id = store
+        .oob_discovery_store(did_hash, invite_b64, expires_at)
+        .await
+        .expect("oob_discovery_store");
+
+    let got = store
+        .oob_discovery_get(&oob_id)
+        .await
+        .expect("oob_discovery_get")
+        .expect("invite present after store");
+    assert_eq!(
+        got,
+        (invite_b64.to_string(), did_hash.to_string()),
+        "oob_discovery_get round-trips (invite, did_hash)"
+    );
+
+    assert!(
+        store
+            .oob_discovery_delete(&oob_id)
+            .await
+            .expect("oob_discovery_delete"),
+        "delete reports success for a stored invite"
+    );
+
+    assert!(
+        store
+            .oob_discovery_get(&oob_id)
+            .await
+            .expect("oob_discovery_get after delete")
+            .is_none(),
+        "invite is gone after delete"
+    );
+
+    assert!(
+        !store
+            .oob_discovery_delete(&oob_id)
+            .await
+            .expect("oob_discovery_delete missing"),
+        "deleting a missing invite reports false"
+    );
+}
+
 /// Generate one `#[tokio::test]` per check for a backend `$ctor`.
 /// Gated to the in-process backends that use it — a Redis-only build drives the
 /// async `conformance_for_redis!` instead, so an ungated def would warn (unused)
@@ -771,6 +829,10 @@ macro_rules! conformance_for {
             async fn audit_log_lifecycle() {
                 check_audit_log_lifecycle(ready($ctor).await).await;
             }
+            #[tokio::test]
+            async fn oob_discovery_roundtrip() {
+                check_oob_discovery_roundtrip(ready($ctor).await).await;
+            }
         }
     };
 }
@@ -815,4 +877,5 @@ conformance_for_redis!(redis,
     session_expiry_sweep     => check_session_expiry_sweep     @ 9,
     access_list_mode_semantics => check_access_list_mode_semantics @ 10,
     audit_log_lifecycle      => check_audit_log_lifecycle      @ 11,
+    oob_discovery_roundtrip  => check_oob_discovery_roundtrip  @ 12,
 );

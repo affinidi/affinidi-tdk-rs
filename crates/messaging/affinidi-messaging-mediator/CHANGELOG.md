@@ -2,6 +2,19 @@
 
 ## Changelog history
 
+## 30th June 2026
+
+### 0.16.35 — store conformance: OOB discovery round-trip; rustfmt
+
+- `tests/store_conformance.rs` gains an `oob_discovery_roundtrip` check (store → get →
+  delete → get-is-gone) that runs against **every** backend, Redis included. It is a
+  regression guard for the Redis `oob_discovery_get` / `oob_discovery_delete` stack-overflow
+  fixed in `affinidi-messaging-mediator-common` 0.15.21 — the previous gap was that no test
+  exercised OOB discovery on the Redis backend.
+- Pure `cargo fmt` reformatting of the `from_hash` fallback in `store/fjall_store.rs` and
+  `store/memory_store.rs`. No code or behaviour change. Restores a clean
+  `cargo fmt --all --check` for the workspace.
+
 ## 29th June 2026 (later)
 
 ### 0.16.34 — follow affinidi-tsp's new routed `next_hop` signature

@@ -144,7 +144,11 @@ mod tests {
 
     #[test]
     fn envelope_encode_decode_roundtrip() {
-        let env = Envelope::new(MessageType::Direct, "did:web:alice.example", "did:web:bob.example");
+        let env = Envelope::new(
+            MessageType::Direct,
+            "did:web:alice.example",
+            "did:web:bob.example",
+        );
         let encoded = env.encode().unwrap();
         let (decoded, consumed) = Envelope::decode(&encoded).unwrap();
         assert_eq!(decoded.sender, env.sender);

@@ -36,10 +36,7 @@
 //! Run with: `cargo run --example alice_and_bob`
 
 use affinidi_tsp::{
-    TspAgent,
-    message::MessageType,
-    relationship::RelationshipState,
-    vid::PrivateVid,
+    TspAgent, message::MessageType, relationship::RelationshipState, vid::PrivateVid,
 };
 
 fn main() {

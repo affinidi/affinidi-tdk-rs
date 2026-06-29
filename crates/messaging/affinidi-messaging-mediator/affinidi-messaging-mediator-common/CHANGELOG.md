@@ -2,6 +2,17 @@
 
 ## Changelog history
 
+## 30th June 2026
+
+### 0.15.21 — fix infinite recursion in Redis OOB discovery get/delete
+
+- `RedisStore`'s `MediatorStore::oob_discovery_get` and `oob_discovery_delete` called
+  themselves recursively (no inherent method of the same name existed), causing unbounded
+  recursion / stack overflow whenever an out-of-band invitation was claimed or deleted.
+  Both now issue the underlying Redis commands directly (`HMGET` / `DEL`), mirroring
+  `oob_discovery_store`. `oob_discovery_get` also performs a best-effort `OOB_INVITES_CLAIMED`
+  counter bump that never fails the request.
+
 ## 29th June 2026
 
 ### 0.15.20 — recognize the new TSP `-E` wire framing

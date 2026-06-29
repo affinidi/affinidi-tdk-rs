@@ -1,5 +1,13 @@
 # Affinidi TSP Changelog
 
+## 30th June 2026
+
+### 0.1.12 — rustfmt-only
+
+- Pure `cargo fmt` reformatting (use-statement, function-signature and call wrapping in
+  `lib.rs`, `message/envelope.rs`, `message/wire.rs` and the `alice_and_bob` example).
+  No code or behaviour change. Restores a clean `cargo fmt --all --check` for the workspace.
+
 ## 29th June 2026 (docs)
 
 ### 0.1.11 — README: reflect full reference interop

@@ -685,7 +685,10 @@ impl MediatorStore for FjallStore {
     ) -> Result<String, MediatorError> {
         let msg_id = digest(message.as_bytes());
         let bytes = message.len();
-        let from = from_hash.filter(|s| !s.is_empty()).unwrap_or("ANONYMOUS").to_string();
+        let from = from_hash
+            .filter(|s| !s.is_empty())
+            .unwrap_or("ANONYMOUS")
+            .to_string();
 
         let _guard = self.write_lock.lock().await;
 
