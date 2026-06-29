@@ -171,6 +171,42 @@ fn main() {
         results.push(("Direct R->A", ok));
     }
 
+    // Large-payload Direct: 2 MiB exercises the *large* CESR variable-data code
+    // (>12 KiB) AND proves the raised MAX_FIELD_SIZE accepts what the old 1 MiB
+    // cap would have rejected. Confirms the size-cap alignment interoperates.
+    {
+        let big = vec![0x5au8; 2 * 1024 * 1024];
+        let packed = atsp::pack(
+            &big,
+            MessageType::Direct,
+            alice_id,
+            bob_id,
+            &alice.sign_sk,
+            &alice.enc_sk,
+            &bob.enc_pk,
+        )
+        .expect("affinidi pack 2MiB");
+        let mut buf = packed.bytes.clone();
+        let ar = matches!(
+            tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf),
+            Ok((_, Payload::Content(c), _, _)) if c == big.as_slice()
+        );
+        results.push(("Direct(2MiB) A->R", ar));
+
+        let sealed = tsp_sdk::crypto::seal(
+            &alice_vid,
+            bob_vid.vid(),
+            None,
+            Payload::Content(big.as_slice()),
+        )
+        .expect("tsp_sdk seal 2MiB");
+        let ra = matches!(
+            atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk),
+            Ok(u) if u.payload == big
+        );
+        results.push(("Direct(2MiB) R->A", ra));
+    }
+
     // The route hops carried inside the payload frame. They are arbitrary VID
     // byte strings as far as the framing is concerned.
     let route_strs = vec!["did:web:hop2.example".to_string(), bob_id.to_string()];

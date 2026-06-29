@@ -35,9 +35,10 @@ const D8: u32 = D0 + 8;
 const D9: u32 = D0 + 9;
 const DASH: u32 = 62;
 
-/// Maximum size we will allocate / accept for a single variable-data field
-/// (1 MiB), guarding against hostile size headers.
-pub const MAX_FIELD_SIZE: usize = 1_048_576;
+/// Maximum size we accept for a single variable-data field, mirroring the ToIP
+/// reference (`tsp_sdk`'s `DATA_LIMIT = 3 * (1 << 24)`, ~48 MiB) so we accept any
+/// field the reference can validly produce. Guards against hostile size headers.
+pub const MAX_FIELD_SIZE: usize = 3 * (1 << 24);
 
 /// Interpret a base64url string as a big-endian integer of its 6-bit symbols.
 /// Used to derive the numeric identifier of single/short CESR codes (e.g. the
@@ -207,7 +208,9 @@ pub fn encode_hops(hops: &[impl AsRef<[u8]>], out: &mut Vec<u8>) {
 pub fn decode_hops(stream: &[u8], pos: &mut usize) -> Result<Vec<Vec<u8>>, TspError> {
     let count = decode_count(TSP_HOP_LIST, stream, pos)
         .ok_or_else(|| TspError::InvalidMessage("missing -J hop list".into()))?;
-    if count as usize > MAX_FIELD_SIZE {
+    // The hop list is a route; bound the count by the route limit (not the much
+    // larger field-size cap) so a hostile count can't pre-allocate gigabytes.
+    if count as usize > crate::message::routed::MAX_HOPS {
         return Err(TspError::InvalidMessage("hop list too long".into()));
     }
     let mut hops = Vec::with_capacity(count as usize);

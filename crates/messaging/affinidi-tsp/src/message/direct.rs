@@ -30,9 +30,10 @@ use crate::message::MessageType;
 use crate::message::envelope::Envelope;
 use crate::message::wire;
 
-/// Maximum allowed message size (1 MB) to prevent memory exhaustion from
-/// maliciously crafted length fields on the wire.
-const MAX_MESSAGE_SIZE: usize = 1_048_576;
+/// Maximum allowed ciphertext size, kept in lock-step with the variable-data
+/// field cap (which mirrors the ToIP reference's `DATA_LIMIT`). The ciphertext is
+/// itself a `G` variable-data field, so this matches what the wire layer accepts.
+const MAX_MESSAGE_SIZE: usize = crate::message::wire::MAX_FIELD_SIZE;
 
 /// X25519 encapsulated-key length appended to the ciphertext.
 const ENC_LEN: usize = 32;
