@@ -2,6 +2,17 @@
 
 ## Changelog history
 
+## 29th June 2026
+
+### 0.2.34 — TSP federation: advertise TSPTransport in the mediator's did:peer
+
+- `generate_mediator_identity` now bakes a `TSPTransport` service (id `#tsp`, endpoint =
+  the mediator's bound base URL) into the mediator's `did:peer`, so a peer mediator can
+  resolve its TSP endpoint and forward across mediators. (Production `did:web` mediators
+  auto-advertise this at startup; a `did:peer` bakes its document into the DID, so it must
+  be present at generation — mirroring the production expectation for `did:peer`/`did:webvh`
+  deployments.) Enables the new two-mediator `tsp_federation` e2e test.
+
 ## 27th June 2026
 
 ### 0.2.33 — TSP: pure-TSP authentication e2e
