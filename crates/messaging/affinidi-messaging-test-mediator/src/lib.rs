@@ -1119,6 +1119,20 @@ async fn generate_mediator_identity(
             endpoint: PeerServiceEndpoint::Uri(auth_uri),
             id: Some("#auth".into()),
         },
+        // TSPTransport service so peer mediators can resolve this mediator's
+        // inbound endpoint for cross-mediator TSP forwarding. The production
+        // mediator auto-adds this for `did:web` at startup, but a `did:peer`
+        // bakes its document into the DID, so it must be present at generation.
+        // The endpoint is the bare base URL (no trailing slash): the forwarding
+        // processor appends `/inbound` to it (`{endpoint}/inbound`), and TSP and
+        // DIDComm share the `/inbound` route. Always advertised — harmless when
+        // the mediator is built without the `tsp` feature, and lets the same
+        // fixture drive TSP federation tests.
+        PeerService {
+            type_: "TSPTransport".into(),
+            endpoint: PeerServiceEndpoint::Uri(base_uri.to_string()),
+            id: Some("#tsp".into()),
+        },
     ];
     let (did, secrets) = DID::generate_did_peer_with_services(
         vec![
