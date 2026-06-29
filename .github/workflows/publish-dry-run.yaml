@@ -1,0 +1,51 @@
+name: publish-dry-run
+# Catches "green on every check but fails to publish" at PR time instead of at
+# release time. `cargo publish --dry-run` builds each crate's packaged tarball
+# in isolation, with DEFAULT features, under `-D warnings`, resolving deps from
+# crates.io (ignoring the workspace `[patch.crates-io]`) — a combination the
+# normal workspace build never reproduces. See scripts/check-publish-dry-run.sh
+# for the two real incidents this guards against.
+#
+# Scoped to publishable crates whose source changed in the PR (via the same
+# source/test/doc split as the version-bump guard) so it stays cheap. The
+# `toolchain:` pin below is policed by scripts/check-toolchain-sync.sh, so it
+# stays equal to rust-toolchain.toml's channel.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+
+jobs:
+  publish-dry-run:
+    name: publish dry-run
+    runs-on: ubuntu-latest
+    env:
+      # Match release.yaml so dead-code (and friends) are hard errors here too —
+      # without this the dry-run's verify build would only warn and pass.
+      RUSTFLAGS: "-D warnings --cfg tracing_unstable"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the changed-crate diff can reach the PR's base commit.
+          fetch-depth: 0
+
+      - name: Install native deps (libdbus for keyring, libssl, libchafa)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libdbus-1-dev libssl-dev libchafa-dev pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: publish-dry-run
+
+      - name: cargo publish --dry-run for changed publishable crates
+        run: bash scripts/check-publish-dry-run.sh "${{ github.event.pull_request.base.sha }}"
