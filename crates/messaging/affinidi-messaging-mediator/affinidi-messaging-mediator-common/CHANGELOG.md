@@ -2,6 +2,14 @@
 
 ## Changelog history
 
+## 29th June 2026
+
+### 0.15.20 — recognize the new TSP `-E` wire framing
+
+- `MessageProtocol::detect` and `decode_tsp_forward` now recognize the TSP spec's CESR
+  framing (qb64 `-E` prefix / `0xF8` magic byte), matching affinidi-tsp 0.1.8. Previously
+  they keyed on the old `1AAF` / `0xD4` markers.
+
 ## 24th June 2026
 
 ### 0.15.18 — did:webvh → did:web document rewriting

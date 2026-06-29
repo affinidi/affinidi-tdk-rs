@@ -512,7 +512,7 @@ async fn handle_socket(
                                         continue;
                                     }
 
-                                    // A binary frame leading with the TSP magic byte (0xD4) is a
+                                    // A binary frame leading with the TSP magic byte (0xF8) is a
                                     // TSP message; route it to the TSP handler. Other binary frames
                                     // are UTF-8-decoded and handled as DIDComm exactly as before.
                                     #[cfg(feature = "tsp")]

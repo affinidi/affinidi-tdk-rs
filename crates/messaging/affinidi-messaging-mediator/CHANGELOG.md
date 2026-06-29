@@ -2,6 +2,27 @@
 
 ## Changelog history
 
+## 29th June 2026 (later)
+
+### 0.16.34 — follow affinidi-tsp's new routed `next_hop` signature
+
+- The TSP relay now calls `routed::next_hop(&unpacked)` (affinidi-tsp 0.1.9 moved the route
+  into the CESR hop list, so the next hop is derived from the unpacked message rather than
+  re-parsing the payload bytes). No change to the receiver-based dispatch or relay behaviour.
+
+## 29th June 2026
+
+### 0.16.33 — TSP routed-by-receiver + new `-E` framing detection
+
+- The TSP message kind now lives in the encrypted payload (affinidi-tsp 0.1.8), so the
+  keys-free mediator can no longer dispatch on it. `handle_inbound_tsp` now routes on the
+  cleartext **receiver**: messages not addressed to this mediator are opaque pass-through
+  (stored for the local recipient); messages addressed to this mediator are unpacked (we
+  hold the key) and the unpacked kind drives relay (Routed → forward) / metadata-privacy
+  (Nested → reveal + route inner) / local store (Direct, Control).
+- Updated the TSP wire detection from the old `0xD4` / `1AAF` markers to the new `-E` count
+  code (`0xF8` / qb64 `-E`).
+
 ## 26th June 2026
 
 ### 0.16.32 — Bump vta-sdk to 0.18 (enables did:webvh P-256 rendering)

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.40] - 2026-06-29
+
+- Doc/comment updates for affinidi-tsp 0.1.8's new `-E` CESR wire framing. No functional
+  change — the SDK's TSP path already routes by envelope addressing and unpacks for the
+  message kind, so it is agnostic to the framing magic byte.
+
 ## [0.18.39] - 2026-06-27
 
 SDK consumer for the mediator's raw-TSP WebSocket mode.

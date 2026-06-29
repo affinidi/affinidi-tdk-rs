@@ -31,10 +31,11 @@ pub enum MessageProtocol {
 
 impl MessageProtocol {
     /// Detect the protocol of a stored message from its on-the-wire form. TSP is
-    /// stored as CESR qb64 text (begins `1AAF`); a DIDComm JWE/JWS is JSON (`{`)
-    /// or compact (`ey`). Anything else is [`MessageProtocol::Other`].
+    /// stored as CESR qb64 text (begins `-E`, the TSP envelope's `-E` count code);
+    /// a DIDComm JWE/JWS is JSON (`{`) or compact (`ey`). Anything else is
+    /// [`MessageProtocol::Other`].
     pub fn detect(message: &str) -> Self {
-        if message.starts_with("1AAF") {
+        if message.starts_with("-E") {
             MessageProtocol::Tsp
         } else if message.starts_with('{') || message.starts_with("ey") {
             MessageProtocol::DidComm
@@ -173,11 +174,8 @@ mod protocol_tests {
 
     #[test]
     fn detect_classifies_the_wire_protocol() {
-        // TSP is stored as CESR qb64 text (begins `1AAF`).
-        assert_eq!(
-            MessageProtocol::detect("1AAFsomeqb64"),
-            MessageProtocol::Tsp
-        );
+        // TSP is stored as CESR qb64 text (begins `-E`, the `-E` count code).
+        assert_eq!(MessageProtocol::detect("-EsomeqB64"), MessageProtocol::Tsp);
         // DIDComm: JSON JWE or compact JWS/JWE.
         assert_eq!(
             MessageProtocol::detect(r#"{"protected":"..."}"#),
