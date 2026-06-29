@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-didcomm-service"
-version = "0.3.10"
+version = "0.3.11"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
 authors.workspace = true
@@ -11,6 +11,13 @@ repository.workspace = true
 publish.workspace = true
 readme = "README.md"
 rust-version.workspace = true
+
+[features]
+## Multiplex TSP alongside DIDComm on the listener's single websocket.
+## Enables the SDK's TSP surface (`atm.tsp().unpack_bytes`) used to route
+## inbound TSP frames to a `TspHandler`. Off by default — a DIDComm-only build
+## is unaffected.
+tsp = ["affinidi-messaging-sdk/tsp"]
 
 [dependencies]
 affinidi-tdk-common = "0.6"

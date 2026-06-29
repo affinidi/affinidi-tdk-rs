@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::{DIDCommServiceConfig, ListenerConfig};
 use crate::error::DIDCommServiceError;
-use crate::handler::DIDCommHandler;
+use crate::handler::{DIDCommHandler, TspHandler};
 
 use listener::ConnectionHandle;
 
@@ -44,6 +44,10 @@ pub enum ListenerEvent {
 pub struct DIDCommService {
     listeners: Arc<RwLock<HashMap<String, ListenerHandle>>>,
     handler: Arc<dyn DIDCommHandler>,
+    /// Optional TSP handler, attached via [`DIDCommService::with_tsp_handler`].
+    /// Used by listeners whose `protocols.tsp` is enabled to route inbound TSP
+    /// frames off the shared websocket.
+    tsp_handler: Option<Arc<dyn TspHandler>>,
     shutdown: CancellationToken,
     events_tx: broadcast::Sender<ListenerEvent>,
 }
@@ -79,13 +83,48 @@ impl DIDCommService {
         handler: impl DIDCommHandler,
         shutdown: CancellationToken,
     ) -> Result<DIDCommService, DIDCommServiceError> {
-        let handler = Arc::new(handler) as Arc<dyn DIDCommHandler>;
+        Self::start_inner(
+            config,
+            Arc::new(handler) as Arc<dyn DIDCommHandler>,
+            None,
+            shutdown,
+        )
+        .await
+    }
+
+    /// Like [`start`](Self::start), but also routes inbound **TSP** frames to
+    /// `tsp_handler` on listeners whose `protocols.tsp` is enabled. The TSP
+    /// frames ride the same single per-DID websocket as DIDComm (no second
+    /// socket). Routing only takes effect when this crate is built with the
+    /// `tsp` feature; without it the handler is stored but never invoked.
+    pub async fn start_with_tsp(
+        config: DIDCommServiceConfig,
+        handler: impl DIDCommHandler,
+        tsp_handler: impl TspHandler,
+        shutdown: CancellationToken,
+    ) -> Result<DIDCommService, DIDCommServiceError> {
+        Self::start_inner(
+            config,
+            Arc::new(handler) as Arc<dyn DIDCommHandler>,
+            Some(Arc::new(tsp_handler) as Arc<dyn TspHandler>),
+            shutdown,
+        )
+        .await
+    }
+
+    async fn start_inner(
+        config: DIDCommServiceConfig,
+        handler: Arc<dyn DIDCommHandler>,
+        tsp_handler: Option<Arc<dyn TspHandler>>,
+        shutdown: CancellationToken,
+    ) -> Result<DIDCommService, DIDCommServiceError> {
         let listeners = Arc::new(RwLock::new(HashMap::new()));
         let (events_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
 
         let service = DIDCommService {
             listeners: listeners.clone(),
             handler: handler.clone(),
+            tsp_handler,
             shutdown: shutdown.clone(),
             events_tx,
         };
@@ -313,6 +352,7 @@ impl DIDCommService {
         let listener_did = config.profile.did.clone();
         let listener_token = self.shutdown.child_token();
         let handler = self.handler.clone();
+        let tsp_handler = self.tsp_handler.clone();
         let restart_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let restart_count_clone = restart_count.clone();
         let token_clone = listener_token.clone();
@@ -321,8 +361,14 @@ impl DIDCommService {
         let (connection_tx, connection_rx) = watch::channel(None);
 
         let task = tokio::spawn(async move {
-            let mut listener =
-                listener::Listener::new(config, handler, token_clone, connection_tx, events_tx);
+            let mut listener = listener::Listener::new(
+                config,
+                handler,
+                tsp_handler,
+                token_clone,
+                connection_tx,
+                events_tx,
+            );
             listener.run_with_restart(restart_count_clone).await;
         });
 
@@ -360,6 +406,7 @@ mod tests {
         DIDCommService {
             listeners: Arc::new(RwLock::new(HashMap::new())),
             handler: Arc::new(handler),
+            tsp_handler: None,
             shutdown: CancellationToken::new(),
             events_tx,
         }

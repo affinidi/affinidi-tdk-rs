@@ -12,10 +12,12 @@ use tracing::{error, info, warn};
 
 use crate::config::ListenerConfig;
 use crate::error::{DIDCommServiceError, StartupError};
-use crate::handler::{DIDCommHandler, HandlerContext};
+use crate::handler::{DIDCommHandler, HandlerContext, TspHandler};
 use crate::response::DIDCommResponse;
 use crate::service::ListenerEvent;
 use crate::transport;
+#[cfg(feature = "tsp")]
+use crate::utils::new_message_id;
 use crate::utils::{get_parent_thread_id, get_thread_id};
 
 /// Convert SDK compat UnpackMetadata to didcomm crate UnpackMetadata
@@ -49,6 +51,10 @@ pub(crate) struct ConnectionHandle {
 pub(crate) struct Listener {
     pub config: ListenerConfig,
     pub handler: Arc<dyn DIDCommHandler>,
+    /// Optional TSP handler. When set and `config.protocols.tsp` is on, inbound
+    /// TSP frames off the shared socket are routed here. `None` → TSP frames are
+    /// dropped with a warning.
+    pub tsp_handler: Option<Arc<dyn TspHandler>>,
     pub shutdown: CancellationToken,
     atm: Option<ATM>,
     profile: Option<Arc<ATMProfile>>,
@@ -62,6 +68,7 @@ impl Listener {
     pub fn new(
         config: ListenerConfig,
         handler: Arc<dyn DIDCommHandler>,
+        tsp_handler: Option<Arc<dyn TspHandler>>,
         shutdown: CancellationToken,
         connection_tx: watch::Sender<Option<ConnectionHandle>>,
         events_tx: broadcast::Sender<ListenerEvent>,
@@ -69,6 +76,7 @@ impl Listener {
         Self {
             config,
             handler,
+            tsp_handler,
             shutdown,
             atm: None,
             profile: None,
@@ -236,6 +244,14 @@ impl Listener {
         &self,
         tasks: &mut JoinSet<()>,
     ) -> Result<(), DIDCommServiceError> {
+        // When TSP is enabled, pull frames of *either* protocol off the one
+        // socket and route by transport (a node speaks both over a single
+        // per-DID websocket — opening a second would be evicted as a duplicate).
+        #[cfg(feature = "tsp")]
+        if self.config.protocols.tsp {
+            return self.process_next_frame(tasks).await;
+        }
+
         let wait_duration = Duration::from_secs(self.config.message_wait_duration_secs);
         let auto_delete = self.config.auto_delete;
         let atm = self.atm()?;
@@ -259,6 +275,104 @@ impl Listener {
         }
 
         Ok(())
+    }
+
+    /// Multiplexed receive: pull the next inbound frame (DIDComm *or* TSP) off
+    /// the shared websocket and dispatch by transport.
+    #[cfg(feature = "tsp")]
+    async fn process_next_frame(&self, tasks: &mut JoinSet<()>) -> Result<(), DIDCommServiceError> {
+        use affinidi_messaging_sdk::protocols::message_pickup::InboundFrame;
+
+        let wait_duration = Duration::from_secs(self.config.message_wait_duration_secs);
+        let auto_delete = self.config.auto_delete;
+        let atm = self.atm()?;
+        let profile = self.profile()?;
+
+        let next = atm
+            .message_pickup()
+            .live_stream_next_frame(profile, Some(wait_duration), auto_delete)
+            .await
+            .map_err(DIDCommServiceError::ATM)?;
+
+        match next {
+            Some(InboundFrame::DidComm(message, meta)) => {
+                let meta = convert_meta(*meta);
+                let listener_id = self.config.id.clone();
+                let atm = atm.clone();
+                let profile = profile.clone();
+                let handler = self.handler.clone();
+                tasks.spawn(async move {
+                    Self::dispatch_message(&listener_id, &atm, &profile, &handler, *message, meta)
+                        .await;
+                });
+            }
+            Some(InboundFrame::Tsp(packed)) => {
+                if let Some(tsp_handler) = self.tsp_handler.clone() {
+                    let listener_id = self.config.id.clone();
+                    let atm = atm.clone();
+                    let profile = profile.clone();
+                    tasks.spawn(async move {
+                        Self::dispatch_tsp(&listener_id, &atm, &profile, &tsp_handler, *packed)
+                            .await;
+                    });
+                } else {
+                    warn!(
+                        profile = %profile.inner.alias,
+                        "received TSP frame but no TspHandler configured — dropping"
+                    );
+                }
+            }
+            // `InboundFrame` is `#[non_exhaustive]`; tolerate a future frame
+            // kind this build doesn't yet route.
+            Some(_) => {
+                warn!(
+                    profile = %profile.inner.alias,
+                    "received unrecognised inbound frame kind — dropping"
+                );
+            }
+            None => {}
+        }
+
+        Ok(())
+    }
+
+    /// Unpack a TSP frame (yielding cleartext payload + authenticated sender VID)
+    /// and hand it to the configured [`TspHandler`].
+    #[cfg(feature = "tsp")]
+    pub(crate) async fn dispatch_tsp(
+        listener_id: &str,
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        handler: &Arc<dyn TspHandler>,
+        packed: String,
+    ) {
+        // NOTE: the packed frame surfaces as a String off the pickup socket; the
+        // exact qb2/qb64 encoding handed to `unpack_bytes` is confirmed by the
+        // live VTA↔mediator run.
+        let (payload, sender_vid) = match atm.tsp().unpack_bytes(profile, packed.as_bytes()).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(profile = %profile.inner.alias, error = %e, "Failed to unpack TSP frame");
+                return;
+            }
+        };
+
+        let ctx = HandlerContext {
+            listener_id: listener_id.to_string(),
+            atm: atm.clone(),
+            profile: profile.clone(),
+            sender_did: Some(sender_vid.clone()),
+            // A TSP frame carries no DIDComm thread/message id; synthesize one so
+            // handlers and logs have a stable id.
+            message_id: new_message_id(),
+            thread_id: String::new(),
+            parent_thread_id: None,
+        };
+
+        let profile_alias = profile.inner.alias.clone();
+        if let Err(e) = handler.handle(ctx, payload, sender_vid).await {
+            warn!(profile = %profile_alias, error = %e, "Unhandled TSP handler error");
+        }
     }
 
     pub(crate) async fn dispatch_message(
