@@ -812,11 +812,50 @@ impl MediatorStore for RedisStore {
         &self,
         oob_id: &str,
     ) -> Result<Option<(String, String)>, MediatorError> {
-        self.oob_discovery_get(oob_id).await
+        let key = format!("OOB_INVITES:{oob_id}");
+        let mut conn = self.get_connection().await?;
+        let result: Vec<Option<String>> = redis::cmd("HMGET")
+            .arg(&key)
+            .arg("INVITE")
+            .arg("DID")
+            .query_async(&mut conn)
+            .await
+            .map_err(|err| {
+                MediatorError::DatabaseError(
+                    14,
+                    oob_id.into(),
+                    format!("oob_discovery_get failed: {err}"),
+                )
+            })?;
+        let (invite, did_hash) = match result.as_slice() {
+            [Some(i), Some(d)] => (i.clone(), d.clone()),
+            _ => return Ok(None),
+        };
+        // Best-effort stats bump: don't fail the request if the counter update fails.
+        let _ = redis::cmd("HINCRBY")
+            .arg("GLOBAL")
+            .arg("OOB_INVITES_CLAIMED")
+            .arg(1)
+            .exec_async(&mut conn)
+            .await;
+        Ok(Some((invite, did_hash)))
     }
 
     async fn oob_discovery_delete(&self, oob_id: &str) -> Result<bool, MediatorError> {
-        self.oob_discovery_delete(oob_id).await
+        let key = format!("OOB_INVITES:{oob_id}");
+        let mut conn = self.get_connection().await?;
+        let deleted: i64 = redis::cmd("DEL")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .map_err(|err| {
+                MediatorError::DatabaseError(
+                    14,
+                    oob_id.into(),
+                    format!("oob_discovery_delete failed: {err}"),
+                )
+            })?;
+        Ok(deleted > 0)
     }
 
     // ─── Stats / counters ───────────────────────────────────────────────────
