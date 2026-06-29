@@ -1,5 +1,13 @@
 # Affinidi TSP Changelog
 
+## 29th June 2026 (docs)
+
+### 0.1.11 — README: reflect full reference interop
+
+- README now states that `affinidi-tsp` wire-interoperates with the ToIP reference
+  (`tsp-sdk`) for all message types (replacing the stale "does not interoperate" note).
+  Docs-only; no code change.
+
 ## 29th June 2026 (control)
 
 ### 0.1.10 — spec-compliant relationship Control (full tsp_sdk wire parity)
