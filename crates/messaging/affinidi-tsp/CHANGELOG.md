@@ -1,5 +1,26 @@
 # Affinidi TSP Changelog
 
+## 29th June 2026 (later)
+
+### 0.1.9 — spec-compliant Routed/Nested payloads + reference-aligned size cap
+
+- **Routed and Nested payloads now match the ToIP reference (`tsp_sdk`) and interoperate
+  both directions.** The payload frame inside `-Z` is now kind-encoded per the spec:
+  Direct=`XSCS`+`B(body)`, Nested=`XHOP`+empty-hop-list+`B(body)`, Routed=`XHOP`+hop-list+
+  `B(body)` (hops as `-J<count>` + a `B` field per VID). Replaces the previous
+  affinidi-private `ANS`/`ART` markers and the bespoke `encode_route` (the route is now the
+  CESR hop list, not baked into the plaintext). `UnpackedMessage` gains `hops`. New
+  `direct::pack_with_hops`; `routed::next_hop(&UnpackedMessage)` (was `next_hop(&[u8])`).
+  Control stays on its `ACT` marker (relationship interop is a separate follow-up).
+- **Size cap aligned with the reference:** `MAX_FIELD_SIZE` is now `3 * (1 << 24)` (~48 MiB,
+  the reference's `DATA_LIMIT`) instead of 1 MiB, so affinidi accepts any field the reference
+  can validly send; `MAX_MESSAGE_SIZE` (the ciphertext guard) tracks it. `decode_hops` is
+  bounded by `MAX_HOPS` so the larger cap can't let a hostile hop count over-allocate.
+  Verified by a 2 MiB Direct round-trip in the interop harness (exercises the large CESR
+  variable-data code).
+- Wire-breaking for Routed/Nested (Direct unchanged/byte-exact); API: `next_hop` signature
+  changed, `pack_with_hops` added, `pack_routed`/`pack_nested` public signatures unchanged.
+
 ## 29th June 2026
 
 ### 0.1.8 — spec conformance (2/2): CESR wire framing + RFC-9180 HPKE (tsp-sdk interop)
