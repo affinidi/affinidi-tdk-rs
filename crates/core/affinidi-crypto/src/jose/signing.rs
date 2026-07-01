@@ -1,7 +1,9 @@
-//! Ed25519 signing and verification (EdDSA / JWS `alg: EdDSA`).
+//! Ed25519 signing/verification (EdDSA / JWS `alg: EdDSA`) and ECDSA P-256
+//! verification (JWS `alg: ES256`).
 //!
 //! Ported verbatim from `affinidi-messaging-didcomm` for the #327
-//! centralization; byte-level output is locked by [`super::kat`].
+//! centralization; byte-level output is locked by [`super::kat`] (both the
+//! Ed25519 and the deterministic-ECDSA P-256 golden vectors).
 
 use ed25519_dalek::{Signer, Verifier};
 
@@ -28,4 +30,21 @@ pub fn verify(data: &[u8], signature: &[u8; 64], public_key: &[u8; 32]) -> Resul
 pub fn public_key_from_private(private_key: &[u8; 32]) -> [u8; 32] {
     let signing_key = ed25519_dalek::SigningKey::from_bytes(private_key);
     signing_key.verifying_key().to_bytes()
+}
+
+/// Verify an ECDSA P-256 signature (JWS `alg: ES256`).
+pub fn verify_p256(
+    data: &[u8],
+    signature: &[u8; 64],
+    public_key_sec1: &[u8],
+) -> Result<(), CryptoError> {
+    use p256::ecdsa::signature::Verifier as _;
+
+    let verifying_key = p256::ecdsa::VerifyingKey::from_sec1_bytes(public_key_sec1)
+        .map_err(|e| CryptoError::Verification(format!("invalid P-256 public key: {e}")))?;
+    let sig = p256::ecdsa::Signature::from_slice(signature)
+        .map_err(|e| CryptoError::Verification(format!("invalid P-256 signature: {e}")))?;
+    verifying_key
+        .verify(data, &sig)
+        .map_err(|e| CryptoError::Verification(format!("signature verification failed: {e}")))
 }

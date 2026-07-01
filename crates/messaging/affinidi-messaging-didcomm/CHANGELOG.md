@@ -4,6 +4,22 @@ All notable changes to `affinidi-messaging-didcomm` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.4] - 2026-06-30
+
+### Added
+
+- **ES256 (ECDSA P-256) JWS verification.** `jws::verify::verify_p256` verifies
+  DIDComm signed messages whose protected header declares `alg: ES256`,
+  alongside the existing `EdDSA` path. The signer `kid` is attributed from the
+  protected header, falling back to the per-signature unprotected header
+  (#323 semantics). Signer-key resolution and the inner/top-level JWS dispatch
+  live in the mediator's `didcomm_compat` shim. Verify-only — this crate does
+  not sign ES256.
+- **Fully-specified `Ed25519` alg accepted on verification.** `verify_ed25519`
+  now accepts a protected-header `alg` of either `EdDSA` (polymorphic, RFC 8037)
+  or `Ed25519` (fully-specified, draft-ietf-jose-fully-specified-algorithms) —
+  both denote Ed25519 signatures. Signing still emits `EdDSA` for broad interop.
+
 ## [0.15.3] - 2026-06-14
 
 ### Added

@@ -44,7 +44,7 @@ pub struct JwsProtectedHeader {
     /// Media type
     #[serde(skip_serializing_if = "Option::is_none")]
     pub typ: Option<String>,
-    /// Signing algorithm: "EdDSA"
+    /// Signing algorithm: "EdDSA"/"Ed25519" (Ed25519) or "ES256" (P-256)
     pub alg: String,
     /// Signer KID (DID URL)
     #[serde(skip_serializing_if = "Option::is_none")]
