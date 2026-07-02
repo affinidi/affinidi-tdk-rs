@@ -118,6 +118,7 @@ pub fn open_store(url: &str) -> Result<DynSecretStore> {
         BackendUrl::Gcp { .. } => backends::gcp::open(parsed),
         BackendUrl::Azure { .. } => backends::azure::open(parsed),
         BackendUrl::Vault { .. } => backends::vault::open(parsed),
+        BackendUrl::Kubernetes { .. } => backends::k8s::open(parsed),
     }
 }
 

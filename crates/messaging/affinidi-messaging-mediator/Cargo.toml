@@ -56,6 +56,7 @@ secrets-aws = ["affinidi-messaging-mediator-common/secrets-aws", "aws"]
 secrets-gcp = ["affinidi-messaging-mediator-common/secrets-gcp"]
 secrets-azure = ["affinidi-messaging-mediator-common/secrets-azure"]
 secrets-vault = ["affinidi-messaging-mediator-common/secrets-vault"]
+secrets-k8s = ["affinidi-messaging-mediator-common/secrets-k8s"]
 
 ## AWS integration used by `did_web_self_hosted = "aws_parameter_store://..."`
 ## (still loaded directly by the mediator, not via the secret store). Enabled

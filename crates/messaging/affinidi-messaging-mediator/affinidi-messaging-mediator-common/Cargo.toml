@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-common"
-version = "0.15.22"
+version = "0.15.23"
 description = "Shared types for the Affinidi Messaging Mediator (errors, database handler, config)"
 edition.workspace = true
 authors.workspace = true
@@ -85,6 +85,7 @@ secrets-azure = [
   "dep:azure_core",
 ]
 secrets-vault = ["server", "dep:vaultrs"]
+secrets-k8s = ["server", "dep:kube", "dep:k8s-openapi"]
 
 # ── Test-only injectable clock ──────────────────────────────────────
 ## Compiles `types::clock::TestClock`, a manually-advanced clock for fast
@@ -147,6 +148,15 @@ azure_core = { version = "0.35", optional = true }
 vaultrs = { version = "0.8", default-features = false, features = [
   "rustls",
 ], optional = true }
+## Native Kubernetes Secrets backend. `kube` talks to the API server
+## (in-cluster ServiceAccount or local kubeconfig); rustls-tls keeps it
+## on the workspace TLS story. `k8s-openapi` "latest" pins the generated
+## API types to the newest supported Kubernetes version.
+kube = { version = "3.1", default-features = false, features = [
+  "client",
+  "rustls-tls",
+], optional = true }
+k8s-openapi = { version = "0.27", features = ["latest"], optional = true }
 
 # ── Async stream helpers (used by the redis-store pubsub bridge) ─────────
 tokio-stream = { version = "0.1", optional = true }
