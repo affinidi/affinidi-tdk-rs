@@ -186,7 +186,7 @@ use crate::protocols::tsp::TspOps;
 #[cfg(feature = "tsp")]
 pub use crate::protocols::tsp::{
     CapabilitySource, InMemoryRelationshipStore, PeerCapability, RelationshipStore, SendProtocol,
-    TspPolicy, TspSupport, TspWebSocket,
+    TSP_DISCOVER_FEATURE_URI, TspPolicy, TspSupport, TspWebSocket,
 };
 /// Re-export of the pure-TSP authentication handler so a TSP-only client can
 /// register it on the TDK in place of the built-in DIDComm auth flow.

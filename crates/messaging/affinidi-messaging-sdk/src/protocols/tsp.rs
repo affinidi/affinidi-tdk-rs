@@ -36,6 +36,19 @@ use tokio::sync::RwLock;
 use crate::ATM;
 use crate::errors::ATMError;
 use crate::profiles::ATMProfile;
+use crate::protocols::discover_features::{
+    DiscoverFeaturesDisclosure, DiscoverFeaturesQuery, FeatureType, Query,
+};
+use affinidi_messaging_didcomm::message::Message;
+
+/// DIDComm [Discover Features 2.0](https://identity.foundation/didcomm-messaging/spec/#discover-features-protocol-20)
+/// protocol URI that advertises an agent accepts TSP messages.
+///
+/// Advertise it in the discoverable state (see [`TspOps::advertise_capability`])
+/// so a peer can learn our TSP capability proactively; consuming a peer's
+/// disclosure that lists it (see [`TspOps::learn_from_disclosure`]) caches the
+/// peer as [`TspSupport::Supported`] with source [`CapabilitySource::DiscoverFeatures`].
+pub const TSP_DISCOVER_FEATURE_URI: &str = "https://affinidi.com/tsp/1.0";
 
 /// Which wire protocol [`crate::ATM::send_to`] chose for a message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +105,9 @@ pub enum CapabilitySource {
     DidDocument,
     /// Observed from an inbound TSP message the peer sent us.
     Observed,
+    /// Learned from a peer's DIDComm Discover Features 2.0 disclosure that
+    /// advertised the TSP capability URI ([`TSP_DISCOVER_FEATURE_URI`]).
+    DiscoverFeatures,
     /// Set explicitly by the application.
     Manual,
 }
@@ -324,6 +340,17 @@ fn classify_protocol(
     }
     // 3. No TSP signal.
     deny_or_didcomm(policy)
+}
+
+/// Whether a Discover Features 2.0 disclosure advertises the TSP capability URI
+/// ([`TSP_DISCOVER_FEATURE_URI`]) as a supported protocol. Factored out of
+/// [`TspOps::learn_from_disclosure`] so the match is unit-testable without a live
+/// `ATM`.
+fn disclosure_advertises_tsp(disclosure: &DiscoverFeaturesDisclosure) -> bool {
+    disclosure
+        .disclosures
+        .iter()
+        .any(|d| matches!(d.feature_type, FeatureType::Protocol) && d.id == TSP_DISCOVER_FEATURE_URI)
 }
 
 /// Under `Required`, no-TSP is a denial; otherwise fall back to DIDComm.
@@ -761,6 +788,72 @@ impl TspOps<'_> {
         self.relationship_store()
             .set_capability(our_did, their_did, cap)
             .await
+    }
+
+    /// Advertise this agent's TSP capability in its Discover Features 2.0
+    /// discoverable state, so a peer that queries our supported protocols learns
+    /// we accept TSP and can proactively prefer it. Adds
+    /// [`TSP_DISCOVER_FEATURE_URI`] to the shared discoverable protocol list
+    /// (idempotent).
+    ///
+    /// Enabling a non-[`Off`](TspPolicy::Off) [`TspPolicy`] auto-advertises this
+    /// at SDK construction; call this to advertise at runtime or under `Off`.
+    pub async fn advertise_capability(&self) {
+        let state = self.atm.inner.config.discover_features.clone();
+        let mut features = state.write().await;
+        if !features
+            .protocols
+            .iter()
+            .any(|p| p == TSP_DISCOVER_FEATURE_URI)
+        {
+            features
+                .protocols
+                .push(TSP_DISCOVER_FEATURE_URI.to_string());
+        }
+    }
+
+    /// Build a DIDComm Discover Features 2.0 query that asks `to_did` whether it
+    /// supports TSP (matches [`TSP_DISCOVER_FEATURE_URI`]). Pack + send it like
+    /// any DIDComm message; feed the peer's disclosure response to
+    /// [`learn_from_disclosure`](Self::learn_from_disclosure) to populate the
+    /// capability cache before the first message.
+    pub fn capability_query(&self, from_did: &str, to_did: &str) -> Result<Message, ATMError> {
+        self.atm.discover_features().generate_query_message(
+            from_did,
+            to_did,
+            DiscoverFeaturesQuery {
+                queries: vec![Query {
+                    feature_type: FeatureType::Protocol,
+                    match_: TSP_DISCOVER_FEATURE_URI.to_string(),
+                }],
+            },
+        )
+    }
+
+    /// Consume a peer's Discover Features 2.0 disclosure: if it advertises the
+    /// TSP capability URI, cache the peer as [`TspSupport::Supported`]
+    /// (source [`CapabilitySource::DiscoverFeatures`]) so a later
+    /// [`send_to`](crate::ATM::send_to) can prefer TSP *before* any relationship
+    /// or observed inbound TSP.
+    ///
+    /// Returns whether the disclosure advertised TSP. A disclosure that omits the
+    /// URI is left untouched (not marked `Unsupported`) — a scoped disclosure may
+    /// simply not have been queried for it. A no-op under [`TspPolicy::Off`]
+    /// (like the other capability-learning paths, tracking is inert unless
+    /// protocol selection is enabled).
+    pub async fn learn_from_disclosure(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        disclosure: &DiscoverFeaturesDisclosure,
+    ) -> Result<bool, ATMError> {
+        let advertises_tsp = disclosure_advertises_tsp(disclosure);
+        if advertises_tsp {
+            let (our_did, _) = profile.dids()?;
+            self.learn_tsp_supported(our_did, their_did, CapabilitySource::DiscoverFeatures)
+                .await?;
+        }
+        Ok(advertises_tsp)
     }
 
     /// Whether a cached capability is still within the configured TTL (`None`
@@ -1296,10 +1389,14 @@ mod tests {
 
     use super::{
         CapabilitySource, InMemoryRelationshipStore, PeerCapability, ProtocolChoice,
-        RelationshipEvent, RelationshipState, RelationshipStore, TspPolicy, TspSupport,
-        advance_state, classify_protocol, next_state,
+        RelationshipEvent, RelationshipState, RelationshipStore, TSP_DISCOVER_FEATURE_URI,
+        TspPolicy, TspSupport, advance_state, classify_protocol, disclosure_advertises_tsp,
+        next_state,
     };
     use crate::errors::ATMError;
+    use crate::protocols::discover_features::{
+        Disclosure, DiscoverFeaturesDisclosure, FeatureType,
+    };
     use std::sync::Arc;
 
     const ALICE: &str = "did:example:alice";
@@ -1550,5 +1647,57 @@ mod tests {
             _ => unreachable!(),
         };
         assert!(RelationshipState::Bidirectional.transition(e).is_ok());
+    }
+
+    // ── Discover Features → capability (pure) ──────────────────────────────────
+
+    fn protocol_disclosure(ids: &[&str]) -> DiscoverFeaturesDisclosure {
+        DiscoverFeaturesDisclosure {
+            disclosures: ids
+                .iter()
+                .map(|id| Disclosure {
+                    feature_type: FeatureType::Protocol,
+                    id: (*id).to_string(),
+                    roles: vec![],
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn disclosure_with_tsp_uri_is_recognised() {
+        let d = protocol_disclosure(&[
+            "https://didcomm.org/trust-ping/2.0",
+            TSP_DISCOVER_FEATURE_URI,
+        ]);
+        assert!(disclosure_advertises_tsp(&d));
+    }
+
+    #[test]
+    fn disclosure_without_tsp_uri_is_not() {
+        let d = protocol_disclosure(&["https://didcomm.org/trust-ping/2.0"]);
+        assert!(!disclosure_advertises_tsp(&d));
+        assert!(!disclosure_advertises_tsp(&DiscoverFeaturesDisclosure::default()));
+    }
+
+    #[test]
+    fn tsp_uri_under_non_protocol_feature_type_is_ignored() {
+        // The same string disclosed as a goal code / header must not count as a
+        // protocol capability.
+        let d = DiscoverFeaturesDisclosure {
+            disclosures: vec![
+                Disclosure {
+                    feature_type: FeatureType::GoalCode,
+                    id: TSP_DISCOVER_FEATURE_URI.to_string(),
+                    roles: vec![],
+                },
+                Disclosure {
+                    feature_type: FeatureType::Header,
+                    id: TSP_DISCOVER_FEATURE_URI.to_string(),
+                    roles: vec![],
+                },
+            ],
+        };
+        assert!(!disclosure_advertises_tsp(&d));
     }
 }
