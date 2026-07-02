@@ -164,7 +164,10 @@ impl TestEnvironment {
             .build()
             .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
 
-        Self::new_with_config(mediator, tdk_config).await
+        let atm_config = ATMConfig::builder()
+            .build()
+            .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+        Self::new_with_config(mediator, tdk_config, atm_config).await
     }
 
     /// Use an existing [`TestMediatorHandle`] — for tests that want
@@ -173,7 +176,27 @@ impl TestEnvironment {
     pub async fn new(mediator: TestMediatorHandle) -> Result<Self, TestEnvironmentError> {
         let tdk_config =
             TDKConfig::headless().map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
-        Self::new_with_config(mediator, tdk_config).await
+        let atm_config = ATMConfig::builder()
+            .build()
+            .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+        Self::new_with_config(mediator, tdk_config, atm_config).await
+    }
+
+    /// Spawn the default mediator (with the `tsp` feature) and wire up the SDK
+    /// with a chosen [`TspPolicy`](affinidi_messaging_sdk::TspPolicy) so
+    /// `atm.send_to` protocol selection can be exercised end-to-end.
+    #[cfg(feature = "tsp")]
+    pub async fn spawn_with_tsp_policy(
+        policy: affinidi_messaging_sdk::TspPolicy,
+    ) -> Result<Self, TestEnvironmentError> {
+        let mediator = TestMediator::spawn().await?;
+        let tdk_config =
+            TDKConfig::headless().map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+        let atm_config = ATMConfig::builder()
+            .with_tsp_policy(policy)
+            .build()
+            .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+        Self::new_with_config(mediator, tdk_config, atm_config).await
     }
 
     /// Shared constructor: wire the SDK + TDK against `mediator` using
@@ -183,6 +206,7 @@ impl TestEnvironment {
     async fn new_with_config(
         mediator: TestMediatorHandle,
         tdk_config: TDKConfig,
+        atm_config: ATMConfig,
     ) -> Result<Self, TestEnvironmentError> {
         let tdk = Arc::new(
             TDKSharedState::new(tdk_config)
@@ -199,9 +223,6 @@ impl TestEnvironment {
         let mediator_secrets = mediator.mediator_secrets().to_vec();
         tdk.secrets_resolver().insert_vec(&mediator_secrets).await;
 
-        let atm_config = ATMConfig::builder()
-            .build()
-            .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
         let atm = ATM::new(atm_config, tdk.clone())
             .await
             .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;

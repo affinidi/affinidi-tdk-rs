@@ -184,7 +184,10 @@ use crate::protocols::tsp::TspOps;
 /// Re-exports of the TSP relationship-store API so consumers can implement a
 /// durable store or select one via the config builder.
 #[cfg(feature = "tsp")]
-pub use crate::protocols::tsp::{InMemoryRelationshipStore, RelationshipStore, TspWebSocket};
+pub use crate::protocols::tsp::{
+    CapabilitySource, InMemoryRelationshipStore, PeerCapability, RelationshipStore, SendProtocol,
+    TspPolicy, TspSupport, TspWebSocket,
+};
 /// Re-export of the pure-TSP authentication handler so a TSP-only client can
 /// register it on the TDK in place of the built-in DIDComm auth flow.
 #[cfg(feature = "tsp")]
