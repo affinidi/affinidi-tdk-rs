@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.15] - 2026-07-02
+
+- Fix inbound TSP: `dispatch_tsp` handed the **qb64** pickup string (`base64url(qb2)`, `-E…`
+  text) straight to `atm.tsp().unpack_bytes`, which expects **decoded qb2** — so every
+  multiplexed inbound TSP frame failed with `couldn't parse TSP envelope: missing -E
+  envelope wrapper` and was dropped. Use `atm.tsp().unpack` (decodes base64url first),
+  matching the mediator round-trip tests. The raw-TSP `connect_websocket` path already
+  yields decoded qb2 and is unaffected. This is what made a TSP Trust-Ping to a VTA fail
+  end-to-end even with the listener correctly in `Protocols::BOTH`.
+
 ## [0.3.14] - 2026-07-02
 
 Symmetric TSP replies (ADR 0005 stage 6). `TspHandler::handle` now returns

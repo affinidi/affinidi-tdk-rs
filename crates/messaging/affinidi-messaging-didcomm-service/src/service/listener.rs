@@ -352,10 +352,14 @@ impl Listener {
         handler: &Arc<dyn TspHandler>,
         packed: String,
     ) {
-        // NOTE: the packed frame surfaces as a String off the pickup socket; the
-        // exact qb2/qb64 encoding handed to `unpack_bytes` is confirmed by the
-        // live VTA↔mediator run.
-        let (payload, sender_vid) = match atm.tsp().unpack_bytes(profile, packed.as_bytes()).await {
+        // The pickup socket surfaces the frame as the **qb64** stored string
+        // (`base64url(qb2)`, i.e. `-E…` text) — NOT raw qb2. Use `unpack`, which
+        // decodes the base64url first; `unpack_bytes(packed.as_bytes())` would
+        // feed the ASCII `'-','E',…` bytes straight into the CESR parser and
+        // fail with "missing -E envelope wrapper". (The raw-TSP `connect_websocket`
+        // path yields already-decoded qb2 and correctly uses `unpack_bytes`; this
+        // DIDComm-multiplexed path does not.)
+        let (payload, sender_vid) = match atm.tsp().unpack(profile, &packed).await {
             Ok(v) => v,
             Err(e) => {
                 warn!(profile = %profile.inner.alias, error = %e, "Failed to unpack TSP frame");
