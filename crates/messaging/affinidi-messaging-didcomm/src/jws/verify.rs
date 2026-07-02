@@ -11,7 +11,7 @@ pub struct VerifiedJws {
     /// The raw payload bytes.
     pub payload: Vec<u8>,
     /// The signer KID, taken from the protected header if present,
-    /// otherwise from the per-signature unprotected header.
+    /// otherwise from the per-signature unprotected header (issue #323).
     pub signer_kid: Option<String>,
 }
 
