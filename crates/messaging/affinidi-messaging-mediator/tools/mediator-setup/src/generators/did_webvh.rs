@@ -56,6 +56,7 @@ pub async fn generate_did_webvh(
     address: &str,
     service_url: &str,
     key_suites: &[KeySuite],
+    tsp_enabled: bool,
 ) -> anyhow::Result<DidWebvhResult> {
     let address = if address.starts_with("http://") || address.starts_with("https://") {
         address.to_string()
@@ -152,9 +153,21 @@ pub async fn generate_did_webvh(
     // doesn't flag it as unresolved; `didwebvh-rs` substitutes the actual
     // DID string after SCID computation.
     vars.insert_string("DID", "{DID}");
-    let did_document = template
+    let mut did_document = template
         .render(&vars)
         .map_err(|e| anyhow::anyhow!("Failed to render mediator template: {e}"))?;
+
+    // ── Opt-in TSP service ──────────────────────────────────────────
+    // did:webvh binds the document to the DID (SCID), so the mediator
+    // runtime cannot mutate it in place the way it does for did:web — the
+    // `TSPTransport` service must be baked in here, before `create_did`
+    // computes the SCID. The `{DID}#tsp` id keeps the same sentinel the
+    // template uses; `didwebvh-rs` resolves it across the whole document
+    // after SCID computation. No-op when the operator didn't enable TSP,
+    // so the default document is byte-identical to before.
+    if tsp_enabled {
+        augment_webvh_doc_with_tsp_service(&mut did_document)?;
+    }
 
     // ── Authorization + pre-rotation ───────────────────────────────
     let mut auth_key = Secret::generate_ed25519(None, None);
@@ -217,6 +230,71 @@ pub async fn generate_did_webvh(
     })
 }
 
+/// Inject a `TSPTransport` service into a rendered (pre-SCID) mediator DID
+/// document so did:webvh peers can discover the mediator's TSP endpoint.
+///
+/// TSP and DIDComm share the mediator's `/inbound`, so the TSP endpoint
+/// mirrors the first `DIDCommMessaging` service endpoint URI — matching the
+/// runtime's did:web behaviour (`augment_did_web_doc_with_tsp_service`). The
+/// service id keeps the `{DID}` sentinel (`{DID}#tsp`) so `create_did`
+/// resolves it alongside every other self-reference once the SCID is known.
+///
+/// Idempotent: if a `TSPTransport` service is already present the document is
+/// left unchanged. Errors only if the document has no `service` array or no
+/// DIDComm endpoint to mirror (a mediator template without one is a bug).
+fn augment_webvh_doc_with_tsp_service(did_document: &mut serde_json::Value) -> anyhow::Result<()> {
+    use serde_json::Value;
+
+    let service_type_is = |svc: &Value, want: &str| {
+        svc.get("type").is_some_and(|t| match t {
+            Value::String(s) => s == want,
+            Value::Array(arr) => arr.iter().any(|v| v.as_str() == Some(want)),
+            _ => false,
+        })
+    };
+
+    let services = did_document
+        .get_mut("service")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow::anyhow!("Rendered DID document has no `service` array"))?;
+
+    // Already advertised (e.g. a forked template) — leave it be.
+    if services
+        .iter()
+        .any(|svc| service_type_is(svc, "TSPTransport"))
+    {
+        return Ok(());
+    }
+
+    // Mirror the first DIDCommMessaging endpoint URI. The template renders
+    // `serviceEndpoint` as an array of `{uri, accept, routingKeys}` objects,
+    // but tolerate the object / bare-string shapes a forked template might use.
+    let uri = services
+        .iter()
+        .find(|svc| service_type_is(svc, "DIDCommMessaging"))
+        .and_then(|svc| svc.get("serviceEndpoint"))
+        .and_then(|ep| match ep {
+            Value::Array(arr) => arr.first().and_then(|e| e.get("uri")),
+            Value::Object(_) => ep.get("uri"),
+            _ => Some(ep),
+        })
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Rendered DID document has no DIDCommMessaging endpoint to mirror for TSP"
+            )
+        })?
+        .to_string();
+
+    services.push(serde_json::json!({
+        "id": "{DID}#tsp",
+        "type": ["TSPTransport"],
+        "serviceEndpoint": uri,
+    }));
+
+    Ok(())
+}
+
 /// Convert a did:webvh log entry into the equivalent did:web DID document.
 ///
 /// Re-exported from `affinidi-messaging-mediator-common` so the wizard's
@@ -241,6 +319,7 @@ mod tests {
             "https://mediator.example.com",
             "https://mediator.example.com/mediator/v1",
             &[],
+            false,
         )
         .await
         .unwrap();
@@ -312,6 +391,7 @@ mod tests {
             "https://mediator.example.com",
             "https://mediator.example.com/mediator/v1",
             &[KeySuite::P256],
+            false,
         )
         .await
         .unwrap();
@@ -367,10 +447,14 @@ mod tests {
 
     #[tokio::test]
     async fn webvh_key_ids_match_final_did() {
-        let result =
-            generate_did_webvh("mediator.example.com", "https://mediator.example.com", &[])
-                .await
-                .unwrap();
+        let result = generate_did_webvh(
+            "mediator.example.com",
+            "https://mediator.example.com",
+            &[],
+            false,
+        )
+        .await
+        .unwrap();
         for secret in &result.secrets {
             assert!(secret.id.starts_with(&result.did));
         }
@@ -384,6 +468,7 @@ mod tests {
             "https://mediator.example.com",
             "https://mediator.example.com/mediator/v1",
             &[],
+            false,
         )
         .await
         .unwrap();
@@ -415,5 +500,73 @@ mod tests {
         let err = webvh_log_to_did_web(r#"{"versionId":"1-abc"}"#, "did:webvh:QmScId:example.com")
             .unwrap_err();
         assert!(err.to_string().contains("state"));
+    }
+
+    #[tokio::test]
+    async fn webvh_tsp_enabled_bakes_in_tsptransport_service() {
+        let result = generate_did_webvh(
+            "https://mediator.example.com",
+            "https://mediator.example.com/mediator/v1",
+            &[],
+            true,
+        )
+        .await
+        .unwrap();
+
+        // Keys are unchanged by the TSP service — it reuses the mediator's
+        // existing Ed25519 signing + X25519 key-agreement keys.
+        assert_eq!(result.secrets.len(), 2);
+
+        let entry: Value = serde_json::from_str(&result.did_doc).unwrap();
+        let doc = &entry["state"];
+        let services = doc["service"].as_array().unwrap();
+
+        let service_type_is =
+            |svc: &Value, want: &str| svc["type"] == json!([want]) || svc["type"] == json!(want);
+        let tsp = services
+            .iter()
+            .find(|svc| service_type_is(svc, "TSPTransport"))
+            .expect("TSPTransport service baked in");
+
+        // The `{DID}#tsp` sentinel was resolved to the final DID by create_did.
+        let tsp_id = tsp["id"].as_str().unwrap();
+        assert!(tsp_id.ends_with("#tsp"));
+        assert!(tsp_id.starts_with(&result.did));
+        assert!(!result.did_doc.contains("{DID}"));
+
+        // Endpoint mirrors the DIDComm HTTP endpoint (shared `/inbound`).
+        assert_eq!(
+            tsp["serviceEndpoint"].as_str().unwrap(),
+            "https://mediator.example.com/mediator/v1"
+        );
+
+        // DIDComm service is untouched.
+        assert!(
+            services
+                .iter()
+                .any(|svc| service_type_is(svc, "DIDCommMessaging"))
+        );
+    }
+
+    #[test]
+    fn augment_is_idempotent_when_tsp_already_present() {
+        // A document that already advertises TSP is left unchanged.
+        let mut doc: Value = serde_json::from_str(
+            r#"{"service":[{"id":"{DID}#tsp","type":["TSPTransport"],"serviceEndpoint":"https://x/"}]}"#,
+        )
+        .unwrap();
+        let before = doc.clone();
+        augment_webvh_doc_with_tsp_service(&mut doc).unwrap();
+        assert_eq!(doc, before);
+    }
+
+    #[test]
+    fn augment_errors_without_a_didcomm_endpoint_to_mirror() {
+        let mut doc: Value = serde_json::from_str(
+            r#"{"service":[{"id":"{DID}#auth","type":["Authentication"],"serviceEndpoint":"https://x/authenticate"}]}"#,
+        )
+        .unwrap();
+        let err = augment_webvh_doc_with_tsp_service(&mut doc).unwrap_err();
+        assert!(err.to_string().contains("DIDCommMessaging"));
     }
 }
