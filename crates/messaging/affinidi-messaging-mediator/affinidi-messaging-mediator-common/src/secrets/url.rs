@@ -10,9 +10,12 @@
 //! | `gcp_secrets://` | `gcp_secrets://<project>/<namespace>`       | `gcp_secrets://my-proj/mediator-`          |
 //! | `azure_keyvault://` | `azure_keyvault://<vault-name-or-url>`   | `azure_keyvault://my-vault`                |
 //! | `vault://`       | `vault://<host[:port]>/<kv-path>[?auth=…]`  | `vault://vault.internal/secret/mediator`   |
+//! | `k8s://`         | `k8s://<namespace>/<secret-name>`           | `k8s://affinidi/mediator-secrets`          |
 //!
 //! The `vault://` scheme accepts optional query parameters selecting a
 //! non-default auth method and transport options — see [`parse_vault`].
+//! The `k8s://` scheme stores every mediator key inside one namespaced
+//! `Secret` object — see [`parse_k8s`].
 //!
 //! `string://` is intentionally not supported — inline secrets in
 //! `mediator.toml` would defeat the whole point. CI scripts that used to
@@ -78,6 +81,13 @@ pub enum BackendUrl {
         /// Skip TLS verification (`?insecure=1`) — dev/test only.
         insecure: bool,
     },
+    Kubernetes {
+        /// Explicit namespace, or `None` to resolve from the in-pod
+        /// ServiceAccount / kubeconfig context at connect time.
+        namespace: Option<String>,
+        /// Name of the `Secret` object holding every mediator key.
+        secret_name: String,
+    },
 }
 
 /// Parse a backend URL. Returns a structured [`BackendUrl`] or an
@@ -106,11 +116,12 @@ pub fn parse_url(raw: &str) -> Result<BackendUrl> {
         "gcp_secrets" => parse_gcp(rest, raw),
         "azure_keyvault" => parse_azure(rest, raw),
         "vault" => parse_vault(rest, raw),
+        "k8s" => parse_k8s(rest, raw),
         other => Err(SecretStoreError::InvalidUrl {
             url: raw.to_string(),
             reason: format!(
                 "unknown scheme '{other}://' — supported schemes: keyring, file, aws_secrets, \
-                 gcp_secrets, azure_keyvault, vault"
+                 gcp_secrets, azure_keyvault, vault, k8s"
             ),
         }),
     }
@@ -364,6 +375,52 @@ fn parse_vault(rest: &str, raw: &str) -> Result<BackendUrl> {
         auth,
         enterprise_namespace,
         insecure,
+    })
+}
+
+/// Parse a `k8s://` URL.
+///
+/// Shape: `k8s://<namespace>/<secret-name>` or `k8s://<secret-name>`.
+/// When the namespace segment is omitted (or empty), the backend resolves
+/// it from the in-pod ServiceAccount / kubeconfig context at connect time.
+fn parse_k8s(rest: &str, raw: &str) -> Result<BackendUrl> {
+    if rest.contains('?') {
+        return Err(SecretStoreError::InvalidUrl {
+            url: raw.to_string(),
+            reason: "k8s:// takes no query parameters".into(),
+        });
+    }
+    if rest.is_empty() {
+        return Err(SecretStoreError::InvalidUrl {
+            url: raw.to_string(),
+            reason: "k8s:// requires a Secret name, e.g. k8s://<namespace>/<secret-name>".into(),
+        });
+    }
+    // Split on the first '/': `<namespace>/<secret-name>`. An empty
+    // namespace segment (`k8s:///name`) means "resolve at connect time".
+    // A trailing slash (`k8s://ns/`) leaves an empty secret name, which is
+    // rejected below rather than silently treated as the name.
+    let (namespace, secret_name) = match rest.split_once('/') {
+        Some((ns, name)) => ((!ns.is_empty()).then(|| ns.to_string()), name),
+        None => (None, rest),
+    };
+    if secret_name.is_empty() {
+        return Err(SecretStoreError::InvalidUrl {
+            url: raw.to_string(),
+            reason: "k8s:// requires a non-empty Secret name".into(),
+        });
+    }
+    if secret_name.contains('/') {
+        return Err(SecretStoreError::InvalidUrl {
+            url: raw.to_string(),
+            reason: "k8s:// Secret name must not contain '/' — expected \
+                     k8s://<namespace>/<secret-name>"
+                .into(),
+        });
+    }
+    Ok(BackendUrl::Kubernetes {
+        namespace,
+        secret_name: secret_name.to_string(),
     })
 }
 
@@ -657,6 +714,55 @@ mod tests {
     #[test]
     fn vault_unknown_auth_method_errors() {
         assert!(parse_url("vault://vault.internal/secret?auth=ldap").is_err());
+    }
+
+    #[test]
+    fn k8s_with_namespace() {
+        assert_eq!(
+            parse_url("k8s://affinidi/mediator-secrets").unwrap(),
+            BackendUrl::Kubernetes {
+                namespace: Some("affinidi".into()),
+                secret_name: "mediator-secrets".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn k8s_without_namespace() {
+        assert_eq!(
+            parse_url("k8s://mediator-secrets").unwrap(),
+            BackendUrl::Kubernetes {
+                namespace: None,
+                secret_name: "mediator-secrets".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn k8s_empty_namespace_segment_is_none() {
+        assert_eq!(
+            parse_url("k8s:///mediator-secrets").unwrap(),
+            BackendUrl::Kubernetes {
+                namespace: None,
+                secret_name: "mediator-secrets".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn k8s_missing_secret_name_errors() {
+        assert!(parse_url("k8s://").is_err());
+        assert!(parse_url("k8s://affinidi/").is_err());
+    }
+
+    #[test]
+    fn k8s_extra_path_segment_errors() {
+        assert!(parse_url("k8s://ns/a/b").is_err());
+    }
+
+    #[test]
+    fn k8s_query_param_errors() {
+        assert!(parse_url("k8s://ns/secret?key=seed").is_err());
     }
 
     #[test]

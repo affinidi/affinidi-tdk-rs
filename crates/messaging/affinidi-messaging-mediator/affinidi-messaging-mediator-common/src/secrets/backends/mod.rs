@@ -5,6 +5,7 @@ pub(crate) mod azure;
 pub(crate) mod file;
 pub(crate) mod file_encrypted;
 pub(crate) mod gcp;
+pub(crate) mod k8s;
 pub(crate) mod keyring;
 pub(crate) mod memory;
 pub(crate) mod vault;
