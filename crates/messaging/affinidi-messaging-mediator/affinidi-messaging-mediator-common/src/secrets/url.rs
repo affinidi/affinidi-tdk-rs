@@ -9,7 +9,10 @@
 //! | `aws_secrets://` | `aws_secrets://<region>/<namespace>`        | `aws_secrets://us-east-1/prod/mediator/`   |
 //! | `gcp_secrets://` | `gcp_secrets://<project>/<namespace>`       | `gcp_secrets://my-proj/mediator-`          |
 //! | `azure_keyvault://` | `azure_keyvault://<vault-name-or-url>`   | `azure_keyvault://my-vault`                |
-//! | `vault://`       | `vault://<host[:port]>/<kv-path>`           | `vault://vault.internal/secret/mediator`   |
+//! | `vault://`       | `vault://<host[:port]>/<kv-path>[?auth=…]`  | `vault://vault.internal/secret/mediator`   |
+//!
+//! The `vault://` scheme accepts optional query parameters selecting a
+//! non-default auth method and transport options — see [`parse_vault`].
 //!
 //! `string://` is intentionally not supported — inline secrets in
 //! `mediator.toml` would defeat the whole point. CI scripts that used to
@@ -20,14 +23,61 @@ use url::Url;
 
 use crate::secrets::error::{Result, SecretStoreError};
 
+/// Default Vault Kubernetes auth mount (the `kubernetes` auth backend).
+pub const VAULT_DEFAULT_K8S_MOUNT: &str = "kubernetes";
+/// Default in-pod ServiceAccount JWT path used by Kubernetes auth.
+pub const VAULT_DEFAULT_JWT_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
+/// Default Vault AppRole auth mount.
+pub const VAULT_DEFAULT_APPROLE_MOUNT: &str = "approle";
+
+/// Vault authentication method, parsed from the `?auth=` query parameter
+/// of a `vault://` URL. Secret material (the token, or the AppRole
+/// `role_id`/`secret_id`) is never carried in the URL — it is read from
+/// the environment at login time so it never lands in `mediator.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VaultAuth {
+    /// Token auth (default). Token read from `VAULT_TOKEN`.
+    Token,
+    /// Kubernetes auth: the pod's ServiceAccount JWT is exchanged for a
+    /// Vault token against `mount` using `role`.
+    Kubernetes {
+        role: String,
+        mount: String,
+        jwt_path: String,
+    },
+    /// AppRole auth. `role_id`/`secret_id` read from `VAULT_ROLE_ID` /
+    /// `VAULT_SECRET_ID` at login time.
+    AppRole { mount: String },
+}
+
+impl VaultAuth {
+    /// Whether this method can re-authenticate on its own (obtain a
+    /// fresh token) — true for Kubernetes/AppRole, false for a static
+    /// env-supplied token.
+    pub fn is_renewable(&self) -> bool {
+        !matches!(self, VaultAuth::Token)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BackendUrl {
     Keyring { service: String },
     File { path: String, encrypted: bool },
     Aws { region: String, namespace: String },
     Gcp { project: String, namespace: String },
     Azure { vault: String },
-    Vault { endpoint: String, path: String },
+    Vault {
+        endpoint: String,
+        path: String,
+        /// Selected auth method (defaults to [`VaultAuth::Token`]).
+        auth: VaultAuth,
+        /// Vault Enterprise namespace (`X-Vault-Namespace` header), from
+        /// `?namespace=`. Distinct from the per-key path namespace.
+        enterprise_namespace: Option<String>,
+        /// Skip TLS verification (`?insecure=1`) — dev/test only.
+        insecure: bool,
+    },
 }
 
 /// Parse a backend URL. Returns a structured [`BackendUrl`] or an
@@ -210,22 +260,110 @@ fn parse_azure(rest: &str, raw: &str) -> Result<BackendUrl> {
     Ok(BackendUrl::Azure { vault: resolved })
 }
 
+/// Parse a `vault://` URL.
+///
+/// Shape: `vault://<host[:port]>/<mount>[/<namespace>…][?<params>]`.
+///
+/// Query parameters (all optional):
+///   - `auth=token|kubernetes|approle` — auth method (default `token`).
+///   - `role=<name>` — Vault role (required for `kubernetes`).
+///   - `k8s_mount=<mount>` — Kubernetes auth mount (default `kubernetes`).
+///   - `jwt_path=<path>` — ServiceAccount JWT path
+///     (default `/var/run/secrets/kubernetes.io/serviceaccount/token`).
+///   - `approle_mount=<mount>` — AppRole auth mount (default `approle`).
+///   - `namespace=<ns>` — Vault Enterprise namespace header.
+///   - `insecure=1` — skip TLS verification (dev/test only).
+///
+/// No auth *secret* is accepted here: the token comes from `VAULT_TOKEN`
+/// and AppRole credentials from `VAULT_ROLE_ID` / `VAULT_SECRET_ID`.
 fn parse_vault(rest: &str, raw: &str) -> Result<BackendUrl> {
-    let (endpoint, path) = rest
-        .split_once('/')
-        .ok_or_else(|| SecretStoreError::InvalidUrl {
-            url: raw.to_string(),
-            reason: "vault:// requires '<host>[:<port>]/<kv-path>'".into(),
-        })?;
+    let (locator, query) = match rest.split_once('?') {
+        Some((l, q)) => (l, Some(q)),
+        None => (rest, None),
+    };
+    let (endpoint, path) =
+        locator
+            .split_once('/')
+            .ok_or_else(|| SecretStoreError::InvalidUrl {
+                url: raw.to_string(),
+                reason: "vault:// requires '<host>[:<port>]/<kv-path>'".into(),
+            })?;
     if endpoint.is_empty() {
         return Err(SecretStoreError::InvalidUrl {
             url: raw.to_string(),
             reason: "vault:// requires a non-empty endpoint".into(),
         });
     }
+
+    // Collect recognised query parameters. Values are taken verbatim
+    // (no percent-decoding) — the recognised params (roles, mounts, a
+    // JWT file path) don't need it, and avoiding it keeps `jwt_path`'s
+    // slashes intact.
+    let mut method: Option<&str> = None;
+    let mut role: Option<String> = None;
+    let mut k8s_mount = VAULT_DEFAULT_K8S_MOUNT.to_string();
+    let mut jwt_path = VAULT_DEFAULT_JWT_PATH.to_string();
+    let mut approle_mount = VAULT_DEFAULT_APPROLE_MOUNT.to_string();
+    let mut enterprise_namespace: Option<String> = None;
+    let mut insecure = false;
+
+    if let Some(query) = query {
+        for pair in query.split('&').filter(|p| !p.is_empty()) {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+            match k {
+                "auth" => method = Some(v),
+                "role" => role = Some(v.to_string()),
+                "k8s_mount" => k8s_mount = v.to_string(),
+                "jwt_path" => jwt_path = v.to_string(),
+                "approle_mount" => approle_mount = v.to_string(),
+                "namespace" => {
+                    enterprise_namespace = (!v.is_empty()).then(|| v.to_string());
+                }
+                "insecure" => insecure = matches!(v, "1" | "true" | "yes" | "on"),
+                other => {
+                    return Err(SecretStoreError::InvalidUrl {
+                        url: raw.to_string(),
+                        reason: format!("unknown query parameter '{other}' on vault:// URL"),
+                    });
+                }
+            }
+        }
+    }
+
+    let auth = match method.unwrap_or("token") {
+        "token" => VaultAuth::Token,
+        "kubernetes" | "k8s" => {
+            let role = role.filter(|r| !r.is_empty()).ok_or_else(|| {
+                SecretStoreError::InvalidUrl {
+                    url: raw.to_string(),
+                    reason: "vault:// auth=kubernetes requires a 'role' query parameter".into(),
+                }
+            })?;
+            VaultAuth::Kubernetes {
+                role,
+                mount: k8s_mount,
+                jwt_path,
+            }
+        }
+        "approle" => VaultAuth::AppRole {
+            mount: approle_mount,
+        },
+        other => {
+            return Err(SecretStoreError::InvalidUrl {
+                url: raw.to_string(),
+                reason: format!(
+                    "unknown vault auth method '{other}' — supported: token, kubernetes, approle"
+                ),
+            });
+        }
+    };
+
     Ok(BackendUrl::Vault {
         endpoint: endpoint.to_string(),
         path: path.to_string(),
+        auth,
+        enterprise_namespace,
+        insecure,
     })
 }
 
@@ -418,8 +556,107 @@ mod tests {
             BackendUrl::Vault {
                 endpoint: "vault.internal".into(),
                 path: "secret/mediator".into(),
+                auth: VaultAuth::Token,
+                enterprise_namespace: None,
+                insecure: false,
             }
         );
+    }
+
+    #[test]
+    fn vault_defaults_to_token_auth() {
+        let url = parse_url("vault://vault.internal/secret").unwrap();
+        match url {
+            BackendUrl::Vault { auth, .. } => assert_eq!(auth, VaultAuth::Token),
+            other => panic!("expected Vault, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vault_kubernetes_auth_with_defaults() {
+        let url = parse_url("vault://vault.internal/secret/mediator?auth=kubernetes&role=med").unwrap();
+        assert_eq!(
+            url,
+            BackendUrl::Vault {
+                endpoint: "vault.internal".into(),
+                path: "secret/mediator".into(),
+                auth: VaultAuth::Kubernetes {
+                    role: "med".into(),
+                    mount: VAULT_DEFAULT_K8S_MOUNT.into(),
+                    jwt_path: VAULT_DEFAULT_JWT_PATH.into(),
+                },
+                enterprise_namespace: None,
+                insecure: false,
+            }
+        );
+    }
+
+    #[test]
+    fn vault_kubernetes_auth_requires_role() {
+        assert!(parse_url("vault://vault.internal/secret?auth=kubernetes").is_err());
+    }
+
+    #[test]
+    fn vault_kubernetes_auth_custom_mount_and_jwt_path() {
+        let url = parse_url(
+            "vault://vault.internal/secret/mediator?auth=kubernetes&role=r&k8s_mount=k8s-prod&jwt_path=/var/run/token",
+        )
+        .unwrap();
+        match url {
+            BackendUrl::Vault { auth, .. } => assert_eq!(
+                auth,
+                VaultAuth::Kubernetes {
+                    role: "r".into(),
+                    mount: "k8s-prod".into(),
+                    jwt_path: "/var/run/token".into(),
+                }
+            ),
+            other => panic!("expected Vault, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vault_approle_auth() {
+        let url = parse_url("vault://vault.internal/secret?auth=approle&approle_mount=my-approle")
+            .unwrap();
+        match url {
+            BackendUrl::Vault { auth, .. } => assert_eq!(
+                auth,
+                VaultAuth::AppRole {
+                    mount: "my-approle".into()
+                }
+            ),
+            other => panic!("expected Vault, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vault_enterprise_namespace_and_insecure() {
+        let url =
+            parse_url("vault://vault.internal/secret/mediator?namespace=team-a&insecure=1").unwrap();
+        match url {
+            BackendUrl::Vault {
+                enterprise_namespace,
+                insecure,
+                auth,
+                ..
+            } => {
+                assert_eq!(enterprise_namespace, Some("team-a".into()));
+                assert!(insecure);
+                assert_eq!(auth, VaultAuth::Token);
+            }
+            other => panic!("expected Vault, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vault_unknown_query_param_errors() {
+        assert!(parse_url("vault://vault.internal/secret?bogus=1").is_err());
+    }
+
+    #[test]
+    fn vault_unknown_auth_method_errors() {
+        assert!(parse_url("vault://vault.internal/secret?auth=ldap").is_err());
     }
 
     #[test]

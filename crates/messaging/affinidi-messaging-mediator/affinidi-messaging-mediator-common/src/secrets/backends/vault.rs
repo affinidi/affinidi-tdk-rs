@@ -12,16 +12,25 @@
 //!   - `vault://vault.internal/secret/mediator` → mount `secret`,
 //!     namespace `mediator/`.
 //!
-//! Transport: always HTTPS against the configured endpoint. Local-
-//! dev operators running Vault without TLS should front it with a
-//! reverse proxy or use `vault server -dev-tls` — we don't offer an
-//! `insecure=1` knob because wizard-managed material always includes
-//! the mediator's admin credential and JWT key.
+//! Transport: HTTPS against the configured endpoint by default. The
+//! `?insecure=1` query parameter disables TLS verification for local
+//! dev / test only — never use it with production material, which
+//! includes the mediator's admin credential and JWT key.
 //!
-//! Auth: token auth only (Kubernetes, AppRole, JWT/OIDC and friends
-//! are documented follow-ups). `VAULT_TOKEN` env var is consulted at
-//! client construction; an empty value produces a clear error at
-//! probe time rather than a silent 403 on first write.
+//! Auth (selected by the `?auth=` query parameter, default `token`):
+//!   - `token` — `VAULT_TOKEN` env var (matches the `vault` CLI).
+//!   - `kubernetes` — the pod ServiceAccount JWT is exchanged for a
+//!     Vault token (`?role=`, optional `?k8s_mount=` / `?jwt_path=`).
+//!     The JWT is re-read on every login so kubelet rotation is
+//!     handled transparently.
+//!   - `approle` — `role_id`/`secret_id` from `VAULT_ROLE_ID` /
+//!     `VAULT_SECRET_ID` (optional `?approle_mount=`).
+//!
+//! Auth secrets never appear in the URL. For the renewable methods
+//! (Kubernetes / AppRole) a call that fails with 401/403 triggers a
+//! single re-authentication + retry, so an expired token or rotated
+//! JWT recovers without a restart. Vault Enterprise namespaces are
+//! supported via `?namespace=` (`X-Vault-Namespace`).
 //!
 //! Calls go through [`super::super::retry::with_retry`] with
 //! [`VaultRetryPolicy`]: 429, 5xx, RestClientError connect / IO
@@ -42,27 +51,51 @@ use base64::Engine;
 #[cfg(feature = "secrets-vault")]
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 #[cfg(feature = "secrets-vault")]
+use crate::secrets::url::VaultAuth;
+#[cfg(feature = "secrets-vault")]
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "secrets-vault")]
-use tokio::sync::OnceCell;
+use std::future::Future;
+#[cfg(feature = "secrets-vault")]
+use std::pin::Pin;
+#[cfg(feature = "secrets-vault")]
+use tokio::sync::{OnceCell, RwLock};
+#[cfg(feature = "secrets-vault")]
+use tracing::warn;
 #[cfg(feature = "secrets-vault")]
 use vaultrs::{
-    client::{VaultClient, VaultClientSettingsBuilder},
+    auth::{approle, kubernetes},
+    client::{Client, VaultClient, VaultClientSettings, VaultClientSettingsBuilder},
     error::ClientError,
     kv2,
 };
 
 const BACKEND_LABEL: &str = "vault";
 
-/// Env var the Vault backend looks up at client construction. Matches
-/// the `VAULT_TOKEN` convention used by the `vault` CLI so operators
-/// don't learn a new variable.
+/// Env var supplying the token for `auth=token`. Matches the `vault` CLI.
 #[cfg(feature = "secrets-vault")]
 const VAULT_TOKEN_ENV: &str = "VAULT_TOKEN";
+/// Env vars supplying AppRole credentials for `auth=approle`.
+#[cfg(feature = "secrets-vault")]
+const VAULT_ROLE_ID_ENV: &str = "VAULT_ROLE_ID";
+#[cfg(feature = "secrets-vault")]
+const VAULT_SECRET_ID_ENV: &str = "VAULT_SECRET_ID";
+
+/// Boxed future returned by a KV operation closure; borrows the client.
+#[cfg(feature = "secrets-vault")]
+type VaultFut<'a, T> =
+    Pin<Box<dyn Future<Output = std::result::Result<T, ClientError>> + Send + 'a>>;
 
 #[cfg(feature = "secrets-vault")]
 pub(crate) fn open(url: BackendUrl) -> Result<DynSecretStore> {
-    let BackendUrl::Vault { endpoint, path } = url else {
+    let BackendUrl::Vault {
+        endpoint,
+        path,
+        auth,
+        enterprise_namespace,
+        insecure,
+    } = url
+    else {
         return Err(SecretStoreError::Other(
             "internal error: vault backend received non-vault URL".into(),
         ));
@@ -89,6 +122,9 @@ pub(crate) fn open(url: BackendUrl) -> Result<DynSecretStore> {
         address,
         mount,
         namespace,
+        enterprise_namespace,
+        auth,
+        verify_tls: !insecure,
         client: OnceCell::new(),
     }))
 }
@@ -111,10 +147,33 @@ pub struct VaultStore {
     mount: String,
     /// Per-key namespace path (always ends with `/` when non-empty).
     namespace: String,
-    /// Lazily-constructed client. Token discovery happens on first
-    /// use so a wizard run that never touches the backend doesn't
-    /// complain about a missing `VAULT_TOKEN`.
-    client: OnceCell<VaultClient>,
+    /// Vault Enterprise namespace (`X-Vault-Namespace`), if configured.
+    enterprise_namespace: Option<String>,
+    /// Selected auth method.
+    auth: VaultAuth,
+    /// Whether TLS certificates are verified (false only for `insecure=1`).
+    verify_tls: bool,
+    /// Lazily-authenticated client behind an `RwLock` so a renewable auth
+    /// method (Kubernetes / AppRole) can swap in a fresh token when the
+    /// current one expires. Authentication happens on first use so a
+    /// wizard run that never touches the backend doesn't require creds.
+    client: OnceCell<RwLock<VaultClient>>,
+}
+
+/// Read a required env var, erroring if it is unset or empty.
+#[cfg(feature = "secrets-vault")]
+fn require_env(var: &str) -> Result<String> {
+    let value = std::env::var(var).map_err(|_| SecretStoreError::Unreachable {
+        backend: BACKEND_LABEL,
+        reason: format!("{var} env var not set"),
+    })?;
+    if value.is_empty() {
+        return Err(SecretStoreError::Unreachable {
+            backend: BACKEND_LABEL,
+            reason: format!("{var} is set but empty"),
+        });
+    }
+    Ok(value)
 }
 
 #[cfg(feature = "secrets-vault")]
@@ -123,37 +182,128 @@ impl VaultStore {
         format!("{}{key}", self.namespace)
     }
 
-    async fn client(&self) -> Result<&VaultClient> {
-        self.client
-            .get_or_try_init(|| async {
-                let token =
-                    std::env::var(VAULT_TOKEN_ENV).map_err(|_| SecretStoreError::Unreachable {
+    /// Build client settings shared by every auth method — address, TLS
+    /// verification, and the optional Enterprise namespace — bearing the
+    /// supplied token (empty during the pre-login step of k8s/AppRole).
+    fn settings(&self, token: &str) -> Result<VaultClientSettings> {
+        let mut builder = VaultClientSettingsBuilder::default();
+        builder
+            .address(&self.address)
+            .token(token)
+            .verify(self.verify_tls);
+        if let Some(ns) = &self.enterprise_namespace {
+            builder.namespace(Some(ns.clone()));
+        }
+        builder.build().map_err(|e| SecretStoreError::Unreachable {
+            backend: BACKEND_LABEL,
+            reason: format!("could not build Vault client settings: {e}"),
+        })
+    }
+
+    fn build_client(&self, token: &str) -> Result<VaultClient> {
+        VaultClient::new(self.settings(token)?).map_err(|e| SecretStoreError::Unreachable {
+            backend: BACKEND_LABEL,
+            reason: format!("could not build Vault client: {e}"),
+        })
+    }
+
+    /// Authenticate using the configured method, returning a token-bearing
+    /// client. Kubernetes/AppRole perform a login round-trip; the
+    /// ServiceAccount JWT is re-read on every call so kubelet rotation is
+    /// handled transparently.
+    async fn authenticate(&self) -> Result<VaultClient> {
+        match &self.auth {
+            VaultAuth::Token => {
+                let token = require_env(VAULT_TOKEN_ENV)?;
+                self.build_client(&token)
+            }
+            VaultAuth::Kubernetes {
+                role,
+                mount,
+                jwt_path,
+            } => {
+                let jwt = std::fs::read_to_string(jwt_path).map_err(|e| {
+                    SecretStoreError::Unreachable {
                         backend: BACKEND_LABEL,
                         reason: format!(
-                            "VAULT_TOKEN env var not set — token auth is the only auth \
-                             method currently supported by the '{BACKEND_LABEL}' backend"
+                            "could not read Kubernetes ServiceAccount JWT at '{jwt_path}': {e}"
                         ),
-                    })?;
-                if token.is_empty() {
-                    return Err(SecretStoreError::Unreachable {
-                        backend: BACKEND_LABEL,
-                        reason: format!("{VAULT_TOKEN_ENV} is set but empty"),
-                    });
-                }
-                let settings = VaultClientSettingsBuilder::default()
-                    .address(&self.address)
-                    .token(token)
-                    .build()
+                    }
+                })?;
+                let mut client = self.build_client("")?;
+                let info = kubernetes::login(&client, mount, role, jwt.trim())
+                    .await
                     .map_err(|e| SecretStoreError::Unreachable {
                         backend: BACKEND_LABEL,
-                        reason: format!("could not build Vault client settings: {e}"),
+                        reason: format!(
+                            "Vault Kubernetes login (mount '{mount}', role '{role}') failed: {e}"
+                        ),
                     })?;
-                VaultClient::new(settings).map_err(|e| SecretStoreError::Unreachable {
-                    backend: BACKEND_LABEL,
-                    reason: format!("could not build Vault client: {e}"),
-                })
+                client.set_token(&info.client_token);
+                Ok(client)
+            }
+            VaultAuth::AppRole { mount } => {
+                let role_id = require_env(VAULT_ROLE_ID_ENV)?;
+                let secret_id = require_env(VAULT_SECRET_ID_ENV)?;
+                let mut client = self.build_client("")?;
+                let info = approle::login(&client, mount, &role_id, &secret_id)
+                    .await
+                    .map_err(|e| SecretStoreError::Unreachable {
+                        backend: BACKEND_LABEL,
+                        reason: format!("Vault AppRole login (mount '{mount}') failed: {e}"),
+                    })?;
+                client.set_token(&info.client_token);
+                Ok(client)
+            }
+        }
+    }
+
+    /// Lazily initialise the authenticated client cell.
+    async fn cell(&self) -> Result<&RwLock<VaultClient>> {
+        self.client
+            .get_or_try_init(|| async {
+                let client = self.authenticate().await?;
+                Ok(RwLock::new(client))
             })
             .await
+    }
+
+    /// Run a KV operation with transient-error retries, re-authenticating
+    /// once if it fails with 401/403 and the auth method can obtain a
+    /// fresh token. The outer `Result` carries setup/auth failures; the
+    /// inner one carries the (possibly-retried) API result so callers keep
+    /// their existing 404 handling.
+    async fn run<T, F>(&self, label: &str, op: F) -> Result<std::result::Result<T, ClientError>>
+    where
+        F: for<'a> Fn(&'a VaultClient) -> VaultFut<'a, T>,
+    {
+        let cell = self.cell().await?;
+        let first = {
+            let guard = cell.read().await;
+            with_retry(label, &VaultRetryPolicy, || op(&guard)).await
+        };
+        match first {
+            Err(err)
+                if self.auth.is_renewable() && matches!(api_status(&err), Some(401 | 403)) =>
+            {
+                match self.authenticate().await {
+                    Ok(fresh) => {
+                        *cell.write().await = fresh;
+                        let guard = cell.read().await;
+                        Ok(with_retry(label, &VaultRetryPolicy, || op(&guard)).await)
+                    }
+                    Err(reauth_err) => {
+                        warn!(
+                            backend = BACKEND_LABEL,
+                            error = %reauth_err,
+                            "vault re-authentication failed after an auth error"
+                        );
+                        Ok(Err(err))
+                    }
+                }
+            }
+            other => Ok(other),
+        }
     }
 }
 
@@ -214,13 +364,14 @@ impl SecretStore for VaultStore {
 
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         let path = self.secret_path(key);
-        let client = self.client().await?;
         let label = format!("kv2::read({}/{path})", self.mount);
-        let result = with_retry(&label, &VaultRetryPolicy, || {
-            let path = path.clone();
-            async move { kv2::read::<VaultPayload>(client, &self.mount, &path).await }
-        })
-        .await;
+        let result = self
+            .run(&label, |client| {
+                let mount = self.mount.clone();
+                let path = path.clone();
+                Box::pin(async move { kv2::read::<VaultPayload>(client, &mount, &path).await })
+            })
+            .await?;
         let payload = match result {
             Ok(p) => p,
             Err(err) if matches!(api_status(&err), Some(404)) => return Ok(None),
@@ -242,17 +393,17 @@ impl SecretStore for VaultStore {
 
     async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
         let path = self.secret_path(key);
-        let client = self.client().await?;
         let encoded = B64URL.encode(value);
         let label = format!("kv2::set({}/{path})", self.mount);
-        with_retry(&label, &VaultRetryPolicy, || {
+        self.run(&label, |client| {
+            let mount = self.mount.clone();
             let path = path.clone();
             let payload = VaultPayload {
                 value: encoded.clone(),
             };
-            async move { kv2::set(client, &self.mount, &path, &payload).await }
+            Box::pin(async move { kv2::set(client, &mount, &path, &payload).await })
         })
-        .await
+        .await?
         .map(|_| ())
         .map_err(|err| SecretStoreError::Unreachable {
             backend: BACKEND_LABEL,
@@ -262,13 +413,14 @@ impl SecretStore for VaultStore {
 
     async fn delete(&self, key: &str) -> Result<()> {
         let path = self.secret_path(key);
-        let client = self.client().await?;
         let label = format!("kv2::delete_latest({}/{path})", self.mount);
-        let result = with_retry(&label, &VaultRetryPolicy, || {
-            let path = path.clone();
-            async move { kv2::delete_latest(client, &self.mount, &path).await }
-        })
-        .await;
+        let result = self
+            .run(&label, |client| {
+                let mount = self.mount.clone();
+                let path = path.clone();
+                Box::pin(async move { kv2::delete_latest(client, &mount, &path).await })
+            })
+            .await?;
         match result {
             Ok(()) => Ok(()),
             Err(err) if matches!(api_status(&err), Some(404)) => Ok(()),
@@ -289,12 +441,13 @@ impl SecretStore for VaultStore {
     /// purged). We translate that to an empty list so the discovery
     /// hotkey shows "no entries" rather than an error banner.
     async fn list_namespace(&self) -> Result<Vec<String>> {
-        let client = self.client().await?;
         let label = format!("kv2::list({}/)", self.mount);
-        let result = with_retry(&label, &VaultRetryPolicy, || async move {
-            kv2::list(client, &self.mount, "").await
-        })
-        .await;
+        let result = self
+            .run(&label, |client| {
+                let mount = self.mount.clone();
+                Box::pin(async move { kv2::list(client, &mount, "").await })
+            })
+            .await?;
         match result {
             Ok(keys) => Ok(keys),
             Err(err) if matches!(api_status(&err), Some(404)) => Ok(Vec::new()),
@@ -320,6 +473,9 @@ mod tests {
                 .split_once('/')
                 .map(|(_, rest)| format!("{rest}/"))
                 .unwrap_or_default(),
+            enterprise_namespace: None,
+            auth: VaultAuth::Token,
+            verify_tls: true,
             client: OnceCell::new(),
         }
     }
