@@ -12,11 +12,14 @@
 //! - Sender public key resolution is done lazily during decryption, not eagerly.
 
 use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
-use affinidi_did_common::{document::DocumentExt, verification_method::VerificationRelationship};
+use affinidi_did_common::{
+    document::DocumentExt,
+    verification_method::{VerificationMethod, VerificationRelationship},
+};
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_didcomm::{
     jwe::decrypt::decrypt,
-    jws::verify::verify_ed25519,
+    jws::verify::{VerifiedJws, verify_ed25519, verify_p256},
     message::{
         Message,
         pack::{pack_encrypted_anoncrypt, pack_encrypted_authcrypt},
@@ -322,19 +325,18 @@ async fn recurse_decrypted_plaintext(
 
     if value.get("payload").is_some() && value.get("signatures").is_some() {
         // Nested JWS: sign-then-encrypt. Verify the inner signature with the
-        // signer's resolved Ed25519 key and attribute non-repudiation. Never
-        // trust the kid without verifying — a bad signature must error.
+        // signer's resolved key (Ed25519/EdDSA or P-256/ES256) and attribute
+        // non-repudiation. Never trust the kid without verifying — a bad
+        // signature must error.
         let jws_str = std::str::from_utf8(plaintext)
             .map_err(|e| format!("Inner JWS is not valid UTF-8: {e}"))?;
+
         let signer_kid = extract_jws_signer_kid(&value)
             .ok_or("Inner JWS has no signer kid to resolve a verification key")?;
         let signer_did = did_part(&signer_kid);
-        let pubkey = resolve_did_ed25519_verification(&signer_did, Some(&signer_kid), did_resolver)
+        let alg = extract_jws_alg(&value).unwrap_or_default();
+        let verified = verify_inner_jws(jws_str, &alg, &signer_did, &signer_kid, did_resolver)
             .await
-            .ok_or_else(|| {
-                format!("Could not resolve Ed25519 verification key for signer {signer_kid}")
-            })?;
-        let verified = verify_ed25519(jws_str, &pubkey)
             .map_err(|e| format!("Inner JWS signature verification failed: {e}"))?;
         metadata.non_repudiation = true;
         metadata.sign_from = verified.signer_kid.or(Some(signer_kid));
@@ -406,6 +408,60 @@ fn extract_jws_signer_kid(jws: &serde_json::Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Extract the JWS signature algorithm (`alg`) from the first signature's
+/// integrity-protected header. Returns `None` if absent/undecodable.
+fn extract_jws_alg(jws: &serde_json::Value) -> Option<String> {
+    let sig = jws.get("signatures")?.as_array()?.first()?;
+    let protected_b64 = sig.get("protected").and_then(|p| p.as_str())?;
+    let bytes = BASE64_URL_SAFE_NO_PAD.decode(protected_b64).ok()?;
+    let header: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    header
+        .get("alg")
+        .and_then(|a| a.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Verify an inner/top-level JWS, dispatching on the JOSE `alg`:
+/// `EdDSA`/`Ed25519` (Ed25519) or `ES256` (P-256). Resolves the signer's
+/// verification key from their DID document and verifies the signature. Any
+/// other `alg` (including a missing/undecodable one) is rejected rather than
+/// assumed.
+async fn verify_inner_jws(
+    jws_str: &str,
+    alg: &str,
+    signer_did: &str,
+    signer_kid: &str,
+    did_resolver: &DIDCacheClient,
+) -> Result<VerifiedJws, String> {
+    match alg {
+        // `EdDSA` is the polymorphic JOSE alg (RFC 8037); `Ed25519` is its
+        // fully-specified equivalent (draft-ietf-jose-fully-specified-algorithms).
+        // Both denote Ed25519 signatures here.
+        "EdDSA" | "Ed25519" => {
+            let pubkey =
+                resolve_did_ed25519_verification(signer_did, Some(signer_kid), did_resolver)
+                    .await
+                    .ok_or_else(|| {
+                        format!(
+                            "Could not resolve Ed25519 verification key for signer {signer_kid}"
+                        )
+                    })?;
+            verify_ed25519(jws_str, &pubkey).map_err(|e| e.to_string())
+        }
+        "ES256" => {
+            let pubkey = resolve_did_p256_verification(signer_did, Some(signer_kid), did_resolver)
+                .await
+                .ok_or_else(|| {
+                    format!("Could not resolve P-256 verification key for signer {signer_kid}")
+                })?;
+            verify_p256(jws_str, &pubkey).map_err(|e| e.to_string())
+        }
+        other => Err(format!(
+            "Unsupported JWS signature algorithm {other:?} (expected EdDSA/Ed25519 or ES256)"
+        )),
+    }
+}
+
 /// Extract the inner JWE's sender DID from its protected header (`skid`, or
 /// `apu` fallback), mirroring the outer-layer logic in `MetaEnvelope::new`.
 fn inner_jwe_sender_did(jwe: &serde_json::Value) -> Option<String> {
@@ -459,13 +515,9 @@ async fn unpack_jws(
     let signer_kid =
         extract_jws_signer_kid(&value).ok_or("JWS has no signer kid to resolve a key")?;
     let signer_did = did_part(&signer_kid);
-    let pubkey = resolve_did_ed25519_verification(&signer_did, Some(&signer_kid), did_resolver)
+    let alg = extract_jws_alg(&value).unwrap_or_default();
+    let verified = verify_inner_jws(msg_string, &alg, &signer_did, &signer_kid, did_resolver)
         .await
-        .ok_or_else(|| {
-            format!("Could not resolve Ed25519 verification key for signer {signer_kid}")
-        })?;
-
-    let verified = verify_ed25519(msg_string, &pubkey)
         .map_err(|e| format!("JWS signature verification failed: {e}"))?;
 
     let msg = Message::from_json(&verified.payload)
@@ -481,10 +533,25 @@ async fn unpack_jws(
     Ok((msg, metadata))
 }
 
+/// Resolve the verification method a signer authenticates with: the exact
+/// `prefer_kid` when it appears in the DID's authentication relationship,
+/// otherwise the DID's first authentication key.
+async fn resolve_authentication_vm(
+    did: &str,
+    prefer_kid: Option<&str>,
+    did_resolver: &DIDCacheClient,
+) -> Option<VerificationMethod> {
+    let doc = did_resolver.resolve(did).await.ok()?;
+    let auth = doc.doc.find_authentication(None);
+    let kid = prefer_kid
+        .filter(|k| auth.iter().any(|a| a == k))
+        .map(|k| k.to_string())
+        .or_else(|| auth.first().map(|k| k.to_string()))?;
+    doc.doc.get_verification_method(&kid).cloned()
+}
+
 /// Resolve a DID's Ed25519 verification (signing) public key as raw 32 bytes.
 ///
-/// Picks the verification method named by `prefer_kid` when present in the
-/// authentication relationship, otherwise the DID's first authentication key.
 /// Supports `publicKeyMultibase` (multikey, `ed25519-pub` codec) and
 /// `publicKeyJwk` (`OKP`/`Ed25519`).
 async fn resolve_did_ed25519_verification(
@@ -492,22 +559,11 @@ async fn resolve_did_ed25519_verification(
     prefer_kid: Option<&str>,
     did_resolver: &DIDCacheClient,
 ) -> Option<[u8; 32]> {
-    let doc = did_resolver.resolve(did).await.ok()?;
-
-    // Prefer the exact authentication kid the signer claimed; fall back to the
-    // DID's first authentication key.
-    let auth = doc.doc.find_authentication(None);
-    let kid = prefer_kid
-        .filter(|k| auth.iter().any(|a| a == k))
-        .map(|k| k.to_string())
-        .or_else(|| auth.first().map(|k| k.to_string()))?;
-
-    let vm = doc.doc.get_verification_method(&kid)?;
+    let vm = resolve_authentication_vm(did, prefer_kid, did_resolver).await?;
 
     if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
         && let Some(multibase_str) = multibase_value.as_str()
-        && let Ok((codec, key_bytes)) =
-            affinidi_encoding::decode_multikey_with_codec(multibase_str)
+        && let Ok((codec, key_bytes)) = affinidi_encoding::decode_multikey_with_codec(multibase_str)
         && codec == affinidi_encoding::ED25519_PUB
         && key_bytes.len() == 32
     {
@@ -522,6 +578,47 @@ async fn resolve_did_ed25519_verification(
         && x_bytes.len() == 32
     {
         return x_bytes.try_into().ok();
+    }
+
+    None
+}
+
+/// Resolve a DID's ECDSA P-256 verification (signing) public key as SEC1 bytes.
+///
+/// Supports `publicKeyMultibase` (multikey, `p256-pub` codec — compressed
+/// SEC1) and `publicKeyJwk` (`EC`/`P-256` — assembled into uncompressed SEC1).
+async fn resolve_did_p256_verification(
+    did: &str,
+    prefer_kid: Option<&str>,
+    did_resolver: &DIDCacheClient,
+) -> Option<Vec<u8>> {
+    let vm = resolve_authentication_vm(did, prefer_kid, did_resolver).await?;
+
+    if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
+        && let Some(multibase_str) = multibase_value.as_str()
+        && let Ok((codec, key_bytes)) = affinidi_encoding::decode_multikey_with_codec(multibase_str)
+        && codec == affinidi_encoding::P256_PUB
+    {
+        // Multikey for P-256 is the compressed SEC1 point (33 bytes).
+        return Some(key_bytes);
+    }
+
+    if let Some(jwk_value) = vm.property_set.get("publicKeyJwk")
+        && jwk_value.get("kty").and_then(|v| v.as_str()) == Some("EC")
+        && jwk_value.get("crv").and_then(|v| v.as_str()) == Some("P-256")
+        && let Some(x_b64) = jwk_value.get("x").and_then(|v| v.as_str())
+        && let Some(y_b64) = jwk_value.get("y").and_then(|v| v.as_str())
+        && let Ok(x_bytes) = BASE64_URL_SAFE_NO_PAD.decode(x_b64)
+        && let Ok(y_bytes) = BASE64_URL_SAFE_NO_PAD.decode(y_b64)
+        && x_bytes.len() == 32
+        && y_bytes.len() == 32
+    {
+        // Assemble the uncompressed SEC1 point: 0x04 || x || y.
+        let mut sec1 = Vec::with_capacity(65);
+        sec1.push(0x04);
+        sec1.extend_from_slice(&x_bytes);
+        sec1.extend_from_slice(&y_bytes);
+        return Some(sec1);
     }
 
     None
@@ -648,5 +745,102 @@ pub async fn pack_encrypted<S: SecretsResolver>(
         };
 
         Ok((packed, metadata))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// base64url-encode a JSON value as a JWS/JWE protected header.
+    fn protected_b64(v: &serde_json::Value) -> String {
+        BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_vec(v).unwrap())
+    }
+
+    #[test]
+    fn did_part_strips_fragment() {
+        assert_eq!(did_part("did:example:alice#key-1"), "did:example:alice");
+        assert_eq!(did_part("did:example:alice"), "did:example:alice");
+    }
+
+    #[test]
+    fn jws_signer_kid_prefers_protected_header() {
+        let protected =
+            protected_b64(&json!({"alg": "ES256", "kid": "did:example:alice#protected"}));
+        let jws = json!({
+            "payload": "e30",
+            "signatures": [{
+                "protected": protected,
+                "header": {"kid": "did:example:mallory#unprotected"},
+                "signature": "AA"
+            }]
+        });
+        assert_eq!(
+            extract_jws_signer_kid(&jws).as_deref(),
+            Some("did:example:alice#protected"),
+            "integrity-protected kid must win over the unprotected one"
+        );
+    }
+
+    #[test]
+    fn jws_signer_kid_falls_back_to_unprotected() {
+        // Protected header carries only alg (no kid) — credo-ts / didcomm-python shape.
+        let protected = protected_b64(&json!({"alg": "EdDSA"}));
+        let jws = json!({
+            "payload": "e30",
+            "signatures": [{
+                "protected": protected,
+                "header": {"kid": "did:example:alice#unprotected"},
+                "signature": "AA"
+            }]
+        });
+        assert_eq!(
+            extract_jws_signer_kid(&jws).as_deref(),
+            Some("did:example:alice#unprotected")
+        );
+    }
+
+    #[test]
+    fn jws_alg_extracted_from_protected_header() {
+        let protected = protected_b64(&json!({"alg": "ES256", "kid": "did:example:alice#p256"}));
+        let jws =
+            json!({"payload": "e30", "signatures": [{"protected": protected, "signature": "AA"}]});
+        assert_eq!(extract_jws_alg(&jws).as_deref(), Some("ES256"));
+    }
+
+    #[test]
+    fn jws_alg_none_when_protected_undecodable() {
+        let jws = json!({"payload": "e30", "signatures": [{"protected": "!!not-base64!!", "signature": "AA"}]});
+        assert_eq!(extract_jws_alg(&jws), None);
+    }
+
+    #[test]
+    fn inner_jwe_sender_did_from_skid() {
+        let protected =
+            protected_b64(&json!({"alg": "ECDH-1PU+A256KW", "skid": "did:example:bob#key-x25519"}));
+        let jwe = json!({"protected": protected, "ciphertext": "x", "recipients": []});
+        assert_eq!(
+            inner_jwe_sender_did(&jwe).as_deref(),
+            Some("did:example:bob")
+        );
+    }
+
+    #[test]
+    fn inner_jwe_sender_did_from_apu_fallback() {
+        let apu = BASE64_URL_SAFE_NO_PAD.encode("did:example:carol#key-1");
+        let protected = protected_b64(&json!({"alg": "ECDH-1PU+A256KW", "apu": apu}));
+        let jwe = json!({"protected": protected});
+        assert_eq!(
+            inner_jwe_sender_did(&jwe).as_deref(),
+            Some("did:example:carol")
+        );
+    }
+
+    #[test]
+    fn inner_jwe_sender_did_none_for_anoncrypt() {
+        let protected = protected_b64(&json!({"alg": "ECDH-ES+A256KW"}));
+        let jwe = json!({"protected": protected});
+        assert_eq!(inner_jwe_sender_did(&jwe), None);
     }
 }

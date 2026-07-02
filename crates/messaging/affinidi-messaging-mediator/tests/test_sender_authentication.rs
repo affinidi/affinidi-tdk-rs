@@ -413,7 +413,10 @@ async fn resolve_ka_public(did: &str, resolver: &DIDCacheClient) -> (String, Pub
         affinidi_encoding::P521_PUB => Curve::P521,
         other => panic!("unexpected KA codec {other:#x}"),
     };
-    (kid, PublicKeyAgreement::from_raw_bytes(curve, &bytes).unwrap())
+    (
+        kid,
+        PublicKeyAgreement::from_raw_bytes(curve, &bytes).unwrap(),
+    )
 }
 
 /// Decode the 32-byte `d` of an OKP/EC JWK (the JWKs here use url-safe base64).
@@ -456,7 +459,8 @@ async fn nested_wrappings_classified_correctly() {
         encrypt::anoncrypt(inner_jws.as_bytes(), &[(&bob_ka_kid, &bob_ka_pub)]).unwrap();
 
     // 3. anoncrypt(authcrypt(plaintext))
-    let anon_auth = encrypt::anoncrypt(authcrypt.as_bytes(), &[(&bob_ka_kid, &bob_ka_pub)]).unwrap();
+    let anon_auth =
+        encrypt::anoncrypt(authcrypt.as_bytes(), &[(&bob_ka_kid, &bob_ka_pub)]).unwrap();
 
     // 4. anoncrypt(plaintext)
     let anon_plain = encrypt::anoncrypt(&plaintext, &[(&bob_ka_kid, &bob_ka_pub)]).unwrap();
@@ -493,13 +497,18 @@ async fn nested_wrappings_classified_correctly() {
     );
 
     // The exact inbound.rs anonymous-block decision.
-    let blocked =
-        |m: &affinidi_messaging_sdk::messages::compat::UnpackMetadata| {
-            !m.authenticated && m.sign_from.is_none()
-        };
+    let blocked = |m: &affinidi_messaging_sdk::messages::compat::UnpackMetadata| {
+        !m.authenticated && m.sign_from.is_none()
+    };
     assert!(!blocked(&m_authcrypt), "authcrypt must be accepted");
-    assert!(!blocked(&m_anon_signed), "anoncrypt(signed) must be accepted");
-    assert!(!blocked(&m_anon_auth), "anoncrypt(authcrypt) must be accepted");
+    assert!(
+        !blocked(&m_anon_signed),
+        "anoncrypt(signed) must be accepted"
+    );
+    assert!(
+        !blocked(&m_anon_auth),
+        "anoncrypt(authcrypt) must be accepted"
+    );
     assert!(blocked(&m_anon_plain), "pure anoncrypt must be blocked");
 }
 
@@ -525,5 +534,210 @@ async fn nested_signed_with_bad_signature_is_rejected() {
     assert!(
         result.is_err(),
         "a forged inner signature must be rejected, not pass as authenticated"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ES256 (ECDSA P-256) signed messages.
+//
+// The EdDSA signed paths above use `sign_ed25519`. These exercise the ES256
+// dispatch arm end-to-end: `extract_jws_alg` → `verify_inner_jws` (`"ES256"`)
+// → `resolve_did_p256_verification` (P-256 did:key) → `verify_p256`. The
+// didcomm crate is verify-only for ES256, so the JWS is hand-built and signed
+// with `affinidi_crypto::p256`.
+// ---------------------------------------------------------------------------
+
+/// Hand-build an ES256 JWS (General JSON Serialization) over `payload`, signing
+/// the JWS signing input with the given P-256 private key.
+fn build_es256_jws(payload: &[u8], signer_kid: &str, p256_private: &[u8]) -> String {
+    let protected = json!({
+        "typ": "application/didcomm-signed+json",
+        "alg": "ES256",
+        "kid": signer_kid,
+    });
+    let protected_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&protected).unwrap());
+    let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+    let signing_input = format!("{protected_b64}.{payload_b64}");
+    let sig = affinidi_crypto::p256::sign(p256_private, signing_input.as_bytes()).unwrap();
+    let jws = json!({
+        "payload": payload_b64,
+        "signatures": [{
+            "protected": protected_b64,
+            "signature": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&sig),
+        }],
+    });
+    serde_json::to_string(&jws).unwrap()
+}
+
+/// A P-256/ES256 signed message must verify, attribute the signer, and be
+/// accepted by the anonymous-block decision.
+#[tokio::test]
+async fn es256_signed_message_verifies_and_attributes_signer() {
+    let (resolver, _alice_secrets, bob_secrets) = setup().await;
+    let (bob_ka_kid, bob_ka_pub) = resolve_ka_public(BOB_DID, &resolver).await;
+
+    // A P-256 signer as a did:key (resolvable offline).
+    let (signer_did, key) =
+        affinidi_did_common::DID::generate_key(affinidi_crypto::KeyType::P256).unwrap();
+    let signer_did = signer_did.to_string();
+
+    let msg = build_test_message(&signer_did, BOB_DID, "https://example.com/es256");
+    let es256_jws = build_es256_jws(&msg.to_json().unwrap(), &key.id, key.private_bytes());
+
+    // Sign-then-encrypt: anoncrypt(signed(plaintext)) to Bob.
+    let anon_signed =
+        encrypt::anoncrypt(es256_jws.as_bytes(), &[(&bob_ka_kid, &bob_ka_pub)]).unwrap();
+
+    let (unpacked, metadata) = didcomm_compat::unpack(&anon_signed, &resolver, &bob_secrets)
+        .await
+        .expect("ES256 signed message must unpack");
+
+    assert_eq!(unpacked.id, msg.id, "verified payload must survive");
+    assert!(
+        metadata.non_repudiation,
+        "ES256 signed message must set non_repudiation"
+    );
+    let blocked = !metadata.authenticated && metadata.sign_from.is_none();
+    assert!(!blocked, "ES256 signed message must be accepted");
+
+    let sign_from = metadata
+        .sign_from
+        .as_deref()
+        .expect("ES256 signed message must set sign_from");
+    let (did, _frag) = sign_from.split_once('#').expect("sign_from has fragment");
+    assert_eq!(did, signer_did, "sign_from DID must be the P-256 signer");
+}
+
+/// An ES256 JWS signed with the WRONG P-256 key but claiming the signer's kid
+/// must fail verification — the resolver fetches the real P-256 key.
+#[tokio::test]
+async fn es256_signed_with_wrong_key_is_rejected() {
+    let (resolver, _alice_secrets, bob_secrets) = setup().await;
+    let (bob_ka_kid, bob_ka_pub) = resolve_ka_public(BOB_DID, &resolver).await;
+
+    // The claimed signer (its real key lives in the resolved DID document)…
+    let (signer_did, _key) =
+        affinidi_did_common::DID::generate_key(affinidi_crypto::KeyType::P256).unwrap();
+    let signer_did = signer_did.to_string();
+    // …but we sign with a DIFFERENT P-256 key while claiming the signer's kid.
+    let wrong = affinidi_crypto::p256::generate_random();
+
+    let msg = build_test_message(&signer_did, BOB_DID, "https://example.com/es256");
+    let claimed_kid = format!("{signer_did}#forged");
+    let forged_jws = build_es256_jws(&msg.to_json().unwrap(), &claimed_kid, &wrong.private_bytes);
+    let anon_forged =
+        encrypt::anoncrypt(forged_jws.as_bytes(), &[(&bob_ka_kid, &bob_ka_pub)]).unwrap();
+
+    let result = didcomm_compat::unpack(&anon_forged, &resolver, &bob_secrets).await;
+    assert!(
+        result.is_err(),
+        "an ES256 signature from the wrong key must be rejected"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fully-specified `Ed25519` alg (draft-ietf-jose-fully-specified-algorithms).
+//
+// `sign_ed25519` emits the polymorphic `EdDSA` alg. Verification must ALSO
+// accept the fully-specified `Ed25519` alg (both denote Ed25519 signatures),
+// and must still reject an unsupported alg rather than assuming a default.
+// ---------------------------------------------------------------------------
+
+/// Hand-build an Ed25519 JWS with an explicit `alg` value (so we can exercise
+/// both `EdDSA` and the fully-specified `Ed25519`).
+fn build_ed25519_jws(payload: &[u8], signer_kid: &str, ed_private: &[u8; 32], alg: &str) -> String {
+    let protected = json!({
+        "typ": "application/didcomm-signed+json",
+        "alg": alg,
+        "kid": signer_kid,
+    });
+    let protected_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&protected).unwrap());
+    let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+    let signing_input = format!("{protected_b64}.{payload_b64}");
+    let sig = affinidi_crypto::jose::signing::sign(signing_input.as_bytes(), ed_private).unwrap();
+    let jws = json!({
+        "payload": payload_b64,
+        "signatures": [{
+            "protected": protected_b64,
+            "signature": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig),
+        }],
+    });
+    serde_json::to_string(&jws).unwrap()
+}
+
+/// Shared body: a message signed with an Ed25519 key and declaring `alg` must
+/// verify and be attributed to the signer — whether the header uses the
+/// polymorphic `EdDSA` or the fully-specified `Ed25519`.
+async fn assert_ed25519_signed_message_accepted(alg: &str) {
+    let (resolver, _alice_secrets, bob_secrets) = setup().await;
+    let (bob_ka_kid, bob_ka_pub) = resolve_ka_public(BOB_DID, &resolver).await;
+
+    let (signer_did, key) =
+        affinidi_did_common::DID::generate_key(affinidi_crypto::KeyType::Ed25519).unwrap();
+    let signer_did = signer_did.to_string();
+    let ed_private: [u8; 32] = key
+        .private_bytes()
+        .try_into()
+        .expect("32-byte Ed25519 seed");
+
+    let msg = build_test_message(&signer_did, BOB_DID, "https://example.com/ed25519");
+    let jws = build_ed25519_jws(&msg.to_json().unwrap(), &key.id, &ed_private, alg);
+    let anon_signed = encrypt::anoncrypt(jws.as_bytes(), &[(&bob_ka_kid, &bob_ka_pub)]).unwrap();
+
+    let (unpacked, metadata) = didcomm_compat::unpack(&anon_signed, &resolver, &bob_secrets)
+        .await
+        .unwrap_or_else(|e| panic!("{alg}-signed message must unpack: {e}"));
+
+    assert_eq!(unpacked.id, msg.id, "verified payload must survive ({alg})");
+    assert!(
+        metadata.non_repudiation,
+        "{alg}-signed message must set non_repudiation"
+    );
+    let sign_from = metadata
+        .sign_from
+        .as_deref()
+        .unwrap_or_else(|| panic!("{alg}-signed message must set sign_from"));
+    let (did, _frag) = sign_from.split_once('#').expect("sign_from has fragment");
+    assert_eq!(did, signer_did, "sign_from DID must be the signer ({alg})");
+}
+
+/// The polymorphic `EdDSA` alg (RFC 8037) must verify and attribute the signer.
+#[tokio::test]
+async fn eddsa_alg_signed_message_is_accepted() {
+    assert_ed25519_signed_message_accepted("EdDSA").await;
+}
+
+/// The fully-specified `Ed25519` alg must verify identically to `EdDSA`.
+#[tokio::test]
+async fn ed25519_alg_signed_message_is_accepted() {
+    assert_ed25519_signed_message_accepted("Ed25519").await;
+}
+
+/// A JWS declaring an unsupported alg (here `RS256`) must be rejected outright —
+/// the mediator never falls back to a default algorithm.
+#[tokio::test]
+async fn unsupported_alg_signed_message_is_rejected() {
+    let (resolver, _alice_secrets, bob_secrets) = setup().await;
+    let (bob_ka_kid, bob_ka_pub) = resolve_ka_public(BOB_DID, &resolver).await;
+
+    let (signer_did, key) =
+        affinidi_did_common::DID::generate_key(affinidi_crypto::KeyType::Ed25519).unwrap();
+    let signer_did = signer_did.to_string();
+    let ed_private: [u8; 32] = key
+        .private_bytes()
+        .try_into()
+        .expect("32-byte Ed25519 seed");
+
+    let msg = build_test_message(&signer_did, BOB_DID, "https://example.com/test");
+    // A validly-signed JWS, but the header declares an unsupported alg.
+    let jws = build_ed25519_jws(&msg.to_json().unwrap(), &key.id, &ed_private, "RS256");
+    let anon = encrypt::anoncrypt(jws.as_bytes(), &[(&bob_ka_kid, &bob_ka_pub)]).unwrap();
+
+    let result = didcomm_compat::unpack(&anon, &resolver, &bob_secrets).await;
+    assert!(
+        result.is_err(),
+        "a JWS with an unsupported alg (RS256) must be rejected, not assumed EdDSA"
     );
 }

@@ -68,19 +68,13 @@ The lifecycle follows a state machine: **None** → **Pending**/**InviteReceived
 **Bidirectional**.
 
 ```rust
-use affinidi_tsp::message::direct::message_digest;
-
 // Alice sends a relationship invite to Bob
 let invite = agent.send_relationship_invite("did:example:alice", "did:example:bob")?;
-let digest = message_digest(&invite);
 
-// Bob receives and accepts the invite
+// Bob receives and accepts the invite. The accept derives the invite's thread
+// digest from the store (recorded by `receive`), so it only needs the two VIDs.
 let received = agent.receive("did:example:bob", &invite.bytes)?;
-let accept = agent.send_relationship_accept(
-    "did:example:bob",
-    "did:example:alice",
-    digest.to_vec(),
-)?;
+let accept = agent.send_relationship_accept("did:example:bob", "did:example:alice")?;
 
 // Alice processes the acceptance — relationship is now Bidirectional
 agent.receive("did:example:alice", &accept.bytes)?;

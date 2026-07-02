@@ -4,6 +4,21 @@
 
 ## 30th June 2026
 
+### 0.16.37 — feat: ES256 (P-256) JWS verification; reject unknown JWS algs
+
+- `didcomm_compat` now verifies inner/top-level signed messages whose protected
+  header declares `alg: ES256` (ECDSA P-256) in addition to `EdDSA`, resolving
+  the signer's P-256 verification key from their DID document
+  (`publicKeyMultibase` p256-pub / `publicKeyJwk` EC P-256).
+- `verify_inner_jws` no longer falls back to EdDSA for an unrecognized (or
+  missing/undecodable) `alg` — it now returns an explicit error, removing the
+  implicit algorithm assumption.
+- `verify_inner_jws` also accepts the fully-specified `Ed25519` alg
+  (draft-ietf-jose-fully-specified-algorithms) as an alias for `EdDSA`, both
+  routed to Ed25519 verification.
+- Adds unit tests for the JWS/JWE header helpers (`extract_jws_signer_kid`,
+  `extract_jws_alg`, `inner_jwe_sender_did`, `did_part`).
+
 ### 0.16.36 — fix: accept sender-authenticated nested DIDComm envelopes again
 
 - The DIDComm unpack (`didcomm_compat`) only inspected the outermost layer, so it never

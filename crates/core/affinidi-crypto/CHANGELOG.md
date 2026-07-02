@@ -1,5 +1,13 @@
 # Affinidi Crypto Changelog
 
+## 30th June 2026 (0.2.3)
+
+Adds `jose::signing::verify_p256` — ECDSA P-256 signature verification over
+SHA-256 (JWS `alg: ES256`), accepting compressed or uncompressed SEC1 public
+points. Additive (verify-only); locked by a deterministic RFC 6979 golden
+vector in `jose::kat`. Patch bump (additive) keeps the `[patch.crates-io]`
+redirect valid — see [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md).
+
 ## 13th June 2026 (0.2.2)
 
 Semver wave (W7/W8 — release W11). `CryptoError` and `Params` are now

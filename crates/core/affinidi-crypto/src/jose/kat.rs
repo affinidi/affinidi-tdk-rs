@@ -14,6 +14,8 @@
 //! - `ecdh_1pu_x25519_kek_golden` — the full ECDH-1PU + Concat-KDF KEK,
 //!   asserting the **same** `f3cc56…` golden as didcomm #336 (closes the
 //!   vector 5b deferred until key agreement landed).
+//! - `es256_p256_golden` — deterministic (RFC 6979) ECDSA P-256 sign +
+//!   `verify_p256` roundtrip, pinning the ES256 signature/public-key bytes.
 
 #![cfg(test)]
 
@@ -23,6 +25,9 @@ use super::ecdh::{
 use super::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
 use super::{A256CbcHs512, A256Kw, ContentEncryption, Ed25519, JwsSigner, JwsVerifier, KeyWrap};
 use super::{aes_kw, concat_kdf, content_encryption, signing};
+// ECDSA P-256 signing lives in the `p256` dev-dependency (this crate is
+// verify-only for ES256), used by the P-256 KAT(s) below to produce vectors.
+use p256::ecdsa::{SigningKey as P256SigningKey, signature::Signer as P256Signer};
 
 fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -329,4 +334,93 @@ fn ed25519_eddsa_golden() {
     let sig_t = Ed25519.sign(msg, &seed).unwrap();
     assert_eq!(hex(&sig_t), EXPECTED_SIG);
     assert!(Ed25519.verify(msg, &sig_t, &pk).is_ok());
+}
+
+// ─── ES256 (ECDSA P-256) — deterministic RFC 6979 golden ────────────────────
+
+#[test]
+fn es256_p256_golden() {
+    const EXPECTED_PK: &str = "0457e977f6db7e33c3fe7acf2842ed987009caf56d458682fca447b7d3d762ab34c5ab3770ba573bdff5414065640ffb5b346dfa84dec4db4d68e5f59cc471c2ec";
+    const EXPECTED_SIG: &str = "db8c58825274a5559cefa68f7b724f1a9039350f7c833b17e9e81d024fe15ae3df31fa3296816af83f24c18bac256f2a2b38fafa23f9c88a9b48629911702027";
+
+    let sk = P256SigningKey::from_slice(&[0x55u8; 32]).expect("valid P-256 scalar");
+    let msg = b"DIDComm KAT message";
+
+    let pk = sk.verifying_key().to_encoded_point(false);
+    assert_eq!(hex(pk.as_bytes()), EXPECTED_PK, "P-256 public key drifted");
+
+    // RustCrypto ECDSA `sign` is deterministic (RFC 6979), so these bytes pin.
+    let sig: p256::ecdsa::Signature = P256Signer::sign(&sk, msg);
+    let sig_bytes: [u8; 64] = sig.to_bytes().into();
+    assert_eq!(
+        hex(&sig_bytes),
+        EXPECTED_SIG,
+        "ES256 signature drifted (RFC 6979 determinism broken)"
+    );
+
+    assert!(signing::verify_p256(msg, &sig_bytes, pk.as_bytes()).is_ok());
+    assert!(signing::verify_p256(b"tampered", &sig_bytes, pk.as_bytes()).is_err());
+}
+
+/// A P-256 signing key's public point as uncompressed SEC1 bytes (65 bytes).
+fn p256_sec1_uncompressed(sk: &P256SigningKey) -> Vec<u8> {
+    sk.verifying_key()
+        .to_encoded_point(false)
+        .as_bytes()
+        .to_vec()
+}
+
+#[test]
+fn p256_sign_verify_roundtrip() {
+    let sk = P256SigningKey::random(&mut rand_core::OsRng);
+    let msg = b"affinidi es256 roundtrip";
+    let sig: p256::ecdsa::Signature = P256Signer::sign(&sk, msg);
+    let sig_bytes: [u8; 64] = sig.to_bytes().into();
+    assert!(signing::verify_p256(msg, &sig_bytes, &p256_sec1_uncompressed(&sk)).is_ok());
+}
+
+#[test]
+fn p256_wrong_key_fails() {
+    let sk = P256SigningKey::random(&mut rand_core::OsRng);
+    let other = P256SigningKey::random(&mut rand_core::OsRng);
+    let msg = b"affinidi es256";
+    let sig: p256::ecdsa::Signature = P256Signer::sign(&sk, msg);
+    let sig_bytes: [u8; 64] = sig.to_bytes().into();
+    assert!(signing::verify_p256(msg, &sig_bytes, &p256_sec1_uncompressed(&other)).is_err());
+}
+
+#[test]
+fn p256_tampered_message_fails() {
+    let sk = P256SigningKey::random(&mut rand_core::OsRng);
+    let sig: p256::ecdsa::Signature = P256Signer::sign(&sk, b"original");
+    let sig_bytes: [u8; 64] = sig.to_bytes().into();
+    assert!(signing::verify_p256(b"tampered", &sig_bytes, &p256_sec1_uncompressed(&sk)).is_err());
+}
+
+/// `verify_p256` accepts both SEC1 encodings of the public point
+/// (compressed 33-byte and uncompressed 65-byte).
+#[test]
+fn p256_compressed_and_uncompressed_pubkey_agree() {
+    let sk = P256SigningKey::random(&mut rand_core::OsRng);
+    let msg = b"sec1 encodings";
+    let sig: p256::ecdsa::Signature = P256Signer::sign(&sk, msg);
+    let sig_bytes: [u8; 64] = sig.to_bytes().into();
+    let uncompressed = sk
+        .verifying_key()
+        .to_encoded_point(false)
+        .as_bytes()
+        .to_vec();
+    let compressed = sk
+        .verifying_key()
+        .to_encoded_point(true)
+        .as_bytes()
+        .to_vec();
+    assert!(signing::verify_p256(msg, &sig_bytes, &uncompressed).is_ok());
+    assert!(signing::verify_p256(msg, &sig_bytes, &compressed).is_ok());
+}
+
+#[test]
+fn p256_invalid_public_key_errors() {
+    let sig_bytes = [0u8; 64];
+    assert!(signing::verify_p256(b"x", &sig_bytes, b"not-a-key").is_err());
 }

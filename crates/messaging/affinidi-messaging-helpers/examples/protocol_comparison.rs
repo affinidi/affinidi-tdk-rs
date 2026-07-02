@@ -172,9 +172,8 @@ fn bench_tsp_payload(payload: &[u8], iterations: usize) -> (Duration, Duration, 
         .send_relationship_invite(alice_id, bob_id)
         .unwrap();
     bob_agent.receive(bob_id, &rfi.bytes).unwrap();
-    let digest = affinidi_tsp::message::direct::message_digest(&rfi).to_vec();
     let rfa = bob_agent
-        .send_relationship_accept(bob_id, alice_id, digest)
+        .send_relationship_accept(bob_id, alice_id)
         .unwrap();
     alice_agent.receive(alice_id, &rfa.bytes).unwrap();
 
