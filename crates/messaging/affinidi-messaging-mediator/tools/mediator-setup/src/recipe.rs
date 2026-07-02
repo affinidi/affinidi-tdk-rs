@@ -874,10 +874,21 @@ fn apply_secrets_storage(raw: &str, config: &mut WizardConfig) -> anyhow::Result
             // URL is fine — it stays canonical when re-parsed.
             config.secret_azure_vault = vault;
         }
-        BackendUrl::Vault { endpoint, path } => {
+        BackendUrl::Vault { endpoint, path, .. } => {
+            // NOTE: the extended Vault auth parameters (auth method,
+            // enterprise namespace, insecure) are not yet round-tripped
+            // into wizard config fields — that wiring lands with the
+            // wizard support PR. Recipes still carry them in the raw URL.
             config.secret_storage = STORAGE_VAULT.into();
             config.secret_vault_endpoint = endpoint;
             config.secret_vault_mount = path;
+        }
+        // `BackendUrl` is `#[non_exhaustive]`; any scheme not yet wired
+        // into the wizard config falls through here.
+        _ => {
+            anyhow::bail!(
+                "Invalid secrets.storage '{raw}': backend not yet supported in recipe config"
+            );
         }
     }
     Ok(())
