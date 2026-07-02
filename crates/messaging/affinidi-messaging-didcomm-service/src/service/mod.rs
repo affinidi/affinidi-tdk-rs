@@ -40,11 +40,19 @@ pub enum ListenerEvent {
     },
 }
 
+/// Always-online message service over a single per-DID mediator websocket.
+///
+/// Multiplexes DIDComm and TSP on that one socket (a second socket for the same
+/// DID is evicted by the mediator as `duplicate-channel`): DIDComm frames go to
+/// the [`DIDCommHandler`] router, TSP frames to a [`TspHandler`]. Which protocols
+/// a listener handles is set by its [`Protocols`](crate::Protocols) config.
+///
+/// `DIDCommService` is a retained compatibility alias for this type.
 #[derive(Clone)]
-pub struct DIDCommService {
+pub struct AffinidiMessageService {
     listeners: Arc<RwLock<HashMap<String, ListenerHandle>>>,
     handler: Arc<dyn DIDCommHandler>,
-    /// Optional TSP handler, attached via [`DIDCommService::with_tsp_handler`].
+    /// Optional TSP handler, attached via [`AffinidiMessageService::start_with_tsp`].
     /// Used by listeners whose `protocols.tsp` is enabled to route inbound TSP
     /// frames off the shared websocket.
     tsp_handler: Option<Arc<dyn TspHandler>>,
@@ -77,7 +85,12 @@ pub enum ListenerState {
     Failed,
 }
 
-impl DIDCommService {
+/// Retained compatibility alias for [`AffinidiMessageService`]. The service
+/// handled DIDComm only when first published; it now multiplexes DIDComm + TSP,
+/// hence the rename. Existing consumers keep compiling under this name.
+pub type DIDCommService = AffinidiMessageService;
+
+impl AffinidiMessageService {
     pub async fn start(
         config: DIDCommServiceConfig,
         handler: impl DIDCommHandler,
@@ -121,7 +134,7 @@ impl DIDCommService {
         let listeners = Arc::new(RwLock::new(HashMap::new()));
         let (events_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
 
-        let service = DIDCommService {
+        let service = AffinidiMessageService {
             listeners: listeners.clone(),
             handler: handler.clone(),
             tsp_handler,
@@ -314,6 +327,72 @@ impl DIDCommService {
         crate::transport::send_message(&conn.atm, &conn.profile, message, recipient_did).await
     }
 
+    /// Send a **TSP** message over the listener's shared mediator websocket —
+    /// the TSP counterpart of [`send_message`](Self::send_message).
+    ///
+    /// Resolves the listener's connection and packs+sends via `atm.tsp()`,
+    /// reusing the one per-DID socket (no second connection). Requires the
+    /// `tsp` feature.
+    ///
+    /// This is a TSP **Direct** send sealed to `recipient_did`. For a recipient
+    /// reached through a TSP-routing mediator, use
+    /// [`send_tsp_routed`](Self::send_tsp_routed).
+    #[cfg(feature = "tsp")]
+    pub async fn send_tsp(
+        &self,
+        listener_id: &str,
+        recipient_did: &str,
+        payload: &[u8],
+    ) -> Result<(), DIDCommServiceError> {
+        let conn = {
+            let listeners = self.listeners.read().await;
+            let handle = listeners
+                .get(listener_id)
+                .ok_or_else(|| DIDCommServiceError::ListenerNotFound(listener_id.to_string()))?;
+            handle
+                .connection_rx
+                .borrow()
+                .clone()
+                .ok_or_else(|| DIDCommServiceError::NotConnected(listener_id.to_string()))?
+        };
+
+        conn.atm
+            .tsp()
+            .send(&conn.profile, recipient_did, payload)
+            .await?;
+        Ok(())
+    }
+
+    /// Send a **TSP routed** message through one or more relay hops — metadata-
+    /// private delivery via a TSP-routing mediator. `route` is the ordered hop
+    /// list ending at the final recipient (e.g. `[recipient_mediator, recipient]`).
+    /// Requires the `tsp` feature.
+    #[cfg(feature = "tsp")]
+    pub async fn send_tsp_routed(
+        &self,
+        listener_id: &str,
+        route: &[String],
+        payload: &[u8],
+    ) -> Result<(), DIDCommServiceError> {
+        let conn = {
+            let listeners = self.listeners.read().await;
+            let handle = listeners
+                .get(listener_id)
+                .ok_or_else(|| DIDCommServiceError::ListenerNotFound(listener_id.to_string()))?;
+            handle
+                .connection_rx
+                .borrow()
+                .clone()
+                .ok_or_else(|| DIDCommServiceError::NotConnected(listener_id.to_string()))?
+        };
+
+        conn.atm
+            .tsp()
+            .send_routed(&conn.profile, route, payload)
+            .await?;
+        Ok(())
+    }
+
     /// Like [`send_message`](Self::send_message), but retries on
     /// [`NotConnected`](DIDCommServiceError::NotConnected) errors using
     /// exponential backoff.
@@ -395,7 +474,7 @@ mod tests {
     use affinidi_tdk_common::profiles::TDKProfile;
     use serde_json::json;
 
-    fn make_service() -> DIDCommService {
+    fn make_service() -> AffinidiMessageService {
         use crate::handler::ignore_handler;
         use crate::router::{Router, handler_fn};
 
@@ -403,7 +482,7 @@ mod tests {
             .route("test", handler_fn(ignore_handler))
             .expect("valid route");
         let (events_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
-        DIDCommService {
+        AffinidiMessageService {
             listeners: Arc::new(RwLock::new(HashMap::new())),
             handler: Arc::new(handler),
             tsp_handler: None,
