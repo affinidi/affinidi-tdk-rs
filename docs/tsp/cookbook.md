@@ -51,9 +51,14 @@ feature on:
 
 - **did:web** — added automatically at startup, mirroring the `DIDCommMessaging`
   endpoint (TSP and DIDComm share `/inbound`). No action needed.
-- **did:peer / did:webvh** — the document is bound to the DID, so add the
-  `TSPTransport` service **when you generate the DID**. The mediator logs a
-  startup warning if `tsp` is on but no `TSPTransport` service is advertised.
+- **did:peer / did:webvh** — the document is bound to the DID, so the
+  `TSPTransport` service is baked in **when the DID is generated**. The setup
+  wizard does this automatically when you select the `tsp` protocol; if you
+  hand-roll the DID, add the service yourself. The mediator logs a startup
+  warning if `tsp` is on but no `TSPTransport` service is advertised.
+
+> Running a mediator? See the [operator enablement guide](./enablement.md) for
+> the full build + DID-document + verification walkthrough.
 
 ---
 
