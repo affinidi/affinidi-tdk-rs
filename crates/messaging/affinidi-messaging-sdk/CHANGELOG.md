@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.18.43] - 2026-07-02
+
+- TSP-preferred protocol selection (SDD phase 1). New `ATM::send_to(profile, message, to,
+  from, sign_by)` façade automatically picks TSP or DIDComm and returns the `SendProtocol`
+  used. Selection is governed by a new `TspPolicy` (`Off` default / `Preferred` / `Required`)
+  set via `ATMConfigBuilder::with_tsp_policy`; with the default `Off` nothing changes.
+- Per-peer TSP capability cache folded into `RelationshipStore` (new `get_capability` /
+  `set_capability` trait methods with default no-op impls, so existing stores keep
+  compiling; `InMemoryRelationshipStore` persists it). New `TspOps::select_protocol`,
+  `peer_capability`, `set_peer_capability`; `PeerCapability` / `TspSupport` /
+  `CapabilitySource` types; a configurable capability TTL via
+  `ATMConfigBuilder::with_tsp_capability_ttl` measured against the injected clock.
+- Selection precedence: a fresh cached capability, else a `Bidirectional` relationship
+  (→ TSP, cached), else a DID-doc `TSPTransport` service (→ TSP, tentative), else DIDComm
+  (or an error under `Required`). Additive/patch — no breaking changes.
+
 ## [0.18.41] - 2026-06-29
 
 - TSP relationship methods follow affinidi-tsp 0.1.10's spec-compliant Control encoding:

@@ -57,6 +57,20 @@ pub struct ATMConfig {
     /// [`ATMConfigBuilder::with_relationship_store`].
     #[cfg(feature = "tsp")]
     pub(crate) relationship_store: Arc<dyn crate::protocols::tsp::RelationshipStore>,
+
+    /// Protocol-selection policy for [`crate::ATM::send_to`]. Defaults to
+    /// [`TspPolicy::Off`] — send_to sends DIDComm and never picks TSP — so
+    /// enabling the `tsp` feature alone changes no behaviour. Set
+    /// [`TspPolicy::Preferred`] / [`TspPolicy::Required`] via
+    /// [`ATMConfigBuilder::with_tsp_policy`] to opt in.
+    #[cfg(feature = "tsp")]
+    pub(crate) tsp_policy: crate::protocols::tsp::TspPolicy,
+
+    /// How long a learned per-peer TSP capability stays fresh before it is
+    /// re-derived. `None` (default) = never expires. Measured against the
+    /// injected [`clock`](Self::clock).
+    #[cfg(feature = "tsp")]
+    pub(crate) tsp_capability_ttl: Option<Duration>,
 }
 
 impl ATMConfig {
@@ -80,6 +94,19 @@ impl ATMConfig {
     #[cfg(feature = "tsp")]
     pub(crate) fn relationship_store(&self) -> &Arc<dyn crate::protocols::tsp::RelationshipStore> {
         &self.relationship_store
+    }
+
+    /// The protocol-selection policy for [`crate::ATM::send_to`].
+    #[cfg(feature = "tsp")]
+    pub(crate) fn tsp_policy(&self) -> crate::protocols::tsp::TspPolicy {
+        self.tsp_policy
+    }
+
+    /// The freshness window for a learned per-peer TSP capability (`None` =
+    /// never expires).
+    #[cfg(feature = "tsp")]
+    pub(crate) fn tsp_capability_ttl(&self) -> Option<Duration> {
+        self.tsp_capability_ttl
     }
 
     /// Returns a builder for `ATMConfig`
@@ -118,6 +145,10 @@ pub struct ATMConfigBuilder {
     clock: Option<Arc<dyn Clock>>,
     #[cfg(feature = "tsp")]
     relationship_store: Option<Arc<dyn crate::protocols::tsp::RelationshipStore>>,
+    #[cfg(feature = "tsp")]
+    tsp_policy: crate::protocols::tsp::TspPolicy,
+    #[cfg(feature = "tsp")]
+    tsp_capability_ttl: Option<Duration>,
 }
 
 impl Default for ATMConfigBuilder {
@@ -134,6 +165,10 @@ impl Default for ATMConfigBuilder {
             clock: None,
             #[cfg(feature = "tsp")]
             relationship_store: None,
+            #[cfg(feature = "tsp")]
+            tsp_policy: crate::protocols::tsp::TspPolicy::Off,
+            #[cfg(feature = "tsp")]
+            tsp_capability_ttl: None,
         }
     }
 }
@@ -253,6 +288,28 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// Set the protocol-selection policy for [`crate::ATM::send_to`].
+    ///
+    /// Defaults to [`crate::protocols::tsp::TspPolicy::Off`] (send_to always
+    /// sends DIDComm). [`Preferred`](crate::protocols::tsp::TspPolicy::Preferred)
+    /// picks TSP when the peer is known/derivable to speak it and falls back to
+    /// DIDComm otherwise; [`Required`](crate::protocols::tsp::TspPolicy::Required)
+    /// errors instead of falling back.
+    #[cfg(feature = "tsp")]
+    pub fn with_tsp_policy(mut self, policy: crate::protocols::tsp::TspPolicy) -> Self {
+        self.tsp_policy = policy;
+        self
+    }
+
+    /// Set how long a learned per-peer TSP capability stays fresh before it is
+    /// re-derived. Defaults to `None` (never expires). Measured against the
+    /// injected [`clock`](ATMConfigBuilder::with_clock).
+    #[cfg(feature = "tsp")]
+    pub fn with_tsp_capability_ttl(mut self, ttl: Duration) -> Self {
+        self.tsp_capability_ttl = Some(ttl);
+        self
+    }
+
     pub fn build(self) -> Result<ATMConfig, ATMError> {
         // Process any custom SSL certificates
         let mut certs = vec![];
@@ -295,6 +352,10 @@ impl ATMConfigBuilder {
             relationship_store: self.relationship_store.unwrap_or_else(|| {
                 Arc::new(crate::protocols::tsp::InMemoryRelationshipStore::default())
             }),
+            #[cfg(feature = "tsp")]
+            tsp_policy: self.tsp_policy,
+            #[cfg(feature = "tsp")]
+            tsp_capability_ttl: self.tsp_capability_ttl,
         })
     }
 }

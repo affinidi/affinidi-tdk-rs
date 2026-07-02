@@ -2,6 +2,17 @@
 
 ## Changelog history
 
+## 2nd July 2026
+
+### 0.2.35 — TestEnvironment::spawn_with_tsp_policy + send_to e2e
+
+- New `TestEnvironment::spawn_with_tsp_policy(policy)` builds the SDK's `ATM` with a chosen
+  `TspPolicy`, so `atm.send_to` protocol selection can be driven end-to-end. New
+  `tests/tsp_send_to.rs` exercises the TSP branch (capability `Supported` → TSP, DIDComm
+  `Message` recovered from the TSP payload), the DIDComm fallback (`Unsupported` → forward
+  delivery), and the `Required`-policy error. Internal `new_with_config` now takes the
+  `ATMConfig` explicitly; no behaviour change to existing spawns.
+
 ## 29th June 2026
 
 ### 0.2.34 — TSP federation: advertise TSPTransport in the mediator's did:peer

@@ -37,13 +37,90 @@ use crate::ATM;
 use crate::errors::ATMError;
 use crate::profiles::ATMProfile;
 
-/// Pluggable backing store for TSP relationship state.
+/// Which wire protocol [`crate::ATM::send_to`] chose for a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SendProtocol {
+    /// Sent as a TSP Direct message (`atm.tsp().send`).
+    Tsp,
+    /// Sent as a DIDComm message (`pack_encrypted` + `send_message`).
+    DidComm,
+}
+
+/// Policy governing whether [`crate::ATM::send_to`] may pick TSP over DIDComm.
+///
+/// Set via [`crate::config::ATMConfigBuilder::with_tsp_policy`]. Defaults to
+/// [`Off`](TspPolicy::Off), so enabling the `tsp` feature alone changes no
+/// send behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum TspPolicy {
+    /// Never pick TSP — [`send_to`](crate::ATM::send_to) always sends DIDComm.
+    #[default]
+    Off,
+    /// Pick TSP when the peer is known/derivable to speak it; otherwise fall
+    /// back to DIDComm.
+    Preferred,
+    /// Pick TSP when the peer is known/derivable to speak it; otherwise return
+    /// an error instead of falling back to DIDComm.
+    Required,
+}
+
+/// A peer's known TSP capability — whether its **agent** accepts TSP messages.
+///
+/// Distinct from a DID-document `TSPTransport` advertisement, which only says
+/// the peer's **mediator** speaks TSP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum TspSupport {
+    /// Not yet known — derive from live signals / negotiate.
+    Unknown,
+    /// The peer's agent is known to accept TSP.
+    Supported,
+    /// The peer's agent is known not to accept TSP.
+    Unsupported,
+}
+
+/// How a [`PeerCapability`] was learned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum CapabilitySource {
+    /// Derived from a completed TSP relationship (`Bidirectional`).
+    Relationship,
+    /// Derived from a `TSPTransport` service on the peer's DID document
+    /// (a mediator-level, tentative signal).
+    DidDocument,
+    /// Observed from an inbound TSP message the peer sent us.
+    Observed,
+    /// Set explicitly by the application.
+    Manual,
+}
+
+/// A cached per-peer TSP capability record, stored by [`RelationshipStore`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PeerCapability {
+    /// Whether the peer's agent accepts TSP.
+    pub tsp: TspSupport,
+    /// How this record was learned.
+    pub source: CapabilitySource,
+    /// Unix seconds (against the SDK's configured clock) when learned — used
+    /// for the capability TTL.
+    pub learned_at_unix: u64,
+}
+
+/// Pluggable backing store for TSP relationship state (and learned per-peer
+/// capability).
 ///
 /// The relationship state machine (invite → accept → bidirectional, plus
 /// cancel) is keyed on the `(our_vid, their_vid)` DID pair. The SDK drives the
 /// pure FSM in [`affinidi_tsp::relationship::RelationshipState`] and persists
 /// each new state through this trait, so where the state lives (memory, a
 /// database, …) is up to the consumer.
+///
+/// The same store also caches each peer's learned TSP [`capability`](PeerCapability)
+/// (used by [`crate::ATM::send_to`]); the capability methods have default no-op
+/// implementations so existing stores keep compiling, and durable stores can
+/// override them to persist capability alongside relationship state.
 ///
 /// The default implementation is [`InMemoryRelationshipStore`]; supply a
 /// durable one via
@@ -61,6 +138,28 @@ pub trait RelationshipStore: Send + Sync {
         their_vid: &str,
         state: RelationshipState,
     ) -> Result<(), ATMError>;
+
+    /// Cached TSP capability for the `(our_vid, their_vid)` pair, or `None` if
+    /// unknown. Default impl returns `None` (no capability cache);
+    /// [`InMemoryRelationshipStore`] and durable stores override it.
+    async fn get_capability(
+        &self,
+        _our_vid: &str,
+        _their_vid: &str,
+    ) -> Result<Option<PeerCapability>, ATMError> {
+        Ok(None)
+    }
+
+    /// Persist a learned TSP capability for the `(our_vid, their_vid)` pair.
+    /// Default impl is a no-op.
+    async fn set_capability(
+        &self,
+        _our_vid: &str,
+        _their_vid: &str,
+        _capability: PeerCapability,
+    ) -> Result<(), ATMError> {
+        Ok(())
+    }
 }
 
 /// Default, ephemeral [`RelationshipStore`] backed by an in-memory map.
@@ -74,6 +173,7 @@ pub trait RelationshipStore: Send + Sync {
 #[derive(Default)]
 pub struct InMemoryRelationshipStore {
     inner: RwLock<HashMap<(String, String), RelationshipState>>,
+    capabilities: RwLock<HashMap<(String, String), PeerCapability>>,
 }
 
 #[async_trait::async_trait]
@@ -98,6 +198,139 @@ impl RelationshipStore for InMemoryRelationshipStore {
         let key = (our_vid.to_string(), their_vid.to_string());
         self.inner.write().await.insert(key, state);
         Ok(())
+    }
+
+    async fn get_capability(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+    ) -> Result<Option<PeerCapability>, ATMError> {
+        let key = (our_vid.to_string(), their_vid.to_string());
+        Ok(self.capabilities.read().await.get(&key).copied())
+    }
+
+    async fn set_capability(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        capability: PeerCapability,
+    ) -> Result<(), ATMError> {
+        let key = (our_vid.to_string(), their_vid.to_string());
+        self.capabilities.write().await.insert(key, capability);
+        Ok(())
+    }
+}
+
+impl ATM {
+    /// Send `message` to `to`, automatically choosing TSP or DIDComm per the
+    /// configured [`TspPolicy`] (see [`TspOps::select_protocol`]).
+    ///
+    /// - **DIDComm**: the message is packed (`pack_encrypted`) and sent to the
+    ///   profile's mediator.
+    /// - **TSP**: the message is serialised to JSON and sent as a TSP Direct
+    ///   message (`atm.tsp().send`), which seals it end-to-end; the recipient
+    ///   unpacks the TSP envelope to recover the same JSON [`Message`].
+    ///
+    /// Returns which [`SendProtocol`] was used. With the default
+    /// [`TspPolicy::Off`] this always sends DIDComm, so existing behaviour is
+    /// unchanged until an app opts in via
+    /// [`with_tsp_policy`](crate::config::ATMConfigBuilder::with_tsp_policy).
+    ///
+    /// v1 assumes the recipient shares (or its mediator federates with) the
+    /// sender's mediator; cross-mediator TSP routing to a service-less DID
+    /// (e.g. did:key) is out of scope here — use `atm.tsp().send_routed` for
+    /// explicit multi-hop.
+    ///
+    /// [`Message`]: affinidi_messaging_didcomm::message::Message
+    pub async fn send_to(
+        &self,
+        profile: &Arc<ATMProfile>,
+        message: &affinidi_messaging_didcomm::message::Message,
+        to: &str,
+        from: Option<&str>,
+        sign_by: Option<&str>,
+    ) -> Result<SendProtocol, ATMError> {
+        let protocol = self.tsp().select_protocol(profile, to).await?;
+        match protocol {
+            SendProtocol::Tsp => {
+                let payload = serde_json::to_vec(message).map_err(|e| {
+                    ATMError::MsgSendError(format!("couldn't serialise message for TSP: {e}"))
+                })?;
+                self.tsp().send(profile, to, &payload).await?;
+            }
+            SendProtocol::DidComm => {
+                // Pack for the recipient, then wrap in a single `forward` to the
+                // profile's mediator (`next` = recipient) so it lands in the
+                // recipient's mailbox — the standard DIDComm delivery path,
+                // mirroring TSP's mediator-relative delivery. v1's single-mediator
+                // scope means the recipient shares this mediator.
+                let (packed, _meta) = self.pack_encrypted(message, to, from, sign_by).await?;
+                let (_, mediator_did) = profile.dids()?;
+                let (fwd_id, fwd) = self
+                    .routing()
+                    .forward_message(profile, false, &packed, mediator_did, to, None, None)
+                    .await?;
+                self.send_message(profile, &fwd, &fwd_id, false, false)
+                    .await?;
+            }
+        }
+        Ok(protocol)
+    }
+}
+
+/// The outcome of the pure [`classify_protocol`] precedence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProtocolChoice {
+    /// Use TSP. `cache` names the source to persist as `Supported`, or `None`
+    /// to leave the cache untouched (a tentative signal).
+    Tsp { cache: Option<CapabilitySource> },
+    /// Use DIDComm.
+    DidComm,
+    /// No TSP capability under `Required` policy — the caller turns this into an
+    /// error.
+    Deny,
+}
+
+/// Pure protocol-selection precedence, factored out of
+/// [`TspOps::select_protocol`] so the full truth table is unit-testable without
+/// a live `ATM`. `fresh_cap` is the cached capability (if any, already
+/// TTL-filtered); `has_tsp_service` is whether the peer's DID document
+/// advertises a `TSPTransport` service.
+fn classify_protocol(
+    policy: TspPolicy,
+    fresh_cap: Option<TspSupport>,
+    bidirectional: bool,
+    has_tsp_service: bool,
+) -> ProtocolChoice {
+    if policy == TspPolicy::Off {
+        return ProtocolChoice::DidComm;
+    }
+    // 1. A fresh cached agent-level capability wins.
+    match fresh_cap {
+        Some(TspSupport::Supported) => return ProtocolChoice::Tsp { cache: None },
+        Some(TspSupport::Unsupported) => return deny_or_didcomm(policy),
+        _ => {}
+    }
+    // 2a. A completed relationship is a strong agent-level signal — cache it.
+    if bidirectional {
+        return ProtocolChoice::Tsp {
+            cache: Some(CapabilitySource::Relationship),
+        };
+    }
+    // 2b. A DID-doc `TSPTransport` service is a mediator-level (tentative)
+    // signal — attempt TSP but don't cache it as an agent-level capability.
+    if has_tsp_service {
+        return ProtocolChoice::Tsp { cache: None };
+    }
+    // 3. No TSP signal.
+    deny_or_didcomm(policy)
+}
+
+/// Under `Required`, no-TSP is a denial; otherwise fall back to DIDComm.
+fn deny_or_didcomm(policy: TspPolicy) -> ProtocolChoice {
+    match policy {
+        TspPolicy::Required => ProtocolChoice::Deny,
+        _ => ProtocolChoice::DidComm,
     }
 }
 
@@ -479,6 +712,119 @@ impl TspOps<'_> {
             ControlType::RelationshipCancel => RelationshipEvent::ReceiveCancel,
         };
         advance_state(self.relationship_store(), our_did, peer_did, event).await
+    }
+
+    // ── Protocol selection / capability ───────────────────────────────────────
+
+    /// The cached TSP [`capability`](PeerCapability) for the `(profile, their_did)`
+    /// pair, or `None` if unknown or expired (per the configured TTL / clock).
+    pub async fn peer_capability(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+    ) -> Result<Option<PeerCapability>, ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let cap = self
+            .relationship_store()
+            .get_capability(our_did, their_did)
+            .await?;
+        Ok(cap.filter(|c| self.capability_is_fresh(c)))
+    }
+
+    /// Explicitly record a peer's TSP [`capability`](PeerCapability) — e.g. the
+    /// app learned it out of band. Stamped with the current clock time and
+    /// [`CapabilitySource::Manual`].
+    pub async fn set_peer_capability(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        support: TspSupport,
+    ) -> Result<(), ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let cap = PeerCapability {
+            tsp: support,
+            source: CapabilitySource::Manual,
+            learned_at_unix: self.atm.inner.config.clock().unix_secs(),
+        };
+        self.relationship_store()
+            .set_capability(our_did, their_did, cap)
+            .await
+    }
+
+    /// Whether a cached capability is still within the configured TTL (`None`
+    /// TTL = always fresh).
+    fn capability_is_fresh(&self, cap: &PeerCapability) -> bool {
+        match self.atm.inner.config.tsp_capability_ttl() {
+            None => true,
+            Some(ttl) => {
+                let now = self.atm.inner.config.clock().unix_secs();
+                now.saturating_sub(cap.learned_at_unix) <= ttl.as_secs()
+            }
+        }
+    }
+
+    /// Decide which wire protocol to use for a message to `their_did`, per the
+    /// configured [`TspPolicy`].
+    ///
+    /// Gathers the signals ([`peer_capability`](Self::peer_capability), the
+    /// relationship state, and — only if those are inconclusive — a DID-doc
+    /// `TSPTransport` lookup) and applies the precedence in [`classify_protocol`].
+    /// When a `Bidirectional` relationship is the deciding signal, the peer is
+    /// cached as [`TspSupport::Supported`]. Under [`TspPolicy::Required`] a
+    /// no-TSP outcome is an error rather than a DIDComm fallback.
+    pub async fn select_protocol(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+    ) -> Result<SendProtocol, ATMError> {
+        let policy = self.atm.inner.config.tsp_policy();
+        if policy == TspPolicy::Off {
+            return Ok(SendProtocol::DidComm);
+        }
+
+        let (our_did, _) = profile.dids()?;
+        let store = self.relationship_store();
+
+        let fresh_cap = store
+            .get_capability(our_did, their_did)
+            .await?
+            .filter(|c| self.capability_is_fresh(c))
+            .map(|c| c.tsp);
+        let bidirectional =
+            store.get(our_did, their_did).await? == RelationshipState::Bidirectional;
+
+        // Only resolve the peer's DID document (a network/cache lookup) when the
+        // cheap store signals don't already settle it.
+        let needs_resolve = !matches!(
+            fresh_cap,
+            Some(TspSupport::Supported | TspSupport::Unsupported)
+        ) && !bidirectional;
+        let has_tsp_service = if needs_resolve {
+            self.resolve_vid(their_did)
+                .await
+                .map(|vid| !vid.endpoints.is_empty())
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        match classify_protocol(policy, fresh_cap, bidirectional, has_tsp_service) {
+            ProtocolChoice::Tsp { cache } => {
+                if let Some(source) = cache {
+                    let cap = PeerCapability {
+                        tsp: TspSupport::Supported,
+                        source,
+                        learned_at_unix: self.atm.inner.config.clock().unix_secs(),
+                    };
+                    store.set_capability(our_did, their_did, cap).await?;
+                }
+                Ok(SendProtocol::Tsp)
+            }
+            ProtocolChoice::DidComm => Ok(SendProtocol::DidComm),
+            ProtocolChoice::Deny => Err(ATMError::MsgSendError(format!(
+                "TspPolicy::Required but no TSP capability is known for {their_did}"
+            ))),
+        }
     }
 
     /// POST an already-packed TSP message (raw qb2 bytes) to the mediator
@@ -894,9 +1240,11 @@ mod tests {
     // `affinidi-messaging-test-mediator`.
 
     use super::{
-        InMemoryRelationshipStore, RelationshipEvent, RelationshipState, RelationshipStore,
-        advance_state, next_state,
+        CapabilitySource, InMemoryRelationshipStore, PeerCapability, ProtocolChoice,
+        RelationshipEvent, RelationshipState, RelationshipStore, TspPolicy, TspSupport,
+        advance_state, classify_protocol, next_state,
     };
+    use crate::errors::ATMError;
     use std::sync::Arc;
 
     const ALICE: &str = "did:example:alice";
@@ -924,6 +1272,124 @@ mod tests {
         assert_eq!(
             store.get(BOB, ALICE).await.unwrap(),
             RelationshipState::None
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_capability_roundtrip() {
+        let store = InMemoryRelationshipStore::default();
+        // Unknown pair → None.
+        assert_eq!(store.get_capability(ALICE, BOB).await.unwrap(), None);
+
+        let cap = PeerCapability {
+            tsp: TspSupport::Supported,
+            source: CapabilitySource::Relationship,
+            learned_at_unix: 42,
+        };
+        store.set_capability(ALICE, BOB, cap).await.unwrap();
+        assert_eq!(store.get_capability(ALICE, BOB).await.unwrap(), Some(cap));
+
+        // Directional + independent of relationship state.
+        assert_eq!(store.get_capability(BOB, ALICE).await.unwrap(), None);
+        assert_eq!(
+            store.get(ALICE, BOB).await.unwrap(),
+            RelationshipState::None
+        );
+
+        // Default trait impl (no override) is a no-op that reports Unknown.
+        struct NoCap;
+        #[async_trait::async_trait]
+        impl RelationshipStore for NoCap {
+            async fn get(&self, _: &str, _: &str) -> Result<RelationshipState, ATMError> {
+                Ok(RelationshipState::None)
+            }
+            async fn set(
+                &self,
+                _: &str,
+                _: &str,
+                _: RelationshipState,
+            ) -> Result<(), ATMError> {
+                Ok(())
+            }
+        }
+        let nocap = NoCap;
+        nocap.set_capability(ALICE, BOB, cap).await.unwrap(); // no-op, no error
+        assert_eq!(nocap.get_capability(ALICE, BOB).await.unwrap(), None);
+    }
+
+    // ── classify_protocol truth table (pure) ──────────────────────────────────
+
+    #[test]
+    fn classify_off_is_always_didcomm() {
+        for cap in [None, Some(TspSupport::Supported), Some(TspSupport::Unsupported)] {
+            for bidi in [false, true] {
+                for svc in [false, true] {
+                    assert_eq!(
+                        classify_protocol(TspPolicy::Off, cap, bidi, svc),
+                        ProtocolChoice::DidComm
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn classify_cached_supported_wins() {
+        // A Supported cache short-circuits before relationship / service checks.
+        for policy in [TspPolicy::Preferred, TspPolicy::Required] {
+            assert_eq!(
+                classify_protocol(policy, Some(TspSupport::Supported), false, false),
+                ProtocolChoice::Tsp { cache: None }
+            );
+        }
+    }
+
+    #[test]
+    fn classify_cached_unsupported_short_circuits() {
+        // Unsupported wins even when a TSPTransport service is present.
+        assert_eq!(
+            classify_protocol(TspPolicy::Preferred, Some(TspSupport::Unsupported), true, true),
+            ProtocolChoice::DidComm
+        );
+        assert_eq!(
+            classify_protocol(TspPolicy::Required, Some(TspSupport::Unsupported), true, true),
+            ProtocolChoice::Deny
+        );
+    }
+
+    #[test]
+    fn classify_relationship_selects_tsp_and_caches() {
+        assert_eq!(
+            classify_protocol(TspPolicy::Preferred, None, true, false),
+            ProtocolChoice::Tsp {
+                cache: Some(CapabilitySource::Relationship)
+            }
+        );
+    }
+
+    #[test]
+    fn classify_did_doc_service_is_tentative_tsp_no_cache() {
+        assert_eq!(
+            classify_protocol(TspPolicy::Preferred, None, false, true),
+            ProtocolChoice::Tsp { cache: None }
+        );
+    }
+
+    #[test]
+    fn classify_no_signal_falls_back_or_denies() {
+        // No signal (e.g. a did:key peer we've never talked to).
+        assert_eq!(
+            classify_protocol(TspPolicy::Preferred, None, false, false),
+            ProtocolChoice::DidComm
+        );
+        assert_eq!(
+            classify_protocol(TspPolicy::Required, None, false, false),
+            ProtocolChoice::Deny
+        );
+        // Unknown cached capability behaves like no cache.
+        assert_eq!(
+            classify_protocol(TspPolicy::Preferred, Some(TspSupport::Unknown), false, false),
+            ProtocolChoice::DidComm
         );
     }
 

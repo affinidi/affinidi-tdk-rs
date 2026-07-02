@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.18.42"
+version = "0.18.43"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
