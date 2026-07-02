@@ -437,7 +437,10 @@ fn vault_backend_url(config: &WizardConfig) -> String {
             if !config.secret_vault_approle_mount.is_empty()
                 && config.secret_vault_approle_mount != VAULT_DEFAULT_APPROLE_MOUNT
             {
-                params.push(format!("approle_mount={}", config.secret_vault_approle_mount));
+                params.push(format!(
+                    "approle_mount={}",
+                    config.secret_vault_approle_mount
+                ));
             }
         }
         // "token" or empty → default auth, no `auth=` query parameter.

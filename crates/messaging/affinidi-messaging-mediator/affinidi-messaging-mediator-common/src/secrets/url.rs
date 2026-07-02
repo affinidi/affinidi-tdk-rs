@@ -65,11 +65,24 @@ impl VaultAuth {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BackendUrl {
-    Keyring { service: String },
-    File { path: String, encrypted: bool },
-    Aws { region: String, namespace: String },
-    Gcp { project: String, namespace: String },
-    Azure { vault: String },
+    Keyring {
+        service: String,
+    },
+    File {
+        path: String,
+        encrypted: bool,
+    },
+    Aws {
+        region: String,
+        namespace: String,
+    },
+    Gcp {
+        project: String,
+        namespace: String,
+    },
+    Azure {
+        vault: String,
+    },
     Vault {
         endpoint: String,
         path: String,
@@ -292,13 +305,12 @@ fn parse_vault(rest: &str, raw: &str) -> Result<BackendUrl> {
         Some((l, q)) => (l, Some(q)),
         None => (rest, None),
     };
-    let (endpoint, path) =
-        locator
-            .split_once('/')
-            .ok_or_else(|| SecretStoreError::InvalidUrl {
-                url: raw.to_string(),
-                reason: "vault:// requires '<host>[:<port>]/<kv-path>'".into(),
-            })?;
+    let (endpoint, path) = locator
+        .split_once('/')
+        .ok_or_else(|| SecretStoreError::InvalidUrl {
+            url: raw.to_string(),
+            reason: "vault:// requires '<host>[:<port>]/<kv-path>'".into(),
+        })?;
     if endpoint.is_empty() {
         return Err(SecretStoreError::InvalidUrl {
             url: raw.to_string(),
@@ -344,12 +356,12 @@ fn parse_vault(rest: &str, raw: &str) -> Result<BackendUrl> {
     let auth = match method.unwrap_or("token") {
         "token" => VaultAuth::Token,
         "kubernetes" | "k8s" => {
-            let role = role.filter(|r| !r.is_empty()).ok_or_else(|| {
-                SecretStoreError::InvalidUrl {
-                    url: raw.to_string(),
-                    reason: "vault:// auth=kubernetes requires a 'role' query parameter".into(),
-                }
-            })?;
+            let role =
+                role.filter(|r| !r.is_empty())
+                    .ok_or_else(|| SecretStoreError::InvalidUrl {
+                        url: raw.to_string(),
+                        reason: "vault:// auth=kubernetes requires a 'role' query parameter".into(),
+                    })?;
             VaultAuth::Kubernetes {
                 role,
                 mount: k8s_mount,
@@ -631,7 +643,8 @@ mod tests {
 
     #[test]
     fn vault_kubernetes_auth_with_defaults() {
-        let url = parse_url("vault://vault.internal/secret/mediator?auth=kubernetes&role=med").unwrap();
+        let url =
+            parse_url("vault://vault.internal/secret/mediator?auth=kubernetes&role=med").unwrap();
         assert_eq!(
             url,
             BackendUrl::Vault {
@@ -689,8 +702,8 @@ mod tests {
 
     #[test]
     fn vault_enterprise_namespace_and_insecure() {
-        let url =
-            parse_url("vault://vault.internal/secret/mediator?namespace=team-a&insecure=1").unwrap();
+        let url = parse_url("vault://vault.internal/secret/mediator?namespace=team-a&insecure=1")
+            .unwrap();
         match url {
             BackendUrl::Vault {
                 enterprise_namespace,

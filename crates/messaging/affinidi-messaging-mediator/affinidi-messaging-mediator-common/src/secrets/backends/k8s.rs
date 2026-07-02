@@ -114,9 +114,13 @@ impl K8sStore {
     /// Build a namespaced `Secret` API handle, resolving the namespace and
     /// loading credentials from the in-cluster SA or local kubeconfig.
     async fn api(&self) -> Result<Api<Secret>> {
-        let client = Client::try_default()
-            .await
-            .map_err(|e| kube_error(&self.secret_name, "failed to initialise Kubernetes client", e))?;
+        let client = Client::try_default().await.map_err(|e| {
+            kube_error(
+                &self.secret_name,
+                "failed to initialise Kubernetes client",
+                e,
+            )
+        })?;
         let namespace = self
             .namespace
             .clone()
@@ -222,10 +226,9 @@ impl SecretStore for K8sStore {
     async fn delete(&self, key: &str) -> Result<()> {
         let api = self.api().await?;
         for attempt in 0..MAX_CONFLICT_RETRIES {
-            let Some(mut existing) = api
-                .get_opt(&self.secret_name)
-                .await
-                .map_err(|e| kube_error(&self.secret_name, "failed to read Kubernetes Secret", e))?
+            let Some(mut existing) = api.get_opt(&self.secret_name).await.map_err(|e| {
+                kube_error(&self.secret_name, "failed to read Kubernetes Secret", e)
+            })?
             else {
                 return Ok(()); // Secret absent → nothing to delete.
             };

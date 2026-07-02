@@ -45,13 +45,13 @@ use crate::secrets::retry::{RetryPolicy, Retryable, with_retry};
 #[cfg(feature = "secrets-vault")]
 use crate::secrets::store::SecretStore;
 #[cfg(feature = "secrets-vault")]
+use crate::secrets::url::VaultAuth;
+#[cfg(feature = "secrets-vault")]
 use async_trait::async_trait;
 #[cfg(feature = "secrets-vault")]
 use base64::Engine;
 #[cfg(feature = "secrets-vault")]
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
-#[cfg(feature = "secrets-vault")]
-use crate::secrets::url::VaultAuth;
 #[cfg(feature = "secrets-vault")]
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "secrets-vault")]
@@ -283,9 +283,7 @@ impl VaultStore {
             with_retry(label, &VaultRetryPolicy, || op(&guard)).await
         };
         match first {
-            Err(err)
-                if self.auth.is_renewable() && matches!(api_status(&err), Some(401 | 403)) =>
-            {
+            Err(err) if self.auth.is_renewable() && matches!(api_status(&err), Some(401 | 403)) => {
                 match self.authenticate().await {
                     Ok(fresh) => {
                         *cell.write().await = fresh;

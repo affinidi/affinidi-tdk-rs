@@ -5632,7 +5632,10 @@ mod tests {
         app.text_input = Input::new("secret/mediator".into());
         app.confirm_text_input();
         // Mount confirmed → the auth-method picker (selection mode).
-        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultAuthMethod));
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::VaultAuthMethod)
+        );
         assert_eq!(app.mode, InputMode::Selecting);
 
         app.selection_index = 0; // Token
@@ -5656,7 +5659,10 @@ mod tests {
         app.confirm_text_input(); // endpoint → mount
         app.text_input = Input::new("secret/mediator".into());
         app.confirm_text_input(); // mount → auth method
-        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultAuthMethod));
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::VaultAuthMethod)
+        );
 
         app.selection_index = 1; // Kubernetes
         app.select_current();
@@ -5770,7 +5776,10 @@ mod tests {
         assert_eq!(app.config.secret_vault_mount, "kv/prod-mediator");
         // Mount now leads into the auth-method picker rather than
         // finishing the step directly.
-        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultAuthMethod));
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::VaultAuthMethod)
+        );
 
         // Pick Token (the default) to complete the sub-flow.
         app.selection_index = 0;
