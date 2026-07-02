@@ -2,6 +2,24 @@
 
 ## Changelog history
 
+## 2nd July 2026
+
+### 0.1.18 — bake a `TSPTransport` service into generated `did:peer` / `did:webvh`
+
+- When the operator selects the `tsp` protocol, the generated mediator DID now
+  advertises a `TSPTransport` service so remote mediators can discover its TSP
+  endpoint for routed/nested forwarding. Previously the mediator only logged a
+  startup warning for `did:peer` / `did:webvh` (whose documents are bound to the
+  DID and cannot be mutated at runtime the way `did:web` is).
+  - `did:webvh`: the service is injected into the rendered document before the
+    SCID is computed, so it is covered by the log entry. Endpoint mirrors the
+    `DIDCommMessaging` HTTP endpoint (TSP and DIDComm share `/inbound`).
+  - `did:peer`: a `tsp` service segment (resolver-expanded to `TSPTransport`) is
+    added alongside the `dm` service.
+  - No-op when TSP is not enabled — the default document is byte-identical to
+    before. `did:key` cannot carry a service, so it is unaffected.
+- See `docs/tsp/enablement.md` for the operator walkthrough.
+
 ## 14th June 2026
 
 ### 0.1.13 — bump vta-sdk to 0.13

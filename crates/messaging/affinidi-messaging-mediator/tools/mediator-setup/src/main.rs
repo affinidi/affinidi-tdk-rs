@@ -1232,8 +1232,11 @@ async fn mint_did_material(
     let (did, secrets, did_log, authorization_vc) = match config.did_method.as_str() {
         DID_PEER => {
             let service_uri = did_peer_service_url(&config.public_url, &config.api_prefix);
-            let (did, secrets) =
-                generators::did_peer::generate_did_peer(service_uri, &config.key_suite)?;
+            let (did, secrets) = generators::did_peer::generate_did_peer(
+                service_uri,
+                &config.key_suite,
+                config.tsp_enabled,
+            )?;
             (did, secrets, None, None)
         }
         DID_WEBVH => {
@@ -1254,6 +1257,7 @@ async fn mint_did_material(
                 &address,
                 &service_url,
                 &config.key_suite,
+                config.tsp_enabled,
             )
             .await?;
             (result.did, result.secrets, Some(result.did_doc), None)
