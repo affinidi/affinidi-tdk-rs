@@ -24,7 +24,7 @@ arbitrary = ["dep:arbitrary"]
 # JOSE crypto primitives (#327) — this crate owns only the DIDComm/JOSE
 # envelope layer; all key agreement, KDF, key-wrap, content-encryption,
 # and signing live in affinidi-crypto's `jose` module.
-affinidi-crypto = { version = "0.2.3", features = ["jose"] }
+affinidi-crypto = { version = "0.2", features = ["jose"] }
 
 # Curve crates — still used directly by the adapter for SEC1 point
 # encoding (`ToEncodedPoint`) on resolved public keys.
