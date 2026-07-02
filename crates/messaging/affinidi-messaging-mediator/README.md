@@ -35,8 +35,8 @@ The interactive TUI guides you through:
 2. **Protocol** — DIDComm v2, TSP, or both (dual-protocol)
 3. **DID configuration** — did:peer, did:webvh, or VTA-managed
 4. **Key storage** — file (`?encrypt=1` opt-in), OS keyring, AWS
-   Secrets Manager, GCP Secret Manager, Azure Key Vault, or
-   HashiCorp Vault
+   Secrets Manager, GCP Secret Manager, Azure Key Vault, HashiCorp
+   Vault (token / Kubernetes / AppRole auth), or Kubernetes Secrets
 5. **SSL/TLS** — none (use a proxy), existing certs, or self-signed
 6. **Database** — Redis URL (multi-node cluster) or Fjall data
    directory (single-node embedded LSM, no sidecar)
@@ -150,7 +150,8 @@ the **[TSP cookbook](../../../docs/tsp/cookbook.md)**.
 | `secrets-aws` | No | AWS Secrets Manager (`aws_secrets://`) |
 | `secrets-gcp` | No | GCP Secret Manager (`gcp_secrets://`) |
 | `secrets-azure` | No | Azure Key Vault (`azure_keyvault://`) |
-| `secrets-vault` | No | HashiCorp Vault KV v2 (`vault://`) |
+| `secrets-vault` | No | HashiCorp Vault KV v2 (`vault://`) — token / Kubernetes / AppRole auth |
+| `secrets-k8s` | No | Kubernetes Secrets (`k8s://`) — native `Secret` via the K8s API |
 
 The wizard automatically picks the right feature set and writes the
 exact `cargo build` / `cargo install` / Dockerfile commands when it
@@ -283,10 +284,11 @@ upgrade path.
 cargo run --bin mediator-setup
 ```
 
-At the **Key Storage** step the wizard offers all six backends:
+At the **Key Storage** step the wizard offers all seven backends:
 `keyring://`, `aws_secrets://`, `gcp_secrets://`,
-`azure_keyvault://`, `vault://`, and `file://` (with an opt-in
-`?encrypt=1` envelope-encryption flag for AES-256-GCM + Argon2id).
+`azure_keyvault://`, `vault://` (with a token / Kubernetes / AppRole
+auth picker), `k8s://`, and `file://` (with an opt-in `?encrypt=1`
+envelope-encryption flag for AES-256-GCM + Argon2id).
 `vta://` is not a backend — the VTA is a key *source*, not a
 store; its provisioned bundle is written into whichever real
 backend you pick here.
