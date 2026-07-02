@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.14] - 2026-07-02
+
+Symmetric TSP replies (ADR 0005 stage 6). `TspHandler::handle` now returns
+`Result<Option<TspResponse>, DIDCommServiceError>` instead of `Result<(), _>`, mirroring
+`DIDCommHandler`: return `Ok(Some(TspResponse::new(bytes)))` and the service seals the reply
+to the authenticated `sender_vid` and routes it back over the *same* shared mediator socket
+(no second connection, no consumer-side outbound plumbing). Routing rule: `send_routed(
+[profile_mediator_did, sender_vid])` when the listener profile has a mediator, else a TSP
+Direct `send` fallback. `Ok(None)` keeps the previous one-way (fire-and-forget) behaviour;
+cross-mediator replies remain a consumer concern via `AffinidiMessageService::send_tsp_routed`.
+
+**Breaking**: existing `TspHandler` implementors must change their return type (`Ok(())`
+→ `Ok(None)`, or return `Ok(Some(..))` to reply). `IgnoreTspHandler` now returns `Ok(None)`.
+`tsp`-feature only; default builds are source-compatible. New `TspResponse` type re-exported
+from the crate root.
+
 ## [0.3.12] - 2026-06-30
 
 Fixes the publish-verify failure that has blocked the release pipeline since the listener

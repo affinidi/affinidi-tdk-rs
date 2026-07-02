@@ -14,7 +14,7 @@ pub use error::{ConfigError, DIDCommServiceError, PolicyViolation, StartupError,
 pub use handler::{
     DIDCommHandler, DefaultErrorHandler, ErrorHandler, Extension, Extensions, FromMessageParts,
     HandlerContext, IgnoreTspHandler, MESSAGE_PICKUP_STATUS_TYPE, TRUST_PING_TYPE, TRUST_PONG_TYPE,
-    TspHandler, ignore_handler, trust_ping_handler,
+    TspHandler, TspResponse, ignore_handler, trust_ping_handler,
 };
 pub use middleware::{
     MessagePolicy, MiddlewareHandler, MiddlewareResult, Next, RequestLogging, middleware_fn,

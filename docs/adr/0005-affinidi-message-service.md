@@ -139,3 +139,56 @@ compatibility shim over it (DIDComm-only configuration).
 
 Each stage is a separate PR; stage 5 lands in the VTI repo against the published
 result of 1–4.
+
+## Amendment (2026-07-02) — stage 6: symmetric TSP replies
+
+Stages 1–5 make a node *receive* TSP and *initiate* a TSP send, but the two
+handler surfaces were left asymmetric:
+
+- **DIDComm**: `DIDCommHandler::handle -> Result<Option<DIDCommResponse>, _>`;
+  the listener's `dispatch_message` auto-sends the returned response. A built-in
+  `trust_ping_handler` round-trips for free.
+- **TSP**: `TspHandler::handle -> Result<(), _>`; `dispatch_tsp` discarded any
+  result. A consumer wanting a request/response round-trip (e.g. a VTA health
+  probe, or any Trust Task that returns a document) had to reach into
+  `ctx.atm.tsp()` and re-derive the route back to the sender by hand — the exact
+  outbound plumbing this ADR set out to centralise.
+
+**Decision.** Make `TspHandler` symmetric with `DIDCommHandler`:
+
+```rust
+pub struct TspResponse { pub payload: Vec<u8> }   // sealed + routed to sender_vid
+
+pub trait TspHandler {
+    async fn handle(&self, ctx, payload, sender_vid)
+        -> Result<Option<TspResponse>, DIDCommServiceError>;   // was Result<(), _>
+}
+```
+
+`dispatch_tsp` now mirrors `dispatch_message`: on `Ok(Some(resp))` it seals
+`resp.payload` to the authenticated `sender_vid` and routes it back over the
+**same** shared mediator socket — consumers never touch outbound TSP.
+
+**Reply-routing rule.** A TSP unpack yields only the sender's VID (a bare DID),
+not its mediator, so — unlike DIDComm, where mediator routing falls out of the
+recipient's DID doc — the service must choose a route. It uses the listener
+profile's own mediator: `send_routed([profile_mediator_did, sender_vid])`
+(`ATMProfile::dids()` gives both). This is correct for the common case where
+both parties share one mediator (the case the health probe and most intra-fleet
+traffic hit). If the profile has no mediator, it falls back to a TSP Direct
+`send`. Cross-mediator replies (sender reachable only via a *different* mediator)
+are out of scope for the auto-reply — a handler that needs that returns
+`Ok(None)` and drives `AffinidiMessageService::send_tsp_routed` with an explicit
+route.
+
+**Correlation** stays at the application layer: a TSP frame carries no thread id,
+so a request/response id must live in the payload (e.g. a Trust Task `#response`
+document's `threadId`). The transport ferries bytes; it does not correlate.
+
+**Breaking**: `Result<(), _>` → `Result<Option<TspResponse>, _>`. Existing
+implementors migrate `Ok(())` → `Ok(None)`; `IgnoreTspHandler` returns `Ok(None)`.
+`tsp`-feature-only surface; default builds are source-compatible. Consequently
+the VTI stage-5 `VtaTspHandler` (which today drops the Trust Task response) can
+return it as `Ok(Some(..))` and the round-trip completes — enabling the `pnm
+health` TSP probe end-to-end. Shipped in `affinidi-messaging-didcomm-service`
+0.3.14.
