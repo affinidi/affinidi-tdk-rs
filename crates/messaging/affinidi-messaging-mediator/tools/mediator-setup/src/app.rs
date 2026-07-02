@@ -232,6 +232,23 @@ pub enum KeyStoragePhase {
     /// `vault://` — second prompt: KV v2 mount + optional per-key
     /// namespace glued (e.g. `secret/mediator`).
     VaultMount,
+    /// `vault://` — auth-method picker (Token / Kubernetes / AppRole).
+    /// A selection phase (like [`Self::FileEncryptChoice`]), not text.
+    VaultAuthMethod,
+    /// `vault://` kubernetes auth — Vault role (required).
+    VaultRole,
+    /// `vault://` kubernetes auth — auth mount (default `kubernetes`).
+    VaultK8sMount,
+    /// `vault://` approle auth — auth mount (default `approle`).
+    VaultApproleMount,
+    /// `vault://` — Vault Enterprise namespace (optional). Shared tail of
+    /// the kubernetes and approle sub-flows.
+    VaultNamespace,
+    /// `k8s://` — first prompt: Kubernetes namespace (optional; resolved
+    /// from the ServiceAccount / kubeconfig when blank).
+    K8sNamespace,
+    /// `k8s://` — second prompt: Secret object name (required).
+    K8sSecretName,
 }
 
 /// Literal phrase the operator must type to clear the `file://` hard-gate.
@@ -331,6 +348,7 @@ impl KeyStoragePhase {
             STORAGE_GCP => Some(Self::GcpProject),
             STORAGE_AZURE => Some(Self::AzureVault),
             STORAGE_VAULT => Some(Self::VaultEndpoint),
+            STORAGE_K8S => Some(Self::K8sNamespace),
             _ => None,
         }
     }
@@ -2388,6 +2406,24 @@ impl WizardApp {
                         ),
                     ];
                 }
+                // The Vault auth-method picker also rides the selection
+                // list (like the file encrypt choice above).
+                if self.key_storage_phase == Some(KeyStoragePhase::VaultAuthMethod) {
+                    return vec![
+                        SelectionOption::new(
+                            "Token (VAULT_TOKEN env) [default]",
+                            "Reads the token from the VAULT_TOKEN environment variable at boot.",
+                        ),
+                        SelectionOption::new(
+                            "Kubernetes (pod ServiceAccount)",
+                            "Exchanges the pod's ServiceAccount JWT for a Vault token. Needs a Vault role.",
+                        ),
+                        SelectionOption::new(
+                            "AppRole (VAULT_ROLE_ID / VAULT_SECRET_ID)",
+                            "Logs in with an AppRole; role_id/secret_id come from env vars at boot.",
+                        ),
+                    ];
+                }
                 // Unified secret-storage backends. `vta://` is no longer a
                 // backend (the VTA is a *source* of keys, not a store) and
                 // `string://` has been removed (inline secrets in TOML are
@@ -2412,7 +2448,11 @@ impl WizardApp {
                     ),
                     SelectionOption::new(
                         "HashiCorp Vault (vault://)",
-                        "Enterprise / multi-cloud (KV v2 only)",
+                        "Enterprise / multi-cloud (KV v2 only); token / Kubernetes / AppRole auth",
+                    ),
+                    SelectionOption::new(
+                        "Kubernetes Secrets (k8s://)",
+                        "Native Secret object via the K8s API (in-cluster ServiceAccount)",
                     ),
                     SelectionOption::new(
                         "Local file (file://)",
@@ -2984,6 +3024,28 @@ impl WizardApp {
                     }
                     return;
                 }
+                // Vault auth-method picker (selection mode). Token
+                // finishes the sub-flow; Kubernetes / AppRole branch into
+                // their own text prompts.
+                if self.key_storage_phase == Some(KeyStoragePhase::VaultAuthMethod) {
+                    match self.selection_index {
+                        0 => {
+                            self.config.secret_vault_auth = "token".into();
+                            self.exit_key_storage_subflow();
+                            self.advance();
+                        }
+                        1 => {
+                            self.config.secret_vault_auth = "kubernetes".into();
+                            self.enter_key_storage_phase(KeyStoragePhase::VaultRole);
+                        }
+                        2 => {
+                            self.config.secret_vault_auth = "approle".into();
+                            self.enter_key_storage_phase(KeyStoragePhase::VaultApproleMount);
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
                 // Ignore a stray Enter while a text-input sub-phase is
                 // active — `confirm_text_input` drives those.
                 if self.key_storage_phase.is_some() {
@@ -2995,7 +3057,8 @@ impl WizardApp {
                     2 => STORAGE_GCP.into(),
                     3 => STORAGE_AZURE.into(),
                     4 => STORAGE_VAULT.into(),
-                    5 => STORAGE_FILE.into(),
+                    5 => STORAGE_K8S.into(),
+                    6 => STORAGE_FILE.into(),
                     _ => return,
                 };
                 // Backend with extra config → enter sub-flow. No extra
@@ -3177,6 +3240,12 @@ impl WizardApp {
             KeyStoragePhase::AzureVault => self.config.secret_azure_vault.clone(),
             KeyStoragePhase::VaultEndpoint => self.config.secret_vault_endpoint.clone(),
             KeyStoragePhase::VaultMount => self.config.secret_vault_mount.clone(),
+            KeyStoragePhase::VaultRole => self.config.secret_vault_role.clone(),
+            KeyStoragePhase::VaultK8sMount => self.config.secret_vault_k8s_mount.clone(),
+            KeyStoragePhase::VaultApproleMount => self.config.secret_vault_approle_mount.clone(),
+            KeyStoragePhase::VaultNamespace => self.config.secret_vault_namespace.clone(),
+            KeyStoragePhase::K8sNamespace => self.config.secret_k8s_namespace.clone(),
+            KeyStoragePhase::K8sSecretName => self.config.secret_k8s_secret_name.clone(),
             // Encrypt choice doesn't take text input — render uses
             // selection mode. Short-circuit before touching the input
             // widget so we don't flip mode unexpectedly.
@@ -3187,6 +3256,18 @@ impl WizardApp {
                     0
                 } else {
                     1
+                };
+                return;
+            }
+            // Vault auth-method picker is also selection-mode. Preselect
+            // the current method so re-entry doesn't reset the choice.
+            KeyStoragePhase::VaultAuthMethod => {
+                self.key_storage_phase = Some(phase);
+                self.mode = InputMode::Selecting;
+                self.selection_index = match self.config.secret_vault_auth.as_str() {
+                    "kubernetes" => 1,
+                    "approle" => 2,
+                    _ => 0,
                 };
                 return;
             }
@@ -3349,6 +3430,51 @@ impl WizardApp {
                 if !value.is_empty() {
                     self.config.secret_vault_mount = value;
                 }
+                // Mount collected — pick the auth method next.
+                self.enter_key_storage_phase(KeyStoragePhase::VaultAuthMethod);
+            }
+            KeyStoragePhase::VaultAuthMethod => {
+                // Driven via select_current (selection mode); the
+                // text-input branch is unreachable. No-op if hit.
+            }
+            KeyStoragePhase::VaultRole => {
+                if value.is_empty() {
+                    // Kubernetes auth needs a role — no sensible default.
+                    return;
+                }
+                self.config.secret_vault_role = value;
+                self.enter_key_storage_phase(KeyStoragePhase::VaultK8sMount);
+            }
+            KeyStoragePhase::VaultK8sMount => {
+                // Empty keeps the backend default (`kubernetes`); the
+                // URL builder omits the param in that case.
+                self.config.secret_vault_k8s_mount = value;
+                self.enter_key_storage_phase(KeyStoragePhase::VaultNamespace);
+            }
+            KeyStoragePhase::VaultApproleMount => {
+                // Empty keeps the backend default (`approle`).
+                self.config.secret_vault_approle_mount = value;
+                self.enter_key_storage_phase(KeyStoragePhase::VaultNamespace);
+            }
+            KeyStoragePhase::VaultNamespace => {
+                // Vault Enterprise namespace — optional; empty = none.
+                self.config.secret_vault_namespace = value;
+                self.exit_key_storage_subflow();
+                self.advance();
+            }
+            KeyStoragePhase::K8sNamespace => {
+                // Empty is allowed — the backend resolves the namespace
+                // from the ServiceAccount / kubeconfig at connect time.
+                self.config.secret_k8s_namespace = value;
+                self.enter_key_storage_phase(KeyStoragePhase::K8sSecretName);
+            }
+            KeyStoragePhase::K8sSecretName => {
+                if value.is_empty() {
+                    // The Secret name is required — no default that would
+                    // be safe to guess across clusters.
+                    return;
+                }
+                self.config.secret_k8s_secret_name = value;
                 self.exit_key_storage_subflow();
                 self.advance();
             }
@@ -3372,6 +3498,29 @@ impl WizardApp {
             }
             KeyStoragePhase::VaultMount => {
                 self.enter_key_storage_phase(KeyStoragePhase::VaultEndpoint);
+            }
+            KeyStoragePhase::VaultAuthMethod => {
+                self.enter_key_storage_phase(KeyStoragePhase::VaultMount);
+            }
+            KeyStoragePhase::VaultRole => {
+                self.enter_key_storage_phase(KeyStoragePhase::VaultAuthMethod);
+            }
+            KeyStoragePhase::VaultK8sMount => {
+                self.enter_key_storage_phase(KeyStoragePhase::VaultRole);
+            }
+            KeyStoragePhase::VaultApproleMount => {
+                self.enter_key_storage_phase(KeyStoragePhase::VaultAuthMethod);
+            }
+            KeyStoragePhase::VaultNamespace => {
+                // Return to whichever auth sub-flow led here.
+                if self.config.secret_vault_auth == "approle" {
+                    self.enter_key_storage_phase(KeyStoragePhase::VaultApproleMount);
+                } else {
+                    self.enter_key_storage_phase(KeyStoragePhase::VaultK8sMount);
+                }
+            }
+            KeyStoragePhase::K8sSecretName => {
+                self.enter_key_storage_phase(KeyStoragePhase::K8sNamespace);
             }
             _ => {
                 self.exit_key_storage_subflow();
@@ -5231,7 +5380,7 @@ mod tests {
         app.current_step = WizardStep::KeyStorage;
         // "Local file (file://)" lives at index 5 after vta:// and
         // string:// were dropped from the selection list.
-        app.selection_index = 5;
+        app.selection_index = 6; // file:// (k8s inserted at 5)
         app.select_current();
         assert_eq!(app.config.secret_storage, STORAGE_FILE);
         assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::FileGate));
@@ -5266,7 +5415,7 @@ mod tests {
         // rejects empty input and exports the value via env on confirm.
         let mut app = WizardApp::new("test.toml".into());
         app.current_step = WizardStep::KeyStorage;
-        app.selection_index = 5; // file://
+        app.selection_index = 6; // file:// (k8s inserted at 5)
         app.select_current();
         // Walk through the gate + path with defaults.
         app.text_input = Input::new(FILE_GATE_PHRASE.into());
@@ -5343,7 +5492,7 @@ mod tests {
         //   5. Leave the env var unset
         let mut app = WizardApp::new("test.toml".into());
         app.current_step = WizardStep::KeyStorage;
-        app.selection_index = 5; // file://
+        app.selection_index = 6; // file:// (k8s inserted at 5)
         app.select_current();
         app.text_input = Input::new(FILE_GATE_PHRASE.into());
         app.confirm_text_input();
@@ -5401,7 +5550,7 @@ mod tests {
         // with `secret_storage` cleared so they have to re-pick.
         let mut app = WizardApp::new("test.toml".into());
         app.current_step = WizardStep::KeyStorage;
-        app.selection_index = 5; // file://
+        app.selection_index = 6; // file:// (k8s inserted at 5)
         app.select_current();
         assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::FileGate));
 
@@ -5420,7 +5569,7 @@ mod tests {
         // back out without typing the phrase.
         let mut app = WizardApp::new("test.toml".into());
         app.current_step = WizardStep::KeyStorage;
-        app.selection_index = 5; // file://
+        app.selection_index = 6; // file:// (k8s inserted at 5)
         app.select_current();
         assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::FileGate));
 
@@ -5441,6 +5590,97 @@ mod tests {
         app.confirm_text_input();
         assert_eq!(app.config.secret_keyring_service, "affinidi-prod-mediator");
         assert_eq!(app.current_step, WizardStep::Vta);
+    }
+
+    #[test]
+    fn keystorage_k8s_backend_walks_namespace_then_secret_name() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 5; // Kubernetes Secrets (k8s://)
+        app.select_current();
+        assert_eq!(app.config.secret_storage, STORAGE_K8S);
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::K8sNamespace));
+
+        app.text_input = Input::new("affinidi".into());
+        app.confirm_text_input();
+        assert_eq!(app.config.secret_k8s_namespace, "affinidi");
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::K8sSecretName));
+
+        app.text_input = Input::new("mediator-secrets".into());
+        app.confirm_text_input();
+        assert_eq!(app.config.secret_k8s_secret_name, "mediator-secrets");
+        assert!(!app.in_key_storage_subflow());
+        assert_eq!(app.current_step, WizardStep::Vta);
+        assert_eq!(
+            crate::config_writer::build_backend_url(&app.config),
+            "k8s://affinidi/mediator-secrets"
+        );
+    }
+
+    #[test]
+    fn keystorage_vault_token_auth_finishes_after_method_pick() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 4; // HashiCorp Vault
+        app.select_current();
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultEndpoint));
+
+        app.text_input = Input::new("vault.internal:8200".into());
+        app.confirm_text_input();
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultMount));
+
+        app.text_input = Input::new("secret/mediator".into());
+        app.confirm_text_input();
+        // Mount confirmed → the auth-method picker (selection mode).
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultAuthMethod));
+        assert_eq!(app.mode, InputMode::Selecting);
+
+        app.selection_index = 0; // Token
+        app.select_current();
+        assert_eq!(app.config.secret_vault_auth, "token");
+        assert!(!app.in_key_storage_subflow());
+        assert_eq!(app.current_step, WizardStep::Vta);
+        assert_eq!(
+            crate::config_writer::build_backend_url(&app.config),
+            "vault://vault.internal:8200/secret/mediator"
+        );
+    }
+
+    #[test]
+    fn keystorage_vault_kubernetes_auth_collects_role_and_namespace() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 4; // Vault
+        app.select_current();
+        app.text_input = Input::new("vault.internal".into());
+        app.confirm_text_input(); // endpoint → mount
+        app.text_input = Input::new("secret/mediator".into());
+        app.confirm_text_input(); // mount → auth method
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultAuthMethod));
+
+        app.selection_index = 1; // Kubernetes
+        app.select_current();
+        assert_eq!(app.config.secret_vault_auth, "kubernetes");
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultRole));
+
+        app.text_input = Input::new("mediator".into());
+        app.confirm_text_input(); // role → k8s mount
+        assert_eq!(app.config.secret_vault_role, "mediator");
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultK8sMount));
+
+        app.text_input = Input::new(String::new()); // keep the default mount
+        app.confirm_text_input(); // k8s mount → namespace
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultNamespace));
+
+        app.text_input = Input::new("team-a".into());
+        app.confirm_text_input(); // namespace → done
+        assert_eq!(app.config.secret_vault_namespace, "team-a");
+        assert!(!app.in_key_storage_subflow());
+        assert_eq!(app.current_step, WizardStep::Vta);
+        assert_eq!(
+            crate::config_writer::build_backend_url(&app.config),
+            "vault://vault.internal/secret/mediator?auth=kubernetes&role=mediator&namespace=team-a"
+        );
     }
 
     #[test]
@@ -5528,6 +5768,14 @@ mod tests {
         app.text_input = Input::new("kv/prod-mediator".into());
         app.confirm_text_input();
         assert_eq!(app.config.secret_vault_mount, "kv/prod-mediator");
+        // Mount now leads into the auth-method picker rather than
+        // finishing the step directly.
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultAuthMethod));
+
+        // Pick Token (the default) to complete the sub-flow.
+        app.selection_index = 0;
+        app.select_current();
+        assert_eq!(app.config.secret_vault_auth, "token");
         assert!(!app.in_key_storage_subflow());
         assert_eq!(app.current_step, WizardStep::Vta);
     }
