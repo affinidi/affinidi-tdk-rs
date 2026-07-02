@@ -1030,6 +1030,54 @@ fn augment_did_web_doc_with_tsp_service(doc: &mut Document, did: &str) -> Option
     serde_json::to_string(doc).ok()
 }
 
+/// Warn when the mediator's DID document advertises a `TSPTransport` service but
+/// the binary was built **without** the `tsp` feature. Some DID templates (e.g.
+/// the VTA / self-hosted webvh `didcomm-mediator` template) may carry a `#tsp`
+/// service unconditionally; if TSP was not compiled in, the mediator cannot
+/// actually sniff or handle TSP at ingress, so remote peers that resolve the
+/// service and route TSP here will have their messages misclassified as DIDComm
+/// and rejected. This is the inverse of [`apply_tsp_did_advertisement`]'s
+/// "TSP on but nothing advertised" warning; it runs only on non-TSP builds.
+///
+/// The `TSPTransport` type is spelled out here rather than referenced via
+/// `affinidi_tsp::TSP_SERVICE_TYPE` because that crate is not a dependency when
+/// the `tsp` feature is off; the two must stay in sync (both are `"TSPTransport"`).
+#[cfg(not(feature = "tsp"))]
+pub(crate) fn warn_if_tsp_advertised_without_feature(config: &Config) {
+    const TSP_SERVICE_TYPE: &str = "TSPTransport";
+
+    let advertises_tsp = config
+        .mediator_did_document
+        .as_ref()
+        .map(|doc| {
+            doc.service
+                .iter()
+                .any(|s| s.type_.iter().any(|t| t == TSP_SERVICE_TYPE))
+        })
+        .or_else(|| {
+            config
+                .mediator_did_doc
+                .as_ref()
+                .and_then(|json| serde_json::from_str::<Document>(json).ok())
+                .map(|doc| {
+                    doc.service
+                        .iter()
+                        .any(|s| s.type_.iter().any(|t| t == TSP_SERVICE_TYPE))
+                })
+        })
+        .unwrap_or(false);
+
+    if advertises_tsp {
+        warn!(
+            "The mediator DID document advertises a '{TSP_SERVICE_TYPE}' service, but this \
+             binary was built without the `tsp` feature. Remote mediators will attempt to \
+             route TSP here and their messages will be rejected. Either rebuild with \
+             `--features didcomm,tsp` or remove the '{TSP_SERVICE_TYPE}' service from the \
+             DID document (for VTA-managed DIDs, disable TSP in the DID template)."
+        );
+    }
+}
+
 pub async fn init(config_file: &str, with_ansi: bool) -> Result<Config, MediatorError> {
     // Read configuration file parameters. `read_config_file` lives in the config
     // crate now (returns its lean `ConfigError`); map it back to MediatorError.

@@ -157,16 +157,22 @@ pub async fn generate_did_webvh(
         .render(&vars)
         .map_err(|e| anyhow::anyhow!("Failed to render mediator template: {e}"))?;
 
-    // ── Opt-in TSP service ──────────────────────────────────────────
-    // did:webvh binds the document to the DID (SCID), so the mediator
-    // runtime cannot mutate it in place the way it does for did:web — the
-    // `TSPTransport` service must be baked in here, before `create_did`
-    // computes the SCID. The `{DID}#tsp` id keeps the same sentinel the
-    // template uses; `didwebvh-rs` resolves it across the whole document
-    // after SCID computation. No-op when the operator didn't enable TSP,
-    // so the default document is byte-identical to before.
+    // ── TSP service, matched to the operator's choice ───────────────
+    // did:webvh binds the document to the DID (SCID), so the mediator runtime
+    // cannot mutate it the way it does for did:web — the `TSPTransport` service
+    // must be settled here, before `create_did` computes the SCID.
+    //
+    // The shipped `didcomm-mediator` template advertises a `#tsp` service
+    // *unconditionally*, so we normalise both ways: ensure it's present when
+    // TSP is enabled (a no-op with the current template; a safety net for a
+    // forked template that lacks it), and strip it when TSP is off so a
+    // DIDComm-only mediator doesn't mislead peers into routing TSP it can't
+    // handle. The `{DID}#tsp` id keeps the template's sentinel; `didwebvh-rs`
+    // resolves it across the whole document after SCID computation.
     if tsp_enabled {
         augment_webvh_doc_with_tsp_service(&mut did_document)?;
+    } else {
+        strip_tsp_service(&mut did_document);
     }
 
     // ── Authorization + pre-rotation ───────────────────────────────
@@ -295,6 +301,26 @@ fn augment_webvh_doc_with_tsp_service(did_document: &mut serde_json::Value) -> a
     Ok(())
 }
 
+/// Remove any `TSPTransport` service from a rendered (pre-SCID) DID document.
+///
+/// The shipped `didcomm-mediator` template advertises a `#tsp` service
+/// unconditionally; when the operator did **not** enable TSP we drop it so a
+/// DIDComm-only mediator doesn't advertise a transport it can't serve. A no-op
+/// when no such service is present (e.g. a forked template without one).
+fn strip_tsp_service(did_document: &mut serde_json::Value) {
+    use serde_json::Value;
+
+    if let Some(services) = did_document.get_mut("service").and_then(Value::as_array_mut) {
+        services.retain(|svc| {
+            !svc.get("type").is_some_and(|t| match t {
+                Value::String(s) => s == "TSPTransport",
+                Value::Array(arr) => arr.iter().any(|v| v.as_str() == Some("TSPTransport")),
+                _ => false,
+            })
+        });
+    }
+}
+
 /// Convert a did:webvh log entry into the equivalent did:web DID document.
 ///
 /// Re-exported from `affinidi-messaging-mediator-common` so the wizard's
@@ -346,13 +372,19 @@ mod tests {
         assert_eq!(doc["authentication"].as_array().unwrap().len(), 1);
         assert_eq!(doc["keyAgreement"].as_array().unwrap().len(), 1);
 
-        // Locate services by `type` rather than position — the template may
-        // advertise additional transports (e.g. a `#tsp` TSPTransport entry)
-        // ahead of the DIDComm one, and the canonical preference order is not
-        // this test's concern.
+        // Locate services by `type` rather than position — the canonical
+        // preference order is not this test's concern.
         let services = doc["service"].as_array().unwrap();
         let service_type_is =
             |svc: &Value, want: &str| svc["type"] == json!([want]) || svc["type"] == json!(want);
+        // TSP was NOT enabled, so the template's unconditional `#tsp` service
+        // must be stripped — a DIDComm-only mediator must not advertise TSP.
+        assert!(
+            !services
+                .iter()
+                .any(|svc| service_type_is(svc, "TSPTransport")),
+            "TSPTransport must be stripped when TSP is disabled"
+        );
         let didcomm = services
             .iter()
             .find(|svc| service_type_is(svc, "DIDCommMessaging"))
@@ -568,5 +600,32 @@ mod tests {
         .unwrap();
         let err = augment_webvh_doc_with_tsp_service(&mut doc).unwrap_err();
         assert!(err.to_string().contains("DIDCommMessaging"));
+    }
+
+    #[test]
+    fn strip_removes_tsp_but_keeps_other_services() {
+        let mut doc: Value = serde_json::from_str(
+            r#"{"service":[
+                {"id":"{DID}#service","type":["DIDCommMessaging"],"serviceEndpoint":[{"uri":"https://x/"}]},
+                {"id":"{DID}#tsp","type":["TSPTransport"],"serviceEndpoint":"https://x/"},
+                {"id":"{DID}#auth","type":["Authentication"],"serviceEndpoint":"https://x/authenticate"}
+            ]}"#,
+        )
+        .unwrap();
+        strip_tsp_service(&mut doc);
+        let services = doc["service"].as_array().unwrap();
+        assert_eq!(services.len(), 2);
+        assert!(!services.iter().any(|s| s["type"] == json!(["TSPTransport"])));
+        assert!(services.iter().any(|s| s["type"] == json!(["DIDCommMessaging"])));
+        assert!(services.iter().any(|s| s["type"] == json!(["Authentication"])));
+    }
+
+    #[test]
+    fn strip_is_a_noop_without_a_tsp_service() {
+        let src = r#"{"service":[{"id":"{DID}#service","type":["DIDCommMessaging"],"serviceEndpoint":[{"uri":"https://x/"}]}]}"#;
+        let mut doc: Value = serde_json::from_str(src).unwrap();
+        let before = doc.clone();
+        strip_tsp_service(&mut doc);
+        assert_eq!(doc, before);
     }
 }

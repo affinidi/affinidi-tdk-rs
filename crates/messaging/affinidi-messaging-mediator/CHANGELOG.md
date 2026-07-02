@@ -2,6 +2,19 @@
 
 ## Changelog history
 
+## 2nd July 2026
+
+### 0.16.39 — warn when TSP is advertised on a build without the `tsp` feature
+
+- Added a startup consistency check for DIDComm-only builds: if the mediator's
+  DID document advertises a `TSPTransport` service but the binary was built
+  without the `tsp` feature, the mediator now warns. Some DID templates (VTA /
+  self-hosted webvh `didcomm-mediator`) carry a `#tsp` service unconditionally;
+  without the `tsp` feature the mediator can't sniff or handle TSP at ingress,
+  so remote peers routing TSP here would have their messages misclassified as
+  DIDComm and rejected. This is the inverse of the existing "TSP enabled but no
+  service advertised" warning. No behaviour change to TSP-enabled builds.
+
 ## 30th June 2026
 
 ### 0.16.37 — feat: ES256 (P-256) JWS verification; reject unknown JWS algs
