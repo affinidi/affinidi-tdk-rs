@@ -39,6 +39,7 @@ jobs:
     env:
       # Override the repo's stable rust-toolchain.toml for this job.
       RUSTUP_TOOLCHAIN: nightly
+      CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
 
