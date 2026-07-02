@@ -4,6 +4,19 @@
 
 ## 2nd July 2026
 
+### 0.1.20 — advertise `TSPTransport` on VTA-minted mediators only when TSP is enabled
+
+- Completes the TSP-advertisement consistency work for the VTA-managed DID
+  path. When the operator enables the `tsp` protocol, the wizard now injects a
+  `SERVICE_TSP` service object into the VTA provisioning request's
+  `integration_template_vars`, so the VTA renders a `#tsp` `TSPTransport`
+  service on the minted mediator DID (endpoint mirrors the DIDComm `URL`). When
+  TSP is off, nothing is injected and the mediator advertises no TSP transport.
+- Requires vta-sdk >= 0.18.15, whose `didcomm-mediator` template renders `#tsp`
+  only when `SERVICE_TSP` is supplied (previously it was unconditional). The
+  self-hosted `did:webvh` / `did:peer` paths were already handled in 0.1.18 /
+  0.1.19; this closes the last (VTA) gap.
+
 ### 0.1.19 — strip `TSPTransport` from generated `did:webvh` when TSP is disabled
 
 - The shipped `didcomm-mediator` template (vta-sdk) advertises a `#tsp`
