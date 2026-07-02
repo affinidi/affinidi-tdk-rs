@@ -4,6 +4,13 @@
 
 ## 2nd July 2026
 
+### 0.2.36 — TSP capability-learning e2e
+
+- New `tests/tsp_capability.rs` covers SDD phase 2: observing an inbound TSP message
+  upgrades a peer to `Supported` so `send_to` switches DIDComm → TSP; the same is inert
+  under the default `Off` policy; and a full relationship handshake (the repo's first
+  end-to-end TSP invite/accept) marks both peers `Supported`.
+
 ### 0.2.35 — TestEnvironment::spawn_with_tsp_policy + send_to e2e
 
 - New `TestEnvironment::spawn_with_tsp_policy(policy)` builds the SDK's `ATM` with a chosen

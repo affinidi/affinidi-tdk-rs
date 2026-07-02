@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.45] - 2026-07-02
+
+- TSP capability learning (SDD phase 2): the per-peer TSP capability cache is now
+  populated automatically, so `atm.send_to` upgrades a peer from DIDComm to TSP once
+  we know their agent speaks it. A peer is marked `Supported` when a relationship
+  completes (`accept_relationship` / `record_incoming_control` reaching `Bidirectional`)
+  or when an authenticated inbound TSP message is observed (`unpack` / `unpack_bytes` /
+  `unpack_control`). Learning is a no-op under the default `TspPolicy::Off` (no extra
+  store writes) and skips redundant writes when a fresh `Supported` record already exists.
+
 ## [0.18.44] - 2026-07-02
 
 - Fix a poison-message loop: `MessagePickup::live_stream_next` / `live_stream_get` errored
