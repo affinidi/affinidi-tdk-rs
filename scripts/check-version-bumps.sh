@@ -50,15 +50,21 @@ if [ -z "$changed" ]; then
   exit 0
 fi
 
-# Publishable crates as  name<TAB>relative-crate-dir  lines, longest dir first
+# ALL crates as  pub<TAB>name<TAB>relative-crate-dir  lines, longest dir first
 # so the most specific crate wins for nested manifests (e.g. affinidi-tdk vs
-# affinidi-tdk/common).
+# affinidi-tdk/common). `pub` is 1 for publishable, 0 otherwise.
+#
+# We include non-publishable crates here (not just publishable ones) so a file
+# under a nested `publish = false` package (e.g. the mediator-setup tool nested
+# in the publishable affinidi-messaging-mediator dir) is attributed to that
+# nested package and skipped — rather than bubbling up to the publishable parent
+# and demanding a spurious bump for source that never reaches crates.io.
 crates=$(cargo metadata --format-version 1 --no-deps 2>/dev/null \
   | jq -r '.packages[]
-      | select(.publish == null or .publish == ["crates.io"])
-      | "\(.name)\t\(.manifest_path)"' \
+      | (if (.publish == null or .publish == ["crates.io"]) then "1" else "0" end) as $pub
+      | "\($pub)\t\(.name)\t\(.manifest_path)"' \
   | sed "s|\t$ROOT/|\t|; s|/Cargo.toml\$||" \
-  | awk -F'\t' '{ print length($2)"\t"$0 }' \
+  | awk -F'\t' '{ print length($3)"\t"$0 }' \
   | sort -rn \
   | cut -f2-)
 
@@ -74,13 +80,13 @@ is_source() {
   esac
 }
 
-# attribute a changed file to its most-specific publishable crate dir
-crate_of() { # $1 = changed path -> prints "name<TAB>dir" or nothing
-  local path="$1" name dir
-  while IFS=$'\t' read -r name dir; do
+# attribute a changed file to its most-specific crate dir (publishable or not)
+crate_of() { # $1 = changed path -> prints "pub<TAB>name<TAB>dir" or nothing
+  local path="$1" pub name dir
+  while IFS=$'\t' read -r pub name dir; do
     [ -z "$dir" ] && continue
     case "$path" in
-      "$dir"/*) printf '%s\t%s\n' "$name" "$dir"; return 0 ;;
+      "$dir"/*) printf '%s\t%s\t%s\n' "$pub" "$name" "$dir"; return 0 ;;
     esac
   done <<EOF
 $crates
@@ -93,8 +99,12 @@ while IFS= read -r f; do
   [ -z "$f" ] && continue
   hit=$(crate_of "$f") || true
   [ -z "$hit" ] && continue
-  name=$(printf '%s' "$hit" | cut -f1)
-  dir=$(printf '%s' "$hit" | cut -f2)
+  pub=$(printf '%s' "$hit" | cut -f1)
+  name=$(printf '%s' "$hit" | cut -f2)
+  dir=$(printf '%s' "$hit" | cut -f3)
+  # A file whose most-specific owner is a non-publishable crate never reaches
+  # crates.io (even when nested under a publishable parent dir) — skip it.
+  [ "$pub" = "1" ] || continue
   rel=${f#"$dir"/}
   is_source "$rel" || continue
   case "

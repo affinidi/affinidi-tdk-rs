@@ -93,14 +93,20 @@ async fn observed_inbound_tsp_upgrades_send_to() {
         .send_to(&alice.profile, &m2, &bob.did, Some(&alice.did), None)
         .await
         .expect("send_to bob (2)");
-    assert_eq!(via2, SendProtocol::Tsp, "learned capability upgrades to TSP");
+    assert_eq!(
+        via2,
+        SendProtocol::Tsp,
+        "learned capability upgrades to TSP"
+    );
 }
 
 /// Under the default `Off` policy, capability tracking is inert — observing an
 /// inbound TSP message writes nothing, so behaviour is unchanged.
 #[tokio::test]
 async fn observed_inbound_is_inert_under_off_policy() {
-    let env = TestEnvironment::spawn().await.expect("spawn default (Off) env");
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn default (Off) env");
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
 

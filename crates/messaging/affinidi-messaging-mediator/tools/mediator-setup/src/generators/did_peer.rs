@@ -151,9 +151,12 @@ mod tests {
 
     #[test]
     fn test_generate_did_peer_with_service() {
-        let (did, secrets) =
-            generate_did_peer(Some("http://localhost:7037/mediator/v1/".into()), &[], false)
-                .unwrap();
+        let (did, secrets) = generate_did_peer(
+            Some("http://localhost:7037/mediator/v1/".into()),
+            &[],
+            false,
+        )
+        .unwrap();
         assert!(did.starts_with("did:peer:2.V"));
         assert_eq!(did.matches(".S").count(), 2);
         assert_eq!(secrets.len(), 2);
@@ -181,7 +184,8 @@ mod tests {
         // mediator's HTTP `/inbound` base with DIDComm. The resolver expands
         // the `tsp` abbreviation to `TSPTransport`.
         let (did, _secrets) =
-            generate_did_peer(Some("http://localhost:7037/mediator/v1/".into()), &[], true).unwrap();
+            generate_did_peer(Some("http://localhost:7037/mediator/v1/".into()), &[], true)
+                .unwrap();
         assert_eq!(did.matches(".S").count(), 3);
 
         let services = decode_service_segments(&did);

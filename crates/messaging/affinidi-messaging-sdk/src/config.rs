@@ -338,13 +338,33 @@ impl ATMConfigBuilder {
             ));
         }
 
+        // When TSP protocol selection is enabled, advertise the TSP capability
+        // URI in Discover Features 2.0 so peers can discover it proactively
+        // (symmetric with `send_to` preferring TSP for peers known to support it).
+        #[cfg(feature = "tsp")]
+        let discover_features = {
+            let mut df = self.discover_features;
+            if self.tsp_policy != crate::protocols::tsp::TspPolicy::Off
+                && !df
+                    .protocols
+                    .iter()
+                    .any(|p| p == crate::protocols::tsp::TSP_DISCOVER_FEATURE_URI)
+            {
+                df.protocols
+                    .push(crate::protocols::tsp::TSP_DISCOVER_FEATURE_URI.to_string());
+            }
+            df
+        };
+        #[cfg(not(feature = "tsp"))]
+        let discover_features = self.discover_features;
+
         Ok(ATMConfig {
             ssl_certificates: certs,
             fetch_cache_limit_count: self.fetch_cache_limit_count,
             fetch_cache_limit_bytes: self.fetch_cache_limit_bytes,
             inbound_message_channel: self.inbound_message_channel,
             unpack_forwards: self.unpack_forwards,
-            discover_features: Arc::new(RwLock::new(self.discover_features)),
+            discover_features: Arc::new(RwLock::new(discover_features)),
             curve_preference: self.curve_preference,
             request_timeout: self.request_timeout,
             clock: self.clock.unwrap_or_else(|| Arc::new(SystemClock)),
