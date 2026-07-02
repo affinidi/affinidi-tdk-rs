@@ -70,14 +70,12 @@ pub async fn run_provision_flight(
     context: String,
     mediator_url: String,
     label: Option<String>,
+    tsp_enabled: bool,
     webvh_server_id: Option<String>,
     webvh_path: Option<String>,
     tx: UnboundedSender<VtaEvent>,
 ) {
-    let mut ask = ProvisionAsk::didcomm_mediator(context, mediator_url);
-    if let Some(label) = label {
-        ask = ask.with_label(label);
-    }
+    let ask = build_mediator_ask(context, mediator_url, label, tsp_enabled);
     let messages: Arc<dyn OperatorMessages> = Arc::new(MediatorMessages);
     provision_client::run_provision_flight(
         vta_did,
@@ -92,4 +90,81 @@ pub async fn run_provision_flight(
         tx,
     )
     .await;
+}
+
+/// Build the `didcomm-mediator` provisioning ask, optionally advertising a
+/// `TSPTransport` service on the minted mediator DID.
+///
+/// The `didcomm-mediator` template (vta-sdk >= 0.18.15) renders `#tsp` only
+/// when `SERVICE_TSP` is supplied. The template renderer does not recurse into
+/// injected values, so we pass the fully-resolved service object: the endpoint
+/// mirrors the DIDComm `{URL}` (TSP and DIDComm share `/inbound`) and `{DID}`
+/// stays a sentinel the VTA's webvh layer resolves after SCID computation
+/// (identical to the P-256 verification-method slots). Omitted when TSP is off,
+/// so a DIDComm-only mediator advertises no TSP transport.
+fn build_mediator_ask(
+    context: String,
+    mediator_url: String,
+    label: Option<String>,
+    tsp_enabled: bool,
+) -> ProvisionAsk {
+    let mut ask = ProvisionAsk::didcomm_mediator(context, mediator_url.clone());
+    if let Some(label) = label {
+        ask = ask.with_label(label);
+    }
+    if tsp_enabled {
+        ask.integration_template_vars.insert(
+            "SERVICE_TSP".to_string(),
+            serde_json::json!({
+                "id": "{DID}#tsp",
+                "type": "TSPTransport",
+                "serviceEndpoint": mediator_url,
+            }),
+        );
+    }
+    ask
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mediator_ask_advertises_tsp_when_enabled() {
+        let ask = build_mediator_ask(
+            "ctx".into(),
+            "https://mediator.example.com/mediator/v1".into(),
+            None,
+            true,
+        );
+        let tsp = ask
+            .integration_template_vars
+            .get("SERVICE_TSP")
+            .expect("SERVICE_TSP present when TSP enabled");
+        assert_eq!(tsp["id"], "{DID}#tsp");
+        assert_eq!(tsp["type"], "TSPTransport");
+        // Endpoint mirrors the DIDComm URL var (shared `/inbound`).
+        assert_eq!(
+            tsp["serviceEndpoint"],
+            "https://mediator.example.com/mediator/v1"
+        );
+        assert_eq!(
+            ask.integration_template_vars.get("URL").unwrap(),
+            "https://mediator.example.com/mediator/v1"
+        );
+    }
+
+    #[test]
+    fn mediator_ask_omits_tsp_when_disabled() {
+        let ask = build_mediator_ask(
+            "ctx".into(),
+            "https://mediator.example.com/mediator/v1".into(),
+            None,
+            false,
+        );
+        assert!(
+            !ask.integration_template_vars.contains_key("SERVICE_TSP"),
+            "SERVICE_TSP must be absent when TSP is disabled"
+        );
+    }
 }

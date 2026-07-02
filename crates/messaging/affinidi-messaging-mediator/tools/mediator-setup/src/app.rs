@@ -1556,6 +1556,7 @@ impl WizardApp {
     /// become inputs so we don't re-resolve; the webvh server pick
     /// and path are read from state.
     fn start_vta_provision(&mut self, rest_url: Option<String>, mediator_did: String) {
+        let tsp_enabled = self.config.tsp_enabled;
         let Some(st) = self.vta_connect.as_mut() else {
             return;
         };
@@ -1595,6 +1596,7 @@ impl WizardApp {
                 context,
                 mediator_url,
                 label,
+                tsp_enabled,
                 webvh_server_id,
                 webvh_path,
                 tx,
