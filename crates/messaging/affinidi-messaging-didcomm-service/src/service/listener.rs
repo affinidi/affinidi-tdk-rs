@@ -376,9 +376,52 @@ impl Listener {
         };
 
         let profile_alias = profile.inner.alias.clone();
-        if let Err(e) = handler.handle(ctx, payload, sender_vid).await {
-            warn!(profile = %profile_alias, error = %e, "Unhandled TSP handler error");
+        match handler.handle(ctx, payload, sender_vid.clone()).await {
+            Ok(Some(response)) => {
+                if let Err(e) = Self::send_tsp_reply(atm, profile, &sender_vid, &response).await {
+                    warn!(profile = %profile_alias, error = %e, "Failed to send TSP reply");
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                warn!(profile = %profile_alias, error = %e, "Unhandled TSP handler error");
+            }
         }
+    }
+
+    /// Seal a [`TspHandler`] reply to the authenticated sender and route it back
+    /// over the same shared mediator websocket — the TSP analogue of
+    /// [`send_response`](Self::send_response).
+    ///
+    /// Routing rule: when the listener's profile has a mediator (the common
+    /// case — the sender is reachable through the same mediator we're connected
+    /// to), route metadata-privately as `[mediator_did, sender_vid]` via
+    /// `send_routed`. If the profile has no mediator configured, fall back to a
+    /// TSP Direct `send`. Cross-mediator senders (a sender reachable only via a
+    /// *different* mediator) are not resolved here — a handler that needs that
+    /// can return `Ok(None)` and drive [`AffinidiMessageService::send_tsp_routed`]
+    /// itself with an explicit route.
+    #[cfg(feature = "tsp")]
+    async fn send_tsp_reply(
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        sender_vid: &str,
+        response: &crate::handler::TspResponse,
+    ) -> Result<(), DIDCommServiceError> {
+        match profile.dids() {
+            Ok((_, mediator_did)) => {
+                let route = [mediator_did.to_string(), sender_vid.to_string()];
+                atm.tsp()
+                    .send_routed(profile, &route, &response.payload)
+                    .await?;
+            }
+            Err(_) => {
+                atm.tsp()
+                    .send(profile, sender_vid, &response.payload)
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn dispatch_message(
