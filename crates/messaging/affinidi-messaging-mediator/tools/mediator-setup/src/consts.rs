@@ -17,6 +17,7 @@ pub const STORAGE_AWS: &str = "aws_secrets://";
 pub const STORAGE_GCP: &str = "gcp_secrets://";
 pub const STORAGE_AZURE: &str = "azure_keyvault://";
 pub const STORAGE_VAULT: &str = "vault://";
+pub const STORAGE_K8S: &str = "k8s://";
 pub const STORAGE_VTA: &str = "vta://";
 
 /// Mediator persistence backend selectors written to `[storage].backend`
@@ -186,3 +187,5 @@ pub const DEFAULT_AZURE_VAULT: &str = "";
 /// Vault ships with `vault server -dev`.
 pub const DEFAULT_VAULT_ENDPOINT: &str = "";
 pub const DEFAULT_VAULT_MOUNT: &str = "secret/mediator";
+/// Default name of the `Secret` object for the `k8s://` backend.
+pub const DEFAULT_K8S_SECRET_NAME: &str = "mediator-secrets";

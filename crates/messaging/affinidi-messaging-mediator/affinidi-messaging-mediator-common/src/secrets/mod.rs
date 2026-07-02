@@ -30,7 +30,10 @@ pub mod well_known;
 pub use envelope::{ENVELOPE_VERSION, Envelope};
 pub use error::{Result, SecretStoreError};
 pub use store::{DynSecretStore, SecretStore, open_store};
-pub use url::{BackendUrl, VaultAuth, parse_url};
+pub use url::{
+    BackendUrl, VAULT_DEFAULT_APPROLE_MOUNT, VAULT_DEFAULT_JWT_PATH, VAULT_DEFAULT_K8S_MOUNT,
+    VaultAuth, parse_url,
+};
 pub use well_known::{
     ADMIN_CREDENTIAL, AdminCredential, BOOTSTRAP_EPHEMERAL_SEED_PREFIX, BOOTSTRAP_SEED_INDEX,
     BootstrapSeedIndex, BootstrapSeedIndexEntry, JWT_SECRET, MediatorSecrets,

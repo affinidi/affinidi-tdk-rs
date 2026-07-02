@@ -806,7 +806,7 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
 ///
 /// Deprecated schemes (`string://`, `vta://`) error with a pointer to
 /// the supported alternative.
-fn apply_secrets_storage(raw: &str, config: &mut WizardConfig) -> anyhow::Result<()> {
+pub(crate) fn apply_secrets_storage(raw: &str, config: &mut WizardConfig) -> anyhow::Result<()> {
     // Bare scheme (no body) — preserve the pre-cloud-config behaviour:
     // set `secret_storage` to the scheme, leave per-backend fields at
     // their wizard defaults. Operators upgrading from older recipes
@@ -818,6 +818,7 @@ fn apply_secrets_storage(raw: &str, config: &mut WizardConfig) -> anyhow::Result
         STORAGE_GCP,
         STORAGE_AZURE,
         STORAGE_VAULT,
+        STORAGE_K8S,
     ];
     if let Some(&scheme) = bare_schemes.iter().find(|&&s| raw == s) {
         config.secret_storage = scheme.into();
@@ -841,10 +842,10 @@ fn apply_secrets_storage(raw: &str, config: &mut WizardConfig) -> anyhow::Result
     // Full URL — let the shared parser handle each scheme's body and
     // surface its diagnostics verbatim. Splitting per-backend fields
     // here mirrors the wizard's own `enter_key_storage_phase` chain.
-    use affinidi_messaging_mediator_common::secrets::{BackendUrl, parse_url};
+    use affinidi_messaging_mediator_common::secrets::{BackendUrl, VaultAuth, parse_url};
     let parsed = parse_url(raw).map_err(|e| {
         anyhow::anyhow!(
-            "Invalid secrets.storage '{raw}': {e} (expected one of {STORAGE_FILE}, {STORAGE_KEYRING}, {STORAGE_AWS}, {STORAGE_GCP}, {STORAGE_AZURE}, {STORAGE_VAULT})",
+            "Invalid secrets.storage '{raw}': {e} (expected one of {STORAGE_FILE}, {STORAGE_KEYRING}, {STORAGE_AWS}, {STORAGE_GCP}, {STORAGE_AZURE}, {STORAGE_VAULT}, {STORAGE_K8S})",
         )
     })?;
     match parsed {
@@ -874,17 +875,46 @@ fn apply_secrets_storage(raw: &str, config: &mut WizardConfig) -> anyhow::Result
             // URL is fine — it stays canonical when re-parsed.
             config.secret_azure_vault = vault;
         }
-        BackendUrl::Vault { endpoint, path, .. } => {
-            // NOTE: the extended Vault auth parameters (auth method,
-            // enterprise namespace, insecure) are not yet round-tripped
-            // into wizard config fields — that wiring lands with the
-            // wizard support PR. Recipes still carry them in the raw URL.
+        BackendUrl::Vault {
+            endpoint,
+            path,
+            auth,
+            enterprise_namespace,
+            insecure,
+        } => {
             config.secret_storage = STORAGE_VAULT.into();
             config.secret_vault_endpoint = endpoint;
             config.secret_vault_mount = path;
+            match auth {
+                VaultAuth::Token => config.secret_vault_auth = "token".into(),
+                VaultAuth::Kubernetes {
+                    role,
+                    mount,
+                    jwt_path,
+                } => {
+                    config.secret_vault_auth = "kubernetes".into();
+                    config.secret_vault_role = role;
+                    config.secret_vault_k8s_mount = mount;
+                    config.secret_vault_jwt_path = jwt_path;
+                }
+                VaultAuth::AppRole { mount } => {
+                    config.secret_vault_auth = "approle".into();
+                    config.secret_vault_approle_mount = mount;
+                }
+            }
+            config.secret_vault_namespace = enterprise_namespace.unwrap_or_default();
+            config.secret_vault_insecure = insecure;
         }
-        // `BackendUrl` is `#[non_exhaustive]`; any scheme not yet wired
-        // into the wizard config falls through here.
+        BackendUrl::Kubernetes {
+            namespace,
+            secret_name,
+        } => {
+            config.secret_storage = STORAGE_K8S.into();
+            config.secret_k8s_namespace = namespace.unwrap_or_default();
+            config.secret_k8s_secret_name = secret_name;
+        }
+        // `BackendUrl` is `#[non_exhaustive]`; a variant with no wizard
+        // mapping yet falls through here.
         _ => {
             anyhow::bail!(
                 "Invalid secrets.storage '{raw}': backend not yet supported in recipe config"

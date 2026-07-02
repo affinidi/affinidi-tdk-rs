@@ -381,10 +381,17 @@ pub fn build_backend_url(config: &WizardConfig) -> String {
             config.secret_gcp_project, config.secret_gcp_namespace
         ),
         STORAGE_AZURE => format!("azure_keyvault://{}", config.secret_azure_vault),
-        STORAGE_VAULT => format!(
-            "vault://{}/{}",
-            config.secret_vault_endpoint, config.secret_vault_mount
-        ),
+        STORAGE_VAULT => vault_backend_url(config),
+        STORAGE_K8S => {
+            if config.secret_k8s_namespace.is_empty() {
+                format!("k8s://{}", config.secret_k8s_secret_name)
+            } else {
+                format!(
+                    "k8s://{}/{}",
+                    config.secret_k8s_namespace, config.secret_k8s_secret_name
+                )
+            }
+        }
         // string:// is no longer supported by the mediator's SecretStore
         // URL parser; fall back to a keyring default and warn in stdout
         // during `generate_and_write`. The wildcard catches any future
@@ -393,6 +400,60 @@ pub fn build_backend_url(config: &WizardConfig) -> String {
         // they have callers today.
         _ => "keyring://affinidi-mediator".to_string(),
     }
+}
+
+/// Assemble a `vault://` URL including any non-default auth-method and
+/// transport query parameters. Defaults are omitted, so a plain
+/// token-auth setup renders the same compact URL as before and a recipe
+/// round-trip (parse → fields → build) stays stable.
+fn vault_backend_url(config: &WizardConfig) -> String {
+    use affinidi_messaging_mediator_common::secrets::{
+        VAULT_DEFAULT_APPROLE_MOUNT, VAULT_DEFAULT_JWT_PATH, VAULT_DEFAULT_K8S_MOUNT,
+    };
+    let mut url = format!(
+        "vault://{}/{}",
+        config.secret_vault_endpoint, config.secret_vault_mount
+    );
+    let mut params: Vec<String> = Vec::new();
+    match config.secret_vault_auth.as_str() {
+        "kubernetes" => {
+            params.push("auth=kubernetes".to_string());
+            if !config.secret_vault_role.is_empty() {
+                params.push(format!("role={}", config.secret_vault_role));
+            }
+            if !config.secret_vault_k8s_mount.is_empty()
+                && config.secret_vault_k8s_mount != VAULT_DEFAULT_K8S_MOUNT
+            {
+                params.push(format!("k8s_mount={}", config.secret_vault_k8s_mount));
+            }
+            if !config.secret_vault_jwt_path.is_empty()
+                && config.secret_vault_jwt_path != VAULT_DEFAULT_JWT_PATH
+            {
+                params.push(format!("jwt_path={}", config.secret_vault_jwt_path));
+            }
+        }
+        "approle" => {
+            params.push("auth=approle".to_string());
+            if !config.secret_vault_approle_mount.is_empty()
+                && config.secret_vault_approle_mount != VAULT_DEFAULT_APPROLE_MOUNT
+            {
+                params.push(format!("approle_mount={}", config.secret_vault_approle_mount));
+            }
+        }
+        // "token" or empty → default auth, no `auth=` query parameter.
+        _ => {}
+    }
+    if !config.secret_vault_namespace.is_empty() {
+        params.push(format!("namespace={}", config.secret_vault_namespace));
+    }
+    if config.secret_vault_insecure {
+        params.push("insecure=1".to_string());
+    }
+    if !params.is_empty() {
+        url.push('?');
+        url.push_str(&params.join("&"));
+    }
+    url
 }
 
 #[cfg(test)]
@@ -537,6 +598,132 @@ mod tests {
             build_backend_url(&cfg),
             "vault://vault.example.com:8200/secret/mediator"
         );
+    }
+
+    #[test]
+    fn build_backend_url_vault_token_auth_omits_query() {
+        // Explicit token auth (or empty) renders the same compact URL as
+        // before — no `?auth=token`.
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_VAULT.into(),
+            secret_vault_endpoint: "vault.internal".into(),
+            secret_vault_mount: "secret/mediator".into(),
+            secret_vault_auth: "token".into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(
+            build_backend_url(&cfg),
+            "vault://vault.internal/secret/mediator"
+        );
+    }
+
+    #[test]
+    fn build_backend_url_vault_kubernetes_auth() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_VAULT.into(),
+            secret_vault_endpoint: "vault.internal".into(),
+            secret_vault_mount: "secret/mediator".into(),
+            secret_vault_auth: "kubernetes".into(),
+            secret_vault_role: "mediator".into(),
+            // Backend-default mount/jwt_path are omitted from the URL.
+            secret_vault_k8s_mount: "kubernetes".into(),
+            secret_vault_namespace: "team-a".into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(
+            build_backend_url(&cfg),
+            "vault://vault.internal/secret/mediator?auth=kubernetes&role=mediator&namespace=team-a"
+        );
+    }
+
+    #[test]
+    fn build_backend_url_vault_kubernetes_custom_mount_and_insecure() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_VAULT.into(),
+            secret_vault_endpoint: "vault.internal".into(),
+            secret_vault_mount: "secret/mediator".into(),
+            secret_vault_auth: "kubernetes".into(),
+            secret_vault_role: "med".into(),
+            secret_vault_k8s_mount: "k8s-prod".into(),
+            secret_vault_insecure: true,
+            ..WizardConfig::default()
+        };
+        assert_eq!(
+            build_backend_url(&cfg),
+            "vault://vault.internal/secret/mediator?auth=kubernetes&role=med&k8s_mount=k8s-prod&insecure=1"
+        );
+    }
+
+    #[test]
+    fn build_backend_url_vault_approle_auth() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_VAULT.into(),
+            secret_vault_endpoint: "vault.internal".into(),
+            secret_vault_mount: "secret/mediator".into(),
+            secret_vault_auth: "approle".into(),
+            secret_vault_approle_mount: "my-approle".into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(
+            build_backend_url(&cfg),
+            "vault://vault.internal/secret/mediator?auth=approle&approle_mount=my-approle"
+        );
+    }
+
+    #[test]
+    fn build_backend_url_k8s_with_namespace() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_K8S.into(),
+            secret_k8s_namespace: "affinidi".into(),
+            secret_k8s_secret_name: "mediator-secrets".into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(build_backend_url(&cfg), "k8s://affinidi/mediator-secrets");
+    }
+
+    #[test]
+    fn build_backend_url_k8s_without_namespace() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_K8S.into(),
+            secret_k8s_namespace: String::new(),
+            secret_k8s_secret_name: "mediator-secrets".into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(build_backend_url(&cfg), "k8s://mediator-secrets");
+    }
+
+    /// A `vault://…?auth=kubernetes` URL survives the recipe round-trip
+    /// (build → parse-back → build) unchanged.
+    #[test]
+    fn vault_kubernetes_url_round_trips_through_recipe() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_VAULT.into(),
+            secret_vault_endpoint: "vault.internal".into(),
+            secret_vault_mount: "secret/mediator".into(),
+            secret_vault_auth: "kubernetes".into(),
+            secret_vault_role: "mediator".into(),
+            secret_vault_namespace: "team-a".into(),
+            ..WizardConfig::default()
+        };
+        let url = build_backend_url(&cfg);
+        let mut round = WizardConfig::default();
+        crate::recipe::apply_secrets_storage(&url, &mut round).unwrap();
+        assert_eq!(build_backend_url(&round), url);
+    }
+
+    /// A `k8s://` URL survives the recipe round-trip unchanged.
+    #[test]
+    fn k8s_url_round_trips_through_recipe() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_K8S.into(),
+            secret_k8s_namespace: "affinidi".into(),
+            secret_k8s_secret_name: "mediator-secrets".into(),
+            ..WizardConfig::default()
+        };
+        let url = build_backend_url(&cfg);
+        let mut round = WizardConfig::default();
+        crate::recipe::apply_secrets_storage(&url, &mut round).unwrap();
+        assert_eq!(build_backend_url(&round), url);
     }
 
     #[test]

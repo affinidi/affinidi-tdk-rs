@@ -392,6 +392,27 @@ pub struct WizardConfig {
     /// (`secret/mediator`). The backend splits the first segment off
     /// as the mount and uses the rest as the namespace.
     pub secret_vault_mount: String,
+    /// Vault auth method: `token` (default), `kubernetes`, or `approle`.
+    /// Empty is treated as `token`.
+    pub secret_vault_auth: String,
+    /// Vault role for `kubernetes` auth (required for that method).
+    pub secret_vault_role: String,
+    /// Vault Kubernetes auth mount. Empty → backend default (`kubernetes`).
+    pub secret_vault_k8s_mount: String,
+    /// ServiceAccount JWT path for `kubernetes` auth. Empty → backend
+    /// default (`/var/run/secrets/kubernetes.io/serviceaccount/token`).
+    pub secret_vault_jwt_path: String,
+    /// Vault AppRole auth mount. Empty → backend default (`approle`).
+    pub secret_vault_approle_mount: String,
+    /// Vault Enterprise namespace (`X-Vault-Namespace`). Empty → none.
+    pub secret_vault_namespace: String,
+    /// Skip TLS verification for `vault://` (dev/test only).
+    pub secret_vault_insecure: bool,
+    /// Kubernetes namespace for the `k8s://` backend. Empty → resolved
+    /// from the in-pod ServiceAccount / kubeconfig at connect time.
+    pub secret_k8s_namespace: String,
+    /// Name of the `Secret` object for the `k8s://` backend.
+    pub secret_k8s_secret_name: String,
     /// `true` when the operator chose `file://?encrypt=1`. Influences
     /// the backend URL written to `mediator.toml` and whether the
     /// wizard prompts for a passphrase.
@@ -544,6 +565,15 @@ impl Default for WizardConfig {
             secret_azure_vault: DEFAULT_AZURE_VAULT.into(),
             secret_vault_endpoint: DEFAULT_VAULT_ENDPOINT.into(),
             secret_vault_mount: DEFAULT_VAULT_MOUNT.into(),
+            secret_vault_auth: String::new(),
+            secret_vault_role: String::new(),
+            secret_vault_k8s_mount: String::new(),
+            secret_vault_jwt_path: String::new(),
+            secret_vault_approle_mount: String::new(),
+            secret_vault_namespace: String::new(),
+            secret_vault_insecure: false,
+            secret_k8s_namespace: String::new(),
+            secret_k8s_secret_name: DEFAULT_K8S_SECRET_NAME.into(),
             secret_file_encrypted: false,
             ssl_mode: String::new(),
             ssl_cert_path: String::new(),
