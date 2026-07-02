@@ -299,10 +299,23 @@ impl MessagePickup {
                             debug!("WebSocket disconnected while awaiting next message");
                             Ok(None)
                         }
-                        Ok(WebSocketResponses::PackedMessageReceived(_)) => {
-                            Err(ATMError::MsgReceiveError(
-                                "Received packed message when expecting unpacked message. Use live_stream_next_packed() for packed messages.".into()
-                            ))
+                        Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
+                            // A DIDComm-only stream can't handle a packed (e.g.
+                            // TSP/CESR) frame. Erroring here without removing it
+                            // left the message in the mediator queue, so the
+                            // pickup redelivered it every cycle — a poison loop.
+                            // Delete it (when auto_delete) and skip; a consumer
+                            // that wants packed frames uses `live_stream_next_frame`
+                            // / `live_stream_next_packed`.
+                            warn!(
+                                "Dropping unexpected packed message on a DIDComm-only stream \
+                                 (use live_stream_next_frame for multiplexed TSP + DIDComm)"
+                            );
+                            if auto_delete {
+                                let sha256_hash = sha256::digest(packed_msg.as_str());
+                                atm.delete_message_background(profile, &sha256_hash).await?;
+                            }
+                            Ok(None)
                         }
                         Err(e) => {
                             warn!("Error receiving message: {:?}", e);
@@ -491,10 +504,23 @@ impl MessagePickup {
                                 "Connection reset while awaiting response for {msg_id}"
                             )))
                         }
-                        Ok(WebSocketResponses::PackedMessageReceived(_)) => {
-                            Err(ATMError::MsgReceiveError(
-                                "Received packed message when expecting unpacked message. Use live_stream_next_packed() for packed messages.".into()
-                            ))
+                        Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
+                            // A DIDComm-only stream can't handle a packed (e.g.
+                            // TSP/CESR) frame. Erroring here without removing it
+                            // left the message in the mediator queue, so the
+                            // pickup redelivered it every cycle — a poison loop.
+                            // Delete it (when auto_delete) and skip; a consumer
+                            // that wants packed frames uses `live_stream_next_frame`
+                            // / `live_stream_next_packed`.
+                            warn!(
+                                "Dropping unexpected packed message on a DIDComm-only stream \
+                                 (use live_stream_next_frame for multiplexed TSP + DIDComm)"
+                            );
+                            if auto_delete {
+                                let sha256_hash = sha256::digest(packed_msg.as_str());
+                                atm.delete_message_background(profile, &sha256_hash).await?;
+                            }
+                            Ok(None)
                         }
                         Err(e) => {
                             warn!("Error receiving message: {:?}", e);

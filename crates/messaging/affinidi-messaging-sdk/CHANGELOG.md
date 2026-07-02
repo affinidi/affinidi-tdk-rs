@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.18.44] - 2026-07-02
+
+- Fix a poison-message loop: `MessagePickup::live_stream_next` / `live_stream_get` errored
+  (without deleting) when a **packed** frame (e.g. a TSP/CESR message) arrived on a
+  DIDComm-only stream, so the mediator redelivered it every pickup cycle forever. They now
+  delete the undeliverable packed frame (when `auto_delete`) and skip it (`Ok(None)`) with a
+  warning, keeping the stream live. A consumer that wants packed frames should use
+  `live_stream_next_frame` (multiplexed) or `live_stream_next_packed`. Behaviour change:
+  these paths return `Ok(None)` instead of `Err(MsgReceiveError)` on an unexpected packed
+  frame.
+
 ## [0.18.43] - 2026-07-02
 
 - TSP-preferred protocol selection (SDD phase 1). New `ATM::send_to(profile, message, to,
