@@ -502,6 +502,12 @@ pub async fn serve_internal(
     #[cfg(feature = "tsp")]
     crate::common::config::apply_tsp_did_advertisement(&mut config);
 
+    // Inverse guard for TSP-less builds: some DID templates advertise a
+    // `TSPTransport` service unconditionally, which would mislead peers into
+    // routing TSP to a mediator that can't handle it. Warn if so.
+    #[cfg(not(feature = "tsp"))]
+    crate::common::config::warn_if_tsp_advertised_without_feature(&config);
+
     // Preload the mediator's own DID document so it can pack/unpack DIDComm
     // messages without hitting the network (did:web/did:webvh self-resolution
     // needs HTTPS, which may be unreachable from the mediator's own network).

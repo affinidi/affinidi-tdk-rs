@@ -4,6 +4,20 @@
 
 ## 2nd July 2026
 
+### 0.1.19 — strip `TSPTransport` from generated `did:webvh` when TSP is disabled
+
+- The shipped `didcomm-mediator` template (vta-sdk) advertises a `#tsp`
+  `TSPTransport` service **unconditionally**. On the self-hosted `did:webvh`
+  path the wizard now strips that service when the operator did **not** enable
+  the `tsp` protocol, so a DIDComm-only mediator no longer advertises a
+  transport it cannot serve (which would make remote peers route TSP that the
+  mediator then rejects). When TSP *is* enabled the service is kept/ensured as
+  before. `did:peer` already only added the service when TSP was enabled.
+- Note: VTA-managed DIDs are rendered server-side and still carry the template's
+  unconditional `#tsp`; the mediator now warns about that mismatch at startup
+  (see the `affinidi-messaging-mediator` changelog). Gating it at the source
+  needs a vta-sdk template change (tracked separately).
+
 ### 0.1.18 — bake a `TSPTransport` service into generated `did:peer` / `did:webvh`
 
 - When the operator selects the `tsp` protocol, the generated mediator DID now
