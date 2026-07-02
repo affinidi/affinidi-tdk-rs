@@ -654,6 +654,9 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     KeyStoragePhase::FileEncryptChoice => {
                         unreachable!("FileEncryptChoice runs in selection mode, not TextInput")
                     }
+                    KeyStoragePhase::VaultAuthMethod => {
+                        unreachable!("VaultAuthMethod runs in selection mode, not TextInput")
+                    }
                     KeyStoragePhase::FileGate => (
                         "file:// is dev-only — type \"I understand\" to confirm",
                         "Plaintext secrets on disk are unsafe for production. \
@@ -771,6 +774,54 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                          `mediator/` to each key.\n\n\
                          [F5] lists keys already under the mount root so you \
                          can see the live layout.",
+                    ),
+                    KeyStoragePhase::VaultRole => (
+                        "Vault role",
+                        "Vault role bound to the mediator's Kubernetes ServiceAccount.",
+                        "mediator",
+                        "The role configured on the Vault Kubernetes auth mount \
+                         that grants this mediator's ServiceAccount a policy \
+                         over the KV path. Required.",
+                    ),
+                    KeyStoragePhase::VaultK8sMount => (
+                        "Kubernetes auth mount",
+                        "Path where the Kubernetes auth method is enabled in Vault.",
+                        affinidi_messaging_mediator_common::secrets::VAULT_DEFAULT_K8S_MOUNT,
+                        "Leave blank to use Vault's default `kubernetes` mount. \
+                         Set it only if your Vault enables the k8s auth method \
+                         at a custom path.",
+                    ),
+                    KeyStoragePhase::VaultApproleMount => (
+                        "AppRole auth mount",
+                        "Path where the AppRole auth method is enabled in Vault.",
+                        affinidi_messaging_mediator_common::secrets::VAULT_DEFAULT_APPROLE_MOUNT,
+                        "Leave blank to use Vault's default `approle` mount. \
+                         role_id / secret_id are read from VAULT_ROLE_ID and \
+                         VAULT_SECRET_ID at boot — never entered here.",
+                    ),
+                    KeyStoragePhase::VaultNamespace => (
+                        "Vault Enterprise namespace",
+                        "X-Vault-Namespace header (Vault Enterprise only) — optional.",
+                        "(leave blank for none)",
+                        "Distinct from the per-key path namespace in the mount \
+                         field. Leave blank on Vault OSS / when you don't use \
+                         Enterprise namespaces.",
+                    ),
+                    KeyStoragePhase::K8sNamespace => (
+                        "Kubernetes namespace",
+                        "Namespace holding the mediator's Secret (optional).",
+                        "(blank = ServiceAccount / kubeconfig namespace)",
+                        "Leave blank to resolve the namespace from the in-pod \
+                         ServiceAccount (or the kubeconfig context) at connect \
+                         time. Set it to target a specific namespace.",
+                    ),
+                    KeyStoragePhase::K8sSecretName => (
+                        "Kubernetes Secret name",
+                        "Name of the Secret object that holds every mediator key.",
+                        crate::consts::DEFAULT_K8S_SECRET_NAME,
+                        "One Secret stores all mediator keys as separate data \
+                         entries. The pod ServiceAccount needs get/create/update \
+                         on this Secret. Required.",
                     ),
                 };
                 // Passphrase entry + confirm get the masked variant so
