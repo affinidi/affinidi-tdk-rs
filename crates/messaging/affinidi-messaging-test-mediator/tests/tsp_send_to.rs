@@ -63,7 +63,8 @@ async fn send_to_uses_tsp_when_capability_supported() {
         .unpack(&bob.profile, stored)
         .await
         .expect("bob unpacks the TSP message");
-    let recovered: Message = serde_json::from_slice(&payload).expect("payload is a DIDComm Message");
+    let recovered: Message =
+        serde_json::from_slice(&payload).expect("payload is a DIDComm Message");
     assert_eq!(recovered.body["content"], "hi over the façade");
     assert_eq!(sender, alice.did);
 }

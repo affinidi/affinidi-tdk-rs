@@ -347,10 +347,9 @@ fn classify_protocol(
 /// [`TspOps::learn_from_disclosure`] so the match is unit-testable without a live
 /// `ATM`.
 fn disclosure_advertises_tsp(disclosure: &DiscoverFeaturesDisclosure) -> bool {
-    disclosure
-        .disclosures
-        .iter()
-        .any(|d| matches!(d.feature_type, FeatureType::Protocol) && d.id == TSP_DISCOVER_FEATURE_URI)
+    disclosure.disclosures.iter().any(|d| {
+        matches!(d.feature_type, FeatureType::Protocol) && d.id == TSP_DISCOVER_FEATURE_URI
+    })
 }
 
 /// Under `Required`, no-TSP is a denial; otherwise fall back to DIDComm.
@@ -1455,12 +1454,7 @@ mod tests {
             async fn get(&self, _: &str, _: &str) -> Result<RelationshipState, ATMError> {
                 Ok(RelationshipState::None)
             }
-            async fn set(
-                &self,
-                _: &str,
-                _: &str,
-                _: RelationshipState,
-            ) -> Result<(), ATMError> {
+            async fn set(&self, _: &str, _: &str, _: RelationshipState) -> Result<(), ATMError> {
                 Ok(())
             }
         }
@@ -1473,7 +1467,11 @@ mod tests {
 
     #[test]
     fn classify_off_is_always_didcomm() {
-        for cap in [None, Some(TspSupport::Supported), Some(TspSupport::Unsupported)] {
+        for cap in [
+            None,
+            Some(TspSupport::Supported),
+            Some(TspSupport::Unsupported),
+        ] {
             for bidi in [false, true] {
                 for svc in [false, true] {
                     assert_eq!(
@@ -1500,11 +1498,21 @@ mod tests {
     fn classify_cached_unsupported_short_circuits() {
         // Unsupported wins even when a TSPTransport service is present.
         assert_eq!(
-            classify_protocol(TspPolicy::Preferred, Some(TspSupport::Unsupported), true, true),
+            classify_protocol(
+                TspPolicy::Preferred,
+                Some(TspSupport::Unsupported),
+                true,
+                true
+            ),
             ProtocolChoice::DidComm
         );
         assert_eq!(
-            classify_protocol(TspPolicy::Required, Some(TspSupport::Unsupported), true, true),
+            classify_protocol(
+                TspPolicy::Required,
+                Some(TspSupport::Unsupported),
+                true,
+                true
+            ),
             ProtocolChoice::Deny
         );
     }
@@ -1540,7 +1548,12 @@ mod tests {
         );
         // Unknown cached capability behaves like no cache.
         assert_eq!(
-            classify_protocol(TspPolicy::Preferred, Some(TspSupport::Unknown), false, false),
+            classify_protocol(
+                TspPolicy::Preferred,
+                Some(TspSupport::Unknown),
+                false,
+                false
+            ),
             ProtocolChoice::DidComm
         );
     }
@@ -1677,7 +1690,9 @@ mod tests {
     fn disclosure_without_tsp_uri_is_not() {
         let d = protocol_disclosure(&["https://didcomm.org/trust-ping/2.0"]);
         assert!(!disclosure_advertises_tsp(&d));
-        assert!(!disclosure_advertises_tsp(&DiscoverFeaturesDisclosure::default()));
+        assert!(!disclosure_advertises_tsp(
+            &DiscoverFeaturesDisclosure::default()
+        ));
     }
 
     #[test]

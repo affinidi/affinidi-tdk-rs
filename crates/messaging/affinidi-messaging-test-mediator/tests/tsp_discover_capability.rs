@@ -27,7 +27,10 @@ fn basic_message(from: &str, to: &str, text: &str) -> Message {
 /// The disclosure a responder would return for `query`, calculated from its own
 /// live discoverable state — the real production path
 /// (`get_discoverable_state` → `calculate_disclosure`).
-async fn disclosure_for_query(env: &TestEnvironment, query: &Message) -> DiscoverFeaturesDisclosure {
+async fn disclosure_for_query(
+    env: &TestEnvironment,
+    query: &Message,
+) -> DiscoverFeaturesDisclosure {
     let query_body: DiscoverFeaturesQuery =
         serde_json::from_value(query.body.clone()).expect("parse query body");
     let state = env.atm.discover_features().get_discoverable_state();
@@ -127,12 +130,14 @@ async fn disclosure_without_tsp_uri_stays_didcomm() {
 
     // A disclosure listing only an unrelated protocol.
     let disclosure = DiscoverFeaturesDisclosure {
-        disclosures: vec![affinidi_messaging_sdk::protocols::discover_features::Disclosure {
-            feature_type:
-                affinidi_messaging_sdk::protocols::discover_features::FeatureType::Protocol,
-            id: "https://didcomm.org/trust-ping/2.0".to_string(),
-            roles: vec![],
-        }],
+        disclosures: vec![
+            affinidi_messaging_sdk::protocols::discover_features::Disclosure {
+                feature_type:
+                    affinidi_messaging_sdk::protocols::discover_features::FeatureType::Protocol,
+                id: "https://didcomm.org/trust-ping/2.0".to_string(),
+                roles: vec![],
+            },
+        ],
     };
     let learned = env
         .atm
@@ -164,7 +169,9 @@ async fn disclosure_without_tsp_uri_stays_didcomm() {
 /// consuming a disclosure that lists it is inert — capability tracking stays off.
 #[tokio::test]
 async fn discovery_is_inert_under_off_policy() {
-    let env = TestEnvironment::spawn().await.expect("spawn default (Off) env");
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn default (Off) env");
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
 
@@ -183,12 +190,14 @@ async fn discovery_is_inert_under_off_policy() {
 
     // Even handed a disclosure that *does* advertise TSP, learning is a no-op.
     let forced = DiscoverFeaturesDisclosure {
-        disclosures: vec![affinidi_messaging_sdk::protocols::discover_features::Disclosure {
-            feature_type:
-                affinidi_messaging_sdk::protocols::discover_features::FeatureType::Protocol,
-            id: TSP_DISCOVER_FEATURE_URI.to_string(),
-            roles: vec![],
-        }],
+        disclosures: vec![
+            affinidi_messaging_sdk::protocols::discover_features::Disclosure {
+                feature_type:
+                    affinidi_messaging_sdk::protocols::discover_features::FeatureType::Protocol,
+                id: TSP_DISCOVER_FEATURE_URI.to_string(),
+                roles: vec![],
+            },
+        ],
     };
     let learned = env
         .atm

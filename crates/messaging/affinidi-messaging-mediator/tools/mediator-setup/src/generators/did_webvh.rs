@@ -310,7 +310,10 @@ fn augment_webvh_doc_with_tsp_service(did_document: &mut serde_json::Value) -> a
 fn strip_tsp_service(did_document: &mut serde_json::Value) {
     use serde_json::Value;
 
-    if let Some(services) = did_document.get_mut("service").and_then(Value::as_array_mut) {
+    if let Some(services) = did_document
+        .get_mut("service")
+        .and_then(Value::as_array_mut)
+    {
         services.retain(|svc| {
             !svc.get("type").is_some_and(|t| match t {
                 Value::String(s) => s == "TSPTransport",
@@ -615,9 +618,21 @@ mod tests {
         strip_tsp_service(&mut doc);
         let services = doc["service"].as_array().unwrap();
         assert_eq!(services.len(), 2);
-        assert!(!services.iter().any(|s| s["type"] == json!(["TSPTransport"])));
-        assert!(services.iter().any(|s| s["type"] == json!(["DIDCommMessaging"])));
-        assert!(services.iter().any(|s| s["type"] == json!(["Authentication"])));
+        assert!(
+            !services
+                .iter()
+                .any(|s| s["type"] == json!(["TSPTransport"]))
+        );
+        assert!(
+            services
+                .iter()
+                .any(|s| s["type"] == json!(["DIDCommMessaging"]))
+        );
+        assert!(
+            services
+                .iter()
+                .any(|s| s["type"] == json!(["Authentication"]))
+        );
     }
 
     #[test]
