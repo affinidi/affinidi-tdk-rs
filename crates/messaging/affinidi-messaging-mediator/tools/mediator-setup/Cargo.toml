@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-setup"
-version = "0.1.14"
+version = "0.1.15"
 description = "Interactive TUI setup wizard for Affinidi Messaging Mediator"
 edition.workspace = true
 authors.workspace = true
@@ -23,12 +23,14 @@ default = [
   "secrets-gcp",
   "secrets-azure",
   "secrets-vault",
+  "secrets-k8s",
 ]
 secrets-keyring = ["affinidi-messaging-mediator-common/secrets-keyring"]
 secrets-aws = ["affinidi-messaging-mediator-common/secrets-aws"]
 secrets-gcp = ["affinidi-messaging-mediator-common/secrets-gcp"]
 secrets-azure = ["affinidi-messaging-mediator-common/secrets-azure"]
 secrets-vault = ["affinidi-messaging-mediator-common/secrets-vault"]
+secrets-k8s = ["affinidi-messaging-mediator-common/secrets-k8s"]
 
 [dependencies]
 # ── TUI Framework ────────────────────────────────────────────────────────
