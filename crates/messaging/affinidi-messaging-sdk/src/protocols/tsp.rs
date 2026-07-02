@@ -646,6 +646,11 @@ impl TspOps<'_> {
         )
         .await?;
         store.set(our_did, their_did, next).await?;
+        // A completed relationship confirms the peer's agent speaks TSP.
+        if next == RelationshipState::Bidirectional {
+            self.learn_tsp_supported(our_did, their_did, CapabilitySource::Relationship)
+                .await?;
+        }
         Ok(next)
     }
 
@@ -711,7 +716,14 @@ impl TspOps<'_> {
             ControlType::RelationshipFormingAccept => RelationshipEvent::ReceiveAccept,
             ControlType::RelationshipCancel => RelationshipEvent::ReceiveCancel,
         };
-        advance_state(self.relationship_store(), our_did, peer_did, event).await
+        let new_state = advance_state(self.relationship_store(), our_did, peer_did, event).await?;
+        // The initiator reaches Bidirectional here (on receiving the accept) —
+        // confirm the peer's TSP capability.
+        if new_state == RelationshipState::Bidirectional {
+            self.learn_tsp_supported(our_did, peer_did, CapabilitySource::Relationship)
+                .await?;
+        }
+        Ok(new_state)
     }
 
     // ── Protocol selection / capability ───────────────────────────────────────
@@ -761,6 +773,40 @@ impl TspOps<'_> {
                 now.saturating_sub(cap.learned_at_unix) <= ttl.as_secs()
             }
         }
+    }
+
+    /// Learn that `their_did` speaks TSP and cache it as [`TspSupport::Supported`]
+    /// with the given `source`. Called when a relationship completes
+    /// ([`CapabilitySource::Relationship`]) or an inbound TSP message is observed
+    /// ([`CapabilitySource::Observed`]).
+    ///
+    /// A no-op when the [`TspPolicy`] is [`Off`](TspPolicy::Off) — capability
+    /// tracking is inert unless protocol selection is enabled, so the default
+    /// build incurs no extra store writes. Skips the write when a fresh
+    /// `Supported` record already exists, so durable stores aren't rewritten on
+    /// every received message.
+    async fn learn_tsp_supported(
+        &self,
+        our_did: &str,
+        their_did: &str,
+        source: CapabilitySource,
+    ) -> Result<(), ATMError> {
+        if self.atm.inner.config.tsp_policy() == TspPolicy::Off {
+            return Ok(());
+        }
+        let store = self.relationship_store();
+        if let Some(cap) = store.get_capability(our_did, their_did).await?
+            && cap.tsp == TspSupport::Supported
+            && self.capability_is_fresh(&cap)
+        {
+            return Ok(());
+        }
+        let cap = PeerCapability {
+            tsp: TspSupport::Supported,
+            source,
+            learned_at_unix: self.atm.inner.config.clock().unix_secs(),
+        };
+        store.set_capability(our_did, their_did, cap).await
     }
 
     /// Decide which wire protocol to use for a message to `their_did`, per the
@@ -911,6 +957,11 @@ impl TspOps<'_> {
         )
         .map_err(|e| ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}")))?;
 
+        // Observing an authenticated inbound TSP message confirms the sender's
+        // agent speaks TSP (no-op unless a TSP policy is set).
+        self.learn_tsp_supported(profile_did, &unpacked.sender, CapabilitySource::Observed)
+            .await?;
+
         Ok((unpacked.payload, unpacked.sender))
     }
 
@@ -950,6 +1001,10 @@ impl TspOps<'_> {
         let control = unpacked.control.ok_or_else(|| {
             ATMError::MsgReceiveError("TSP message is not a control message".into())
         })?;
+        // An inbound control message is also authenticated inbound TSP — the
+        // sender's agent speaks TSP (no-op unless a TSP policy is set).
+        self.learn_tsp_supported(profile_did, &unpacked.sender, CapabilitySource::Observed)
+            .await?;
         Ok((control, unpacked.sender, unpacked.thread_digest))
     }
 
