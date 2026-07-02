@@ -303,7 +303,11 @@ webvh_server = "prod-1"                         # optional, pin VTA to a webvh s
 webvh_path = "mediator/v1"                      # optional, server-specific path hint
 
 [secrets]
-storage = "keyring://affinidi-mediator"         # or file://, aws_secrets://, vault://, ...
+storage = "keyring://affinidi-mediator"         # or file://, aws_secrets://, vault://, k8s://, ...
+# vault:// supports auth methods, e.g.
+#   "vault://vault.internal:8200/secret/mediator?auth=kubernetes&role=mediator"
+# k8s:// stores every key in one namespaced Secret, e.g.
+#   "k8s://affinidi/mediator-secrets"
 
 [security]
 ssl = "none"                                    # operator-managed reverse proxy expected

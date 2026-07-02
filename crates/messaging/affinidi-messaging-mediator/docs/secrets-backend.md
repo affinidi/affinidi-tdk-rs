@@ -29,7 +29,12 @@ running the interactive wizard, and how to migrate from the legacy
 | `aws_secrets://<region>/<prefix>` | One AWS secret per key, named `<prefix><key>` | AWS server-side | Build with `--features secrets-aws` |
 | `gcp_secrets://<project>/<prefix>` | One GCP Secret per key, named `<prefix><key>`; `put` appends a new version | Google-managed | Auth via Application Default Credentials. Build with `--features secrets-gcp` |
 | `azure_keyvault://<vault-name-or-url>` | One Key Vault secret per key, names normalised `_` → `-` | Azure-managed | Bare name → `https://<name>.vault.azure.net`; full `https://…` URL passed verbatim (sovereign clouds). Auth via `DeveloperToolsCredential` (Azure CLI). Build with `--features secrets-azure` |
-| `vault://<endpoint>/<mount>[/<prefix>]` | KV v2 secret per key under `<mount>`, prefixed path | Vault-managed | First path segment = KV v2 mount; remainder = per-key prefix. Auth via `VAULT_TOKEN`. Build with `--features secrets-vault` |
+| `vault://<endpoint>/<mount>[/<prefix>][?auth=…]` | KV v2 secret per key under `<mount>`, prefixed path | Vault-managed | First path segment = KV v2 mount; remainder = per-key prefix. Token / Kubernetes / AppRole auth (see below). Build with `--features secrets-vault` |
+| `k8s://<namespace>/<secret-name>` | One namespaced `Secret`; each mediator key is one `data` entry | Kubernetes etcd (enable encryption-at-rest) | Namespace optional (`k8s://<secret-name>` resolves it from the pod ServiceAccount / kubeconfig). Auth via in-cluster ServiceAccount or local kubeconfig. Build with `--features secrets-k8s` |
+
+The `vault://` and `k8s://` backends have extra auth/deployment
+options — see [Vault authentication methods](#vault-authentication-methods)
+and [Kubernetes Secrets backend](#kubernetes-secrets-backend) below.
 
 `string://` (inline secrets in TOML) is **not supported**. Inline
 secrets in a config file are unsafe even for CI; use `file://` with
@@ -56,6 +61,7 @@ small while leaving every backend one feature flag away.
 | `gcp_secrets://` | `secrets-gcp` | opt-in |
 | `azure_keyvault://` | `secrets-azure` | opt-in |
 | `vault://` | `secrets-vault` | opt-in |
+| `k8s://` | `secrets-k8s` | opt-in |
 
 The default build compiles only the dependency-free `file://` backend (plain
 and AEAD-encrypted) — the cloud/OS backends each pull a sizeable SDK, so they
@@ -72,6 +78,134 @@ with an actionable message naming the flag — e.g. *"compiled without the
 enable"* — never a silent fallback. CI (`checks-features.yaml`) builds the
 mediator and the setup wizard against **each** `secrets-*` feature on every
 run, so no backend bit-rots even though it isn't in the default build.
+
+---
+
+## Vault authentication methods
+
+The `vault://` backend supports three auth methods, selected by an
+`?auth=` query parameter on the URL (default `token`, so an existing
+`vault://host/mount` URL keeps working unchanged). **No auth secret is
+ever carried in the URL** — tokens and AppRole credentials come from
+the environment at login time so they never land in `mediator.toml`.
+
+| `?auth=` | Extra URL params | Secrets (from env) | Use when |
+|----------|------------------|--------------------|----------|
+| `token` (default) | — | `VAULT_TOKEN` | You already have a token (dev, CI, or an external renewer) |
+| `kubernetes` | `role=<name>` (required); `k8s_mount=<mount>` (default `kubernetes`); `jwt_path=<path>` (default `/var/run/secrets/kubernetes.io/serviceaccount/token`) | — (the pod ServiceAccount JWT) | The mediator runs in a pod and Vault has the Kubernetes auth method enabled |
+| `approle` | `approle_mount=<mount>` (default `approle`) | `VAULT_ROLE_ID`, `VAULT_SECRET_ID` | Non-Kubernetes workloads with an AppRole |
+
+Transport / namespace params (any auth method):
+
+- `namespace=<ns>` — Vault Enterprise namespace (`X-Vault-Namespace`).
+  Distinct from the per-key *path* prefix in the mount segment.
+- `insecure=1` — skip TLS verification. **Dev/test only.**
+
+For the renewable methods (`kubernetes` / `approle`) the backend
+re-authenticates once on a `401`/`403` and retries, so an expired token
+or a kubelet-rotated ServiceAccount JWT recovers without a restart.
+
+Example — Kubernetes auth against Vault Enterprise namespace `team-a`:
+
+```toml
+[secrets]
+backend = "vault://vault.internal:8200/secret/mediator?auth=kubernetes&role=mediator&namespace=team-a"
+```
+
+Server-side Vault policy + Kubernetes auth role for that example
+(mediator keys live under `secret/data/mediator/*` on a KV v2 mount
+named `secret`):
+
+```hcl
+# mediator-policy.hcl
+path "secret/data/mediator/*"     { capabilities = ["create", "read", "update", "delete"] }
+path "secret/metadata/mediator/*" { capabilities = ["list", "read", "delete"] }
+```
+
+```sh
+vault policy write mediator mediator-policy.hcl
+
+# Bind the mediator's ServiceAccount to that policy.
+vault write auth/kubernetes/role/mediator \
+    bound_service_account_names=mediator \
+    bound_service_account_namespaces=affinidi \
+    policies=mediator \
+    ttl=1h
+```
+
+---
+
+## Kubernetes Secrets backend
+
+`k8s://<namespace>/<secret-name>` stores **every** mediator key as a
+separate entry in the `data` map of a *single* namespaced `Secret`
+object (the raw envelope bytes — Kubernetes base64-encodes `data`
+values on the wire, so nothing is double-encoded). One Secret for the
+whole bundle keeps RBAC minimal (the pod ServiceAccount needs rights on
+just that one object) and writes atomic.
+
+- Namespace may be omitted (`k8s://mediator-secrets`) — the backend
+  then resolves it from the in-pod ServiceAccount (or the kubeconfig
+  context), falling back to `default`.
+- Auth is `Client::try_default()`: the in-cluster ServiceAccount when
+  running in a pod, or your local kubeconfig (`~/.kube/config` /
+  `$KUBECONFIG`) for out-of-cluster admin.
+- Writes read-modify-write the Secret and `replace` with the fetched
+  `resourceVersion` (optimistic concurrency, bounded retry on 409), so
+  a concurrent writer never silently clobbers another key.
+- **Enable [encryption at rest for Secrets](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/)**
+  on the cluster — by default `Secret` data is only base64-encoded in
+  etcd, not encrypted.
+
+RBAC: the ServiceAccount needs `get`/`create`/`update` on that one
+Secret. A minimal, resource-scoped Role:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mediator
+  namespace: affinidi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mediator-secrets
+  namespace: affinidi
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["mediator-secrets"]   # the k8s:// secret-name
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]                      # create can't be resourceName-scoped
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mediator-secrets
+  namespace: affinidi
+subjects:
+  - kind: ServiceAccount
+    name: mediator
+    namespace: affinidi
+roleRef:
+  kind: Role
+  name: mediator-secrets
+  apiGroup: rbac.authorization.k8s.io
+```
+
+`mediator.toml` for a pod in namespace `affinidi`:
+
+```toml
+[secrets]
+backend = "k8s://affinidi/mediator-secrets"
+```
+
+Let the mediator create the Secret on first boot (it provisions the
+well-known keys itself), or pre-create an empty `Opaque` Secret named
+`mediator-secrets` if your policy forbids app-created Secrets.
 
 ---
 
@@ -361,7 +495,9 @@ at any moment.
 | `file://` | No | Local filesystem path; same problem. |
 | `file:///shared/path?encrypt=1` | Discouraged | Works in theory if the path is a shared mount, but no flock / atomic-rename — race window during writes. |
 | `aws_secrets://…` | **Yes** | All replicas read the same secret. Writes still single-writer. |
-| `vault://…` (when implemented) | **Yes (planned)** | Same model. |
+| `gcp_secrets://…` / `azure_keyvault://…` | **Yes** | All replicas read the same managed secret store. |
+| `vault://…` | **Yes** | All replicas read the same KV path. Writes still single-writer. |
+| `k8s://…` | **Yes** | All replicas read the same namespaced `Secret`. Writes still single-writer. |
 
 The mediator does **no application-level leader election**. If a
 deployment needs active/active processing of mediated traffic, that
