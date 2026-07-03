@@ -113,7 +113,7 @@ pub enum CapabilitySource {
 }
 
 /// A cached per-peer TSP capability record, stored by [`RelationshipStore`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PeerCapability {
     /// Whether the peer's agent accepts TSP.
     pub tsp: TspSupport,
@@ -122,6 +122,13 @@ pub struct PeerCapability {
     /// Unix seconds (against the SDK's configured clock) when learned — used
     /// for the capability TTL.
     pub learned_at_unix: u64,
+    /// The peer's mediator DID, when known — used by [`crate::ATM::send_to`] to
+    /// route a TSP message to a peer on a *different* mediator (a service-less
+    /// `did:key` peer can't advertise this in a DID document, so it is learned
+    /// from a routed relationship invite or set out-of-band). `None` means "assume
+    /// the peer shares the sender's mediator" (Direct delivery).
+    #[serde(default)]
+    pub mediator: Option<String>,
 }
 
 /// Pluggable backing store for TSP relationship state (and learned per-peer
@@ -222,7 +229,7 @@ impl RelationshipStore for InMemoryRelationshipStore {
         their_vid: &str,
     ) -> Result<Option<PeerCapability>, ATMError> {
         let key = (our_vid.to_string(), their_vid.to_string());
-        Ok(self.capabilities.read().await.get(&key).copied())
+        Ok(self.capabilities.read().await.get(&key).cloned())
     }
 
     async fn set_capability(
@@ -252,10 +259,13 @@ impl ATM {
     /// unchanged until an app opts in via
     /// [`with_tsp_policy`](crate::config::ATMConfigBuilder::with_tsp_policy).
     ///
-    /// v1 assumes the recipient shares (or its mediator federates with) the
-    /// sender's mediator; cross-mediator TSP routing to a service-less DID
-    /// (e.g. did:key) is out of scope here — use `atm.tsp().send_routed` for
-    /// explicit multi-hop.
+    /// TSP delivery is Direct (via the sender's mediator) when the recipient
+    /// shares that mediator. When the recipient's mediator is **known and
+    /// different** (learned from a routed relationship invite or set via
+    /// [`TspOps::set_peer_mediator`] — the service-less `did:key` case), the
+    /// message is instead routed cross-mediator with metadata privacy
+    /// ([`TspOps::send_nested_routed`]): the recipient stays hidden from the
+    /// sender's mediator.
     ///
     /// [`Message`]: affinidi_messaging_didcomm::message::Message
     pub async fn send_to(
@@ -272,7 +282,25 @@ impl ATM {
                 let payload = serde_json::to_vec(message).map_err(|e| {
                     ATMError::MsgSendError(format!("couldn't serialise message for TSP: {e}"))
                 })?;
-                self.tsp().send(profile, to, &payload).await?;
+                // Route cross-mediator (metadata-private) when the peer's mediator
+                // is known and differs from ours; otherwise Direct via our mediator.
+                let peer_mediator = self
+                    .tsp()
+                    .peer_capability(profile, to)
+                    .await?
+                    .and_then(|c| c.mediator);
+                let (_, own_mediator) = profile.dids()?;
+                match peer_mediator {
+                    Some(peer_mediator) if peer_mediator != own_mediator => {
+                        let route = [own_mediator.to_string(), peer_mediator];
+                        self.tsp()
+                            .send_nested_routed(profile, &route, to, &payload)
+                            .await?;
+                    }
+                    _ => {
+                        self.tsp().send(profile, to, &payload).await?;
+                    }
+                }
             }
             SendProtocol::DidComm => {
                 // Pack for the recipient, then wrap in a single `forward` to the
@@ -583,6 +611,65 @@ impl TspOps<'_> {
         self.send_raw(profile, &nested.bytes).await
     }
 
+    /// Send `payload` to `to_did` across mediators with **metadata privacy**:
+    /// the inner Direct message is sealed end-to-end to `to_did`, wrapped in a
+    /// **Nested** envelope sealed to the recipient's mediator (`route.last()`),
+    /// and **routed** through `route`.
+    ///
+    /// `route` is the hop list `[own_mediator, …, recipient_mediator]`. The sender
+    /// posts to its own mediator (`route[0]`), which forwards along the route to
+    /// the recipient's mediator; each intermediary sees only the *next hop*, never
+    /// `to_did` (it is sealed inside the Nested inner). The recipient's mediator
+    /// unwraps the Nested layer and delivers the Direct message to `to_did`
+    /// locally — so only the recipient's own mediator learns the recipient, which
+    /// is unavoidable for local delivery.
+    ///
+    /// This is the metadata-private counterpart to [`send_routed`](Self::send_routed),
+    /// which carries the recipient as a visible route hop.
+    pub async fn send_nested_routed(
+        &self,
+        profile: &Arc<ATMProfile>,
+        route: &[String],
+        to_did: &str,
+        payload: &[u8],
+    ) -> Result<(), ATMError> {
+        let intermediary = route
+            .last()
+            .ok_or_else(|| ATMError::MsgSendError("route must not be empty".into()))?;
+
+        let (from_did, _) = profile.dids()?;
+        let (signing_key, decryption_key) = self.profile_tsp_keys(from_did).await?;
+
+        // Inner Direct message sealed end-to-end to the final recipient.
+        let recipient = self.resolve_vid(to_did).await?;
+        let inner = direct::pack(
+            payload,
+            MessageType::Direct,
+            from_did,
+            to_did,
+            &signing_key,
+            &decryption_key,
+            &recipient.encryption_key,
+        )
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't pack inner TSP message: {e}")))?;
+
+        // Wrap in a Nested envelope sealed to the recipient's mediator, so the
+        // recipient's identity is opaque to every earlier hop.
+        let intermediary_vid = self.resolve_vid(intermediary).await?;
+        let nested = affinidi_tsp::message::routed::pack_nested(
+            &inner,
+            from_did,
+            intermediary,
+            &signing_key,
+            &decryption_key,
+            &intermediary_vid.encryption_key,
+        )
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't pack nested TSP message: {e}")))?;
+
+        // Route the Nested envelope through the hops to the recipient's mediator.
+        self.send_routed_opaque(profile, route, &nested.bytes).await
+    }
+
     /// Send a TSP **Control** message — a relationship-management message (invite /
     /// accept / cancel) to a peer.
     ///
@@ -639,6 +726,34 @@ impl TspOps<'_> {
         let next = next_state(store, our_did, their_did, RelationshipEvent::SendInvite).await?;
         self.send_control(profile, their_did, &ControlMessage::invite())
             .await?;
+        store.set(our_did, their_did, next).await?;
+        Ok(next)
+    }
+
+    /// Like [`form_relationship`](Self::form_relationship), but the invite
+    /// **advertises this agent's own mediator DID** in its route, so the peer can
+    /// learn where to route TSP messages back — needed to reach a cross-mediator
+    /// peer (e.g. a service-less `did:key` peer, whose DID document can't carry a
+    /// `TSPTransport` service). The peer records it via
+    /// [`record_incoming_control`](Self::record_incoming_control).
+    ///
+    /// Opt-in (SDD decision Q2): the plain
+    /// [`form_relationship`](Self::form_relationship) advertises nothing, so your
+    /// mediator is only disclosed when you deliberately use this routed form.
+    pub async fn form_relationship_routed(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+    ) -> Result<RelationshipState, ATMError> {
+        let (our_did, our_mediator) = profile.dids()?;
+        let store = self.relationship_store();
+        let next = next_state(store, our_did, their_did, RelationshipEvent::SendInvite).await?;
+        self.send_control(
+            profile,
+            their_did,
+            &ControlMessage::invite_routed(vec![our_mediator.to_string()]),
+        )
+        .await?;
         store.set(our_did, their_did, next).await?;
         Ok(next)
     }
@@ -743,6 +858,16 @@ impl TspOps<'_> {
             ControlType::RelationshipCancel => RelationshipEvent::ReceiveCancel,
         };
         let new_state = advance_state(self.relationship_store(), our_did, peer_did, event).await?;
+        // If the peer advertised its mediator in the control's route (a routed
+        // invite/accept), cache it so `send_to` can route to this peer on a
+        // different mediator. Learned once during the handshake; no-op under
+        // `TspPolicy::Off`, like the other capability-learning paths.
+        if self.atm.inner.config.tsp_policy() != TspPolicy::Off
+            && let Some(peer_mediator) = control.route.first()
+        {
+            self.set_peer_mediator(profile, peer_did, Some(peer_mediator.clone()))
+                .await?;
+        }
         // The initiator reaches Bidirectional here (on receiving the accept) —
         // confirm the peer's TSP capability.
         if new_state == RelationshipState::Bidirectional {
@@ -779,14 +904,48 @@ impl TspOps<'_> {
         support: TspSupport,
     ) -> Result<(), ATMError> {
         let (our_did, _) = profile.dids()?;
+        let store = self.relationship_store();
+        let existing = store.get_capability(our_did, their_did).await?;
         let cap = PeerCapability {
             tsp: support,
             source: CapabilitySource::Manual,
             learned_at_unix: self.atm.inner.config.clock().unix_secs(),
+            // Preserve any learned mediator (this call sets support, not routing).
+            mediator: existing.and_then(|c| c.mediator),
         };
-        self.relationship_store()
-            .set_capability(our_did, their_did, cap)
-            .await
+        store.set_capability(our_did, their_did, cap).await
+    }
+
+    /// Record the `mediator` DID that a peer's TSP agent lives behind, so
+    /// [`crate::ATM::send_to`] can route a TSP message to a peer on a *different*
+    /// mediator (a service-less `did:key` peer can't advertise this in its DID
+    /// document). Learned automatically from a routed relationship invite
+    /// ([`form_relationship_routed`](Self::form_relationship_routed)); use this to
+    /// set it out-of-band. Pass `None` to clear it (assume the shared mediator).
+    ///
+    /// Preserves any known TSP support level for the peer.
+    pub async fn set_peer_mediator(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        mediator: Option<String>,
+    ) -> Result<(), ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let store = self.relationship_store();
+        let existing = store.get_capability(our_did, their_did).await?;
+        let cap = PeerCapability {
+            tsp: existing
+                .as_ref()
+                .map(|c| c.tsp)
+                .unwrap_or(TspSupport::Unknown),
+            source: existing
+                .as_ref()
+                .map(|c| c.source)
+                .unwrap_or(CapabilitySource::Manual),
+            learned_at_unix: self.atm.inner.config.clock().unix_secs(),
+            mediator,
+        };
+        store.set_capability(our_did, their_did, cap).await
     }
 
     /// Advertise this agent's TSP capability in its Discover Features 2.0
@@ -887,9 +1046,10 @@ impl TspOps<'_> {
             return Ok(());
         }
         let store = self.relationship_store();
-        if let Some(cap) = store.get_capability(our_did, their_did).await?
+        let existing = store.get_capability(our_did, their_did).await?;
+        if let Some(cap) = &existing
             && cap.tsp == TspSupport::Supported
-            && self.capability_is_fresh(&cap)
+            && self.capability_is_fresh(cap)
         {
             return Ok(());
         }
@@ -897,6 +1057,8 @@ impl TspOps<'_> {
             tsp: TspSupport::Supported,
             source,
             learned_at_unix: self.atm.inner.config.clock().unix_secs(),
+            // Preserve any learned mediator (used for cross-mediator routing).
+            mediator: existing.and_then(|c| c.mediator),
         };
         store.set_capability(our_did, their_did, cap).await
     }
@@ -923,11 +1085,11 @@ impl TspOps<'_> {
         let (our_did, _) = profile.dids()?;
         let store = self.relationship_store();
 
-        let fresh_cap = store
+        let existing_cap = store
             .get_capability(our_did, their_did)
             .await?
-            .filter(|c| self.capability_is_fresh(c))
-            .map(|c| c.tsp);
+            .filter(|c| self.capability_is_fresh(c));
+        let fresh_cap = existing_cap.as_ref().map(|c| c.tsp);
         let bidirectional =
             store.get(our_did, their_did).await? == RelationshipState::Bidirectional;
 
@@ -953,6 +1115,7 @@ impl TspOps<'_> {
                         tsp: TspSupport::Supported,
                         source,
                         learned_at_unix: self.atm.inner.config.clock().unix_secs(),
+                        mediator: existing_cap.and_then(|c| c.mediator),
                     };
                     store.set_capability(our_did, their_did, cap).await?;
                 }
@@ -1436,9 +1599,13 @@ mod tests {
             tsp: TspSupport::Supported,
             source: CapabilitySource::Relationship,
             learned_at_unix: 42,
+            mediator: None,
         };
-        store.set_capability(ALICE, BOB, cap).await.unwrap();
-        assert_eq!(store.get_capability(ALICE, BOB).await.unwrap(), Some(cap));
+        store.set_capability(ALICE, BOB, cap.clone()).await.unwrap();
+        assert_eq!(
+            store.get_capability(ALICE, BOB).await.unwrap(),
+            Some(cap.clone())
+        );
 
         // Directional + independent of relationship state.
         assert_eq!(store.get_capability(BOB, ALICE).await.unwrap(), None);
