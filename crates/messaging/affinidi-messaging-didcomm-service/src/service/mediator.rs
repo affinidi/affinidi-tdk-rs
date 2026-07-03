@@ -150,8 +150,15 @@ impl Listener {
                 match frame {
                     Some(InboundFrame::DidComm(message, meta)) => {
                         let meta = super::listener::convert_meta(*meta);
-                        Listener::dispatch_message(listener_id, atm, profile, handler, *message, meta)
-                            .await;
+                        Listener::dispatch_message(
+                            listener_id,
+                            atm,
+                            profile,
+                            handler,
+                            *message,
+                            meta,
+                        )
+                        .await;
                     }
                     Some(InboundFrame::Tsp(packed)) => match tsp_handler {
                         Some(h) => {
