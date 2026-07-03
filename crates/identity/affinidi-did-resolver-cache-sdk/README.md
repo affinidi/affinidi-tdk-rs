@@ -142,12 +142,12 @@ resolver does not affect DIDs already cached (immutable methods like `did:key`
 are cached until capacity-evicted). Register resolvers before resolving, or use a
 fresh client.
 
-**Scope (current):** registering a resolver for a method that is **already
-built in** (`did:key`, `did:web`, `did:ethr`, …) takes effect through the public
-`resolve()` API. A resolver for a **brand-new** method (e.g. `did:example`) is
-not yet reachable via `resolve()`, which validates the method against the
-built-in `DIDMethod` set before dispatch. See
-[issue #583](https://github.com/affinidi/affinidi-tdk-rs/issues/583).
+**Brand-new methods:** registering a resolver for a method with no built-in
+support (e.g. `did:example`) works through the public `resolve()` API — an
+unrecognised method is tagged `DIDMethod::OTHER` and dispatched to the
+registered resolver (the concrete name is preserved in `ResolveResponse::did`).
+If no resolver is registered for the method, `resolve()` returns
+`UnsupportedMethod`.
 
 Runnable example: [`examples/custom_resolver.rs`](examples/custom_resolver.rs) —
 `cargo run --example custom_resolver`.

@@ -69,6 +69,10 @@ pub enum DIDMethod {
     SCID,
     EBSI,
     EXAMPLE,
+    /// A DID method with no built-in support — resolved only if a custom
+    /// resolver has been registered for it (see [`DIDCacheClient::set_resolver`]).
+    /// The concrete method name is preserved in [`ResolveResponse::did`].
+    OTHER,
 }
 
 /// Helper function to convert a DIDMethod to a string
@@ -86,6 +90,7 @@ impl fmt::Display for DIDMethod {
             DIDMethod::SCID => write!(f, "scid"),
             DIDMethod::EBSI => write!(f, "ebsi"),
             DIDMethod::EXAMPLE => write!(f, "example"),
+            DIDMethod::OTHER => write!(f, "other"),
         }
     }
 }
@@ -127,6 +132,10 @@ impl DIDMethod {
     ///
     /// Returns `false` for deterministic methods where the document is derived
     /// entirely from the DID string itself (key, peer, jwk, ethr, pkh, example).
+    ///
+    /// A custom (`OTHER`) method is treated as **mutable** — its resolver may
+    /// fetch from external infrastructure, so the cached document is given the
+    /// mutable TTL rather than being kept forever.
     pub fn is_mutable(&self) -> bool {
         matches!(
             self,
@@ -135,6 +144,7 @@ impl DIDMethod {
                 | DIDMethod::CHEQD
                 | DIDMethod::SCID
                 | DIDMethod::EBSI
+                | DIDMethod::OTHER
         )
     }
 }
@@ -368,7 +378,16 @@ impl DIDCacheClient {
             )));
         }
 
-        let method: DIDMethod = parsed_did.method().to_string().as_str().try_into()?;
+        // Map the parsed method onto the cache's method tag. An unknown method is
+        // tagged `OTHER` (rather than rejected) so a registered custom resolver
+        // can still handle it; if none is registered, `local_resolve` reports it
+        // as unsupported.
+        let method: DIDMethod = parsed_did
+            .method()
+            .to_string()
+            .as_str()
+            .try_into()
+            .unwrap_or(DIDMethod::OTHER);
 
         let hash = DIDCacheClient::hash_did(did);
 

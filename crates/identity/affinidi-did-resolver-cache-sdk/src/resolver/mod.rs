@@ -39,9 +39,8 @@ impl DIDCacheClient {
             DIDMethod::Scid { .. } => Err(DIDCacheError::UnsupportedMethod(
                 "did:scid is not enabled".to_string(),
             )),
-            _ => Err(DIDCacheError::DIDError(format!(
-                "No resolver registered for DID method '{}'",
-                did.method()
+            _ => Err(DIDCacheError::UnsupportedMethod(format!(
+                "no resolver registered for DID method '{method_name}'"
             ))),
         }
     }
@@ -49,7 +48,7 @@ impl DIDCacheClient {
 
 #[cfg(test)]
 mod tests {
-    use crate::{DIDCacheClient, MethodName, config};
+    use crate::{DIDCacheClient, DIDMethod, MethodName, config, errors::DIDCacheError};
     use affinidi_did_common::DID;
     use affinidi_did_common::Document;
     use affinidi_did_resolver_traits::{AsyncResolver, Resolution, ResolverError};
@@ -362,6 +361,39 @@ mod tests {
         let did: DID = "did:test:alice".parse().unwrap();
         let result = client.local_resolve(&did).await;
         assert!(result.is_err());
+    }
+
+    /// Regression for #583: a registered custom resolver is reachable through the
+    /// public `resolve()` API — previously `resolve()` rejected unknown methods
+    /// (with `UnsupportedMethod`) before consulting the resolver chain, so only
+    /// `local_resolve` could reach a custom-method resolver.
+    #[tokio::test]
+    async fn custom_resolver_reachable_via_public_resolve() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let mut client = DIDCacheClient::new(config).await.unwrap();
+        client.set_resolver(
+            MethodName::Other("test".to_string()),
+            Box::new(TestResolver),
+        );
+
+        let response = client.resolve("did:test:alice").await.unwrap();
+        assert_eq!(response.doc.id.as_str(), "did:test:alice");
+        // The cache tags an unknown method as `OTHER`; the concrete name is in `did`.
+        assert_eq!(response.method, DIDMethod::OTHER);
+        assert_eq!(response.did, "did:test:alice");
+    }
+
+    /// An unknown method with no registered resolver surfaces as `UnsupportedMethod`
+    /// through the public `resolve()` API.
+    #[tokio::test]
+    async fn unregistered_method_via_public_resolve_is_unsupported() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let client = DIDCacheClient::new(config).await.unwrap();
+        let err = client.resolve("did:nope:whatever").await.unwrap_err();
+        assert!(
+            matches!(err, DIDCacheError::UnsupportedMethod(_)),
+            "expected UnsupportedMethod, got: {err:?}"
+        );
     }
 
     #[tokio::test]

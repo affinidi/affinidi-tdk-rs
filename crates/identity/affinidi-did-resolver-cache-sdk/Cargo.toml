@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.11"
+version = "0.8.12"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
