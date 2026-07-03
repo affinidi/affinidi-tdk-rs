@@ -11,7 +11,7 @@ use trust_tasks_rs::specs::messaging::acl;
 
 use super::listener::Listener;
 use crate::error::{DIDCommServiceError, StartupError};
-use crate::handler::DIDCommHandler;
+use crate::handler::{DIDCommHandler, TspHandler};
 
 const OFFLINE_SYNC_INTERVAL_SECS: u64 = 30;
 /// Short retry used only when the very first drains can't run yet because the
@@ -56,6 +56,7 @@ impl Listener {
         atm: &ATM,
         profile: &Arc<ATMProfile>,
         handler: &Arc<dyn DIDCommHandler>,
+        tsp_handler: Option<&Arc<dyn TspHandler>>,
         shutdown: &CancellationToken,
     ) {
         let profile_alias = profile.inner.alias.clone();
@@ -71,6 +72,7 @@ impl Listener {
                 atm,
                 profile,
                 handler,
+                tsp_handler,
             )
             .await
             {
@@ -111,6 +113,7 @@ impl Listener {
         atm: &ATM,
         profile: &Arc<ATMProfile>,
         handler: &Arc<dyn DIDCommHandler>,
+        tsp_handler: Option<&Arc<dyn TspHandler>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let wait_for_response = true;
         let messages_limit = 100;
@@ -127,31 +130,92 @@ impl Listener {
             return Ok(());
         }
 
-        let offline_messages = atm
-            .message_pickup()
-            .send_delivery_request(profile, Some(messages_limit), wait_for_response)
-            .await?;
+        // TSP-aware drain: fetch the backlog as classified frames so a TSP
+        // frame goes to the TSP handler (like the live loop) instead of being
+        // DIDComm-unpacked and left to poison-loop. Undeliverable frames are
+        // acked too so the mediator stops redelivering them.
+        #[cfg(feature = "tsp")]
+        {
+            use affinidi_messaging_sdk::protocols::message_pickup::InboundFrame;
 
-        let message_ids: Vec<_> = offline_messages.iter().map(|(m, _)| m.id.clone()).collect();
+            let frames = atm
+                .message_pickup()
+                .send_delivery_request_frames(profile, Some(messages_limit), wait_for_response)
+                .await?;
 
-        debug!(profile = %profile.inner.alias, count = offline_messages.len(), "Retrieved offline messages");
+            let ack_ids: Vec<String> = frames.iter().map(|(_, id)| id.clone()).collect();
+            debug!(profile = %profile.inner.alias, count = frames.len(), "Retrieved offline frames");
 
-        for (message, meta) in offline_messages {
-            let meta = super::listener::convert_meta(meta);
-            Listener::dispatch_message(listener_id, atm, profile, handler, message, meta).await;
+            for (frame, _id) in frames {
+                match frame {
+                    Some(InboundFrame::DidComm(message, meta)) => {
+                        let meta = super::listener::convert_meta(*meta);
+                        Listener::dispatch_message(listener_id, atm, profile, handler, *message, meta)
+                            .await;
+                    }
+                    Some(InboundFrame::Tsp(packed)) => match tsp_handler {
+                        Some(h) => {
+                            Listener::dispatch_tsp(listener_id, atm, profile, h, *packed).await;
+                        }
+                        None => warn!(
+                            profile = %profile.inner.alias,
+                            "Offline TSP frame but no TSP handler configured — dropping (acked)"
+                        ),
+                    },
+                    // `InboundFrame` is `#[non_exhaustive]`.
+                    Some(_) => warn!(
+                        profile = %profile.inner.alias,
+                        "Unrecognised offline frame kind — dropping (acked)"
+                    ),
+                    // Undeliverable (bad encoding / DIDComm unpack failure): drop
+                    // it; it's in `ack_ids` so the mediator stops redelivering.
+                    None => {}
+                }
+            }
+
+            if !ack_ids.is_empty() {
+                let delete_result = atm
+                    .message_pickup()
+                    .send_messages_received(profile, &ack_ids, wait_for_response)
+                    .await?;
+                if delete_result.is_none() {
+                    warn!(profile = %profile.inner.alias, "No status reply for offline messages ack");
+                }
+            }
+
+            Ok(())
         }
 
-        let delete_result = atm
-            .message_pickup()
-            .send_messages_received(profile, &message_ids, wait_for_response)
-            .await?;
+        #[cfg(not(feature = "tsp"))]
+        {
+            let _ = tsp_handler;
 
-        if delete_result.is_some() {
-            debug!(profile = %profile.inner.alias, "Offline messages acknowledged and deleted");
-        } else {
-            warn!(profile = %profile.inner.alias, "No status reply for offline messages ack");
+            let offline_messages = atm
+                .message_pickup()
+                .send_delivery_request(profile, Some(messages_limit), wait_for_response)
+                .await?;
+
+            let message_ids: Vec<_> = offline_messages.iter().map(|(m, _)| m.id.clone()).collect();
+
+            debug!(profile = %profile.inner.alias, count = offline_messages.len(), "Retrieved offline messages");
+
+            for (message, meta) in offline_messages {
+                let meta = super::listener::convert_meta(meta);
+                Listener::dispatch_message(listener_id, atm, profile, handler, message, meta).await;
+            }
+
+            let delete_result = atm
+                .message_pickup()
+                .send_messages_received(profile, &message_ids, wait_for_response)
+                .await?;
+
+            if delete_result.is_some() {
+                debug!(profile = %profile.inner.alias, "Offline messages acknowledged and deleted");
+            } else {
+                warn!(profile = %profile.inner.alias, "No status reply for offline messages ack");
+            }
+
+            Ok(())
         }
-
-        Ok(())
     }
 }

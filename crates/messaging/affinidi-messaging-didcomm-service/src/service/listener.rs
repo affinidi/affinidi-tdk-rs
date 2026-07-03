@@ -199,12 +199,14 @@ impl Listener {
         let atm_clone = atm.clone();
         let profile_clone = profile.clone();
         let handler_clone = self.handler.clone();
+        let tsp_handler_clone = self.tsp_handler.clone();
         tasks.spawn(async move {
             Listener::run_periodic_offline_sync(
                 &listener_id,
                 &atm_clone,
                 &profile_clone,
                 &handler_clone,
+                tsp_handler_clone.as_ref(),
                 &shutdown_clone,
             )
             .await;

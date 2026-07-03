@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.18.47] - 2026-07-03
+
+- Add `MessagePickup::send_delivery_request_frames` (+ `MessagePickupOps` delegate), the
+  offline/backlog counterpart of `live_stream_next_frame`: it returns each queued message as
+  an `InboundFrame` (DIDComm or TSP) paired with its ack id, so an offline-sync consumer can
+  route TSP frames to a TSP handler instead of DIDComm-unpacking (and poison-looping on)
+  them. Undeliverable attachments (bad encoding, or a non-TSP frame that fails DIDComm
+  unpack) yield `(None, id)` so the caller still acks them. `tsp`-feature only; additive.
+
 ## [0.18.45] - 2026-07-02
 
 - TSP capability learning (SDD phase 2): the per-peer TSP capability cache is now

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.16] - 2026-07-03
+
+- Fix a TSP poison-loop in the offline-sync poller. `AffinidiMessageService` runs a periodic
+  offline/backlog drain (`run_periodic_offline_sync`, every 30s) alongside the TSP-aware live
+  loop, but that drain was DIDComm-only: it blindly `atm.unpack()`d every queued message, so
+  a queued **TSP** frame failed to unpack ("Cannot parse message as JSON") and — never being
+  acked/deleted — was redelivered every 30s forever. The drain is now TSP-aware: it fetches
+  the backlog via the new `send_delivery_request_frames`, routes TSP frames to the same
+  `TspHandler` the live loop uses, dispatches DIDComm frames as before, and acks **all**
+  fetched frames (including undeliverable ones) so nothing loops. `tsp`-feature only; the
+  DIDComm-only path is unchanged.
+
 ## [0.3.15] - 2026-07-02
 
 - Fix inbound TSP: `dispatch_tsp` handed the **qb64** pickup string (`base64url(qb2)`, `-E…`
