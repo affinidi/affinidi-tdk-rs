@@ -546,6 +546,42 @@ impl MessagePickup {
         limit: Option<usize>,
         wait_for_response: bool,
     ) -> Result<Vec<(Message, UnpackMetadata)>, ATMError> {
+        let message = self
+            ._request_delivery(atm, profile, limit, wait_for_response)
+            .await?;
+        self._handle_delivery(atm, &message).await
+    }
+
+    /// TSP-aware sibling of [`send_delivery_request`]: returns each queued
+    /// message as an [`InboundFrame`] (DIDComm or TSP) paired with the
+    /// attachment id needed to acknowledge/delete it — so an offline-sync
+    /// consumer can route TSP frames to a TSP handler instead of DIDComm-
+    /// unpacking (and poison-looping on) them. Undeliverable attachments yield
+    /// `(None, id)` so the caller still acks them. Requires the `tsp` feature.
+    #[cfg(feature = "tsp")]
+    pub async fn send_delivery_request_frames(
+        &self,
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        limit: Option<usize>,
+        wait_for_response: bool,
+    ) -> Result<Vec<(Option<InboundFrame>, String)>, ATMError> {
+        let message = self
+            ._request_delivery(atm, profile, limit, wait_for_response)
+            .await?;
+        self._handle_delivery_frames(atm, &message).await
+    }
+
+    /// Send a Message-Pickup 3.0 delivery-request and return the mediator's
+    /// `delivery` message (whose attachments are the queued messages). Shared by
+    /// [`send_delivery_request`] and [`send_delivery_request_frames`].
+    async fn _request_delivery(
+        &self,
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        limit: Option<usize>,
+        wait_for_response: bool,
+    ) -> Result<Message, ATMError> {
         let _span = span!(Level::DEBUG, "send_delivery_request",);
 
         async move {
@@ -597,12 +633,79 @@ impl MessagePickup {
                 .send_message(profile, &msg, &msg_id, wait_for_response, false)
                 .await?
             {
-                SendMessageResponse::Message(message) => self._handle_delivery(atm, &message).await,
+                SendMessageResponse::Message(message) => Ok(*message),
                 _ => Err(ATMError::MsgReceiveError("No Messages from API".into())),
             }
         }
         .instrument(_span)
         .await
+    }
+
+    /// TSP-aware sibling of [`_handle_delivery`]: classify each delivered
+    /// attachment (DIDComm vs TSP) and return it as an [`InboundFrame`] paired
+    /// with the attachment id needed to ack/delete it. Undeliverable
+    /// attachments — bad base64/utf8, or a non-TSP frame that fails DIDComm
+    /// unpack — yield `(None, id)` so the caller still acks them and the
+    /// mediator stops redelivering (no poison loop). Unlike [`_handle_delivery`],
+    /// a TSP frame is surfaced (`InboundFrame::Tsp`) rather than DIDComm-unpacked
+    /// and dropped.
+    #[cfg(feature = "tsp")]
+    pub(crate) async fn _handle_delivery_frames(
+        &self,
+        atm: &ATM,
+        message: &Message,
+    ) -> Result<Vec<(Option<InboundFrame>, String)>, ATMError> {
+        let mut out: Vec<(Option<InboundFrame>, String)> = Vec::new();
+
+        let Some(attachments) = &message.attachments else {
+            return Ok(out);
+        };
+
+        for attachment in attachments {
+            // No id => we can't ack/delete it individually; skip (leaving it
+            // queued is preferable to acking the wrong message).
+            let Some(id) = attachment.id.clone() else {
+                warn!("Delivery attachment has no id; cannot ack — skipping");
+                continue;
+            };
+            let Some(b64) = &attachment.data.base64 else {
+                warn!("Attachment type not supported: {:?}", attachment.data);
+                out.push((None, id));
+                continue;
+            };
+            let decoded = match BASE64_URL_SAFE_NO_PAD.decode(b64.clone()) {
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Error decoding attachment to utf8: ({e:?}). id({id})");
+                        out.push((None, id));
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    warn!("Error decoding base64: ({e:?}). id({id})");
+                    out.push((None, id));
+                    continue;
+                }
+            };
+
+            if atm.tsp().is_tsp(&decoded) {
+                out.push((Some(InboundFrame::Tsp(Box::new(decoded))), id));
+            } else {
+                match atm.unpack(&decoded).await {
+                    Ok((mut m, u)) => {
+                        m.id = id.clone();
+                        out.push((Some(InboundFrame::DidComm(Box::new(m), Box::new(u))), id));
+                    }
+                    Err(e) => {
+                        warn!("Error unpacking message: ({e:?}); dropping. id({id})");
+                        out.push((None, id));
+                    }
+                }
+            }
+        }
+
+        Ok(out)
     }
 
     /// Iterates through each attachment and unpacks each message into an array to return
@@ -969,6 +1072,22 @@ impl<'a> MessagePickupOps<'a> {
     ) -> Result<Option<InboundFrame>, ATMError> {
         MessagePickup::default()
             .live_stream_next_frame(self.atm, profile, wait, auto_delete)
+            .await
+    }
+
+    /// Sends a Message Pickup 3.0 `Delivery Request` and returns each queued
+    /// message as an [`InboundFrame`] (DIDComm or TSP) paired with its ack id —
+    /// the offline/backlog counterpart of [`live_stream_next_frame`].
+    /// See [`MessagePickup::send_delivery_request_frames`] for full documentation.
+    #[cfg(feature = "tsp")]
+    pub async fn send_delivery_request_frames(
+        &self,
+        profile: &Arc<ATMProfile>,
+        limit: Option<usize>,
+        wait_for_response: bool,
+    ) -> Result<Vec<(Option<InboundFrame>, String)>, ATMError> {
+        MessagePickup::default()
+            .send_delivery_request_frames(self.atm, profile, limit, wait_for_response)
             .await
     }
 }
