@@ -760,9 +760,12 @@ pub async fn pack_encrypted<S: SecretsResolver>(
         Ok((packed, metadata))
     } else {
         // Anoncrypt: pick the recipient's most-preferred usable curve.
-        let (recipient_kid, recipient_public) =
-            select_anoncrypt_key(&recipient_doc.doc, &recipient_ka_kids, &DEFAULT_CURVE_PREFERENCE)
-                .map_err(|e| e.to_string())?;
+        let (recipient_kid, recipient_public) = select_anoncrypt_key(
+            &recipient_doc.doc,
+            &recipient_ka_kids,
+            &DEFAULT_CURVE_PREFERENCE,
+        )
+        .map_err(|e| e.to_string())?;
 
         let recipients: Vec<(&str, &PublicKeyAgreement)> = vec![(recipient_kid, &recipient_public)];
         let packed = pack_encrypted_anoncrypt(message, &recipients)
@@ -1032,5 +1035,82 @@ mod tests {
             !err.contains("curve mismatch between private and public keys"),
             "must not surface the raw ECDH mismatch string: {err}"
         );
+    }
+
+    /// A `messagepickup` status message with **no** `from` header — packed as
+    /// anoncrypt when `pack_encrypted` is called with `from_did: None`.
+    fn anoncrypt_message(to: &str, id: &str) -> Message {
+        Message::build(
+            id.to_string(),
+            "https://didcomm.org/messagepickup/3.0/status".to_string(),
+            json!({ "message_count": 0 }),
+        )
+        .to(to.to_string())
+        .finalize()
+    }
+
+    #[tokio::test]
+    async fn pack_encrypted_anoncrypt_uses_p256_for_p256_only_client() {
+        // Anoncrypt sibling of the authcrypt regression: a mediator anoncrypt
+        // reply (no `from`) to a P-256-only client must run ECDH-ES on P-256,
+        // not choke selecting an absent/unusable X25519 key.
+        let client = "did:example:anon-p256-client";
+        let cli_p_kid = format!("{client}#key-p256");
+        let cli_p = Secret::generate_p256(Some(&cli_p_kid), None).unwrap();
+
+        let client_doc = json!({
+            "id": client,
+            "verificationMethod": [ka_vm(&cli_p_kid, client, &cli_p)],
+            "keyAgreement": [cli_p_kid],
+        });
+
+        let resolver = example_resolver(&[client_doc]).await;
+        // Anoncrypt has no sender side, so no secrets are required.
+        let no_secrets: [Secret; 0] = [];
+        let secrets = SimpleSecretsResolver::new(&no_secrets).await;
+
+        let msg = anoncrypt_message(client, "regression-anoncrypt-p256");
+        let (packed, metadata) = pack_encrypted(&msg, client, None, &resolver, &secrets)
+            .await
+            .expect("anoncrypt to a P-256-only client must pack");
+
+        assert_eq!(metadata.to_kids, vec![cli_p_kid.clone()]);
+        assert_eq!(jwe_epk_crv(&packed).as_deref(), Some("P-256"));
+    }
+
+    #[tokio::test]
+    async fn pack_encrypted_anoncrypt_prefers_curve_over_document_order() {
+        // Recipient lists P-256 FIRST, X25519 second. Naive `.first()`
+        // selection would encrypt to P-256; the fix honours
+        // DEFAULT_CURVE_PREFERENCE (X25519 > P-256), so anoncrypt must select
+        // the second-listed X25519 key — proving curve-preference selection,
+        // not document order.
+        let client = "did:example:anon-mixed-client";
+        let cli_p_kid = format!("{client}#key-p256");
+        let cli_x_kid = format!("{client}#key-x25519");
+        let cli_p = Secret::generate_p256(Some(&cli_p_kid), None).unwrap();
+        let cli_x = Secret::generate_x25519(Some(&cli_x_kid), None).unwrap();
+
+        let client_doc = json!({
+            "id": client,
+            "verificationMethod": [
+                ka_vm(&cli_p_kid, client, &cli_p),
+                ka_vm(&cli_x_kid, client, &cli_x),
+            ],
+            // P-256 listed first on purpose — the fix must ignore this order.
+            "keyAgreement": [cli_p_kid, cli_x_kid],
+        });
+
+        let resolver = example_resolver(&[client_doc]).await;
+        let no_secrets: [Secret; 0] = [];
+        let secrets = SimpleSecretsResolver::new(&no_secrets).await;
+
+        let msg = anoncrypt_message(client, "regression-anoncrypt-preference");
+        let (packed, metadata) = pack_encrypted(&msg, client, None, &resolver, &secrets)
+            .await
+            .expect("anoncrypt must pack");
+
+        assert_eq!(metadata.to_kids, vec![cli_x_kid.clone()]);
+        assert_eq!(jwe_epk_crv(&packed).as_deref(), Some("X25519"));
     }
 }
