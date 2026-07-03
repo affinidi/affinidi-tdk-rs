@@ -89,6 +89,8 @@ pub struct TestTopologyBuilder {
     mediators: usize,
     relay_mode: RelayMode,
     customize: Option<Box<dyn Fn(TestMediatorBuilder) -> TestMediatorBuilder + Send + Sync>>,
+    #[cfg(feature = "tsp")]
+    tsp_policy: Option<affinidi_messaging_sdk::TspPolicy>,
 }
 
 impl Default for TestTopologyBuilder {
@@ -97,6 +99,8 @@ impl Default for TestTopologyBuilder {
             mediators: 2,
             relay_mode: RelayMode::Blind,
             customize: None,
+            #[cfg(feature = "tsp")]
+            tsp_policy: None,
         }
     }
 }
@@ -111,6 +115,15 @@ impl TestTopologyBuilder {
     /// Relay posture for every mediator (default [`RelayMode::Blind`]).
     pub fn relay_mode(mut self, mode: RelayMode) -> Self {
         self.relay_mode = mode;
+        self
+    }
+
+    /// Set a [`TspPolicy`](affinidi_messaging_sdk::TspPolicy) on every node's SDK
+    /// so `atm.send_to` protocol selection (and cross-mediator TSP routing) can be
+    /// exercised. Defaults to unset (each node uses `TspPolicy::Off`).
+    #[cfg(feature = "tsp")]
+    pub fn tsp_policy(mut self, policy: affinidi_messaging_sdk::TspPolicy) -> Self {
+        self.tsp_policy = Some(policy);
         self
     }
 
@@ -162,7 +175,14 @@ impl TestTopologyBuilder {
                 .spawn()
                 .await
                 .map_err(|e| TestTopologyError::Mediator(e.to_string()))?;
-            nodes.push(TestEnvironment::new(handle).await?);
+            #[cfg(feature = "tsp")]
+            let node = match self.tsp_policy {
+                Some(policy) => TestEnvironment::new_with_tsp_policy(handle, policy).await?,
+                None => TestEnvironment::new(handle).await?,
+            };
+            #[cfg(not(feature = "tsp"))]
+            let node = TestEnvironment::new(handle).await?;
+            nodes.push(node);
         }
 
         Ok(TestTopology { nodes })

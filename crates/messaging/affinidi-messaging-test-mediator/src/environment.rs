@@ -199,6 +199,24 @@ impl TestEnvironment {
         Self::new_with_config(mediator, tdk_config, atm_config).await
     }
 
+    /// Like [`new`](Self::new), but sets a
+    /// [`TspPolicy`](affinidi_messaging_sdk::TspPolicy) on the SDK so
+    /// `atm.send_to` protocol selection can be exercised — used by multi-mediator
+    /// topology tests that need TSP enabled on an existing mediator handle.
+    #[cfg(feature = "tsp")]
+    pub async fn new_with_tsp_policy(
+        mediator: TestMediatorHandle,
+        policy: affinidi_messaging_sdk::TspPolicy,
+    ) -> Result<Self, TestEnvironmentError> {
+        let tdk_config =
+            TDKConfig::headless().map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+        let atm_config = ATMConfig::builder()
+            .with_tsp_policy(policy)
+            .build()
+            .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+        Self::new_with_config(mediator, tdk_config, atm_config).await
+    }
+
     /// Shared constructor: wire the SDK + TDK against `mediator` using
     /// the supplied `tdk_config`. The only difference between
     /// [`new`](Self::new) and [`spawn_with_tsp_auth`](Self::spawn_with_tsp_auth)
