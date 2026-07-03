@@ -99,6 +99,62 @@ let resolver = DIDCacheClient::new(config).await?;
 
 Network mode still caches locally to reduce remote calls.
 
+### Custom Resolvers
+
+Each DID method is resolved through a chain of pluggable resolvers. You can
+replace, extend, or add priority/fallback layers for a method by implementing a
+resolver trait and registering it on the client.
+
+Implement the **sync** [`Resolver`] trait when resolution is pure computation
+(the SDK's blanket impl makes it an `AsyncResolver` automatically), or implement
+[`AsyncResolver`] directly when it needs network/database IO. A resolver returns
+`None` for DIDs it doesn't handle, so the next resolver in the chain gets a turn.
+
+```rust
+use affinidi_did_resolver_cache_sdk::{DIDCacheClient, MethodName, Resolution, Resolver};
+use affinidi_did_common::{DID, Document};
+
+struct StubKeyResolver;
+impl Resolver for StubKeyResolver {
+    fn name(&self) -> &str { "StubKeyResolver" }
+    fn resolve(&self, did: &DID) -> Resolution {
+        if did.method().name() != "key" { return None; }
+        // ... build and return Some(Ok(document)) ...
+    }
+}
+
+let mut client = DIDCacheClient::new(config).await?;
+client.set_resolver(MethodName::Key, Box::new(StubKeyResolver)); // replaces the built-in
+```
+
+Registration API:
+
+- `set_resolver(method, r)` — replace all resolvers for a method with `r`.
+- `prepend_resolver(method, r)` — try `r` first, then fall through to existing (e.g. override-with-fallback).
+- `append_resolver(method, r)` — try `r` last (fallback).
+- `clear_resolvers` / `remove_resolver` / `find_resolver` — manage the chain.
+
+**Register during setup, before the client is cloned/shared** — registration
+takes `&mut self` and panics if the client has already been cloned.
+
+**Caching interaction:** `resolve()` checks the cache first, so re-registering a
+resolver does not affect DIDs already cached (immutable methods like `did:key`
+are cached until capacity-evicted). Register resolvers before resolving, or use a
+fresh client.
+
+**Scope (current):** registering a resolver for a method that is **already
+built in** (`did:key`, `did:web`, `did:ethr`, …) takes effect through the public
+`resolve()` API. A resolver for a **brand-new** method (e.g. `did:example`) is
+not yet reachable via `resolve()`, which validates the method against the
+built-in `DIDMethod` set before dispatch. See
+[issue #583](https://github.com/affinidi/affinidi-tdk-rs/issues/583).
+
+Runnable example: [`examples/custom_resolver.rs`](examples/custom_resolver.rs) —
+`cargo run --example custom_resolver`.
+
+[`Resolver`]: https://docs.rs/affinidi-did-resolver-traits
+[`AsyncResolver`]: https://docs.rs/affinidi-did-resolver-traits
+
 ## Caching Strategy
 
 The cache uses **per-method TTL** to avoid unnecessary re-resolution:
