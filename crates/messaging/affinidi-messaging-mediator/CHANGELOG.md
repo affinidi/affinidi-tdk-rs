@@ -2,6 +2,20 @@
 
 ## Changelog history
 
+## 3rd July 2026
+
+### 0.16.40 — fix: negotiate shared key-agreement curve when packing encrypted replies
+
+- Fixed a curve-mismatch failure when packing encrypted replies to clients on
+  the P-256 key suite. `pack_encrypted` selected the recipient's first
+  key-agreement key regardless of the sender's curve, so authcrypt/anoncrypt
+  replies to a P-256 recipient failed with `Failed to pack authcrypt: key
+  agreement failed: curve mismatch between private and public keys`
+  (`e.p.message.pack`, HTTP 400) whenever the mediator advertised X25519 ahead
+  of P-256. The packer now negotiates a shared curve for authcrypt and selects
+  a curve-matched recipient key (by preference, skipping unusable keys) for
+  anoncrypt. Added regression tests covering both encryption paths.
+
 ## 2nd July 2026
 
 ### 0.16.39 — warn when TSP is advertised on a build without the `tsp` feature

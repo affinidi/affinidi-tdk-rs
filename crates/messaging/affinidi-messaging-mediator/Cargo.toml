@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.16.39"
+version = "0.16.40"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -191,6 +191,12 @@ uuid = { version = "1", features = ["v4", "fast-rng"] }
 lazy_static = "1"
 ## `FjallStore` smoke tests open a temp directory.
 tempfile = "3"
+## `did_example` lets curve-negotiation regression tests inject local DID
+## documents into the resolver without any network I/O. Feature-unified with
+## the `network` build above only for test targets.
+affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["did_example"] }
+## In-memory secrets + example DID docs for the `pack_encrypted` regression.
+affinidi-secrets-resolver = "0.5"
 ## `test-util` enables `tokio::time::pause/advance` so the task-supervisor
 ## backoff tests run deterministically without real sleeps.
 tokio = { workspace = true, features = ["test-util"] }

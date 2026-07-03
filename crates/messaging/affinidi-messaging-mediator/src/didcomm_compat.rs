@@ -14,6 +14,7 @@
 use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
 use affinidi_did_common::{
     document::DocumentExt,
+    key_negotiation::{DEFAULT_CURVE_PREFERENCE, negotiate_authcrypt, select_anoncrypt_key},
     verification_method::{VerificationMethod, VerificationRelationship},
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
@@ -676,6 +677,15 @@ fn resolve_public_key(
 }
 
 /// Pack (encrypt) a message for a recipient.
+///
+/// Key selection negotiates a **shared curve** between sender and recipient
+/// rather than blindly taking each side's first `keyAgreement` key. A DID
+/// document may advertise several key-agreement keys on different curves
+/// (e.g. the mediator offers X25519 first and P-256 second, while a P-256
+/// client offers only P-256); picking `first()` on both sides caused
+/// `curve mismatch between private and public keys` when the curves differed.
+/// The negotiation mirrors `affinidi-did-authentication`'s pack path and the
+/// messaging SDK, all delegating to `affinidi_did_common::key_negotiation`.
 pub async fn pack_encrypted<S: SecretsResolver>(
     message: &Message,
     to_did: &str,
@@ -683,59 +693,93 @@ pub async fn pack_encrypted<S: SecretsResolver>(
     did_resolver: &DIDCacheClient,
     secrets_resolver: &S,
 ) -> Result<(String, PackEncryptedMetadata), String> {
-    // Resolve recipient's key agreement public key
+    // Resolve recipient's advertised key agreement keys.
     let recipient_doc = did_resolver
         .resolve(to_did)
         .await
         .map_err(|e| format!("Failed to resolve recipient DID: {e}"))?;
     let recipient_ka_kids = recipient_doc.doc.find_key_agreement(None);
-    let recipient_kid = recipient_ka_kids
-        .first()
-        .ok_or("Recipient has no key agreement key")?;
-    let recipient_public = resolve_public_key(&recipient_doc.doc, recipient_kid)
-        .ok_or("Failed to resolve recipient public key")?;
-
-    let recipients: Vec<(&str, &PublicKeyAgreement)> = vec![(recipient_kid, &recipient_public)];
+    if recipient_ka_kids.is_empty() {
+        return Err("Recipient has no key agreement key".to_string());
+    }
 
     if let Some(from) = from_did {
-        // Authcrypt: resolve sender's private key
+        // Authcrypt: enumerate the sender's *usable* key-agreement keys (those
+        // we hold a secret for, on a supported curve) so negotiation can pick a
+        // curve the recipient also offers, instead of only the sender's first.
         let sender_doc = did_resolver
             .resolve(from)
             .await
             .map_err(|e| format!("Failed to resolve sender DID: {e}"))?;
         let sender_ka_kids = sender_doc.doc.find_key_agreement(None);
-        let sender_kid = sender_ka_kids
-            .first()
-            .ok_or("Sender has no key agreement key")?;
 
-        let secret = secrets_resolver
-            .get_secret(sender_kid)
-            .await
-            .ok_or(format!("No secret found for sender kid: {sender_kid}"))?;
+        let mut sender_keys: Vec<(&str, PrivateKeyAgreement, Curve)> = Vec::new();
+        // Track why each advertised key was skipped, so a "no usable key" error
+        // can show what the sender advertised vs. what was actually usable.
+        let mut skipped: Vec<String> = Vec::new();
+        for &kid in &sender_ka_kids {
+            let Some(secret) = secrets_resolver.get_secret(kid).await else {
+                skipped.push(format!("{kid} (no secret held)"));
+                continue;
+            };
+            let key_type = secret.get_key_type();
+            let key_type_dbg = format!("{key_type:?}");
+            let Ok(curve) = key_type_to_curve(key_type) else {
+                skipped.push(format!("{kid} (unsupported key type: {key_type_dbg})"));
+                continue;
+            };
+            match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
+                Ok(private) => sender_keys.push((kid, private, curve)),
+                Err(e) => skipped.push(format!("{kid} (invalid key material: {e})")),
+            }
+        }
+        if sender_keys.is_empty() {
+            return Err(format!(
+                "Sender has no usable key-agreement key (a usable key needs a held \
+                 secret on a supported curve). Advertised: [{}]; unusable: [{}]",
+                sender_ka_kids.join(", "),
+                skipped.join("; "),
+            ));
+        }
+        let sender_curves: Vec<Curve> = sender_keys.iter().map(|(_, _, c)| *c).collect();
 
-        let curve = match secret.get_key_type() {
-            affinidi_secrets_resolver::secrets::KeyType::X25519 => Curve::X25519,
-            affinidi_secrets_resolver::secrets::KeyType::P256 => Curve::P256,
-            affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Curve::K256,
-            affinidi_secrets_resolver::secrets::KeyType::P384 => Curve::P384,
-            affinidi_secrets_resolver::secrets::KeyType::P521 => Curve::P521,
-            _ => return Err("Unsupported key type for sender".to_string()),
-        };
+        let pairing = negotiate_authcrypt(
+            &sender_curves,
+            &recipient_doc.doc,
+            &recipient_ka_kids,
+            &DEFAULT_CURVE_PREFERENCE,
+        )
+        .map_err(|e| e.to_string())?;
 
-        let sender_private = PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes())
-            .map_err(|e| format!("Failed to load sender private key: {e}"))?;
+        // The negotiated curve was drawn from `sender_curves`, so a matching
+        // sender key should always be present.
+        let (sender_kid, sender_private, _) = sender_keys
+            .iter()
+            .find(|(_, _, c)| *c == pairing.curve)
+            .ok_or("internal error: negotiated curve has no matching sender key")?;
 
-        let packed = pack_encrypted_authcrypt(message, sender_kid, &sender_private, &recipients)
+        let recipients: Vec<(&str, &PublicKeyAgreement)> =
+            vec![(pairing.recipient_kid, &pairing.recipient_pub)];
+        let packed = pack_encrypted_authcrypt(message, sender_kid, sender_private, &recipients)
             .map_err(|e| format!("Failed to pack authcrypt: {e}"))?;
 
         let metadata = PackEncryptedMetadata {
             from_kid: Some(sender_kid.to_string()),
-            to_kids: vec![recipient_kid.to_string()],
+            to_kids: vec![pairing.recipient_kid.to_string()],
             ..Default::default()
         };
 
         Ok((packed, metadata))
     } else {
+        // Anoncrypt: pick the recipient's most-preferred usable curve.
+        let (recipient_kid, recipient_public) = select_anoncrypt_key(
+            &recipient_doc.doc,
+            &recipient_ka_kids,
+            &DEFAULT_CURVE_PREFERENCE,
+        )
+        .map_err(|e| e.to_string())?;
+
+        let recipients: Vec<(&str, &PublicKeyAgreement)> = vec![(recipient_kid, &recipient_public)];
         let packed = pack_encrypted_anoncrypt(message, &recipients)
             .map_err(|e| format!("Failed to pack anoncrypt: {e}"))?;
 
@@ -745,6 +789,20 @@ pub async fn pack_encrypted<S: SecretsResolver>(
         };
 
         Ok((packed, metadata))
+    }
+}
+
+/// Map a secrets-resolver `KeyType` to a DIDComm `Curve`.
+fn key_type_to_curve(
+    key_type: affinidi_secrets_resolver::secrets::KeyType,
+) -> Result<Curve, String> {
+    match key_type {
+        affinidi_secrets_resolver::secrets::KeyType::X25519 => Ok(Curve::X25519),
+        affinidi_secrets_resolver::secrets::KeyType::P256 => Ok(Curve::P256),
+        affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Ok(Curve::K256),
+        affinidi_secrets_resolver::secrets::KeyType::P384 => Ok(Curve::P384),
+        affinidi_secrets_resolver::secrets::KeyType::P521 => Ok(Curve::P521),
+        other => Err(format!("unsupported key type for key agreement: {other:?}")),
     }
 }
 
@@ -842,5 +900,277 @@ mod tests {
         let protected = protected_b64(&json!({"alg": "ECDH-ES+A256KW"}));
         let jwe = json!({"protected": protected});
         assert_eq!(inner_jwe_sender_did(&jwe), None);
+    }
+
+    // ---------------------------------------------------------------------
+    // Regression: `pack_encrypted` must negotiate a shared key-agreement
+    // curve instead of blindly pairing each side's first `keyAgreement` key.
+    //
+    // Post-0.11.7, a P-256 client hit
+    //   "Failed to pack authcrypt: key agreement failed: curve mismatch
+    //    between private and public keys"
+    // (ProblemReport code 47 / `e.p.message.pack`) when the mediator packed
+    // its encrypted reply: the mediator advertises X25519 (`#key-1`) first
+    // and P-256 (`#key-3`) second, so `.first()` paired the mediator's
+    // X25519 secret with the client's only (P-256) key and ECDH failed.
+    // ---------------------------------------------------------------------
+    use affinidi_did_resolver_cache_sdk::config::DIDCacheConfigBuilder;
+    use affinidi_secrets_resolver::{SimpleSecretsResolver, secrets::Secret};
+
+    /// A `did:example` key-agreement verification method (Multikey / multibase),
+    /// referenced by id from the document's `keyAgreement` set.
+    fn ka_vm(kid: &str, did: &str, secret: &Secret) -> serde_json::Value {
+        json!({
+            "id": kid,
+            "type": "Multikey",
+            "controller": did,
+            "publicKeyMultibase": secret.get_public_keymultibase().unwrap(),
+        })
+    }
+
+    /// A local DID cache seeded with the given `did:example` documents (no network).
+    async fn example_resolver(docs: &[serde_json::Value]) -> DIDCacheClient {
+        let mut client = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .expect("local DID cache client");
+        for doc in docs {
+            client
+                .add_example_did(&doc.to_string())
+                .expect("register example DID");
+        }
+        client
+    }
+
+    /// The `epk.crv` advertised in a packed authcrypt JWE's protected header —
+    /// proves which curve the ECDH actually ran on.
+    fn jwe_epk_crv(packed: &str) -> Option<String> {
+        let jwe: serde_json::Value = serde_json::from_str(packed).ok()?;
+        let protected = jwe["protected"].as_str()?;
+        let hdr: serde_json::Value =
+            serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(protected).ok()?).ok()?;
+        hdr["epk"]["crv"].as_str().map(str::to_string)
+    }
+
+    fn status_message(from: &str, to: &str, id: &str) -> Message {
+        Message::build(
+            id.to_string(),
+            "https://didcomm.org/messagepickup/3.0/status".to_string(),
+            json!({ "message_count": 0 }),
+        )
+        .from(from.to_string())
+        .to(to.to_string())
+        .finalize()
+    }
+
+    #[tokio::test]
+    async fn pack_encrypted_negotiates_shared_curve_for_p256_client() {
+        // Mediator: X25519 (`#key-1`) first, P-256 (`#key-3`) second — the
+        // real mediator DID-document ordering.
+        let mediator = "did:example:mediator";
+        let med_x_kid = format!("{mediator}#key-1");
+        let med_p_kid = format!("{mediator}#key-3");
+        let med_x = Secret::generate_x25519(Some(&med_x_kid), None).unwrap();
+        let med_p = Secret::generate_p256(Some(&med_p_kid), None).unwrap();
+
+        // P-256-only client: the single shared curve is P-256.
+        let client = "did:example:client";
+        let cli_p_kid = format!("{client}#key-p256");
+        let cli_p = Secret::generate_p256(Some(&cli_p_kid), None).unwrap();
+
+        let mediator_doc = json!({
+            "id": mediator,
+            "verificationMethod": [
+                ka_vm(&med_x_kid, mediator, &med_x),
+                ka_vm(&med_p_kid, mediator, &med_p),
+            ],
+            "keyAgreement": [med_x_kid, med_p_kid],
+        });
+        let client_doc = json!({
+            "id": client,
+            "verificationMethod": [ka_vm(&cli_p_kid, client, &cli_p)],
+            "keyAgreement": [cli_p_kid],
+        });
+
+        let resolver = example_resolver(&[mediator_doc, client_doc]).await;
+        // The sender (mediator) holds both of its key-agreement secrets.
+        let secrets = SimpleSecretsResolver::new(&[med_x, med_p]).await;
+
+        let msg = status_message(mediator, client, "regression-curve-mismatch");
+        let (packed, metadata) = pack_encrypted(&msg, client, Some(mediator), &resolver, &secrets)
+            .await
+            .expect("mediator must negotiate the shared P-256 curve, not fail on curve mismatch");
+
+        // Negotiation must pick P-256 on BOTH sides — not the mediator's
+        // first-listed X25519 key.
+        assert_eq!(metadata.from_kid.as_deref(), Some(med_p_kid.as_str()));
+        assert_eq!(metadata.to_kids, vec![cli_p_kid.clone()]);
+        assert_eq!(jwe_epk_crv(&packed).as_deref(), Some("P-256"));
+    }
+
+    #[tokio::test]
+    async fn pack_encrypted_reports_no_common_curve_cleanly() {
+        // Mediator with ONLY X25519 key agreement + a P-256-only client: no
+        // shared curve at all. The failure must be the negotiation error, not
+        // the raw ECDH "curve mismatch between private and public keys".
+        let mediator = "did:example:medx";
+        let med_x_kid = format!("{mediator}#key-1");
+        let med_x = Secret::generate_x25519(Some(&med_x_kid), None).unwrap();
+
+        let client = "did:example:clip";
+        let cli_p_kid = format!("{client}#key-p256");
+        let cli_p = Secret::generate_p256(Some(&cli_p_kid), None).unwrap();
+
+        let mediator_doc = json!({
+            "id": mediator,
+            "verificationMethod": [ka_vm(&med_x_kid, mediator, &med_x)],
+            "keyAgreement": [med_x_kid],
+        });
+        let client_doc = json!({
+            "id": client,
+            "verificationMethod": [ka_vm(&cli_p_kid, client, &cli_p)],
+            "keyAgreement": [cli_p_kid],
+        });
+
+        let resolver = example_resolver(&[mediator_doc, client_doc]).await;
+        let secrets = SimpleSecretsResolver::new(&[med_x]).await;
+
+        let msg = status_message(mediator, client, "regression-no-common-curve");
+        let err = pack_encrypted(&msg, client, Some(mediator), &resolver, &secrets)
+            .await
+            .expect_err("no shared curve must fail");
+
+        assert!(
+            err.contains("no common key-agreement curve"),
+            "expected the negotiation error, got: {err}"
+        );
+        assert!(
+            !err.contains("curve mismatch between private and public keys"),
+            "must not surface the raw ECDH mismatch string: {err}"
+        );
+    }
+
+    /// A `messagepickup` status message with **no** `from` header — packed as
+    /// anoncrypt when `pack_encrypted` is called with `from_did: None`.
+    fn anoncrypt_message(to: &str, id: &str) -> Message {
+        Message::build(
+            id.to_string(),
+            "https://didcomm.org/messagepickup/3.0/status".to_string(),
+            json!({ "message_count": 0 }),
+        )
+        .to(to.to_string())
+        .finalize()
+    }
+
+    #[tokio::test]
+    async fn pack_encrypted_anoncrypt_uses_p256_for_p256_only_client() {
+        // Anoncrypt sibling of the authcrypt regression: a mediator anoncrypt
+        // reply (no `from`) to a P-256-only client must run ECDH-ES on P-256,
+        // not choke selecting an absent/unusable X25519 key.
+        let client = "did:example:anon-p256-client";
+        let cli_p_kid = format!("{client}#key-p256");
+        let cli_p = Secret::generate_p256(Some(&cli_p_kid), None).unwrap();
+
+        let client_doc = json!({
+            "id": client,
+            "verificationMethod": [ka_vm(&cli_p_kid, client, &cli_p)],
+            "keyAgreement": [cli_p_kid],
+        });
+
+        let resolver = example_resolver(&[client_doc]).await;
+        // Anoncrypt has no sender side, so no secrets are required.
+        let no_secrets: [Secret; 0] = [];
+        let secrets = SimpleSecretsResolver::new(&no_secrets).await;
+
+        let msg = anoncrypt_message(client, "regression-anoncrypt-p256");
+        let (packed, metadata) = pack_encrypted(&msg, client, None, &resolver, &secrets)
+            .await
+            .expect("anoncrypt to a P-256-only client must pack");
+
+        assert_eq!(metadata.to_kids, vec![cli_p_kid.clone()]);
+        assert_eq!(jwe_epk_crv(&packed).as_deref(), Some("P-256"));
+    }
+
+    #[tokio::test]
+    async fn pack_encrypted_anoncrypt_prefers_curve_over_document_order() {
+        // Recipient lists P-256 FIRST, X25519 second. Naive `.first()`
+        // selection would encrypt to P-256; the fix honours
+        // DEFAULT_CURVE_PREFERENCE (X25519 > P-256), so anoncrypt must select
+        // the second-listed X25519 key — proving curve-preference selection,
+        // not document order.
+        let client = "did:example:anon-mixed-client";
+        let cli_p_kid = format!("{client}#key-p256");
+        let cli_x_kid = format!("{client}#key-x25519");
+        let cli_p = Secret::generate_p256(Some(&cli_p_kid), None).unwrap();
+        let cli_x = Secret::generate_x25519(Some(&cli_x_kid), None).unwrap();
+
+        let client_doc = json!({
+            "id": client,
+            "verificationMethod": [
+                ka_vm(&cli_p_kid, client, &cli_p),
+                ka_vm(&cli_x_kid, client, &cli_x),
+            ],
+            // P-256 listed first on purpose — the fix must ignore this order.
+            "keyAgreement": [cli_p_kid, cli_x_kid],
+        });
+
+        let resolver = example_resolver(&[client_doc]).await;
+        let no_secrets: [Secret; 0] = [];
+        let secrets = SimpleSecretsResolver::new(&no_secrets).await;
+
+        let msg = anoncrypt_message(client, "regression-anoncrypt-preference");
+        let (packed, metadata) = pack_encrypted(&msg, client, None, &resolver, &secrets)
+            .await
+            .expect("anoncrypt must pack");
+
+        assert_eq!(metadata.to_kids, vec![cli_x_kid.clone()]);
+        assert_eq!(jwe_epk_crv(&packed).as_deref(), Some("X25519"));
+    }
+
+    #[tokio::test]
+    async fn pack_encrypted_authcrypt_reports_unusable_sender_keys() {
+        // Sender advertises an X25519 key-agreement key but we hold no secret
+        // for it: the error must name what the sender advertised and why it was
+        // unusable, rather than a bare "no usable key" string.
+        let sender = "did:example:sender-nosecret";
+        let snd_x_kid = format!("{sender}#key-1");
+        let snd_x = Secret::generate_x25519(Some(&snd_x_kid), None).unwrap();
+
+        let client = "did:example:client-authcrypt";
+        let cli_p_kid = format!("{client}#key-p256");
+        let cli_p = Secret::generate_p256(Some(&cli_p_kid), None).unwrap();
+
+        let sender_doc = json!({
+            "id": sender,
+            "verificationMethod": [ka_vm(&snd_x_kid, sender, &snd_x)],
+            "keyAgreement": [snd_x_kid],
+        });
+        let client_doc = json!({
+            "id": client,
+            "verificationMethod": [ka_vm(&cli_p_kid, client, &cli_p)],
+            "keyAgreement": [cli_p_kid],
+        });
+
+        let resolver = example_resolver(&[sender_doc, client_doc]).await;
+        // No sender secret registered → the advertised key is unusable.
+        let no_secrets: [Secret; 0] = [];
+        let secrets = SimpleSecretsResolver::new(&no_secrets).await;
+
+        let msg = status_message(sender, client, "regression-unusable-sender");
+        let err = pack_encrypted(&msg, client, Some(sender), &resolver, &secrets)
+            .await
+            .expect_err("a sender with no held secret must fail to authcrypt");
+
+        assert!(
+            err.contains("no usable key-agreement key"),
+            "expected the no-usable-key error, got: {err}"
+        );
+        assert!(
+            err.contains(&snd_x_kid),
+            "error must name the advertised sender kid: {err}"
+        );
+        assert!(
+            err.contains("no secret held"),
+            "error must explain why the advertised key was unusable: {err}"
+        );
     }
 }
