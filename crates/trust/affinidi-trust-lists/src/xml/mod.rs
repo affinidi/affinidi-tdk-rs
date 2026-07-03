@@ -99,14 +99,29 @@ pub fn parse_trust_list_xml(xml: &str) -> Result<TrustServiceStatusList> {
                 }
             }
             Ok(Event::Text(e)) => {
-                let text = e.unescape().unwrap_or_default().to_string();
+                // quick-xml 0.41 emits raw text between entity references; the
+                // references themselves arrive as separate `GeneralRef` events
+                // (see below), so accumulate rather than replace.
+                let text = e.decode().unwrap_or_default();
                 if in_x509_cert {
                     cert_base64.push_str(text.trim());
                 } else {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() {
-                        text_buf = trimmed.to_string();
-                    }
+                    text_buf.push_str(&text);
+                }
+            }
+            Ok(Event::GeneralRef(e)) => {
+                // An entity reference inside element text (e.g. `&amp;` in an org
+                // name or URI). quick-xml 0.41 surfaces these as their own event;
+                // resolve predefined/numeric references and append so the value is
+                // reassembled exactly as 0.37's inline `unescape()` produced it.
+                let name = e.decode().unwrap_or_default();
+                let resolved = quick_xml::escape::unescape(&format!("&{name};"))
+                    .map(|c| c.into_owned())
+                    .unwrap_or_else(|_| name.into_owned());
+                if in_x509_cert {
+                    cert_base64.push_str(resolved.trim());
+                } else {
+                    text_buf.push_str(&resolved);
                 }
             }
             Ok(Event::End(e)) => {
@@ -116,25 +131,30 @@ pub fn parse_trust_list_xml(xml: &str) -> Result<TrustServiceStatusList> {
                 // Build path string for context matching
                 let path_str = path.join("/");
 
+                // Trimmed snapshot of the element's accumulated text (Text +
+                // resolved GeneralRef events) for the handlers below; the raw
+                // accumulator is cleared at the end of this arm.
+                let text = text_buf.trim().to_string();
+
                 match local.as_str() {
                     "TSLVersionIdentifier" => {
-                        if let Ok(v) = text_buf.parse::<u32>() {
+                        if let Ok(v) = text.parse::<u32>() {
                             tsl_version = v;
                         }
                     }
                     "TSLSequenceNumber" => {
-                        if let Ok(v) = text_buf.parse::<u32>() {
+                        if let Ok(v) = text.parse::<u32>() {
                             tsl_sequence_number = v;
                         }
                     }
                     "TSLType" => {
-                        tsl_type_uri = text_buf.clone();
+                        tsl_type_uri = text.clone();
                     }
                     "SchemeTerritory" => {
                         if path_str.contains("OtherTSLPointer") {
-                            current_pointer_territory = text_buf.clone();
+                            current_pointer_territory = text.clone();
                         } else if scheme_territory.is_empty() {
-                            scheme_territory = text_buf.clone();
+                            scheme_territory = text.clone();
                         }
                     }
                     "Name" => {
@@ -143,38 +163,38 @@ pub fn parse_trust_list_xml(xml: &str) -> Result<TrustServiceStatusList> {
                             && !path_str.contains("OtherTSLPointer")
                         {
                             if scheme_operator_name.is_empty() {
-                                scheme_operator_name = text_buf.clone();
+                                scheme_operator_name = text.clone();
                             }
                         } else if path_str.contains("OtherTSLPointer")
                             && path_str.contains("SchemeOperatorName")
                         {
-                            current_pointer_operator = Some(text_buf.clone());
+                            current_pointer_operator = Some(text.clone());
                         } else if path_str.contains("TSPName") {
                             if current_tsp_name.is_empty() {
-                                current_tsp_name = text_buf.clone();
+                                current_tsp_name = text.clone();
                             }
                         } else if path_str.contains("TSPTradeName") {
-                            current_tsp_trade_name = Some(text_buf.clone());
+                            current_tsp_trade_name = Some(text.clone());
                         } else if path_str.contains("ServiceName")
                             && current_service_name.is_empty()
                         {
-                            current_service_name = text_buf.clone();
+                            current_service_name = text.clone();
                         }
                     }
                     "ServiceTypeIdentifier" => {
-                        current_service_type = text_buf.clone();
+                        current_service_type = text.clone();
                     }
                     "ServiceStatus" => {
-                        current_service_status = text_buf.clone();
+                        current_service_status = text.clone();
                     }
                     "StatusStartingTime" => {
-                        current_status_time = text_buf.clone();
+                        current_status_time = text.clone();
                     }
                     "TSLLocation" => {
-                        current_pointer_location = text_buf.clone();
+                        current_pointer_location = text.clone();
                     }
                     "URI" if path_str.contains("TSPInformationURI") => {
-                        current_tsp_uris.push(text_buf.clone());
+                        current_tsp_uris.push(text.clone());
                     }
                     "X509Certificate" => {
                         in_x509_cert = false;
@@ -319,6 +339,31 @@ mod tests {
         assert_eq!(tl.scheme_information.scheme_territory, "DE");
         assert_eq!(tl.scheme_information.scheme_operator_name, "Test Authority");
         assert_eq!(tl.scheme_information.tsl_type, TslType::EuGeneric);
+    }
+
+    /// Element text containing XML entity references must be reassembled with the
+    /// entities resolved. Under quick-xml 0.41 the reader emits the surrounding
+    /// text and each `&…;` reference as separate events, so this exercises the
+    /// `Event::Text` + `Event::GeneralRef` accumulation path (predefined `&amp;`
+    /// and numeric `&#38;` both resolve to `&`).
+    #[test]
+    fn parse_resolves_entity_references_in_text() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<TrustServiceStatusList>
+  <SchemeInformation>
+    <SchemeOperatorName>
+      <Name>Foo &amp; Bar &#38; Baz &lt;Ltd&gt;</Name>
+    </SchemeOperatorName>
+    <SchemeTerritory>DE</SchemeTerritory>
+  </SchemeInformation>
+</TrustServiceStatusList>"#;
+
+        let tl = parse_trust_list_xml(xml).unwrap();
+        assert_eq!(
+            tl.scheme_information.scheme_operator_name, "Foo & Bar & Baz <Ltd>",
+            "predefined and numeric entity references are resolved and the text \
+             around them reassembled"
+        );
     }
 
     #[test]
