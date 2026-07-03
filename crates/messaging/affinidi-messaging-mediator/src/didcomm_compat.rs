@@ -714,20 +714,32 @@ pub async fn pack_encrypted<S: SecretsResolver>(
         let sender_ka_kids = sender_doc.doc.find_key_agreement(None);
 
         let mut sender_keys: Vec<(&str, PrivateKeyAgreement, Curve)> = Vec::new();
+        // Track why each advertised key was skipped, so a "no usable key" error
+        // can show what the sender advertised vs. what was actually usable.
+        let mut skipped: Vec<String> = Vec::new();
         for &kid in &sender_ka_kids {
             let Some(secret) = secrets_resolver.get_secret(kid).await else {
+                skipped.push(format!("{kid} (no secret held)"));
                 continue;
             };
-            let Ok(curve) = key_type_to_curve(secret.get_key_type()) else {
+            let key_type = secret.get_key_type();
+            let key_type_dbg = format!("{key_type:?}");
+            let Ok(curve) = key_type_to_curve(key_type) else {
+                skipped.push(format!("{kid} (unsupported key type: {key_type_dbg})"));
                 continue;
             };
             match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
                 Ok(private) => sender_keys.push((kid, private, curve)),
-                Err(_) => continue,
+                Err(e) => skipped.push(format!("{kid} (invalid key material: {e})")),
             }
         }
         if sender_keys.is_empty() {
-            return Err("Sender has no usable key agreement key".to_string());
+            return Err(format!(
+                "Sender has no usable key-agreement key (a usable key needs a held \
+                 secret on a supported curve). Advertised: [{}]; unusable: [{}]",
+                sender_ka_kids.join(", "),
+                skipped.join("; "),
+            ));
         }
         let sender_curves: Vec<Curve> = sender_keys.iter().map(|(_, _, c)| *c).collect();
 
@@ -1112,5 +1124,53 @@ mod tests {
 
         assert_eq!(metadata.to_kids, vec![cli_x_kid.clone()]);
         assert_eq!(jwe_epk_crv(&packed).as_deref(), Some("X25519"));
+    }
+
+    #[tokio::test]
+    async fn pack_encrypted_authcrypt_reports_unusable_sender_keys() {
+        // Sender advertises an X25519 key-agreement key but we hold no secret
+        // for it: the error must name what the sender advertised and why it was
+        // unusable, rather than a bare "no usable key" string.
+        let sender = "did:example:sender-nosecret";
+        let snd_x_kid = format!("{sender}#key-1");
+        let snd_x = Secret::generate_x25519(Some(&snd_x_kid), None).unwrap();
+
+        let client = "did:example:client-authcrypt";
+        let cli_p_kid = format!("{client}#key-p256");
+        let cli_p = Secret::generate_p256(Some(&cli_p_kid), None).unwrap();
+
+        let sender_doc = json!({
+            "id": sender,
+            "verificationMethod": [ka_vm(&snd_x_kid, sender, &snd_x)],
+            "keyAgreement": [snd_x_kid],
+        });
+        let client_doc = json!({
+            "id": client,
+            "verificationMethod": [ka_vm(&cli_p_kid, client, &cli_p)],
+            "keyAgreement": [cli_p_kid],
+        });
+
+        let resolver = example_resolver(&[sender_doc, client_doc]).await;
+        // No sender secret registered → the advertised key is unusable.
+        let no_secrets: [Secret; 0] = [];
+        let secrets = SimpleSecretsResolver::new(&no_secrets).await;
+
+        let msg = status_message(sender, client, "regression-unusable-sender");
+        let err = pack_encrypted(&msg, client, Some(sender), &resolver, &secrets)
+            .await
+            .expect_err("a sender with no held secret must fail to authcrypt");
+
+        assert!(
+            err.contains("no usable key-agreement key"),
+            "expected the no-usable-key error, got: {err}"
+        );
+        assert!(
+            err.contains(&snd_x_kid),
+            "error must name the advertised sender kid: {err}"
+        );
+        assert!(
+            err.contains("no secret held"),
+            "error must explain why the advertised key was unusable: {err}"
+        );
     }
 }
