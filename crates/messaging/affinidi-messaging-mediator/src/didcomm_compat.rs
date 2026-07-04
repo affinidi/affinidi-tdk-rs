@@ -220,13 +220,8 @@ impl MetaEnvelope {
             if let Some(kid) = recipient["header"]["kid"].as_str()
                 && let Some(secret) = secrets_resolver.get_secret(kid).await
             {
-                let curve = match secret.get_key_type() {
-                    affinidi_secrets_resolver::secrets::KeyType::X25519 => Curve::X25519,
-                    affinidi_secrets_resolver::secrets::KeyType::P256 => Curve::P256,
-                    affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Curve::K256,
-                    affinidi_secrets_resolver::secrets::KeyType::P384 => Curve::P384,
-                    affinidi_secrets_resolver::secrets::KeyType::P521 => Curve::P521,
-                    _ => continue,
+                let Some(curve) = secret.get_key_type().key_agreement_curve() else {
+                    continue;
                 };
                 match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
                     Ok(pk) => {
@@ -723,9 +718,8 @@ pub async fn pack_encrypted<S: SecretsResolver>(
                 continue;
             };
             let key_type = secret.get_key_type();
-            let key_type_dbg = format!("{key_type:?}");
-            let Ok(curve) = key_type_to_curve(key_type) else {
-                skipped.push(format!("{kid} (unsupported key type: {key_type_dbg})"));
+            let Some(curve) = key_type.key_agreement_curve() else {
+                skipped.push(format!("{kid} (unsupported key type: {key_type:?})"));
                 continue;
             };
             match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
@@ -789,20 +783,6 @@ pub async fn pack_encrypted<S: SecretsResolver>(
         };
 
         Ok((packed, metadata))
-    }
-}
-
-/// Map a secrets-resolver `KeyType` to a DIDComm `Curve`.
-fn key_type_to_curve(
-    key_type: affinidi_secrets_resolver::secrets::KeyType,
-) -> Result<Curve, String> {
-    match key_type {
-        affinidi_secrets_resolver::secrets::KeyType::X25519 => Ok(Curve::X25519),
-        affinidi_secrets_resolver::secrets::KeyType::P256 => Ok(Curve::P256),
-        affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Ok(Curve::K256),
-        affinidi_secrets_resolver::secrets::KeyType::P384 => Ok(Curve::P384),
-        affinidi_secrets_resolver::secrets::KeyType::P521 => Ok(Curve::P521),
-        other => Err(format!("unsupported key type for key agreement: {other:?}")),
     }
 }
 

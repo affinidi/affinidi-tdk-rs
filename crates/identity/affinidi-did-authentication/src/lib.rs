@@ -728,7 +728,7 @@ where
         let Some(secret) = secrets_resolver.get_secret(kid).await else {
             continue;
         };
-        let Ok(curve) = _key_type_to_curve(secret.get_key_type()) else {
+        let Some(curve) = secret.get_key_type().key_agreement_curve() else {
             continue;
         };
         match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
@@ -778,20 +778,6 @@ where
         &[(pairing.recipient_kid, &pairing.recipient_pub)],
     )
     .map_err(|e| DIDAuthError::DIDComm(format!("pack failed: {e}")))
-}
-
-/// Map from secrets resolver KeyType to DIDComm Curve.
-fn _key_type_to_curve(key_type: affinidi_secrets_resolver::secrets::KeyType) -> Result<Curve> {
-    match key_type {
-        affinidi_secrets_resolver::secrets::KeyType::X25519 => Ok(Curve::X25519),
-        affinidi_secrets_resolver::secrets::KeyType::P256 => Ok(Curve::P256),
-        affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Ok(Curve::K256),
-        affinidi_secrets_resolver::secrets::KeyType::P384 => Ok(Curve::P384),
-        affinidi_secrets_resolver::secrets::KeyType::P521 => Ok(Curve::P521),
-        other => Err(DIDAuthError::DIDComm(format!(
-            "unsupported key type for key agreement: {other:?}"
-        ))),
-    }
 }
 
 /// Possible responses from checking authentication JWT tokens

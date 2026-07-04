@@ -106,7 +106,7 @@ impl SharedState {
         value: &serde_json::Value,
         sha256_hash: &str,
     ) -> Result<(Message, UnpackMetadata), ATMError> {
-        use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement};
+        use affinidi_crypto::jose::key_agreement::PrivateKeyAgreement;
         use affinidi_messaging_didcomm::jwe::decrypt::decrypt;
 
         // Extract recipient KIDs from the JWE
@@ -122,11 +122,8 @@ impl SharedState {
             if let Some(kid) = recipient["header"]["kid"].as_str()
                 && let Some(secret) = self.tdk_common.secrets_resolver().get_secret(kid).await
             {
-                let curve = match secret.get_key_type() {
-                    affinidi_secrets_resolver::secrets::KeyType::X25519 => Curve::X25519,
-                    affinidi_secrets_resolver::secrets::KeyType::P256 => Curve::P256,
-                    affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Curve::K256,
-                    _ => continue,
+                let Some(curve) = secret.get_key_type().key_agreement_curve() else {
+                    continue;
                 };
                 match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
                     Ok(pk) => {

@@ -1,5 +1,12 @@
 # Affinidi DID Authentication
 
+## 4th July 2026 (0.3.9)
+
+Internal refactor: the local `_key_type_to_curve` helper is replaced by
+`affinidi_crypto::KeyType::key_agreement_curve()`, the shared single source of
+truth for the `KeyType` → key-agreement `Curve` mapping. No public API or
+behaviour change; patch bump — see ADR 0003.
+
 ## 13th June 2026 (0.3.8)
 
 Semver wave (W7 — release W11). `DIDAuthError` is now `#[non_exhaustive]` (match
