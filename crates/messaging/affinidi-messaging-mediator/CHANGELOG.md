@@ -2,6 +2,16 @@
 
 ## Changelog history
 
+## 4th July 2026
+
+### 0.16.41 — refactor: single source of truth for key-agreement curve mapping
+
+- The `pack_encrypted` and `unpack_jwe` paths now select their key-agreement
+  curve via the shared `affinidi_crypto::KeyType::key_agreement_curve()` helper
+  instead of two local copies of the `KeyType` → `Curve` match (one of them the
+  `key_type_to_curve` fn added in 0.16.40). No behaviour change — the mapping is
+  identical; this removes the duplication flagged in the 0.16.40 review.
+
 ## 3rd July 2026
 
 ### 0.16.40 — fix: negotiate shared key-agreement curve when packing encrypted replies

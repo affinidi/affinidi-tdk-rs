@@ -1,5 +1,18 @@
 # Affinidi Crypto Changelog
 
+## 4th July 2026 (0.2.4)
+
+Adds `KeyType::key_agreement_curve() -> Option<Curve>` (gated on the `jose`
+feature) — the single source of truth for the secrets-resolver `KeyType` →
+JOSE `Curve` mapping. Every DIDComm pack/unpack path in the workspace now
+routes its sender/recipient key-agreement curve selection through this one
+method instead of re-implementing the match, so the paths can never diverge.
+The mapping is exhaustive with no wildcard arm, so a future `KeyType` variant
+is a compile error until it is explicitly classified as key-agreement-capable
+or not. Additive (verify-only new method); patch bump keeps the
+`[patch.crates-io]` redirect valid — see
+[ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md).
+
 ## 30th June 2026 (0.2.3)
 
 Adds `jose::signing::verify_p256` — ECDSA P-256 signature verification over

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.18.49] - 2026-07-04
+
+- Route the DIDComm pack and unpack paths through the shared
+  `affinidi_crypto::KeyType::key_agreement_curve()` helper (single source of
+  truth for the `KeyType` → key-agreement `Curve` mapping) instead of two
+  local copies of the match.
+- Fix: the JWE unpack path previously handled only X25519/P-256/secp256k1
+  recipient keys and silently skipped P-384/P-521 (they fell through to
+  `_ => continue`), so a message encrypted to a local P-384/P-521 key failed
+  to decrypt with "no matching recipient". Consolidating onto the shared
+  helper restores P-384/P-521 recipient decryption, matching the pack path
+  and the mediator. Patch bump — see ADR 0003.
+
 ## [0.18.47] - 2026-07-03
 
 - Add `MessagePickup::send_delivery_request_frames` (+ `MessagePickupOps` delegate), the
