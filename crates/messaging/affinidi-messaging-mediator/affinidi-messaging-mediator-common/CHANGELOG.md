@@ -2,6 +2,21 @@
 
 ## Changelog history
 
+## 9th July 2026
+
+### 0.15.26 — add read-only secret-backend probe
+
+- Added `SecretStore::probe_readonly()`, a default-implemented health check that
+  reads a fixed sentinel key and never mutates the backend. Lets callers verify
+  a secret backend is reachable without requiring write permissions. Backend
+  errors propagate verbatim (an unreachable backend surfaces as `Unreachable`,
+  identical to `get`).
+- The file backends override it to re-read from disk instead of trusting the
+  snapshot cached at `open()`: plaintext `file://` treats a missing file as
+  healthy (pre-provisioning), while the encrypted variant treats a missing file
+  as an error and re-parses the envelope without re-deriving the KDF key.
+- `MediatorSecrets` gained a matching `probe_readonly()` passthrough.
+
 ## 30th June 2026
 
 ### 0.15.21 — fix infinite recursion in Redis OOB discovery get/delete

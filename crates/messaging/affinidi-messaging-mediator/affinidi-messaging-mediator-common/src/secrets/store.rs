@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::secrets::backends;
 use crate::secrets::error::{Result, SecretStoreError};
 use crate::secrets::url::{BackendUrl, parse_url};
-use crate::secrets::well_known::PROBE_SENTINEL_PREFIX;
+use crate::secrets::well_known::{PROBE_READONLY_KEY, PROBE_SENTINEL_PREFIX};
 
 /// Convenience alias for a heap-allocated, trait-object-backed store.
 pub type DynSecretStore = Arc<dyn SecretStore>;
@@ -101,6 +101,36 @@ pub trait SecretStore: Send + Sync {
             reason: format!("sentinel read OK but delete failed: {e}"),
         })
     }
+
+    /// Read-only reachability + credential check: proves the backend is
+    /// reachable and the caller is authenticated **without mutating it**.
+    ///
+    /// Unlike [`SecretStore::probe`] (write → read → delete, requires write
+    /// permissions), the default impl only reads the fixed [`PROBE_READONLY_KEY`]
+    /// sentinel, so a read-only caller can use it. The sentinel is never
+    /// written, so `Ok(None)` is the healthy case — it still proves the
+    /// backend answered with valid credentials; only a transport/permission
+    /// failure returns `Err` (propagated verbatim, so an unreachable backend
+    /// surfaces as [`SecretStoreError::Unreachable`] identically to `get`).
+    ///
+    /// A read-only role must be granted the sentinel's **prefix**
+    /// (`mediator_probe_*`), not just the well-known keys — e.g. on AWS,
+    /// `Resource: arn:…:secret:mediator_probe_*` with `GetSecretValue`. A role
+    /// scoped to an enumerated list of exact secret ARNs gets `AccessDenied`
+    /// (→ `Unreachable`) and would report a healthy backend as down. Every
+    /// call also emits a `ResourceNotFound`-shaped entry in the backend's
+    /// audit log (CloudTrail / Cloud Audit Logs).
+    ///
+    /// The default reads through [`SecretStore::get`], so it is only a genuine
+    /// health signal for backends whose `get` performs a live round-trip
+    /// (cloud, `k8s`, `keyring`). The `file` / `file_encrypted` backends serve
+    /// `get` from an in-memory cache after `open()`, so they override this to
+    /// re-touch the disk.
+    async fn probe_readonly(&self) -> Result<()> {
+        // Fixed key (never written), so a healthy backend reads Ok(None).
+        // Propagate the backend's error verbatim to match probe()'s read path.
+        self.get(PROBE_READONLY_KEY).await.map(|_| ())
+    }
 }
 
 /// Construct a store from a backend URL. Each supported scheme is
@@ -131,5 +161,59 @@ mod tests {
     async fn probe_succeeds_on_a_functioning_store() {
         let store: DynSecretStore = Arc::new(MemoryStore::new("memory"));
         store.probe().await.unwrap();
+    }
+
+    #[test]
+    fn probe_readonly_key_lives_under_the_sentinel_prefix() {
+        assert!(PROBE_READONLY_KEY.starts_with(PROBE_SENTINEL_PREFIX));
+    }
+
+    #[tokio::test]
+    async fn probe_readonly_succeeds_on_empty_store() {
+        // The sentinel key is absent, so this exercises the healthy
+        // "authorized but empty" path: get returns Ok(None), probe passes.
+        let store: DynSecretStore = Arc::new(MemoryStore::new("memory"));
+        store.probe_readonly().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_readonly_does_not_mutate_the_store() {
+        let store: DynSecretStore = Arc::new(MemoryStore::new("memory"));
+        store.probe_readonly().await.unwrap();
+        // A read-only probe must leave no sentinel behind.
+        assert!(store.get(PROBE_READONLY_KEY).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn probe_readonly_surfaces_a_backend_error_verbatim() {
+        // A backend whose get() is unreachable must surface as Unreachable
+        // through probe_readonly() too — the same variant probe()'s read path
+        // yields — not wrapped into a different error.
+        struct UnreachableStore;
+        #[async_trait]
+        impl SecretStore for UnreachableStore {
+            fn backend(&self) -> &'static str {
+                "unreachable-test"
+            }
+            async fn get(&self, _key: &str) -> Result<Option<Vec<u8>>> {
+                Err(SecretStoreError::Unreachable {
+                    backend: "unreachable-test",
+                    reason: "simulated transport failure".into(),
+                })
+            }
+            async fn put(&self, _key: &str, _value: &[u8]) -> Result<()> {
+                unreachable!("probe_readonly must not write")
+            }
+            async fn delete(&self, _key: &str) -> Result<()> {
+                unreachable!("probe_readonly must not delete")
+            }
+        }
+
+        let store: DynSecretStore = Arc::new(UnreachableStore);
+        let err = store.probe_readonly().await.unwrap_err();
+        assert!(
+            matches!(err, SecretStoreError::Unreachable { backend, .. } if backend == "unreachable-test"),
+            "expected Unreachable, got {err:?}"
+        );
     }
 }

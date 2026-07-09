@@ -406,10 +406,44 @@ wizard re-creates the index on the next phase-1 run.
 
 ### `mediator_probe_*` — no kind
 
-End-to-end probe sentinels written + deleted in a single call by
-`SecretStore::probe()`. Short-lived; no operator interaction.
-Listed here only so the `mediator_probe_` prefix isn't a surprise
-when operators browse the backend.
+Two probe mechanisms share this prefix; neither carries an envelope:
+
+- **`SecretStore::probe()`** — end-to-end health check. Writes → reads
+  back → deletes a per-call UUID sentinel (`mediator_probe_<uuid>`), so
+  success proves the caller can *write*. Short-lived; used by setup
+  tooling and the write-capable role.
+- **`SecretStore::probe_readonly()`** — reachability + credential check
+  that never mutates the backend. Reads the single fixed key
+  `mediator_probe_readonly`, which is never written, so a healthy
+  backend answers "absent" (`Ok(None)`). This is what `/readyz` polls,
+  so a read-only role is enough to keep the mediator serving.
+
+Listed here so the `mediator_probe_` prefix isn't a surprise when
+operators browse the backend.
+
+**Granting a read-only role.** Scope it to the whole `mediator_probe_*`
+prefix, not just the well-known keys — the probe key lives under that
+prefix and would otherwise be denied. On AWS Secrets Manager, that means
+`Resource: arn:aws:secretsmanager:<region>:<acct>:secret:mediator_probe_*`
+(plus the deployment prefix) with `secretsmanager:GetSecretValue`. A role
+scoped to an enumerated list of exact secret ARNs will get `AccessDenied`
+for the probe key and report a healthy backend as down. Every `/readyz`
+poll issues one read of `mediator_probe_readonly`, which shows up as a
+`ResourceNotFound`-shaped entry in the backend's audit log
+(CloudTrail / Cloud Audit Logs) — expected, not an error.
+
+**Missing-file asymmetry (file backends).** The read-only probe re-touches
+disk rather than trusting the snapshot cached at `open()`:
+
+- `file://` (plaintext): a missing store file reads as **healthy**. First
+  run precedes provisioning and setup tooling probes before writing, so an
+  absent file is the normal pre-provisioning state — matching the
+  absent-cloud-sentinel contract. Only unreadable or corrupt data fails.
+- `file://…?encrypted` : a missing store file is an **error**. `open()`
+  would have created the encrypted envelope, so its absence at runtime
+  means the mount disappeared. The probe re-parses the envelope but does
+  **not** re-derive the Argon2 key (that ran once at `open()`; repeating it
+  on every poll would be a self-inflicted DoS).
 
 ---
 

@@ -68,6 +68,11 @@ pub const BOOTSTRAP_SEED_INDEX: &str = "mediator_bootstrap_seed_index";
 /// unique name that fits the flat character class.
 pub const PROBE_SENTINEL_PREFIX: &str = "mediator_probe_";
 
+/// Fixed key read by `SecretStore::probe_readonly`. Never written, so it
+/// reads as absent on a healthy backend; a `const` avoids allocating it
+/// on every `/readyz` poll.
+pub const PROBE_READONLY_KEY: &str = "mediator_probe_readonly";
+
 /// HKDF salt for deriving the cache-HMAC key from the admin credential's
 /// private key. Versioned so we can rotate the derivation in the future
 /// without invalidating admin credentials.
@@ -281,6 +286,12 @@ impl MediatorSecrets {
 
     pub async fn probe(&self) -> Result<()> {
         self.store.probe().await
+    }
+
+    /// Read-only reachability probe (no mutation). See
+    /// [`SecretStore::probe_readonly`].
+    pub async fn probe_readonly(&self) -> Result<()> {
+        self.store.probe_readonly().await
     }
 
     // ── Generic envelope accessors ───────────────────────────────────

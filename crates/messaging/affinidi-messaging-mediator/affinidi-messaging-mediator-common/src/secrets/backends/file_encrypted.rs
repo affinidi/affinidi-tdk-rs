@@ -526,6 +526,28 @@ impl SecretStore for EncryptedFileStore {
         }
         Ok(())
     }
+
+    /// Re-read and parse the on-disk envelope so `/readyz` reflects the
+    /// live file rather than the snapshot cached at `open()`. This does NOT
+    /// re-derive the Argon2 key or decrypt any entries — `open()` already
+    /// verified the passphrase, and running the KDF on every poll would be
+    /// a self-inflicted DoS. Unlike the plaintext backend, a missing file
+    /// is an error here: `open()` would have created one, so its absence at
+    /// runtime means the mount vanished.
+    async fn probe_readonly(&self) -> Result<()> {
+        let bytes = fs::read(&self.path).map_err(|e| SecretStoreError::Io {
+            backend: BACKEND_LABEL,
+            source: e,
+        })?;
+        serde_json::from_slice::<EncryptedStoreFile>(&bytes).map_err(|e| SecretStoreError::Io {
+            backend: BACKEND_LABEL,
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("failed to parse store file {}: {e}", self.path.display()),
+            ),
+        })?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -668,6 +690,56 @@ mod tests {
                 "rewriting the same key with the same plaintext must change the on-disk \
                  ciphertext (nonce reuse would be a critical AES-GCM bug)"
             );
+        });
+        unsafe {
+            std::env::remove_var(PASSPHRASE_ENV);
+        }
+    }
+
+    #[test]
+    fn probe_readonly_fails_when_file_vanishes_but_get_still_serves_cache() {
+        // Deleting the file out from under a running store must fail the
+        // read-only probe (mount lost), even though cached `get` still
+        // answers from memory — that asymmetry is the whole point of the
+        // override re-touching disk.
+        let _g = env_lock();
+        unsafe {
+            std::env::set_var(PASSPHRASE_ENV, "vanish-test");
+            std::env::remove_var(PASSPHRASE_FILE_ENV);
+        }
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("s.json");
+        let store = open(url_for(&path)).unwrap();
+        block_on(async {
+            store.probe_readonly().await.unwrap();
+            fs::remove_file(&path).unwrap();
+            assert!(
+                store.probe_readonly().await.is_err(),
+                "probe must fail once the on-disk file is gone"
+            );
+            // A never-written key still reads as absent from the cache.
+            assert!(store.get("mediator_jwt_secret").await.unwrap().is_none());
+        });
+        unsafe {
+            std::env::remove_var(PASSPHRASE_ENV);
+        }
+    }
+
+    #[test]
+    fn probe_readonly_fails_on_corrupt_file() {
+        // A present-but-unparseable envelope must surface as Err.
+        let _g = env_lock();
+        unsafe {
+            std::env::set_var(PASSPHRASE_ENV, "corrupt-test");
+            std::env::remove_var(PASSPHRASE_FILE_ENV);
+        }
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("s.json");
+        let store = open(url_for(&path)).unwrap();
+        block_on(async {
+            store.probe_readonly().await.unwrap();
+            fs::write(&path, b"{ not json").unwrap();
+            assert!(store.probe_readonly().await.is_err());
         });
         unsafe {
             std::env::remove_var(PASSPHRASE_ENV);

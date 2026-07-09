@@ -184,6 +184,17 @@ impl SecretStore for FileStore {
         *guard = Some(state);
         Ok(())
     }
+
+    /// Re-read the store file from disk without touching the in-memory
+    /// cache, so `/readyz` reflects the live filesystem rather than the
+    /// snapshot captured at `open()`. A missing file stays healthy
+    /// (`load_locked` maps `NotFound` → default): first-run precedes
+    /// provisioning, and setup tooling probes before writing anything,
+    /// mirroring the absent-cloud-sentinel contract. Only unreadable or
+    /// corrupt on-disk data returns `Err`.
+    async fn probe_readonly(&self) -> Result<()> {
+        self.load_locked().map(|_| ())
+    }
 }
 
 #[cfg(test)]
@@ -266,5 +277,33 @@ mod tests {
         };
         let store = open(url).unwrap();
         store.delete("does-not-exist").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_readonly_is_healthy_when_file_absent() {
+        // No file on disk yet (pre-provisioning): must read as healthy.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("secrets.json");
+        let url = BackendUrl::File {
+            path: path.to_string_lossy().into(),
+            encrypted: false,
+        };
+        let store = open(url).unwrap();
+        store.probe_readonly().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_readonly_fails_on_corrupt_file() {
+        // A file present but unparseable must surface as Err — the probe
+        // re-reads disk rather than trusting a cached snapshot.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("secrets.json");
+        fs::write(&path, b"{ not json").unwrap();
+        let url = BackendUrl::File {
+            path: path.to_string_lossy().into(),
+            encrypted: false,
+        };
+        let store = open(url).unwrap();
+        assert!(store.probe_readonly().await.is_err());
     }
 }
