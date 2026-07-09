@@ -466,7 +466,8 @@ impl TryFrom<ConfigRaw> for Config {
             )
         })?;
         let mediator_secrets = MediatorSecrets::new(store);
-        mediator_secrets.probe().await.map_err(|e| {
+        // Read-only probe: verify reachability without needing write perms.
+        mediator_secrets.probe_readonly().await.map_err(|e| {
             MediatorError::ConfigError(
                 12,
                 "NA".into(),

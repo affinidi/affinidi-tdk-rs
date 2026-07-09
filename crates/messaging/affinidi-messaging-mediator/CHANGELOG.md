@@ -2,6 +2,15 @@
 
 ## Changelog history
 
+## 9th July 2026
+
+### 0.16.43 — use the read-only secret-backend probe at boot and on /readyz
+
+- The startup secret-backend reachability check and the `/readyz` liveness probe
+  now call `SecretStore::probe_readonly()` instead of the write-based probe, so
+  the running service no longer needs write access to its secret backend just to
+  confirm the backend is reachable.
+
 ## 4th July 2026
 
 ### 0.16.41 — refactor: single source of truth for key-agreement curve mapping

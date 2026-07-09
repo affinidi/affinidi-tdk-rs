@@ -259,7 +259,8 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
     // (Phase E), so a backend that was reachable at boot is highly
     // likely still reachable here. Re-probing on every /readyz catches
     // mid-flight credential expiries / network blips that the boot-
-    // time probe couldn't.
+    // time probe couldn't. Uses the read-only probe, so repeated /readyz
+    // polling never writes/deletes a sentinel (no write perms on the role).
     //
     // /readyz is unauthenticated, so the response must not echo the
     // backend URL or the underlying probe error: those can leak
@@ -267,7 +268,7 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
     // strings to anyone who can reach the load-balancer probe path.
     // Keep a boolean `secrets_backend_reachable` for monitoring; log
     // the detailed error at warn level for operators.
-    let backend_reachable = match state.config.secrets_backend.probe().await {
+    let backend_reachable = match state.config.secrets_backend.probe_readonly().await {
         Ok(()) => {
             checks.push(serde_json::json!({
                 "name": "secrets_backend",
