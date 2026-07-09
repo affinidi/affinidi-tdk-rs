@@ -2,6 +2,21 @@
 
 ## Changelog history
 
+## 9th July 2026
+
+### 0.1.21 — publish the minted public DID to an optional target
+
+- After provisioning, the wizard can publish the mediator's public DID string
+  to a target from the recipe's `[output].did_target` — either `file://<path>`
+  or `aws_parameter_store://<region>/<name>` (SSM, gated by the new
+  `publish-aws` build feature). Defaults to `None`, so interactive and local
+  setups are unaffected.
+- The SSM region is part of the target (`<region>/<name>`) so the publish
+  destination is self-describing and never silently inherits the secret-storage
+  backend's region.
+- The target scheme is validated at recipe load — before anything is minted,
+  provisioned, or written — so a malformed target fails fast.
+
 ## 2nd July 2026
 
 ### 0.1.20 — advertise `TSPTransport` on VTA-minted mediators only when TSP is enabled

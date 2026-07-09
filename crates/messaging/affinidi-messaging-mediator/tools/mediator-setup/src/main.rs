@@ -9,6 +9,7 @@ mod discovery;
 mod docker;
 mod exit_recap;
 mod generators;
+mod publish;
 mod recipe;
 mod reprovision;
 mod sealed_handoff;
@@ -1145,6 +1146,9 @@ async fn generate_and_write(
     let artefacts = mint_artefacts(config, vta_session).await?;
     provision_secret_backend(config, &artefacts, vta_session).await?;
     write_config_artefacts(config, &artefacts, save_recipe)?;
+    // Optional: publish the minted DID to the recipe's `[output].did_target`.
+    // No-op unless a target is configured.
+    publish::publish_did_artefacts(&artefacts.mediator_did, config.did_target.as_deref()).await?;
     print_completion_summary(config, &artefacts, vta_session);
     Ok(())
 }

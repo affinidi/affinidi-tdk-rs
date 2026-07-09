@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-setup"
-version = "0.1.20"
+version = "0.1.21"
 description = "Interactive TUI setup wizard for Affinidi Messaging Mediator"
 edition.workspace = true
 authors.workspace = true
@@ -24,6 +24,7 @@ default = [
   "secrets-azure",
   "secrets-vault",
   "secrets-k8s",
+  "publish-aws",
 ]
 secrets-keyring = ["affinidi-messaging-mediator-common/secrets-keyring"]
 secrets-aws = ["affinidi-messaging-mediator-common/secrets-aws"]
@@ -31,6 +32,11 @@ secrets-gcp = ["affinidi-messaging-mediator-common/secrets-gcp"]
 secrets-azure = ["affinidi-messaging-mediator-common/secrets-azure"]
 secrets-vault = ["affinidi-messaging-mediator-common/secrets-vault"]
 secrets-k8s = ["affinidi-messaging-mediator-common/secrets-k8s"]
+# AWS SSM client + config, so an `[output].did_target =
+# "aws_parameter_store://<region>/<name>"` can publish the minted DID. Kept
+# separate from `secrets-aws` (AWS secret *storage*) so a build that only
+# stores secrets in AWS doesn't have to pull the SSM client, and vice versa.
+publish-aws = ["dep:aws-config", "dep:aws-sdk-ssm"]
 
 [dependencies]
 # ── TUI Framework ────────────────────────────────────────────────────────
@@ -141,6 +147,13 @@ humantime = "2"
 
 # ── Logging ──────────────────────────────────────────────────────────────
 tracing = "0.1"
+
+# ── AWS SSM (optional — gated by the `publish-aws` feature) ──────────────
+## Publishes the minted DID to SSM Parameter Store when `[output].did_target`
+## uses `aws_parameter_store://`. Pinned to `1` to match the runtime crate's
+## existing `aws-sdk-ssm` dependency.
+aws-config = { version = "1", optional = true }
+aws-sdk-ssm = { version = "1", optional = true }
 
 [dev-dependencies]
 ## Test fixtures from `provision_client::test_helpers` (e.g.
