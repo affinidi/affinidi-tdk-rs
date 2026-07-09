@@ -15,6 +15,9 @@
   snapshot cached at `open()`: plaintext `file://` treats a missing file as
   healthy (pre-provisioning), while the encrypted variant treats a missing file
   as an error and re-parses the envelope without re-deriving the KDF key.
+  Both overrides take the store's state lock across the read, the same lock
+  `put`/`delete` hold while `save_locked` truncates and rewrites the file, so a
+  probe can never judge the backend on a half-written store.
 - `MediatorSecrets` gained a matching `probe_readonly()` passthrough.
 
 ## 30th June 2026

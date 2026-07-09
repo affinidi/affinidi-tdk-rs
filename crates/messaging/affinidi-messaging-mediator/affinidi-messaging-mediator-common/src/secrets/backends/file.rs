@@ -193,6 +193,15 @@ impl SecretStore for FileStore {
     /// mirroring the absent-cloud-sentinel contract. Only unreadable or
     /// corrupt on-disk data returns `Err`.
     async fn probe_readonly(&self) -> Result<()> {
+        // Hold the state lock across the read, as `put`/`delete` do around
+        // `save_locked`'s truncate-then-rewrite. Reading unlocked would let
+        // the probe observe a half-written store and judge the backend on
+        // it. Deliberately don't populate the cache from what we read — the
+        // probe stays free of side effects.
+        let _guard = self
+            .state
+            .lock()
+            .map_err(|e| SecretStoreError::other(format!("file store poisoned: {e}")))?;
         self.load_locked().map(|_| ())
     }
 }
@@ -200,6 +209,9 @@ impl SecretStore for FileStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::mpsc;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -305,5 +317,46 @@ mod tests {
         };
         let store = open(url).unwrap();
         assert!(store.probe_readonly().await.is_err());
+    }
+
+    #[test]
+    fn probe_readonly_waits_for_an_in_flight_write() {
+        // `put`/`delete` hold the state lock while `save_locked` truncates
+        // the file in place and rewrites it. The probe takes the same lock,
+        // so it waits for the writer instead of reading a half-written
+        // store. Mirrors the encrypted backend, where reading mid-write is
+        // what makes /readyz flap.
+        let tmp = TempDir::new().unwrap();
+        let store = Arc::new(FileStore {
+            path: tmp.path().join("secrets.json"),
+            state: Mutex::new(None),
+        });
+
+        let guard = store.state.lock().unwrap();
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let probe = {
+            let store = Arc::clone(&store);
+            std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .unwrap()
+                    .block_on(store.probe_readonly())
+            })
+        };
+        // Unlocked, the probe would finish in microseconds.
+        started_rx.recv().unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            !probe.is_finished(),
+            "probe_readonly must block while a writer holds the state lock"
+        );
+
+        drop(guard);
+        probe
+            .join()
+            .unwrap()
+            .expect("probe succeeds once the writer releases the lock");
     }
 }
