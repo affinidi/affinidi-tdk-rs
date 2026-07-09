@@ -369,14 +369,35 @@ impl StreamingTask {
         let replacing = if let Some(old) = clients.get(&value.did_hash) {
             let since_last = old.registered_at.elapsed();
             let churn = since_last < CHURN_WINDOW;
-            warn!(
-                did = did,
-                old_session = old.session_id,
-                new_session = new_session_id,
-                since_last_ms = since_last.as_millis() as u64,
-                churn,
-                "Duplicate WebSocket connection: closing old session in favour of new one",
-            );
+            let since_last_ms = since_last.as_millis() as u64;
+            let msg = "Duplicate WebSocket connection: closing old session in favour of new one";
+            // A churning DID replaces its own socket every few seconds
+            // (e.g. two client sessions for the same DID dueling over the
+            // one-socket-per-DID slot). Logging every flip at WARN buries
+            // the log — a two-hour duel emits thousands of identical lines.
+            // Emit churn at DEBUG and let the dedicated
+            // `WEBSOCKET_DUPLICATE_CHURN_TOTAL` counter be the operator
+            // signal (rate-alert on it). A genuine, spaced-out duplicate
+            // (non-churn) is still noteworthy, so keep it at WARN.
+            if churn {
+                debug!(
+                    did = did,
+                    old_session = old.session_id,
+                    new_session = new_session_id,
+                    since_last_ms,
+                    churn,
+                    "{msg}",
+                );
+            } else {
+                warn!(
+                    did = did,
+                    old_session = old.session_id,
+                    new_session = new_session_id,
+                    since_last_ms,
+                    churn,
+                    "{msg}",
+                );
+            }
             metrics::counter!(WEBSOCKET_DUPLICATE_REPLACEMENTS_TOTAL).increment(1);
             if churn {
                 // Rapid replacement for the same DID — surface the flip-flop
