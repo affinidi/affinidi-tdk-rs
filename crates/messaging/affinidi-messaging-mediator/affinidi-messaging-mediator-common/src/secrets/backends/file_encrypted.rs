@@ -526,12 +526,46 @@ impl SecretStore for EncryptedFileStore {
         }
         Ok(())
     }
+
+    /// Re-read and parse the on-disk envelope so `/readyz` reflects the
+    /// live file rather than the snapshot cached at `open()`. This does NOT
+    /// re-derive the Argon2 key or decrypt any entries — `open()` already
+    /// verified the passphrase, and running the KDF on every poll would be
+    /// a self-inflicted DoS. Unlike the plaintext backend, a missing file
+    /// is an error here: `open()` would have created one, so its absence at
+    /// runtime means the mount vanished.
+    async fn probe_readonly(&self) -> Result<()> {
+        // Hold the state lock across the read. `put`/`delete` hold it while
+        // `save_locked` truncates the file in place and rewrites it, so an
+        // unlocked probe can read the truncated file and reject the empty
+        // bytes as an unparseable envelope. In VTA mode the refresh task
+        // rewrites the cached bundle on a live server, which would make
+        // /readyz flap unhealthy for no reason.
+        let _guard = self
+            .state
+            .lock()
+            .map_err(|e| SecretStoreError::other(format!("encrypted file store poisoned: {e}")))?;
+        let bytes = fs::read(&self.path).map_err(|e| SecretStoreError::Io {
+            backend: BACKEND_LABEL,
+            source: e,
+        })?;
+        serde_json::from_slice::<EncryptedStoreFile>(&bytes).map_err(|e| SecretStoreError::Io {
+            backend: BACKEND_LABEL,
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("failed to parse store file {}: {e}", self.path.display()),
+            ),
+        })?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::mpsc;
+    use std::sync::{Arc, Mutex, MutexGuard};
+    use std::time::Duration;
     use tempfile::TempDir;
 
     /// Serialise env-var manipulation across the test suite. Tokio's
@@ -672,5 +706,100 @@ mod tests {
         unsafe {
             std::env::remove_var(PASSPHRASE_ENV);
         }
+    }
+
+    #[test]
+    fn probe_readonly_fails_when_file_vanishes_but_get_still_serves_cache() {
+        // Deleting the file out from under a running store must fail the
+        // read-only probe (mount lost), even though cached `get` still
+        // answers from memory — that asymmetry is the whole point of the
+        // override re-touching disk.
+        let _g = env_lock();
+        unsafe {
+            std::env::set_var(PASSPHRASE_ENV, "vanish-test");
+            std::env::remove_var(PASSPHRASE_FILE_ENV);
+        }
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("s.json");
+        let store = open(url_for(&path)).unwrap();
+        block_on(async {
+            store.probe_readonly().await.unwrap();
+            fs::remove_file(&path).unwrap();
+            assert!(
+                store.probe_readonly().await.is_err(),
+                "probe must fail once the on-disk file is gone"
+            );
+            // A never-written key still reads as absent from the cache.
+            assert!(store.get("mediator_jwt_secret").await.unwrap().is_none());
+        });
+        unsafe {
+            std::env::remove_var(PASSPHRASE_ENV);
+        }
+    }
+
+    #[test]
+    fn probe_readonly_fails_on_corrupt_file() {
+        // A present-but-unparseable envelope must surface as Err.
+        let _g = env_lock();
+        unsafe {
+            std::env::set_var(PASSPHRASE_ENV, "corrupt-test");
+            std::env::remove_var(PASSPHRASE_FILE_ENV);
+        }
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("s.json");
+        let store = open(url_for(&path)).unwrap();
+        block_on(async {
+            store.probe_readonly().await.unwrap();
+            fs::write(&path, b"{ not json").unwrap();
+            assert!(store.probe_readonly().await.is_err());
+        });
+        unsafe {
+            std::env::remove_var(PASSPHRASE_ENV);
+        }
+    }
+
+    #[test]
+    fn probe_readonly_waits_for_an_in_flight_write() {
+        // `save_locked` truncates the file in place before rewriting it, and
+        // `put`/`delete` hold the state lock across that window. A probe that
+        // read the path without taking the lock would see zero bytes and
+        // reject them as an unparseable envelope — so in VTA mode, where the
+        // refresh task rewrites the cached bundle on a live server, /readyz
+        // would flap unhealthy at random. Holding the lock is what makes the
+        // probe wait rather than judge the backend on a half-written file.
+        //
+        // Constructed directly (not via `open`) so the test needs no env var
+        // and can reach `state` to stand in for a writer mid-`save_locked`.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("s.json");
+        let store = Arc::new(
+            EncryptedFileStore::open(path, Zeroizing::new("in-flight-write".to_string())).unwrap(),
+        );
+
+        let guard = store.state.lock().unwrap();
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let probe = {
+            let store = Arc::clone(&store);
+            std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                block_on(store.probe_readonly())
+            })
+        };
+        // The probe thread is running; without the lock it would finish in
+        // microseconds, so still being unfinished after this pause is a
+        // reliable signal that it is blocked on the writer.
+        started_rx.recv().unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            !probe.is_finished(),
+            "probe_readonly must block while a writer holds the state lock"
+        );
+
+        drop(guard);
+        probe
+            .join()
+            .unwrap()
+            .expect("probe succeeds once the writer releases the lock");
     }
 }
