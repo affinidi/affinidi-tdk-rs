@@ -144,6 +144,18 @@ config_path = "conf/mediator.toml"
 # Listen address for the mediator (ip:port).
 listen_address = "0.0.0.0:7037"
 
+# Optional: publish the minted public DID string after provisioning.
+# Omit (the default) to publish nowhere -- interactive/local setups.
+# Either a local file, or an SSM parameter:
+#
+#   did_target = "file:///run/mediator/did.txt"
+#   did_target = "aws_parameter_store:///mediator/did?region=eu-west-1"
+#
+# A hierarchical SSM name keeps its leading slash (hence three slashes);
+# AWS rejects a hierarchy without one. Without ?region= the ambient AWS
+# region is used. The aws_parameter_store:// value written here is the
+# same string mediator.toml accepts for `mediator_did`.
+
 
 # ── Install ─────────────────────────────────────────────────────────────────
 [install]

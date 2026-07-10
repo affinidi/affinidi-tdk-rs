@@ -334,8 +334,10 @@ pub struct OutputSection {
     #[serde(default = "default_api_prefix")]
     pub api_prefix: String,
     /// Optional target to publish the minted public DID string to after
-    /// provisioning (`aws_parameter_store://<region>/<name>` or
-    /// `file://<path>`). `None` (default) = don't publish.
+    /// provisioning (`aws_parameter_store://<name>[?region=<region>]` or
+    /// `file://<path>`). `None` (default) = don't publish. The
+    /// `aws_parameter_store://` form is exactly what `mediator.toml`'s
+    /// `mediator_did` accepts, so the published target can be pasted across.
     #[serde(default)]
     pub did_target: Option<String>,
 }

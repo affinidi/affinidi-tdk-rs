@@ -2,20 +2,28 @@
 
 ## Changelog history
 
-## 9th July 2026
+## 10th July 2026
 
 ### 0.1.21 — publish the minted public DID to an optional target
 
 - After provisioning, the wizard can publish the mediator's public DID string
   to a target from the recipe's `[output].did_target` — either `file://<path>`
-  or `aws_parameter_store://<region>/<name>` (SSM, gated by the new
+  or `aws_parameter_store://<name>[?region=<region>]` (SSM, gated by the new
   `publish-aws` build feature). Defaults to `None`, so interactive and local
   setups are unaffected.
-- The SSM region is part of the target (`<region>/<name>`) so the publish
-  destination is self-describing and never silently inherits the secret-storage
-  backend's region.
-- The target scheme is validated at recipe load — before anything is minted,
-  provisioned, or written — so a malformed target fails fast.
+- The parameter-store target uses `mediator-common`'s shared `parameter_store`
+  grammar — the same one the mediator runtime parses when it reads `mediator_did`
+  — so the published target can be pasted into `mediator.toml` verbatim. A
+  hierarchical name keeps its leading slash (`aws_parameter_store:///mediator/did`),
+  which AWS requires; the region is an optional `?region=` query parameter rather
+  than a leading path segment, which would be ambiguous against that slash.
+- Without `?region=` the ambient AWS chain is used (`AWS_REGION`, profile, IMDS),
+  so the publish destination never silently inherits the secret-storage backend's
+  region.
+- The target is validated at recipe load — before anything is minted, provisioned,
+  or written — including rejecting an `aws_parameter_store://` target in a build
+  without the `publish-aws` feature, which previously failed only after
+  provisioning had already run.
 
 ## 2nd July 2026
 
