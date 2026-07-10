@@ -6,13 +6,13 @@ name: publish-images
 #                          AWS_ROLE_ARN variable is set (GitHub -> AWS OIDC).
 # Multi-arch is built once on native runners and merged into one manifest list.
 # The production image must build and boot-probe (verify-image) before publishing.
-# Branch pushes build + verify the image only; publishing happens on release
+# Any branch push builds + verifies the image only; publishing happens on release
 # tags and manual dispatch.
 
 on:
   push:
     branches:
-      - ws-a-image-publish
+      - "**"
     tags:
       - "affinidi-messaging-mediator-v*"
   workflow_dispatch:
