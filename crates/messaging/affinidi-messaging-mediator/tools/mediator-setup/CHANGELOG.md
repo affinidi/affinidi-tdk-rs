@@ -2,6 +2,35 @@
 
 ## Changelog history
 
+## 10th July 2026
+
+### 0.1.21 — publish the minted public DID to an optional target
+
+- After provisioning, the wizard can publish the mediator's public DID string
+  to a target from the recipe's `[output].did_target` — either `file://<path>`
+  or `aws_parameter_store://<name>[?region=<region>]` (SSM, gated by the new
+  `publish-aws` build feature). Defaults to `None`, so interactive and local
+  setups are unaffected.
+- The parameter-store target uses `mediator-common`'s shared `parameter_store`
+  grammar — the same one the mediator runtime parses when it reads `mediator_did`
+  — so the published target can be pasted into `mediator.toml` verbatim. A
+  hierarchical name keeps its leading slash (`aws_parameter_store:///mediator/did`),
+  which AWS requires; the region is an optional `?region=` query parameter rather
+  than a leading path segment, which would be ambiguous against that slash.
+- Without `?region=` the ambient AWS chain is used (`AWS_REGION`, profile, IMDS),
+  so the publish destination never silently inherits the secret-storage backend's
+  region.
+- The target is validated at recipe load — before anything is minted, provisioned,
+  or written — including rejecting an `aws_parameter_store://` target in a build
+  without the `publish-aws` feature, which previously failed only after
+  provisioning had already run.
+- Documented that **only the `aws_parameter_store://` target round-trips**. The
+  mediator resolves `mediator_did` / `admin_did` from `did://<did>` or
+  `aws_parameter_store://` only, so a `file://` target hands the DID to an
+  out-of-band consumer (a relying party, a CI step, an operator) rather than to
+  `mediator.toml`, where the DID itself is pasted as `did://<did>`. Unchanged
+  behaviour — previously unstated.
+
 ## 2nd July 2026
 
 ### 0.1.20 — advertise `TSPTransport` on VTA-minted mediators only when TSP is enabled

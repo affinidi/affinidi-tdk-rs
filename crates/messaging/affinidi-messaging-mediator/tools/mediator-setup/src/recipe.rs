@@ -333,6 +333,18 @@ pub struct OutputSection {
     /// reverse proxy.
     #[serde(default = "default_api_prefix")]
     pub api_prefix: String,
+    /// Optional target to publish the minted public DID string to after
+    /// provisioning (`aws_parameter_store://<name>[?region=<region>]` or
+    /// `file://<path>`). `None` (default) = don't publish.
+    ///
+    /// Only the `aws_parameter_store://` form round-trips: it is exactly what
+    /// `mediator.toml`'s `mediator_did` accepts, so the published target can be
+    /// pasted across verbatim. The runtime cannot read `mediator_did` from a
+    /// file, so a `file://` target serves out-of-band consumers (a relying
+    /// party, a CI step, an operator) — to use its contents in `mediator.toml`,
+    /// paste the DID itself as `did://<did>`.
+    #[serde(default)]
+    pub did_target: Option<String>,
 }
 
 fn default_config_path() -> String {
@@ -353,6 +365,7 @@ impl Default for OutputSection {
             config_path: default_config_path(),
             listen_address: default_listen_address(),
             api_prefix: default_api_prefix(),
+            did_target: None,
         }
     }
 }
@@ -609,6 +622,14 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
     config.config_path = recipe.output.config_path.clone();
     config.listen_address = recipe.output.listen_address.clone();
     config.api_prefix = recipe.output.api_prefix.clone();
+    config.did_target = recipe.output.did_target.clone();
+
+    // Validate the publish target's scheme now, at recipe load, so a bad
+    // target fails before anything is minted, provisioned, or written.
+    if let Some(target) = &config.did_target {
+        crate::publish::validate_target(target)
+            .map_err(|e| anyhow::anyhow!("invalid [output].did_target: {e}"))?;
+    }
 
     Ok(config)
 }
@@ -785,7 +806,11 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
     out.push_str("[output]\n");
     out.push_str(&format!("config_path = \"{}\"\n", config.config_path));
     out.push_str(&format!("listen_address = \"{}\"\n", config.listen_address));
-    out.push_str(&format!("api_prefix = \"{}\"\n\n", config.api_prefix));
+    out.push_str(&format!("api_prefix = \"{}\"\n", config.api_prefix));
+    if let Some(target) = &config.did_target {
+        out.push_str(&format!("did_target = \"{target}\"\n"));
+    }
+    out.push('\n');
 
     // Install (default: not enabled in recipe — user can enable manually)
     out.push_str("[install]\n");

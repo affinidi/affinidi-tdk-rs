@@ -6,17 +6,26 @@
 //!
 //! - Reading the TOML file + applying env overrides.
 //! - Resolving `mediator_did` / `admin_did` from either a literal DID or
-//!   `aws_parameter_store://<name>`.
+//!   `aws_parameter_store://<name>[?region=<region>]`.
 //! - Reading the self-hosted DID document from `file://` or
 //!   `aws_parameter_store://`.
 //! - Hostname resolution and forwarding-loop protection.
+//!
+//! The `aws_parameter_store://` grammar lives in `mediator-common`'s
+//! `parameter_store` module, shared with the `mediator-setup` wizard that
+//! publishes to it, so the string the wizard writes is the string read here.
 
 use affinidi_did_common::{Document, DocumentExt, service::Endpoint};
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+#[cfg(feature = "aws")]
+use affinidi_messaging_mediator_common::parameter_store::parse_parameter_store_target;
+use affinidi_messaging_mediator_common::parameter_store::{
+    PARAMETER_STORE_SCHEME, is_parameter_store_target,
+};
 use affinidi_secrets_resolver::SecretsResolver;
 #[cfg(feature = "aws")]
-use aws_config::SdkConfig;
+use aws_config::{Region, SdkConfig};
 #[cfg(feature = "aws")]
 use aws_sdk_ssm::types::ParameterType;
 use std::{
@@ -34,14 +43,13 @@ use super::processors::ForwardingConfig;
 /// excluded — those are handled via `MediatorSecrets`, which owns its own
 /// AWS SDK client when the `secrets-aws` feature is enabled.
 pub(crate) fn config_needs_aws(raw: &super::ConfigRaw) -> bool {
-    let aws_param = |s: &str| s.starts_with("aws_parameter_store://");
-    aws_param(&raw.mediator_did)
-        || aws_param(&raw.server.admin_did)
+    is_parameter_store_target(&raw.mediator_did)
+        || is_parameter_store_target(&raw.server.admin_did)
         || raw
             .server
             .did_web_self_hosted
-            .as_ref()
-            .is_some_and(|s| aws_param(s))
+            .as_deref()
+            .is_some_and(is_parameter_store_target)
 }
 
 /// Extract the AWS `SdkConfig` from an `Option<AwsConfig>`, returning a clear
@@ -74,7 +82,9 @@ fn parse_scheme<'a>(input: &'a str, field_name: &str) -> Result<(&'a str, &'a st
 ///
 /// Supported schemes:
 /// - `did://<did-string>` — literal DID.
-/// - `aws_parameter_store://<parameter-name>` — fetched at startup.
+/// - `aws_parameter_store://<parameter-name>[?region=<region>]` — fetched at
+///   startup. See [`affinidi_messaging_mediator_common::parameter_store`] for
+///   the grammar; `mediator-setup` publishes to the same one.
 ///
 /// `vta://` is no longer supported here; when VTA integration is enabled
 /// the mediator DID is discovered from the admin credential at startup.
@@ -86,14 +96,14 @@ pub(crate) async fn read_did_config(
     let (scheme, path) = parse_scheme(did_config, field_name)?;
     let content: String = match scheme {
         "did" => path.to_string(),
-        "aws_parameter_store" => {
+        PARAMETER_STORE_SCHEME => {
             #[cfg(feature = "aws")]
             {
                 let cfg = require_aws_config(
                     aws_config,
-                    &format!("{field_name} (aws_parameter_store://)"),
+                    &format!("{field_name} ({PARAMETER_STORE_SCHEME}://)"),
                 )?;
-                aws_parameter_store(path, cfg).await?
+                aws_parameter_store(did_config, cfg).await?
             }
             #[cfg(not(feature = "aws"))]
             {
@@ -118,7 +128,10 @@ pub(crate) async fn read_did_config(
         }
     };
 
-    Ok(content)
+    // A DID is a single token, and a parameter set by hand via the console or
+    // CLI often carries a trailing newline. Trim rather than hand a stray
+    // "\n" to the DID resolver, which fails far from the cause.
+    Ok(content.trim().to_string())
 }
 
 pub(crate) fn get_hostname(host_name: &str) -> Result<String, MediatorError> {
@@ -150,16 +163,35 @@ pub(crate) fn get_hostname(host_name: &str) -> Result<String, MediatorError> {
     }
 }
 
+/// Fetch a parameter named by a full `aws_parameter_store://…` target.
+///
+/// `target` is parsed by the shared grammar, so the name keeps its leading
+/// slash and an optional `?region=` overrides the ambient region for this
+/// call only — the rest of the process keeps using the shared `SdkConfig`.
 #[cfg(feature = "aws")]
 pub(crate) async fn aws_parameter_store(
-    parameter_name: &str,
+    target: &str,
     aws_config: &SdkConfig,
 ) -> Result<String, MediatorError> {
+    let parsed = parse_parameter_store_target(target)
+        .map_err(|e| MediatorError::ConfigError(12, "NA".into(), e.to_string()))?;
+    let parameter_name = parsed.name;
+
+    // Region in the target wins, so a parameter can live somewhere other
+    // than the region the rest of the SDK defaulted to.
+    let regional_config;
+    let aws_config = match parsed.region {
+        Some(region) => {
+            regional_config = aws_config.to_builder().region(Region::new(region)).build();
+            &regional_config
+        }
+        None => aws_config,
+    };
     let ssm = aws_sdk_ssm::Client::new(aws_config);
 
     let response = ssm
         .get_parameter()
-        .set_name(Some(parameter_name.to_string()))
+        .set_name(Some(parameter_name.clone()))
         .send()
         .await
         .map_err(|e| {
@@ -254,11 +286,11 @@ pub(crate) async fn read_document(
     let (scheme, path) = parse_scheme(document_path, "document_path")?;
     let content: String = match scheme {
         "file" => read_file_lines(path)?.concat(),
-        "aws_parameter_store" => {
+        PARAMETER_STORE_SCHEME => {
             #[cfg(feature = "aws")]
             {
                 let cfg = require_aws_config(aws_config, "document_path (aws_parameter_store://)")?;
-                aws_parameter_store(path, cfg).await?
+                aws_parameter_store(document_path, cfg).await?
             }
             #[cfg(not(feature = "aws"))]
             {
@@ -480,7 +512,33 @@ pub(crate) async fn load_forwarding_protection_blocks(
 
 #[cfg(test)]
 mod tests {
-    use super::{join_api_path, normalize_api_prefix};
+    use super::{join_api_path, normalize_api_prefix, read_did_config};
+
+    /// `mediator-setup` documents that a `file://` DID target does not
+    /// round-trip into `mediator_did`. Pin the runtime half of that claim so
+    /// the docs and the code cannot drift apart.
+    #[tokio::test]
+    async fn read_did_config_rejects_a_file_target() {
+        let err = read_did_config("file:///run/mediator/did.txt", &None, "mediator_did")
+            .await
+            .expect_err("file:// is not a DID source");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("did://") && msg.contains("aws_parameter_store://"),
+            "error should name the two accepted schemes, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_did_config_trims_surrounding_whitespace() {
+        // A DID is a single token. The trim exists for parameter-store values
+        // set by hand (a trailing newline is easy to leave behind); assert it
+        // through the one scheme reachable without an AWS client.
+        let did = read_did_config("did://  did:peer:2.Vz6Mk\n", &None, "mediator_did")
+            .await
+            .expect("literal DID resolves");
+        assert_eq!(did, "did:peer:2.Vz6Mk");
+    }
 
     #[test]
     fn normalize_empty_forms_collapse_to_root() {

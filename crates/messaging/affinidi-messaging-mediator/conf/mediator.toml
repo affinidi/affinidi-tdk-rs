@@ -19,7 +19,11 @@ log_json = "false"
 ### this field is ignored.
 ### Supported formats:
 ###   did://<did_string>
-###   aws_parameter_store://<parameter_name>
+###   aws_parameter_store://<parameter_name>[?region=<region>]
+### A hierarchical parameter name keeps its leading slash, so it reads as
+### three slashes: aws_parameter_store:///mediator/did?region=eu-west-1
+### Without ?region= the ambient AWS region is used (AWS_REGION, profile,
+### then IMDS). The mediator-setup wizard publishes to this exact format.
 mediator_did = "did://did:peer:2.Vz6MkksX9huJxJwvLtj9vc3gXbT2m1WVy4Uoi3ssEiSSH2ZYJ.EzQ3shVZJV9gKezYsvy5tC1LCwjjWSms2zCfZhvnRK48BNoHH3"
 
 ### ****************************************************************************************************************************
@@ -76,7 +80,7 @@ admin_did = "did://did:peer:2.Vz6MkksX9huJxJwvLtj9vc3gXbT2m1WVy4Uoi3ssEiSSH2ZYJ.
 ### Path to the self-hosted DID Document
 ### Supported formats:
 ###   file://<path>
-###   aws_parameter_store://<parameter_name>
+###   aws_parameter_store://<parameter_name>[?region=<region>]
 ### When enabled, adds a did:web route at /.well-known/did.json.
 ### Inactive by default — uncomment only when this mediator should
 ### serve its own DID document/log (e.g. did:webvh self-hosted at

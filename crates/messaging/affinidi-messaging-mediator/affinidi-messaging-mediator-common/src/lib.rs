@@ -27,6 +27,12 @@ pub mod types;
 /// the `mediator-setup` wizard (writing the `did-web.json` artefact).
 pub mod did_web;
 
+/// `aws_parameter_store://` target parsing. Pure (no AWS SDK), always
+/// built: shared by the mediator runtime (reading `mediator_did` from a
+/// parameter) and the `mediator-setup` wizard (publishing the minted DID
+/// to one), so the string one writes is the string the other reads.
+pub mod parameter_store;
+
 #[cfg(feature = "server")]
 pub mod circuit_breaker;
 /// Database wiring: the lean `DatabaseConfig` serde struct is always
