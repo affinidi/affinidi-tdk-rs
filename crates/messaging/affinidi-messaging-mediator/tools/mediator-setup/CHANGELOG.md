@@ -24,6 +24,12 @@
   or written — including rejecting an `aws_parameter_store://` target in a build
   without the `publish-aws` feature, which previously failed only after
   provisioning had already run.
+- Documented that **only the `aws_parameter_store://` target round-trips**. The
+  mediator resolves `mediator_did` / `admin_did` from `did://<did>` or
+  `aws_parameter_store://` only, so a `file://` target hands the DID to an
+  out-of-band consumer (a relying party, a CI step, an operator) rather than to
+  `mediator.toml`, where the DID itself is pasted as `did://<did>`. Unchanged
+  behaviour — previously unstated.
 
 ## 2nd July 2026
 

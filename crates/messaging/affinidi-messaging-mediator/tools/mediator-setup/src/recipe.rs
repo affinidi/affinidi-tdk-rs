@@ -335,9 +335,14 @@ pub struct OutputSection {
     pub api_prefix: String,
     /// Optional target to publish the minted public DID string to after
     /// provisioning (`aws_parameter_store://<name>[?region=<region>]` or
-    /// `file://<path>`). `None` (default) = don't publish. The
-    /// `aws_parameter_store://` form is exactly what `mediator.toml`'s
-    /// `mediator_did` accepts, so the published target can be pasted across.
+    /// `file://<path>`). `None` (default) = don't publish.
+    ///
+    /// Only the `aws_parameter_store://` form round-trips: it is exactly what
+    /// `mediator.toml`'s `mediator_did` accepts, so the published target can be
+    /// pasted across verbatim. The runtime cannot read `mediator_did` from a
+    /// file, so a `file://` target serves out-of-band consumers (a relying
+    /// party, a CI step, an operator) — to use its contents in `mediator.toml`,
+    /// paste the DID itself as `did://<did>`.
     #[serde(default)]
     pub did_target: Option<String>,
 }

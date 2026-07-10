@@ -512,7 +512,33 @@ pub(crate) async fn load_forwarding_protection_blocks(
 
 #[cfg(test)]
 mod tests {
-    use super::{join_api_path, normalize_api_prefix};
+    use super::{join_api_path, normalize_api_prefix, read_did_config};
+
+    /// `mediator-setup` documents that a `file://` DID target does not
+    /// round-trip into `mediator_did`. Pin the runtime half of that claim so
+    /// the docs and the code cannot drift apart.
+    #[tokio::test]
+    async fn read_did_config_rejects_a_file_target() {
+        let err = read_did_config("file:///run/mediator/did.txt", &None, "mediator_did")
+            .await
+            .expect_err("file:// is not a DID source");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("did://") && msg.contains("aws_parameter_store://"),
+            "error should name the two accepted schemes, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_did_config_trims_surrounding_whitespace() {
+        // A DID is a single token. The trim exists for parameter-store values
+        // set by hand (a trailing newline is easy to leave behind); assert it
+        // through the one scheme reachable without an AWS client.
+        let did = read_did_config("did://  did:peer:2.Vz6Mk\n", &None, "mediator_did")
+            .await
+            .expect("literal DID resolves");
+        assert_eq!(did, "did:peer:2.Vz6Mk");
+    }
 
     #[test]
     fn normalize_empty_forms_collapse_to_root() {

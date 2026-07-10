@@ -146,15 +146,24 @@ listen_address = "0.0.0.0:7037"
 
 # Optional: publish the minted public DID string after provisioning.
 # Omit (the default) to publish nowhere -- interactive/local setups.
-# Either a local file, or an SSM parameter:
+# Either an SSM parameter, or a local file:
 #
-#   did_target = "file:///run/mediator/did.txt"
 #   did_target = "aws_parameter_store:///mediator/did?region=eu-west-1"
+#   did_target = "file:///run/mediator/did.txt"
 #
 # A hierarchical SSM name keeps its leading slash (hence three slashes);
 # AWS rejects a hierarchy without one. Without ?region= the ambient AWS
-# region is used. The aws_parameter_store:// value written here is the
-# same string mediator.toml accepts for `mediator_did`.
+# region is used (AWS_REGION, profile, then IMDS).
+#
+# Only the aws_parameter_store:// form round-trips: it is exactly the
+# string mediator.toml accepts for `mediator_did`, so it can be pasted
+# across verbatim.
+#
+# A file:// target does NOT round-trip. The mediator cannot read
+# `mediator_did` from a file -- it accepts only did://<did> and
+# aws_parameter_store://. Use a file target to hand the DID to something
+# else (a relying party, a CI step, an operator); to put it in
+# mediator.toml, paste the file's contents as `mediator_did = "did://..."`.
 
 
 # ── Install ─────────────────────────────────────────────────────────────────

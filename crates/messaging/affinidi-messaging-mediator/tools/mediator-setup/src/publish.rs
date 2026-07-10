@@ -7,9 +7,11 @@
 //! Opt-in: the recipe's `[output].did_target` defaults to `None`, so
 //! interactive/local setups are unaffected. Supported targets:
 //!
-//! - `file://<path>` — write the DID string to a local file.
 //! - `aws_parameter_store://<name>[?region=<region>]` — write it to an SSM
 //!   parameter (gated by the `publish-aws` build feature).
+//! - `file://<path>` — write the DID string to a local file.
+//!
+//! # Only the parameter-store target round-trips
 //!
 //! The parameter-store grammar is `mediator-common`'s
 //! [`affinidi_messaging_mediator_common::parameter_store`], the same one the
@@ -21,6 +23,18 @@
 //! parameter rather than a leading path segment, which would be ambiguous
 //! against that slash. Without `?region=`, the ambient AWS chain is used —
 //! never the secret-storage backend's region.
+//!
+//! **A `file://` target does not round-trip.** The runtime resolves
+//! `mediator_did` / `admin_did` from `did://<did>` or `aws_parameter_store://`
+//! only — `read_did_config` rejects `file://`, because a config field pointing
+//! at a file the mediator must read at boot is a deployment coupling the
+//! unified-secrets migration deliberately removed. So a file target is for
+//! out-of-band consumers: a relying party, a CI step, an operator reading the
+//! value. To use it in `mediator.toml`, paste the file's contents in as
+//! `mediator_did = "did://<did>"`, not the `file://` URL.
+//!
+//! (`did_web_self_hosted` is unrelated and *does* accept `file://` — it names
+//! a DID *document*, not a DID string, and is read by `read_document`.)
 
 use affinidi_messaging_mediator_common::parameter_store::{
     PARAMETER_STORE_SCHEME, ParameterStoreTarget, parse_parameter_store_target,
