@@ -2,6 +2,24 @@
 
 ## Changelog history
 
+## 10th July 2026
+
+### 0.15.27 — shared `aws_parameter_store://` target parser
+
+- New always-built `parameter_store` module: `parse_parameter_store_target`,
+  `ParameterStoreTarget`, `ParameterStoreTargetError`, `is_parameter_store_target`
+  and `PARAMETER_STORE_SCHEME`. Pure (no AWS SDK), shared by the mediator runtime
+  (which reads `mediator_did` / `admin_did` / `did_web_self_hosted` from a
+  parameter) and the `mediator-setup` wizard (which publishes the minted DID to
+  one), so the string one writes is the string the other reads.
+- The parameter name is everything between `://` and `?`, passed to AWS verbatim.
+  AWS requires a hierarchical name to carry a leading `/` (`/mediator/did`, not
+  `mediator/did`), so the name is never split on `/`, and an unqualified
+  hierarchy is rejected up front with a message naming the correct form.
+- Region is an optional `?region=` query parameter — the idiom `vault://` already
+  uses for its options. Absent means "use the ambient AWS chain". Encoding it as
+  a leading path segment would be ambiguous against the name's own leading slash.
+
 ## 9th July 2026
 
 ### 0.15.26 — add read-only secret-backend probe
