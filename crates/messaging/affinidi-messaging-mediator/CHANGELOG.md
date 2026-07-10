@@ -2,6 +2,24 @@
 
 ## Changelog history
 
+## 10th July 2026
+
+### 0.16.44 — `?region=` on `aws_parameter_store://` targets
+
+- `mediator_did`, `admin_did` and `did_web_self_hosted` now accept an optional
+  `?region=<region>` on an `aws_parameter_store://` value, so a parameter can
+  live in a region other than the one the process resolved by default. Absent,
+  the ambient AWS chain is used exactly as before — existing configs are
+  unaffected.
+- The scheme is now parsed by `mediator-common`'s shared `parameter_store`
+  module, the same one the `mediator-setup` wizard uses to publish, so a
+  published target can be pasted into `mediator.toml` verbatim. The parameter
+  name is everything between `://` and `?` and keeps its leading slash, which
+  AWS requires for a hierarchy (`aws_parameter_store:///mediator/did`).
+- `read_did_config` now trims the fetched value. A parameter set by hand via
+  the console or CLI often carries a trailing newline, which previously reached
+  the DID resolver and failed far from its cause.
+
 ## 9th July 2026
 
 ### 0.16.43 — use the read-only secret-backend probe at boot and on /readyz
