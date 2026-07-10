@@ -6,17 +6,15 @@ name: publish-images
 #                          AWS_ROLE_ARN variable is set (GitHub -> AWS OIDC).
 # Multi-arch is built once on native runners and merged into one manifest list.
 # The production image must build and boot-probe (verify-image) before publishing.
-# On pull_request the workflow builds + verifies the image but does NOT publish.
+# Branch pushes build + verify the image only; publishing happens on release
+# tags and manual dispatch.
 
 on:
   push:
+    branches:
+      - ws-a-image-publish
     tags:
       - "affinidi-messaging-mediator-v*"
-  pull_request:
-    paths:
-      - "docker/**"
-      - ".github/workflows/publish-images.yaml"
-      - "crates/messaging/affinidi-messaging-mediator/**"
   workflow_dispatch:
     inputs:
       version:
@@ -88,7 +86,7 @@ jobs:
   build:
     name: build ${{ matrix.platform }}
     needs: [version, verify-image]
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -146,7 +144,7 @@ jobs:
   publish-ghcr:
     name: publish GHCR manifest
     needs: [version, build]
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -198,7 +196,7 @@ jobs:
   mirror-ecr-public:
     name: mirror to ECR Public
     needs: [version, publish-ghcr]
-    if: ${{ github.event_name != 'pull_request' && vars.AWS_ROLE_ARN != '' }}
+    if: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') && vars.AWS_ROLE_ARN != '' }}
     runs-on: ubuntu-latest
     environment: release
     permissions:
