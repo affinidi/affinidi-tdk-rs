@@ -44,7 +44,7 @@ affinidi-did-common = "0.3"
 # Embedded mediator fixture + DID generation for the soft-restart websocket
 # regression test. Sister-crate path deps carry an explicit `version =` so the
 # package stays publishable while using the in-tree path for dev-builds.
-affinidi-messaging-test-mediator = { version = "0.2", path = "../affinidi-messaging-test-mediator" }
+affinidi-messaging-test-mediator = { version = "0.2", path = "../affinidi-messaging-test-mediator", features = ["tsp"] }
 affinidi-tdk = { version = "0.8", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
 
 
