@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.16.44"
+version = "0.16.45"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -97,7 +97,7 @@ affinidi-secrets-resolver = "0.5"
 ## Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"
 ## VTA SDK for centralized DID/key management via Verifiable Trust Agent
-vta-sdk = { version = "0.18", features = ["integration"] }
+vta-sdk = { version = "0.18.21", features = ["integration"] }
 
 # ── Web Framework ────────────────────────────────────────────────────────
 axum = { version = "0.8", features = ["ws"] }
