@@ -1301,6 +1301,24 @@ impl TspOps<'_> {
                 profile.inner.alias
             )));
         };
+
+        // Footgun guard: the mediator permits ONE websocket per DID. If this
+        // profile already has a live-stream pickup websocket, opening a second
+        // (raw-TSP) socket makes the mediator evict a duplicate channel, and the
+        // two sockets flap against each other. A node that needs both DIDComm and
+        // TSP should multiplex on the single pickup socket via
+        // `MessagePickup::live_stream_next_frame` (or the
+        // `affinidi-messaging-didcomm-service` crate), not open this second socket.
+        if mediator.ws_channel_tx.read().await.is_some() {
+            tracing::warn!(
+                "Profile ({}) already has a live-stream websocket; opening a raw-TSP \
+                 connect_websocket on the same DID will be evicted by the mediator \
+                 (one websocket per DID). For combined DIDComm+TSP receive, multiplex \
+                 via message_pickup().live_stream_next_frame instead.",
+                profile.inner.alias
+            );
+        }
+
         let Some(address) = &mediator.websocket_endpoint else {
             return Err(ATMError::ConfigError(format!(
                 "Profile ({}) is missing a valid websocket endpoint!",

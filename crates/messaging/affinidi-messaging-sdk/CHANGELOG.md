@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.18.50] - 2026-07-12
+
+- Footgun guard: `TspOps::connect_websocket` now warns when the profile already
+  has a live-stream pickup websocket. The mediator permits one websocket per DID,
+  so opening a second (raw-TSP) socket on the same DID makes it evict a duplicate
+  channel and the two flap. Combined DIDComm+TSP receivers should multiplex on the
+  single pickup socket via `MessagePickup::live_stream_next_frame` (or the
+  `affinidi-messaging-didcomm-service` crate) instead.
+
 ## [0.18.49] - 2026-07-04
 
 - Route the DIDComm pack and unpack paths through the shared
