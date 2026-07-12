@@ -2,6 +2,26 @@
 
 ## Changelog history
 
+## 12th July 2026
+
+### 0.16.45 — surface a VTA 403 on refresh instead of masking it as "unreachable"
+
+- The hourly VTA secrets refresh re-authenticates from scratch every cycle, so a
+  recurring 403 is the VTA *rejecting* the mediator's freshly-authenticated
+  request (e.g. an expired ACL entry for its operating DID), not a stale client
+  token. Previously `integration::startup` collapsed a 403, a timeout, and a
+  network outage all into `SecretSource::Cache`, and the refresh task logged
+  every one at `DEBUG` as "VTA unreachable" — hiding a standing authorization
+  problem an operator never sees.
+- Uses the new `integration::startup_with_reason` (vta-sdk 0.18.21): on a cache
+  fallback, `FallbackReason::AuthDenied` now logs a `WARN` with actionable text
+  (check the ACL / access policy for the mediator's DID) plus a distinct
+  `vta_refresh_total{result="forbidden"}` metric. Unreachable/timeout keep the
+  `DEBUG` path — they self-heal on the next tick.
+- vta-sdk 0.18.21 also adds a REST reactive re-auth + retry-once on 401/403, so a
+  transiently-rejected token self-heals instead of falling back to cache.
+- Requires `vta-sdk >= 0.18.21`.
+
 ## 10th July 2026
 
 ### 0.16.44 — `?region=` on `aws_parameter_store://` targets

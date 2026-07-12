@@ -35,7 +35,7 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
-use vta_sdk::integration::{self, SecretSource, VtaServiceConfig};
+use vta_sdk::integration::{self, FallbackReason, SecretSource, VtaServiceConfig};
 
 /// Default refresh interval when `cache_ttl == 0` (no-expiry policy).
 /// Picks a sensible cadence so the cache still tracks the latest VTA
@@ -113,12 +113,12 @@ impl VtaRefresher {
             }
 
             let started = Instant::now();
-            let outcome = integration::startup(&self.service_config, &cache).await;
+            let outcome = integration::startup_with_reason(&self.service_config, &cache).await;
             metrics::histogram!(names::VTA_REFRESH_DURATION_SECONDS)
                 .record(started.elapsed().as_secs_f64());
 
             match outcome {
-                Ok(result) => match result.source {
+                Ok((result, fallback)) => match result.source {
                     SecretSource::Vta => {
                         metrics::counter!(names::VTA_REFRESH_TOTAL, "result" => "vta").increment(1);
                         if let Ok(since_epoch) = SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -136,16 +136,39 @@ impl VtaRefresher {
                         }
                     }
                     SecretSource::Cache => {
-                        metrics::counter!(names::VTA_REFRESH_TOTAL, "result" => "cache")
-                            .increment(1);
-                        // Refresh fell back to cache — VTA is unreachable
-                        // right now. The cache write didn't actually
-                        // re-fetch fresh material; the runtime secrets
-                        // are unchanged. Log at debug — operators only
-                        // care if this persists, in which case the
-                        // existing degraded-mode warning at boot
-                        // suffices.
-                        debug!("VTA refresh: VTA unreachable, runtime secrets unchanged");
+                        // Refresh fell back to cache. The cache write didn't
+                        // re-fetch fresh material; runtime secrets are
+                        // unchanged either way. But *why* it fell back
+                        // decides the severity: an authorization denial is
+                        // an operator problem that won't self-heal, whereas
+                        // transient unreachability clears on the next tick.
+                        match fallback {
+                            Some(FallbackReason::AuthDenied) => {
+                                metrics::counter!(names::VTA_REFRESH_TOTAL, "result" => "forbidden")
+                                    .increment(1);
+                                // Not "unreachable" — the VTA answered and
+                                // *rejected* us. A fresh re-auth happens every
+                                // cycle, so this is a standing authorization
+                                // problem (e.g. an expired ACL entry for the
+                                // mediator's operating DID), not a stale token.
+                                warn!(
+                                    context = %self.service_config.context.id,
+                                    "VTA refused the mediator's credential (401/403); \
+                                     running on cached secrets. Runtime keys are unchanged, \
+                                     but this will keep failing until the mediator's \
+                                     authorization is restored on the VTA (check the ACL / \
+                                     access policy for its operating DID)."
+                                );
+                            }
+                            _ => {
+                                metrics::counter!(names::VTA_REFRESH_TOTAL, "result" => "cache")
+                                    .increment(1);
+                                // Unreachable / timeout — log at debug; operators
+                                // only care if it persists, in which case the
+                                // boot-time degraded-mode warning suffices.
+                                debug!("VTA refresh: VTA unreachable, runtime secrets unchanged");
+                            }
+                        }
                     }
                 },
                 Err(err) => {
