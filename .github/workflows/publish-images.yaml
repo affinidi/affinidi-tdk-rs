@@ -6,15 +6,20 @@ name: publish-images
 #                          AWS_ROLE_ARN variable is set (GitHub -> AWS OIDC).
 # Multi-arch is built once on native runners and merged into one manifest list.
 # The production image must build and boot-probe (verify-image) before publishing.
-# Any branch push builds + verifies the image only; publishing happens on release
-# tags and manual dispatch.
+#
+# The image is a full `cargo build --release`, so it is NOT built on every push —
+# it runs only when it can pay for itself:
+#   * release tag           -> build, verify, publish
+#   * workflow_dispatch     -> build, verify, publish (version input optional)
+#   * PR labelled `ci:image`-> build + verify only (opt-in; no publish)
+# Add the `ci:image` label to any PR that touches docker/ or this workflow.
 
 on:
   push:
-    branches:
-      - "**"
     tags:
       - "affinidi-messaging-mediator-v*"
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
       version:
@@ -32,8 +37,15 @@ env:
   ECR_PUBLIC_REGION: us-east-1
 
 jobs:
+  # Opt-in gate. Every other job hangs off this one, so an unlabelled PR skips
+  # the workflow entirely (a skipped `needs` skips its dependents). Tags and
+  # manual dispatch always run. The label name is inlined rather than read from
+  # `env` because the `env` context is not available in a job-level `if`.
   version:
     name: resolve version
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:image')
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
@@ -233,6 +245,7 @@ jobs:
           SRC: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
           DST: ${{ env.ECR_PUBLIC_REGISTRY }}/${{ env.IMAGE_NAME }}
           VERSION: ${{ needs.version.outputs.version }}
+          IS_LATEST: ${{ needs.version.outputs.is_latest }}
         run: bash docker/ci/mirror-ecr.sh
 
       - name: Attest build provenance (ECR Public, best-effort)
