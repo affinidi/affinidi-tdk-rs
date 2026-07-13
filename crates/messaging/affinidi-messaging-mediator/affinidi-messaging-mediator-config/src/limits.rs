@@ -37,10 +37,25 @@ pub struct LimitsConfigRaw {
     pub did_rate_limit_per_second: String,
     #[serde(default = "default_did_rate_limit_burst")]
     pub did_rate_limit_burst: String,
+    #[serde(default = "default_ws_send_buffer")]
+    pub ws_send_buffer: String,
+    #[serde(default = "default_pubsub_buffer")]
+    pub pubsub_buffer: String,
 }
 
 fn default_rate_limit_per_ip() -> String {
     "100".to_string()
+}
+
+/// 32 MiB — aggregate ceiling across every live WebSocket send queue.
+fn default_ws_send_buffer() -> String {
+    "33554432".to_string()
+}
+
+/// 16 MiB — the live-delivery pub/sub ring. Divided by `message_size` to get
+/// the ring's slot count, so this is a true byte ceiling.
+fn default_pubsub_buffer() -> String {
+    "16777216".to_string()
 }
 fn default_rate_limit_burst() -> String {
     "50".to_string()

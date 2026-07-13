@@ -45,6 +45,53 @@ Per-crate version history is summarised here; for the full code history see
   in-memory single-use TTL helper, and documents that **replay prevention is a
   MUST** (matching a nonce value is not sufficient).
 
+### Changed
+
+- **Mediator memory: byte budgets, storage tuning, and jemalloc — defaults now
+  hold a node under ~256 MB RSS.** **`affinidi-messaging-mediator` 0.17.0**,
+  **`affinidi-messaging-mediator-config` 0.2.0**,
+  **`affinidi-messaging-mediator-common` 0.15.29**,
+  **`affinidi-messaging-test-mediator` 0.2.39**. New operator reference:
+  [docs/memory-tuning.md](crates/messaging/affinidi-messaging-mediator/docs/memory-tuning.md).
+
+  Measured on the Fjall backend: **~23 MB idle**, and **~44 MB after writing
+  500 MB of message bodies** (previously ~546 MB for the same load — resident
+  memory tracked the data volume rather than any budget).
+
+  - *Buffers are bounded by bytes, not message counts.* The WebSocket send queues
+    were `5 slots x 10 MiB x 10 000 connections`, and the live-delivery pub/sub
+    ring was 1024 slots of up to 10 MiB — neither number meant anything in bytes.
+    They are now sized by `limits.ws_send_buffer` (32 MiB, a single pool shared by
+    *all* connections) and `limits.pubsub_buffer` (16 MiB, divided by
+    `message_size` to get the ring's slot count).
+  - *A slow WebSocket client no longer stalls live delivery for everyone.*
+    Dispatch awaited each client's queue from the single loop that serves every
+    DID, so one stalled socket head-of-line blocked the rest. Sends are now
+    non-blocking; a client that cannot keep up has its *push* dropped, never the
+    message — the message is already durable in its inbox and arrives on the next
+    poll or on reconnect. New metric `ws_live_delivery_dropped_total`.
+  - *Fjall is tuned via `[storage.fjall]`* — `block_cache` (16 MiB),
+    `write_buffer` (32 MiB across all keyspaces) and `max_journal` (128 MiB).
+    Fjall's stock defaults allow 64 MiB of memtable *per keyspace*, and the
+    mediator opens 14. Note `max_journal` is the load-bearing bound: Fjall's own
+    global write-buffer cap is a dead field in 3.1.x, and `write_buffer` only
+    applies when a data directory is first created. **Redis is unaffected** — its
+    memory lives in the Redis server and is governed by `maxmemory` in
+    `redis.conf`; the guide covers both.
+  - *The binary uses jemalloc* (`jemalloc` feature, on by default). With the
+    system allocator the storage backend's write-buffer churn is never returned to
+    the OS, so RSS ratchets to its high-water mark and reads like a leak.
+
+- **BREAKING: `limits.message_size` is now enforced at ingress.**
+  **`affinidi-messaging-mediator` 0.17.0**. It was documented, parsed and
+  env-overridable, but never read at runtime — the real ceiling was
+  `http_size`/`ws_size` (10 MiB), not the advertised 1 MiB. Messages over
+  `message_size` are now rejected with `message.size.exceeded`
+  (413 Payload Too Large). **Upgrade note:** if your clients send messages larger
+  than 1 MiB they will start failing; raise `limits.message_size` to restore the
+  previous behaviour. Enforcing it is what gives every in-memory budget above a
+  real per-item ceiling.
+
 ### Fixed
 
 - **Two unbounded-growth paths in the mediator's in-memory state.**

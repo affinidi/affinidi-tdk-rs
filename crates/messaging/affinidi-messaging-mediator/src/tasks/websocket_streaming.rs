@@ -22,8 +22,9 @@
 */
 use crate::common::metrics::names::{
     WEBSOCKET_DUPLICATE_CHURN_TOTAL, WEBSOCKET_DUPLICATE_REPLACEMENTS_TOTAL,
-    WEBSOCKET_REDELIVERED_MESSAGES_TOTAL,
+    WEBSOCKET_REDELIVERED_MESSAGES_TOTAL, WS_LIVE_DELIVERY_DROPPED,
 };
+use crate::common::ws_budget::{SendPermit, WsSendBudget};
 use crate::tasks::supervisor::TaskSupervisor;
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
@@ -56,10 +57,18 @@ const REDELIVERY_PAGE: usize = 50;
 /// remainder is left for the client to pick up via normal message-pickup.
 const REDELIVERY_MAX: usize = 1000;
 
+/// Slots in a single connection's send queue.
+///
+/// This is the per-connection *depth* cap; the aggregate *byte* cap is the
+/// shared [`WsSendBudget`]. Depth still matters: without it one client could
+/// reserve the entire global pool for itself. Together they bound a connection
+/// at `WS_CHANNEL_SLOTS × message_size` and all connections at the pool size.
+pub const WS_CHANNEL_SLOTS: usize = 8;
+
 /// One registered streaming client for a DID.
 struct ClientEntry {
     /// Channel to the per-connection websocket handler.
-    tx: mpsc::Sender<WebSocketCommands>,
+    tx: mpsc::Sender<QueuedCommand>,
     /// Session id of the owning websocket (used for churn/diagnostic logs).
     session_id: String,
     /// Whether live delivery is currently active for this client.
@@ -75,7 +84,7 @@ struct ClientEntry {
 /// Deregister: Remove the hash map entry for the DID hash.
 pub enum StreamingUpdateState {
     Register {
-        channel: mpsc::Sender<WebSocketCommands>,
+        channel: mpsc::Sender<QueuedCommand>,
         session_id: String,
         did: String,
     },
@@ -90,6 +99,68 @@ pub enum WebSocketCommands {
     Close,           // Close the websocket connection
 }
 
+/// A command sitting in a connection's send queue, together with the byte
+/// reservation it holds against the global [`WsSendBudget`].
+///
+/// The permit is owned by the queue item on purpose: it is released exactly when
+/// the item is dropped, which is when the connection's writer has taken it off
+/// the queue. There is no separate "release" call to forget.
+pub struct QueuedCommand {
+    pub cmd: WebSocketCommands,
+    /// `None` for control commands (`Close`), which carry no payload and must
+    /// never be refused for want of buffer bytes.
+    _permit: Option<SendPermit>,
+}
+
+impl QueuedCommand {
+    /// A control command. Always admissible — it holds no bytes.
+    fn control(cmd: WebSocketCommands) -> Self {
+        Self { cmd, _permit: None }
+    }
+}
+
+/// Queue a payload to one client without blocking.
+///
+/// Returns `false` if the message was dropped — either the global byte pool is
+/// exhausted or this connection's queue is full. Both mean the client is not
+/// keeping up; the message is already durable in its inbox, so it will arrive on
+/// the next poll or on reconnect redelivery.
+///
+/// Non-blocking is the whole point: this is called from the single streaming
+/// loop that serves every DID, so awaiting one slow client here would stall live
+/// delivery for all of them.
+fn try_queue_message(
+    tx: &mpsc::Sender<QueuedCommand>,
+    budget: &WsSendBudget,
+    did_hash: &str,
+    message: String,
+) -> bool {
+    let Some(permit) = budget.try_reserve(message.len()) else {
+        warn!(
+            "WebSocket send buffer exhausted ({} bytes total); dropping live notification for {}. \
+             Client will pick the message up from its inbox.",
+            budget.total_bytes(),
+            did_hash
+        );
+        metrics::counter!(WS_LIVE_DELIVERY_DROPPED).increment(1);
+        return false;
+    };
+
+    let queued = QueuedCommand {
+        cmd: WebSocketCommands::Message(message),
+        _permit: Some(permit),
+    };
+
+    if tx.try_send(queued).is_err() {
+        // Channel full (slow consumer) or closed (socket gone). Either way the
+        // push is dropped; a closed channel is reaped by the caller.
+        debug!("Send queue unavailable for {did_hash}; dropping live notification");
+        metrics::counter!(WS_LIVE_DELIVERY_DROPPED).increment(1);
+        return false;
+    }
+    true
+}
+
 /// Used to update the streaming state.
 /// did_hash: The DID hash to update the state for.
 /// state: The state to update to.
@@ -102,6 +173,8 @@ pub struct StreamingUpdate {
 pub struct StreamingTask {
     pub uuid: String,
     pub channel: mpsc::Sender<StreamingUpdate>,
+    /// Global byte pool shared by every connection's send queue.
+    pub send_budget: WsSendBudget,
 }
 
 impl StreamingTask {
@@ -124,12 +197,16 @@ impl StreamingTask {
         supervisor: &TaskSupervisor,
         database: Arc<dyn MediatorStore>,
         mediator_uuid: &str,
+        send_budget: WsSendBudget,
     ) -> Self {
-        // Create the inter-task channel - allows up to 10 queued messages
+        // Control-plane channel (register/start/stop/deregister). Carries no
+        // message bodies — a handful of small structs — so a slot count is the
+        // right bound here and 10 is plenty.
         let (tx, rx) = mpsc::channel(10);
         let task = StreamingTask {
             channel: tx,
             uuid: mediator_uuid.to_string(),
+            send_budget,
         };
         let rx = Arc::new(Mutex::new(rx));
 
@@ -262,65 +339,69 @@ impl StreamingTask {
 
     /// Forward one streaming notification to the WebSocket sender for
     /// its target DID, dropping clients whose channels have closed.
+    ///
+    /// Never awaits a client's send queue: this runs in the single loop that
+    /// serves every DID, so blocking on one slow socket would stall live
+    /// delivery for all of them. A client that cannot keep up has its push
+    /// dropped (see [`try_queue_message`]).
     async fn dispatch_payload(
         &self,
         database: &dyn MediatorStore,
         clients: &mut HashMap<String, ClientEntry>,
         payload: PubSubRecord,
     ) {
-        match clients.get(&payload.did_hash) {
+        let PubSubRecord {
+            did_hash,
+            message,
+            force_delivery,
+        } = payload;
+        match clients.get(&did_hash) {
             Some(entry) => {
-                if payload.force_delivery || entry.active {
-                    if let Err(err) = entry
-                        .tx
-                        .send(WebSocketCommands::Message(payload.message.clone()))
-                        .await
-                    {
-                        warn!(
-                            "Dead WebSocket channel for ({}), cleaning up: {}",
-                            payload.did_hash, err
-                        );
-                        clients.remove(&payload.did_hash);
+                if force_delivery || entry.active {
+                    // A closed channel means the socket is gone and the entry is
+                    // stale; a *full* one means a slow client, which is not a
+                    // reason to tear the connection down. Distinguish them, or a
+                    // brief burst would evict a perfectly healthy client.
+                    if entry.tx.is_closed() {
+                        warn!("Dead WebSocket channel for ({did_hash}), cleaning up");
+                        clients.remove(&did_hash);
                         if let Err(e) = database
                             .streaming_set_state(
-                                &payload.did_hash,
+                                &did_hash,
                                 &self.uuid,
                                 StreamingClientState::Deregistered,
                             )
                             .await
                         {
-                            error!(
-                                "Error deregistering dead client ({}): {}",
-                                payload.did_hash, e
-                            );
+                            error!("Error deregistering dead client ({did_hash}): {e}");
                         }
-                    } else {
-                        debug!("Sent message to client ({})", payload.did_hash);
+                    } else if try_queue_message(
+                        &entry.tx,
+                        &self.send_budget,
+                        &did_hash,
+                        // Moved, not cloned: the body already exists in the
+                        // broadcast ring slot, and `payload` is owned here.
+                        message,
+                    ) {
+                        debug!("Sent message to client ({did_hash})");
                     }
                 } else {
-                    debug!(
-                        "pub/sub msg received for did_hash({}) but it is not active",
-                        payload.did_hash
-                    );
+                    debug!("pub/sub msg received for did_hash({did_hash}) but it is not active");
                     if let Err(err) = database
                         .streaming_set_state(
-                            &payload.did_hash,
+                            &did_hash,
                             &self.uuid,
                             StreamingClientState::Registered,
                         )
                         .await
                     {
-                        error!(
-                            "Error stopping streaming for client ({}): {}",
-                            payload.did_hash, err
-                        );
+                        error!("Error stopping streaming for client ({did_hash}): {err}");
                     }
                 }
             }
             None => {
                 warn!(
-                    "pub/sub msg received for did_hash({}) but it doesn't exist in clients HashMap",
-                    payload.did_hash
+                    "pub/sub msg received for did_hash({did_hash}) but it doesn't exist in clients HashMap"
                 );
             }
         }
@@ -361,7 +442,9 @@ impl StreamingTask {
                  the upstream session is missing its authenticated DID. \
                  Closing the channel."
             );
-            let _ = client_tx.send(WebSocketCommands::Close).await;
+            let _ = client_tx
+                .send(QueuedCommand::control(WebSocketCommands::Close))
+                .await;
             return;
         }
 
@@ -406,7 +489,10 @@ impl StreamingTask {
                 metrics::counter!(WEBSOCKET_DUPLICATE_CHURN_TOTAL).increment(1);
             }
             // Channel already exists, close the old one.
-            let _ = old.tx.send(WebSocketCommands::Close).await;
+            let _ = old
+                .tx
+                .send(QueuedCommand::control(WebSocketCommands::Close))
+                .await;
             true
         } else {
             false
@@ -458,6 +544,7 @@ impl StreamingTask {
                 spawn_inbox_redelivery(
                     Arc::clone(database),
                     client_tx.clone(),
+                    self.send_budget.clone(),
                     value.did_hash.clone(),
                     new_session_id.to_string(),
                     Arc::clone(replay_in_progress),
@@ -484,7 +571,8 @@ impl StreamingTask {
 /// message id.
 fn spawn_inbox_redelivery(
     database: Arc<dyn MediatorStore>,
-    client_tx: mpsc::Sender<WebSocketCommands>,
+    client_tx: mpsc::Sender<QueuedCommand>,
+    budget: WsSendBudget,
     did_hash: String,
     session_id: String,
     replay_in_progress: Arc<DashSet<String>>,
@@ -525,16 +613,15 @@ fn spawn_inbox_redelivery(
                 }
                 let Some(msg) = element.msg else { continue };
 
-                if client_tx
-                    .send(WebSocketCommands::Message(msg))
-                    .await
-                    .is_err()
-                {
-                    // The surviving socket is already gone; nothing to do — the
-                    // messages remain in the inbox for the next connection.
+                // Fetched with `DoNotDelete`, so anything not queued here stays
+                // in the inbox. Stopping the drain early is therefore lossless —
+                // the client picks the remainder up via normal message-pickup,
+                // exactly as it does when REDELIVERY_MAX is hit.
+                if !try_queue_message(&client_tx, &budget, &did_hash, msg) {
                     debug!(
                         did_hash = %did_hash,
-                        "Surviving socket closed mid-redelivery; stopping drain"
+                        "Send queue or byte budget unavailable mid-redelivery; \
+                         stopping drain, remainder left for message-pickup"
                     );
                     break 'drain;
                 }
@@ -582,6 +669,9 @@ mod tests {
         StreamingTask {
             uuid: "test-mediator".to_string(),
             channel: tx,
+            // Generous budget: these tests exercise registration/redelivery, not
+            // buffer exhaustion (which `ws_budget` covers directly).
+            send_budget: WsSendBudget::new(16 * 1024 * 1024),
         }
     }
 
@@ -637,7 +727,10 @@ mod tests {
             .await
             .expect("A receives a command")
         {
-            Some(WebSocketCommands::Close) => {}
+            Some(QueuedCommand {
+                cmd: WebSocketCommands::Close,
+                ..
+            }) => {}
             other => panic!("expected Close on old socket, got {:?}", other.is_some()),
         }
 
@@ -646,7 +739,10 @@ mod tests {
             .await
             .expect("B receives the redelivered message")
         {
-            Some(WebSocketCommands::Message(msg)) => assert_eq!(msg, stored),
+            Some(QueuedCommand {
+                cmd: WebSocketCommands::Message(msg),
+                ..
+            }) => assert_eq!(msg, stored),
             _ => panic!("expected redelivered Message on the surviving socket"),
         }
 

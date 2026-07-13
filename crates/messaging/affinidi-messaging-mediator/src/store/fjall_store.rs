@@ -79,7 +79,7 @@ use affinidi_messaging_sdk::{
     },
 };
 use async_trait::async_trait;
-use fjall::{Config as FjallConfig, Database, Keyspace, KeyspaceCreateOptions};
+use fjall::{Database, Keyspace, KeyspaceCreateOptions};
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use std::{
@@ -93,7 +93,84 @@ use std::{
 };
 use tokio::sync::{Mutex, Notify, broadcast};
 
-const PUBSUB_BROADCAST_CAPACITY: usize = 1024;
+/// Fallback ring size when no tuning is supplied (tests, the embedded builder).
+/// Production derives this from `limits.pubsub_buffer / limits.message_size`.
+const PUBSUB_BROADCAST_CAPACITY: usize = 32;
+
+/// Memory tuning for the embedded Fjall database.
+///
+/// Fjall's stock defaults are sized for a general-purpose embedded store, not
+/// for a service that opens 14 keyspaces: 64 MiB of memtable *per keyspace*
+/// would permit ~896 MiB of write buffer on its own. These values come from
+/// `[storage.fjall]`.
+#[derive(Clone, Copy, Debug)]
+pub struct FjallTuning {
+    /// Block cache (read-side), in bytes.
+    pub block_cache: u64,
+    /// Total memtable budget across all keyspaces, in bytes. Split by
+    /// [`KEYSPACE_WRITE_WEIGHTS`].
+    pub write_buffer: u64,
+    /// Journal ceiling, in bytes. The only *effective* global bound on unflushed
+    /// memory — see the field docs on the config type.
+    pub max_journal: u64,
+}
+
+impl Default for FjallTuning {
+    fn default() -> Self {
+        Self {
+            block_cache: 16 * 1024 * 1024,
+            write_buffer: 32 * 1024 * 1024,
+            max_journal: 128 * 1024 * 1024,
+        }
+    }
+}
+
+/// Relative share of the write-buffer budget each keyspace gets.
+///
+/// Every open keyspace carries its own memtable, and Fjall flushes a keyspace
+/// when *its* memtable crosses *its* threshold — there is no global trigger. So
+/// the budget has to be divided up front, and dividing it evenly would be wrong:
+/// `messages` stores whole message bodies inline while `admins` stores a byte
+/// per row. Weighting by how much each keyspace actually writes keeps the hot
+/// ones from flushing constantly while the cold ones sit on memory they will
+/// never use.
+const KEYSPACE_WRITE_WEIGHTS: &[(&str, u32)] = &[
+    // Whole message bodies, inline. By far the heaviest writer.
+    (PARTITION_MESSAGES, 40),
+    // One small row per message, but written on every message.
+    (PARTITION_INBOX, 10),
+    (PARTITION_OUTBOX, 10),
+    (PARTITION_EXPIRY, 5),
+    // Whole message bodies again, but only for messages being forwarded.
+    (PARTITION_FORWARD_QUEUE, 20),
+    (PARTITION_FORWARD_PENDING, 3),
+    // Per-session and per-account rows: steady but small.
+    (PARTITION_SESSIONS, 4),
+    (PARTITION_ACCOUNTS, 2),
+    (PARTITION_STREAMING_CLIENTS, 2),
+    (PARTITION_AUDIT_LOG, 2),
+    // Cold: written on admin action only.
+    (PARTITION_ACCESS_LISTS, 1),
+    (PARTITION_ADMINS, 1),
+    (PARTITION_OOB_INVITES, 1),
+    (PARTITION_GLOBALS, 1),
+];
+
+/// Never size a memtable below this. A memtable smaller than a few pages would
+/// flush on almost every write, turning a cold keyspace into an IO hotspot.
+const MIN_MEMTABLE_BYTES: u64 = 1024 * 1024;
+
+/// This keyspace's slice of the write-buffer budget.
+fn memtable_size_for(keyspace: &str, write_buffer: u64) -> u64 {
+    let total: u32 = KEYSPACE_WRITE_WEIGHTS.iter().map(|(_, w)| w).sum();
+    let weight = KEYSPACE_WRITE_WEIGHTS
+        .iter()
+        .find(|(name, _)| *name == keyspace)
+        .map(|(_, w)| *w)
+        .unwrap_or(1);
+    let share = write_buffer.saturating_mul(u64::from(weight)) / u64::from(total);
+    share.max(MIN_MEMTABLE_BYTES)
+}
 
 const PARTITION_MESSAGES: &str = "messages";
 const PARTITION_INBOX: &str = "inbox";
@@ -155,6 +232,8 @@ pub struct FjallStore {
     /// Fires on every `forward_queue_enqueue` so blocking
     /// `forward_queue_read` callers wake up immediately.
     forward_notify: Arc<Notify>,
+    /// Slots in the live-delivery broadcast ring. See `with_pubsub_capacity`.
+    pubsub_capacity: usize,
     /// Live entry count of the `audit_log` keyspace. Seeded at open,
     /// maintained under `write_lock`. See the module-level note.
     audit_log_len: AtomicUsize,
@@ -385,6 +464,14 @@ impl FjallStore {
         Self::open_with_circuit_breaker(path, DEFAULT_CB_THRESHOLD, DEFAULT_CB_RECOVERY_SECS)
     }
 
+    /// Size the live-delivery broadcast ring. See
+    /// [`MemoryStore::with_pubsub_capacity`](crate::store::MemoryStore::with_pubsub_capacity)
+    /// for why this must come from a byte budget.
+    pub fn with_pubsub_capacity(mut self, capacity: usize) -> Self {
+        self.pubsub_capacity = capacity.max(1);
+        self
+    }
+
     /// Like [`open`](Self::open) but with explicit circuit-breaker tuning.
     /// The mediator threads `[database] circuit_breaker_threshold` /
     /// `circuit_breaker_recovery_secs` here so the Fjall backend degrades
@@ -394,25 +481,55 @@ impl FjallStore {
         circuit_breaker_threshold: u32,
         circuit_breaker_recovery_secs: u64,
     ) -> Result<Self, MediatorError> {
+        Self::open_with_tuning(
+            path,
+            circuit_breaker_threshold,
+            circuit_breaker_recovery_secs,
+            FjallTuning::default(),
+        )
+    }
+
+    /// Open with explicit memory tuning from `[storage.fjall]`.
+    ///
+    /// `block_cache` and `max_journal` are database-level and are applied on
+    /// every open, including existing data directories. The per-keyspace
+    /// memtable sizes derived from `write_buffer` are **only honoured when a
+    /// keyspace is first created**: Fjall persists a keyspace's memtable size at
+    /// creation and exposes no setter, so against an existing `data_dir` the
+    /// closure below is never called for keyspaces that already exist. That is
+    /// why `max_journal` — which forces rotation once the journal grows past it,
+    /// and therefore caps unflushed memtable memory — is the load-bearing bound.
+    pub fn open_with_tuning<P: AsRef<Path>>(
+        path: P,
+        circuit_breaker_threshold: u32,
+        circuit_breaker_recovery_secs: u64,
+        tuning: FjallTuning,
+    ) -> Result<Self, MediatorError> {
         let path = path.as_ref().to_path_buf();
-        let cfg = FjallConfig::new(&path);
-        let db = Database::create_or_recover(cfg).map_err(|e| {
-            MediatorError::InternalError(
-                500,
-                "fjall".into(),
-                format!("FjallStore::open: failed to open database at {path:?}: {e}"),
-            )
-        })?;
+        let db = Database::builder(&path)
+            .cache_size(tuning.block_cache)
+            .max_journaling_size(tuning.max_journal)
+            .open()
+            .map_err(|e| {
+                MediatorError::InternalError(
+                    500,
+                    "fjall".into(),
+                    format!("FjallStore::open: failed to open database at {path:?}: {e}"),
+                )
+            })?;
 
         let open_partition = |name: &str| -> Result<Keyspace, MediatorError> {
-            db.keyspace(name, KeyspaceCreateOptions::default)
-                .map_err(|e| {
-                    MediatorError::InternalError(
-                        500,
-                        "fjall".into(),
-                        format!("FjallStore::open: failed to open partition '{name}': {e}"),
-                    )
-                })
+            let memtable = memtable_size_for(name, tuning.write_buffer);
+            db.keyspace(name, move || {
+                KeyspaceCreateOptions::default().max_memtable_size(memtable)
+            })
+            .map_err(|e| {
+                MediatorError::InternalError(
+                    500,
+                    "fjall".into(),
+                    format!("FjallStore::open: failed to open partition '{name}': {e}"),
+                )
+            })
         };
 
         let forward_queue = open_partition(PARTITION_FORWARD_QUEUE)?;
@@ -452,6 +569,7 @@ impl FjallStore {
             next_stream_seq: AtomicU64::new(0),
             broadcast_channels: Arc::new(Mutex::new(HashMap::new())),
             forward_notify: Arc::new(Notify::new()),
+            pubsub_capacity: PUBSUB_BROADCAST_CAPACITY,
             audit_log_len: AtomicUsize::new(audit_log_len),
             forward_queue_len: AtomicUsize::new(forward_queue_len),
             circuit_breaker: CircuitBreaker::new(
@@ -2540,7 +2658,7 @@ impl MediatorStore for FjallStore {
         if let Some(sender) = channels.get(mediator_uuid) {
             return Ok(sender.subscribe());
         }
-        let (sender, receiver) = broadcast::channel(PUBSUB_BROADCAST_CAPACITY);
+        let (sender, receiver) = broadcast::channel(self.pubsub_capacity);
         channels.insert(mediator_uuid.to_string(), sender);
         Ok(receiver)
     }

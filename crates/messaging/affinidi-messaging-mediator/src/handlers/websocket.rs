@@ -9,7 +9,9 @@ use crate::{
     common::jwt_auth::{AuthError, authenticate_token},
     common::session::Session,
     messages::inbound::handle_inbound,
-    tasks::websocket_streaming::{StreamingUpdate, StreamingUpdateState, WebSocketCommands},
+    tasks::websocket_streaming::{
+        QueuedCommand, StreamingUpdate, StreamingUpdateState, WS_CHANNEL_SLOTS, WebSocketCommands,
+    },
 };
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_didcomm::message::Message as DidcommMessage;
@@ -372,7 +374,8 @@ async fn handle_socket(
         metrics::gauge!(ACTIVE_WEBSOCKET_CONNECTIONS).increment(1.0);
 
         // Register the transmission channel between websocket_streaming task and this websocket.
-        let (tx, mut rx): (Sender<WebSocketCommands>, Receiver<WebSocketCommands>) = mpsc::channel(5);
+        let (tx, mut rx): (Sender<QueuedCommand>, Receiver<QueuedCommand>) =
+            mpsc::channel(WS_CHANNEL_SLOTS);
         if let Some(streaming) = &state.streaming_task {
 
             let start = StreamingUpdate {
@@ -559,8 +562,11 @@ async fn handle_socket(
                     }
                 }
                 value = rx.recv() => {
-                    if let Some(msg) = value {
-                        match msg {
+                    if let Some(queued) = value {
+                        // Destructuring drops `_permit` at the end of this arm,
+                        // returning the message's bytes to the global send pool
+                        // once it has been written to the socket.
+                        match queued.cmd {
                             WebSocketCommands::Message(msg) => {
                                 debug!("ws: Received message from streaming task");
                                 // In raw-TSP mode the notification body carries no id we can
