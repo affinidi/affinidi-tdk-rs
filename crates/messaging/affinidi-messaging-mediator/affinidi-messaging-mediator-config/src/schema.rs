@@ -113,4 +113,75 @@ pub struct StorageConfig {
     /// it doesn't exist.
     #[serde(default)]
     pub data_dir: Option<String>,
+    /// `[storage.fjall]` — memory tuning for the embedded Fjall backend.
+    /// Ignored when `backend = "redis"`: Redis holds its data in the Redis
+    /// *server*, so its memory is governed by `maxmemory` in `redis.conf`,
+    /// not by anything the mediator can set. See the memory-tuning guide.
+    #[serde(default)]
+    pub fjall: Option<FjallConfig>,
+}
+
+/// `[storage.fjall]` — memory knobs for the embedded Fjall backend.
+///
+/// Fjall ships with defaults sized for a general-purpose embedded database
+/// (32 MiB block cache, 64 MiB of memtable *per keyspace*, 512 MiB of journal).
+/// The mediator opens 14 keyspaces, so the stock per-keyspace memtable default
+/// alone allows ~896 MiB of write buffer. These knobs bring that down to a
+/// budget the operator chooses.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FjallConfig {
+    /// Block cache, in bytes. Caches decompressed data blocks read from disk;
+    /// this is the read-side memory and the first thing to raise for read
+    /// throughput. Default 16 MiB (Fjall's own default is 32 MiB).
+    #[serde(default = "default_fjall_block_cache")]
+    pub block_cache: String,
+    /// Total write-buffer (memtable) budget in bytes, divided across the
+    /// mediator's keyspaces by write weight. Default 32 MiB.
+    ///
+    /// **Applies at data-directory creation only.** Fjall persists each
+    /// keyspace's memtable size when the keyspace is first created and has no
+    /// runtime setter, so changing this against an existing `data_dir` has no
+    /// effect on already-created keyspaces. `max_journal` (below) bounds
+    /// unflushed memory on existing directories.
+    #[serde(default = "default_fjall_write_buffer")]
+    pub write_buffer: String,
+    /// Journal size ceiling in bytes. Default 128 MiB (Fjall's default is
+    /// 512 MiB).
+    ///
+    /// This is the load-bearing global bound. Fjall's own global write-buffer
+    /// cap (`max_write_buffer_size`) is a dead field in 3.1.x — declared, with a
+    /// setter, but never read — so there is *no* global memtable ceiling. What
+    /// does exist: when the journal exceeds this size, Fjall force-rotates the
+    /// keyspaces pinning the oldest journal, which flushes their memtables. So
+    /// this indirectly caps total unflushed memory, and unlike `write_buffer` it
+    /// takes effect on every open, including existing data directories.
+    ///
+    /// Lower = tighter memory, more frequent flushes (more write amplification).
+    #[serde(default = "default_fjall_max_journal")]
+    pub max_journal: String,
+}
+
+/// 16 MiB.
+fn default_fjall_block_cache() -> String {
+    "16777216".to_string()
+}
+
+/// 32 MiB, split across keyspaces by write weight.
+fn default_fjall_write_buffer() -> String {
+    "33554432".to_string()
+}
+
+/// 128 MiB.
+fn default_fjall_max_journal() -> String {
+    "134217728".to_string()
+}
+
+impl Default for FjallConfig {
+    fn default() -> Self {
+        Self {
+            block_cache: default_fjall_block_cache(),
+            write_buffer: default_fjall_write_buffer(),
+            max_journal: default_fjall_max_journal(),
+        }
+    }
 }

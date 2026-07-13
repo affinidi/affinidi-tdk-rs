@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.2.38"
+version = "0.2.39"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -30,7 +30,7 @@ tsp = ["affinidi-messaging-mediator/tsp", "affinidi-messaging-sdk/tsp"]
 ## is publishable to crates.io while still using the in-tree path for
 ## workspace dev-builds. Pins follow the workspace's caret-pin policy
 ## (major.minor only) so transitive patch fixes resolve automatically.
-affinidi-messaging-mediator = { version = "0.16", path = "../affinidi-messaging-mediator", default-features = false, features = ["didcomm", "memory-backend"] }
+affinidi-messaging-mediator = { version = "0.17", path = "../affinidi-messaging-mediator", default-features = false, features = ["didcomm", "memory-backend"] }
 # `test-clock` compiles the advanceable `TestClock` this fixture injects via
 # `TestMediatorBuilder::clock` for fast expiry/TTL tests.
 affinidi-messaging-mediator-common = { version = "0.15", path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common", features = [

@@ -9,9 +9,10 @@ use crate::{
         },
         did_rate_limiter::DidRateLimiter,
         error_codes,
-        metrics::{self, metrics_handler},
+        metrics::{self, metrics_handler, names::WS_SEND_BUFFER_AVAILABLE_BYTES},
         rate_limiter::{RateLimitLayer, RateLimiterState},
         request_id::RequestIdLayer,
+        ws_budget::WsSendBudget,
     },
     handlers::{
         admin_status, application_routes, health_checker_handler, liveness_handler,
@@ -40,6 +41,38 @@ use tower_http::trace::{self, TraceLayer};
 use tracing::{Level, error, info, warn};
 use tracing_subscriber::EnvFilter;
 use url::Url;
+
+/// Resolve `[storage.fjall]` into the store's typed tuning.
+///
+/// A free function rather than a `TryFrom` impl because the raw type lives in
+/// the config crate and the target type in the store — the same orphan-rule
+/// dance as `database_config_from_raw`.
+///
+/// Absent section => [`FjallTuning::default`], which is the point: an operator
+/// who never writes `[storage.fjall]` still gets the tuned defaults, not Fjall's
+/// stock ones (64 MiB of memtable per keyspace x 14 keyspaces).
+#[cfg(feature = "fjall-backend")]
+fn fjall_tuning_from_raw(
+    raw: Option<&affinidi_messaging_mediator_config::FjallConfig>,
+) -> crate::store::FjallTuning {
+    use crate::store::FjallTuning;
+
+    let defaults = FjallTuning::default();
+    let Some(raw) = raw else { return defaults };
+
+    let parse = |field: &str, value: &str, fallback: u64| -> u64 {
+        value.parse().unwrap_or_else(|_| {
+            warn!("Could not parse storage.fjall.{field} ('{value}'), using default: {fallback}");
+            fallback
+        })
+    };
+
+    FjallTuning {
+        block_cache: parse("block_cache", &raw.block_cache, defaults.block_cache),
+        write_buffer: parse("write_buffer", &raw.write_buffer, defaults.write_buffer),
+        max_journal: parse("max_journal", &raw.max_journal, defaults.max_journal),
+    }
+}
 
 /// Run the mediator HTTP server from a TOML config path.
 ///
@@ -140,16 +173,27 @@ pub async fn start(config_path: &str) -> Result<(), MediatorError> {
                                 "[storage] backend = \"fjall\" requires `data_dir`".into(),
                             )
                         })?;
-                    info!("Opening Fjall data directory at {data_dir}");
-                    let store = crate::store::FjallStore::open_with_circuit_breaker(
+                    let tuning = fjall_tuning_from_raw(
+                        config.storage.as_ref().and_then(|s| s.fjall.as_ref()),
+                    );
+                    info!(
+                        "Opening Fjall data directory at {data_dir} \
+                         (block_cache={} MiB, write_buffer={} MiB, max_journal={} MiB)",
+                        tuning.block_cache / (1024 * 1024),
+                        tuning.write_buffer / (1024 * 1024),
+                        tuning.max_journal / (1024 * 1024),
+                    );
+                    let store = crate::store::FjallStore::open_with_tuning(
                         &data_dir,
                         config.database.circuit_breaker_threshold,
                         config.database.circuit_breaker_recovery_secs,
+                        tuning,
                     )
                     .map_err(|e| {
                         error!("Failed to open Fjall data directory: {e}");
                         e
-                    })?;
+                    })?
+                    .with_pubsub_capacity(config.limits.pubsub_capacity());
                     Some(Arc::new(store) as Arc<_>)
                 }
                 #[cfg(not(feature = "fjall-backend"))]
@@ -273,7 +317,8 @@ pub async fn serve_internal(
                 config.database.circuit_breaker_threshold,
                 config.database.circuit_breaker_recovery_secs,
                 config.database.functions_file.clone(),
-            );
+            )
+            .with_pubsub_capacity(config.limits.pubsub_capacity());
             let init_cfg = affinidi_messaging_mediator_common::store::redis::RedisInitConfig {
                 mediator_did_hash: config.mediator_did_hash.clone(),
                 admin_did: config.admin_did.clone(),
@@ -474,11 +519,19 @@ pub async fn serve_internal(
     // (restart-and-degrade) rather than spawned detached, so a panic or a
     // transient startup error restarts it instead of silently killing live
     // delivery. Not load-bearing — clients fall back to message-pickup polling.
+    // Global byte pool shared by every WebSocket send queue. Bounds the
+    // aggregate at `limits.ws_send_buffer` regardless of connection count.
+    let ws_send_budget = WsSendBudget::new(config.limits.ws_send_buffer);
+    // `metrics` is shadowed here by `crate::common::metrics`, so reach for the
+    // crate explicitly.
+    ::metrics::gauge!(WS_SEND_BUFFER_AVAILABLE_BYTES).set(ws_send_budget.total_bytes() as f64);
+
     let streaming_task = if config.streaming_enabled {
         Some(StreamingTask::spawn_supervised(
             &supervisor,
             store.clone(),
             &config.streaming_uuid,
+            ws_send_budget.clone(),
         ))
     } else {
         None
@@ -547,6 +600,7 @@ pub async fn serve_internal(
         config.limits.did_rate_limit_per_second,
         config.limits.did_rate_limit_burst,
     );
+    did_rate_limiter.spawn_gc(shutdown_token.clone());
     if config.limits.did_rate_limit_per_second > 0 {
         info!(
             "Per-DID rate limiting enabled: {} req/s per DID, burst: {}",
@@ -611,6 +665,7 @@ pub async fn serve_internal(
         config.limits.rate_limit_per_ip,
         config.limits.rate_limit_burst,
     );
+    rate_limiter.spawn_gc(shutdown_token.clone());
     if config.limits.rate_limit_per_ip > 0 {
         info!(
             "Rate limiting enabled: {} req/s per IP, burst: {}",

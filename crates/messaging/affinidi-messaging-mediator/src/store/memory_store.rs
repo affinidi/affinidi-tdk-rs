@@ -57,7 +57,9 @@ use std::{
 };
 use tokio::sync::{Mutex, Notify, broadcast};
 
-const PUBSUB_BROADCAST_CAPACITY: usize = 1024;
+/// Fallback ring size when no tuning is supplied (tests, the embedded builder).
+/// Production derives this from `limits.pubsub_buffer / limits.message_size`.
+const PUBSUB_BROADCAST_CAPACITY: usize = 32;
 
 // ─── Internal types ─────────────────────────────────────────────────────────
 
@@ -297,12 +299,27 @@ pub struct MemoryStore {
     state: Arc<Mutex<MemoryState>>,
     broadcast_channels: Arc<Mutex<HashMap<String, broadcast::Sender<PubSubRecord>>>>,
     forward_notify: Arc<Notify>,
+    /// Slots in the live-delivery broadcast ring. See `with_pubsub_capacity`.
+    pubsub_capacity: usize,
 }
 
 impl MemoryStore {
     /// Construct an empty in-memory store.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Size the live-delivery broadcast ring.
+    ///
+    /// `tokio::sync::broadcast` holds every one of its `capacity` slots for the
+    /// life of the channel — a slot is not freed when a subscriber reads it, only
+    /// when it is overwritten `capacity` sends later. So the ring is a *standing*
+    /// reservation of `capacity x message_size` bytes, not a transient queue, and
+    /// the capacity must be derived from a byte budget rather than picked by feel.
+    /// See [`pubsub_capacity_for`].
+    pub fn with_pubsub_capacity(mut self, capacity: usize) -> Self {
+        self.pubsub_capacity = capacity.max(1);
+        self
     }
 }
 
@@ -312,6 +329,7 @@ impl Default for MemoryStore {
             state: Arc::new(Mutex::new(MemoryState::default())),
             broadcast_channels: Arc::new(Mutex::new(HashMap::new())),
             forward_notify: Arc::new(Notify::new()),
+            pubsub_capacity: PUBSUB_BROADCAST_CAPACITY,
         }
     }
 }
@@ -322,6 +340,7 @@ impl Clone for MemoryStore {
             state: Arc::clone(&self.state),
             broadcast_channels: Arc::clone(&self.broadcast_channels),
             forward_notify: Arc::clone(&self.forward_notify),
+            pubsub_capacity: self.pubsub_capacity,
         }
     }
 }
@@ -1561,7 +1580,7 @@ impl MediatorStore for MemoryStore {
         if let Some(sender) = channels.get(mediator_uuid) {
             return Ok(sender.subscribe());
         }
-        let (sender, receiver) = broadcast::channel(PUBSUB_BROADCAST_CAPACITY);
+        let (sender, receiver) = broadcast::channel(self.pubsub_capacity);
         channels.insert(mediator_uuid.to_string(), sender);
         Ok(receiver)
     }

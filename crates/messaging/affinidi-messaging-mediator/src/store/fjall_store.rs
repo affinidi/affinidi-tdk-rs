@@ -7,24 +7,23 @@
 //! configurations that require multiple mediator instances sharing
 //! storage.
 //!
-//! # Status: skeleton
+//! # Keyspace layout
 //!
-//! This file is the structural foundation. All [`MediatorStore`] trait
-//! methods are present so the type satisfies the trait, but most
-//! return `MediatorError::InternalError(..., "FjallStore::method not
-//! yet implemented")`. Subsequent commits land actual implementations.
+//! Fjall 3.x renamed "partition" to "keyspace"; the `PARTITION_*`
+//! constants below keep the older name for continuity with the on-disk
+//! layout, which is unchanged. Each keyspace carries its own memtable,
+//! so the count here is also the process's memtable count.
 //!
-//! # Partition layout (planned)
-//!
-//! - `messages`           — `msg_id` → message body (UTF-8)
-//! - `message_meta`       — `msg_id` → JSON-serialised
-//!   [`MessageMetaData`]
+//! - `messages`           — `msg_id` → message body (UTF-8). Also carries
+//!   the per-message metadata (`bytes`, peer DID hashes, timestamp), so
+//!   `get_message_metadata` reads it directly; there is no separate
+//!   metadata keyspace.
 //! - `inbox`              — `{did_hash}:{stream_id}` → inbox entry
 //! - `outbox`             — `{did_hash}:{stream_id}` → outbox entry
 //! - `expiry`             — `{expires_at_secs}:{msg_id}` → empty
 //! - `sessions`           — `session_id` → JSON-serialised [`Session`]
-//! - `accounts`           — `did_hash` → JSON-serialised account record
-//! - `acls`               — `did_hash` → ACL bitmask hex
+//! - `accounts`           — `did_hash` → JSON-serialised account record.
+//!   Carries the ACL bitmask inline, so there is no separate ACL keyspace.
 //! - `access_lists`       — `{did_hash}:{member_did_hash}` → empty
 //! - `admins`             — `did_hash` → role flag (1=Admin,
 //!   2=RootAdmin, 3=Mediator)
@@ -45,6 +44,14 @@
 //! [`broadcast::channel`] with no Fjall-side persistence — subscribers
 //! disconnect on mediator restart. Forward-queue blocking reads use a
 //! [`Notify`] that fires on each `forward_queue_enqueue`.
+//!
+//! The `audit_log` and `forward_queue` keyspaces keep a live entry count
+//! in an [`AtomicUsize`]. Fjall has no O(1) exact length — both
+//! `Keyspace::len` and `approximate_len` are unusable here (the former
+//! scans, the latter counts tombstones) — and both keyspaces need their
+//! length on every insert to enforce a bound. The counters are seeded by
+//! one key-only scan at open and maintained under `write_lock`
+//! thereafter, which is sound because this backend is single-process.
 
 use affinidi_messaging_mediator_common::{
     circuit_breaker::CircuitBreaker,
@@ -72,7 +79,7 @@ use affinidi_messaging_sdk::{
     },
 };
 use async_trait::async_trait;
-use fjall::{Config as FjallConfig, Database, Keyspace, KeyspaceCreateOptions};
+use fjall::{Database, Keyspace, KeyspaceCreateOptions};
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use std::{
@@ -80,22 +87,97 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{Mutex, Notify, broadcast};
 
-const PUBSUB_BROADCAST_CAPACITY: usize = 1024;
+/// Fallback ring size when no tuning is supplied (tests, the embedded builder).
+/// Production derives this from `limits.pubsub_buffer / limits.message_size`.
+const PUBSUB_BROADCAST_CAPACITY: usize = 32;
+
+/// Memory tuning for the embedded Fjall database.
+///
+/// Fjall's stock defaults are sized for a general-purpose embedded store, not
+/// for a service that opens 14 keyspaces: 64 MiB of memtable *per keyspace*
+/// would permit ~896 MiB of write buffer on its own. These values come from
+/// `[storage.fjall]`.
+#[derive(Clone, Copy, Debug)]
+pub struct FjallTuning {
+    /// Block cache (read-side), in bytes.
+    pub block_cache: u64,
+    /// Total memtable budget across all keyspaces, in bytes. Split by
+    /// [`KEYSPACE_WRITE_WEIGHTS`].
+    pub write_buffer: u64,
+    /// Journal ceiling, in bytes. The only *effective* global bound on unflushed
+    /// memory — see the field docs on the config type.
+    pub max_journal: u64,
+}
+
+impl Default for FjallTuning {
+    fn default() -> Self {
+        Self {
+            block_cache: 16 * 1024 * 1024,
+            write_buffer: 32 * 1024 * 1024,
+            max_journal: 128 * 1024 * 1024,
+        }
+    }
+}
+
+/// Relative share of the write-buffer budget each keyspace gets.
+///
+/// Every open keyspace carries its own memtable, and Fjall flushes a keyspace
+/// when *its* memtable crosses *its* threshold — there is no global trigger. So
+/// the budget has to be divided up front, and dividing it evenly would be wrong:
+/// `messages` stores whole message bodies inline while `admins` stores a byte
+/// per row. Weighting by how much each keyspace actually writes keeps the hot
+/// ones from flushing constantly while the cold ones sit on memory they will
+/// never use.
+const KEYSPACE_WRITE_WEIGHTS: &[(&str, u32)] = &[
+    // Whole message bodies, inline. By far the heaviest writer.
+    (PARTITION_MESSAGES, 40),
+    // One small row per message, but written on every message.
+    (PARTITION_INBOX, 10),
+    (PARTITION_OUTBOX, 10),
+    (PARTITION_EXPIRY, 5),
+    // Whole message bodies again, but only for messages being forwarded.
+    (PARTITION_FORWARD_QUEUE, 20),
+    (PARTITION_FORWARD_PENDING, 3),
+    // Per-session and per-account rows: steady but small.
+    (PARTITION_SESSIONS, 4),
+    (PARTITION_ACCOUNTS, 2),
+    (PARTITION_STREAMING_CLIENTS, 2),
+    (PARTITION_AUDIT_LOG, 2),
+    // Cold: written on admin action only.
+    (PARTITION_ACCESS_LISTS, 1),
+    (PARTITION_ADMINS, 1),
+    (PARTITION_OOB_INVITES, 1),
+    (PARTITION_GLOBALS, 1),
+];
+
+/// Never size a memtable below this. A memtable smaller than a few pages would
+/// flush on almost every write, turning a cold keyspace into an IO hotspot.
+const MIN_MEMTABLE_BYTES: u64 = 1024 * 1024;
+
+/// This keyspace's slice of the write-buffer budget.
+fn memtable_size_for(keyspace: &str, write_buffer: u64) -> u64 {
+    let total: u32 = KEYSPACE_WRITE_WEIGHTS.iter().map(|(_, w)| w).sum();
+    let weight = KEYSPACE_WRITE_WEIGHTS
+        .iter()
+        .find(|(name, _)| *name == keyspace)
+        .map(|(_, w)| *w)
+        .unwrap_or(1);
+    let share = write_buffer.saturating_mul(u64::from(weight)) / u64::from(total);
+    share.max(MIN_MEMTABLE_BYTES)
+}
 
 const PARTITION_MESSAGES: &str = "messages";
-const PARTITION_MESSAGE_META: &str = "message_meta";
 const PARTITION_INBOX: &str = "inbox";
 const PARTITION_OUTBOX: &str = "outbox";
 const PARTITION_EXPIRY: &str = "expiry";
 const PARTITION_SESSIONS: &str = "sessions";
 const PARTITION_ACCOUNTS: &str = "accounts";
-const PARTITION_ACLS: &str = "acls";
 const PARTITION_ACCESS_LISTS: &str = "access_lists";
 const PARTITION_ADMINS: &str = "admins";
 const PARTITION_OOB_INVITES: &str = "oob_invites";
@@ -110,12 +192,6 @@ const PARTITION_AUDIT_LOG: &str = "audit_log";
 /// Construct with [`FjallStore::open`] and a path to a directory the
 /// mediator may write to. Drops the underlying [`Database`] on shutdown
 /// — outstanding readers must be released first.
-//
-// Many fields are unused at the moment because the trait methods are
-// stubbed; subsequent commits land per-method implementations that
-// read/write each partition. The `dead_code` allowance is removed
-// once enough methods land.
-#[allow(dead_code)]
 pub struct FjallStore {
     /// Top-level Fjall database. Cloned cheaply (internal `Arc`).
     db: Database,
@@ -125,13 +201,11 @@ pub struct FjallStore {
 
     // ─── Partitions ─────────────────────────────────────────────────
     messages: Keyspace,
-    message_meta: Keyspace,
     inbox: Keyspace,
     outbox: Keyspace,
     expiry: Keyspace,
     sessions: Keyspace,
     accounts: Keyspace,
-    acls: Keyspace,
     access_lists: Keyspace,
     admins: Keyspace,
     oob_invites: Keyspace,
@@ -158,6 +232,14 @@ pub struct FjallStore {
     /// Fires on every `forward_queue_enqueue` so blocking
     /// `forward_queue_read` callers wake up immediately.
     forward_notify: Arc<Notify>,
+    /// Slots in the live-delivery broadcast ring. See `with_pubsub_capacity`.
+    pubsub_capacity: usize,
+    /// Live entry count of the `audit_log` keyspace. Seeded at open,
+    /// maintained under `write_lock`. See the module-level note.
+    audit_log_len: AtomicUsize,
+    /// Live entry count of the `forward_queue` keyspace. Seeded at open,
+    /// maintained under `write_lock`. See the module-level note.
+    forward_queue_len: AtomicUsize,
     /// Probe-driven circuit breaker. The embedded store has no
     /// per-request connection chokepoint like the Redis backend, so the
     /// breaker is driven by a cheap point read in
@@ -382,6 +464,14 @@ impl FjallStore {
         Self::open_with_circuit_breaker(path, DEFAULT_CB_THRESHOLD, DEFAULT_CB_RECOVERY_SECS)
     }
 
+    /// Size the live-delivery broadcast ring. See
+    /// [`MemoryStore::with_pubsub_capacity`](crate::store::MemoryStore::with_pubsub_capacity)
+    /// for why this must come from a byte budget.
+    pub fn with_pubsub_capacity(mut self, capacity: usize) -> Self {
+        self.pubsub_capacity = capacity.max(1);
+        self
+    }
+
     /// Like [`open`](Self::open) but with explicit circuit-breaker tuning.
     /// The mediator threads `[database] circuit_breaker_threshold` /
     /// `circuit_breaker_recovery_secs` here so the Fjall backend degrades
@@ -391,44 +481,87 @@ impl FjallStore {
         circuit_breaker_threshold: u32,
         circuit_breaker_recovery_secs: u64,
     ) -> Result<Self, MediatorError> {
+        Self::open_with_tuning(
+            path,
+            circuit_breaker_threshold,
+            circuit_breaker_recovery_secs,
+            FjallTuning::default(),
+        )
+    }
+
+    /// Open with explicit memory tuning from `[storage.fjall]`.
+    ///
+    /// `block_cache` and `max_journal` are database-level and are applied on
+    /// every open, including existing data directories. The per-keyspace
+    /// memtable sizes derived from `write_buffer` are **only honoured when a
+    /// keyspace is first created**: Fjall persists a keyspace's memtable size at
+    /// creation and exposes no setter, so against an existing `data_dir` the
+    /// closure below is never called for keyspaces that already exist. That is
+    /// why `max_journal` — which forces rotation once the journal grows past it,
+    /// and therefore caps unflushed memtable memory — is the load-bearing bound.
+    pub fn open_with_tuning<P: AsRef<Path>>(
+        path: P,
+        circuit_breaker_threshold: u32,
+        circuit_breaker_recovery_secs: u64,
+        tuning: FjallTuning,
+    ) -> Result<Self, MediatorError> {
         let path = path.as_ref().to_path_buf();
-        let cfg = FjallConfig::new(&path);
-        let db = Database::create_or_recover(cfg).map_err(|e| {
-            MediatorError::InternalError(
-                500,
-                "fjall".into(),
-                format!("FjallStore::open: failed to open database at {path:?}: {e}"),
-            )
-        })?;
+        let db = Database::builder(&path)
+            .cache_size(tuning.block_cache)
+            .max_journaling_size(tuning.max_journal)
+            .open()
+            .map_err(|e| {
+                MediatorError::InternalError(
+                    500,
+                    "fjall".into(),
+                    format!("FjallStore::open: failed to open database at {path:?}: {e}"),
+                )
+            })?;
 
         let open_partition = |name: &str| -> Result<Keyspace, MediatorError> {
-            db.keyspace(name, KeyspaceCreateOptions::default)
-                .map_err(|e| {
-                    MediatorError::InternalError(
-                        500,
-                        "fjall".into(),
-                        format!("FjallStore::open: failed to open partition '{name}': {e}"),
-                    )
-                })
+            let memtable = memtable_size_for(name, tuning.write_buffer);
+            db.keyspace(name, move || {
+                KeyspaceCreateOptions::default().max_memtable_size(memtable)
+            })
+            .map_err(|e| {
+                MediatorError::InternalError(
+                    500,
+                    "fjall".into(),
+                    format!("FjallStore::open: failed to open partition '{name}': {e}"),
+                )
+            })
         };
+
+        let forward_queue = open_partition(PARTITION_FORWARD_QUEUE)?;
+        let audit_log = open_partition(PARTITION_AUDIT_LOG)?;
+
+        // Seed the bounded-keyspace counters. `Keyspace::len` is a
+        // key-only scan (it never materialises values), and it runs once
+        // per process against keyspaces that are small by construction:
+        // `audit_log` is a ring capped at AUDIT_LOG_MAX_ENTRIES, and
+        // `forward_queue` is drained by the forwarding processor.
+        let audit_log_len = audit_log
+            .len()
+            .map_err(|e| Self::db_err("open:audit_log_len", e))?;
+        let forward_queue_len = forward_queue
+            .len()
+            .map_err(|e| Self::db_err("open:forward_queue_len", e))?;
 
         Ok(Self {
             messages: open_partition(PARTITION_MESSAGES)?,
-            message_meta: open_partition(PARTITION_MESSAGE_META)?,
             inbox: open_partition(PARTITION_INBOX)?,
             outbox: open_partition(PARTITION_OUTBOX)?,
             expiry: open_partition(PARTITION_EXPIRY)?,
             sessions: open_partition(PARTITION_SESSIONS)?,
             accounts: open_partition(PARTITION_ACCOUNTS)?,
-            acls: open_partition(PARTITION_ACLS)?,
             access_lists: open_partition(PARTITION_ACCESS_LISTS)?,
             admins: open_partition(PARTITION_ADMINS)?,
             oob_invites: open_partition(PARTITION_OOB_INVITES)?,
-            forward_queue: open_partition(PARTITION_FORWARD_QUEUE)?,
+            forward_queue,
             forward_pending: open_partition(PARTITION_FORWARD_PENDING)?,
             globals: open_partition(PARTITION_GLOBALS)?,
             streaming_clients: open_partition(PARTITION_STREAMING_CLIENTS)?,
-            audit_log: open_partition(PARTITION_AUDIT_LOG)?,
+            audit_log,
             db,
             path,
             write_lock: Arc::new(Mutex::new(())),
@@ -436,6 +569,9 @@ impl FjallStore {
             next_stream_seq: AtomicU64::new(0),
             broadcast_channels: Arc::new(Mutex::new(HashMap::new())),
             forward_notify: Arc::new(Notify::new()),
+            pubsub_capacity: PUBSUB_BROADCAST_CAPACITY,
+            audit_log_len: AtomicUsize::new(audit_log_len),
+            forward_queue_len: AtomicUsize::new(forward_queue_len),
             circuit_breaker: CircuitBreaker::new(
                 circuit_breaker_threshold,
                 circuit_breaker_recovery_secs,
@@ -524,32 +660,17 @@ impl FjallStore {
             .map_err(|e| Self::db_err("access_list_contains", e))
     }
 
-    /// O(n) count of entries currently in the forward queue. Used by
+    /// O(1) count of entries currently in the forward queue. Used by
     /// `forward_queue_len` and the `max_len` trim in
     /// `forward_queue_enqueue`.
-    fn forward_queue_count_inner(&self) -> Result<usize, MediatorError> {
-        let mut count = 0usize;
-        for guard in self.forward_queue.iter() {
-            let _ = guard
-                .into_inner()
-                .map_err(|e| Self::db_err("forward_queue_count:iter", e))?;
-            count += 1;
-        }
-        Ok(count)
+    fn forward_queue_count_inner(&self) -> usize {
+        self.forward_queue_len.load(Ordering::Acquire)
     }
 
-    /// O(n) count of audit-log entries. Used by `audit_log_record` for the
-    /// ring trim and by `audit_log_list` for cursor maths. Bounded by
-    /// `AUDIT_LOG_MAX_ENTRIES`.
-    fn audit_log_count_inner(&self) -> Result<usize, MediatorError> {
-        let mut count = 0usize;
-        for guard in self.audit_log.iter() {
-            let _ = guard
-                .into_inner()
-                .map_err(|e| Self::db_err("audit_log_count:iter", e))?;
-            count += 1;
-        }
-        Ok(count)
+    /// O(1) count of audit-log entries. Used by `audit_log_record` for the
+    /// ring trim and by `audit_log_list` for cursor maths.
+    fn audit_log_count_inner(&self) -> usize {
+        self.audit_log_len.load(Ordering::Acquire)
     }
 
     /// Read a consumer group's `last_delivered` stream ID from the
@@ -2019,16 +2140,21 @@ impl MediatorStore for FjallStore {
         // Bounded ring: drop the oldest entries (lowest keys, first in ascending
         // order) once we'd exceed the cap. `+1` accounts for the entry we're
         // adding in this same batch.
-        let current = self.audit_log_count_inner()?;
+        let current = self.audit_log_count_inner();
+        let mut removed = 0usize;
         if current >= AUDIT_LOG_MAX_ENTRIES {
             let over = current - AUDIT_LOG_MAX_ENTRIES + 1;
             let mut to_remove = Vec::with_capacity(over);
+            // Steady state `over` is 1, so this walks one key, not the ring.
+            // `key()` skips materialising the value, unlike `into_inner()`.
             for guard in self.audit_log.iter().take(over) {
-                let (key, _) = guard
-                    .into_inner()
-                    .map_err(|e| Self::db_err("audit_log_record:trim", e))?;
-                to_remove.push(key);
+                to_remove.push(
+                    guard
+                        .key()
+                        .map_err(|e| Self::db_err("audit_log_record:trim", e))?,
+                );
             }
+            removed = to_remove.len();
             for k in to_remove {
                 batch.remove(&self.audit_log, k.as_ref());
             }
@@ -2037,6 +2163,11 @@ impl MediatorStore for FjallStore {
         batch
             .commit()
             .map_err(|e| Self::db_err("audit_log_record:commit", e))?;
+
+        // Only after the batch is durable, so a failed commit can't drift the
+        // counter. Both ops are under `write_lock`, so this is not racy.
+        self.audit_log_len
+            .store(current + 1 - removed, Ordering::Release);
         Ok(())
     }
 
@@ -2046,28 +2177,25 @@ impl MediatorStore for FjallStore {
         limit: u32,
     ) -> Result<MediatorAuditLogList, MediatorError> {
         let limit = limit.min(100) as usize;
-        let total = self.audit_log_count_inner()?;
+        let total = self.audit_log_count_inner();
 
-        // Entries are stored oldest-first (ascending key). The newest-first page
-        // [cursor, cursor+limit) maps onto the oldest-first index window
-        // [start, end); we decode only that window, then reverse it.
-        let end = total.saturating_sub(cursor as usize);
-        let start = end.saturating_sub(limit);
-
-        let mut entries: Vec<AuditLogEntry> = Vec::with_capacity(end - start);
-        for (i, guard) in self.audit_log.iter().enumerate() {
-            if i < start {
-                continue;
-            }
-            if i >= end {
-                break;
-            }
-            let (_, value) = guard
-                .into_inner()
+        // Entries are stored oldest-first (ascending key), and the caller wants
+        // them newest-first, so walk the keyspace in reverse: skip `cursor`,
+        // decode `limit`. That touches `cursor + limit` entries rather than
+        // scanning and decoding the whole ring.
+        let mut entries: Vec<AuditLogEntry> = Vec::with_capacity(limit);
+        for guard in self
+            .audit_log
+            .iter()
+            .rev()
+            .skip(cursor as usize)
+            .take(limit)
+        {
+            let value = guard
+                .value()
                 .map_err(|e| Self::db_err("audit_log_list:iter", e))?;
             entries.push(Self::decode(&value)?);
         }
-        entries.reverse(); // oldest-first window → newest-first page
 
         let next_cursor = if cursor as usize + entries.len() >= total {
             0
@@ -2198,18 +2326,22 @@ impl MediatorStore for FjallStore {
         );
 
         // Approximate `max_len` trim: drop oldest entries when over.
+        let current = self.forward_queue_count_inner();
+        let mut removed = 0usize;
         if max_len > 0 {
             let mut to_remove = Vec::new();
-            let current = self.forward_queue_count_inner()?;
             if current >= max_len {
                 let over = current - max_len + 1; // +1 because we're adding one
+                // `key()` skips materialising the value, unlike `into_inner()`.
                 for guard in self.forward_queue.iter().take(over) {
-                    let (key, _) = guard
-                        .into_inner()
-                        .map_err(|e| Self::db_err("forward_queue_enqueue:trim", e))?;
-                    to_remove.push(key);
+                    to_remove.push(
+                        guard
+                            .key()
+                            .map_err(|e| Self::db_err("forward_queue_enqueue:trim", e))?,
+                    );
                 }
             }
+            removed = to_remove.len();
             for k in to_remove {
                 batch.remove(&self.forward_queue, k.as_ref());
             }
@@ -2217,13 +2349,18 @@ impl MediatorStore for FjallStore {
         batch
             .commit()
             .map_err(|e| Self::db_err("forward_queue_enqueue:commit", e))?;
+
+        // Only after the batch is durable, so a failed commit can't drift the
+        // counter. Still under `write_lock`, so this is not racy.
+        self.forward_queue_len
+            .store(current + 1 - removed, Ordering::Release);
         drop(_guard);
         self.forward_notify.notify_waiters();
         Ok(stream_id)
     }
 
     async fn forward_queue_len(&self) -> Result<usize, MediatorError> {
-        self.forward_queue_count_inner()
+        Ok(self.forward_queue_count_inner())
     }
 
     async fn forward_queue_read(
@@ -2325,14 +2462,29 @@ impl MediatorStore for FjallStore {
     async fn forward_queue_delete(&self, stream_ids: &[&str]) -> Result<(), MediatorError> {
         let _guard = self.write_lock.lock().await;
         let mut batch = self.db.batch();
+        // Removing an absent key is a no-op in Fjall but would still decrement
+        // the counter, so only count the ones that are actually there. Callers
+        // legitimately re-delete (duplicate acks, autoclaim races).
+        let mut removed = 0usize;
         for id in stream_ids {
             if let Some(sid) = parse_stream_id_string(id) {
-                batch.remove(&self.forward_queue, encode_stream_id(sid.0, sid.1).to_vec());
+                let key = encode_stream_id(sid.0, sid.1).to_vec();
+                if self
+                    .forward_queue
+                    .contains_key(&key)
+                    .map_err(|e| Self::db_err("forward_queue_delete:contains", e))?
+                {
+                    removed += 1;
+                    batch.remove(&self.forward_queue, key);
+                }
             }
         }
         batch
             .commit()
             .map_err(|e| Self::db_err("forward_queue_delete:commit", e))?;
+
+        // Only after the batch is durable. Still under `write_lock`.
+        self.forward_queue_len.fetch_sub(removed, Ordering::AcqRel);
         Ok(())
     }
 
@@ -2506,7 +2658,7 @@ impl MediatorStore for FjallStore {
         if let Some(sender) = channels.get(mediator_uuid) {
             return Ok(sender.subscribe());
         }
-        let (sender, receiver) = broadcast::channel(PUBSUB_BROADCAST_CAPACITY);
+        let (sender, receiver) = broadcast::channel(self.pubsub_capacity);
         channels.insert(mediator_uuid.to_string(), sender);
         Ok(receiver)
     }

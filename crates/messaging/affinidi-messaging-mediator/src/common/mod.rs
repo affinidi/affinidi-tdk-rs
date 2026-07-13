@@ -11,3 +11,4 @@ pub mod request_metrics;
 pub mod session;
 pub mod storage_timeout;
 pub mod time;
+pub mod ws_budget;

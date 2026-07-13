@@ -32,11 +32,46 @@ use tracing::{Instrument, debug, span};
 #[cfg(any(feature = "didcomm", feature = "tsp"))]
 use super::{ProcessMessageResponse, WrapperType};
 
+/// Reject a message larger than `limits.message_size`.
+///
+/// Every ingress path (HTTP `POST /inbound`, WebSocket text, WebSocket binary /
+/// TSP) funnels through `handle_inbound` or `handle_inbound_tsp`, so this is the
+/// one place the ceiling has to hold.
+///
+/// The transport caps (`http_size`, `ws_size`) are deliberately *larger* than
+/// this — they bound a single request or frame, whereas this bounds the message
+/// the mediator will copy, queue, store, and fan out. Every in-memory buffer is
+/// sized against this value, so it has to be enforced for those bounds to mean
+/// anything.
+fn check_message_size(
+    state: &SharedData,
+    session: &Session,
+    len: usize,
+) -> Result<(), MediatorError> {
+    let limit = state.config.limits.message_size;
+    if len > limit {
+        return Err(MediatorError::problem(
+            37,
+            &session.session_id,
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Message,
+            "message.size.exceeded",
+            "Message size {1} exceeds the mediator limit of {2} bytes",
+            vec![len.to_string(), limit.to_string()],
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) async fn handle_inbound(
     #[cfg_attr(not(feature = "didcomm"), allow(unused_variables))] state: &SharedData,
     session: &Session,
     #[cfg_attr(not(feature = "didcomm"), allow(unused_variables))] message: &str,
 ) -> Result<InboundMessageResponse, MediatorError> {
+    check_message_size(state, session, message.len())?;
+
     // Try DIDComm first if enabled
     #[cfg(feature = "didcomm")]
     {
@@ -80,6 +115,8 @@ pub(crate) async fn handle_inbound_tsp(
     raw: &[u8],
 ) -> Result<InboundMessageResponse, MediatorError> {
     use affinidi_tsp::MessageType as TspMessageType;
+
+    check_message_size(state, session, raw.len())?;
 
     let meta = TspMetaEnvelope::parse(raw).map_err(|e| {
         MediatorError::problem(

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.16.45"
+version = "0.17.0"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -17,9 +17,16 @@ name = "mediator"
 path = "src/main.rs"
 
 [features]
-## Default: DIDComm v2 protocol support + Redis storage backend.
+## Default: DIDComm v2 protocol support + Redis storage backend + jemalloc.
 ## AWS integration is opt-in: use --features aws when deploying to AWS.
-default = ["didcomm", "redis-backend"]
+default = ["didcomm", "redis-backend", "jemalloc"]
+
+## Use jemalloc as the binary's global allocator (see the dependency comment).
+## On by default: with the system allocator the process holds its RSS high-water
+## mark for its lifetime. Disable (`--no-default-features`) if you need to
+## profile against the system allocator or are building for a target jemalloc
+## doesn't support.
+jemalloc = ["dep:tikv-jemallocator"]
 
 ## Storage backends for the `MediatorStore` trait. At least one must be
 ## enabled for the binary to function. Multiple may be enabled, but the
@@ -80,10 +87,10 @@ affinidi-encoding = { version = "0.1", optional = true }
 ## Shared types: DatabaseHandler, errors, config structs, secret storage.
 ## Backend features are enabled below via the mediator's own cargo features
 ## so operators only compile the backends their deployment needs.
-affinidi-messaging-mediator-common = { version = "0.15.27", path = "affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-common = { version = "0.15.29", path = "affinidi-messaging-mediator-common" }
 ## Raw TOML config schema — the `*ConfigRaw` types are defined here and the
 ## mediator re-exports them; the runtime `Config` + conversions stay local.
-affinidi-messaging-mediator-config = { version = "0.1", path = "affinidi-messaging-mediator-config" }
+affinidi-messaging-mediator-config = { version = "0.2", path = "affinidi-messaging-mediator-config" }
 ## Humantime for the VTA cache TTL (`[secrets].cache_ttl = "30d"`).
 humantime = "2"
 ## CLI parsing for the mediator binary's subcommands (`mediator`,
@@ -97,7 +104,7 @@ affinidi-secrets-resolver = "0.5"
 ## Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"
 ## VTA SDK for centralized DID/key management via Verifiable Trust Agent
-vta-sdk = { version = "0.18.21", features = ["integration"] }
+vta-sdk = { version = "0.19.0", features = ["integration"] }
 
 # ── Web Framework ────────────────────────────────────────────────────────
 axum = { version = "0.8", features = ["ws"] }
@@ -186,6 +193,22 @@ rand = "0.10"
 regex = "1"
 semver = "1"
 uuid = { version = "1", features = ["v4", "fast-rng"] }
+
+# ── Allocator ────────────────────────────────────────────────────────────
+## jemalloc, used by the `mediator` binary only (set as the global allocator
+## in main.rs — a library must never impose an allocator on its consumers).
+##
+## The default system allocator (glibc malloc on Linux) does not return the
+## mediator's freed pages to the OS: the storage backend's write-buffer churn
+## is a sawtooth of large short-lived allocations, and glibc retains those
+## arenas, so RSS ratchets up to its high-water mark and stays there. That
+## reads as a leak in monitoring even though the live heap is flat. jemalloc's
+## decay-based purging returns the pages, so RSS tracks live memory.
+##
+## Not available on MSVC; the cfg gate below falls back to the system
+## allocator there.
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { version = "0.6", optional = true }
 
 [dev-dependencies]
 lazy_static = "1"

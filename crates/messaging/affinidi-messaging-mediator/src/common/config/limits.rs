@@ -39,6 +39,12 @@ pub struct LimitsConfig {
     pub did_rate_limit_per_second: u32,
     /// Burst size for per-DID rate limiting (additional requests allowed in a burst).
     pub did_rate_limit_burst: u32,
+    /// Aggregate byte ceiling across every live WebSocket send queue.
+    /// Collapses `slots x message_size x connections` into one real number.
+    pub ws_send_buffer: usize,
+    /// Byte ceiling for the live-delivery pub/sub ring. The ring's slot count is
+    /// derived from this — see [`LimitsConfig::pubsub_capacity`].
+    pub pubsub_buffer: usize,
 }
 
 impl Default for LimitsConfig {
@@ -68,7 +74,30 @@ impl Default for LimitsConfig {
             max_websocket_connections_per_did: 100,
             did_rate_limit_per_second: 0,
             did_rate_limit_burst: 10,
+            ws_send_buffer: 33_554_432,
+            pubsub_buffer: 16_777_216,
         }
+    }
+}
+
+impl LimitsConfig {
+    /// Slot count for the live-delivery pub/sub ring, derived from the byte
+    /// budget: `pubsub_buffer / message_size`.
+    ///
+    /// A `tokio::sync::broadcast` ring holds all of its `capacity` slots for the
+    /// life of the channel — a slot is freed only when it is overwritten
+    /// `capacity` sends later, not when a subscriber reads it. So the ring costs
+    /// `capacity x message_size` bytes as a *standing reservation*, and picking a
+    /// capacity by feel (it was 1024) silently reserves that much memory. Deriving
+    /// it from a byte budget makes the ceiling explicit and honest.
+    ///
+    /// Floored at 8 so a small `pubsub_buffer` cannot collapse the ring to a
+    /// single slot, which would make even a momentary hiccup lag the subscriber.
+    /// Lag is not message loss (the message is durable in the recipient's inbox
+    /// and arrives on the next poll), but it does cost a live push.
+    pub fn pubsub_capacity(&self) -> usize {
+        let per_slot = self.message_size.max(1);
+        (self.pubsub_buffer / per_slot).max(8)
     }
 }
 
@@ -189,6 +218,14 @@ impl std::convert::TryFrom<LimitsConfigRaw> for LimitsConfig {
                 warn_default("did_rate_limit_burst", "10");
                 10
             }),
+            ws_send_buffer: raw.ws_send_buffer.parse().unwrap_or_else(|_| {
+                warn_default("ws_send_buffer", "33554432");
+                33_554_432
+            }),
+            pubsub_buffer: raw.pubsub_buffer.parse().unwrap_or_else(|_| {
+                warn_default("pubsub_buffer", "16777216");
+                16_777_216
+            }),
         })
     }
 }
@@ -252,8 +289,12 @@ mod tests {
             max_websocket_connections_per_did: "250".to_string(),
             did_rate_limit_per_second: "50".to_string(),
             did_rate_limit_burst: "20".to_string(),
+            ws_send_buffer: "8388608".to_string(),
+            pubsub_buffer: "4194304".to_string(),
         };
         let limits = LimitsConfig::try_from(raw).unwrap();
+        assert_eq!(limits.ws_send_buffer, 8_388_608);
+        assert_eq!(limits.pubsub_buffer, 4_194_304);
         assert_eq!(limits.attachments_max_count, 5);
         assert_eq!(limits.crypto_operations_per_message, 500);
         assert_eq!(limits.deleted_messages, 75);
@@ -307,6 +348,8 @@ mod tests {
             max_websocket_connections_per_did: "100".to_string(),
             did_rate_limit_per_second: "0".to_string(),
             did_rate_limit_burst: "10".to_string(),
+            ws_send_buffer: "67108864".to_string(),
+            pubsub_buffer: "33554432".to_string(),
         };
         let limits = LimitsConfig::try_from(raw).unwrap();
         // Invalid values should fall back to unwrap_or defaults

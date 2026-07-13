@@ -47,6 +47,96 @@ Per-crate version history is summarised here; for the full code history see
 
 ### Changed
 
+- **Mediator memory: byte budgets, storage tuning, and jemalloc — defaults now
+  hold a node under ~256 MB RSS.** **`affinidi-messaging-mediator` 0.17.0**,
+  **`affinidi-messaging-mediator-config` 0.2.0**,
+  **`affinidi-messaging-mediator-common` 0.15.29**,
+  **`affinidi-messaging-test-mediator` 0.2.39**. New operator reference:
+  [docs/memory-tuning.md](crates/messaging/affinidi-messaging-mediator/docs/memory-tuning.md).
+
+  Measured on the Fjall backend: **~23 MB idle**, and **~44 MB after writing
+  500 MB of message bodies** (previously ~546 MB for the same load — resident
+  memory tracked the data volume rather than any budget).
+
+  - *Buffers are bounded by bytes, not message counts.* The WebSocket send queues
+    were `5 slots x 10 MiB x 10 000 connections`, and the live-delivery pub/sub
+    ring was 1024 slots of up to 10 MiB — neither number meant anything in bytes.
+    They are now sized by `limits.ws_send_buffer` (32 MiB, a single pool shared by
+    *all* connections) and `limits.pubsub_buffer` (16 MiB, divided by
+    `message_size` to get the ring's slot count).
+  - *A slow WebSocket client no longer stalls live delivery for everyone.*
+    Dispatch awaited each client's queue from the single loop that serves every
+    DID, so one stalled socket head-of-line blocked the rest. Sends are now
+    non-blocking; a client that cannot keep up has its *push* dropped, never the
+    message — the message is already durable in its inbox and arrives on the next
+    poll or on reconnect. New metric `ws_live_delivery_dropped_total`.
+  - *Fjall is tuned via `[storage.fjall]`* — `block_cache` (16 MiB),
+    `write_buffer` (32 MiB across all keyspaces) and `max_journal` (128 MiB).
+    Fjall's stock defaults allow 64 MiB of memtable *per keyspace*, and the
+    mediator opens 14. Note `max_journal` is the load-bearing bound: Fjall's own
+    global write-buffer cap is a dead field in 3.1.x, and `write_buffer` only
+    applies when a data directory is first created. **Redis is unaffected** — its
+    memory lives in the Redis server and is governed by `maxmemory` in
+    `redis.conf`; the guide covers both.
+  - *The binary uses jemalloc* (`jemalloc` feature, on by default). With the
+    system allocator the storage backend's write-buffer churn is never returned to
+    the OS, so RSS ratchets to its high-water mark and reads like a leak.
+
+- **BREAKING: `limits.message_size` is now enforced at ingress.**
+  **`affinidi-messaging-mediator` 0.17.0**. It was documented, parsed and
+  env-overridable, but never read at runtime — the real ceiling was
+  `http_size`/`ws_size` (10 MiB), not the advertised 1 MiB. Messages over
+  `message_size` are now rejected with `message.size.exceeded`
+  (413 Payload Too Large). **Upgrade note:** if your clients send messages larger
+  than 1 MiB they will start failing; raise `limits.message_size` to restore the
+  previous behaviour. Enforcing it is what gives every in-memory budget above a
+  real per-item ceiling.
+
+### Fixed
+
+- **Two unbounded-growth paths in the mediator's in-memory state.**
+  **`affinidi-messaging-mediator` 0.16.46**, **`affinidi-messaging-mediator-common`
+  0.15.28**.
+  - *Per-IP and per-DID rate limiters never reclaimed keys.* `governor` only
+    frees entries via `retain_recent()`, which was never called, so every source
+    IP the mediator had ever seen kept a `DashMap` entry for the process
+    lifetime. The per-IP limiter is **on by default** (`rate_limit_per_ip = 100`)
+    and keyed on unauthenticated, client-chosen input — a client rotating
+    through an IPv6 /64 inserted an entry per request. Both limiters now run a
+    60s background sweep. `retain_recent()` only drops fully-replenished
+    buckets, which are indistinguishable from never-seen keys, so the sweep
+    cannot let a client exceed its quota.
+  - *The forwarding processor's per-endpoint state map never reclaimed
+    entries.* `endpoints` is keyed by the service-endpoint URL from a peer's DID
+    Doc — remote-controlled — and tracked `last_activity` but never reaped on
+    it. Entries idle for more than 5 minutes are now dropped by the existing
+    idle-connection reaper.
+
+- **Audit-log and forward-queue inserts were O(n) in the Fjall backend.**
+  **`affinidi-messaging-mediator` 0.16.46**. `audit_log_record` and
+  `forward_queue_enqueue` need the keyspace length to enforce their bound, and
+  Fjall has no O(1) exact length, so each insert scanned and JSON-decoded the
+  entire keyspace — up to 10,000 decodes per audit record, making a full ring
+  quadratic. Both lengths are now kept in memory (seeded by one key-only scan at
+  open, maintained under the write lock). `audit_log_list` also paginates by
+  reverse iteration instead of scanning the whole ring. Filling the 10,000-entry
+  audit ring drops from ~35s to ~3s, and the trim/pagination semantics are
+  unchanged (the same conformance suite and a new ring-cap regression test pass
+  against both the old and new code).
+
+### Changed
+
+- **Fjall backend no longer opens the `message_meta` and `acls` keyspaces.**
+  **`affinidi-messaging-mediator` 0.16.46**. Both were opened at startup but
+  never read or written — per-message metadata lives inline in `messages`, and
+  the ACL bitmask lives inline in the `accounts` record. Each open keyspace
+  carries its own memtable (64 MiB flush threshold), so dropping them removes
+  two memtables' worth of headroom from the process. No data migration is
+  needed: nothing was ever stored in them.
+
+- **`vta-sdk` updated to 0.19.0** (from 0.18.21) in
+  **`affinidi-messaging-mediator` 0.16.46**. No source changes were required.
+
 - **`affinidi-sd-jwt-vc` merged into `affinidi-vc` (W18b).** SD-JWT VC is a
   credential format, so it now lives at `affinidi_vc::sd_jwt_vc` (in
   **`affinidi-vc` 0.2.0**) instead of its own crate. The public surface is
