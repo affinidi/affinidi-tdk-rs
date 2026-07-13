@@ -1,0 +1,118 @@
+### ****************************************************************************************************************************
+### Container profile — this is the config baked into the published image.
+###
+### It differs from the annotated template (crates/messaging/affinidi-messaging-mediator/conf/mediator.toml)
+### in exactly three ways, all of them deliberate:
+###
+###   1. No identity is baked in. `mediator_did` and `admin_did` are empty: a
+###      published image must not ship a usable (or sample) DID. Supply them at
+###      run time with MEDIATOR_DID / ADMIN_DID, or mount your own config and
+###      pass `-c <path>`.
+###   2. The secret backend is `file://`, not `keyring://`. The image is built
+###      with `secrets-aws` (see docker/mediator.Dockerfile); `keyring://` needs
+###      an OS secret service that does not exist in a container, and naming a
+###      backend the binary was not compiled with makes it hard-fail at startup.
+###      Cloud deployments override this with MEDIATOR_SECRETS_BACKEND.
+###   3. Container-shaped defaults: bind on 0.0.0.0, Redis at the `redis` host.
+###
+### Every field below is env-overridable — see the `### Env:` markers in the
+### template for the full list, and mediator-config's `env.rs` for the mapping.
+###
+### Minimum to boot:
+###   docker run \
+###     -e MEDIATOR_DID=did://did:peer:2.Vz6...       \
+###     -e ADMIN_DID=did://did:peer:2.Vz6...          \
+###     -e DATABASE_URL=redis://<host>:6379/          \
+###     -e MEDIATOR_SECRETS_BACKEND=aws_secrets://us-east-1/prod/mediator/ \
+###     ghcr.io/affinidi/messaging-mediator:<version>
+###
+### Self-hosted equivalent: leave MEDIATOR_SECRETS_BACKEND unset and mount a
+### secrets file at /etc/mediator/secrets.json (plaintext on disk — the mediator
+### warns; prefer a cloud backend for anything real).
+###
+### This file is parsed as `ConfigRaw` by a unit test in mediator-config
+### (`golden::container_mediator_toml_parses`), so a new required field cannot
+### silently rot the shipped image.
+### ****************************************************************************************************************************
+
+log_level = "info"
+log_json = "true"
+
+### The mediator's own DID. Empty on purpose — set MEDIATOR_DID.
+mediator_did = ""
+
+[secrets]
+### Overridden by MEDIATOR_SECRETS_BACKEND in cloud deployments, e.g.
+### aws_secrets://us-east-1/prod/mediator/
+backend = "file:///etc/mediator/secrets.json"
+
+[server]
+listen_address = "0.0.0.0:7037"
+api_prefix = "/mediator/v1/"
+### The admin identity. Empty on purpose — set ADMIN_DID.
+admin_did = ""
+
+[database]
+functions_file = "./conf/atm-functions.lua"
+### Overridden by DATABASE_URL.
+database_url = "redis://redis:6379/"
+database_timeout = "2"
+
+[security]
+mediator_acl_mode = "explicit_allow"
+global_acl_default = "DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES"
+local_direct_delivery_allowed = "true"
+local_direct_delivery_allow_anon = "false"
+### TLS is terminated in front of the container (LB/ingress), so no cert paths
+### are shipped. Set USE_SSL + the cert/key paths if you terminate in-process.
+use_ssl = "false"
+jwt_access_expiry = "900"
+jwt_refresh_expiry = "86400"
+block_anonymous_outer_envelope = "true"
+force_session_did_match = "true"
+block_remote_admin_msgs = "true"
+admin_messages_expiry = "3"
+enable_inter_mediator_relay = "false"
+
+[streaming]
+enabled = "true"
+uuid = "hostname://"
+
+[did_resolver]
+cache_capacity = "1000"
+cache_ttl = "300"
+network_timeout = "5000"
+network_limit = "100"
+
+[limits]
+attachments_max_count = "20"
+crypto_operations_per_message = "1000"
+deleted_messages = "100"
+forward_task_queue = "50000"
+http_size = "10485760"
+listed_messages = "100"
+local_max_acl = "1000"
+message_expiry_seconds = "604800"
+message_size = "1048576"
+queued_send_messages_soft = "200"
+queued_send_messages_hard = "1000"
+queued_receive_messages_soft = "200"
+queued_receive_messages_hard = "1000"
+to_keys_per_recipient = "100"
+to_recipients = "100"
+ws_size = "10485760"
+access_list_limit = "1000"
+oob_invite_ttl = "86400"
+
+[processors.forwarding]
+enabled = "true"
+future_time_limit = "86400"
+external_forwarding = "true"
+report_errors = "true"
+blocked_forwarding_dids = "[]"
+
+[processors.message_expiry_cleanup]
+enabled = "true"
+
+[processors.session_expiry_cleanup]
+enabled = "true"
