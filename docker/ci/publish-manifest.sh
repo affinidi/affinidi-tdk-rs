@@ -20,10 +20,20 @@ if [ "$IS_LATEST" = "true" ]; then
   tags+=(--tag "${IMAGE}:latest")
 fi
 
-# shellcheck disable=SC2046  # intentional: each digest must be a separate arg
-docker buildx imagetools create \
-  "${tags[@]}" \
-  $(printf "${IMAGE}@sha256:%s " *)
+# One source ref per digest file. An unmatched glob would otherwise expand to a
+# literal `*` and hand imagetools a bogus `<image>@sha256:*` ref, so refuse to
+# publish an empty (or partial) digest set rather than fail obscurely downstream.
+shopt -s nullglob
+sources=()
+for digest in *; do
+  sources+=("${IMAGE}@sha256:${digest}")
+done
+if [ "${#sources[@]}" -eq 0 ]; then
+  echo "::error::no digest files found in $PWD — the build jobs produced nothing to publish" >&2
+  exit 1
+fi
+
+docker buildx imagetools create "${tags[@]}" "${sources[@]}"
 
 digest=$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')
 
