@@ -308,6 +308,9 @@ See:
   for the three setup modes (Online / Sealed-mint / Sealed-export).
 - [docs/secrets-backend.md](docs/secrets-backend.md) — well-known key
   schemas, HA topology, and the migration path from the legacy schema.
+- [docs/memory-tuning.md](docs/memory-tuning.md) — what the mediator holds
+  in memory, which knob to raise for throughput, and how the Fjall and Redis
+  backends differ (they put their memory in different places).
 
 ### Re-running the wizard / tearing down
 

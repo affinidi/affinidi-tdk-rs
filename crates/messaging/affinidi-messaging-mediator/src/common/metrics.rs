@@ -87,6 +87,14 @@ pub mod names {
     pub const ACTIVE_WEBSOCKET_CONNECTIONS: &str = "active_websocket_connections";
     /// counter: Messages delivered via WebSocket live streaming
     pub const WEBSOCKET_MESSAGES_TOTAL: &str = "websocket_messages_total";
+    /// counter: Live-delivery pushes dropped because the send-buffer byte budget
+    /// (`limits.ws_send_buffer`) or a connection's queue was full. Not message
+    /// loss — the message is durable in the recipient's inbox and arrives on the
+    /// next poll or on reconnect. A rising rate means slow WebSocket consumers,
+    /// or a `ws_send_buffer` sized too small for the live-delivery fan-out.
+    pub const WS_LIVE_DELIVERY_DROPPED: &str = "ws_live_delivery_dropped_total";
+    /// gauge: Bytes currently free in the global WebSocket send-buffer pool.
+    pub const WS_SEND_BUFFER_AVAILABLE_BYTES: &str = "ws_send_buffer_available_bytes";
     /// counter: Old WebSocket sessions displaced by a newer duplicate for the same DID
     pub const WEBSOCKET_DUPLICATE_REPLACEMENTS_TOTAL: &str =
         "websocket_duplicate_replacements_total";

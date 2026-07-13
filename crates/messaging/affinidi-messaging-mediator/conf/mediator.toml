@@ -443,6 +443,28 @@ oob_invite_ttl = "86400"
 ### bursty authenticated clients once did_rate_limit_per_second is enabled.
 # did_rate_limit_burst = "10"
 
+### Env: LIMIT_WS_SEND_BUFFER
+### Total bytes of queued live-delivery messages across ALL WebSocket
+### connections (32 MiB). This is one shared pool, not a per-connection budget:
+### the aggregate is capped here no matter how many clients are connected.
+### When it is exhausted, live pushes are DROPPED rather than queued — not
+### message loss, since the message is already durable in the recipient's inbox
+### and arrives on its next poll or on reconnect. Watch
+### `ws_live_delivery_dropped_total` to see if this is happening.
+### Scale: raise for many concurrent live-streaming clients or large messages
+### (a client's queue also caps at 8 messages); costs up to this much RSS.
+# ws_send_buffer = "33554432"
+
+### Env: LIMIT_PUBSUB_BUFFER
+### Bytes reserved for the live-delivery pub/sub ring (16 MiB). The ring's slot
+### count is derived as pubsub_buffer / message_size, so at the defaults it holds
+### 16 messages. A ring slot stays occupied until it is overwritten, so this is a
+### standing ceiling, not a transient queue.
+### Scale: raise if you see "Streaming subscriber lagged" warnings under bursts —
+### lagging costs a live push (the message still lands in the inbox), it does not
+### lose messages. Costs up to this much RSS.
+# pubsub_buffer = "16777216"
+
 ### ****************************************************************************************************************************
 ### Forwarding processor configuration
 ###
@@ -536,3 +558,59 @@ enabled = "true"
 ### Reclaim expired session records on backends without native TTL
 ### (Fjall, in-memory). No-op on Redis, which expires sessions itself.
 enabled = "true"
+### ****************************************************************************************************************************
+### Storage backend
+### ****************************************************************************************************************************
+### Absent = Redis (the historical default), configured via [database] above.
+### Uncomment to run the embedded Fjall backend instead — a single-process,
+### on-disk LSM store for self-hosted deployments that don't want to operate a
+### separate Redis. Fjall does NOT support cross-process pub/sub, so it cannot
+### run multiple mediator instances against one data directory.
+###
+### See docs/memory-tuning.md for the full memory model and how these interact.
+# [storage]
+### Env: STORAGE_BACKEND — "redis" (default) or "fjall"
+# backend = "fjall"
+### Env: STORAGE_DATA_DIR — required when backend = "fjall"
+# data_dir = "/var/lib/mediator/data"
+
+### ─── Fjall memory tuning ────────────────────────────────────────────────────
+### Ignored unless backend = "fjall". These have no Redis equivalent: with the
+### Redis backend the data lives in the Redis *server*, so its memory is governed
+### by `maxmemory` / `maxmemory-policy` in redis.conf, not by the mediator.
+###
+### The shipped defaults hold a mediator under ~256 MB RSS. Raise them for
+### throughput — all three trade memory for speed.
+# [storage.fjall]
+
+### Env: STORAGE_FJALL_BLOCK_CACHE
+### Read cache for decompressed data blocks, in bytes. Default 16 MiB.
+### Scale: the first knob to raise for READ throughput (message pickup, ACL
+### lookups). A larger cache means fewer disk reads. Costs exactly this many
+### bytes of RSS once warm.
+# block_cache = "16777216"
+
+### Env: STORAGE_FJALL_WRITE_BUFFER
+### Total in-memory write buffer (memtables) across all keyspaces, in bytes.
+### Default 32 MiB, divided between keyspaces by how much each one writes.
+### Scale: raise for WRITE throughput — a bigger buffer means fewer, larger
+### flushes to disk and less write amplification. Costs up to this many bytes of
+### RSS under sustained writes.
+###
+### NOTE: this applies when the data directory is FIRST CREATED. Fjall persists
+### each keyspace's memtable size at creation and offers no way to change it
+### later, so editing this against an existing `data_dir` will not resize
+### keyspaces that already exist. `max_journal` below still bounds them.
+# write_buffer = "33554432"
+
+### Env: STORAGE_FJALL_MAX_JOURNAL
+### Journal size ceiling in bytes. Default 128 MiB.
+### This is the real global memory bound. Fjall has NO global write-buffer cap
+### (its `max_write_buffer_size` setting is a no-op in 3.1.x), and each keyspace
+### only flushes when its own memtable fills. What does bound things: once the
+### journal grows past this, Fjall force-flushes the keyspaces holding it open.
+### Unlike write_buffer, this takes effect on every start, including on an
+### existing data_dir.
+### Scale: raise to reduce flush frequency (better write throughput, more RSS);
+### lower to clamp memory harder at the cost of more disk I/O.
+# max_journal = "134217728"

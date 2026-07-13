@@ -6,9 +6,14 @@
 //! determine whether the request should proceed.
 
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DashMapStateStore};
-use std::{num::NonZeroU32, sync::Arc};
+use std::{num::NonZeroU32, sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
+use tracing::debug;
 
 type KeyedLimiter = RateLimiter<String, DashMapStateStore<String>, DefaultClock>;
+
+/// How often to sweep fully-replenished buckets out of the keyed state store.
+const GC_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Application-level rate limiter keyed by DID hash.
 #[derive(Clone)]
@@ -40,6 +45,43 @@ impl DidRateLimiter {
             None => true,
             Some(limiter) => limiter.check_key(&did_hash.to_owned()).is_ok(),
         }
+    }
+
+    /// Spawn the background sweep that reclaims idle buckets.
+    ///
+    /// Same reclamation gap as the per-IP limiter: `governor` never drops keys
+    /// on its own, so every DID that has ever authenticated would keep a
+    /// `DashMap` entry for the process lifetime. `retain_recent` only drops
+    /// buckets that have fully replenished, so it cannot let a DID exceed its
+    /// quota.
+    ///
+    /// No-op when rate limiting is disabled (the default: `per_second == 0`).
+    pub fn spawn_gc(&self, shutdown: CancellationToken) {
+        let Some(limiter) = self.limiter.clone() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(GC_INTERVAL);
+            ticker.tick().await; // the first tick fires immediately
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = ticker.tick() => {
+                        let before = limiter.len();
+                        limiter.retain_recent();
+                        limiter.shrink_to_fit();
+                        let after = limiter.len();
+                        if before != after {
+                            debug!(
+                                "Per-DID rate limiter GC: reclaimed {} idle bucket(s), {} live",
+                                before - after,
+                                after
+                            );
+                        }
+                    }
+                }
+            }
+        });
     }
 }
 

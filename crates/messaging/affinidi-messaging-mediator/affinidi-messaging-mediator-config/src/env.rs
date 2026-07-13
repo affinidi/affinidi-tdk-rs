@@ -163,6 +163,31 @@ pub fn apply_env_overrides(config: &mut ConfigRaw) {
         config.limits.did_rate_limit_burst,
         "LIMIT_DID_RATE_LIMIT_BURST"
     );
+    env_override!(config.limits.ws_send_buffer, "LIMIT_WS_SEND_BUFFER");
+    env_override!(config.limits.pubsub_buffer, "LIMIT_PUBSUB_BUFFER");
+
+    // `[storage]` is optional, and `[storage.fjall]` is optional within it, so
+    // these only override a section that already exists. An env var alone does
+    // not conjure a storage backend into being — selecting the backend is a
+    // deliberate choice that belongs in the file.
+    if let Some(storage) = config.storage.as_mut() {
+        env_override!(storage.backend, "STORAGE_BACKEND");
+        env_override_opt!(storage.data_dir, "STORAGE_DATA_DIR");
+        if storage.fjall.is_none()
+            && (std::env::var("STORAGE_FJALL_BLOCK_CACHE").is_ok()
+                || std::env::var("STORAGE_FJALL_WRITE_BUFFER").is_ok()
+                || std::env::var("STORAGE_FJALL_MAX_JOURNAL").is_ok())
+        {
+            // Any one of the knobs being set means the operator wants to tune;
+            // materialise the section at its defaults so the override lands.
+            storage.fjall = Some(crate::FjallConfig::default());
+        }
+        if let Some(fjall) = storage.fjall.as_mut() {
+            env_override!(fjall.block_cache, "STORAGE_FJALL_BLOCK_CACHE");
+            env_override!(fjall.write_buffer, "STORAGE_FJALL_WRITE_BUFFER");
+            env_override!(fjall.max_journal, "STORAGE_FJALL_MAX_JOURNAL");
+        }
+    }
 
     env_override!(
         config.processors.forwarding.enabled,

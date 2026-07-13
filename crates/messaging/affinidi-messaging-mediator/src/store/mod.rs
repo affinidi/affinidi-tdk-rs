@@ -21,7 +21,7 @@ pub mod fjall_store;
 mod fjall_migrations;
 
 #[cfg(feature = "fjall-backend")]
-pub use fjall_store::FjallStore;
+pub use fjall_store::{FjallStore, FjallTuning};
 
 #[cfg(feature = "memory-backend")]
 pub mod memory_store;

@@ -48,7 +48,9 @@ use tokio::sync::{Mutex, broadcast};
 use tokio_stream::StreamExt;
 use tracing::{debug, warn};
 
-const PUBSUB_BROADCAST_CAPACITY: usize = 1024;
+/// Fallback ring size when no tuning is supplied. Production derives this from
+/// `limits.pubsub_buffer / limits.message_size` via `with_pubsub_capacity`.
+const PUBSUB_BROADCAST_CAPACITY: usize = 32;
 const STATIC_TIMESLOT_BATCH: u32 = 100;
 
 /// Redis-backed [`MediatorStore`].
@@ -64,6 +66,9 @@ pub struct RedisStore {
     circuit_breaker: Arc<CircuitBreaker>,
     lua_scripts_path: Option<String>,
     broadcast_channels: Arc<Mutex<HashMap<String, broadcast::Sender<PubSubRecord>>>>,
+    /// Slots in the local broadcast ring that bridges Redis pub/sub to the
+    /// streaming task. See `with_pubsub_capacity`.
+    pubsub_capacity: usize,
 }
 
 impl RedisStore {
@@ -87,7 +92,22 @@ impl RedisStore {
             )),
             lua_scripts_path,
             broadcast_channels: Arc::new(Mutex::new(HashMap::new())),
+            pubsub_capacity: PUBSUB_BROADCAST_CAPACITY,
         }
+    }
+
+    /// Size the local broadcast ring that bridges Redis pub/sub to the streaming
+    /// task.
+    ///
+    /// `tokio::sync::broadcast` retains all `capacity` slots for the life of the
+    /// channel — a slot is freed only when overwritten `capacity` sends later,
+    /// not when a subscriber reads it. The ring is therefore a standing
+    /// reservation of `capacity x message_size` bytes, so its capacity has to be
+    /// derived from a byte budget. Note this bounds the *mediator's* memory; the
+    /// Redis server's own memory is governed by `maxmemory` in `redis.conf`.
+    pub fn with_pubsub_capacity(mut self, capacity: usize) -> Self {
+        self.pubsub_capacity = capacity.max(1);
+        self
     }
 
     /// Get a clone of the auto-reconnecting multiplexed Redis connection.
@@ -1003,7 +1023,7 @@ impl MediatorStore for RedisStore {
         // connection and bridge incoming messages into a broadcast
         // channel. The bridge task lives until the underlying pubsub
         // connection drops or the broadcast Sender is removed.
-        let (sender, receiver) = broadcast::channel(PUBSUB_BROADCAST_CAPACITY);
+        let (sender, receiver) = broadcast::channel(self.pubsub_capacity);
         let mut pubsub = self.handler.get_pubsub_connection().await?;
         let channel_name = format!("CHANNEL:{mediator_uuid}");
         pubsub.subscribe(&channel_name).await.map_err(|err| {

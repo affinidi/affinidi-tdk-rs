@@ -1,6 +1,34 @@
 use affinidi_messaging_mediator::{commands, server::start};
 use clap::{Parser, Subcommand};
 
+// ─── Allocator ──────────────────────────────────────────────────────────────
+//
+// Set on the binary only. A library that installs a #[global_allocator] forces
+// it on every consumer, so this deliberately does not live in lib.rs.
+//
+// Why not the system allocator: the storage backend churns large, short-lived
+// buffers (write buffers, packed message bodies). glibc malloc keeps those
+// arenas rather than returning them, so RSS ratchets to the high-water mark and
+// never falls back — indistinguishable from a leak on a memory graph.
+#[cfg(all(feature = "jemalloc", not(target_env = "msvc")))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+/// jemalloc tuning, read by jemalloc itself at startup via this well-known symbol.
+///
+/// `background_thread:true` runs the purger off the request path.
+/// `dirty_decay_ms` / `muzzy_decay_ms` are how long freed pages linger before
+/// being returned to the OS; jemalloc's defaults (10s / 10s) are tuned for
+/// throughput on allocation-heavy workloads, and hold RSS well above the live
+/// heap. 5s keeps the memory graph honest at a negligible cost here, because
+/// the mediator's hot path is I/O-bound, not allocation-bound.
+///
+/// Raise these (or drop the `jemalloc` feature) if you are optimising for
+/// allocation throughput over resident footprint.
+#[cfg(all(feature = "jemalloc", not(target_env = "msvc")))]
+#[unsafe(export_name = "malloc_conf")]
+pub static MALLOC_CONF: &[u8] = b"background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000\0";
+
 /// Affinidi Messaging Mediator.
 ///
 /// Without a subcommand, runs the mediator HTTP server (the historical
