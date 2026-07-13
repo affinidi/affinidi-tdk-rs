@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.16.45"
+version = "0.16.46"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -80,7 +80,7 @@ affinidi-encoding = { version = "0.1", optional = true }
 ## Shared types: DatabaseHandler, errors, config structs, secret storage.
 ## Backend features are enabled below via the mediator's own cargo features
 ## so operators only compile the backends their deployment needs.
-affinidi-messaging-mediator-common = { version = "0.15.27", path = "affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-common = { version = "0.15.28", path = "affinidi-messaging-mediator-common" }
 ## Raw TOML config schema — the `*ConfigRaw` types are defined here and the
 ## mediator re-exports them; the runtime `Config` + conversions stay local.
 affinidi-messaging-mediator-config = { version = "0.1", path = "affinidi-messaging-mediator-config" }
@@ -97,7 +97,7 @@ affinidi-secrets-resolver = "0.5"
 ## Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"
 ## VTA SDK for centralized DID/key management via Verifiable Trust Agent
-vta-sdk = { version = "0.18.21", features = ["integration"] }
+vta-sdk = { version = "0.19.0", features = ["integration"] }
 
 # ── Web Framework ────────────────────────────────────────────────────────
 axum = { version = "0.8", features = ["ws"] }

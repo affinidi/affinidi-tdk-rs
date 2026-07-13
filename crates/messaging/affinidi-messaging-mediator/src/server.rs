@@ -547,6 +547,7 @@ pub async fn serve_internal(
         config.limits.did_rate_limit_per_second,
         config.limits.did_rate_limit_burst,
     );
+    did_rate_limiter.spawn_gc(shutdown_token.clone());
     if config.limits.did_rate_limit_per_second > 0 {
         info!(
             "Per-DID rate limiting enabled: {} req/s per DID, burst: {}",
@@ -611,6 +612,7 @@ pub async fn serve_internal(
         config.limits.rate_limit_per_ip,
         config.limits.rate_limit_burst,
     );
+    rate_limiter.spawn_gc(shutdown_token.clone());
     if config.limits.rate_limit_per_ip > 0 {
         info!(
             "Rate limiting enabled: {} req/s per IP, burst: {}",

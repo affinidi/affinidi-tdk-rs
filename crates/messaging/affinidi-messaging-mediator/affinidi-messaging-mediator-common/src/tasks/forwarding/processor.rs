@@ -128,6 +128,13 @@ fn decode_tsp_forward(message: &str) -> Option<Vec<u8>> {
         .filter(|bytes| bytes.first() == Some(&0xF8))
 }
 
+/// How long an endpoint may sit idle before its cached state is reaped.
+///
+/// Must stay comfortably above both the rate tracker's window (10s) and the
+/// retry backoff ceiling (`max_backoff_ms`, 60s by default), so that state
+/// still in active use is never dropped out from under a retry.
+const ENDPOINT_IDLE_TTL: Duration = Duration::from_secs(300);
+
 /// State for a connection to a remote mediator endpoint
 struct EndpointState {
     rate_tracker: EndpointRateTracker,
@@ -248,8 +255,10 @@ impl ForwardingProcessor {
             }
         });
 
-        // Spawn a background task to clean up idle WebSocket connections
+        // Spawn a background task to clean up idle WebSocket connections and
+        // idle per-endpoint state.
         let ws_pool = self.ws_pool.clone();
+        let endpoints = self.endpoints.clone();
         let idle_timeout = Duration::from_secs(self.config.ws_idle_timeout_seconds);
         tokio::spawn(async move {
             loop {
@@ -276,6 +285,27 @@ impl ForwardingProcessor {
                         "Closed {} idle WebSocket connections ({} remaining)",
                         closed,
                         pool.len()
+                    );
+                }
+                drop(pool);
+
+                // `endpoints` is keyed by the service endpoint URL out of a
+                // peer's DID Doc, so its key space is remote-controlled and it
+                // would otherwise grow for the process lifetime. Entries only
+                // cache a rate window and a failure count, both of which are
+                // meaningless once an endpoint has been silent this long, so
+                // dropping them just means the next forward starts fresh.
+                let mut endpoints = endpoints.write().await;
+                let before = endpoints.len();
+                endpoints.retain(|_, state| {
+                    now.duration_since(state.last_activity) <= ENDPOINT_IDLE_TTL
+                });
+                let reaped = before - endpoints.len();
+                if reaped > 0 {
+                    debug!(
+                        "Reaped {} idle forwarding endpoint(s) ({} remaining)",
+                        reaped,
+                        endpoints.len()
                     );
                 }
             }

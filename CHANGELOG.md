@@ -45,7 +45,50 @@ Per-crate version history is summarised here; for the full code history see
   in-memory single-use TTL helper, and documents that **replay prevention is a
   MUST** (matching a nonce value is not sufficient).
 
+### Fixed
+
+- **Two unbounded-growth paths in the mediator's in-memory state.**
+  **`affinidi-messaging-mediator` 0.16.46**, **`affinidi-messaging-mediator-common`
+  0.15.28**.
+  - *Per-IP and per-DID rate limiters never reclaimed keys.* `governor` only
+    frees entries via `retain_recent()`, which was never called, so every source
+    IP the mediator had ever seen kept a `DashMap` entry for the process
+    lifetime. The per-IP limiter is **on by default** (`rate_limit_per_ip = 100`)
+    and keyed on unauthenticated, client-chosen input — a client rotating
+    through an IPv6 /64 inserted an entry per request. Both limiters now run a
+    60s background sweep. `retain_recent()` only drops fully-replenished
+    buckets, which are indistinguishable from never-seen keys, so the sweep
+    cannot let a client exceed its quota.
+  - *The forwarding processor's per-endpoint state map never reclaimed
+    entries.* `endpoints` is keyed by the service-endpoint URL from a peer's DID
+    Doc — remote-controlled — and tracked `last_activity` but never reaped on
+    it. Entries idle for more than 5 minutes are now dropped by the existing
+    idle-connection reaper.
+
+- **Audit-log and forward-queue inserts were O(n) in the Fjall backend.**
+  **`affinidi-messaging-mediator` 0.16.46**. `audit_log_record` and
+  `forward_queue_enqueue` need the keyspace length to enforce their bound, and
+  Fjall has no O(1) exact length, so each insert scanned and JSON-decoded the
+  entire keyspace — up to 10,000 decodes per audit record, making a full ring
+  quadratic. Both lengths are now kept in memory (seeded by one key-only scan at
+  open, maintained under the write lock). `audit_log_list` also paginates by
+  reverse iteration instead of scanning the whole ring. Filling the 10,000-entry
+  audit ring drops from ~35s to ~3s, and the trim/pagination semantics are
+  unchanged (the same conformance suite and a new ring-cap regression test pass
+  against both the old and new code).
+
 ### Changed
+
+- **Fjall backend no longer opens the `message_meta` and `acls` keyspaces.**
+  **`affinidi-messaging-mediator` 0.16.46**. Both were opened at startup but
+  never read or written — per-message metadata lives inline in `messages`, and
+  the ACL bitmask lives inline in the `accounts` record. Each open keyspace
+  carries its own memtable (64 MiB flush threshold), so dropping them removes
+  two memtables' worth of headroom from the process. No data migration is
+  needed: nothing was ever stored in them.
+
+- **`vta-sdk` updated to 0.19.0** (from 0.18.21) in
+  **`affinidi-messaging-mediator` 0.16.46**. No source changes were required.
 
 - **`affinidi-sd-jwt-vc` merged into `affinidi-vc` (W18b).** SD-JWT VC is a
   credential format, so it now lives at `affinidi_vc::sd_jwt_vc` (in
