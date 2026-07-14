@@ -7,8 +7,8 @@
 //! - Reading the TOML file + applying env overrides.
 //! - Resolving `mediator_did` / `admin_did` from either a literal DID or
 //!   `aws_parameter_store://<name>[?region=<region>]`.
-//! - Reading the self-hosted DID document from `file://` or
-//!   `aws_parameter_store://`.
+//! - Reading the self-hosted DID document from `file://`,
+//!   `aws_parameter_store://`, or `s3://`.
 //! - Hostname resolution and forwarding-loop protection.
 //!
 //! The `aws_parameter_store://` grammar lives in `mediator-common`'s
@@ -23,6 +23,9 @@ use affinidi_messaging_mediator_common::parameter_store::parse_parameter_store_t
 use affinidi_messaging_mediator_common::parameter_store::{
     PARAMETER_STORE_SCHEME, is_parameter_store_target,
 };
+#[cfg(feature = "aws")]
+use affinidi_messaging_mediator_common::s3_target::parse_s3_target;
+use affinidi_messaging_mediator_common::s3_target::{S3_SCHEME, is_s3_target};
 use affinidi_secrets_resolver::SecretsResolver;
 #[cfg(feature = "aws")]
 use aws_config::{Region, SdkConfig};
@@ -38,9 +41,9 @@ use tracing::{error, info, warn};
 use super::AwsConfig;
 use super::processors::ForwardingConfig;
 
-/// Check if any DID-resolution field uses `aws_parameter_store://`,
-/// requiring the AWS SDK to be initialised. Secret-store backends are
-/// excluded — those are handled via `MediatorSecrets`, which owns its own
+/// Check if any DID-resolution field uses `aws_parameter_store://` or
+/// `s3://`, requiring the AWS SDK to be initialised. Secret-store backends
+/// are excluded — those are handled via `MediatorSecrets`, which owns its own
 /// AWS SDK client when the `secrets-aws` feature is enabled.
 pub(crate) fn config_needs_aws(raw: &super::ConfigRaw) -> bool {
     is_parameter_store_target(&raw.mediator_did)
@@ -49,7 +52,7 @@ pub(crate) fn config_needs_aws(raw: &super::ConfigRaw) -> bool {
             .server
             .did_web_self_hosted
             .as_deref()
-            .is_some_and(is_parameter_store_target)
+            .is_some_and(|t| is_parameter_store_target(t) || is_s3_target(t))
 }
 
 /// Extract the AWS `SdkConfig` from an `Option<AwsConfig>`, returning a clear
@@ -243,6 +246,71 @@ pub(crate) async fn aws_parameter_store(
     })
 }
 
+/// Fetch an object body named by a full `s3://…` target, decoded as UTF-8.
+///
+/// `target` is parsed by the shared grammar. An optional `?region=` overrides
+/// the ambient region for this call only — the rest of the process keeps
+/// using the shared `SdkConfig`.
+#[cfg(feature = "aws")]
+pub(crate) async fn aws_s3(
+    target: &str,
+    aws_config: &SdkConfig,
+) -> Result<String, MediatorError> {
+    let parsed = parse_s3_target(target)
+        .map_err(|e| MediatorError::ConfigError(12, "NA".into(), e.to_string()))?;
+
+    // Region in the target wins, so the object can live somewhere other than
+    // the region the rest of the SDK defaulted to.
+    let regional_config;
+    let aws_config = match parsed.region {
+        Some(region) => {
+            regional_config = aws_config.to_builder().region(Region::new(region)).build();
+            &regional_config
+        }
+        None => aws_config,
+    };
+    let s3 = aws_sdk_s3::Client::new(aws_config);
+
+    let response = s3
+        .get_object()
+        .bucket(&parsed.bucket)
+        .key(&parsed.key)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(
+                "Could not get s3 object (bucket={:?} key={:?}). {e:?}",
+                parsed.bucket, parsed.key
+            );
+            MediatorError::ConfigError(
+                12,
+                "NA".into(),
+                format!(
+                    "Could not get s3 object (bucket={:?} key={:?}). {e:?}",
+                    parsed.bucket, parsed.key
+                ),
+            )
+        })?;
+
+    let bytes = response.body.collect().await.map_err(|e| {
+        error!("Could not read s3 object body. {e:?}");
+        MediatorError::ConfigError(
+            12,
+            "NA".into(),
+            format!("Could not read s3 object body. {e:?}"),
+        )
+    })?;
+
+    String::from_utf8(bytes.to_vec()).map_err(|e| {
+        error!("s3 object is not valid UTF-8. {e}");
+        MediatorError::ConfigError(
+            12,
+            "NA".into(),
+            format!("s3 object is not valid UTF-8. {e}"),
+        )
+    })
+}
+
 /// Reads a file and returns a vector of strings, one for each line in the file.
 /// Strips lines starting with `#` (comments). Used by the runtime document /
 /// DID-resolution helpers below; the config-loading copy lives in the
@@ -278,7 +346,7 @@ where
     Ok(lines)
 }
 
-/// Reads document from file or aws_parameter_store
+/// Reads document from `file://`, `aws_parameter_store://`, or `s3://`.
 pub(crate) async fn read_document(
     document_path: &str,
     #[cfg_attr(not(feature = "aws"), allow(unused_variables))] aws_config: &Option<AwsConfig>,
@@ -302,11 +370,27 @@ pub(crate) async fn read_document(
                 ));
             }
         }
+        S3_SCHEME => {
+            #[cfg(feature = "aws")]
+            {
+                let cfg = require_aws_config(aws_config, "document_path (s3://)")?;
+                aws_s3(document_path, cfg).await?
+            }
+            #[cfg(not(feature = "aws"))]
+            {
+                let _ = path;
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    "s3:// requires the 'aws' feature. Rebuild with: cargo build --features aws".into(),
+                ));
+            }
+        }
         _ => {
             return Err(MediatorError::ConfigError(
                 12,
                 "NA".into(),
-                "Invalid document_path format! Expecting file:// or aws_parameter_store:// ..."
+                "Invalid document_path format! Expecting file://, aws_parameter_store://, or s3:// ..."
                     .into(),
             ));
         }
@@ -512,7 +596,24 @@ pub(crate) async fn load_forwarding_protection_blocks(
 
 #[cfg(test)]
 mod tests {
-    use super::{join_api_path, normalize_api_prefix, read_did_config};
+    use super::{join_api_path, normalize_api_prefix, read_did_config, read_document};
+
+    /// The runtime document reader accepts `file://`, `aws_parameter_store://`,
+    /// and `s3://`. An unknown scheme must fail with a message that names all
+    /// three, so an operator's typo is self-diagnosing.
+    #[tokio::test]
+    async fn read_document_rejects_unknown_scheme() {
+        let err = read_document("gs://bucket/obj", &None)
+            .await
+            .expect_err("unknown scheme is not a document source");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("file://")
+                && msg.contains("aws_parameter_store://")
+                && msg.contains("s3://"),
+            "error should name the accepted schemes, got: {msg}"
+        );
+    }
 
     /// `mediator-setup` documents that a `file://` DID target does not
     /// round-trip into `mediator_did`. Pin the runtime half of that claim so

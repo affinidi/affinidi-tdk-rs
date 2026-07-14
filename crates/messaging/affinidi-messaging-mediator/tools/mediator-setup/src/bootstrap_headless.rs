@@ -193,7 +193,14 @@ async fn phase1_emit_request(config: &crate::app::WizardConfig) -> anyhow::Resul
     // secret store — no point minting a request, writing it to disk,
     // and then discovering `aws_secrets://...` can't talk to AWS.
     let backend_url = crate::config_writer::build_backend_url(config);
-    let store = crate::secret_backend::open_and_probe_secret_backend(&backend_url).await?;
+    // Headless flow: read-only probe. The well-known secrets are pre-created
+    // out-of-band (e.g. by CDK), so setup only overwrites them and never needs
+    // create/delete rights — matching the runtime's read-only boot probe.
+    let store = crate::secret_backend::open_and_probe_secret_backend(
+        &backend_url,
+        crate::secret_backend::ProvisionProbe::ReadOnly,
+    )
+    .await?;
 
     // Refuse to clobber an in-flight bootstrap. The backend index is
     // our cross-invocation state now; any entry means "a request is

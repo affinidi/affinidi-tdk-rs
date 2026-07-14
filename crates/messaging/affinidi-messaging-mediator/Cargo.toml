@@ -66,9 +66,9 @@ secrets-vault = ["affinidi-messaging-mediator-common/secrets-vault"]
 secrets-k8s = ["affinidi-messaging-mediator-common/secrets-k8s"]
 
 ## AWS integration used by `did_web_self_hosted = "aws_parameter_store://..."`
-## (still loaded directly by the mediator, not via the secret store). Enabled
-## automatically by `secrets-aws`.
-aws = ["dep:aws-config", "dep:aws-sdk-ssm"]
+## or `"s3://..."` (still loaded directly by the mediator, not via the secret
+## store). Enabled automatically by `secrets-aws`.
+aws = ["dep:aws-config", "dep:aws-sdk-ssm", "dep:aws-sdk-s3"]
 
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
@@ -140,6 +140,7 @@ didwebvh-rs = "0.5.4"
 ## To build without: --no-default-features --features didcomm
 aws-config = { version = "1", optional = true }
 aws-sdk-ssm = { version = "1", optional = true }
+aws-sdk-s3 = { version = "1", optional = true }
 
 # ── Cryptography & Security ─────────────────────────────────────────────
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
