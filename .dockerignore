@@ -1,4 +1,4 @@
-# Build-context excludes for docker/test/Dockerfile (repo-root context).
+# Build-context excludes for docker/mediator.Dockerfile (repo-root context).
 # Keep the context small and reproducible — the container does a clean
 # `cargo build`, so the host target/ must not leak in.
 target/
