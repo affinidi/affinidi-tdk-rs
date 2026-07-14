@@ -2,6 +2,21 @@
 
 ## Changelog history
 
+## 14th July 2026
+
+### 0.17.1 — read the self-hosted `did.jsonl` log from `s3://`
+
+- The self-hosted `did:webvh` log (`did_web_self_hosted`) can now be sourced
+  from an `s3://` target in addition to `file://` and `aws_parameter_store://`.
+  On startup the runtime fetches the `did.jsonl` object and serves it at
+  `/.well-known/did.jsonl`, so the durable log lives in S3 rather than baked
+  into the container or a parameter.
+- `s3://` support requires the `aws` feature (pulled in by `secrets-aws`); the
+  scheme is parsed with the shared `s3_target` parser in mediator-common
+  (>= 0.15.30) so the runtime and the `mediator-setup` wizard cannot drift on
+  the target grammar. Without the `aws` feature, an `s3://` target fails fast
+  with an actionable rebuild message.
+
 ## 12th July 2026
 
 ### 0.16.45 — surface a VTA 403 on refresh instead of masking it as "unreachable"

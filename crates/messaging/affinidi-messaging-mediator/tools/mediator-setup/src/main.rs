@@ -354,7 +354,13 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
     // read-only backend probe: the well-known secrets are pre-created
     // out-of-band (e.g. by CDK), so setup only overwrites them and never needs
     // create/delete rights — matching the runtime, which also probes read-only.
-    generate_and_write(&config, None, true, secret_backend::ProvisionProbe::ReadOnly).await?;
+    generate_and_write(
+        &config,
+        None,
+        true,
+        secret_backend::ProvisionProbe::ReadOnly,
+    )
+    .await?;
     offer_build_and_guidance(&config);
 
     Ok(())
@@ -438,7 +444,13 @@ async fn run_from_recipe(
         }
     } else {
         println!("  Generating cryptographic material...\n");
-        generate_and_write(&config, None, false, secret_backend::ProvisionProbe::ReadOnly).await?;
+        generate_and_write(
+            &config,
+            None,
+            false,
+            secret_backend::ProvisionProbe::ReadOnly,
+        )
+        .await?;
         None
     };
 
@@ -1167,8 +1179,11 @@ async fn generate_and_write(
     // `[output].did_target` / `[output].did_log_target`. No-op unless a target
     // is configured.
     publish::publish_did_artefacts(&artefacts.mediator_did, config.did_target.as_deref()).await?;
-    publish::publish_did_log_artefacts(artefacts.did_doc.as_deref(), config.did_log_target.as_deref())
-        .await?;
+    publish::publish_did_log_artefacts(
+        artefacts.did_doc.as_deref(),
+        config.did_log_target.as_deref(),
+    )
+    .await?;
     print_completion_summary(config, &artefacts, vta_session);
     Ok(())
 }
@@ -2848,9 +2863,14 @@ mod generate_and_write_tests {
         let mut config = did_peer_config(&dir);
         config.admin_did_mode = ADMIN_SKIP.into();
 
-        generate_and_write(&config, None, false, secret_backend::ProvisionProbe::ReadWrite)
-            .await
-            .expect("generate_and_write with ADMIN_SKIP");
+        generate_and_write(
+            &config,
+            None,
+            false,
+            secret_backend::ProvisionProbe::ReadWrite,
+        )
+        .await
+        .expect("generate_and_write with ADMIN_SKIP");
 
         let toml_text = std::fs::read_to_string(dir.join("conf").join("mediator.toml")).unwrap();
         let parsed: toml::Value = toml::from_str(&toml_text).unwrap();
@@ -2968,9 +2988,14 @@ mod generate_and_write_tests {
         let mut config = did_peer_config(&dir);
         config.jwt_mode = JWT_MODE_PROVIDE.into();
 
-        generate_and_write(&config, None, false, secret_backend::ProvisionProbe::ReadWrite)
-            .await
-            .unwrap();
+        generate_and_write(
+            &config,
+            None,
+            false,
+            secret_backend::ProvisionProbe::ReadWrite,
+        )
+        .await
+        .unwrap();
 
         let unified_text = std::fs::read_to_string(dir.join("unified-secrets.json")).unwrap();
         assert!(

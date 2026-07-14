@@ -252,10 +252,7 @@ pub(crate) async fn aws_parameter_store(
 /// the ambient region for this call only — the rest of the process keeps
 /// using the shared `SdkConfig`.
 #[cfg(feature = "aws")]
-pub(crate) async fn aws_s3(
-    target: &str,
-    aws_config: &SdkConfig,
-) -> Result<String, MediatorError> {
+pub(crate) async fn aws_s3(target: &str, aws_config: &SdkConfig) -> Result<String, MediatorError> {
     let parsed = parse_s3_target(target)
         .map_err(|e| MediatorError::ConfigError(12, "NA".into(), e.to_string()))?;
 
@@ -382,7 +379,8 @@ pub(crate) async fn read_document(
                 return Err(MediatorError::ConfigError(
                     12,
                     "NA".into(),
-                    "s3:// requires the 'aws' feature. Rebuild with: cargo build --features aws".into(),
+                    "s3:// requires the 'aws' feature. Rebuild with: cargo build --features aws"
+                        .into(),
                 ));
             }
         }

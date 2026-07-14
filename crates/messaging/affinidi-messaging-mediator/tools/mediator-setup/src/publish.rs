@@ -308,7 +308,10 @@ async fn put_s3_object(target: &S3Target, value: &str, label: &str) -> anyhow::R
 #[cfg(feature = "publish-aws")]
 fn render_s3_target(target: &S3Target) -> String {
     match &target.region {
-        Some(region) => format!("{S3_SCHEME}://{}/{}?region={region}", target.bucket, target.key),
+        Some(region) => format!(
+            "{S3_SCHEME}://{}/{}?region={region}",
+            target.bucket, target.key
+        ),
         None => format!("{S3_SCHEME}://{}/{}", target.bucket, target.key),
     }
 }
@@ -443,7 +446,11 @@ mod tests {
         ] {
             validate_target(target).unwrap_or_else(|e| panic!("{target} should validate: {e}"));
             let parsed = parse_s3(target).expect("shared parser accepts it");
-            assert_eq!(render_s3_target(&parsed), target, "round-trip must be exact");
+            assert_eq!(
+                render_s3_target(&parsed),
+                target,
+                "round-trip must be exact"
+            );
         }
     }
 
