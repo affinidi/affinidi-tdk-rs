@@ -432,8 +432,8 @@ impl TryFrom<ConfigRaw> for Config {
                 return Err(MediatorError::ConfigError(
                     12,
                     "NA".into(),
-                    "Configuration uses aws_secrets:// or aws_parameter_store:// but the 'aws' \
-                     feature is not enabled. Rebuild with: cargo build --features aws"
+                    "Configuration uses aws_secrets://, aws_parameter_store://, or s3:// but the \
+                     'aws' feature is not enabled. Rebuild with: cargo build --features aws"
                         .into(),
                 ));
             }
