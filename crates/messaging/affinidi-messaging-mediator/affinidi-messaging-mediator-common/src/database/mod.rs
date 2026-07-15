@@ -46,6 +46,77 @@ pub struct DatabaseHandler {
 #[cfg(feature = "redis-backend")]
 const REDIS_VERSION_REQ: &str = ">=7.1, <9.0";
 
+/// Major engine lines that [`REDIS_VERSION_REQ`] is known to cover.
+///
+/// Managed engines — notably **ElastiCache Serverless for Valkey / Redis OSS** —
+/// answer `INFO server` with a `redis_version` that carries only the *major*
+/// component (e.g. `8`), unlike OSS Valkey/Redis which report a full
+/// `MAJOR.MINOR.PATCH` (e.g. `7.2.4`). A bare major cannot be meaningfully
+/// range-checked against `>=7.1` (is it `7.0` or `7.9`?), so when only a major is
+/// reported we accept it iff it is one of these supported lines. Keep this in sync
+/// with `REDIS_VERSION_REQ`.
+#[cfg(feature = "redis-backend")]
+const SUPPORTED_MAJOR_VERSIONS: &[u64] = &[7, 8];
+
+/// Outcome of checking a reported `redis_version` against [`REDIS_VERSION_REQ`].
+#[cfg(feature = "redis-backend")]
+#[derive(Debug, PartialEq, Eq)]
+enum VersionVerdict {
+    Compatible,
+    Incompatible,
+}
+
+/// Coerce a `redis_version` value from `INFO server` into a full [`Version`],
+/// returning the parsed version plus the number of numeric components that were
+/// actually present (1, 2 or 3).
+///
+/// OSS Valkey/Redis report a complete `MAJOR.MINOR.PATCH` (e.g. `7.2.4`). Managed
+/// engines can report fewer components — ElastiCache Serverless reports only the
+/// major (e.g. `8`). We take the leading numeric dotted core (ignoring an optional
+/// `v` prefix and any non-numeric suffix) and zero-fill the missing minor/patch so
+/// the value always parses; the returned precision lets the caller decide how
+/// strictly it can range-check.
+#[cfg(feature = "redis-backend")]
+fn normalize_redis_version(raw: &str) -> Result<(Version, usize), semver::Error> {
+    let core = raw.trim();
+    let core = core.strip_prefix('v').unwrap_or(core);
+    let numeric: Vec<&str> = core
+        .split('.')
+        .take_while(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        .collect();
+    if numeric.is_empty() {
+        // Nothing numeric to work with — surface a parse error for the raw value.
+        return Version::parse(core).map(|version| (version, 3));
+    }
+    let present = numeric.len().min(3);
+    let major = numeric[0];
+    let minor = numeric.get(1).copied().unwrap_or("0");
+    let patch = numeric.get(2).copied().unwrap_or("0");
+    Version::parse(&format!("{major}.{minor}.{patch}")).map(|version| (version, present))
+}
+
+/// Decide whether a reported `redis_version` is compatible with `req`.
+///
+/// - When the minor is known (≥ 2 components), range-check precisely — this is the
+///   original strict behaviour for OSS Valkey/Redis.
+/// - When only the major is known (ElastiCache Serverless reports e.g. `8`), a
+///   `>=7.1` range check would be ambiguous, so accept iff the major is a supported
+///   line ([`SUPPORTED_MAJOR_VERSIONS`]).
+#[cfg(feature = "redis-backend")]
+fn assess_redis_version(raw: &str, req: &VersionReq) -> Result<VersionVerdict, semver::Error> {
+    let (version, present) = normalize_redis_version(raw)?;
+    let compatible = if present >= 2 {
+        req.matches(&version)
+    } else {
+        SUPPORTED_MAJOR_VERSIONS.contains(&version.major)
+    };
+    Ok(if compatible {
+        VersionVerdict::Compatible
+    } else {
+        VersionVerdict::Incompatible
+    })
+}
+
 #[cfg(feature = "redis-backend")]
 impl DatabaseHandler {
     /// Creates a new `DatabaseHandler`, establishing a multiplexed connection and verifying
@@ -256,28 +327,12 @@ impl DatabaseHandler {
             .next();
 
         if let Some(version) = server_version {
-            let semver_version: Version = match Version::parse(&version) {
-                Ok(result) => result,
-                Err(err) => {
-                    return Err(MediatorError::problem_with_log(
-                        7,
-                        "NA",
-                        None,
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.res.storage.version",
-                        "Cannot parse database version ({1}). Reason: {2}",
-                        vec![version.clone(), err.to_string()],
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Cannot parse database version ({version}). Reason: {err}"),
-                    ));
+            match assess_redis_version(&version, &redis_version_req) {
+                Ok(VersionVerdict::Compatible) => {
+                    info!("Redis version is compatible: {}", version);
+                    Ok(version.to_owned())
                 }
-            };
-            if redis_version_req.matches(&semver_version) {
-                info!("Redis version is compatible: {}", version);
-                Ok(version.to_owned())
-            } else {
-                Err(MediatorError::problem_with_log(
+                Ok(VersionVerdict::Incompatible) => Err(MediatorError::problem_with_log(
                     8,
                     "NA",
                     None,
@@ -290,7 +345,19 @@ impl DatabaseHandler {
                     format!(
                         "Database version {version} does not match expected {redis_version_req}"
                     ),
-                ))
+                )),
+                Err(err) => Err(MediatorError::problem_with_log(
+                    7,
+                    "NA",
+                    None,
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.storage.version",
+                    "Cannot parse database version ({1}). Reason: {2}",
+                    vec![version.clone(), err.to_string()],
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Cannot parse database version ({version}). Reason: {err}"),
+                )),
             }
         } else {
             Err(MediatorError::problem(
@@ -344,6 +411,115 @@ impl DatabaseHandler {
 
         if is_tls {
             info!("Redis TLS connection detected (rediss://)");
+        }
+    }
+}
+
+#[cfg(all(test, feature = "redis-backend"))]
+mod version_checks {
+    use super::{
+        REDIS_VERSION_REQ, SUPPORTED_MAJOR_VERSIONS, VersionVerdict, assess_redis_version,
+        normalize_redis_version,
+    };
+    use semver::{Version, VersionReq};
+
+    fn req() -> VersionReq {
+        VersionReq::parse(REDIS_VERSION_REQ).unwrap()
+    }
+
+    #[test]
+    fn normalizes_full_partial_and_prefixed_versions() {
+        // OSS Valkey/Redis: full MAJOR.MINOR.PATCH.
+        assert_eq!(
+            normalize_redis_version("7.2.4").unwrap(),
+            (Version::new(7, 2, 4), 3)
+        );
+        // Managed proxy reporting MAJOR.MINOR.
+        assert_eq!(
+            normalize_redis_version("8.1").unwrap(),
+            (Version::new(8, 1, 0), 2)
+        );
+        // ElastiCache Serverless: bare major only.
+        assert_eq!(
+            normalize_redis_version("8").unwrap(),
+            (Version::new(8, 0, 0), 1)
+        );
+        // Optional `v` prefix and surrounding whitespace are tolerated.
+        assert_eq!(
+            normalize_redis_version(" v7.4.0 ").unwrap(),
+            (Version::new(7, 4, 0), 3)
+        );
+        // Non-numeric suffix is dropped; only the numeric core is kept.
+        assert_eq!(
+            normalize_redis_version("7.4.0-serverless").unwrap(),
+            (Version::new(7, 4, 0), 2)
+        );
+    }
+
+    #[test]
+    fn rejects_non_numeric_versions() {
+        assert!(normalize_redis_version("").is_err());
+        assert!(normalize_redis_version("unknown").is_err());
+    }
+
+    #[test]
+    fn full_and_minor_versions_are_range_checked() {
+        assert_eq!(
+            assess_redis_version("7.2.4", &req()).unwrap(),
+            VersionVerdict::Compatible
+        );
+        assert_eq!(
+            assess_redis_version("8.1", &req()).unwrap(),
+            VersionVerdict::Compatible
+        );
+        // Genuinely below the >=7.1 floor.
+        assert_eq!(
+            assess_redis_version("7.0", &req()).unwrap(),
+            VersionVerdict::Incompatible
+        );
+        // At/above the <9.0 ceiling.
+        assert_eq!(
+            assess_redis_version("9.0.0", &req()).unwrap(),
+            VersionVerdict::Incompatible
+        );
+        assert_eq!(
+            assess_redis_version("6.2.0", &req()).unwrap(),
+            VersionVerdict::Incompatible
+        );
+    }
+
+    #[test]
+    fn bare_major_uses_supported_lines() {
+        // ElastiCache Serverless reports only the major (e.g. Valkey 8 -> "8").
+        assert_eq!(
+            assess_redis_version("8", &req()).unwrap(),
+            VersionVerdict::Compatible
+        );
+        assert_eq!(
+            assess_redis_version("7", &req()).unwrap(),
+            VersionVerdict::Compatible
+        );
+        assert_eq!(
+            assess_redis_version("6", &req()).unwrap(),
+            VersionVerdict::Incompatible
+        );
+        assert_eq!(
+            assess_redis_version("9", &req()).unwrap(),
+            VersionVerdict::Incompatible
+        );
+    }
+
+    #[test]
+    fn supported_majors_stay_within_requirement() {
+        // Guard against SUPPORTED_MAJOR_VERSIONS drifting out of REDIS_VERSION_REQ:
+        // every supported major must satisfy the requirement at some minor.
+        let req = req();
+        for &major in SUPPORTED_MAJOR_VERSIONS {
+            let ok = (0..10).any(|minor| req.matches(&Version::new(major, minor, 0)));
+            assert!(
+                ok,
+                "supported major {major} has no minor within {REDIS_VERSION_REQ}"
+            );
         }
     }
 }
