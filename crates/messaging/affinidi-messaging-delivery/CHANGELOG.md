@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.6] - 2026-07-16
+
+- Add **escalate-on-expiry** (§5a): when a `Sent` entry's delivery window passes
+  with no evidence, the window passing is never a silent success — the sweep
+  escalates it, visibly.
+  - `ExpiryEscalator` trait + `Escalation` outcome: `Rebound { deliver_by_ms,
+    hop_id }` (the escalator re-sent over an **alternate binding** — a dead
+    mediator ≠ a dead peer — so re-arm the window and keep watching, `Sent`),
+    `Failed` (no alternate — the delivery-critical send failed; **surface it**),
+    or `Unconfirmed` (no evidence was ever possible — a truthful "we can't know").
+  - `sweep_confirmations_with` / `confirmation_loop_with` apply the policy;
+    `confirmation_loop_with` logs a **warning** tick whenever entries `Failed`
+    (the operator-alert surface). `sweep_confirmations` / `confirmation_loop`
+    are unchanged — the default policy settles `Unconfirmed`.
+  - `ConfirmReport` gains `failed` and `rebound` counts (additive;
+    `#[non_exhaustive]`).
+  The concrete escalator — re-resolving the peer's DID document and re-sending
+  over another transport/mediator — is wired by the service that owns the
+  transports (lands with multi-transport / Phase 4); the layer applies the
+  outcome. Additive. 4 new offline tests (34 total).
+
 ## [0.1.5] - 2026-07-16
 
 - Add the §5a **protocol-reply** evidence source (the third §5a source, after
