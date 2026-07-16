@@ -36,6 +36,7 @@ members = [
 
   # Messaging: core, DIDComm, TSP, SDK, mediator
   "crates/messaging/affinidi-messaging-core",
+  "crates/messaging/affinidi-messaging-delivery",
   "crates/messaging/affinidi-messaging-didcomm",
   "crates/messaging/affinidi-tsp",
   "crates/messaging/affinidi-messaging-sdk",
