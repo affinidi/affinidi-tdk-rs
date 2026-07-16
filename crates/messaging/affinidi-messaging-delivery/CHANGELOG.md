@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.5] - 2026-07-16
+
+- Add the §5a **protocol-reply** evidence source (the third §5a source, after
+  layer-receipt and outbox-drain). An inbound message arriving *in the thread of*
+  a `Sent` outbox entry — thread id matches its idempotency key — is proof the
+  peer received the original `Guaranteed` send (you cannot reply in-thread to a
+  message you never got), so the dispatcher settles that entry `Delivered` with
+  no application ack of our own. Where the peer already replies (registry
+  response, RPC, approver approve/deny), that reply *is* the receipt.
+  - Consume-only, event-driven in the inbound dispatcher; needs no packer.
+    Idempotent — a no-op when no `Sent` entry matches, and harmless when a layer
+    receipt already confirmed the same entry. The reply is still delivered to the
+    application as ordinary traffic.
+  - A reply that confirms one of our own sends is **not** itself receipted (it is
+    a reply, not a fresh `Guaranteed` push; its thread id is the original thread,
+    not the reply's own key).
+  Additive (dispatcher behaviour; no API change). 2 new offline tests (30 total).
+
 ## [0.1.4] - 2026-07-16
 
 - Add the §5a **layer receipt** — the strongest delivery-confirmation evidence
