@@ -4,6 +4,7 @@
 
 use super::{WebSocketResponses, ws_cache::MessageCache};
 use crate::{ATM, SharedState, errors::ATMError, profiles::ATMProfile};
+use affinidi_messaging_core::ConnState;
 use ahash::{HashMap, HashMapExt};
 use futures_util::{SinkExt, StreamExt};
 use rand::RngExt;
@@ -14,7 +15,7 @@ use tokio::{
     sync::{
         broadcast,
         mpsc::{self, Receiver, Sender},
-        oneshot,
+        oneshot, watch,
     },
     task::JoinHandle,
     time::{Interval, interval_at},
@@ -72,6 +73,13 @@ pub(crate) struct WebSocketTransport {
 
     /// Skip unpacking messages - return them as packed strings instead
     skip_unpack_messages: bool,
+
+    /// Re-falsifiable connection-state signal. A transition is published on
+    /// every successful (re)connect (`Connected`) and every drop
+    /// (`Disconnected`), so observers see live connectivity rather than a
+    /// boot-time latch. The matching `Receiver` is handed to the caller by
+    /// `start`/`start_with_options` and stored on the `Mediator`.
+    conn_state_tx: watch::Sender<ConnState>,
 }
 
 /// WebSocket Commands
@@ -112,8 +120,13 @@ impl WebSocketTransport {
         profile: Arc<ATMProfile>,
         shared: Arc<SharedState>,
         direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
-    ) -> (JoinHandle<()>, Sender<WebSocketCommands>) {
+    ) -> (
+        JoinHandle<()>,
+        Sender<WebSocketCommands>,
+        watch::Receiver<ConnState>,
+    ) {
         let (task_tx, mut task_rx) = mpsc::channel::<WebSocketCommands>(32);
+        let (conn_state_tx, conn_state_rx) = watch::channel(ConnState::Connecting);
         let handle = tokio::spawn(async move {
             let mut websocket = WebSocketTransport {
                 profile: profile.clone(),
@@ -133,10 +146,11 @@ impl WebSocketTransport {
                 next_requests_list: VecDeque::new(),
                 skip_toggle_live_delivery: false,
                 skip_unpack_messages: false,
+                conn_state_tx,
             };
             websocket.run(&mut task_rx).await;
         });
-        (handle, task_tx)
+        (handle, task_tx, conn_state_rx)
     }
 
     pub(crate) async fn start_with_options(
@@ -145,8 +159,13 @@ impl WebSocketTransport {
         direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
         skip_toggle_live_delivery: bool,
         skip_unpack_messages: bool,
-    ) -> (JoinHandle<()>, Sender<WebSocketCommands>) {
+    ) -> (
+        JoinHandle<()>,
+        Sender<WebSocketCommands>,
+        watch::Receiver<ConnState>,
+    ) {
         let (task_tx, mut task_rx) = mpsc::channel::<WebSocketCommands>(32);
+        let (conn_state_tx, conn_state_rx) = watch::channel(ConnState::Connecting);
         let handle = tokio::spawn(async move {
             let mut websocket = WebSocketTransport {
                 profile: profile.clone(),
@@ -166,10 +185,11 @@ impl WebSocketTransport {
                 next_requests_list: VecDeque::new(),
                 skip_toggle_live_delivery,
                 skip_unpack_messages,
+                conn_state_tx,
             };
             websocket.run(&mut task_rx).await;
         });
-        (handle, task_tx)
+        (handle, task_tx, conn_state_rx)
     }
 
     /// Starts the WebSocket Connection and management to the mediator
@@ -217,6 +237,9 @@ impl WebSocketTransport {
                         debug!("Attempt to reconnect");
                         self.web_socket = self._handle_connection(&atm).await;
                         if self.web_socket.is_some() {
+                            // Single success site for the first connect AND every
+                            // reconnect — publish the live connection signal here.
+                            let _ = self.conn_state_tx.send(ConnState::Connected);
                             // Arm the proactive-refresh timer for this socket.
                             refresh_deadline = self.refresh_deadline();
                             if notify_connection.is_some() {
@@ -540,6 +563,12 @@ impl WebSocketTransport {
     /// them, or their response was lost with the socket — so they will not be
     /// answered on the reconnected socket.
     fn fail_pending_requests(&mut self) {
+        // Every websocket drop funnels through here (missed pong, server close,
+        // reset, socket error, forced token-refresh reconnect), so this is the
+        // single place that publishes the `Disconnected` transition. The
+        // reconnect loop republishes `Connected` on the next successful connect.
+        let _ = self.conn_state_tx.send(ConnState::Disconnected);
+
         let mut notified = 0usize;
 
         // Pending `Next` waiters
