@@ -22,14 +22,76 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use affinidi_messaging_core::MessageTransport;
 
-use crate::outbox::{OutboxError, OutboxState, OutboxStore};
+use crate::outbox::{OutboxEntry, OutboxError, OutboxState, OutboxStore};
 
-/// What one [`sweep_confirmations`] pass settled.
+/// What one confirmation sweep settled.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ConfirmReport {
-    /// `Sent` entries whose window expired with no evidence (→ `Unconfirmed`).
+    /// Expired `Sent` entries settled `Unconfirmed` — no end-to-end evidence was
+    /// possible (no layer, no reply, no pickup).
     pub unconfirmed: usize,
+    /// Expired `Sent` entries settled `Failed` — delivery-critical, escalation
+    /// exhausted. **Surface these** (metric + operator alert).
+    pub failed: usize,
+    /// Expired `Sent` entries **re-sent over an alternate binding** and re-armed
+    /// with a fresh window (a dead mediator ≠ a dead peer); still watched.
+    pub rebound: usize,
+}
+
+/// How an expired, still-unconfirmed `Sent` entry is escalated (§5a) — the
+/// window passing is **never** a silent success. Returned by an
+/// [`ExpiryEscalator`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Escalation {
+    /// The escalator re-resolved the peer and **re-sent over an alternate
+    /// binding** (another transport/mediator the DID document offers). Keep
+    /// watching until `deliver_by_ms`, correlating the new hop via `hop_id`. The
+    /// entry stays `Sent` (re-hop-accepted on the alternate); the previous
+    /// outbox observation is reset.
+    Rebound {
+        /// The fresh delivery window for the re-sent message.
+        deliver_by_ms: u64,
+        /// The alternate hop's id, for outbox-drain correlation (`None` if the
+        /// alternate binding returns no id).
+        hop_id: Option<String>,
+    },
+    /// No alternate binding is possible (a dead mediator with no fallback) → the
+    /// delivery-critical send **failed**; surface it. Distinct from a silent
+    /// drop and from `Unconfirmed`.
+    Failed,
+    /// No end-to-end evidence was ever possible for this recipient (no layer, no
+    /// reply, never picks up) → a truthful "we can't know", not a failure.
+    Unconfirmed,
+}
+
+/// The escalation policy the confirmation sweep applies when a `Sent` entry's
+/// delivery window expires with no evidence.
+///
+/// The concrete escalator — which re-resolves the peer's DID document and
+/// re-sends over an alternate transport/mediator — is wired by the service that
+/// owns the transports (it lands with multi-transport / Phase 4); the delivery
+/// layer only applies the [`Escalation`] outcome. The default policy (no
+/// escalator, i.e. [`sweep_confirmations`]) settles every expired entry
+/// `Unconfirmed`.
+#[async_trait::async_trait]
+pub trait ExpiryEscalator: Send + Sync {
+    /// Decide how the expired, still-unconfirmed `entry` escalates. Any
+    /// alternate-binding re-send is the escalator's own work; it reports the
+    /// outcome here.
+    async fn escalate(&self, entry: &OutboxEntry) -> Escalation;
+}
+
+/// The default policy: settle every expired entry `Unconfirmed` (no alternate
+/// binding attempted). What [`sweep_confirmations`] uses.
+struct SettleUnconfirmed;
+
+#[async_trait::async_trait]
+impl ExpiryEscalator for SettleUnconfirmed {
+    async fn escalate(&self, _entry: &OutboxEntry) -> Escalation {
+        Escalation::Unconfirmed
+    }
 }
 
 /// Record end-to-end delivery evidence for `idempotency_key`: transition its
@@ -60,16 +122,60 @@ pub async fn confirm_delivered(
 /// hop-accepted (the mediator took it), we just never got end-to-end evidence —
 /// a truthful "we can't know", not "delivery failed". (A `Queued` entry that
 /// expires before it can even hop-accept is the drain's `Failed` case.)
+///
+/// To escalate expired entries — re-send over an alternate binding, or fail
+/// visibly — instead of always settling `Unconfirmed`, use
+/// [`sweep_confirmations_with`].
 pub async fn sweep_confirmations(
     store: &dyn OutboxStore,
     now_ms: u64,
 ) -> Result<ConfirmReport, OutboxError> {
+    sweep_confirmations_with(store, now_ms, &SettleUnconfirmed).await
+}
+
+/// One confirmation sweep that **escalates** each expired `Sent` entry through
+/// `escalator` (§5a) rather than always settling `Unconfirmed`: the window
+/// passing is never a silent success.
+///
+/// Per expired entry, the [`Escalation`] outcome is applied:
+/// - [`Escalation::Rebound`] → re-armed with the fresh window + hop, still `Sent`
+///   (the escalator already re-sent over the alternate binding), the earlier
+///   outbox observation reset so a later drain is unambiguous;
+/// - [`Escalation::Failed`] → `Failed` (surface it);
+/// - [`Escalation::Unconfirmed`] → `Unconfirmed`.
+pub async fn sweep_confirmations_with(
+    store: &dyn OutboxStore,
+    now_ms: u64,
+    escalator: &dyn ExpiryEscalator,
+) -> Result<ConfirmReport, OutboxError> {
     let mut report = ConfirmReport::default();
     for mut entry in store.awaiting_confirmation().await? {
-        if now_ms >= entry.deliver_by_ms {
-            entry.state = OutboxState::Unconfirmed;
-            store.put(entry).await?;
-            report.unconfirmed += 1;
+        if now_ms < entry.deliver_by_ms {
+            continue;
+        }
+        match escalator.escalate(&entry).await {
+            Escalation::Rebound {
+                deliver_by_ms,
+                hop_id,
+            } => {
+                entry.deliver_by_ms = deliver_by_ms;
+                entry.hop_id = hop_id;
+                entry.outbox_observed = false;
+                // Stays Sent: the escalator re-sent over the alternate binding
+                // and it hop-accepted; we keep watching for evidence.
+                store.put(entry).await?;
+                report.rebound += 1;
+            }
+            Escalation::Failed => {
+                entry.state = OutboxState::Failed;
+                store.put(entry).await?;
+                report.failed += 1;
+            }
+            Escalation::Unconfirmed => {
+                entry.state = OutboxState::Unconfirmed;
+                store.put(entry).await?;
+                report.unconfirmed += 1;
+            }
         }
     }
     Ok(report)
@@ -79,14 +185,35 @@ pub async fn sweep_confirmations(
 /// dropped), using the wall clock. A store error on one tick is logged and
 /// retried on the next.
 pub async fn confirmation_loop(store: Arc<dyn OutboxStore>, interval: Duration) {
+    confirmation_loop_with(store, interval, Arc::new(SettleUnconfirmed)).await
+}
+
+/// Run [`sweep_confirmations_with`] every `interval`, forever, escalating
+/// expired entries through `escalator`. Logs a warning tick whenever entries
+/// `Failed` (the operator-alert surface) and a debug tick for rebinds. A store
+/// error on one tick is logged and retried on the next.
+pub async fn confirmation_loop_with(
+    store: Arc<dyn OutboxStore>,
+    interval: Duration,
+    escalator: Arc<dyn ExpiryEscalator>,
+) {
     let mut ticker = tokio::time::interval(interval);
     loop {
         ticker.tick().await;
-        match sweep_confirmations(store.as_ref(), now_unix_ms()).await {
+        match sweep_confirmations_with(store.as_ref(), now_unix_ms(), escalator.as_ref()).await {
+            Ok(report) if report.failed > 0 => {
+                tracing::warn!(
+                    failed = report.failed,
+                    unconfirmed = report.unconfirmed,
+                    rebound = report.rebound,
+                    "delivery window expired with no evidence and no alternate binding — messages FAILED",
+                );
+            }
             Ok(report) if report != ConfirmReport::default() => {
                 tracing::debug!(
                     unconfirmed = report.unconfirmed,
-                    "confirmation sweep settled entries as Unconfirmed",
+                    rebound = report.rebound,
+                    "confirmation sweep escalated expired entries",
                 );
             }
             Ok(_) => {}
@@ -261,6 +388,98 @@ mod tests {
         assert_eq!(
             store.get("in_window").await.unwrap().unwrap().state,
             OutboxState::Delivered
+        );
+    }
+
+    // ── Escalation on window expiry (§5a) ────────────────────────────────
+
+    /// An escalator that returns a fixed decision, for driving the sweep.
+    struct FixedEscalator(Escalation);
+    #[async_trait::async_trait]
+    impl ExpiryEscalator for FixedEscalator {
+        async fn escalate(&self, _entry: &OutboxEntry) -> Escalation {
+            self.0.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn escalate_rebound_rearms_the_window_and_keeps_watching() {
+        let store = InMemoryOutboxStore::new();
+        sent_entry(&store, "k", 1_000).await; // deliver_by = 61_000, Sent
+        // Mark it observed so we can prove the rebind resets that observation.
+        let mut e = store.get("k").await.unwrap().unwrap();
+        e.outbox_observed = true;
+        store.put(e).await.unwrap();
+
+        let esc = FixedEscalator(Escalation::Rebound {
+            deliver_by_ms: 200_000,
+            hop_id: Some("h2".into()),
+        });
+        let report = sweep_confirmations_with(&store, 61_000, &esc)
+            .await
+            .unwrap();
+        assert_eq!(report.rebound, 1);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.unconfirmed, 0);
+
+        let e = store.get("k").await.unwrap().unwrap();
+        assert_eq!(e.state, OutboxState::Sent); // still watched
+        assert_eq!(e.deliver_by_ms, 200_000); // fresh window
+        assert_eq!(e.hop_id.as_deref(), Some("h2")); // alternate hop
+        assert!(!e.outbox_observed); // reset for the alternate binding
+
+        // Before the NEW window expires, another sweep leaves it alone.
+        let report = sweep_confirmations_with(&store, 100_000, &esc)
+            .await
+            .unwrap();
+        assert_eq!(report, ConfirmReport::default());
+        assert_eq!(
+            store.get("k").await.unwrap().unwrap().state,
+            OutboxState::Sent
+        );
+    }
+
+    #[tokio::test]
+    async fn escalate_failed_settles_failed_and_is_reported() {
+        let store = InMemoryOutboxStore::new();
+        sent_entry(&store, "k", 1_000).await;
+        let report = sweep_confirmations_with(&store, 61_000, &FixedEscalator(Escalation::Failed))
+            .await
+            .unwrap();
+        assert_eq!(report.failed, 1);
+        assert_eq!(
+            store.get("k").await.unwrap().unwrap().state,
+            OutboxState::Failed
+        );
+    }
+
+    #[tokio::test]
+    async fn escalate_unconfirmed_matches_the_default_sweep() {
+        let store = InMemoryOutboxStore::new();
+        sent_entry(&store, "k", 1_000).await;
+        let report =
+            sweep_confirmations_with(&store, 61_000, &FixedEscalator(Escalation::Unconfirmed))
+                .await
+                .unwrap();
+        assert_eq!(report.unconfirmed, 1);
+        assert_eq!(
+            store.get("k").await.unwrap().unwrap().state,
+            OutboxState::Unconfirmed
+        );
+    }
+
+    #[tokio::test]
+    async fn escalator_is_not_called_before_expiry() {
+        // An in-window entry must never be escalated (it would fail a live send).
+        let store = InMemoryOutboxStore::new();
+        sent_entry(&store, "k", 1_000).await; // deliver_by = 61_000
+        let report = sweep_confirmations_with(&store, 30_000, &FixedEscalator(Escalation::Failed))
+            .await
+            .unwrap();
+        assert_eq!(report, ConfirmReport::default());
+        assert_eq!(
+            store.get("k").await.unwrap().unwrap().state,
+            OutboxState::Sent
         );
     }
 

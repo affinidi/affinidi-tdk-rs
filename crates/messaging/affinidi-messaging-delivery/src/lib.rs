@@ -26,8 +26,9 @@ pub mod receipt;
 pub mod service;
 
 pub use confirm::{
-    ConfirmReport, DrainPollReport, confirm_delivered, confirmation_loop, outbox_drain_loop,
-    poll_outbox_drain, sweep_confirmations,
+    ConfirmReport, DrainPollReport, Escalation, ExpiryEscalator, confirm_delivered,
+    confirmation_loop, confirmation_loop_with, outbox_drain_loop, poll_outbox_drain,
+    sweep_confirmations, sweep_confirmations_with,
 };
 pub use drain::{DrainReport, drain_loop, drain_once};
 pub use outbox::{InMemoryOutboxStore, Key, OutboxEntry, OutboxError, OutboxState, OutboxStore};
