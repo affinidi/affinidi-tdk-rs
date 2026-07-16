@@ -350,10 +350,12 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
 
     // Non-interactive / recipe paths don't run the online-VTA sub-flow, so
     // there's no captured session — VTA-managed DID creation isn't
-    // supported from `--from` / `--non-interactive` yet. Headless flows use a
-    // read-only backend probe: the well-known secrets are pre-created
-    // out-of-band (e.g. by CDK), so setup only overwrites them and never needs
-    // create/delete rights — matching the runtime, which also probes read-only.
+    // supported from `--from` / `--non-interactive` yet. Headless flows
+    // *request* a read-only backend probe; it takes effect only for
+    // `aws_secrets://`, where the entries are pre-created out-of-band (e.g. by
+    // CDK) so setup only overwrites them — matching the runtime, which also
+    // probes read-only. Every other backend is narrowed back to a write
+    // round-trip in `open_and_probe_secret_backend`.
     generate_and_write(
         &config,
         None,
