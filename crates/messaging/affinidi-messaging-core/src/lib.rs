@@ -23,8 +23,10 @@
 
 pub mod error;
 pub mod traits;
+pub mod transport;
 pub mod types;
 
 pub use error::MessagingError;
 pub use traits::{IdentityResolver, MessagingProtocol, RelationshipManager};
+pub use transport::ConnState;
 pub use types::{Protocol, ReceivedMessage, RelationshipState, ResolvedIdentity};

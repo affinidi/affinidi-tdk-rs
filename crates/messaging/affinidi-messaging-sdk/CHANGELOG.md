@@ -1,6 +1,18 @@
 # Changelog
 
-## [0.18.50] - 2026-07-12
+## [0.18.51] - 2026-07-16
+
+- Publish a re-falsifiable websocket connection-state signal (D1 conformance,
+  R6.2). The reconnect loop lives entirely inside the SDK's `WebSocketTransport`
+  task and previously emitted nothing on drop/reconnect, so every consumer's
+  connectivity view (`ListenerEvent`, health flags) was a boot-time latch. The
+  transport now owns a `tokio::sync::watch::<ConnState>` (from the new
+  `affinidi-messaging-core::ConnState`): it publishes `Connected` at the single
+  reconnect-success site and `Disconnected` from `fail_pending_requests` (the
+  one choke point every drop funnels through). Exposed additively via
+  `ATMProfile::connection_state() -> Option<watch::Receiver<ConnState>>`
+  (`None` for a REST-only profile). No existing API changed; the internal
+  `WebSocketTransport::start`/`start_with_options` now also return the receiver.
 
 - Footgun guard: `TspOps::connect_websocket` now warns when the profile already
   has a live-stream pickup websocket. The mediator permits one websocket per DID,

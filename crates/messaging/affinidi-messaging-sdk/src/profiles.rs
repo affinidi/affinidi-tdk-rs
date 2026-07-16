@@ -18,6 +18,7 @@ use affinidi_did_common::{
     Document,
     service::{Endpoint, Service},
 };
+use affinidi_messaging_core::ConnState;
 use affinidi_tdk_common::profiles::TDKProfile;
 use ahash::AHashMap as HashMap;
 use serde_json::Value;
@@ -30,7 +31,7 @@ use std::{
 };
 use tokio::{
     select,
-    sync::{RwLock, broadcast, mpsc, oneshot},
+    sync::{RwLock, broadcast, mpsc, oneshot, watch},
 };
 use tracing::debug;
 
@@ -194,6 +195,21 @@ impl ATMProfile {
 
         Ok(())
     }
+
+    /// A re-falsifiable view of this profile's DIDComm websocket connection
+    /// state.
+    ///
+    /// Returns a [`watch::Receiver<ConnState>`] that transitions to
+    /// [`ConnState::Connected`] on every successful (re)connect and
+    /// [`ConnState::Disconnected`] on every drop, for the life of the
+    /// transport task — it is a live signal, not a boot-time latch. Returns
+    /// `None` if no websocket transport is running for this profile (REST-only,
+    /// or before `profile_enable_websocket`). Callers observe drops/reconnects
+    /// with [`watch::Receiver::changed`].
+    pub async fn connection_state(&self) -> Option<watch::Receiver<ConnState>> {
+        let mediator = self.inner.mediator.as_ref().as_ref()?;
+        mediator.ws_conn_state_rx.read().await.clone()
+    }
 }
 
 #[derive(Debug)]
@@ -204,6 +220,12 @@ pub struct Mediator {
 
     /// MPSC Channel to send commands to the WebSocket connection
     pub(crate) ws_channel_tx: RwLock<Option<mpsc::Sender<WebSocketCommands>>>,
+
+    /// Re-falsifiable connection-state signal for the WebSocket transport,
+    /// published by the transport task on every drop/reconnect. `None` when no
+    /// websocket transport is running for this mediator. Cloned out by
+    /// [`ATMProfile::connection_state`].
+    pub(crate) ws_conn_state_rx: RwLock<Option<watch::Receiver<ConnState>>>,
 
     /// Unique ID that is used for anything requiring a unique transaction identifier
     pub(crate) tx_uuid: AtomicU32,
@@ -225,6 +247,7 @@ impl Mediator {
             rest_endpoint: Mediator::find_rest_endpoint(&mediator_doc),
             websocket_endpoint: Mediator::find_ws_endpoint(&mediator_doc),
             ws_channel_tx: RwLock::new(None),
+            ws_conn_state_rx: RwLock::new(None),
             tx_uuid: AtomicU32::new(0),
         };
 
@@ -320,6 +343,9 @@ impl Mediator {
     /// `Stop` so the task exits cleanly and drops its arcs on the way out.
     pub(crate) async fn cleanup_failed_websocket(&self) {
         let sender = self.ws_channel_tx.write().await.take();
+        // Drop the stale connection-state receiver alongside the command sender;
+        // a fresh one is installed on the next `WebSocketTransport::start`.
+        let _ = self.ws_conn_state_rx.write().await.take();
         if let Some(sender) = sender {
             let _ = sender.send(WebSocketCommands::Stop).await;
         }
@@ -436,13 +462,18 @@ impl ATM {
 
         debug!("Profile({}): enabling...", profile.inner.alias);
 
-        let (_, ws_channel) = WebSocketTransport::start(
+        let (_, ws_channel, conn_state_rx) = WebSocketTransport::start(
             profile.clone(),
             self.inner.clone(),
             self.inner.config.inbound_message_channel.clone(),
         )
         .await;
         mediator.ws_channel_tx.write().await.replace(ws_channel);
+        mediator
+            .ws_conn_state_rx
+            .write()
+            .await
+            .replace(conn_state_rx);
 
         // Every error path past WebSocketTransport::start MUST clear the
         // sender slot and tell the spawned task to stop. Otherwise the task
@@ -484,7 +515,7 @@ impl ATM {
 
         debug!("Profile({}): enabling...", profile.inner.alias);
 
-        let (_, ws_channel) = WebSocketTransport::start_with_options(
+        let (_, ws_channel, conn_state_rx) = WebSocketTransport::start_with_options(
             profile.clone(),
             self.inner.clone(),
             self.inner.config.inbound_message_channel.clone(),
@@ -493,6 +524,11 @@ impl ATM {
         )
         .await;
         mediator.ws_channel_tx.write().await.replace(ws_channel);
+        mediator
+            .ws_conn_state_rx
+            .write()
+            .await
+            .replace(conn_state_rx);
 
         // Every error path past WebSocketTransport::start_with_options MUST
         // clear the sender slot and tell the spawned task to stop. Otherwise
@@ -585,6 +621,7 @@ mod tests {
             rest_endpoint: Some("http://127.0.0.1:1/".to_string()),
             websocket_endpoint: Some("ws://127.0.0.1:1/".to_string()),
             ws_channel_tx: RwLock::new(None),
+            ws_conn_state_rx: RwLock::new(None),
             tx_uuid: AtomicU32::new(0),
         };
         Arc::new(ATMProfile {
@@ -631,7 +668,7 @@ mod tests {
 
         // Start the transport directly — same call sequence
         // `profile_enable_websocket` performs internally.
-        let (handle, ws_channel) =
+        let (handle, ws_channel, _conn_state_rx) =
             crate::transports::websockets::websocket::WebSocketTransport::start(
                 profile.clone(),
                 atm.inner.clone(),
@@ -662,6 +699,57 @@ mod tests {
             .expect("websocket task did not terminate within 15s")
             .expect("websocket task panicked");
 
+        atm.graceful_shutdown().await;
+    }
+
+    /// The connection-state signal is `None` until a transport runs, then is
+    /// exposed via `ATMProfile::connection_state()` starting at `Connecting`.
+    #[tokio::test]
+    async fn connection_state_is_exposed_and_starts_connecting() {
+        let tdk_cfg = TDKConfig::headless().expect("headless tdk config");
+        let tdk = Arc::new(
+            TDKSharedState::new(tdk_cfg)
+                .await
+                .expect("tdk shared state"),
+        );
+        let atm_cfg = ATMConfig::builder().build().expect("atm config");
+        let atm = ATM::new(atm_cfg, tdk).await.expect("atm");
+
+        let profile = fake_profile();
+
+        // No websocket transport yet → no signal.
+        assert!(
+            profile.connection_state().await.is_none(),
+            "no signal before a transport is started",
+        );
+
+        let mediator = mediator_of(&profile);
+        let (handle, ws_channel, conn_state_rx) =
+            crate::transports::websockets::websocket::WebSocketTransport::start(
+                profile.clone(),
+                atm.inner.clone(),
+                None,
+            )
+            .await;
+        mediator.ws_channel_tx.write().await.replace(ws_channel);
+        mediator
+            .ws_conn_state_rx
+            .write()
+            .await
+            .replace(conn_state_rx);
+
+        // Exposed once running, and initial state is `Connecting`. The fake
+        // mediator endpoint is a closed port, so it never reaches `Connected`
+        // and the initial state is stable for the assertion.
+        let rx = profile
+            .connection_state()
+            .await
+            .expect("connection_state present once the transport is running");
+        assert_eq!(*rx.borrow(), ConnState::Connecting);
+
+        // Tear down the spawned task.
+        mediator.cleanup_failed_websocket().await;
+        let _ = timeout(Duration::from_secs(15), handle).await;
         atm.graceful_shutdown().await;
     }
 
