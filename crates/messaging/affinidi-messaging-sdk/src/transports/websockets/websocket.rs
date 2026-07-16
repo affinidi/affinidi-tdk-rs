@@ -640,12 +640,29 @@ impl WebSocketTransport {
             self.awaiting_pong = false;
             Some(web_socket)
         } else {
-            match atm
-                .message_pickup()
-                .toggle_live_delivery(&self.profile, true)
+            // Pack the live-delivery-change frame and write it DIRECTLY to the
+            // socket we are holding. This code runs on the transport task
+            // itself, so it must not go through `ATM::send_message`: that
+            // enqueues a `SendMessage` command into this task's own channel and
+            // awaits a reply that only this (currently busy) task could
+            // produce — a deadlock that timed out every connect attempt (#611).
+            let send_result =
+                match crate::protocols::message_pickup::MessagePickup::packed_live_delivery_change(
+                    atm,
+                    &self.profile,
+                    true,
+                )
                 .await
-            {
-                Ok(_) => {
+                {
+                    Ok((frame, _msg_id)) => {
+                        web_socket.send(Message::text(frame)).await.map_err(|e| {
+                            ATMError::TransportError(format!("websocket write failed: {e}"))
+                        })
+                    }
+                    Err(e) => Err(e),
+                };
+            match send_result {
+                Ok(()) => {
                     debug!("Live streaming enabled");
                     self.connect_delay = 0;
                     self.connect_delay_timer = None;

@@ -25,16 +25,57 @@ use std::time::Duration;
 use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_didcomm_service::{
     DIDCommResponse, DIDCommService, DIDCommServiceConfig, DIDCommServiceError, Extension,
-    HandlerContext, ListenerConfig, MESSAGE_PICKUP_STATUS_TYPE, RestartPolicy, RetryConfig, Router,
-    TRUST_PING_TYPE, handler_fn, ignore_handler, trust_ping_handler,
+    HandlerContext, ListenerConfig, ListenerEvent, MESSAGE_PICKUP_STATUS_TYPE, RestartPolicy,
+    RetryConfig, Router, TRUST_PING_TYPE, handler_fn, ignore_handler, trust_ping_handler,
 };
 use affinidi_messaging_test_mediator::TestMediator;
 use affinidi_tdk::dids::{DID, KeyType, PeerKeyRole};
 use affinidi_tdk_common::profiles::TDKProfile;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 const REPORT_PROBLEM_TYPE: &str = "https://didcomm.org/report-problem/2.0/problem-report";
 const LISTENER_ID: &str = "vta-main";
+
+/// Connect gate for loaded CI runners (#611). A single `connect()` attempt
+/// may legitimately spend up to 10s inside the service's `profile_add`
+/// timeout, and the test's restart policy backs off 1–2s between attempts —
+/// so the old flat 15s budget fit barely one and a half attempts, and one
+/// slow attempt on a saturated runner failed the whole test. 60s fits about
+/// five full attempts; when healthy the wait returns in well under a second,
+/// so the larger budget costs nothing.
+const CONNECT_BUDGET: Duration = Duration::from_secs(60);
+
+/// Wait for the listener to connect, panicking with every lifecycle event
+/// seen so far when the budget expires — so a CI failure names the actual
+/// connect error(s) instead of an opaque `Timeout(Elapsed(()))`.
+async fn wait_connected_or_dump_events(
+    service: &DIDCommService,
+    events: &mut broadcast::Receiver<ListenerEvent>,
+    generation: &str,
+) {
+    if service
+        .wait_connected(LISTENER_ID, CONNECT_BUDGET)
+        .await
+        .is_ok()
+    {
+        return;
+    }
+    let mut seen = Vec::new();
+    loop {
+        match events.try_recv() {
+            Ok(event) => seen.push(format!("{event:?}")),
+            Err(broadcast::error::TryRecvError::Lagged(n)) => {
+                seen.push(format!("({n} earlier event(s) dropped)"));
+            }
+            Err(_) => break,
+        }
+    }
+    panic!(
+        "service {generation} failed to connect to the mediator within \
+         {CONNECT_BUDGET:?}; lifecycle events observed: {seen:#?}"
+    );
+}
 
 /// Counts `w.websocket.duplicate-channel` problem reports delivered to the
 /// listener. A healthy, singly-connected listener never receives one.
@@ -120,10 +161,8 @@ async fn soft_restart_does_not_leak_a_dueling_websocket() {
     )
     .await
     .expect("start service generation 1");
-    service1
-        .wait_connected(LISTENER_ID, Duration::from_secs(15))
-        .await
-        .expect("service 1 connects to mediator");
+    let mut events1 = service1.subscribe();
+    wait_connected_or_dump_events(&service1, &mut events1, "1").await;
 
     // Soft restart: tear the first service down. With the fix this stops the
     // websocket; without it, the socket is orphaned and keeps reconnecting.
@@ -139,10 +178,8 @@ async fn soft_restart_does_not_leak_a_dueling_websocket() {
     )
     .await
     .expect("start service generation 2");
-    service2
-        .wait_connected(LISTENER_ID, Duration::from_secs(15))
-        .await
-        .expect("service 2 connects to mediator");
+    let mut events2 = service2.subscribe();
+    wait_connected_or_dump_events(&service2, &mut events2, "2").await;
 
     // Give any orphaned socket several reconnect cycles (initial backoff is
     // 1s, capped at 2s) to start a duplicate-channel war. Poll so the test

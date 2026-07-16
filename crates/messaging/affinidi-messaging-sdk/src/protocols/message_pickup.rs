@@ -188,40 +188,62 @@ impl MessagePickup {
         let _span = span!(Level::DEBUG, "toggle_live_delivery",);
         async move {
             debug!("Setting live_delivery to ({})", live_delivery);
-            let (profile_did, mediator_did) = profile.dids()?;
+            let (packed, msg_id) =
+                Self::packed_live_delivery_change(atm, profile, live_delivery).await?;
 
-            let now = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-
-            let mut msg = Message::build(
-                Uuid::new_v4().to_string(),
-                "https://didcomm.org/messagepickup/3.0/live-delivery-change".to_owned(),
-                json!({"live_delivery": live_delivery}),
-            )
-            .created_time(now)
-            .expires_time(now + 300)
-            .from(profile_did.into())
-            .to(mediator_did.into())
-            .finalize();
-            msg.extra
-                .insert("return_route".to_string(), Value::String("all".into()));
-            let msg_id = msg.id.clone();
-
-            // Pack the message
-            let (msg, _) = atm
-                .inner
-                .pack_encrypted(&msg, mediator_did, Some(profile_did))
-                .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
-
-            atm.send_message(profile, &msg, &msg_id, false, false)
+            atm.send_message(profile, &packed, &msg_id, false, false)
                 .await?;
             Ok(msg_id)
         }
         .instrument(_span)
         .await
+    }
+
+    /// Build and pack a Message Pickup 3.0 `live-delivery-change` message
+    /// without sending it. Returns `(packed_message, msg_id)`.
+    ///
+    /// Exists so the websocket transport's connection setup can write the
+    /// frame **directly** to the socket it is holding: that code runs *on*
+    /// the transport task, and routing it through [`ATM::send_message`] would
+    /// enqueue a `SendMessage` command into the transport's own channel and
+    /// then await a reply that only the (currently busy) transport task could
+    /// produce — a deadlock that made every connect attempt time out (#611).
+    /// All other callers should use
+    /// [`toggle_live_delivery`](Self::toggle_live_delivery), which sends
+    /// through the normal transport path.
+    pub(crate) async fn packed_live_delivery_change(
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        live_delivery: bool,
+    ) -> Result<(String, String), ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut msg = Message::build(
+            Uuid::new_v4().to_string(),
+            "https://didcomm.org/messagepickup/3.0/live-delivery-change".to_owned(),
+            json!({"live_delivery": live_delivery}),
+        )
+        .created_time(now)
+        .expires_time(now + 300)
+        .from(profile_did.into())
+        .to(mediator_did.into())
+        .finalize();
+        msg.extra
+            .insert("return_route".to_string(), Value::String("all".into()));
+        let msg_id = msg.id.clone();
+
+        let (packed, _) = atm
+            .inner
+            .pack_encrypted(&msg, mediator_did, Some(profile_did))
+            .await
+            .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
+
+        Ok((packed, msg_id))
     }
 
     /// Waits for the next message to be received via websocket live delivery
