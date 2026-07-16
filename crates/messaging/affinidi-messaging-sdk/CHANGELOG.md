@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.18.52] - 2026-07-16
+
+### Behaviour change (see note on versioning)
+
+- **Truthful websocket send (D1 conformance, R1.1).** On the websocket
+  transport, `ATM::send_message` previously returned `Ok(EmptyResponse)` for a
+  fire-and-forget send **the moment the command was enqueued to the transport
+  task** — before any byte reached the socket. During a reconnect the socket is
+  `None`, so the frame was silently discarded yet the caller saw success; a
+  failed socket write was likewise swallowed into a log line. Every downstream
+  "delivered" record was built on that false `Ok`.
+
+  `WebSocketCommands::SendMessage` now carries a `oneshot` reply; the transport
+  reports the **actual** write outcome, and `send_message` awaits it:
+  - socket write succeeds → `Ok` (as before);
+  - socket disconnected (reconnect window) or write fails → `Err`
+    (`ATMError::TransportError`) — **never** a false `Ok` for an untransmitted
+    frame.
+
+  This is a **behavioural break**: a caller that sent while the socket was down
+  now receives `Err` where it used to receive `Ok(EmptyResponse)`. The public
+  signature of `send_message` is unchanged; `WebSocketCommands` is `pub(crate)`.
+  Delivery-critical callers should treat the `Err` as "not sent" and retry /
+  queue (the delivery-layer outbox, landing separately, will absorb this for
+  `Guaranteed` sends). The REST path was already truthful and is unchanged.
+
+  **Versioning note:** the repo convention signals breaking changes with a minor
+  bump, but a minor bump here forces every in-workspace `affinidi-messaging-sdk
+  = "0.18"` consumer to update its pin in the same PR, which trips the
+  `publish-dry-run` guard (consumers would reference an unpublished 0.19). This
+  change therefore ships as a **patch with this explicit break note**; if the
+  maintainers prefer a coordinated `0.19.0` + consumer-pin cascade, that is a
+  mechanical follow-up.
+
 ## [0.18.51] - 2026-07-16
 
 - Publish a re-falsifiable websocket connection-state signal (D1 conformance,
