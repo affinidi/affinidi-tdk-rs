@@ -318,7 +318,31 @@ async fn run_dispatcher(
             continue;
         }
 
-        // 2. Route application traffic.
+        // 2. Protocol-reply evidence (§5a): a peer replying *in the thread* of one
+        //    of our Guaranteed sends proves it received the original — you cannot
+        //    reply in-thread to a message you never got. So an inbound whose
+        //    thread id matches a `Sent` outbox entry confirms it `Delivered`,
+        //    with no application ack of our own. Idempotent: a no-op when no
+        //    `Sent` entry matches, and harmless if a layer receipt already
+        //    confirmed the same entry. The reply is still ordinary application
+        //    traffic — it is also routed below.
+        let confirmed_our_send = match item.thread_id.as_deref() {
+            Some(thid) => match confirm_delivered(outbox.as_ref(), thid).await {
+                Ok(confirmed) => {
+                    if confirmed {
+                        tracing::debug!(idempotency_key = %thid, "protocol reply confirmed delivery");
+                    }
+                    confirmed
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to apply protocol-reply evidence");
+                    false
+                }
+            },
+            None => false,
+        };
+
+        // 3. Route application traffic.
         let waiter = item
             .thread_id
             .clone()
@@ -331,11 +355,16 @@ async fn run_dispatcher(
                 let _ = tx.send(item.message);
             }
             // Unsolicited → subscribers (dropped if none are listening). If we
-            // run the layer (a packer is configured), emit a fire-and-forget
-            // receipt echoing the correlation so the sender's Guaranteed outbox
-            // entry settles Delivered — end-to-end evidence, no app reply.
+            // run the layer (a packer is configured) AND this is a fresh inbound
+            // rather than a reply to our own Guaranteed send, emit a fire-and-
+            // forget receipt echoing the correlation so *that* sender's outbox
+            // entry settles Delivered. A message that just confirmed one of our
+            // sends is a reply, not a fresh Guaranteed push, so it needs no
+            // receipt from us (its thread id is the original thread, not the
+            // reply's own key — a receipt would be a no-op on the peer anyway).
             None => {
-                if let Some(packer) = receipt_packer.as_ref()
+                if !confirmed_our_send
+                    && let Some(packer) = receipt_packer.as_ref()
                     && let (Some(to), Some(confirms)) =
                         (item.message.sender.clone(), item.thread_id.clone())
                 {
@@ -779,6 +808,61 @@ mod tests {
         // sent back (no emit half).
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(h.transport.sent.lock().unwrap().is_empty());
+    }
+
+    // ── Protocol-reply evidence (§5a) ────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_reply_in_thread_confirms_a_guaranteed_send_and_still_delivers() {
+        let h = mock();
+        let outbox = Arc::new(InMemoryOutboxStore::new());
+        sent_entry(&outbox, "thid-x").await; // a Guaranteed send awaiting evidence
+        let svc = MessagingService::new(h.transport.clone(), outbox.clone());
+        let mut sub = svc.subscribe();
+
+        // A peer replies in the thread of our send (thid == the idempotency key).
+        h.inbound_tx
+            .send(inbound("the-reply", Some("thid-x"), "q-reply"))
+            .unwrap();
+
+        // The reply is evidence → the outbox entry settles Delivered…
+        let got = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("subscribe yields the reply")
+            .expect("stream item");
+        // …and is STILL delivered to the application (it is a real message).
+        assert_eq!(got.message.id, "the-reply");
+        assert_eq!(
+            outbox.get("thid-x").await.unwrap().unwrap().state,
+            OutboxState::Delivered
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reply_confirming_our_send_is_not_receipted() {
+        let h = mock();
+        let outbox = Arc::new(InMemoryOutboxStore::new());
+        sent_entry(&outbox, "thid-x").await;
+        let packer = MockPacker::new();
+        let svc =
+            MessagingService::with_receipts(h.transport.clone(), outbox.clone(), packer.clone());
+        let _sub = svc.subscribe();
+
+        h.inbound_tx
+            .send(inbound("the-reply", Some("thid-x"), "q-reply"))
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Confirmed our send (protocol reply)…
+        assert_eq!(
+            outbox.get("thid-x").await.unwrap().unwrap().state,
+            OutboxState::Delivered
+        );
+        // …and, being a reply to our own send, is NOT itself receipted.
+        assert!(
+            packer.packed_for.lock().unwrap().is_empty(),
+            "a reply confirming our send must not trigger a receipt"
+        );
     }
 
     #[tokio::test]
