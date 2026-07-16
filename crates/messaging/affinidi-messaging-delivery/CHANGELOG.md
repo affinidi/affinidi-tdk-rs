@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.1] - 2026-07-16
+
+- Add the `MessagingService` front-end and its single inbound dispatcher — the
+  API services call, over one transport + outbox:
+  - `send(to, packed, Delivery)` — `BestEffort` sends once (truthful `Err` if not
+    transmitted); `Guaranteed` enqueues a durable outbox entry. Returns `Sent`
+    (`Accepted` for now; `Delivered`/`Unconfirmed` land with §5a confirmation).
+  - `request(to, packed, correlation_thid, timeout)` — send + await the reply
+    correlated by thread id; concurrent requests never steal each other's replies.
+  - `subscribe()` — a per-subscriber stream of inbound messages not claimed by a
+    request waiter (at-least-once; dedup on the idempotency key).
+  - `status()` — `MessagingStatus` read off the transport's live
+    `connection_state()`, never a boot-time latch.
+  - One dispatcher reads `inbound()` exactly once, demuxes by thread id, and
+    **acks each message once after handoff** (never per-caller, never before
+    handoff).
+  Fully unit-tested over a mock transport (no mediator). Additive.
+
 ## [0.1.0] - 2026-07-16
 
 Initial release — the durable outbox and its drain, the first increment of the

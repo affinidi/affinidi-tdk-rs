@@ -21,6 +21,8 @@
 
 pub mod drain;
 pub mod outbox;
+pub mod service;
 
 pub use drain::{DrainReport, drain_loop, drain_once};
 pub use outbox::{InMemoryOutboxStore, Key, OutboxEntry, OutboxError, OutboxState, OutboxStore};
+pub use service::{Delivery, MessagingService, MessagingStatus, Sent};
