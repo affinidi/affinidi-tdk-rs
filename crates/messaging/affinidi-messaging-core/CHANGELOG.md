@@ -2,6 +2,26 @@
 
 ## 16th July 2026
 
+### 0.1.4 — `MessageTransport` wire contract
+
+Add the `transport::MessageTransport` trait and its vocabulary
+(`TransportKind`, `SendReceipt`, `Inbound`, `InboundAck`) — the contract a
+messaging wire (DIDComm now, TSP and REST later) implements so the delivery
+layer above can build reliability on it:
+
+- **truthful send** — `send` resolves `Ok(SendReceipt)` only when the next hop
+  accepts the bytes, `Err` otherwise; the receipt is hop-acceptance, never
+  end-to-end delivery;
+- **re-falsifiable connection state** — `connection_state()` hands out the
+  `watch::Receiver<ConnState>` (from 0.1.3);
+- **ack-after-handoff** — `inbound()` yields undeleted messages and the layer
+  calls `ack()` only after a durable handoff.
+
+Packing stays in `MessagingProtocol` (the crypto layer); `MessageTransport`
+moves already-packed bytes. Definition only — no implementors in this crate
+yet; the DIDComm adapter and conformance suite follow. Additive; pulls
+`futures-util` (for `BoxStream`) and `tokio` (`sync` only, for `watch`).
+
 ### 0.1.3 — `ConnState` transport connection vocabulary
 
 Add `transport::ConnState` (`Connecting` / `Connected` / `Disconnected`), a
