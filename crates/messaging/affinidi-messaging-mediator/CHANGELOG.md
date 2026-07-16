@@ -2,6 +2,22 @@
 
 ## Changelog history
 
+## 16th July 2026
+
+### 0.17.2 — secp256k1 (ES256K) support + resolve sender key by JWE skid
+
+- Accept `ES256K` (secp256k1) signatures in `verify_inner_jws`, resolving the
+  signer's secp256k1 verification key from their DID document (`publicKeyMultibase`
+  multikey or `publicKeyJwk`).
+- Resolve the sender's exact key-agreement key by the JWE `skid` rather than the
+  sender's first advertised key. This fixes an ECDH-1PU
+  `curve mismatch between private and public keys` (`e.p.message.unpack`) when a
+  sender advertises key-agreement keys on multiple curves (e.g. secp256k1 before
+  P-256) and authcrypts on the shared curve.
+- `mediator-setup`: new `--key-suite secp256k1` advertises a secp256k1 signing
+  (`#key-4`) + key-agreement (`#key-5`) pair in the generated `did:webvh`
+  document, so the mediator can speak P-256 + X25519 + secp256k1.
+
 ## 14th July 2026
 
 ### 0.17.1 — read the self-hosted `did.jsonl` log from `s3://`

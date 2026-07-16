@@ -1,5 +1,14 @@
 # Affinidi Crypto Changelog
 
+## 16th July 2026 (0.2.5)
+
+Adds `jose::signing::verify_secp256k1` — ECDSA secp256k1 signature verification
+(JWS `alg: ES256K`), accepting compressed or uncompressed SEC1 public points —
+and enables the k256 `ecdsa` feature. Additive (verify-only); locked by a
+deterministic RFC 6979 golden vector plus roundtrip KATs. Patch bump keeps the
+`[patch.crates-io]` redirect valid — see
+[ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md).
+
 ## 4th July 2026 (0.2.4)
 
 Adds `KeyType::key_agreement_curve() -> Option<Curve>` (gated on the `jose`
