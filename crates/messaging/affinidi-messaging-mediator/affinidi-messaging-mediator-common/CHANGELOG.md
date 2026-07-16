@@ -2,6 +2,25 @@
 
 ## Changelog history
 
+## 15th July 2026
+
+### 0.15.30 — tolerate partial `redis_version` from ElastiCache Serverless
+
+- `check_server_version` no longer requires a full `MAJOR.MINOR.PATCH` from
+  `INFO server`. OSS Valkey/Redis report a complete version (e.g. `7.2.4`), but
+  ElastiCache Serverless reports a truncated `redis_version` carrying only the
+  major (e.g. `8`), which made the strict `semver` parse fail ("unexpected end of
+  input while parsing minor version number") and the mediator `exit(1)` on
+  startup even though the engine (AWS-reported Valkey 8.1) is compatible.
+- The reported value is now normalized: take the leading numeric dotted core,
+  zero-fill any missing minor/patch, and record how many components were present.
+  Compatibility is decided by precision — `>=2` components are range-checked
+  precisely against `REDIS_VERSION_REQ` (unchanged behaviour), while a bare major
+  is accepted iff it is a supported line (`SUPPORTED_MAJOR_VERSIONS = [7, 8]`),
+  since a `>=7.1` range check is ambiguous for a bare major.
+- Adds pure, unit-tested helpers `normalize_redis_version` and
+  `assess_redis_version`.
+
 ## 10th July 2026
 
 ### 0.15.27 — shared `aws_parameter_store://` target parser
