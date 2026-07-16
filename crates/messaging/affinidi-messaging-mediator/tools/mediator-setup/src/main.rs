@@ -173,7 +173,14 @@ async fn main() -> anyhow::Result<()> {
                 // (WizardStep::Output) — no stdin prompt here.
 
                 println!("  Generating cryptographic material...\n");
-                match generate_and_write(&app.config, app.vta_session.as_ref(), true).await {
+                match generate_and_write(
+                    &app.config,
+                    app.vta_session.as_ref(),
+                    true,
+                    secret_backend::ProvisionProbe::ReadWrite,
+                )
+                .await
+                {
                     Ok(()) => {
                         // Clean up the sealed-handoff request / seed
                         // files if the setup went through that flow.
@@ -343,8 +350,19 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
 
     // Non-interactive / recipe paths don't run the online-VTA sub-flow, so
     // there's no captured session — VTA-managed DID creation isn't
-    // supported from `--from` / `--non-interactive` yet.
-    generate_and_write(&config, None, true).await?;
+    // supported from `--from` / `--non-interactive` yet. Headless flows
+    // *request* a read-only backend probe; it takes effect only for
+    // `aws_secrets://`, where the entries are pre-created out-of-band (e.g. by
+    // CDK) so setup only overwrites them — matching the runtime, which also
+    // probes read-only. Every other backend is narrowed back to a write
+    // round-trip in `open_and_probe_secret_backend`.
+    generate_and_write(
+        &config,
+        None,
+        true,
+        secret_backend::ProvisionProbe::ReadOnly,
+    )
+    .await?;
     offer_build_and_guidance(&config);
 
     Ok(())
@@ -410,7 +428,13 @@ async fn run_from_recipe(
             }
             HeadlessOutcome::Applied { session, artifacts } => {
                 println!("  Generating cryptographic material...\n");
-                generate_and_write(&config, Some(&session), false).await?;
+                generate_and_write(
+                    &config,
+                    Some(&session),
+                    false,
+                    secret_backend::ProvisionProbe::ReadOnly,
+                )
+                .await?;
                 bootstrap_headless::cleanup_artifacts(&artifacts);
                 println!(
                     "  \x1b[32m\u{2714}\x1b[0m Setup artefacts removed — \
@@ -422,7 +446,13 @@ async fn run_from_recipe(
         }
     } else {
         println!("  Generating cryptographic material...\n");
-        generate_and_write(&config, None, false).await?;
+        generate_and_write(
+            &config,
+            None,
+            false,
+            secret_backend::ProvisionProbe::ReadOnly,
+        )
+        .await?;
         None
     };
 
@@ -1142,13 +1172,20 @@ async fn generate_and_write(
     config: &app::WizardConfig,
     vta_session: Option<&vta::VtaSession>,
     save_recipe: bool,
+    probe: secret_backend::ProvisionProbe,
 ) -> anyhow::Result<()> {
     let artefacts = mint_artefacts(config, vta_session).await?;
-    provision_secret_backend(config, &artefacts, vta_session).await?;
+    provision_secret_backend(config, &artefacts, vta_session, probe).await?;
     write_config_artefacts(config, &artefacts, save_recipe)?;
-    // Optional: publish the minted DID to the recipe's `[output].did_target`.
-    // No-op unless a target is configured.
+    // Optional: publish the minted DID + its did:webvh log to the recipe's
+    // `[output].did_target` / `[output].did_log_target`. No-op unless a target
+    // is configured.
     publish::publish_did_artefacts(&artefacts.mediator_did, config.did_target.as_deref()).await?;
+    publish::publish_did_log_artefacts(
+        artefacts.did_doc.as_deref(),
+        config.did_log_target.as_deref(),
+    )
+    .await?;
     print_completion_summary(config, &artefacts, vta_session);
     Ok(())
 }
@@ -1411,6 +1448,7 @@ async fn provision_secret_backend(
     config: &app::WizardConfig,
     artefacts: &MintedArtefacts,
     vta_session: Option<&vta::VtaSession>,
+    probe: secret_backend::ProvisionProbe,
 ) -> anyhow::Result<()> {
     let backend_url = config_writer::build_backend_url(config);
     println!("  Provisioning unified secret backend: {backend_url}");
@@ -1429,7 +1467,7 @@ async fn provision_secret_backend(
         );
     }
     let mediator_secrets_store =
-        secret_backend::open_and_probe_secret_backend(&backend_url).await?;
+        secret_backend::open_and_probe_secret_backend(&backend_url, probe).await?;
 
     // JWT signing key — only when generated. Provide-mode skips this
     // and relies on the boot-time env-var/flag path.
@@ -2545,9 +2583,14 @@ mod generate_and_write_tests {
         let dir = cwd.dir().to_path_buf();
         let config = did_peer_config(&dir);
 
-        generate_and_write(&config, None, /*save_recipe=*/ true)
-            .await
-            .expect("generate_and_write must succeed for did:peer");
+        generate_and_write(
+            &config,
+            None,
+            /*save_recipe=*/ true,
+            secret_backend::ProvisionProbe::ReadWrite,
+        )
+        .await
+        .expect("generate_and_write must succeed for did:peer");
 
         // Phase: write_config — mediator.toml + atm-functions.lua.
         let toml_path = dir.join("conf").join("mediator.toml");
@@ -2725,9 +2768,14 @@ mod generate_and_write_tests {
         let dir = cwd.dir().to_path_buf();
         let config = did_peer_config(&dir);
 
-        generate_and_write(&config, None, /*save_recipe=*/ false)
-            .await
-            .expect("generate_and_write must succeed");
+        generate_and_write(
+            &config,
+            None,
+            /*save_recipe=*/ false,
+            secret_backend::ProvisionProbe::ReadWrite,
+        )
+        .await
+        .expect("generate_and_write must succeed");
 
         let recipe_path = dir.join("conf").join("mediator-build.toml");
         assert!(
@@ -2769,9 +2817,14 @@ mod generate_and_write_tests {
             ..app::WizardConfig::default()
         };
 
-        generate_and_write(&config, None, /*save_recipe=*/ false)
-            .await
-            .expect("generate_and_write must succeed for did:peer file:// backend");
+        generate_and_write(
+            &config,
+            None,
+            /*save_recipe=*/ false,
+            secret_backend::ProvisionProbe::ReadWrite,
+        )
+        .await
+        .expect("generate_and_write must succeed for did:peer file:// backend");
 
         assert!(
             secrets_path.exists(),
@@ -2812,9 +2865,14 @@ mod generate_and_write_tests {
         let mut config = did_peer_config(&dir);
         config.admin_did_mode = ADMIN_SKIP.into();
 
-        generate_and_write(&config, None, false)
-            .await
-            .expect("generate_and_write with ADMIN_SKIP");
+        generate_and_write(
+            &config,
+            None,
+            false,
+            secret_backend::ProvisionProbe::ReadWrite,
+        )
+        .await
+        .expect("generate_and_write with ADMIN_SKIP");
 
         let toml_text = std::fs::read_to_string(dir.join("conf").join("mediator.toml")).unwrap();
         let parsed: toml::Value = toml::from_str(&toml_text).unwrap();
@@ -2932,7 +2990,14 @@ mod generate_and_write_tests {
         let mut config = did_peer_config(&dir);
         config.jwt_mode = JWT_MODE_PROVIDE.into();
 
-        generate_and_write(&config, None, false).await.unwrap();
+        generate_and_write(
+            &config,
+            None,
+            false,
+            secret_backend::ProvisionProbe::ReadWrite,
+        )
+        .await
+        .unwrap();
 
         let unified_text = std::fs::read_to_string(dir.join("unified-secrets.json")).unwrap();
         assert!(

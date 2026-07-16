@@ -2,6 +2,31 @@
 
 ## Changelog history
 
+## 16th July 2026
+
+### 0.1.22 — publish the did:webvh log, and a read-only probe for AWS-managed backends
+
+- New recipe key `[output].did_log_target` publishes the minted did:webvh log
+  (`did.jsonl` content) after provisioning, to `s3://<bucket>/<key>[?region=]`
+  (gated by `publish-aws`), `aws_parameter_store://`, or `file://`. Defaults to
+  `None`; validated at recipe load like `did_target`. Prefer `s3://`: the
+  did:webvh v1.0 log embeds the full DID document per entry, so it grows with
+  key rotation and can outgrow Parameter Store's value-size limit.
+- When a `did_log_target` is set and the deployment self-hosts its log, the
+  generated `mediator.toml` points `did_web_self_hosted` at that same target
+  (instead of `file://./conf/did.jsonl`), so a mediator on ephemeral compute
+  reads the published copy that survives the one-shot setup task — no
+  hand-editing. The `s3://` grammar is `mediator-common`'s shared `s3_target`
+  parser, the same one the runtime (>= 0.17.1) resolves, so the two sides
+  cannot drift.
+- Headless / non-interactive / recipe flows now request a **read-only** secret
+  backend probe, honoured **only for `aws_secrets://`** — where entries are
+  pre-created out-of-band (e.g. by CDK) under the IaC-owns-lifecycle contract,
+  so setup needs no create/delete rights (matching the runtime's boot probe).
+  Every other backend is narrowed back to the write round-trip at a single
+  choke point, so setup still fails fast on missing write permissions. The
+  interactive wizard keeps the write probe throughout.
+
 ## 10th July 2026
 
 ### 0.1.21 — publish the minted public DID to an optional target

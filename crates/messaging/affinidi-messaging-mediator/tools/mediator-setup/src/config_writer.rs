@@ -134,7 +134,18 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
         let should_self_host = generated.did_log_jsonl_written
             && self_host_domain_match(&generated.mediator_did, &config.public_url);
         if should_self_host {
-            server["did_web_self_hosted"] = toml_edit::value("file://./conf/did.jsonl");
+            // Point the runtime at the published log target when the recipe
+            // set one: every supported `did_log_target` scheme (`s3://`,
+            // `aws_parameter_store://`, `file://`) is readable by the
+            // runtime's `read_document`, and on ephemeral compute the local
+            // `./conf/did.jsonl` dies with the one-shot setup task while the
+            // published object survives. Without a target, the local copy is
+            // the only source there is.
+            let self_hosted = config
+                .did_log_target
+                .as_deref()
+                .unwrap_or("file://./conf/did.jsonl");
+            server["did_web_self_hosted"] = toml_edit::value(self_hosted);
         } else {
             server
                 .as_table_like_mut()
@@ -1150,6 +1161,60 @@ storage = "keyring://affinidi-mediator"
         let toml = generate_toml(&config, &generated).unwrap();
         assert!(has_active_did_web_self_hosted(&toml));
         assert!(toml.contains("did_web_self_hosted = \"file://./conf/did.jsonl\""));
+    }
+
+    #[test]
+    fn test_did_log_target_becomes_did_web_self_hosted() {
+        // When the recipe publishes the log (`[output].did_log_target`),
+        // the generated mediator.toml must point `did_web_self_hosted` at
+        // that same target — not at the local `./conf/did.jsonl`, which on
+        // ephemeral compute dies with the one-shot setup task. This is the
+        // whole point of the shared target grammar: the string the wizard
+        // writes is the string the runtime reads, with no hand-editing.
+        let config = WizardConfig {
+            did_method: DID_WEBVH.into(),
+            secret_storage: STORAGE_STRING.into(),
+            public_url: "https://mediator.example.com".into(),
+            did_log_target: Some("s3://my-bucket/mediator/did.jsonl?region=eu-west-1".into()),
+            ..WizardConfig::default()
+        };
+        let generated = GeneratedValues {
+            mediator_did: "did:webvh:QmScid:mediator.example.com".into(),
+            did_log_jsonl_written: true,
+            ..test_generated()
+        };
+        let toml = generate_toml(&config, &generated).unwrap();
+        assert!(has_active_did_web_self_hosted(&toml));
+        assert!(toml.contains(
+            "did_web_self_hosted = \"s3://my-bucket/mediator/did.jsonl?region=eu-west-1\""
+        ));
+        // Only the template's commented fallback may still mention the local
+        // file — no *active* line may point at it.
+        assert!(!toml.lines().any(|line| {
+            line.trim_start()
+                .starts_with("did_web_self_hosted = \"file://")
+        }));
+    }
+
+    #[test]
+    fn test_did_log_target_without_self_host_stays_commented() {
+        // A publish target alone must not activate the line: if the DID's
+        // host doesn't match the public URL, this mediator is not the
+        // authority for the log no matter where it was published.
+        let config = WizardConfig {
+            did_method: DID_VTA.into(),
+            secret_storage: STORAGE_STRING.into(),
+            public_url: "https://mediator.example.com".into(),
+            did_log_target: Some("s3://my-bucket/mediator/did.jsonl".into()),
+            ..WizardConfig::default()
+        };
+        let generated = GeneratedValues {
+            mediator_did: "did:webvh:QmScid:webvh.vta-host.com".into(),
+            did_log_jsonl_written: true,
+            ..test_generated()
+        };
+        let toml = generate_toml(&config, &generated).unwrap();
+        assert!(!has_active_did_web_self_hosted(&toml));
     }
 
     #[test]

@@ -2,6 +2,21 @@
 
 ## Changelog history
 
+## 14th July 2026
+
+### 0.15.30 — shared `s3://` target parser
+
+- New always-built `s3_target` module: `parse_s3_target`, `S3Target`,
+  `S3TargetError`, `is_s3_target` and `S3_SCHEME`. Pure (no AWS SDK), shared by
+  the mediator runtime (which reads its self-hosted `did.jsonl` log from an S3
+  object via `did_web_self_hosted`) and the `mediator-setup` wizard (which
+  publishes the minted log to one via `[output].did_log_target`), so the string
+  one writes is the string the other reads — the same drift-proofing pattern as
+  the existing `parameter_store` parser.
+- Grammar: `s3://<bucket>/<key>` with an optional `?region=<region>` query
+  parameter (absent means "use the ambient AWS chain"), mirroring the
+  `aws_parameter_store://` idiom.
+
 ## 10th July 2026
 
 ### 0.15.27 — shared `aws_parameter_store://` target parser

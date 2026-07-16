@@ -1,15 +1,20 @@
-//! Optional publishing of the minted public DID.
+//! Optional publishing of the minted public DID and its did:webvh log.
 //!
-//! Publishes the mediator's public DID string to a store the runtime (or a
-//! relying party) reads, so a one-shot `mediator-setup` task can hand off the
-//! identity directly.
+//! Publishes the mediator's public DID string (`[output].did_target`) and/or
+//! its did:webvh log document (`[output].did_log_target`) to a store the
+//! runtime (or a relying party) reads, so a one-shot `mediator-setup` task can
+//! hand off the identity directly.
 //!
-//! Opt-in: the recipe's `[output].did_target` defaults to `None`, so
-//! interactive/local setups are unaffected. Supported targets:
+//! Opt-in: both targets default to `None`, so interactive/local setups are
+//! unaffected. Supported targets:
 //!
 //! - `aws_parameter_store://<name>[?region=<region>]` — write it to an SSM
 //!   parameter (gated by the `publish-aws` build feature).
-//! - `file://<path>` — write the DID string to a local file.
+//! - `s3://<bucket>/<key>[?region=<region>]` — write it to an S3 object
+//!   (gated by the `publish-aws` build feature). Preferred for the DID *log*,
+//!   which grows with key rotation and can outgrow Parameter Store's value
+//!   limit.
+//! - `file://<path>` — write the value to a local file.
 //!
 //! # Only the parameter-store target round-trips
 //!
@@ -39,6 +44,7 @@
 use affinidi_messaging_mediator_common::parameter_store::{
     PARAMETER_STORE_SCHEME, ParameterStoreTarget, parse_parameter_store_target,
 };
+use affinidi_messaging_mediator_common::s3_target::{S3_SCHEME, S3Target, parse_s3_target};
 use anyhow::{Context, anyhow, bail};
 
 /// Publish the minted public DID string to the optional `[output].did_target`.
@@ -52,6 +58,36 @@ pub async fn publish_did_artefacts(did: &str, did_target: Option<&str>) -> anyho
     publish_value(target, did, "DID")
         .await
         .with_context(|| format!("publishing DID to '{target}'"))
+}
+
+/// Publish the minted did:webvh log (`did.jsonl` content) to the optional
+/// `[output].did_log_target`. A no-op when the target is `None` or there is no
+/// log to publish (non-webvh deployments).
+///
+/// Unlike [`publish_did_artefacts`] (the DID *string*), every supported log
+/// target round-trips into the runtime's `did_web_self_hosted`, which reads a
+/// DID *document* via `read_document` — `file://`, `aws_parameter_store://`,
+/// and `s3://` are all accepted there. `s3://` is the intended target for a
+/// self-hosted mediator on ephemeral compute: the log grows with each key
+/// rotation (did:webvh v1.0 embeds the full document per entry, no JSON
+/// Patch), so it can outgrow Parameter Store's value-size limit — S3 has no
+/// such ceiling.
+pub async fn publish_did_log_artefacts(
+    log_content: Option<&str>,
+    did_log_target: Option<&str>,
+) -> anyhow::Result<()> {
+    let (Some(target), Some(log)) = (did_log_target, log_content) else {
+        return Ok(());
+    };
+
+    println!("\n\x1b[1mPublishing DID log\x1b[0m");
+    // Strict JSON-Lines requires each record to end with `\n`; normalise to
+    // exactly one so the served `/.well-known/did.jsonl` is well-formed and
+    // future log entries append cleanly.
+    let normalised = format!("{}\n", log.trim_end());
+    publish_value(target, &normalised, "DID log")
+        .await
+        .with_context(|| format!("publishing DID log to '{target}'"))
 }
 
 /// Validate a publish target without performing any I/O. Called at recipe-load
@@ -84,9 +120,24 @@ pub fn validate_target(target: &str) -> anyhow::Result<()> {
                 parse_target(target).map(|_| ())
             }
         }
+        S3_SCHEME => {
+            #[cfg(not(feature = "publish-aws"))]
+            {
+                bail!(
+                    "invalid target '{target}': publishing to {S3_SCHEME}:// \
+                     requires the 'publish-aws' build feature; rebuild with \
+                     `--features publish-aws`, or use a file:// target"
+                );
+            }
+            #[cfg(feature = "publish-aws")]
+            {
+                parse_s3(target).map(|_| ())
+            }
+        }
         other => bail!(
-            "unsupported target scheme '{other}://' for DID publishing (expected \
-             '{PARAMETER_STORE_SCHEME}://<name>[?region=<region>]' or 'file://<path>')"
+            "unsupported target scheme '{other}://' for publishing (expected \
+             '{PARAMETER_STORE_SCHEME}://<name>[?region=<region>]', \
+             '{S3_SCHEME}://<bucket>/<key>[?region=<region>]', or 'file://<path>')"
         ),
     }
 }
@@ -101,6 +152,12 @@ fn split_target(target: &str) -> anyhow::Result<(&str, &str)> {
 /// surfacing its error verbatim — it already names the correct form.
 fn parse_target(target: &str) -> anyhow::Result<ParameterStoreTarget> {
     parse_parameter_store_target(target).map_err(|e| anyhow!("{e}"))
+}
+
+/// Parse an `s3://` target through the shared grammar, surfacing its error
+/// verbatim — it already names the correct form.
+fn parse_s3(target: &str) -> anyhow::Result<S3Target> {
+    parse_s3_target(target).map_err(|e| anyhow!("{e}"))
 }
 
 /// Route a single value to its target based on the URI scheme.
@@ -126,9 +183,11 @@ async fn publish_value(target: &str, value: &str, label: &str) -> anyhow::Result
         (PARAMETER_STORE_SCHEME, _) => {
             put_ssm_parameter(&parse_target(target)?, value, label).await
         }
+        (S3_SCHEME, _) => put_s3_object(&parse_s3(target)?, value, label).await,
         (other, _) => bail!(
             "unsupported target scheme '{other}://' for {label} (expected \
-             '{PARAMETER_STORE_SCHEME}://<name>[?region=<region>]' or 'file://<path>')"
+             '{PARAMETER_STORE_SCHEME}://<name>[?region=<region>]', \
+             '{S3_SCHEME}://<bucket>/<key>[?region=<region>]', or 'file://<path>')"
         ),
     }
 }
@@ -202,6 +261,71 @@ async fn put_ssm_parameter(
     )
 }
 
+/// Write `value` to the S3 object named by `target`, overwriting any existing
+/// object. Unlike Parameter Store there is no value-size ceiling, so this is
+/// the target of choice for a did:webvh log that grows with key rotation.
+#[cfg(feature = "publish-aws")]
+async fn put_s3_object(target: &S3Target, value: &str, label: &str) -> anyhow::Result<()> {
+    use aws_sdk_s3::error::DisplayErrorContext;
+    use aws_sdk_s3::primitives::ByteStream;
+
+    let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
+    // No `?region=` means the ambient chain (AWS_REGION, profile, IMDS) —
+    // the same resolution the mediator runtime performs when it reads back.
+    if let Some(region) = &target.region {
+        loader = loader.region(aws_sdk_s3::config::Region::new(region.clone()));
+    }
+    let config = loader.load().await;
+    let s3 = aws_sdk_s3::Client::new(&config);
+
+    s3.put_object()
+        .bucket(&target.bucket)
+        .key(&target.key)
+        .body(ByteStream::from(value.as_bytes().to_vec()))
+        .content_type("application/jsonl")
+        .send()
+        .await
+        // DisplayErrorContext walks the SDK error's source chain so the service
+        // message (e.g. AccessDenied, NoSuchBucket) is surfaced, not just Debug.
+        .map_err(|e| {
+            anyhow!(
+                "S3 PutObject(s3://{}/{}) failed: {}",
+                target.bucket,
+                target.key,
+                DisplayErrorContext(&e)
+            )
+        })?;
+
+    println!(
+        "  \x1b[32m\u{2714}\x1b[0m Published {label} \u{2192} \x1b[36m{}\x1b[0m",
+        render_s3_target(target)
+    );
+    Ok(())
+}
+
+/// Render a parsed S3 target back to the string an operator pastes into
+/// `mediator.toml` as `did_web_self_hosted`.
+#[cfg(feature = "publish-aws")]
+fn render_s3_target(target: &S3Target) -> String {
+    match &target.region {
+        Some(region) => format!(
+            "{S3_SCHEME}://{}/{}?region={region}",
+            target.bucket, target.key
+        ),
+        None => format!("{S3_SCHEME}://{}/{}", target.bucket, target.key),
+    }
+}
+
+#[cfg(not(feature = "publish-aws"))]
+async fn put_s3_object(_target: &S3Target, _value: &str, label: &str) -> anyhow::Result<()> {
+    // Unreachable in practice — `validate_target` rejects the scheme at recipe
+    // load in this build — but kept so the call site type-checks either way.
+    bail!(
+        "publishing {label} to {S3_SCHEME}:// requires the 'publish-aws' \
+         build feature; rebuild with `--features publish-aws`"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,10 +359,10 @@ mod tests {
 
     #[test]
     fn validate_rejects_unsupported_scheme() {
-        let err = validate_target("s3://bucket/key").expect_err("unknown scheme must fail");
+        let err = validate_target("gs://bucket/key").expect_err("unknown scheme must fail");
         assert!(
             err.to_string()
-                .contains("unsupported target scheme 's3://'"),
+                .contains("unsupported target scheme 'gs://'"),
             "{err}"
         );
     }
@@ -260,14 +384,74 @@ mod tests {
 
     #[tokio::test]
     async fn unsupported_scheme_errors_at_publish_time() {
-        let err = publish_value("s3://bucket/key", "did:webvh:abc", "DID")
+        let err = publish_value("gs://bucket/key", "did:webvh:abc", "DID")
             .await
             .expect_err("unknown scheme must error");
         assert!(
             err.to_string()
-                .contains("unsupported target scheme 's3://'"),
+                .contains("unsupported target scheme 'gs://'"),
             "{err}"
         );
+    }
+
+    #[tokio::test]
+    async fn publish_did_log_no_target_or_no_log_is_a_noop() {
+        // Both must be present to publish anything.
+        publish_did_log_artefacts(Some("{\"log\":1}"), None)
+            .await
+            .expect("no target = no-op");
+        publish_did_log_artefacts(None, Some("file:///tmp/should-not-write"))
+            .await
+            .expect("no log = no-op");
+    }
+
+    #[tokio::test]
+    async fn publish_did_log_file_target_normalises_trailing_newline() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let log_path = dir.path().join("nested/did.jsonl");
+        let target = format!("file://{}", log_path.display());
+
+        // Input has no trailing newline; strict JSON-Lines needs exactly one.
+        publish_did_log_artefacts(Some("{\"versionId\":\"1-abc\"}"), Some(&target))
+            .await
+            .expect("file log publish should succeed");
+
+        assert_eq!(
+            std::fs::read_to_string(&log_path).unwrap(),
+            "{\"versionId\":\"1-abc\"}\n"
+        );
+    }
+
+    #[cfg(feature = "publish-aws")]
+    #[test]
+    fn validate_accepts_an_s3_target() {
+        for target in [
+            "s3://my-bucket/did.jsonl",
+            "s3://my-bucket/mediator/did.jsonl",
+            "s3://my-bucket/mediator/did.jsonl?region=eu-west-1",
+        ] {
+            validate_target(target).unwrap_or_else(|e| panic!("{target} should validate: {e}"));
+        }
+    }
+
+    /// The published S3 target must be pasteable into `mediator.toml` as
+    /// `did_web_self_hosted`, so the wizard and the runtime have to agree on
+    /// the grammar. Assert against the shared parser rather than a local copy.
+    #[cfg(feature = "publish-aws")]
+    #[test]
+    fn published_s3_target_round_trips_through_the_shared_grammar() {
+        for target in [
+            "s3://my-bucket/mediator/did.jsonl?region=eu-west-1",
+            "s3://my-bucket/did.jsonl",
+        ] {
+            validate_target(target).unwrap_or_else(|e| panic!("{target} should validate: {e}"));
+            let parsed = parse_s3(target).expect("shared parser accepts it");
+            assert_eq!(
+                render_s3_target(&parsed),
+                target,
+                "round-trip must be exact"
+            );
+        }
     }
 
     /// The published target must be pasteable into `mediator.toml` as

@@ -491,6 +491,13 @@ pub struct WizardConfig {
     /// Publish target for the minted DID string (recipe `[output].did_target`;
     /// never prompted). `None` = don't publish.
     pub did_target: Option<String>,
+    /// Publish target for the minted did:webvh log document (recipe
+    /// `[output].did_log_target`; never prompted). `None` = don't publish.
+    /// When set (and the deployment self-hosts its log), the generated
+    /// mediator.toml points `did_web_self_hosted` at this same target, so a
+    /// mediator on ephemeral compute can serve `/.well-known/did.jsonl`
+    /// after the one-shot setup task exits.
+    pub did_log_target: Option<String>,
 }
 
 impl WizardConfig {
@@ -613,6 +620,7 @@ impl Default for WizardConfig {
             listen_address: DEFAULT_LISTEN_ADDR.into(),
             api_prefix: DEFAULT_API_PREFIX.into(),
             did_target: None,
+            did_log_target: None,
         }
     }
 }

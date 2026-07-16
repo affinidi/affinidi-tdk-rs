@@ -33,6 +33,12 @@ pub mod did_web;
 /// to one), so the string one writes is the string the other reads.
 pub mod parameter_store;
 
+/// `s3://` target parsing. Pure (no AWS SDK), always built: shared by the
+/// mediator runtime (reading its self-hosted `did.jsonl` log from an S3
+/// object) and the `mediator-setup` wizard (publishing the minted log to
+/// one), so the string one writes is the string the other reads.
+pub mod s3_target;
+
 #[cfg(feature = "server")]
 pub mod circuit_breaker;
 /// Database wiring: the lean `DatabaseConfig` serde struct is always

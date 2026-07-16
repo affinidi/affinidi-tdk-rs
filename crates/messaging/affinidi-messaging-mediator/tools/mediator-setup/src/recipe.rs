@@ -345,6 +345,24 @@ pub struct OutputSection {
     /// paste the DID itself as `did://<did>`.
     #[serde(default)]
     pub did_target: Option<String>,
+    /// Optional target to publish the minted did:webvh log document
+    /// (`did.jsonl` content) to after provisioning
+    /// (`s3://<bucket>/<key>[?region=<region>]`,
+    /// `aws_parameter_store://<name>[?region=<region>]`, or `file://<path>`).
+    /// `None` (default) = don't publish.
+    ///
+    /// All three forms round-trip into the runtime's `did_web_self_hosted`,
+    /// which reads a DID *document* (`read_document`) — and when the
+    /// deployment self-hosts its log, the generated mediator.toml points
+    /// `did_web_self_hosted` at this same target automatically, so the
+    /// runtime reads the published copy rather than the local
+    /// `./conf/did.jsonl` that dies with a one-shot setup task. `s3://` is
+    /// the intended target for a self-hosted mediator on ephemeral compute:
+    /// the log grows with each key rotation (did:webvh v1.0 embeds the full
+    /// document per entry — no JSON Patch), so it can outgrow Parameter
+    /// Store's value-size limit; S3 has no such ceiling.
+    #[serde(default)]
+    pub did_log_target: Option<String>,
 }
 
 fn default_config_path() -> String {
@@ -366,6 +384,7 @@ impl Default for OutputSection {
             listen_address: default_listen_address(),
             api_prefix: default_api_prefix(),
             did_target: None,
+            did_log_target: None,
         }
     }
 }
@@ -623,12 +642,17 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
     config.listen_address = recipe.output.listen_address.clone();
     config.api_prefix = recipe.output.api_prefix.clone();
     config.did_target = recipe.output.did_target.clone();
+    config.did_log_target = recipe.output.did_log_target.clone();
 
-    // Validate the publish target's scheme now, at recipe load, so a bad
+    // Validate the publish targets' schemes now, at recipe load, so a bad
     // target fails before anything is minted, provisioned, or written.
     if let Some(target) = &config.did_target {
         crate::publish::validate_target(target)
             .map_err(|e| anyhow::anyhow!("invalid [output].did_target: {e}"))?;
+    }
+    if let Some(target) = &config.did_log_target {
+        crate::publish::validate_target(target)
+            .map_err(|e| anyhow::anyhow!("invalid [output].did_log_target: {e}"))?;
     }
 
     Ok(config)
@@ -809,6 +833,9 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
     out.push_str(&format!("api_prefix = \"{}\"\n", config.api_prefix));
     if let Some(target) = &config.did_target {
         out.push_str(&format!("did_target = \"{target}\"\n"));
+    }
+    if let Some(target) = &config.did_log_target {
+        out.push_str(&format!("did_log_target = \"{target}\"\n"));
     }
     out.push('\n');
 

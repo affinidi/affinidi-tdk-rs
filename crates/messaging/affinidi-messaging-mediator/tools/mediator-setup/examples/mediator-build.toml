@@ -165,6 +165,22 @@ listen_address = "0.0.0.0:7037"
 # else (a relying party, a CI step, an operator); to put it in
 # mediator.toml, paste the file's contents as `mediator_did = "did://..."`.
 
+# Optional: publish the minted did:webvh log document (did.jsonl content)
+# after provisioning, so a self-hosted mediator on ephemeral compute can
+# serve /.well-known/did.jsonl after the one-shot setup task exits. The
+# generated mediator.toml points `did_web_self_hosted` at this SAME target
+# automatically, so the runtime reads the published copy — no hand-editing.
+#
+#   did_log_target = "s3://my-bucket/mediator/did.jsonl?region=eu-west-1"
+#   did_log_target = "aws_parameter_store:///mediator/did-log?region=eu-west-1"
+#   did_log_target = "file:///run/mediator/did.jsonl"
+#
+# All three forms round-trip into `did_web_self_hosted` (which reads a DID
+# *document*, not a DID string). Prefer s3:// for a rotating deployment: the
+# did:webvh v1.0 log embeds the full DID document in every entry (no JSON
+# Patch), so it grows with each key rotation and can outgrow Parameter
+# Store's value-size limit -- S3 has no such ceiling.
+
 
 # ── Install ─────────────────────────────────────────────────────────────────
 [install]

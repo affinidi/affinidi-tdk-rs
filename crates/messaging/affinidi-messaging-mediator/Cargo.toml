@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.17.0"
+version = "0.17.1"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -66,9 +66,9 @@ secrets-vault = ["affinidi-messaging-mediator-common/secrets-vault"]
 secrets-k8s = ["affinidi-messaging-mediator-common/secrets-k8s"]
 
 ## AWS integration used by `did_web_self_hosted = "aws_parameter_store://..."`
-## (still loaded directly by the mediator, not via the secret store). Enabled
-## automatically by `secrets-aws`.
-aws = ["dep:aws-config", "dep:aws-sdk-ssm"]
+## or `"s3://..."` (still loaded directly by the mediator, not via the secret
+## store). Enabled automatically by `secrets-aws`.
+aws = ["dep:aws-config", "dep:aws-sdk-ssm", "dep:aws-sdk-s3"]
 
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ affinidi-encoding = { version = "0.1", optional = true }
 ## Shared types: DatabaseHandler, errors, config structs, secret storage.
 ## Backend features are enabled below via the mediator's own cargo features
 ## so operators only compile the backends their deployment needs.
-affinidi-messaging-mediator-common = { version = "0.15.29", path = "affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-common = { version = "0.15.30", path = "affinidi-messaging-mediator-common" }
 ## Raw TOML config schema — the `*ConfigRaw` types are defined here and the
 ## mediator re-exports them; the runtime `Config` + conversions stay local.
 affinidi-messaging-mediator-config = { version = "0.2", path = "affinidi-messaging-mediator-config" }
@@ -140,6 +140,7 @@ didwebvh-rs = "0.5.4"
 ## To build without: --no-default-features --features didcomm
 aws-config = { version = "1", optional = true }
 aws-sdk-ssm = { version = "1", optional = true }
+aws-sdk-s3 = { version = "1", optional = true }
 
 # ── Cryptography & Security ─────────────────────────────────────────────
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
