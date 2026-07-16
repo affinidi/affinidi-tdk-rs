@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.18.53"
+version = "0.18.54"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -31,7 +31,7 @@ affinidi-crypto = { version = "0.2", features = ["jose"] }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15" }
 # Protocol-agnostic messaging vocabulary (ConnState, the future MessageTransport
 # trait). The websocket transport publishes ConnState over a watch channel.
-affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.3" }
+affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.5" }
 ## Trust Tasks framework — typed request/response documents for the messaging
 ## tasks (ping / account / acl / access-list), carried over the binding envelope.
 trust-tasks-rs = "0.2"
