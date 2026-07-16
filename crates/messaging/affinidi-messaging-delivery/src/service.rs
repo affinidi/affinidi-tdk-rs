@@ -13,7 +13,7 @@ use futures_util::stream::{self, BoxStream, StreamExt};
 use tokio::sync::{broadcast, oneshot, watch};
 use tokio::task::JoinHandle;
 
-use crate::outbox::{Key, OutboxEntry, OutboxStore};
+use crate::outbox::{Key, OutboxEntry, OutboxState, OutboxStore};
 
 /// The delivery guarantee for a [`MessagingService::send`].
 #[derive(Debug, Clone)]
@@ -215,6 +215,35 @@ impl MessagingService {
             ConnState::Connected => MessagingStatus::Connected,
             _ => MessagingStatus::Disconnected,
         }
+    }
+
+    /// Record end-to-end delivery evidence for a `Guaranteed` send:
+    /// its outbox entry transitions `Sent → Delivered` (§5a).
+    ///
+    /// Call this from an evidence source — a layer-receipt recognizer, or a
+    /// protocol-reply handler that knows the reply confirms `idempotency_key`.
+    /// Idempotent: `Ok(true)` if it transitioned an entry, `Ok(false)` if there
+    /// was no matching `Sent` entry (unknown or already terminal).
+    pub async fn confirm(&self, idempotency_key: &str) -> Result<bool, MessagingError> {
+        crate::confirm::confirm_delivered(self.outbox.as_ref(), idempotency_key)
+            .await
+            .map_err(|e| MessagingError::Transport(format!("confirm failed: {e}")))
+    }
+
+    /// The current outbox state of a `Guaranteed` send (`Queued` / `Sent` /
+    /// `Delivered` / `Unconfirmed` / `Failed`), or `None` if the key was never
+    /// enqueued. Callers poll this to learn a delivery outcome after `send`
+    /// returned `Accepted`. (A `BestEffort` send has no outbox entry.)
+    pub async fn delivery_state(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<OutboxState>, MessagingError> {
+        Ok(self
+            .outbox
+            .get(idempotency_key)
+            .await
+            .map_err(|e| MessagingError::Transport(format!("outbox read failed: {e}")))?
+            .map(|entry| entry.state))
     }
 
     fn remove_waiter(&self, thid: &str) {
@@ -495,5 +524,49 @@ mod tests {
 
         h.conn_tx.send(ConnState::Connected).unwrap();
         assert_eq!(svc.status(), MessagingStatus::Connected);
+    }
+
+    #[tokio::test]
+    async fn confirm_upgrades_a_sent_guaranteed_send_to_delivered() {
+        let h = mock();
+        let outbox = Arc::new(InMemoryOutboxStore::new());
+        let svc = MessagingService::new(h.transport.clone(), outbox.clone());
+
+        // Guaranteed send → Queued.
+        svc.send(
+            "did:x",
+            b"m".to_vec(),
+            Delivery::Guaranteed {
+                idempotency_key: Some("k".to_string()),
+                ordering_key: None,
+                deliver_by: Duration::from_secs(60),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            svc.delivery_state("k").await.unwrap(),
+            Some(OutboxState::Queued)
+        );
+
+        // Simulate the drain hop-accepting it (Queued → Sent).
+        let mut e = outbox.get("k").await.unwrap().unwrap();
+        e.state = OutboxState::Sent;
+        outbox.put(e).await.unwrap();
+        assert_eq!(
+            svc.delivery_state("k").await.unwrap(),
+            Some(OutboxState::Sent)
+        );
+
+        // Evidence arrives → Delivered (idempotent).
+        assert!(svc.confirm("k").await.unwrap());
+        assert!(!svc.confirm("k").await.unwrap());
+        assert_eq!(
+            svc.delivery_state("k").await.unwrap(),
+            Some(OutboxState::Delivered)
+        );
+
+        // An unknown key has no delivery state.
+        assert_eq!(svc.delivery_state("unknown").await.unwrap(), None);
     }
 }

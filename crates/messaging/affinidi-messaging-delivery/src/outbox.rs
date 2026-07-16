@@ -130,6 +130,17 @@ pub trait OutboxStore: Send + Sync {
     /// — only the earliest-enqueued non-terminal entry per key (so a per-key
     /// FIFO is preserved). Returned oldest-first.
     async fn due(&self, now_ms: u64) -> Result<Vec<OutboxEntry>, OutboxError>;
+
+    /// All `Sent` entries — hop-accepted and awaiting end-to-end evidence (§5a).
+    /// The confirmation sweep ([`crate::confirm::sweep_confirmations`]) checks
+    /// these against `deliver_by_ms`.
+    ///
+    /// The default returns none, so a store that doesn't override it simply
+    /// never sweeps confirmations (safe, but a `Sent` entry never settles
+    /// `Unconfirmed`). A durable store SHOULD override this.
+    async fn awaiting_confirmation(&self) -> Result<Vec<OutboxEntry>, OutboxError> {
+        Ok(Vec::new())
+    }
 }
 
 /// A non-durable [`OutboxStore`] backed by a `HashMap`. For tests and ephemeral
@@ -201,6 +212,15 @@ impl OutboxStore for InMemoryOutboxStore {
                 .then_with(|| a.idempotency_key.cmp(&b.idempotency_key))
         });
         Ok(due)
+    }
+
+    async fn awaiting_confirmation(&self) -> Result<Vec<OutboxEntry>, OutboxError> {
+        Ok(self
+            .lock()?
+            .values()
+            .filter(|e| e.state == OutboxState::Sent)
+            .cloned()
+            .collect())
     }
 }
 
