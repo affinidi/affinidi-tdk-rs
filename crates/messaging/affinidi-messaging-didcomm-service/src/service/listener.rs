@@ -121,7 +121,15 @@ impl Listener {
         // Clear the connection handle so outbound callers get NotConnected
         let _ = self.connection_tx.send(None);
 
-        let tdk_config = match self.config.tdk_config.take() {
+        // Clone rather than `take()` the caller-seeded config: `connect()` runs
+        // on every restart-loop iteration (see `restart::run_with_restart`), and
+        // `Option::take` left the field `None` after the first attempt, so every
+        // subsequent retry fell back to a cold `TDKConfig::headless()` — losing
+        // the caller's pre-seeded DID resolver and its warm cache (F4). Both
+        // `TDKConfig` and its `DIDCacheClient` are Arc-cheap clones that share the
+        // same underlying resolver state, so cloning keeps the warm resolver
+        // across every reconnect.
+        let tdk_config = match self.config.tdk_config.clone() {
             Some(cfg) => cfg,
             None => affinidi_tdk_common::config::TDKConfig::headless()?,
         };

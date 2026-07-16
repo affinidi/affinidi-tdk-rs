@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.18] - 2026-07-16
+
+- Keep the caller-seeded DID resolver across listener restarts (D1-F4).
+  `Listener::connect()` runs on every iteration of the restart loop
+  (`restart::run_with_restart`), but it consumed the pre-seeded `TDKConfig`
+  with `Option::take()` — leaving the field `None`, so every retry after the
+  first fell back to a cold `TDKConfig::headless()` and lost the caller's
+  DID resolver and its warm cache. It now `clone()`s the config instead; both
+  `TDKConfig` and its `DIDCacheClient` are `Arc`-cheap clones that share the
+  same underlying resolver state, so every reconnect keeps the warm resolver.
+  Behaviour-preserving for the first connect; fixes the degraded-resolution +
+  extra cold-resolver cost on every subsequent reconnect.
+
 ## [0.3.16] - 2026-07-03
 
 - Fix a TSP poison-loop in the offline-sync poller. `AffinidiMessageService` runs a periodic
