@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.19] - 2026-07-16
+
+- Ack (delete) live inbound messages only AFTER the handler has processed them,
+  not on receipt (D1-F5, R1.6/R1.7). `process_next_message` used
+  `live_stream_next(auto_delete = true)`, which deleted the mediator's copy the
+  instant the frame arrived — then dispatched the message to the handler in a
+  *spawned* task. A teardown (or crash) between the delete and the handler
+  running lost the message permanently, since the mediator had already dropped
+  it. The live path now pulls with `auto_delete = false` and acks via
+  `delete_message_background` inside `dispatch_message`, once the handler has had
+  the message; a teardown before that leaves the message queued for redelivery
+  on the next pickup instead. The operator's `auto_delete = false` opt-out is
+  honoured (no ack at all). Behaviour is otherwise unchanged: the offline-sync
+  drain already batch-acked after dispatch, and the TSP-multiplexed live path is
+  unchanged (its ack-after-handoff lands with TSP conformance). Failed acks are
+  non-fatal — the message is redelivered and de-duplicated by the receiver.
+
 ## [0.3.18] - 2026-07-16
 
 - Keep the caller-seeded DID resolver across listener restarts (D1-F4).
