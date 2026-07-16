@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-core"
 description = "Protocol-agnostic messaging traits for DIDComm and TSP"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -17,6 +17,11 @@ async-trait = "0.1"
 thiserror = "2"
 url = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
+# `MessageTransport::inbound` returns a `BoxStream`; `connection_state` returns a
+# `tokio::sync::watch::Receiver`. Only the sync channels are needed, not a
+# runtime, so tokio is pulled with `default-features = false, features = ["sync"]`.
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+tokio = { version = "1", default-features = false, features = ["sync"] }
 
 [lints]
 workspace = true
