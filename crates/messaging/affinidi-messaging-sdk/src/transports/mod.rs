@@ -8,6 +8,7 @@ use affinidi_messaging_didcomm::message::Message;
 use serde_json::Value;
 use sha256::digest;
 use std::{sync::Arc, time::Duration};
+use tokio::sync::oneshot;
 use tracing::debug;
 use websockets::websocket::WebSocketCommands;
 
@@ -83,15 +84,34 @@ impl ATM {
                 profile.inner.alias
             );
 
+            let (reply_tx, reply_rx) = oneshot::channel();
             channel
-                .send(WebSocketCommands::SendMessage(message.to_owned()))
+                .send(WebSocketCommands::SendMessage(message.to_owned(), reply_tx))
                 .await
                 .map_err(|err| {
                     ATMError::TransportError(format!("Could not send websocket message: {err:?}"))
                 })?;
 
+            // R1.1: await the ACTUAL write result. A frame dropped during a
+            // reconnect (socket `None`) or a failed socket write now surfaces as
+            // an error instead of a false `Ok(EmptyResponse)`. This is the
+            // behaviour change every downstream "delivered" log was built on.
+            match reply_rx.await {
+                Ok(Ok(())) => {}
+                Ok(Err(reason)) => {
+                    return Err(ATMError::TransportError(format!(
+                        "WebSocket message not transmitted: {reason}"
+                    )));
+                }
+                Err(_) => {
+                    return Err(ATMError::TransportError(
+                        "WebSocket task ended before confirming the send".to_string(),
+                    ));
+                }
+            }
+
             debug!(
-                "Profile ({}): WebSocket Channel notified",
+                "Profile ({}): WebSocket message written to socket",
                 profile.inner.alias
             );
 

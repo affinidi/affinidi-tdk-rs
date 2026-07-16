@@ -90,8 +90,11 @@ pub(crate) enum WebSocketCommands {
     /// Request to send a notifcation (true) if already connected or when next connects if not connected
     NotifyConnection(oneshot::Sender<bool>),
 
-    /// Send a message to the mediator
-    SendMessage(String),
+    /// Send a message to the mediator. The `oneshot` reports the ACTUAL write
+    /// result: `Ok(())` once the frame is written to the socket, `Err(reason)`
+    /// if the socket is disconnected (reconnect window) or the write fails — so
+    /// the caller never sees success for a frame that was not transmitted (R1.1).
+    SendMessage(String, oneshot::Sender<Result<(), String>>),
 
     /// Send inbound messages to a MPSC Channel
     EnableInboundChannel(broadcast::Sender<WebSocketResponses>),
@@ -298,18 +301,28 @@ impl WebSocketTransport {
                                     notify_connection = Some(sender);
                                 }
                             },
-                            Some(WebSocketCommands::SendMessage(msg)) => {
-                                if let Some(web_socket) = self.web_socket.as_mut() {
+                            Some(WebSocketCommands::SendMessage(msg, reply)) => {
+                                let result = if let Some(web_socket) = self.web_socket.as_mut() {
                                     debug!("Sending message to websocket");
                                     match web_socket.send(Message::text(msg)).await {
                                         Ok(_) => {
                                             debug!("Message sent");
+                                            Ok(())
                                         }
                                         Err(e) => {
                                             error!("Error sending message: {:?}", e);
+                                            Err(format!("websocket write failed: {e}"))
                                         }
                                     }
-                                }
+                                } else {
+                                    // The socket is `None` for the whole reconnect
+                                    // window — the frame was NOT transmitted. Report
+                                    // the failure instead of silently dropping it and
+                                    // letting the caller believe it was sent (R1.1).
+                                    warn!("SendMessage while websocket disconnected; not transmitted");
+                                    Err("websocket is not connected".to_string())
+                                };
+                                let _ = reply.send(result);
                             },
                             Some(WebSocketCommands::Stop) => {
                                 debug!("Stopping WebSocket connection");

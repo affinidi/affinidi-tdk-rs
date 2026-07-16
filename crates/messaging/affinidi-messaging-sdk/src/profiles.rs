@@ -764,4 +764,52 @@ mod tests {
         mediator.cleanup_failed_websocket().await;
         assert!(mediator.ws_channel_tx.read().await.is_none());
     }
+
+    /// Truthful send (R1.1): a `send_message` over the websocket transport while
+    /// the socket is down returns `Err`, not a false `Ok(EmptyResponse)`. The
+    /// fake mediator endpoint is a closed port, so the transport never connects
+    /// and the frame is never transmitted.
+    #[tokio::test]
+    async fn send_message_errors_when_websocket_disconnected() {
+        let tdk_cfg = TDKConfig::headless().expect("headless tdk config");
+        let tdk = Arc::new(
+            TDKSharedState::new(tdk_cfg)
+                .await
+                .expect("tdk shared state"),
+        );
+        let atm_cfg = ATMConfig::builder().build().expect("atm config");
+        let atm = ATM::new(atm_cfg, tdk).await.expect("atm");
+
+        let profile = fake_profile();
+        let mediator = mediator_of(&profile);
+
+        // Start the transport; the socket stays `None` (closed port).
+        let (handle, ws_channel, conn_state_rx) =
+            crate::transports::websockets::websocket::WebSocketTransport::start(
+                profile.clone(),
+                atm.inner.clone(),
+                None,
+            )
+            .await;
+        mediator.ws_channel_tx.write().await.replace(ws_channel);
+        mediator
+            .ws_conn_state_rx
+            .write()
+            .await
+            .replace(conn_state_rx);
+
+        // A fire-and-forget send while disconnected must FAIL, not silently
+        // succeed. Before the fix this returned `Ok(EmptyResponse)`.
+        let result = atm
+            .send_message(&profile, "{}", "msg-1", false, false)
+            .await;
+        assert!(
+            result.is_err(),
+            "send while disconnected must return Err, got {result:?}",
+        );
+
+        mediator.cleanup_failed_websocket().await;
+        let _ = timeout(Duration::from_secs(15), handle).await;
+        atm.graceful_shutdown().await;
+    }
 }
