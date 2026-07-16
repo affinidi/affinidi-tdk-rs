@@ -1,6 +1,23 @@
 # Changelog
 
-## [0.18.52] - 2026-07-16
+## [0.18.53] - 2026-07-16
+
+- Add `DidCommTransport`, a `MessageTransport` (from `affinidi-messaging-core`)
+  implementation over the DIDComm ATM wire — the first step of the messaging
+  delivery layer (D1 Phase 2). It binds the now-conformant SDK to the
+  transport-agnostic contract:
+  - `send` maps to the truthful `ATM::send_message` (an untransmitted frame is
+    an `Err`, never a false `Ok`); the receipt is hop-acceptance, not
+    end-to-end delivery.
+  - `connection_state` hands out the profile's live `watch<ConnState>` (captured
+    at construction; tracks socket reconnects for the transport task's life).
+  - `inbound` yields undeleted messages (`live_stream_next(auto_delete = false)`)
+    as neutral `Inbound { message, thread_id, ack }`; `ack` deletes the message
+    from the mediator only after the caller's durable handoff.
+  Construct with `DidCommTransport::new(atm, profile).await` (errors if the
+  profile has no websocket transport). `async-trait` is now a normal dependency
+  (was `tsp`-feature-gated) so the trait can be implemented unconditionally.
+  Additive; no existing API changed.
 
 ### Behaviour change (see note on versioning)
 

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.18.52"
+version = "0.18.53"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -20,7 +20,6 @@ default = []
 ## today `atm.tsp()` reuses the profile's DIDComm-authenticated session.
 tsp = [
   "dep:affinidi-tsp",
-  "dep:async-trait",
   "dep:affinidi-did-resolver-cache-sdk",
   "dep:reqwest",
 ]
@@ -39,7 +38,7 @@ trust-tasks-rs = "0.2"
 ## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
 affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
 ## Async trait support for the pluggable TSP `RelationshipStore` (tsp feature only).
-async-trait = { version = "0.1", optional = true }
+async-trait = "0.1"
 ## Pure-TSP auth handler needs the resolver-cache + HTTP client types named by the
 ## `CustomAuthHandler` trait it implements (tsp feature only).
 affinidi-did-resolver-cache-sdk = { version = "0.8", optional = true }
