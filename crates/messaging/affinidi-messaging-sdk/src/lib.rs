@@ -219,7 +219,10 @@ pub mod messages;
 pub mod profiles;
 pub mod protocols;
 pub mod public;
+pub mod transport_adapter;
 pub mod transports;
+
+pub use transport_adapter::DidCommTransport;
 
 #[derive(Clone)]
 pub struct ATM {
