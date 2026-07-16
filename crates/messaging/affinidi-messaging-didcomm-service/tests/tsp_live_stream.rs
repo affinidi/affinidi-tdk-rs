@@ -28,9 +28,12 @@ use tokio_util::sync::CancellationToken;
 
 const LISTENER_ID: &str = "svc";
 
+/// `(payload, sender_vid)` pairs recorded by [`RecordingTspHandler`].
+type ReceivedFrames = Arc<Mutex<Vec<(Vec<u8>, String)>>>;
+
 /// Records every TSP payload + sender the service receives.
 struct RecordingTspHandler {
-    received: Arc<Mutex<Vec<(Vec<u8>, String)>>>,
+    received: ReceivedFrames,
 }
 
 #[async_trait]
@@ -87,7 +90,10 @@ async fn tsp_frame_is_delivered_over_the_multiplexed_live_stream() {
     .await
     .expect("start service");
     service_handle
-        .wait_connected(LISTENER_ID, Duration::from_secs(15))
+        // 60s, not 15s: one connect attempt can spend 10s in the service's
+        // `profile_add` timeout on a loaded CI runner, so a flat 15s budget
+        // fits barely one retry (#611). Returns immediately when healthy.
+        .wait_connected(LISTENER_ID, Duration::from_secs(60))
         .await
         .expect("service connects to mediator");
 

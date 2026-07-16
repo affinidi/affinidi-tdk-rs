@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.18.55] - 2026-07-17
+
+- **Fix a connect-path deadlock introduced by the truthful-send change in
+  0.18.52** (#611). The websocket transport's connection setup enables live
+  delivery *from the transport task itself*; since 0.18.52 that call — routed
+  through `ATM::send_message` — enqueued a `SendMessage` command into the
+  transport's **own** command channel and awaited the write-outcome reply that
+  only the (busy) transport task could produce. Every websocket connect
+  attempt therefore hung until the caller's timeout, deterministically:
+  `profile_add(_, true)` timed out at 10s, and the didcomm-service
+  `soft_restart_websocket` CI test failed on every run after 0.18.52 (it was
+  mis-filed as a flake). The live-delivery-change frame is now packed via the
+  new internal `MessagePickup::packed_live_delivery_change` and written
+  directly to the socket the setup code already holds — same message, same
+  packing, no round-trip through the command channel. `toggle_live_delivery`
+  is unchanged for external callers and still sends through the normal
+  (truthful) transport path.
+
 ## [0.18.54] - 2026-07-16
 
 - `DidCommTransport` gains outbox-drain delivery evidence (D1 Phase 2, §5a):
