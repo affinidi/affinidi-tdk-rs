@@ -84,7 +84,7 @@ pub async fn publish_did_log_artefacts(
     // Strict JSON-Lines requires each record to end with `\n`; normalise to
     // exactly one so the served `/.well-known/did.jsonl` is well-formed and
     // future log entries append cleanly.
-    let normalised = format!("{}\n", log.trim_end_matches('\n'));
+    let normalised = format!("{}\n", log.trim_end());
     publish_value(target, &normalised, "DID log")
         .await
         .with_context(|| format!("publishing DID log to '{target}'"))

@@ -167,8 +167,9 @@ listen_address = "0.0.0.0:7037"
 
 # Optional: publish the minted did:webvh log document (did.jsonl content)
 # after provisioning, so a self-hosted mediator on ephemeral compute can
-# serve /.well-known/did.jsonl after the one-shot setup task exits. Point
-# `did_web_self_hosted` in mediator.toml at the SAME target.
+# serve /.well-known/did.jsonl after the one-shot setup task exits. The
+# generated mediator.toml points `did_web_self_hosted` at this SAME target
+# automatically, so the runtime reads the published copy — no hand-editing.
 #
 #   did_log_target = "s3://my-bucket/mediator/did.jsonl?region=eu-west-1"
 #   did_log_target = "aws_parameter_store:///mediator/did-log?region=eu-west-1"

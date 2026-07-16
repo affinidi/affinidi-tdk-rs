@@ -352,11 +352,15 @@ pub struct OutputSection {
     /// `None` (default) = don't publish.
     ///
     /// All three forms round-trip into the runtime's `did_web_self_hosted`,
-    /// which reads a DID *document* (`read_document`). `s3://` is the intended
-    /// target for a self-hosted mediator on ephemeral compute: the log grows
-    /// with each key rotation (did:webvh v1.0 embeds the full document per
-    /// entry — no JSON Patch), so it can outgrow Parameter Store's value-size
-    /// limit; S3 has no such ceiling.
+    /// which reads a DID *document* (`read_document`) — and when the
+    /// deployment self-hosts its log, the generated mediator.toml points
+    /// `did_web_self_hosted` at this same target automatically, so the
+    /// runtime reads the published copy rather than the local
+    /// `./conf/did.jsonl` that dies with a one-shot setup task. `s3://` is
+    /// the intended target for a self-hosted mediator on ephemeral compute:
+    /// the log grows with each key rotation (did:webvh v1.0 embeds the full
+    /// document per entry — no JSON Patch), so it can outgrow Parameter
+    /// Store's value-size limit; S3 has no such ceiling.
     #[serde(default)]
     pub did_log_target: Option<String>,
 }

@@ -493,9 +493,10 @@ pub struct WizardConfig {
     pub did_target: Option<String>,
     /// Publish target for the minted did:webvh log document (recipe
     /// `[output].did_log_target`; never prompted). `None` = don't publish.
-    /// A self-hosted mediator on ephemeral compute points its
-    /// `did_web_self_hosted` at the same target so the runtime can serve
-    /// `/.well-known/did.jsonl` after the one-shot setup task exits.
+    /// When set (and the deployment self-hosts its log), the generated
+    /// mediator.toml points `did_web_self_hosted` at this same target, so a
+    /// mediator on ephemeral compute can serve `/.well-known/did.jsonl`
+    /// after the one-shot setup task exits.
     pub did_log_target: Option<String>,
 }
 
