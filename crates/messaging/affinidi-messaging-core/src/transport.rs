@@ -144,6 +144,21 @@ pub trait MessageTransport: Send + Sync {
     /// makes at-least-once delivery safe: an un-acked message is redelivered
     /// rather than lost.
     async fn ack(&self, ack: InboundAck) -> Result<(), MessagingError>;
+
+    /// The hop-ids still held in the **sender's own outbox** — the transport's
+    /// "not yet picked up" signal (§5a outbox-drain evidence).
+    ///
+    /// A hop-and-hold transport (DIDComm/TSP via a mediator) keeps a sent
+    /// message in the sender's outbox until the recipient acks pickup, then
+    /// deletes it. So a [`SendReceipt::hop_id`] that has **drained** from this
+    /// set — after first appearing in it — is the transport-level evidence that
+    /// the recipient took delivery. The delivery layer polls this.
+    ///
+    /// The default returns `None`: a transport that gives no such signal (a
+    /// stateless REST POST) simply offers no outbox-drain evidence.
+    async fn outbox_message_ids(&self) -> Result<Option<Vec<String>>, MessagingError> {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]

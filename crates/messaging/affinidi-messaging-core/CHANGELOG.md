@@ -2,6 +2,15 @@
 
 ## 16th July 2026
 
+### 0.1.5 — `MessageTransport::outbox_message_ids` (outbox-drain evidence)
+
+Add `MessageTransport::outbox_message_ids()` — the hop-ids still held in the
+**sender's own outbox**, a transport's "not yet picked up" signal for the §5a
+outbox-drain confirmation. A hop-and-hold transport (DIDComm/TSP via a mediator)
+implements it; the default returns `None` (a stateless transport gives no such
+signal), so the addition is non-breaking.
+
+
 ### 0.1.4 — `MessageTransport` wire contract
 
 Add the `transport::MessageTransport` trait and its vocabulary
