@@ -20,7 +20,7 @@ use affinidi_did_common::{
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_didcomm::{
     jwe::decrypt::decrypt,
-    jws::verify::{VerifiedJws, verify_ed25519, verify_p256},
+    jws::verify::{VerifiedJws, verify_ed25519, verify_p256, verify_secp256k1},
     message::{
         Message,
         pack::{pack_encrypted_anoncrypt, pack_encrypted_authcrypt},
@@ -49,6 +49,8 @@ pub struct MetaEnvelope {
     parsed: serde_json::Value,
     /// Pre-resolved sender DID (if authcrypt detected)
     sender_did: Option<String>,
+    /// The sender's specific key id (full `skid`) for ECDH-1PU key resolution
+    sender_kid: Option<String>,
 }
 
 /// Metadata about the envelope format
@@ -74,6 +76,7 @@ impl MetaEnvelope {
             let mut to_did = None;
             let mut from_did = None;
             let mut sender_did = None;
+            let mut sender_kid: Option<String> = None;
             let mut authenticated = false;
 
             // Extract recipient KID to determine to_did
@@ -107,6 +110,7 @@ impl MetaEnvelope {
                     };
                     from_did = Some(did.clone());
                     sender_did = Some(did);
+                    sender_kid = Some(skid.to_string());
                 }
 
                 // Fallback: try apu header for sender DID
@@ -119,6 +123,7 @@ impl MetaEnvelope {
                     let did = apu_str[..hash_pos].to_string();
                     from_did = Some(did.clone());
                     sender_did = Some(did);
+                    sender_kid = Some(apu_str.clone());
                 }
             }
 
@@ -133,6 +138,7 @@ impl MetaEnvelope {
                 },
                 parsed: value,
                 sender_did,
+                sender_kid,
             })
         } else if value.get("payload").is_some() && value.get("signatures").is_some() {
             // JWS envelope - signed but not encrypted
@@ -147,6 +153,7 @@ impl MetaEnvelope {
                 },
                 parsed: value,
                 sender_did: None,
+                sender_kid: None,
             })
         } else if value.get("type").is_some() {
             // Plaintext message
@@ -172,6 +179,7 @@ impl MetaEnvelope {
                 },
                 parsed: value,
                 sender_did: None,
+                sender_kid: None,
             })
         } else {
             Err("Cannot detect message format: expected JWE, JWS, or plaintext".to_string())
@@ -237,8 +245,14 @@ impl MetaEnvelope {
         let recipient_private =
             recipient_private.ok_or("No local secret matches any JWE recipient")?;
 
-        // Resolve sender public key using pre-extracted sender DID (no re-parsing)
-        let sender_public = if let Some(sender_did) = &self.sender_did {
+        // Resolve the sender's *specific* key-agreement key named by the JWE
+        // `skid`, not merely the sender's first advertised key. A sender that
+        // advertises e.g. secp256k1 before P-256 would otherwise pair the wrong
+        // curve here and fail ECDH-1PU with "curve mismatch between private and
+        // public keys" even though the authcrypt itself used P-256.
+        let sender_public = if let Some(skid) = &self.sender_kid {
+            resolve_did_key_agreement_by_skid(skid, did_resolver).await
+        } else if let Some(sender_did) = &self.sender_did {
             resolve_did_key_agreement(sender_did, did_resolver).await
         } else {
             None
@@ -346,9 +360,9 @@ async fn recurse_decrypted_plaintext(
         // key-agreement key (from skid/apu) so ECDH-1PU authcrypt is recovered.
         let inner_str = std::str::from_utf8(plaintext)
             .map_err(|e| format!("Inner JWE is not valid UTF-8: {e}"))?;
-        let inner_sender_did = inner_jwe_sender_did(&value);
-        let inner_sender_public = if let Some(did) = &inner_sender_did {
-            resolve_did_key_agreement(did, did_resolver).await
+        let inner_sender_kid = inner_jwe_sender_kid(&value);
+        let inner_sender_public = if let Some(skid) = &inner_sender_kid {
+            resolve_did_key_agreement_by_skid(skid, did_resolver).await
         } else {
             None
         };
@@ -452,28 +466,46 @@ async fn verify_inner_jws(
                 })?;
             verify_p256(jws_str, &pubkey).map_err(|e| e.to_string())
         }
+        "ES256K" => {
+            let pubkey =
+                resolve_did_secp256k1_verification(signer_did, Some(signer_kid), did_resolver)
+                    .await
+                    .ok_or_else(|| {
+                        format!(
+                            "Could not resolve secp256k1 verification key for signer {signer_kid}"
+                        )
+                    })?;
+            verify_secp256k1(jws_str, &pubkey).map_err(|e| e.to_string())
+        }
         other => Err(format!(
-            "Unsupported JWS signature algorithm {other:?} (expected EdDSA/Ed25519 or ES256)"
+            "Unsupported JWS signature algorithm {other:?} (expected EdDSA/Ed25519, ES256, or ES256K)"
         )),
     }
 }
 
 /// Extract the inner JWE's sender DID from its protected header (`skid`, or
 /// `apu` fallback), mirroring the outer-layer logic in `MetaEnvelope::new`.
+#[cfg(test)]
 fn inner_jwe_sender_did(jwe: &serde_json::Value) -> Option<String> {
+    inner_jwe_sender_kid(jwe).map(|kid| did_part(&kid))
+}
+
+/// Extract the inner JWE's sender key id (full `skid`, with `#fragment`, or the
+/// `apu` fallback). Used to resolve the exact sender key-agreement key.
+fn inner_jwe_sender_kid(jwe: &serde_json::Value) -> Option<String> {
     let protected_b64 = jwe.get("protected").and_then(|p| p.as_str())?;
     let bytes = BASE64_URL_SAFE_NO_PAD.decode(protected_b64).ok()?;
     let header: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
 
     if let Some(skid) = header.get("skid").and_then(|s| s.as_str()) {
-        return Some(did_part(skid));
+        return Some(skid.to_string());
     }
     if let Some(apu) = header.get("apu").and_then(|a| a.as_str())
         && let Ok(apu_bytes) = BASE64_URL_SAFE_NO_PAD.decode(apu)
         && let Ok(apu_str) = String::from_utf8(apu_bytes)
         && apu_str.contains('#')
     {
-        return Some(did_part(&apu_str));
+        return Some(apu_str);
     }
     None
 }
@@ -620,6 +652,48 @@ async fn resolve_did_p256_verification(
     None
 }
 
+/// Resolve a DID's ECDSA secp256k1 verification (signing) public key as SEC1
+/// bytes (JWS `alg: ES256K`).
+///
+/// Supports `publicKeyMultibase` (multikey, `secp256k1-pub` codec — compressed
+/// SEC1) and `publicKeyJwk` (`EC`/`secp256k1` — assembled into uncompressed SEC1).
+async fn resolve_did_secp256k1_verification(
+    did: &str,
+    prefer_kid: Option<&str>,
+    did_resolver: &DIDCacheClient,
+) -> Option<Vec<u8>> {
+    let vm = resolve_authentication_vm(did, prefer_kid, did_resolver).await?;
+
+    if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
+        && let Some(multibase_str) = multibase_value.as_str()
+        && let Ok((codec, key_bytes)) = affinidi_encoding::decode_multikey_with_codec(multibase_str)
+        && codec == affinidi_encoding::SECP256K1_PUB
+    {
+        // Multikey for secp256k1 is the compressed SEC1 point (33 bytes).
+        return Some(key_bytes);
+    }
+
+    if let Some(jwk_value) = vm.property_set.get("publicKeyJwk")
+        && jwk_value.get("kty").and_then(|v| v.as_str()) == Some("EC")
+        && jwk_value.get("crv").and_then(|v| v.as_str()) == Some("secp256k1")
+        && let Some(x_b64) = jwk_value.get("x").and_then(|v| v.as_str())
+        && let Some(y_b64) = jwk_value.get("y").and_then(|v| v.as_str())
+        && let Ok(x_bytes) = BASE64_URL_SAFE_NO_PAD.decode(x_b64)
+        && let Ok(y_bytes) = BASE64_URL_SAFE_NO_PAD.decode(y_b64)
+        && x_bytes.len() == 32
+        && y_bytes.len() == 32
+    {
+        // Assemble the uncompressed SEC1 point: 0x04 || x || y.
+        let mut sec1 = Vec::with_capacity(65);
+        sec1.push(0x04);
+        sec1.extend_from_slice(&x_bytes);
+        sec1.extend_from_slice(&y_bytes);
+        return Some(sec1);
+    }
+
+    None
+}
+
 /// Resolve a DID's first key agreement public key.
 async fn resolve_did_key_agreement(
     did: &str,
@@ -628,6 +702,24 @@ async fn resolve_did_key_agreement(
     let doc = did_resolver.resolve(did).await.ok()?;
     let ka_kids = doc.doc.find_key_agreement(None);
     let kid = ka_kids.first()?;
+    resolve_public_key(&doc.doc, kid)
+}
+
+/// Resolve the sender's key-agreement public key named by `skid` (a full DID
+/// URL with `#fragment`). This honors the exact key the sender used for
+/// ECDH-1PU instead of assuming the sender's first advertised key-agreement
+/// key, which breaks when the sender lists keys on multiple curves (e.g.
+/// secp256k1 before P-256). Falls back to the first key-agreement key only
+/// when the exact key can't be resolved.
+async fn resolve_did_key_agreement_by_skid(
+    skid: &str,
+    did_resolver: &DIDCacheClient,
+) -> Option<PublicKeyAgreement> {
+    let doc = did_resolver.resolve(&did_part(skid)).await.ok()?;
+    if let Some(pk) = resolve_public_key(&doc.doc, skid) {
+        return Some(pk);
+    }
+    let kid = doc.doc.find_key_agreement(None).first().copied()?;
     resolve_public_key(&doc.doc, kid)
 }
 
@@ -1152,5 +1244,73 @@ mod tests {
             err.contains("no secret held"),
             "error must explain why the advertised key was unusable: {err}"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Regression: `unpack` must resolve the sender's key-agreement key named
+    // by the JWE `skid`, not the sender's *first* advertised key. A sender
+    // that lists secp256k1 before P-256 and authcrypts on the shared P-256
+    // curve previously failed the mediator's decrypt with
+    //   "curve mismatch between private and public keys"
+    // (ProblemReport `e.p.message.unpack`) because the mediator paired its
+    // P-256 secret with the sender's *first* (secp256k1) public key.
+    // ---------------------------------------------------------------------
+    #[tokio::test]
+    async fn unpack_authcrypt_resolves_sender_key_by_skid_not_first() {
+        // Mediator offers only P-256 key agreement.
+        let mediator = "did:example:medskid";
+        let med_p_kid = format!("{mediator}#key-p256");
+        let med_p = Secret::generate_p256(Some(&med_p_kid), None).unwrap();
+
+        // Sender advertises secp256k1 FIRST, then P-256 (the shared curve).
+        let sender = "did:example:sndskid";
+        let snd_k_kid = format!("{sender}#key-secp256k1");
+        let snd_p_kid = format!("{sender}#key-p256");
+        let snd_k = Secret::generate_secp256k1(Some(&snd_k_kid), None).unwrap();
+        let snd_p = Secret::generate_p256(Some(&snd_p_kid), None).unwrap();
+
+        let mediator_doc = json!({
+            "id": mediator,
+            "verificationMethod": [ka_vm(&med_p_kid, mediator, &med_p)],
+            "keyAgreement": [med_p_kid],
+        });
+        let sender_doc = json!({
+            "id": sender,
+            "verificationMethod": [
+                ka_vm(&snd_k_kid, sender, &snd_k), // secp256k1 first
+                ka_vm(&snd_p_kid, sender, &snd_p),
+            ],
+            "keyAgreement": [snd_k_kid.clone(), snd_p_kid.clone()],
+        });
+
+        let resolver = example_resolver(&[mediator_doc, sender_doc]).await;
+
+        // Sender packs authcrypt to the mediator; negotiation picks the shared
+        // P-256 curve, so `skid` is the sender's P-256 key (the SECOND one).
+        let sender_secrets = SimpleSecretsResolver::new(&[snd_k, snd_p]).await;
+        let msg = status_message(sender, mediator, "skid-multicurve");
+        let (packed, pack_meta) =
+            pack_encrypted(&msg, mediator, Some(sender), &resolver, &sender_secrets)
+                .await
+                .expect("sender packs authcrypt on the shared P-256 curve");
+        assert_eq!(
+            pack_meta.from_kid.as_deref(),
+            Some(snd_p_kid.as_str()),
+            "authcrypt skid must be the sender's P-256 key, not the first secp256k1 key"
+        );
+        assert_eq!(jwe_epk_crv(&packed).as_deref(), Some("P-256"));
+
+        // Mediator unpacks: it must resolve the sender's P-256 key via skid.
+        let mediator_secrets = SimpleSecretsResolver::new(&[med_p]).await;
+        let envelope = MetaEnvelope::new(&packed, &resolver)
+            .await
+            .expect("parse the JWE envelope");
+        let (out, unpack_meta) = envelope
+            .unpack(&resolver, &mediator_secrets)
+            .await
+            .expect("mediator must unpack authcrypt from a secp256k1-first sender via skid");
+
+        assert!(unpack_meta.authenticated, "authcrypt must be authenticated");
+        assert_eq!(out.from.as_deref(), Some(sender));
     }
 }

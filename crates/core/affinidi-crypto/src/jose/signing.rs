@@ -1,5 +1,6 @@
-//! Ed25519 signing/verification (EdDSA / JWS `alg: EdDSA`) and ECDSA P-256
-//! verification (JWS `alg: ES256`).
+//! Ed25519 signing/verification (EdDSA / JWS `alg: EdDSA`), ECDSA P-256
+//! verification (JWS `alg: ES256`), and ECDSA secp256k1 verification (JWS
+//! `alg: ES256K`).
 //!
 //! Ported verbatim from `affinidi-messaging-didcomm` for the #327
 //! centralization; byte-level output is locked by [`super::kat`] (both the
@@ -44,6 +45,23 @@ pub fn verify_p256(
         .map_err(|e| CryptoError::Verification(format!("invalid P-256 public key: {e}")))?;
     let sig = p256::ecdsa::Signature::from_slice(signature)
         .map_err(|e| CryptoError::Verification(format!("invalid P-256 signature: {e}")))?;
+    verifying_key
+        .verify(data, &sig)
+        .map_err(|e| CryptoError::Verification(format!("signature verification failed: {e}")))
+}
+
+/// Verify an ECDSA secp256k1 signature (JWS `alg: ES256K`).
+pub fn verify_secp256k1(
+    data: &[u8],
+    signature: &[u8; 64],
+    public_key_sec1: &[u8],
+) -> Result<(), CryptoError> {
+    use k256::ecdsa::signature::Verifier as _;
+
+    let verifying_key = k256::ecdsa::VerifyingKey::from_sec1_bytes(public_key_sec1)
+        .map_err(|e| CryptoError::Verification(format!("invalid secp256k1 public key: {e}")))?;
+    let sig = k256::ecdsa::Signature::from_slice(signature)
+        .map_err(|e| CryptoError::Verification(format!("invalid secp256k1 signature: {e}")))?;
     verifying_key
         .verify(data, &sig)
         .map_err(|e| CryptoError::Verification(format!("signature verification failed: {e}")))

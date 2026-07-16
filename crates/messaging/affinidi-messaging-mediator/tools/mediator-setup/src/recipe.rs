@@ -141,8 +141,9 @@ fn parse_extra_key_suites(raw: &[String]) -> anyhow::Result<Vec<crate::cli::KeyS
     raw.iter()
         .map(|s| match s.trim().to_ascii_lowercase().as_str() {
             "p256" | "p-256" | "es256" => Ok(crate::cli::KeySuite::P256),
+            "secp256k1" | "k256" | "es256k" => Ok(crate::cli::KeySuite::Secp256k1),
             other => anyhow::bail!(
-                "Invalid identity.extra_key_suites entry '{other}': supported suites are 'p256'"
+                "Invalid identity.extra_key_suites entry '{other}': supported suites are 'p256', 'secp256k1'"
             ),
         })
         .collect()

@@ -220,12 +220,15 @@ impl std::fmt::Display for DidMethod {
 pub enum KeySuite {
     /// NIST P-256 — ES256 signing + ECDH-ES (P-256) key agreement.
     P256,
+    /// secp256k1 — ES256K signing + ECDH-ES (secp256k1) key agreement.
+    Secp256k1,
 }
 
 impl std::fmt::Display for KeySuite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::P256 => write!(f, "p256"),
+            Self::Secp256k1 => write!(f, "secp256k1"),
         }
     }
 }

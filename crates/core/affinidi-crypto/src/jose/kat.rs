@@ -16,6 +16,8 @@
 //!   vector 5b deferred until key agreement landed).
 //! - `es256_p256_golden` — deterministic (RFC 6979) ECDSA P-256 sign +
 //!   `verify_p256` roundtrip, pinning the ES256 signature/public-key bytes.
+//! - `secp256k1_es256k_golden` — deterministic (RFC 6979) ECDSA secp256k1
+//!   sign + `verify_secp256k1` roundtrip, pinning the ES256K bytes.
 
 #![cfg(test)]
 
@@ -28,6 +30,9 @@ use super::{aes_kw, concat_kdf, content_encryption, signing};
 // ECDSA P-256 signing lives in the `p256` dev-dependency (this crate is
 // verify-only for ES256), used by the P-256 KAT(s) below to produce vectors.
 use p256::ecdsa::{SigningKey as P256SigningKey, signature::Signer as P256Signer};
+// Likewise ECDSA secp256k1 signing (this crate is verify-only for ES256K),
+// used by the secp256k1 KAT(s) below to produce vectors.
+use k256::ecdsa::{SigningKey as K256SigningKey, signature::Signer as K256Signer};
 
 fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -423,4 +428,99 @@ fn p256_compressed_and_uncompressed_pubkey_agree() {
 fn p256_invalid_public_key_errors() {
     let sig_bytes = [0u8; 64];
     assert!(signing::verify_p256(b"x", &sig_bytes, b"not-a-key").is_err());
+}
+
+// ─── ES256K (ECDSA secp256k1) ───────────────────────────────────────────────
+
+#[test]
+fn secp256k1_es256k_golden() {
+    const EXPECTED_PK: &str = "049ac20335eb38768d2052be1dbbc3c8f6178407458e51e6b4ad22f1d91758895baf102a603fa09b366705fd727757a5abd614410a6e3f802ab8da8dfe84289d64";
+    const EXPECTED_SIG: &str = "c857cd5897512aa9606ada5bc8654ec60e3b2467174a4fe8299ab1c4685233d709230fa59777d14e42934f9de78e08c22c02b0f5b30a7fcadf5cefec13ed83b7";
+
+    let sk = K256SigningKey::from_slice(&[0x55u8; 32]).expect("valid secp256k1 scalar");
+    let msg = b"DIDComm KAT message";
+
+    let pk = sk.verifying_key().to_encoded_point(false);
+    assert_eq!(
+        hex(pk.as_bytes()),
+        EXPECTED_PK,
+        "secp256k1 public key drifted"
+    );
+
+    // RustCrypto ECDSA `sign` is deterministic (RFC 6979), so these bytes pin.
+    let sig: k256::ecdsa::Signature = K256Signer::sign(&sk, msg);
+    let sig_bytes: [u8; 64] = sig.to_bytes().into();
+    assert_eq!(
+        hex(&sig_bytes),
+        EXPECTED_SIG,
+        "ES256K signature drifted (RFC 6979 determinism broken)"
+    );
+
+    assert!(signing::verify_secp256k1(msg, &sig_bytes, pk.as_bytes()).is_ok());
+    assert!(signing::verify_secp256k1(b"tampered", &sig_bytes, pk.as_bytes()).is_err());
+}
+
+/// A secp256k1 signing key's public point as uncompressed SEC1 bytes (65 bytes).
+fn k256_sec1_uncompressed(sk: &K256SigningKey) -> Vec<u8> {
+    sk.verifying_key()
+        .to_encoded_point(false)
+        .as_bytes()
+        .to_vec()
+}
+
+#[test]
+fn secp256k1_sign_verify_roundtrip() {
+    let sk = K256SigningKey::random(&mut rand_core::OsRng);
+    let msg = b"affinidi es256k roundtrip";
+    let sig: k256::ecdsa::Signature = K256Signer::sign(&sk, msg);
+    let sig_bytes: [u8; 64] = sig.to_bytes().into();
+    assert!(signing::verify_secp256k1(msg, &sig_bytes, &k256_sec1_uncompressed(&sk)).is_ok());
+}
+
+#[test]
+fn secp256k1_wrong_key_fails() {
+    let sk = K256SigningKey::random(&mut rand_core::OsRng);
+    let other = K256SigningKey::random(&mut rand_core::OsRng);
+    let msg = b"affinidi es256k";
+    let sig: k256::ecdsa::Signature = K256Signer::sign(&sk, msg);
+    let sig_bytes: [u8; 64] = sig.to_bytes().into();
+    assert!(signing::verify_secp256k1(msg, &sig_bytes, &k256_sec1_uncompressed(&other)).is_err());
+}
+
+#[test]
+fn secp256k1_tampered_message_fails() {
+    let sk = K256SigningKey::random(&mut rand_core::OsRng);
+    let sig: k256::ecdsa::Signature = K256Signer::sign(&sk, b"original");
+    let sig_bytes: [u8; 64] = sig.to_bytes().into();
+    assert!(
+        signing::verify_secp256k1(b"tampered", &sig_bytes, &k256_sec1_uncompressed(&sk)).is_err()
+    );
+}
+
+/// `verify_secp256k1` accepts both SEC1 encodings of the public point
+/// (compressed 33-byte and uncompressed 65-byte).
+#[test]
+fn secp256k1_compressed_and_uncompressed_pubkey_agree() {
+    let sk = K256SigningKey::random(&mut rand_core::OsRng);
+    let msg = b"sec1 encodings";
+    let sig: k256::ecdsa::Signature = K256Signer::sign(&sk, msg);
+    let sig_bytes: [u8; 64] = sig.to_bytes().into();
+    let uncompressed = sk
+        .verifying_key()
+        .to_encoded_point(false)
+        .as_bytes()
+        .to_vec();
+    let compressed = sk
+        .verifying_key()
+        .to_encoded_point(true)
+        .as_bytes()
+        .to_vec();
+    assert!(signing::verify_secp256k1(msg, &sig_bytes, &uncompressed).is_ok());
+    assert!(signing::verify_secp256k1(msg, &sig_bytes, &compressed).is_ok());
+}
+
+#[test]
+fn secp256k1_invalid_public_key_errors() {
+    let sig_bytes = [0u8; 64];
+    assert!(signing::verify_secp256k1(b"x", &sig_bytes, b"not-a-key").is_err());
 }
