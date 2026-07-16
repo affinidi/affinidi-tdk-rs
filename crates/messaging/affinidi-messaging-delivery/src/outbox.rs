@@ -4,6 +4,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use serde::{Deserialize, Serialize};
+
 /// An idempotency or ordering key. The idempotency key is the dedup anchor; the
 /// ordering key groups entries into a per-key FIFO.
 pub type Key = String;
@@ -15,7 +17,7 @@ pub type Key = String;
 /// accepted the bytes (durably queued at the mediator) and we are awaiting
 /// end-to-end evidence. Confirmation (`Sent → Delivered`) lands in a later
 /// increment; until then a `Sent` entry is simply not re-sent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum OutboxState {
     /// Not yet handed off, or a failed attempt awaiting its next retry.
@@ -47,7 +49,12 @@ impl OutboxState {
 /// The entry records **who** the message is for (`dest_did`), not which wire —
 /// the transport is resolved at drain time. Timestamps are Unix milliseconds;
 /// the drain takes the clock as a parameter so it stays deterministic in tests.
-#[derive(Debug, Clone)]
+///
+/// `Serialize`/`Deserialize` so a durable [`OutboxStore`] can persist entries
+/// (e.g. a service backing the outbox with an on-disk keyspace). The derive is
+/// format-agnostic — a JSON store encodes `packed` as a byte array, a CBOR/
+/// bincode store compactly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboxEntry {
     /// Dedup anchor. The receiver drops a duplicate carrying the same key, which
     /// is what makes at-least-once retry safe.
@@ -249,6 +256,34 @@ mod tests {
             created,
             created + 60_000,
         )
+    }
+
+    #[test]
+    fn entry_survives_a_serde_roundtrip() {
+        // A durable OutboxStore persists entries via serde; every field must
+        // survive the round trip (incl. the §5a hop_id / outbox_observed and a
+        // non-Queued state).
+        let mut e = entry("k1", 1_000).with_ordering_key("ord");
+        e.state = OutboxState::Sent;
+        e.attempts = 3;
+        e.next_attempt_at_ms = 1_500;
+        e.hop_id = Some("hop-abc".to_string());
+        e.outbox_observed = true;
+
+        let json = serde_json::to_vec(&e).unwrap();
+        let back: OutboxEntry = serde_json::from_slice(&json).unwrap();
+
+        assert_eq!(back.idempotency_key, "k1");
+        assert_eq!(back.dest_did, "did:example:bob");
+        assert_eq!(back.ordering_key.as_deref(), Some("ord"));
+        assert_eq!(back.packed, vec![1, 2, 3]);
+        assert_eq!(back.state, OutboxState::Sent);
+        assert_eq!(back.attempts, 3);
+        assert_eq!(back.next_attempt_at_ms, 1_500);
+        assert_eq!(back.created_at_ms, 1_000);
+        assert_eq!(back.deliver_by_ms, 61_000);
+        assert_eq!(back.hop_id.as_deref(), Some("hop-abc"));
+        assert!(back.outbox_observed);
     }
 
     #[tokio::test]

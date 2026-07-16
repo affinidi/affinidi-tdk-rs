@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.7] - 2026-07-17
+
+- Derive `Serialize`/`Deserialize` on `OutboxEntry` and `OutboxState` so a
+  **durable** `OutboxStore` can persist entries (a service backing the outbox
+  with an on-disk keyspace — the production path; the in-memory store is
+  dev-only). Format-agnostic: JSON encodes `packed` as a byte array, CBOR/bincode
+  compactly. Additive; no field or API change. 1 new roundtrip test.
+
 ## [0.1.6] - 2026-07-16
 
 - Add **escalate-on-expiry** (§5a): when a `Sent` entry's delivery window passes
