@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.2] - 2026-07-16
+
+- Add the end-to-end delivery **confirmation** state machine (§5a): the
+  `Sent → Delivered | Unconfirmed` transitions a hop-accepted entry awaits.
+  - `confirm_delivered(store, key)` — record evidence: `Sent → Delivered`
+    (idempotent; a re-delivered receipt for an already-`Delivered` entry is a
+    no-op).
+  - `sweep_confirmations(store, now)` / `confirmation_loop` — settle any `Sent`
+    entry whose delivery window expired without evidence to `Unconfirmed` (a
+    truthful "we can't know", distinct from the drain's `Failed` for a `Queued`
+    entry that never even hop-accepted).
+  - `OutboxStore::awaiting_confirmation()` — the `Sent` entries the sweep checks
+    (default returns none; `InMemoryOutboxStore` overrides it).
+  - `MessagingService::confirm(key)` — the evidence entry point (called by a
+    layer-receipt recognizer or a protocol-reply handler) — and
+    `delivery_state(key)` to poll the outcome after a `Guaranteed` `send`.
+  The *evidence sources* — the receiver auto-emitting a layer receipt, polling
+  the mediator's own outbox for drain, and re-sending over an alternate binding
+  on expiry — layer on top of this state machine (they need live-mediator
+  interaction). Additive; fully offline-tested.
+
 ## [0.1.1] - 2026-07-16
 
 - Add the `MessagingService` front-end and its single inbound dispatcher — the
