@@ -150,6 +150,8 @@ impl Listener {
                 match frame {
                     Some(InboundFrame::DidComm(message, meta)) => {
                         let meta = super::listener::convert_meta(*meta);
+                        // Offline drain acks the whole batch below via
+                        // `send_messages_received`, so no per-message ack here.
                         Listener::dispatch_message(
                             listener_id,
                             atm,
@@ -157,6 +159,7 @@ impl Listener {
                             handler,
                             *message,
                             meta,
+                            None,
                         )
                         .await;
                     }
@@ -208,7 +211,10 @@ impl Listener {
 
             for (message, meta) in offline_messages {
                 let meta = super::listener::convert_meta(meta);
-                Listener::dispatch_message(listener_id, atm, profile, handler, message, meta).await;
+                // Offline drain acks the whole batch below via
+                // `send_messages_received`, so no per-message ack here.
+                Listener::dispatch_message(listener_id, atm, profile, handler, message, meta, None)
+                    .await;
             }
 
             let delete_result = atm

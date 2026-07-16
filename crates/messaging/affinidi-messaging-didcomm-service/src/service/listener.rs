@@ -269,24 +269,42 @@ impl Listener {
         }
 
         let wait_duration = Duration::from_secs(self.config.message_wait_duration_secs);
-        let auto_delete = self.config.auto_delete;
         let atm = self.atm()?;
         let profile = self.profile()?;
 
+        // R1.6/R1.7: pull the message WITHOUT acking it to the mediator
+        // (`auto_delete = false`). The mediator keeps its copy until we ack —
+        // and we ack only after the handler has processed the message, in
+        // `dispatch_message`. Acking on receipt (the old default) meant a
+        // teardown between receipt and the spawned handler task losing the
+        // message forever.
         let next = atm
             .message_pickup()
-            .live_stream_next(profile, Some(wait_duration), auto_delete)
+            .live_stream_next(profile, Some(wait_duration), false)
             .await
             .map_err(DIDCommServiceError::ATM)?;
 
         if let Some((message, meta)) = next {
+            // The mediator's queue-id (hash) for this frame, used to ack it
+            // after handoff. Honour the operator's `auto_delete = false` opt-out
+            // by acking only when auto-delete is enabled (the default).
+            let ack_id = self.config.auto_delete.then(|| meta.sha256_hash.clone());
             let meta = convert_meta(*meta);
             let listener_id = self.config.id.clone();
             let atm = atm.clone();
             let profile = profile.clone();
             let handler = self.handler.clone();
             tasks.spawn(async move {
-                Self::dispatch_message(&listener_id, &atm, &profile, &handler, message, meta).await;
+                Self::dispatch_message(
+                    &listener_id,
+                    &atm,
+                    &profile,
+                    &handler,
+                    message,
+                    meta,
+                    ack_id,
+                )
+                .await;
             });
         }
 
@@ -318,8 +336,19 @@ impl Listener {
                 let profile = profile.clone();
                 let handler = self.handler.clone();
                 tasks.spawn(async move {
-                    Self::dispatch_message(&listener_id, &atm, &profile, &handler, *message, meta)
-                        .await;
+                    // TSP-multiplexed path (phase 4): still acks on receipt via
+                    // `auto_delete` in `live_stream_next_frame`, so no
+                    // post-handoff ack here yet.
+                    Self::dispatch_message(
+                        &listener_id,
+                        &atm,
+                        &profile,
+                        &handler,
+                        *message,
+                        meta,
+                        None,
+                    )
+                    .await;
                 });
             }
             Some(InboundFrame::Tsp(packed)) => {
@@ -445,6 +474,10 @@ impl Listener {
         handler: &Arc<dyn DIDCommHandler>,
         message: affinidi_messaging_didcomm::Message,
         meta: affinidi_messaging_didcomm::UnpackMetadata,
+        // Mediator queue-id to ack (delete) AFTER handoff. `None` when the
+        // caller acks elsewhere (the TSP-multiplexed path) or `auto_delete` is
+        // off.
+        ack_id: Option<String>,
     ) {
         let sender_did = message.from.clone();
         let thread_id = get_thread_id(&message);
@@ -471,6 +504,17 @@ impl Listener {
             Err(e) => {
                 warn!(profile = %profile_alias, error = %e, "Unhandled handler error");
             }
+        }
+
+        // R1.6: ack (delete from the mediator) only NOW — after the handler has
+        // had the message. If the process is torn down before this line the
+        // message stays queued at the mediator and is redelivered on the next
+        // pickup, rather than being lost. A failed ack is non-fatal: the message
+        // is redelivered and de-duplicated by the receiver instead.
+        if let Some(sha256_hash) = ack_id
+            && let Err(e) = atm.delete_message_background(profile, &sha256_hash).await
+        {
+            warn!(profile = %profile_alias, error = %e, "Failed to ack (delete) message after handoff");
         }
     }
 
