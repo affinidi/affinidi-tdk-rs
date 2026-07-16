@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.3] - 2026-07-16
+
+- Add the §5a **outbox-drain** delivery-evidence source: `poll_outbox_drain` /
+  `outbox_drain_loop` confirm a `Sent` entry `Delivered` when its `hop_id`
+  **drains** from the transport's outbox (`MessageTransport::outbox_message_ids`,
+  the "recipient took pickup" signal).
+  - `OutboxEntry` gains `hop_id` (recorded on `Sent` from `SendReceipt::hop_id`)
+    and `outbox_observed` — the latter guards against the mediator's eventual
+    consistency: a hop-id absent right after send may simply not be indexed yet,
+    so "absent" only counts as pickup **after** the id was observed present.
+  - The drain now records `hop_id` on a hop-accepted entry.
+  Additive; verified against a real mediator via the DIDComm adapter.
+
 ## [0.1.2] - 2026-07-16
 
 - Add the end-to-end delivery **confirmation** state machine (§5a): the

@@ -14,8 +14,10 @@ use affinidi_messaging_core::{
 };
 use affinidi_messaging_didcomm::Message;
 use futures_util::stream::{self, BoxStream};
+use sha256::digest;
 use tokio::sync::watch;
 
+use crate::messages::Folder;
 use crate::messages::compat::UnpackMetadata;
 use crate::{ATM, profiles::ATMProfile};
 
@@ -78,12 +80,17 @@ impl MessageTransport for DidCommTransport {
         // used for reply correlation (unused when not waiting), so a fresh id is
         // fine. `send_message` is truthful — `Err` if the frame wasn't written.
         let msg_id = uuid::Uuid::new_v4().to_string();
+        // The mediator keys a stored message on `sha256(packed bytes)` and shows
+        // that id in the sender's outbox (`Folder::Outbox`). Return it as the
+        // `hop_id` so the delivery layer can watch this exact message drain
+        // (outbox-drain evidence, §5a). Verified live against a real mediator.
+        let hop_id = digest(packed.as_str());
         self.atm
             .send_message(&self.profile, &packed, &msg_id, false, false)
             .await
             .map(|_| SendReceipt {
                 via: TransportKind::Didcomm,
-                hop_id: None,
+                hop_id: Some(hop_id),
             })
             .map_err(|e| MessagingError::Transport(format!("didcomm send failed: {e}")))
     }
@@ -131,6 +138,19 @@ impl MessageTransport for DidCommTransport {
             .delete_message_background(&self.profile, &ack.0)
             .await
             .map_err(|e| MessagingError::Transport(format!("ack (delete) failed: {e}")))
+    }
+
+    async fn outbox_message_ids(&self) -> Result<Option<Vec<String>>, MessagingError> {
+        // The mediator holds a sent message in the sender's `Outbox` until the
+        // recipient acks pickup, then deletes it; each row's `msg_id` is the
+        // `sha256(packed)` this transport returns as a `SendReceipt::hop_id`. So
+        // a hop-id that has drained from this list is the recipient's pickup.
+        let list = self
+            .atm
+            .list_messages(&self.profile, Folder::Outbox)
+            .await
+            .map_err(|e| MessagingError::Transport(format!("list outbox failed: {e}")))?;
+        Ok(Some(list.into_iter().map(|m| m.msg_id).collect()))
     }
 }
 

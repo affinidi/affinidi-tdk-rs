@@ -67,8 +67,11 @@ pub async fn drain_once(
         }
 
         match transport.send(&entry.dest_did, entry.packed.clone()).await {
-            Ok(_receipt) => {
+            Ok(receipt) => {
                 entry.state = OutboxState::Sent;
+                // Record the hop-id so the confirmation watcher can watch this
+                // exact message drain from the sender's outbox (§5a).
+                entry.hop_id = receipt.hop_id;
                 store.put(entry).await?;
                 report.sent += 1;
             }

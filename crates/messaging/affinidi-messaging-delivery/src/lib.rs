@@ -24,7 +24,10 @@ pub mod drain;
 pub mod outbox;
 pub mod service;
 
-pub use confirm::{ConfirmReport, confirm_delivered, confirmation_loop, sweep_confirmations};
+pub use confirm::{
+    ConfirmReport, DrainPollReport, confirm_delivered, confirmation_loop, outbox_drain_loop,
+    poll_outbox_drain, sweep_confirmations,
+};
 pub use drain::{DrainReport, drain_loop, drain_once};
 pub use outbox::{InMemoryOutboxStore, Key, OutboxEntry, OutboxError, OutboxState, OutboxStore};
 pub use service::{Delivery, MessagingService, MessagingStatus, Sent};

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.54] - 2026-07-16
+
+- `DidCommTransport` gains outbox-drain delivery evidence (D1 Phase 2, §5a):
+  `send` now returns the mediator queue-id — `sha256(packed)` — as
+  `SendReceipt::hop_id`, and `outbox_message_ids()` lists the sender's
+  `Folder::Outbox` message ids. Together they let the delivery layer confirm a
+  message `Delivered` once its hop-id **drains** from the outbox (the recipient
+  took pickup). The `hop_id = sha256(packed) = outbox msg_id` correlation and the
+  drain-on-pickup behaviour were verified live against a real mediator. Additive.
+
 ## [0.18.53] - 2026-07-16
 
 - Add `DidCommTransport`, a `MessageTransport` (from `affinidi-messaging-core`)

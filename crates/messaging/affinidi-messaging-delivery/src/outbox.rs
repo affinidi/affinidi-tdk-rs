@@ -70,6 +70,17 @@ pub struct OutboxEntry {
     /// Unix-ms delivery-window deadline — the acceptable recovery time. Past
     /// this without success the entry settles visibly, never a silent success.
     pub deliver_by_ms: u64,
+    /// The transport hop-id (mediator queue-id) for the accepted frame, recorded
+    /// when the entry becomes `Sent`. Used to watch this exact message drain from
+    /// the sender's outbox (§5a outbox-drain evidence). `None` until sent, or if
+    /// the transport returns no hop-id.
+    pub hop_id: Option<String>,
+    /// Whether `hop_id` has been seen present in the transport's outbox at least
+    /// once. Guards the outbox-drain check against the mediator's eventual
+    /// consistency: a hop-id "absent" right after send may simply not be indexed
+    /// yet, so drain (absent) only counts as pickup *after* it was observed
+    /// present.
+    pub outbox_observed: bool,
 }
 
 impl OutboxEntry {
@@ -91,6 +102,8 @@ impl OutboxEntry {
             next_attempt_at_ms: created_at_ms,
             created_at_ms,
             deliver_by_ms,
+            hop_id: None,
+            outbox_observed: false,
         }
     }
 
