@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.4] - 2026-07-16
+
+- Add the §5a **layer receipt** — the strongest delivery-confirmation evidence
+  (`receipt` module). When the *receiving* layer durably persists an inbound
+  message it emits a fire-and-forget receipt back to the sender; the *sending*
+  layer recognises it and settles the matching outbox entry `Sent → Delivered`.
+  Real end-to-end evidence for **every** `Guaranteed` message, one-way traffic
+  included, with no application-protocol reply — and the only evidence that
+  closes the mediator's power-loss window.
+  - `Receipt` (a typed JSON body marked by `RECEIPT_TYPE`) + `receipt_key` /
+    `receipt_of` recognisers; `ReceiptPacker` trait abstracts the crypto (like
+    `OutboxStore` abstracts storage — a service/SDK wires in a DID-encrypting
+    packer; the consume half needs none).
+  - `MessagingService`: the dispatcher **consumes** an inbound receipt
+    (`confirm_delivered`, never surfaced to the app; unknown key = no-op) —
+    always active. `MessagingService::with_receipts(.., packer)` additionally
+    **emits** a receipt for every unsolicited message it receives, echoing the
+    thread-id correlation. A request reply is *not* receipted (it is its own
+    protocol-reply evidence); a receipt is never receipted.
+  Additive (new module + constructor; `new` unchanged); pulls `serde`/`serde_json`.
+  8 new offline tests (28 total).
+
 ## [0.1.3] - 2026-07-16
 
 - Add the §5a **outbox-drain** delivery-evidence source: `poll_outbox_drain` /

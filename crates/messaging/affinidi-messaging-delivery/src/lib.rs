@@ -22,6 +22,7 @@
 pub mod confirm;
 pub mod drain;
 pub mod outbox;
+pub mod receipt;
 pub mod service;
 
 pub use confirm::{
@@ -30,4 +31,5 @@ pub use confirm::{
 };
 pub use drain::{DrainReport, drain_loop, drain_once};
 pub use outbox::{InMemoryOutboxStore, Key, OutboxEntry, OutboxError, OutboxState, OutboxStore};
+pub use receipt::{RECEIPT_TYPE, Receipt, ReceiptPacker, receipt_key, receipt_of};
 pub use service::{Delivery, MessagingService, MessagingStatus, Sent};
