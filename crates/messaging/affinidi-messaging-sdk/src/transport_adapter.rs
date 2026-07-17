@@ -19,6 +19,7 @@ use tokio::sync::watch;
 
 use crate::messages::Folder;
 use crate::messages::compat::UnpackMetadata;
+use crate::protocols::message_pickup::InboundFrame;
 use crate::{ATM, profiles::ATMProfile};
 
 /// How long each inbound `live_stream_next` poll waits for a message before
@@ -129,20 +130,26 @@ impl MessageTransport for DidCommTransport {
         // Own the ATM + profile so the stream is `'static`; re-borrow per poll.
         // `auto_delete = false` so the mediator keeps its copy until the caller
         // acks after a durable handoff (never ack-before-handoff).
+        //
+        // The **frame** variant surfaces BOTH DIDComm and TSP frames off the one
+        // socket — a mediator multiplexes both to a single DID, and a consumer
+        // (e.g. the VTA) receives both. `Inbound.message.protocol` tags which, so
+        // the delivery layer routes each frame to its handler; without this a
+        // DIDComm-only `live_stream_next` would silently drop inbound TSP.
         Box::pin(stream::unfold(
             (atm, profile),
             |(atm, profile)| async move {
                 loop {
                     match atm
                         .message_pickup()
-                        .live_stream_next(&profile, Some(INBOUND_POLL_WAIT), false)
+                        .live_stream_next_frame(&profile, Some(INBOUND_POLL_WAIT), false)
                         .await
                     {
-                        Ok(Some((message, meta))) => {
-                            if let Some(inbound) = to_inbound(message, &meta) {
+                        Ok(Some(frame)) => {
+                            if let Some(inbound) = frame_to_inbound(&atm, &profile, frame).await {
                                 return Some((inbound, (atm, profile)));
                             }
-                            // Un-mappable frame: skip and keep polling.
+                            // Un-mappable / unsupported frame: skip and keep polling.
                         }
                         // Poll window elapsed with no message — poll again.
                         Ok(None) => {}
@@ -176,6 +183,64 @@ impl MessageTransport for DidCommTransport {
             .map_err(|e| MessagingError::Transport(format!("list outbox failed: {e}")))?;
         Ok(Some(list.into_iter().map(|m| m.msg_id).collect()))
     }
+}
+
+/// Map an [`InboundFrame`] (DIDComm or TSP, multiplexed on the one socket) to
+/// the neutral [`Inbound`]. A DIDComm frame arrives already unpacked; a TSP
+/// frame is unpacked here (see [`tsp_to_inbound`]).
+async fn frame_to_inbound(
+    atm: &ATM,
+    profile: &Arc<ATMProfile>,
+    frame: InboundFrame,
+) -> Option<Inbound> {
+    match frame {
+        InboundFrame::DidComm(message, meta) => to_inbound(*message, &meta),
+        InboundFrame::Tsp(packed) => tsp_to_inbound(atm, profile, &packed).await,
+    }
+}
+
+/// Map an inbound TSP frame to the neutral [`Inbound`]. `atm.tsp().unpack_bytes`
+/// authenticates the sender (resolves + verifies the VID), so `sender` is the
+/// cryptographically-authenticated VID and `verified` is `true`. `protocol` is
+/// [`Protocol::TSP`] so the consumer routes it to its TSP handler.
+#[cfg(feature = "tsp")]
+async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> Option<Inbound> {
+    // The mediator keys a stored TSP frame on `sha256(packed)` — the id the frame
+    // stream would delete on ack, so it is the ack handle here too.
+    let ack = digest(packed);
+    let (payload, sender) = match atm.tsp().unpack_bytes(profile, packed.as_bytes()).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to unpack inbound TSP frame — skipping");
+            return None;
+        }
+    };
+    let received = ReceivedMessage {
+        // TSP frames carry no DIDComm message id; the frame hash is a stable id.
+        id: ack.clone(),
+        sender: Some(sender),
+        recipient: profile.inner.did.clone(),
+        payload,
+        protocol: Protocol::TSP,
+        verified: true,
+        encrypted: true,
+    };
+    Some(Inbound {
+        message: received,
+        // TSP correlation is out of band, not the DIDComm `thid` demux.
+        thread_id: None,
+        ack: InboundAck(ack),
+    })
+}
+
+/// Fallback when the `tsp` feature is off: an inbound TSP frame can't be
+/// unpacked (no `atm.tsp()`), so it is skipped rather than dropping the whole
+/// stream. A DIDComm-only build never advertises TSP, so this is unreachable in
+/// practice.
+#[cfg(not(feature = "tsp"))]
+async fn tsp_to_inbound(_atm: &ATM, _profile: &Arc<ATMProfile>, _packed: &str) -> Option<Inbound> {
+    tracing::warn!("received an inbound TSP frame but the `tsp` feature is disabled — skipping it");
+    None
 }
 
 /// Map a DIDComm plaintext message + unpack metadata to the neutral [`Inbound`]

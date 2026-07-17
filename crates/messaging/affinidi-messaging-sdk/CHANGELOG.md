@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.18.58] - 2026-07-17
+
+- **`DidCommTransport` now surfaces inbound TSP frames as well as DIDComm.**
+  `inbound()` polled `live_stream_next` (DIDComm-only), so a mediator that
+  multiplexes DIDComm **and** TSP to one DID (e.g. the VTA) had its inbound TSP
+  silently dropped once it moved to the delivery layer. It now polls
+  `live_stream_next_frame` and maps each `InboundFrame`: a DIDComm frame as
+  before, and a TSP frame (unpacked via `atm.tsp().unpack_bytes`, which
+  authenticates the sender VID) into a neutral `Inbound` with
+  `protocol = Protocol::TSP`, `sender` = the authenticated VID, `verified =
+  true`. The consumer routes by `message.protocol`. TSP unpacking is behind the
+  `tsp` feature (a DIDComm-only build skips a stray TSP frame rather than
+  dropping the stream). Additive; the DIDComm path and `SendReceipt`/ack
+  contract are unchanged. Unblocks the multi-protocol VTA cut-over.
+
 ## [0.18.57] - 2026-07-17
 
 - **Fix `DidCommTransport::send` to actually deliver.** It called
