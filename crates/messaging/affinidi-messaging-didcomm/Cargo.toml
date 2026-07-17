@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-didcomm"
 description = "DIDComm v2.1 messaging implementation for the Affinidi TDK"
-version = "0.15.4"
+version = "0.15.5"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -55,10 +55,11 @@ arbitrary = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-# ECDSA signing for ES256 JWS verification tests (the runtime dep only needs
-# `ecdh`/`jwk`; tests additionally sign with P-256). Cargo unifies the feature
-# set so this enables `ecdsa` for test builds only.
+# ECDSA signing for ES256 / ES256K JWS verification tests (the runtime deps
+# only need `ecdh`/`jwk`; tests additionally sign with P-256 / secp256k1).
+# Cargo unifies the feature set so this enables `ecdsa` for test builds only.
 p256 = { version = "0.13", features = ["ecdsa"] }
+k256 = { version = "0.13", features = ["ecdsa"] }
 
 [lints]
 workspace = true

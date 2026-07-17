@@ -102,6 +102,29 @@ pub async fn generate_did_webvh(
         None
     };
 
+    // secp256k1 suite: a signing key (`#key-4`) + a key-agreement key
+    // (`#key-5`), injected into the rendered document after templating (the
+    // embedded template has no secp256k1 slots, so we append them directly,
+    // mirroring the TSP-service injection). Numbered above the P-256 slots so
+    // the two suites never collide.
+    let include_secp256k1 = key_suites.contains(&KeySuite::Secp256k1);
+    let mut secp256k1_signing = if include_secp256k1 {
+        Some(
+            Secret::generate_secp256k1(None, None)
+                .map_err(|e| anyhow::anyhow!("Failed to generate secp256k1 signing key: {e}"))?,
+        )
+    } else {
+        None
+    };
+    let mut secp256k1_key_agreement =
+        if include_secp256k1 {
+            Some(Secret::generate_secp256k1(None, None).map_err(|e| {
+                anyhow::anyhow!("Failed to generate secp256k1 key-agreement key: {e}")
+            })?)
+        } else {
+            None
+        };
+
     // ── Render template ─────────────────────────────────────────────
     let template = load_embedded("didcomm-mediator")
         .map_err(|e| anyhow::anyhow!("Failed to load mediator template: {e}"))?;
@@ -175,6 +198,21 @@ pub async fn generate_did_webvh(
         strip_tsp_service(&mut did_document);
     }
 
+    // Inject secp256k1 verification methods (post-render; see key generation
+    // above). Uses `{DID}` sentinels so `create_did` resolves them alongside
+    // the templated methods after SCID computation.
+    if let (Some(k1_sign), Some(k1_ka)) =
+        (secp256k1_signing.as_ref(), secp256k1_key_agreement.as_ref())
+    {
+        let k1_sign_mb = k1_sign
+            .get_public_keymultibase()
+            .map_err(|e| anyhow::anyhow!("Failed to get secp256k1 signing public key: {e}"))?;
+        let k1_ka_mb = k1_ka.get_public_keymultibase().map_err(|e| {
+            anyhow::anyhow!("Failed to get secp256k1 key-agreement public key: {e}")
+        })?;
+        inject_secp256k1_vms(&mut did_document, &k1_sign_mb, &k1_ka_mb)?;
+    }
+
     // ── Authorization + pre-rotation ───────────────────────────────
     let mut auth_key = Secret::generate_ed25519(None, None);
     let auth_pubkey = auth_key
@@ -227,6 +265,17 @@ pub async fn generate_did_webvh(
         secrets.push(p256_ka);
     }
 
+    // secp256k1 runtime secrets occupy `#key-4` (signing / assertion) and
+    // `#key-5` (key agreement), matching the injected verification methods.
+    if let Some(mut k1_sign) = secp256k1_signing.take() {
+        k1_sign.id = format!("{final_did}#key-4");
+        secrets.push(k1_sign);
+    }
+    if let Some(mut k1_ka) = secp256k1_key_agreement.take() {
+        k1_ka.id = format!("{final_did}#key-5");
+        secrets.push(k1_ka);
+    }
+
     let did_doc = serde_json::to_string(result.log_entry())?;
 
     Ok(DidWebvhResult {
@@ -234,6 +283,59 @@ pub async fn generate_did_webvh(
         secrets,
         did_doc,
     })
+}
+
+/// Inject secp256k1 signing (`#key-4`) and key-agreement (`#key-5`)
+/// verification methods into a rendered (pre-SCID) mediator DID document.
+///
+/// The embedded template has no secp256k1 slots, so — as with the TSP service
+/// — the methods are appended directly. Ids keep the `{DID}` sentinel so
+/// `create_did` resolves them across the document after SCID computation. The
+/// signing key joins `authentication`/`assertionMethod`; the key-agreement key
+/// joins `keyAgreement`.
+fn inject_secp256k1_vms(
+    did_document: &mut serde_json::Value,
+    signing_mb: &str,
+    key_agreement_mb: &str,
+) -> anyhow::Result<()> {
+    use serde_json::{Value, json};
+
+    let obj = did_document
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Rendered DID document is not a JSON object"))?;
+
+    let vms = obj
+        .get_mut("verificationMethod")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| {
+            anyhow::anyhow!("Rendered DID document has no `verificationMethod` array")
+        })?;
+    vms.push(json!({
+        "id": "{DID}#key-4",
+        "type": "Multikey",
+        "controller": "{DID}",
+        "publicKeyMultibase": signing_mb,
+    }));
+    vms.push(json!({
+        "id": "{DID}#key-5",
+        "type": "Multikey",
+        "controller": "{DID}",
+        "publicKeyMultibase": key_agreement_mb,
+    }));
+
+    for (field, kid) in [
+        ("authentication", "{DID}#key-4"),
+        ("assertionMethod", "{DID}#key-4"),
+        ("keyAgreement", "{DID}#key-5"),
+    ] {
+        let arr = obj
+            .get_mut(field)
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| anyhow::anyhow!("Rendered DID document has no `{field}` array"))?;
+        arr.push(Value::String(kid.to_string()));
+    }
+
+    Ok(())
 }
 
 /// Inject a `TSPTransport` service into a rendered (pre-SCID) mediator DID
@@ -477,6 +579,101 @@ mod tests {
 
         // The webvh SCID sentinel must be fully resolved — no `{DID}` token
         // survives in the var-injected P-256 methods.
+        assert!(!result.did_doc.contains("{DID}"));
+    }
+
+    #[tokio::test]
+    async fn webvh_secp256k1_suite_adds_signing_and_key_agreement_keys() {
+        let result = generate_did_webvh(
+            "https://mediator.example.com",
+            "https://mediator.example.com/mediator/v1",
+            &[KeySuite::P256, KeySuite::Secp256k1],
+            false,
+        )
+        .await
+        .unwrap();
+
+        use affinidi_secrets_resolver::secrets::KeyType;
+        // Six runtime secrets: Ed25519 + X25519 + P-256(sign,KA) + secp256k1(sign,KA).
+        assert_eq!(result.secrets.len(), 6);
+        assert!(result.secrets[4].id.ends_with("#key-4"));
+        assert!(result.secrets[5].id.ends_with("#key-5"));
+        assert!(matches!(
+            result.secrets[4].get_key_type(),
+            KeyType::Secp256k1
+        ));
+        assert!(matches!(
+            result.secrets[5].get_key_type(),
+            KeyType::Secp256k1
+        ));
+
+        let entry: Value = serde_json::from_str(&result.did_doc).unwrap();
+        let doc = &entry["state"];
+
+        // Six verification methods; the secp256k1 pair are `#key-4` / `#key-5`.
+        let vms = doc["verificationMethod"].as_array().unwrap();
+        assert_eq!(vms.len(), 6);
+        assert!(vms[4]["id"].as_str().unwrap().ends_with("#key-4"));
+        assert!(vms[5]["id"].as_str().unwrap().ends_with("#key-5"));
+        assert_eq!(vms[5]["type"], "Multikey");
+        // secp256k1 multikeys use the `zQ3s` multibase prefix.
+        assert!(
+            vms[5]["publicKeyMultibase"]
+                .as_str()
+                .unwrap()
+                .starts_with("zQ3s")
+        );
+
+        // The secp256k1 keys join the relationship arrays.
+        let auth = doc["authentication"].as_array().unwrap();
+        assert!(auth.iter().any(|a| a.as_str().unwrap().ends_with("#key-4")));
+        let assertion = doc["assertionMethod"].as_array().unwrap();
+        assert!(
+            assertion
+                .iter()
+                .any(|a| a.as_str().unwrap().ends_with("#key-4"))
+        );
+        let ka = doc["keyAgreement"].as_array().unwrap();
+        assert!(ka.iter().any(|k| k.as_str().unwrap().ends_with("#key-5")));
+
+        // SCID sentinel fully resolved in the injected methods too.
+        assert!(!result.did_doc.contains("{DID}"));
+    }
+
+    /// The secp256k1 suite alone (no P-256) keeps its suite-stable `#key-4` /
+    /// `#key-5` slots — the numbering gap at `#key-2`/`#key-3` is intentional
+    /// so the two suites never collide.
+    #[tokio::test]
+    async fn webvh_secp256k1_suite_alone_keeps_key4_key5_slots() {
+        let result = generate_did_webvh(
+            "https://mediator.example.com",
+            "https://mediator.example.com/mediator/v1",
+            &[KeySuite::Secp256k1],
+            false,
+        )
+        .await
+        .unwrap();
+
+        use affinidi_secrets_resolver::secrets::KeyType;
+        // Four runtime secrets: Ed25519 + X25519 + secp256k1(sign, KA).
+        assert_eq!(result.secrets.len(), 4);
+        assert!(result.secrets[2].id.ends_with("#key-4"));
+        assert!(result.secrets[3].id.ends_with("#key-5"));
+        assert!(matches!(
+            result.secrets[2].get_key_type(),
+            KeyType::Secp256k1
+        ));
+        assert!(matches!(
+            result.secrets[3].get_key_type(),
+            KeyType::Secp256k1
+        ));
+
+        let entry: Value = serde_json::from_str(&result.did_doc).unwrap();
+        let doc = &entry["state"];
+        let vms = doc["verificationMethod"].as_array().unwrap();
+        assert_eq!(vms.len(), 4);
+        assert!(vms[2]["id"].as_str().unwrap().ends_with("#key-4"));
+        assert!(vms[3]["id"].as_str().unwrap().ends_with("#key-5"));
         assert!(!result.did_doc.contains("{DID}"));
     }
 
