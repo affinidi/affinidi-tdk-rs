@@ -224,6 +224,9 @@ affinidi-secrets-resolver = "0.5"
 ## `test-util` enables `tokio::time::pause/advance` so the task-supervisor
 ## backoff tests run deterministically without real sleeps.
 tokio = { workspace = true, features = ["test-util"] }
+## ES256K test signing for the `verify_inner_jws` secp256k1 path (the runtime
+## is verify-only, via affinidi-crypto / affinidi-messaging-didcomm).
+k256 = { version = "0.13", features = ["ecdsa"] }
 
 [lints]
 workspace = true

@@ -16,6 +16,13 @@ and this crate follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   resolution and the inner/top-level JWS dispatch live in the mediator's
   `didcomm_compat` shim.
 
+### Changed
+
+- Internal: `verify_ed25519` / `verify_p256` / `verify_secp256k1` now share one
+  JWS parsing/dispatch skeleton instead of three copies. Public signatures and
+  behavior are unchanged (the Ed25519 wrong-length-signature error message now
+  names the accepted algs).
+
 ## [0.15.4] - 2026-06-30
 
 ### Added

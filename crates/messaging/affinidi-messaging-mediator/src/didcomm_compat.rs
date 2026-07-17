@@ -335,9 +335,9 @@ async fn recurse_decrypted_plaintext(
 
     if value.get("payload").is_some() && value.get("signatures").is_some() {
         // Nested JWS: sign-then-encrypt. Verify the inner signature with the
-        // signer's resolved key (Ed25519/EdDSA or P-256/ES256) and attribute
-        // non-repudiation. Never trust the kid without verifying — a bad
-        // signature must error.
+        // signer's resolved key (Ed25519/EdDSA, P-256/ES256, or
+        // secp256k1/ES256K) and attribute non-repudiation. Never trust the
+        // kid without verifying — a bad signature must error.
         let jws_str = std::str::from_utf8(plaintext)
             .map_err(|e| format!("Inner JWS is not valid UTF-8: {e}"))?;
 
@@ -432,10 +432,10 @@ fn extract_jws_alg(jws: &serde_json::Value) -> Option<String> {
 }
 
 /// Verify an inner/top-level JWS, dispatching on the JOSE `alg`:
-/// `EdDSA`/`Ed25519` (Ed25519) or `ES256` (P-256). Resolves the signer's
-/// verification key from their DID document and verifies the signature. Any
-/// other `alg` (including a missing/undecodable one) is rejected rather than
-/// assumed.
+/// `EdDSA`/`Ed25519` (Ed25519), `ES256` (P-256), or `ES256K` (secp256k1).
+/// Resolves the signer's verification key from their DID document and
+/// verifies the signature. Any other `alg` (including a missing/undecodable
+/// one) is rejected rather than assumed.
 async fn verify_inner_jws(
     jws_str: &str,
     alg: &str,
@@ -611,29 +611,33 @@ async fn resolve_did_ed25519_verification(
     None
 }
 
-/// Resolve a DID's ECDSA P-256 verification (signing) public key as SEC1 bytes.
+/// Resolve a DID's ECDSA verification (signing) public key as SEC1 bytes,
+/// shared by the ES256 (P-256) and ES256K (secp256k1) paths — the curves
+/// differ only in multicodec and JOSE `crv` name.
 ///
-/// Supports `publicKeyMultibase` (multikey, `p256-pub` codec — compressed
-/// SEC1) and `publicKeyJwk` (`EC`/`P-256` — assembled into uncompressed SEC1).
-async fn resolve_did_p256_verification(
+/// Supports `publicKeyMultibase` (multikey, `multicodec` — compressed SEC1)
+/// and `publicKeyJwk` (`EC`/`jose_crv` — assembled into uncompressed SEC1).
+async fn resolve_did_ecdsa_verification(
     did: &str,
     prefer_kid: Option<&str>,
     did_resolver: &DIDCacheClient,
+    multicodec: u64,
+    jose_crv: &str,
 ) -> Option<Vec<u8>> {
     let vm = resolve_authentication_vm(did, prefer_kid, did_resolver).await?;
 
     if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
         && let Some(multibase_str) = multibase_value.as_str()
         && let Ok((codec, key_bytes)) = affinidi_encoding::decode_multikey_with_codec(multibase_str)
-        && codec == affinidi_encoding::P256_PUB
+        && codec == multicodec
     {
-        // Multikey for P-256 is the compressed SEC1 point (33 bytes).
+        // Multikey ECDSA points are compressed SEC1 (33 bytes).
         return Some(key_bytes);
     }
 
     if let Some(jwk_value) = vm.property_set.get("publicKeyJwk")
         && jwk_value.get("kty").and_then(|v| v.as_str()) == Some("EC")
-        && jwk_value.get("crv").and_then(|v| v.as_str()) == Some("P-256")
+        && jwk_value.get("crv").and_then(|v| v.as_str()) == Some(jose_crv)
         && let Some(x_b64) = jwk_value.get("x").and_then(|v| v.as_str())
         && let Some(y_b64) = jwk_value.get("y").and_then(|v| v.as_str())
         && let Ok(x_bytes) = BASE64_URL_SAFE_NO_PAD.decode(x_b64)
@@ -652,46 +656,38 @@ async fn resolve_did_p256_verification(
     None
 }
 
+/// Resolve a DID's ECDSA P-256 verification (signing) public key as SEC1
+/// bytes (JWS `alg: ES256`).
+async fn resolve_did_p256_verification(
+    did: &str,
+    prefer_kid: Option<&str>,
+    did_resolver: &DIDCacheClient,
+) -> Option<Vec<u8>> {
+    resolve_did_ecdsa_verification(
+        did,
+        prefer_kid,
+        did_resolver,
+        affinidi_encoding::P256_PUB,
+        "P-256",
+    )
+    .await
+}
+
 /// Resolve a DID's ECDSA secp256k1 verification (signing) public key as SEC1
 /// bytes (JWS `alg: ES256K`).
-///
-/// Supports `publicKeyMultibase` (multikey, `secp256k1-pub` codec — compressed
-/// SEC1) and `publicKeyJwk` (`EC`/`secp256k1` — assembled into uncompressed SEC1).
 async fn resolve_did_secp256k1_verification(
     did: &str,
     prefer_kid: Option<&str>,
     did_resolver: &DIDCacheClient,
 ) -> Option<Vec<u8>> {
-    let vm = resolve_authentication_vm(did, prefer_kid, did_resolver).await?;
-
-    if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
-        && let Some(multibase_str) = multibase_value.as_str()
-        && let Ok((codec, key_bytes)) = affinidi_encoding::decode_multikey_with_codec(multibase_str)
-        && codec == affinidi_encoding::SECP256K1_PUB
-    {
-        // Multikey for secp256k1 is the compressed SEC1 point (33 bytes).
-        return Some(key_bytes);
-    }
-
-    if let Some(jwk_value) = vm.property_set.get("publicKeyJwk")
-        && jwk_value.get("kty").and_then(|v| v.as_str()) == Some("EC")
-        && jwk_value.get("crv").and_then(|v| v.as_str()) == Some("secp256k1")
-        && let Some(x_b64) = jwk_value.get("x").and_then(|v| v.as_str())
-        && let Some(y_b64) = jwk_value.get("y").and_then(|v| v.as_str())
-        && let Ok(x_bytes) = BASE64_URL_SAFE_NO_PAD.decode(x_b64)
-        && let Ok(y_bytes) = BASE64_URL_SAFE_NO_PAD.decode(y_b64)
-        && x_bytes.len() == 32
-        && y_bytes.len() == 32
-    {
-        // Assemble the uncompressed SEC1 point: 0x04 || x || y.
-        let mut sec1 = Vec::with_capacity(65);
-        sec1.push(0x04);
-        sec1.extend_from_slice(&x_bytes);
-        sec1.extend_from_slice(&y_bytes);
-        return Some(sec1);
-    }
-
-    None
+    resolve_did_ecdsa_verification(
+        did,
+        prefer_kid,
+        did_resolver,
+        affinidi_encoding::SECP256K1_PUB,
+        "secp256k1",
+    )
+    .await
 }
 
 /// Resolve a DID's first key agreement public key.
@@ -719,6 +715,10 @@ async fn resolve_did_key_agreement_by_skid(
     if let Some(pk) = resolve_public_key(&doc.doc, skid) {
         return Some(pk);
     }
+    tracing::warn!(
+        "JWE skid {skid} not found in the sender's DID document; falling back to the \
+         first key-agreement key (its curve may not match the authcrypt)"
+    );
     let kid = doc.doc.find_key_agreement(None).first().copied()?;
     resolve_public_key(&doc.doc, kid)
 }
@@ -1312,5 +1312,127 @@ mod tests {
 
         assert!(unpack_meta.authenticated, "authcrypt must be authenticated");
         assert_eq!(out.from.as_deref(), Some(sender));
+    }
+
+    // ---------------------------------------------------------------------
+    // ES256K inner-JWS verification: `verify_inner_jws` must resolve the
+    // signer's secp256k1 key from the DID document — both `publicKeyMultibase`
+    // (Multikey, compressed SEC1) and `publicKeyJwk` (EC/secp256k1) encodings
+    // — and actually verify the signature with it.
+    // ---------------------------------------------------------------------
+
+    /// Build an ES256K JWS (General JSON Serialization) over `payload`,
+    /// signed with `sk`, with `kid` in the protected header.
+    fn build_es256k_jws(payload: &[u8], kid: &str, sk: &k256::ecdsa::SigningKey) -> String {
+        use k256::ecdsa::signature::Signer as _;
+        let protected = protected_b64(&json!({
+            "typ": "application/didcomm-signed+json",
+            "alg": "ES256K",
+            "kid": kid,
+        }));
+        let payload_b64 = BASE64_URL_SAFE_NO_PAD.encode(payload);
+        let signing_input = format!("{protected}.{payload_b64}");
+        let sig: k256::ecdsa::Signature = sk.sign(signing_input.as_bytes());
+        let sig_bytes: [u8; 64] = sig.to_bytes().into();
+        json!({
+            "payload": payload_b64,
+            "signatures": [{
+                "protected": protected,
+                "signature": BASE64_URL_SAFE_NO_PAD.encode(sig_bytes),
+            }]
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn verify_inner_jws_es256k_from_multikey() {
+        let signer = "did:example:k256multikey";
+        let kid = format!("{signer}#key-1");
+        let sk = k256::ecdsa::SigningKey::from_slice(&[0x42u8; 32]).unwrap();
+        // Advertise the same key as a Multikey (compressed SEC1) authentication VM.
+        let secret = Secret::generate_secp256k1(Some(&kid), Some(&[0x42u8; 32])).unwrap();
+        let doc = json!({
+            "id": signer,
+            "verificationMethod": [{
+                "id": &kid,
+                "type": "Multikey",
+                "controller": signer,
+                "publicKeyMultibase": secret.get_public_keymultibase().unwrap(),
+            }],
+            "authentication": [&kid],
+        });
+        let resolver = example_resolver(&[doc]).await;
+
+        let payload = br#"{"type":"https://didcomm.org/test/1.0/msg"}"#;
+        let jws = build_es256k_jws(payload, &kid, &sk);
+
+        let verified = verify_inner_jws(&jws, "ES256K", signer, &kid, &resolver)
+            .await
+            .expect("ES256K signer key must resolve from publicKeyMultibase");
+        assert_eq!(verified.payload, payload);
+        assert_eq!(verified.signer_kid.as_deref(), Some(kid.as_str()));
+    }
+
+    #[tokio::test]
+    async fn verify_inner_jws_es256k_from_jwk() {
+        let signer = "did:example:k256jwk";
+        let kid = format!("{signer}#key-1");
+        let sk = k256::ecdsa::SigningKey::from_slice(&[0x43u8; 32]).unwrap();
+        let point = sk.verifying_key().to_encoded_point(false);
+        let doc = json!({
+            "id": signer,
+            "verificationMethod": [{
+                "id": &kid,
+                "type": "JsonWebKey2020",
+                "controller": signer,
+                "publicKeyJwk": {
+                    "kty": "EC",
+                    "crv": "secp256k1",
+                    "x": BASE64_URL_SAFE_NO_PAD.encode(&point.as_bytes()[1..33]),
+                    "y": BASE64_URL_SAFE_NO_PAD.encode(&point.as_bytes()[33..65]),
+                },
+            }],
+            "authentication": [&kid],
+        });
+        let resolver = example_resolver(&[doc]).await;
+
+        let payload = br#"{"type":"https://didcomm.org/test/1.0/msg"}"#;
+        let jws = build_es256k_jws(payload, &kid, &sk);
+
+        let verified = verify_inner_jws(&jws, "ES256K", signer, &kid, &resolver)
+            .await
+            .expect("ES256K signer key must resolve from publicKeyJwk");
+        assert_eq!(verified.payload, payload);
+    }
+
+    /// A well-formed ES256K JWS signed by a key the DID document does NOT
+    /// advertise must fail — the resolved (advertised) key won't verify it.
+    #[tokio::test]
+    async fn verify_inner_jws_es256k_wrong_key_fails() {
+        let signer = "did:example:k256wrong";
+        let kid = format!("{signer}#key-1");
+        let advertised = Secret::generate_secp256k1(Some(&kid), Some(&[0x44u8; 32])).unwrap();
+        let doc = json!({
+            "id": signer,
+            "verificationMethod": [{
+                "id": &kid,
+                "type": "Multikey",
+                "controller": signer,
+                "publicKeyMultibase": advertised.get_public_keymultibase().unwrap(),
+            }],
+            "authentication": [&kid],
+        });
+        let resolver = example_resolver(&[doc]).await;
+
+        // Sign with a DIFFERENT key than the document advertises.
+        let rogue = k256::ecdsa::SigningKey::from_slice(&[0x45u8; 32]).unwrap();
+        let jws = build_es256k_jws(b"{}", &kid, &rogue);
+
+        assert!(
+            verify_inner_jws(&jws, "ES256K", signer, &kid, &resolver)
+                .await
+                .is_err(),
+            "signature by an unadvertised key must not verify"
+        );
     }
 }

@@ -15,16 +15,17 @@ pub struct VerifiedJws {
     pub signer_kid: Option<String>,
 }
 
-/// Verify a JWS string using an Ed25519 public key.
-///
-/// Accepts either the polymorphic `EdDSA` alg (RFC 8037) or the fully-specified
-/// `Ed25519` alg (draft-ietf-jose-fully-specified-algorithms) — both denote
-/// Ed25519 signatures.
-///
-/// # Arguments
-/// * `jws_str` - The JWS JSON string
-/// * `public_key` - The signer's Ed25519 public key (32 bytes)
-pub fn verify_ed25519(jws_str: &str, public_key: &[u8; 32]) -> Result<VerifiedJws, DIDCommError> {
+/// Shared JWS verification skeleton (General JSON Serialization): parse the
+/// envelope, enforce the expected `alg` on the first signature's protected
+/// header, reconstruct the signing input, and delegate the signature check to
+/// `verify`. Only the first signature is verified (DIDComm envelopes are
+/// single-signer). `alg_expected` names the accepted alg(s) in error messages.
+fn verify_jws(
+    jws_str: &str,
+    alg_accepted: impl Fn(&str) -> bool,
+    alg_expected: &str,
+    verify: impl FnOnce(&[u8], &[u8; 64]) -> Result<(), DIDCommError>,
+) -> Result<VerifiedJws, DIDCommError> {
     let jws: Jws = serde_json::from_str(jws_str)
         .map_err(|e| DIDCommError::InvalidMessage(format!("invalid JWS JSON: {e}")))?;
 
@@ -41,23 +42,24 @@ pub fn verify_ed25519(jws_str: &str, public_key: &[u8; 32]) -> Result<VerifiedJw
     let header: JwsProtectedHeader = serde_json::from_slice(&header_bytes)
         .map_err(|e| DIDCommError::InvalidMessage(format!("invalid header JSON: {e}")))?;
 
-    if header.alg != "EdDSA" && header.alg != "Ed25519" {
+    if !alg_accepted(&header.alg) {
         return Err(DIDCommError::UnsupportedAlgorithm(format!(
-            "expected EdDSA or Ed25519, got {}",
+            "expected {alg_expected}, got {}",
             header.alg
         )));
     }
 
-    // Decode signature
+    // Decode signature (raw r || s for ECDSA, R || S for Ed25519 — 64 bytes
+    // either way)
     let sig_bytes = Base64UrlUnpadded::decode_vec(&sig_entry.signature)
         .map_err(|e| DIDCommError::InvalidMessage(format!("invalid signature base64: {e}")))?;
-    let sig: [u8; 64] = sig_bytes
-        .try_into()
-        .map_err(|_| DIDCommError::InvalidMessage("signature must be 64 bytes".into()))?;
+    let sig: [u8; 64] = sig_bytes.try_into().map_err(|_| {
+        DIDCommError::InvalidMessage(format!("{alg_expected} signature must be 64 bytes"))
+    })?;
 
     // Reconstruct signing input
     let signing_input = format!("{}.{}", sig_entry.protected, jws.payload);
-    signing::verify(signing_input.as_bytes(), &sig, public_key)?;
+    verify(signing_input.as_bytes(), &sig)?;
 
     // Decode payload
     let payload = Base64UrlUnpadded::decode_vec(&jws.payload)
@@ -77,60 +79,36 @@ pub fn verify_ed25519(jws_str: &str, public_key: &[u8; 32]) -> Result<VerifiedJw
     })
 }
 
+/// Verify a JWS string using an Ed25519 public key.
+///
+/// Accepts either the polymorphic `EdDSA` alg (RFC 8037) or the fully-specified
+/// `Ed25519` alg (draft-ietf-jose-fully-specified-algorithms) — both denote
+/// Ed25519 signatures.
+///
+/// # Arguments
+/// * `jws_str` - The JWS JSON string
+/// * `public_key` - The signer's Ed25519 public key (32 bytes)
+pub fn verify_ed25519(jws_str: &str, public_key: &[u8; 32]) -> Result<VerifiedJws, DIDCommError> {
+    verify_jws(
+        jws_str,
+        |alg| alg == "EdDSA" || alg == "Ed25519",
+        "EdDSA or Ed25519",
+        |input, sig| signing::verify(input, sig, public_key).map_err(DIDCommError::from),
+    )
+}
+
 /// Verify a JWS string using an ECDSA P-256 (ES256) public key.
 ///
 /// # Arguments
 /// * `jws_str` - The JWS JSON string
 /// * `public_key` - The signer's SEC1-encoded P-256 public key (compressed 33 bytes or uncompressed 65 bytes)
 pub fn verify_p256(jws_str: &str, public_key: &[u8]) -> Result<VerifiedJws, DIDCommError> {
-    let jws: Jws = serde_json::from_str(jws_str)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid JWS JSON: {e}")))?;
-
-    if jws.signatures.is_empty() {
-        return Err(DIDCommError::InvalidMessage("no signatures in JWS".into()));
-    }
-
-    // Verify the first signature
-    let sig_entry = &jws.signatures[0];
-
-    // Parse protected header
-    let header_bytes = Base64UrlUnpadded::decode_vec(&sig_entry.protected)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid protected header: {e}")))?;
-    let header: JwsProtectedHeader = serde_json::from_slice(&header_bytes)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid header JSON: {e}")))?;
-
-    if header.alg != "ES256" {
-        return Err(DIDCommError::UnsupportedAlgorithm(format!(
-            "expected ES256, got {}",
-            header.alg
-        )));
-    }
-
-    // Decode signature (raw r || s, 64 bytes)
-    let sig_bytes = Base64UrlUnpadded::decode_vec(&sig_entry.signature)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid signature base64: {e}")))?;
-    let sig: [u8; 64] = sig_bytes
-        .try_into()
-        .map_err(|_| DIDCommError::InvalidMessage("ES256 signature must be 64 bytes".into()))?;
-
-    // Reconstruct signing input
-    let signing_input = format!("{}.{}", sig_entry.protected, jws.payload);
-    signing::verify_p256(signing_input.as_bytes(), &sig, public_key)?;
-
-    // Decode payload
-    let payload = Base64UrlUnpadded::decode_vec(&jws.payload)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid payload base64: {e}")))?;
-
-    // Signer kid: prefer the protected header, fall back to the
-    // per-signature unprotected header.
-    let signer_kid = header
-        .kid
-        .or_else(|| sig_entry.header.as_ref().and_then(|h| h.kid.clone()));
-
-    Ok(VerifiedJws {
-        payload,
-        signer_kid,
-    })
+    verify_jws(
+        jws_str,
+        |alg| alg == "ES256",
+        "ES256",
+        |input, sig| signing::verify_p256(input, sig, public_key).map_err(DIDCommError::from),
+    )
 }
 
 /// Verify a JWS string using an ECDSA secp256k1 (ES256K) public key.
@@ -139,54 +117,12 @@ pub fn verify_p256(jws_str: &str, public_key: &[u8]) -> Result<VerifiedJws, DIDC
 /// * `jws_str` - The JWS JSON string
 /// * `public_key` - The signer's SEC1-encoded secp256k1 public key (compressed 33 bytes or uncompressed 65 bytes)
 pub fn verify_secp256k1(jws_str: &str, public_key: &[u8]) -> Result<VerifiedJws, DIDCommError> {
-    let jws: Jws = serde_json::from_str(jws_str)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid JWS JSON: {e}")))?;
-
-    if jws.signatures.is_empty() {
-        return Err(DIDCommError::InvalidMessage("no signatures in JWS".into()));
-    }
-
-    // Verify the first signature
-    let sig_entry = &jws.signatures[0];
-
-    // Parse protected header
-    let header_bytes = Base64UrlUnpadded::decode_vec(&sig_entry.protected)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid protected header: {e}")))?;
-    let header: JwsProtectedHeader = serde_json::from_slice(&header_bytes)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid header JSON: {e}")))?;
-
-    if header.alg != "ES256K" {
-        return Err(DIDCommError::UnsupportedAlgorithm(format!(
-            "expected ES256K, got {}",
-            header.alg
-        )));
-    }
-
-    // Decode signature (raw r || s, 64 bytes)
-    let sig_bytes = Base64UrlUnpadded::decode_vec(&sig_entry.signature)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid signature base64: {e}")))?;
-    let sig: [u8; 64] = sig_bytes
-        .try_into()
-        .map_err(|_| DIDCommError::InvalidMessage("ES256K signature must be 64 bytes".into()))?;
-
-    // Reconstruct signing input
-    let signing_input = format!("{}.{}", sig_entry.protected, jws.payload);
-    signing::verify_secp256k1(signing_input.as_bytes(), &sig, public_key)?;
-
-    // Decode payload
-    let payload = Base64UrlUnpadded::decode_vec(&jws.payload)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid payload base64: {e}")))?;
-
-    // Signer kid: prefer the protected header, fall back to the
-    // per-signature unprotected header.
-    let signer_kid = header
-        .kid
-        .or_else(|| sig_entry.header.as_ref().and_then(|h| h.kid.clone()));
-
-    Ok(VerifiedJws {
-        payload,
-        signer_kid,
-    })
+    verify_jws(
+        jws_str,
+        |alg| alg == "ES256K",
+        "ES256K",
+        |input, sig| signing::verify_secp256k1(input, sig, public_key).map_err(DIDCommError::from),
+    )
 }
 
 #[cfg(test)]

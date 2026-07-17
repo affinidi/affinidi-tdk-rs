@@ -13,7 +13,9 @@
   sender's first advertised key. This fixes an ECDH-1PU
   `curve mismatch between private and public keys` (`e.p.message.unpack`) when a
   sender advertises key-agreement keys on multiple curves (e.g. secp256k1 before
-  P-256) and authcrypts on the shared curve.
+  P-256) and authcrypts on the shared curve. When the `skid` cannot be found in
+  the sender's DID document, the fallback to the first key-agreement key is
+  logged at `warn` (it can reproduce the very curve mismatch this fixes).
 - `mediator-setup`: new `--key-suite secp256k1` advertises a secp256k1 signing
   (`#key-4`) + key-agreement (`#key-5`) pair in the generated `did:webvh`
   document, so the mediator can speak P-256 + X25519 + secp256k1.

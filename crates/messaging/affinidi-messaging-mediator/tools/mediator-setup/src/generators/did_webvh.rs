@@ -640,6 +640,43 @@ mod tests {
         assert!(!result.did_doc.contains("{DID}"));
     }
 
+    /// The secp256k1 suite alone (no P-256) keeps its suite-stable `#key-4` /
+    /// `#key-5` slots — the numbering gap at `#key-2`/`#key-3` is intentional
+    /// so the two suites never collide.
+    #[tokio::test]
+    async fn webvh_secp256k1_suite_alone_keeps_key4_key5_slots() {
+        let result = generate_did_webvh(
+            "https://mediator.example.com",
+            "https://mediator.example.com/mediator/v1",
+            &[KeySuite::Secp256k1],
+            false,
+        )
+        .await
+        .unwrap();
+
+        use affinidi_secrets_resolver::secrets::KeyType;
+        // Four runtime secrets: Ed25519 + X25519 + secp256k1(sign, KA).
+        assert_eq!(result.secrets.len(), 4);
+        assert!(result.secrets[2].id.ends_with("#key-4"));
+        assert!(result.secrets[3].id.ends_with("#key-5"));
+        assert!(matches!(
+            result.secrets[2].get_key_type(),
+            KeyType::Secp256k1
+        ));
+        assert!(matches!(
+            result.secrets[3].get_key_type(),
+            KeyType::Secp256k1
+        ));
+
+        let entry: Value = serde_json::from_str(&result.did_doc).unwrap();
+        let doc = &entry["state"];
+        let vms = doc["verificationMethod"].as_array().unwrap();
+        assert_eq!(vms.len(), 4);
+        assert!(vms[2]["id"].as_str().unwrap().ends_with("#key-4"));
+        assert!(vms[3]["id"].as_str().unwrap().ends_with("#key-5"));
+        assert!(!result.did_doc.contains("{DID}"));
+    }
+
     #[tokio::test]
     async fn webvh_key_ids_match_final_did() {
         let result = generate_did_webvh(
