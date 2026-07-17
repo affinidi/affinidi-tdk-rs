@@ -165,13 +165,22 @@ fn to_inbound(message: Message, meta: &UnpackMetadata) -> Option<Inbound> {
         .and_then(|v| v.first())
         .cloned()
         .unwrap_or_default();
+    // Anti-spoof: the plaintext `from` header is sender-controlled, so trust it
+    // ONLY when it matches the DID of the key that actually authcrypted the
+    // envelope. An attacker can authcrypt with their own key (so `authenticated`
+    // is true) while claiming a victim's `from`; that mismatch yields NO
+    // authenticated sender. So `sender` (and the `verified` flag derived from
+    // it) mean "cryptographically-bound sender" — safe for a consumer to use for
+    // authorization without re-deriving the check.
+    let sender = authenticated_sender(&message, meta);
+    let verified = sender.is_some();
     let received = ReceivedMessage {
         id: message.id.clone(),
-        sender: message.from.clone(),
+        sender,
         recipient,
         payload,
         protocol: Protocol::DIDComm,
-        verified: meta.authenticated,
+        verified,
         encrypted: meta.encrypted,
     };
     Some(Inbound {
@@ -179,6 +188,27 @@ fn to_inbound(message: Message, meta: &UnpackMetadata) -> Option<Inbound> {
         thread_id: message.thid.clone(),
         ack: InboundAck(meta.sha256_hash.clone()),
     })
+}
+
+/// The cryptographically-authenticated sender DID of an authcrypt message, or
+/// `None` when the message is anonymous, not authenticated, or its plaintext
+/// `from` does not match the key that encrypted it (a spoof attempt).
+///
+/// This is the binding the DIDComm authcrypt model guarantees: the sender is
+/// the owner of `encrypted_from_kid`, not whoever the (unprotected) `from`
+/// header names. Requiring `from == DID(encrypted_from_kid)` rejects a message
+/// authcrypted by one key but claiming another party's `from`.
+fn authenticated_sender(message: &Message, meta: &UnpackMetadata) -> Option<String> {
+    if !meta.authenticated || meta.anonymous_sender {
+        return None;
+    }
+    let kid = meta.encrypted_from_kid.as_deref()?;
+    // The DID that owns the authcrypt key (strip the `#key` fragment).
+    let key_did = kid.split_once('#').map(|(did, _)| did).unwrap_or(kid);
+    match message.from.as_deref() {
+        Some(from) if from == key_did => Some(from.to_string()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -201,6 +231,8 @@ mod tests {
         let meta = UnpackMetadata {
             authenticated: true,
             encrypted: true,
+            // `from` matches the authcrypt key's DID → a genuine sender.
+            encrypted_from_kid: Some("did:example:alice#key-1".to_string()),
             sha256_hash: "queue-id-abc".to_string(),
             ..Default::default()
         };
@@ -211,7 +243,10 @@ mod tests {
         assert_eq!(inbound.message.sender.as_deref(), Some("did:example:alice"));
         assert_eq!(inbound.message.recipient, "did:example:bob");
         assert_eq!(inbound.message.protocol, Protocol::DIDComm);
-        assert!(inbound.message.verified, "meta.authenticated → verified");
+        assert!(
+            inbound.message.verified,
+            "authcrypt key DID matches `from` → verified"
+        );
         assert!(inbound.message.encrypted, "meta.encrypted → encrypted");
         // Thread id for demux, and the ack carries the mediator queue-id so the
         // caller can ack this exact delivery after handoff.
@@ -219,5 +254,50 @@ mod tests {
         assert_eq!(inbound.ack, InboundAck("queue-id-abc".to_string()));
         // Payload is the full plaintext message JSON (parseable downstream).
         assert!(!inbound.message.payload.is_empty());
+    }
+
+    fn msg_from(from: &str) -> Message {
+        Message::build(
+            "m".to_string(),
+            "https://example.org/t/1.0".to_string(),
+            json!({}),
+        )
+        .from(from.to_string())
+        .to("did:example:bob".to_string())
+        .finalize()
+    }
+
+    #[test]
+    fn spoofed_from_is_not_an_authenticated_sender() {
+        // Authcrypted by mallory's key, but the plaintext `from` claims alice.
+        // The mismatch must NOT yield an authenticated sender (no false trust).
+        let message = msg_from("did:example:alice");
+        let meta = UnpackMetadata {
+            authenticated: true,
+            encrypted: true,
+            encrypted_from_kid: Some("did:example:mallory#key-1".to_string()),
+            sha256_hash: "q".to_string(),
+            ..Default::default()
+        };
+        let inbound = to_inbound(message, &meta).unwrap();
+        assert_eq!(inbound.message.sender, None, "spoofed from → no sender");
+        assert!(!inbound.message.verified, "spoofed from → not verified");
+    }
+
+    #[test]
+    fn anonymous_and_unauthenticated_have_no_sender() {
+        let message = msg_from("did:example:alice");
+        // Anonymous (anoncrypt): authenticated=false / anonymous_sender=true.
+        let anon = UnpackMetadata {
+            authenticated: false,
+            encrypted: true,
+            anonymous_sender: true,
+            encrypted_from_kid: None,
+            sha256_hash: "q".to_string(),
+            ..Default::default()
+        };
+        let inbound = to_inbound(message, &anon).unwrap();
+        assert_eq!(inbound.message.sender, None);
+        assert!(!inbound.message.verified);
     }
 }
