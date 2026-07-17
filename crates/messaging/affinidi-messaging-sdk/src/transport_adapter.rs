@@ -70,29 +70,53 @@ impl MessageTransport for DidCommTransport {
         TransportKind::Didcomm
     }
 
-    async fn send(&self, _dest: &str, packed: Vec<u8>) -> Result<SendReceipt, MessagingError> {
-        // The packed JWE already encodes the recipient; the ATM routes it via
-        // the profile's mediator, so `dest` is informational here.
+    async fn send(&self, dest: &str, packed: Vec<u8>) -> Result<SendReceipt, MessagingError> {
         let packed = String::from_utf8(packed)
             .map_err(|e| MessagingError::Transport(format!("packed message is not UTF-8: {e}")))?;
-        // Fire-and-forget at the transport: the delivery layer's outbox owns
-        // end-to-end confirmation, so we don't wait for a reply. `msg_id` is only
-        // used for reply correlation (unused when not waiting), so a fresh id is
-        // fine. `send_message` is truthful — `Err` if the frame wasn't written.
+        // Deliver to `dest` by **forwarding** the packed message through the
+        // recipient's mediator (a DIDComm routing/2.0 `forward` envelope). A bare
+        // `send_message` only pushes bytes to our own mediator and does NOT wrap a
+        // forward, so a standard mediator never routes it to the recipient — the
+        // message is silently undelivered. (`send_message` "worked" for a
+        // same-DID self-send, which is why this went unnoticed until a real
+        // cross-DID round trip.) Fire-and-forget: the delivery layer's outbox
+        // owns end-to-end confirmation, so we don't wait for a response.
+        // `forward_and_send_message` is truthful — `Err` if the frame wasn't
+        // written.
         let msg_id = uuid::Uuid::new_v4().to_string();
-        // The mediator keys a stored message on `sha256(packed bytes)` and shows
-        // that id in the sender's outbox (`Folder::Outbox`). Return it as the
-        // `hop_id` so the delivery layer can watch this exact message drain
-        // (outbox-drain evidence, §5a). Verified live against a real mediator.
+        let mediator_did = self
+            .profile
+            .inner
+            .mediator
+            .as_ref()
+            .as_ref()
+            .map(|m| m.did.clone())
+            .ok_or_else(|| {
+                MessagingError::Transport("profile has no mediator to forward through".to_string())
+            })?;
+        // `hop_id` correlates a later outbox-drain confirmation (§5a). It is the
+        // `sha256` of the inner packed frame; the outbox-drain path must key on
+        // the same value the mediator exposes in `Folder::Outbox` for a forwarded
+        // message (re-validate before Guaranteed/outbox-drain relies on it).
         let hop_id = digest(packed.as_str());
         self.atm
-            .send_message(&self.profile, &packed, &msg_id, false, false)
+            .forward_and_send_message(
+                &self.profile,
+                false,
+                &packed,
+                Some(&msg_id),
+                &mediator_did,
+                dest,
+                None,
+                None,
+                false,
+            )
             .await
             .map(|_| SendReceipt {
                 via: TransportKind::Didcomm,
                 hop_id: Some(hop_id),
             })
-            .map_err(|e| MessagingError::Transport(format!("didcomm send failed: {e}")))
+            .map_err(|e| MessagingError::Transport(format!("didcomm forward+send failed: {e}")))
     }
 
     fn connection_state(&self) -> watch::Receiver<ConnState> {

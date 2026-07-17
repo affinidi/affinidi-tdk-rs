@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.18.57] - 2026-07-17
+
+- **Fix `DidCommTransport::send` to actually deliver.** It called
+  `ATM::send_message`, which only pushes the packed bytes to our own mediator
+  without wrapping a DIDComm routing/2.0 `forward` envelope — so a standard
+  mediator never routes the message to the recipient and it is silently
+  undelivered. (A same-DID self-send happened to round-trip, which is why the
+  0.18.53 live check missed it.) `send` now uses `forward_and_send_message`,
+  forwarding the packed frame to `dest` (the recipient the delivery layer
+  passes) through the profile's mediator. The `SendReceipt`/`hop_id` contract is
+  unchanged, but the outbox-drain (§5a) correlation must be re-validated for a
+  forwarded frame before a `Guaranteed` flow relies on it. `dest` is no longer
+  ignored. Behavioural fix; no signature change.
+
 ## [0.18.56] - 2026-07-17
 
 - **`DidCommTransport` now yields a cryptographically-authenticated sender.**
