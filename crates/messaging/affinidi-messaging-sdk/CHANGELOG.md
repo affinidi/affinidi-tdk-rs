@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.18.56] - 2026-07-17
+
+- **`DidCommTransport` now yields a cryptographically-authenticated sender.**
+  `to_inbound` set `ReceivedMessage.sender` from the **plaintext `from` header**
+  (sender-controlled) and `verified` from `meta.authenticated` alone — so a
+  message authcrypted with an attacker's own key but claiming a victim's `from`
+  surfaced as `sender = victim, verified = true`. Now `sender` is the DID of the
+  key that **actually** authcrypted the envelope (`encrypted_from_kid`), returned
+  only when the plaintext `from` matches it; anonymous / unauthenticated / spoofed
+  messages yield `sender = None, verified = false`. Consumers can trust
+  `sender` + `verified` for authorization without re-deriving the check.
+  **Behavioural change** (R3.6): a consumer that read `sender` off a spoofed or
+  anonymous message will now see `None`. Additive at the type level; 2 new tests
+  (spoof, anonymous) + the mapping test tightened.
+
 ## [0.18.55] - 2026-07-17
 
 - **Fix a connect-path deadlock introduced by the truthful-send change in
