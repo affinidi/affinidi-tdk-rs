@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.11] - 2026-07-18
+
+- Add **`MessagingService::request_via(transport_id, …)`** — a correlated
+  request/reply over a **specific** installed transport instead of the primary.
+  The reply is awaited on the same merged inbound dispatcher (matched by thread
+  id), so a service can round-trip-prove a **secondary** transport — e.g.
+  trust-ping the VTA via a newly-added-but-not-yet-promoted mediator and await
+  the pong — **before** `promote`ing it. `request` is refactored to share the
+  same `request_over` core; behaviour unchanged. Additive; 1 new test (45 total).
+
 ## [0.1.10] - 2026-07-18
 
 - **`MessagingService` is now multi-transport.** It holds N transports with
