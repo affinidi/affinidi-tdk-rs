@@ -199,7 +199,7 @@ async fn frame_to_inbound(
     }
 }
 
-/// Map an inbound TSP frame to the neutral [`Inbound`]. `atm.tsp().unpack_bytes`
+/// Map an inbound TSP frame to the neutral [`Inbound`]. `atm.tsp().unpack`
 /// authenticates the sender (resolves + verifies the VID), so `sender` is the
 /// cryptographically-authenticated VID and `verified` is `true`. `protocol` is
 /// [`Protocol::TSP`] so the consumer routes it to its TSP handler.
@@ -208,7 +208,16 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
     // The mediator keys a stored TSP frame on `sha256(packed)` — the id the frame
     // stream would delete on ack, so it is the ack handle here too.
     let ack = digest(packed);
-    let (payload, sender) = match atm.tsp().unpack_bytes(profile, packed.as_bytes()).await {
+    // The multiplexed pickup socket (`live_stream_next_frame`) surfaces a TSP
+    // frame as the **qb64** stored string — base64url of qb2, i.e. `-E…` *text* —
+    // NOT raw qb2. Use `unpack`, which base64url-decodes first. Feeding
+    // `packed.as_bytes()` to `unpack_bytes` (which expects raw qb2) would push the
+    // ASCII `'-','E',…` bytes straight into the CESR parser and fail with "missing
+    // -E envelope wrapper", so every inbound TSP frame — e.g. a trust-ping — is
+    // silently skipped and never answered. Mirrors the framework listener's
+    // `dispatch_tsp` (the raw-TSP `connect_websocket` path yields already-decoded
+    // qb2 and correctly uses `unpack_bytes`; this DIDComm-multiplexed path does not).
+    let (payload, sender) = match atm.tsp().unpack(profile, packed).await {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(error = %e, "failed to unpack inbound TSP frame — skipping");
