@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.18.59] - 2026-07-18
+
+- **Fix: `DidCommTransport` dropped every inbound TSP frame** (regression in
+  0.18.58's TSP surfacing). The multiplexed pickup socket
+  (`live_stream_next_frame`) hands a TSP frame to `tsp_to_inbound` as the
+  **qb64** stored string (base64url of qb2 — `-E…` *text*), but the adapter called
+  `unpack_bytes(packed.as_bytes())`, which expects raw qb2 and so pushed the ASCII
+  `'-','E',…` bytes straight into the CESR parser — failing with `missing -E
+  envelope wrapper` and skipping the frame. Every inbound TSP message (e.g. a
+  trust-ping) was silently dropped and never answered. Now calls
+  `atm.tsp().unpack(profile, packed)`, which base64url-decodes first — matching the
+  framework listener's `dispatch_tsp`. TSP-only; the DIDComm path was unaffected.
+
 ## [0.18.58] - 2026-07-17
 
 - **`DidCommTransport` now surfaces inbound TSP frames as well as DIDComm.**
