@@ -20,6 +20,10 @@
 //! [`MessageTransport`]: affinidi_messaging_core::MessageTransport
 
 pub mod confirm;
+/// The `MessageTransport` conformance suite (design §11), parameterized over the
+/// wire. Available under the `conformance` feature (and in tests).
+#[cfg(any(test, feature = "conformance"))]
+pub mod conformance;
 pub mod drain;
 pub mod outbox;
 pub mod receipt;
