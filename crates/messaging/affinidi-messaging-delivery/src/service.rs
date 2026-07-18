@@ -1,5 +1,11 @@
-//! The `MessagingService` front-end — the API services call — over one
-//! transport + outbox, with a single inbound dispatcher.
+//! The `MessagingService` front-end — the API services call — over **N
+//! transports** + one outbox, with a single merged inbound dispatcher.
+//!
+//! A service holds any number of transports (add/remove/promote at runtime) so
+//! it can run a mediator lifecycle — migrate/rollback/drain — over the delivery
+//! layer, while outbound always routes through the current **primary**. The
+//! single-transport API (`new`/`with_receipts`) is a thin shim over the
+//! multi-transport core: it installs one `"default"` transport as the primary.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -7,10 +13,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use affinidi_messaging_core::{
-    ConnState, Inbound, MessageTransport, MessagingError, ReceivedMessage,
+    ConnState, Inbound, InboundAck, MessageTransport, MessagingError, ReceivedMessage, SendReceipt,
+    TransportKind,
 };
 use futures_util::stream::{self, BoxStream, StreamExt};
-use tokio::sync::{broadcast, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::confirm::confirm_delivered;
@@ -54,16 +61,23 @@ pub enum Sent {
     Unconfirmed,
 }
 
-/// Aggregated messaging connectivity for a health endpoint — read off the
+/// Aggregated messaging connectivity for a health endpoint — read off each
 /// transport's live `connection_state()`, never a boot-time latch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MessagingStatus {
-    /// The transport is connected.
+    /// The primary is connected AND every other transport is connected.
     Connected,
-    /// The transport is down or reconnecting.
+    /// The primary is connected but at least one secondary transport is down or
+    /// reconnecting — outbound is fine, but the service is not at full strength.
+    Degraded,
+    /// There is no primary, or the primary is down or reconnecting.
     Disconnected,
 }
+
+/// Identifies a transport within a [`MessagingService`]. `"default"` is the id
+/// of the transport installed by [`MessagingService::new`].
+pub type TransportId = String;
 
 type WaiterMap = Arc<Mutex<HashMap<String, oneshot::Sender<ReceivedMessage>>>>;
 
@@ -73,77 +87,285 @@ const SUBSCRIBE_BUFFER: usize = 256;
 
 static KEY_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// The delivery-layer front-end over one transport + outbox.
-///
-/// Owns a **single inbound dispatcher**: it reads the transport's `inbound()`
-/// exactly once, routes replies (matched by thread id) to `request` waiters and
-/// everything else to `subscribe`, and acks each message **once, after handoff**
-/// — never in a per-caller loop, never before handoff.
-pub struct MessagingService {
+/// One installed transport plus the forwarder task pumping its `inbound()` into
+/// the service's merged inbound channel.
+struct TransportSlot {
     transport: Arc<dyn MessageTransport>,
+    forwarder: JoinHandle<()>,
+}
+
+/// The shared, cloneable core of a [`MessagingService`]. Held behind an `Arc`
+/// so the dispatcher, the outbound [`PrimaryTransport`] handle, and the public
+/// API all see the same live set of transports and the same primary.
+struct ServiceInner {
+    /// Every installed transport, keyed by id. Guarded by a `std::sync::Mutex`;
+    /// the `Arc<dyn MessageTransport>` is always cloned out before any `.await`.
+    transports: Mutex<HashMap<TransportId, TransportSlot>>,
+    /// The transport outbound (send/request/drain) currently routes through.
+    primary: Mutex<Option<TransportId>>,
     outbox: Arc<dyn OutboxStore>,
     waiters: WaiterMap,
     subscribers: broadcast::Sender<Inbound>,
-    conn_state: watch::Receiver<ConnState>,
+    receipt_packer: Option<Arc<dyn ReceiptPacker>>,
+    /// Every transport's forwarder sends `(source id, inbound)` here; the single
+    /// dispatcher drains it.
+    inbound_tx: mpsc::UnboundedSender<(TransportId, Inbound)>,
+    /// A permanently-`Disconnected` signal handed out by the primary handle when
+    /// there is no primary, so `connection_state()` always returns a live watch.
+    fallback_conn: watch::Sender<ConnState>,
+}
+
+impl ServiceInner {
+    /// Install `transport` under `id`: spawn its forwarder (pumping `inbound()`
+    /// into the merged channel), store the slot, and update the primary.
+    ///
+    /// Non-async on purpose — it only spawns a task and takes `std::sync`
+    /// locks, so the non-async constructors (`new`/`with_receipts`) can call it.
+    /// With `make_primary` it becomes the primary unconditionally; otherwise it
+    /// becomes the primary only if there is none yet.
+    fn add_transport_inner(
+        &self,
+        id: TransportId,
+        transport: Arc<dyn MessageTransport>,
+        make_primary: bool,
+    ) {
+        let inbound_tx = self.inbound_tx.clone();
+        let mut stream = transport.inbound();
+        let fwd_id = id.clone();
+        let forwarder = tokio::spawn(async move {
+            while let Some(item) = stream.next().await {
+                if inbound_tx.send((fwd_id.clone(), item)).is_err() {
+                    break;
+                }
+            }
+        });
+
+        let slot = TransportSlot {
+            transport,
+            forwarder,
+        };
+        if let Some(old) = self
+            .transports
+            .lock()
+            .expect("transports mutex")
+            .insert(id.clone(), slot)
+        {
+            // Replacing an id: stop the old forwarder so it doesn't keep pumping.
+            old.forwarder.abort();
+        }
+
+        let mut primary = self.primary.lock().expect("primary mutex");
+        if make_primary || primary.is_none() {
+            *primary = Some(id);
+        }
+    }
+
+    /// Drop a transport: abort its forwarder, remove the slot, and clear the
+    /// primary if it was the one removed.
+    fn remove_transport(&self, id: &str) {
+        let removed = self.transports.lock().expect("transports mutex").remove(id);
+        if let Some(slot) = removed {
+            slot.forwarder.abort();
+        }
+        let mut primary = self.primary.lock().expect("primary mutex");
+        if primary.as_deref() == Some(id) {
+            *primary = None;
+        }
+    }
+
+    /// Make `id` the primary. `Err` if `id` is not a currently-installed
+    /// transport.
+    fn promote(&self, id: &str) -> Result<(), MessagingError> {
+        if !self
+            .transports
+            .lock()
+            .expect("transports mutex")
+            .contains_key(id)
+        {
+            return Err(MessagingError::Transport(format!(
+                "cannot promote unknown transport: {id}"
+            )));
+        }
+        *self.primary.lock().expect("primary mutex") = Some(id.to_string());
+        Ok(())
+    }
+
+    /// The current primary's transport, cloned out of the lock (so callers may
+    /// `.await` on it without holding the guard). `None` if there is no primary.
+    fn primary_transport(&self) -> Option<Arc<dyn MessageTransport>> {
+        let id = self.primary.lock().expect("primary mutex").clone()?;
+        self.transports
+            .lock()
+            .expect("transports mutex")
+            .get(&id)
+            .map(|slot| slot.transport.clone())
+    }
+
+    /// A source transport by id, cloned out of the lock, or `None` if it was
+    /// removed since the inbound item was forwarded.
+    fn transport_by_id(&self, id: &str) -> Option<Arc<dyn MessageTransport>> {
+        self.transports
+            .lock()
+            .expect("transports mutex")
+            .get(id)
+            .map(|slot| slot.transport.clone())
+    }
+
+    /// Aggregate connectivity across all transports (see [`MessagingStatus`]).
+    fn status(&self) -> MessagingStatus {
+        let Some(primary_id) = self.primary.lock().expect("primary mutex").clone() else {
+            return MessagingStatus::Disconnected;
+        };
+        let transports = self.transports.lock().expect("transports mutex");
+        let Some(primary) = transports.get(&primary_id) else {
+            return MessagingStatus::Disconnected;
+        };
+        if !matches!(
+            *primary.transport.connection_state().borrow(),
+            ConnState::Connected
+        ) {
+            return MessagingStatus::Disconnected;
+        }
+        // Primary is connected: full strength only if every transport is.
+        let all_connected = transports.values().all(|slot| {
+            matches!(
+                *slot.transport.connection_state().borrow(),
+                ConnState::Connected
+            )
+        });
+        if all_connected {
+            MessagingStatus::Connected
+        } else {
+            MessagingStatus::Degraded
+        }
+    }
+}
+
+/// The delivery-layer front-end over **N transports** + one outbox.
+///
+/// Outbound (`send`/`request`, and the outbox drain via [`primary_handle`]) goes
+/// through the current **primary** transport. Inbound from **every** installed
+/// transport is merged into a **single dispatcher**: it routes replies (matched
+/// by thread id) to `request` waiters and everything else to `subscribe`, and
+/// acks each message **once, after handoff, over the transport it arrived on**.
+///
+/// [`primary_handle`]: MessagingService::primary_handle
+pub struct MessagingService {
+    inner: Arc<ServiceInner>,
     _dispatcher: JoinHandle<()>,
 }
 
 impl MessagingService {
     /// Build the service over `transport` + `outbox` and start the inbound
-    /// dispatcher. Must be called inside a Tokio runtime.
+    /// dispatcher. Must be called inside a Tokio runtime. Installs `transport`
+    /// as the `"default"` primary.
     ///
     /// The layer-receipt **consume** half is always active — an inbound receipt
     /// confirms its matching outbox entry `Sent → Delivered` (§5a). To also
     /// **emit** receipts for messages this service receives, build with
     /// [`with_receipts`](Self::with_receipts).
     pub fn new(transport: Arc<dyn MessageTransport>, outbox: Arc<dyn OutboxStore>) -> Self {
-        Self::build(transport, outbox, None)
+        let svc = Self::build_empty(outbox, None);
+        svc.inner
+            .add_transport_inner("default".to_string(), transport, true);
+        svc
     }
 
     /// Build the service and, additionally, **emit** a fire-and-forget layer
     /// receipt (§5a) for every unsolicited message it durably receives, using
     /// `receipt_packer` to encrypt the receipt to the sender. This is what lets
     /// a peer's `Guaranteed` outbox entry settle `Delivered` with no
-    /// application-protocol reply.
+    /// application-protocol reply. Installs `transport` as the `"default"`
+    /// primary.
     pub fn with_receipts(
         transport: Arc<dyn MessageTransport>,
         outbox: Arc<dyn OutboxStore>,
         receipt_packer: Arc<dyn ReceiptPacker>,
     ) -> Self {
-        Self::build(transport, outbox, Some(receipt_packer))
+        let svc = Self::build_empty(outbox, Some(receipt_packer));
+        svc.inner
+            .add_transport_inner("default".to_string(), transport, true);
+        svc
     }
 
-    fn build(
-        transport: Arc<dyn MessageTransport>,
+    /// Build the service with **zero transports** and start the dispatcher. Use
+    /// [`add_transport`](Self::add_transport) / [`promote`](Self::promote) to
+    /// bring transports online. Until a primary exists, outbound `send`/`request`
+    /// return `Err` and `status()` is `Disconnected`.
+    pub fn empty(outbox: Arc<dyn OutboxStore>) -> Self {
+        Self::build_empty(outbox, None)
+    }
+
+    fn build_empty(
         outbox: Arc<dyn OutboxStore>,
         receipt_packer: Option<Arc<dyn ReceiptPacker>>,
     ) -> Self {
         let waiters: WaiterMap = Arc::new(Mutex::new(HashMap::new()));
         let (subscribers, _) = broadcast::channel(SUBSCRIBE_BUFFER);
-        let conn_state = transport.connection_state();
+        let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
+        let (fallback_conn, _) = watch::channel(ConnState::Disconnected);
 
-        let dispatcher = tokio::spawn(run_dispatcher(
-            transport.clone(),
-            outbox.clone(),
-            waiters.clone(),
-            subscribers.clone(),
-            receipt_packer,
-        ));
-
-        Self {
-            transport,
+        let inner = Arc::new(ServiceInner {
+            transports: Mutex::new(HashMap::new()),
+            primary: Mutex::new(None),
             outbox,
             waiters,
             subscribers,
-            conn_state,
+            receipt_packer,
+            inbound_tx,
+            fallback_conn,
+        });
+
+        let dispatcher = tokio::spawn(run_dispatcher(inner.clone(), inbound_rx));
+
+        Self {
+            inner,
             _dispatcher: dispatcher,
         }
     }
 
+    /// Install a secondary `transport` under `id`. It starts **receiving**
+    /// immediately (its inbound merges into the dispatcher) but does **not**
+    /// become the outbound primary — unless there is currently no primary, in
+    /// which case it becomes one. Use [`promote`](Self::promote) to switch the
+    /// primary explicitly. Replacing an existing `id` stops the old transport's
+    /// forwarder.
+    pub fn add_transport(&self, id: TransportId, transport: Arc<dyn MessageTransport>) {
+        self.inner.add_transport_inner(id, transport, false);
+    }
+
+    /// Remove the transport `id`: stop its inbound forwarder and drop it. If it
+    /// was the primary, the service is left with **no** primary until one is
+    /// promoted.
+    pub fn remove_transport(&self, id: &str) {
+        self.inner.remove_transport(id);
+    }
+
+    /// Make `id` the outbound primary. `Err` if `id` is not a currently-installed
+    /// transport.
+    pub fn promote(&self, id: &str) -> Result<(), MessagingError> {
+        self.inner.promote(id)
+    }
+
+    /// The current primary's transport, or `None` if there is no primary.
+    pub fn primary_transport(&self) -> Option<Arc<dyn MessageTransport>> {
+        self.inner.primary_transport()
+    }
+
+    /// A stable outbound handle that always routes to **whatever the current
+    /// primary is** — pass it to [`drain_loop`](crate::drain_loop) so the outbox
+    /// drain follows every `promote`/`remove` without being rebuilt.
+    pub fn primary_handle(&self) -> Arc<dyn MessageTransport> {
+        Arc::new(PrimaryTransport {
+            inner: self.inner.clone(),
+        })
+    }
+
     /// Send `packed` to `to` with the chosen delivery guarantee.
     ///
-    /// - `BestEffort`: one truthful `transport.send()`; `Ok(Accepted)` on
-    ///   hop-accept, `Err` if the frame wasn't transmitted. No outbox row.
+    /// - `BestEffort`: one truthful `transport.send()` over the primary;
+    ///   `Ok(Accepted)` on hop-accept, `Err` if the frame wasn't transmitted (or
+    ///   there is no primary). No outbox row.
     /// - `Guaranteed`: enqueue a durable outbox entry (the drain sends + retries)
     ///   and return `Accepted` (queued). Confirmation upgrades it to `Delivered`
     ///   via the outbox once §5a lands.
@@ -155,7 +377,11 @@ impl MessagingService {
     ) -> Result<Sent, MessagingError> {
         match delivery {
             Delivery::BestEffort => {
-                self.transport.send(to, packed).await?;
+                let transport = self
+                    .inner
+                    .primary_transport()
+                    .ok_or_else(|| MessagingError::Transport("no primary transport".into()))?;
+                transport.send(to, packed).await?;
                 Ok(Sent::Accepted)
             }
             Delivery::Guaranteed {
@@ -173,7 +399,7 @@ impl MessagingService {
                     now.saturating_add(deliver_by.as_millis() as u64),
                 );
                 entry.ordering_key = ordering_key;
-                self.outbox.put(entry).await.map_err(|e| {
+                self.inner.outbox.put(entry).await.map_err(|e| {
                     MessagingError::Transport(format!("outbox enqueue failed: {e}"))
                 })?;
                 Ok(Sent::Accepted)
@@ -181,8 +407,9 @@ impl MessagingService {
         }
     }
 
-    /// Send `packed` and await a reply correlated by `correlation_thid` — the
-    /// thread id the caller minted on the outgoing message — up to `timeout`.
+    /// Send `packed` over the primary and await a reply correlated by
+    /// `correlation_thid` — the thread id the caller minted on the outgoing
+    /// message — up to `timeout`.
     ///
     /// Concurrent `request`s are safe: each registers a waiter keyed by its own
     /// thread id, and the dispatcher fans replies to the right one; no shared-
@@ -196,12 +423,21 @@ impl MessagingService {
     ) -> Result<ReceivedMessage, MessagingError> {
         let (tx, rx) = oneshot::channel();
         // Register the waiter BEFORE sending so a fast reply can't race ahead.
-        self.waiters
+        self.inner
+            .waiters
             .lock()
             .expect("waiters mutex")
             .insert(correlation_thid.to_string(), tx);
 
-        if let Err(e) = self.transport.send(to, packed).await {
+        let transport = match self.inner.primary_transport() {
+            Some(transport) => transport,
+            None => {
+                self.remove_waiter(correlation_thid);
+                return Err(MessagingError::Transport("no primary transport".into()));
+            }
+        };
+
+        if let Err(e) = transport.send(to, packed).await {
             self.remove_waiter(correlation_thid);
             return Err(e);
         }
@@ -221,11 +457,11 @@ impl MessagingService {
     }
 
     /// Subscribe to inbound messages NOT claimed by a `request` waiter
-    /// (unsolicited pushes, server-initiated requests). Each subscriber gets its
-    /// own stream. Delivery is at-least-once — a consumer must dedup on the
-    /// message's idempotency key.
+    /// (unsolicited pushes, server-initiated requests), merged across **all**
+    /// installed transports. Each subscriber gets its own stream. Delivery is
+    /// at-least-once — a consumer must dedup on the message's idempotency key.
     pub fn subscribe(&self) -> BoxStream<'static, Inbound> {
-        let rx = self.subscribers.subscribe();
+        let rx = self.inner.subscribers.subscribe();
         Box::pin(stream::unfold(rx, |mut rx| async move {
             loop {
                 match rx.recv().await {
@@ -238,13 +474,10 @@ impl MessagingService {
         }))
     }
 
-    /// The one status a health endpoint reads, off the transport's live
-    /// connection signal.
+    /// The one status a health endpoint reads, aggregated across all transports
+    /// off their live connection signals (see [`MessagingStatus`]).
     pub fn status(&self) -> MessagingStatus {
-        match *self.conn_state.borrow() {
-            ConnState::Connected => MessagingStatus::Connected,
-            _ => MessagingStatus::Disconnected,
-        }
+        self.inner.status()
     }
 
     /// Record end-to-end delivery evidence for a `Guaranteed` send:
@@ -255,7 +488,7 @@ impl MessagingService {
     /// Idempotent: `Ok(true)` if it transitioned an entry, `Ok(false)` if there
     /// was no matching `Sent` entry (unknown or already terminal).
     pub async fn confirm(&self, idempotency_key: &str) -> Result<bool, MessagingError> {
-        crate::confirm::confirm_delivered(self.outbox.as_ref(), idempotency_key)
+        crate::confirm::confirm_delivered(self.inner.outbox.as_ref(), idempotency_key)
             .await
             .map_err(|e| MessagingError::Transport(format!("confirm failed: {e}")))
     }
@@ -269,6 +502,7 @@ impl MessagingService {
         idempotency_key: &str,
     ) -> Result<Option<OutboxState>, MessagingError> {
         Ok(self
+            .inner
             .outbox
             .get(idempotency_key)
             .await
@@ -277,44 +511,91 @@ impl MessagingService {
     }
 
     fn remove_waiter(&self, thid: &str) {
-        self.waiters.lock().expect("waiters mutex").remove(thid);
+        self.inner
+            .waiters
+            .lock()
+            .expect("waiters mutex")
+            .remove(thid);
     }
 }
 
-/// The single inbound dispatcher: read `inbound()` once, then for each message
-/// either
-/// 1. **consume** it as a layer receipt — confirm its outbox entry `Sent →
+/// The outbound handle returned by [`MessagingService::primary_handle`]: a
+/// `MessageTransport` that delegates every call to whatever the **current**
+/// primary is, resolving it fresh each time. The outbox drain holds one of these
+/// so a `promote` transparently redirects the drain.
+struct PrimaryTransport {
+    inner: Arc<ServiceInner>,
+}
+
+#[async_trait::async_trait]
+impl MessageTransport for PrimaryTransport {
+    fn kind(&self) -> TransportKind {
+        // Informational only — the real kind is the resolved primary's.
+        TransportKind::Didcomm
+    }
+
+    async fn send(&self, dest: &str, packed: Vec<u8>) -> Result<SendReceipt, MessagingError> {
+        let transport = self
+            .inner
+            .primary_transport()
+            .ok_or_else(|| MessagingError::Transport("no primary transport".into()))?;
+        transport.send(dest, packed).await
+    }
+
+    fn connection_state(&self) -> watch::Receiver<ConnState> {
+        match self.inner.primary_transport() {
+            Some(transport) => transport.connection_state(),
+            None => self.inner.fallback_conn.subscribe(),
+        }
+    }
+
+    fn inbound(&self) -> BoxStream<'static, Inbound> {
+        // The drain never reads inbound; the real inbound is merged per-transport.
+        Box::pin(stream::empty())
+    }
+
+    async fn ack(&self, _ack: InboundAck) -> Result<(), MessagingError> {
+        // Unused: this handle is outbound-only.
+        Ok(())
+    }
+
+    async fn outbox_message_ids(&self) -> Result<Option<Vec<String>>, MessagingError> {
+        let transport = self
+            .inner
+            .primary_transport()
+            .ok_or_else(|| MessagingError::Transport("no primary transport".into()))?;
+        transport.outbox_message_ids().await
+    }
+}
+
+/// The single inbound dispatcher, over the **merged** inbound of every installed
+/// transport. For each `(source id, message)` it either
+/// 1. **consumes** it as a layer receipt — confirm its outbox entry `Sent →
 ///    Delivered` (§5a) and never surface it to the application; or
-/// 2. **route** it to a matching `request` waiter (by thread id) or to
-///    `subscribe`, emitting a fire-and-forget receipt for unsolicited traffic
-///    when a packer is configured;
+/// 2. **routes** it to a matching `request` waiter (by thread id) or to
+///    `subscribe`, emitting a fire-and-forget receipt (over the current primary)
+///    for unsolicited traffic when a packer is configured;
 ///
-/// then ack it once after handoff.
+/// then acks it once after handoff **over the transport it arrived on**.
 async fn run_dispatcher(
-    transport: Arc<dyn MessageTransport>,
-    outbox: Arc<dyn OutboxStore>,
-    waiters: WaiterMap,
-    subscribers: broadcast::Sender<Inbound>,
-    receipt_packer: Option<Arc<dyn ReceiptPacker>>,
+    inner: Arc<ServiceInner>,
+    mut rx: mpsc::UnboundedReceiver<(TransportId, Inbound)>,
 ) {
-    let mut inbound = transport.inbound();
-    while let Some(item) = inbound.next().await {
+    while let Some((src_id, item)) = rx.recv().await {
         let ack = item.ack.clone();
 
         // 1. A layer receipt is consumed by the layer, not the application: it
         //    confirms the matching outbox entry Sent → Delivered. A receipt for
         //    an unknown/terminal key is a harmless no-op (spurious/duplicate).
         if let Some(key) = receipt::receipt_of(&item.message) {
-            match confirm_delivered(outbox.as_ref(), &key).await {
+            match confirm_delivered(inner.outbox.as_ref(), &key).await {
                 Ok(true) => {
                     tracing::debug!(idempotency_key = %key, "layer receipt confirmed delivery")
                 }
                 Ok(false) => {}
                 Err(e) => tracing::warn!(error = %e, "failed to apply layer receipt"),
             }
-            if let Err(e) = transport.ack(ack).await {
-                tracing::warn!(error = %e, "failed to ack layer receipt");
-            }
+            ack_via_source(&inner, &src_id, ack).await;
             continue;
         }
 
@@ -327,7 +608,7 @@ async fn run_dispatcher(
         //    confirmed the same entry. The reply is still ordinary application
         //    traffic — it is also routed below.
         let confirmed_our_send = match item.thread_id.as_deref() {
-            Some(thid) => match confirm_delivered(outbox.as_ref(), thid).await {
+            Some(thid) => match confirm_delivered(inner.outbox.as_ref(), thid).await {
                 Ok(confirmed) => {
                     if confirmed {
                         tracing::debug!(idempotency_key = %thid, "protocol reply confirmed delivery");
@@ -346,7 +627,7 @@ async fn run_dispatcher(
         let waiter = item
             .thread_id
             .clone()
-            .and_then(|thid| waiters.lock().expect("waiters mutex").remove(&thid));
+            .and_then(|thid| inner.waiters.lock().expect("waiters mutex").remove(&thid));
 
         match waiter {
             // A reply for an in-flight request → its waiter. A reply is its own
@@ -364,34 +645,55 @@ async fn run_dispatcher(
             // reply's own key — a receipt would be a no-op on the peer anyway).
             None => {
                 if !confirmed_our_send
-                    && let Some(packer) = receipt_packer.as_ref()
+                    && let Some(packer) = inner.receipt_packer.as_ref()
                     && let (Some(to), Some(confirms)) =
                         (item.message.sender.clone(), item.thread_id.clone())
                 {
-                    spawn_receipt(transport.clone(), packer.clone(), to, confirms);
+                    spawn_receipt(&inner, packer.clone(), to, confirms);
                 }
-                let _ = subscribers.send(item);
+                let _ = inner.subscribers.send(item);
             }
         }
 
-        // Ack once, HERE, after handoff — never in a per-caller loop and never
-        // before the message has been routed.
-        if let Err(e) = transport.ack(ack).await {
-            tracing::warn!(error = %e, "failed to ack inbound message after handoff");
+        // Ack once, HERE, after handoff — over the transport the message arrived
+        // on, never in a per-caller loop and never before handoff.
+        ack_via_source(&inner, &src_id, ack).await;
+    }
+}
+
+/// Ack `ack` over the transport it arrived on (`src_id`). If that transport was
+/// removed since the message was forwarded, skip the ack (the message will be
+/// redelivered by whatever succeeds it, or is simply gone with the transport).
+async fn ack_via_source(inner: &ServiceInner, src_id: &str, ack: InboundAck) {
+    // Clone the Arc out of the lock BEFORE awaiting — never hold the std Mutex
+    // across `.ack().await`.
+    match inner.transport_by_id(src_id) {
+        Some(transport) => {
+            if let Err(e) = transport.ack(ack).await {
+                tracing::warn!(error = %e, "failed to ack inbound message after handoff");
+            }
+        }
+        None => {
+            tracing::debug!(transport = %src_id, "source transport removed before ack; skipping")
         }
     }
 }
 
 /// Pack and send a fire-and-forget layer receipt confirming `confirms` back to
-/// `to`, on a detached task so a slow pack/send never stalls the dispatcher. A
-/// pack or send failure is only logged: the receipt is self-healing (the
-/// sender's delivery window expires and it re-sends; the receiver re-emits).
+/// `to`, over the **current primary**, on a detached task so a slow pack/send
+/// never stalls the dispatcher. Skipped (logged) if there is no primary. A pack
+/// or send failure is only logged: the receipt is self-healing (the sender's
+/// delivery window expires and it re-sends; the receiver re-emits).
 fn spawn_receipt(
-    transport: Arc<dyn MessageTransport>,
+    inner: &Arc<ServiceInner>,
     packer: Arc<dyn ReceiptPacker>,
     to: String,
     confirms: String,
 ) {
+    let Some(transport) = inner.primary_transport() else {
+        tracing::debug!(to = %to, "no primary transport; skipping layer receipt emit");
+        return;
+    };
     tokio::spawn(async move {
         let body = Receipt::new(confirms).encode();
         match packer.pack_receipt(&to, body).await {
@@ -907,5 +1209,146 @@ mod tests {
 
         // An unknown key has no delivery state.
         assert_eq!(svc.delivery_state("unknown").await.unwrap(), None);
+    }
+
+    // ── Multi-transport (mediator lifecycle) ─────────────────────────────
+
+    #[tokio::test]
+    async fn empty_service_has_no_primary() {
+        let svc = MessagingService::empty(Arc::new(InMemoryOutboxStore::new()));
+        assert!(svc.primary_transport().is_none());
+        assert_eq!(svc.status(), MessagingStatus::Disconnected);
+        // Outbound with no primary is a truthful error, not a silent drop.
+        assert!(
+            svc.send("did:x", b"a".to_vec(), Delivery::BestEffort)
+                .await
+                .is_err()
+        );
+        // The primary handle also errors until a primary exists.
+        assert!(
+            svc.primary_handle()
+                .send("did:x", b"a".to_vec())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn add_transport_merges_a_second_transports_inbound_into_subscribe() {
+        let h1 = mock();
+        let svc = MessagingService::new(h1.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let h2 = mock();
+        svc.add_transport("second".into(), h2.transport.clone());
+        let mut sub = svc.subscribe();
+
+        // A push on the SECOND transport reaches the single merged dispatcher.
+        h2.inbound_tx
+            .send(inbound("from-second", None, "q2"))
+            .unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("subscribe yields the second transport's push")
+            .expect("stream item");
+        assert_eq!(got.message.id, "from-second");
+
+        // Acked over the SOURCE transport (the second), not the primary.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(h2.transport.acked.lock().unwrap().as_slice(), &["q2"]);
+        assert!(h1.transport.acked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn remove_transport_stops_its_inbound() {
+        let h1 = mock();
+        let svc = MessagingService::new(h1.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let h2 = mock();
+        svc.add_transport("second".into(), h2.transport.clone());
+        let mut sub = svc.subscribe();
+
+        svc.remove_transport("second");
+        // Let the forwarder abort land.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        // Aborting the forwarder drops the mock's inbound receiver, so this send
+        // may error (SendError) — either way the message never reaches the
+        // dispatcher.
+        let _ = h2.inbound_tx.send(inbound("after-remove", None, "q"));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), sub.next())
+                .await
+                .is_err(),
+            "a removed transport must not deliver to subscribers"
+        );
+    }
+
+    #[tokio::test]
+    async fn promote_switches_which_transport_send_uses() {
+        let h1 = mock();
+        let svc = MessagingService::new(h1.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let h2 = mock();
+        svc.add_transport("second".into(), h2.transport.clone());
+
+        // "default" is the primary: send goes to h1.
+        svc.send("did:x", b"a".to_vec(), Delivery::BestEffort)
+            .await
+            .unwrap();
+        assert_eq!(h1.transport.sent.lock().unwrap().len(), 1);
+        assert!(h2.transport.sent.lock().unwrap().is_empty());
+
+        // Promote the second: send now goes to h2, h1 unchanged.
+        svc.promote("second").unwrap();
+        svc.send("did:x", b"b".to_vec(), Delivery::BestEffort)
+            .await
+            .unwrap();
+        assert_eq!(h2.transport.sent.lock().unwrap().len(), 1);
+        assert_eq!(h1.transport.sent.lock().unwrap().len(), 1);
+
+        // Promoting an unknown transport is a truthful error.
+        assert!(svc.promote("nope").is_err());
+    }
+
+    #[tokio::test]
+    async fn status_is_degraded_when_a_secondary_is_down() {
+        let h1 = mock();
+        let svc = MessagingService::new(h1.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let h2 = mock();
+        svc.add_transport("second".into(), h2.transport.clone());
+
+        // Both up → Connected.
+        assert_eq!(svc.status(), MessagingStatus::Connected);
+
+        // Primary up, secondary down → Degraded.
+        h2.conn_tx.send(ConnState::Disconnected).unwrap();
+        assert_eq!(svc.status(), MessagingStatus::Degraded);
+
+        // Primary down → Disconnected regardless of the secondary.
+        h1.conn_tx.send(ConnState::Disconnected).unwrap();
+        assert_eq!(svc.status(), MessagingStatus::Disconnected);
+
+        // Both back up → Connected.
+        h1.conn_tx.send(ConnState::Connected).unwrap();
+        h2.conn_tx.send(ConnState::Connected).unwrap();
+        assert_eq!(svc.status(), MessagingStatus::Connected);
+    }
+
+    #[tokio::test]
+    async fn primary_handle_routes_to_current_primary_and_follows_promote() {
+        let h1 = mock();
+        let svc = MessagingService::new(h1.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let h2 = mock();
+        svc.add_transport("second".into(), h2.transport.clone());
+
+        // The stable handle the outbox drain holds.
+        let handle = svc.primary_handle();
+
+        handle.send("did:x", b"a".to_vec()).await.unwrap();
+        assert_eq!(h1.transport.sent.lock().unwrap().len(), 1);
+        assert!(h2.transport.sent.lock().unwrap().is_empty());
+
+        // After a promote, the SAME handle now routes to the new primary.
+        svc.promote("second").unwrap();
+        handle.send("did:x", b"b".to_vec()).await.unwrap();
+        assert_eq!(h2.transport.sent.lock().unwrap().len(), 1);
+        assert_eq!(h1.transport.sent.lock().unwrap().len(), 1);
     }
 }
