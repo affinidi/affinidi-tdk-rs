@@ -46,6 +46,8 @@ affinidi-did-common = "0.3"
 # package stays publishable while using the in-tree path for dev-builds.
 affinidi-messaging-test-mediator = { version = "0.2", path = "../affinidi-messaging-test-mediator", features = ["tsp"] }
 affinidi-tdk = { version = "0.8", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
+affinidi-messaging-core = { version = "0.1", path = "../affinidi-messaging-core" }
+futures-util = "0.3"
 
 
 [[example]]
