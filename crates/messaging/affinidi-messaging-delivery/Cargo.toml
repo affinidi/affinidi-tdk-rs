@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-delivery"
 description = "Reliable messaging delivery layer (durable outbox + drain) over the MessageTransport trait"
-version = "0.1.8"
+version = "0.1.9"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -28,6 +28,11 @@ tokio = { version = "1", default-features = false, features = ["rt", "sync", "ti
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
+
+[features]
+# The `MessageTransport` conformance suite (`conformance` module) — panicking
+# assertions a wire runs against, so it's opt-in and off in a normal build.
+conformance = []
 
 [lints]
 workspace = true

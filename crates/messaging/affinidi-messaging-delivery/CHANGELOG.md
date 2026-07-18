@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.9] - 2026-07-18
+
+- Add the **`MessageTransport` conformance suite** (`conformance` module, behind
+  the `conformance` feature; design §11). Parameterized over the wire via a
+  `ConformanceWire` factory + a `WireControl` surface: `run_all` drives the
+  delivery layer over a fresh transport per case and asserts the seven
+  guarantees — truthful send, connection-truth, demux, dedup, accept-then-die
+  (→ `Unconfirmed`, never a false `Delivered`), outbox-drain (→ `Delivered`), and
+  layer-receipt (→ `Delivered`). Ships an in-crate reference `MockWire` (the
+  always-run baseline, e.g. the "REST-fallback"); a real wire (DIDComm now, TSP
+  at phase 4) implements `ConformanceWire` to run the same suite. Additive,
+  feature-gated (panicking assertions, off in a normal build).
+
 ## [0.1.8] - 2026-07-18
 
 - **Fix: layer receipts carried over DIDComm are now recognised.** `receipt_key`
