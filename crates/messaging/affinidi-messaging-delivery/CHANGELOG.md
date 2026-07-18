@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.1.10] - 2026-07-18
+
+- **`MessagingService` is now multi-transport.** It holds N transports with
+  runtime `add_transport` / `remove_transport` / `promote`, so a service (the
+  VTA) can run its mediator lifecycle — migrate / rollback / drain — over the
+  delivery layer instead of the framework's dynamic multi-listener model.
+  - Every transport's `inbound()` is merged into the one dispatcher (each item
+    tagged with its source transport); the dispatcher acks via the **source**
+    transport, so a drained/removed mediator's in-flight messages still settle.
+  - Outbound (`send` / `request` / the drain / receipt emit) routes to the
+    **primary** transport; `primary_handle()` returns a `MessageTransport` that
+    always follows the current primary, so `drain_loop(store, svc.primary_handle(),
+    …)` survives a `promote`.
+  - `status()` aggregates: `Connected` (primary + all up), `Degraded` (primary up,
+    a secondary down — new `MessagingStatus::Degraded` unit variant), or
+    `Disconnected` (no primary, or primary down).
+  - **Fully backward-compatible**: `new` / `with_receipts` are unchanged (they
+    install a single `"default"` primary) and stay non-async; all existing
+    behaviour and tests are preserved. Additive; 6 new tests (44 total).
+
 ## [0.1.9] - 2026-07-18
 
 - Add the **`MessageTransport` conformance suite** (`conformance` module, behind
