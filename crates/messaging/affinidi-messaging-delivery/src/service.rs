@@ -421,6 +421,54 @@ impl MessagingService {
         correlation_thid: &str,
         timeout: Duration,
     ) -> Result<ReceivedMessage, MessagingError> {
+        let transport = self
+            .inner
+            .primary_transport()
+            .ok_or_else(|| MessagingError::Transport("no primary transport".into()))?;
+        self.request_over(transport, to, packed, correlation_thid, timeout)
+            .await
+    }
+
+    /// Like [`request`](Self::request), but sends over a **specific** installed
+    /// transport (by id) rather than the primary, while still awaiting the reply
+    /// on the same merged inbound dispatcher (matched by `correlation_thid`).
+    ///
+    /// This is what lets a service round-trip-prove a **secondary** transport —
+    /// e.g. trust-ping the VTA via a newly-added-but-not-yet-promoted mediator and
+    /// await the pong — **before** [`promote`](Self::promote)ing it. The reply
+    /// arrives on the same dispatcher as any other transport's inbound and is
+    /// demuxed to this waiter by thread id, so no separate correlation channel is
+    /// needed. `Err` if `transport_id` is not currently installed.
+    pub async fn request_via(
+        &self,
+        transport_id: &str,
+        to: &str,
+        packed: Vec<u8>,
+        correlation_thid: &str,
+        timeout: Duration,
+    ) -> Result<ReceivedMessage, MessagingError> {
+        let transport = self.inner.transport_by_id(transport_id).ok_or_else(|| {
+            MessagingError::Transport(format!(
+                "cannot request via unknown transport: {transport_id}"
+            ))
+        })?;
+        self.request_over(transport, to, packed, correlation_thid, timeout)
+            .await
+    }
+
+    /// Shared core of [`request`](Self::request) and
+    /// [`request_via`](Self::request_via): register a waiter keyed by
+    /// `correlation_thid` **before** sending (so a fast reply can't race ahead),
+    /// send over the already-resolved `transport`, then await the reply the merged
+    /// dispatcher fans back to this waiter, up to `timeout`.
+    async fn request_over(
+        &self,
+        transport: Arc<dyn MessageTransport>,
+        to: &str,
+        packed: Vec<u8>,
+        correlation_thid: &str,
+        timeout: Duration,
+    ) -> Result<ReceivedMessage, MessagingError> {
         let (tx, rx) = oneshot::channel();
         // Register the waiter BEFORE sending so a fast reply can't race ahead.
         self.inner
@@ -428,14 +476,6 @@ impl MessagingService {
             .lock()
             .expect("waiters mutex")
             .insert(correlation_thid.to_string(), tx);
-
-        let transport = match self.inner.primary_transport() {
-            Some(transport) => transport,
-            None => {
-                self.remove_waiter(correlation_thid);
-                return Err(MessagingError::Transport("no primary transport".into()));
-            }
-        };
 
         if let Err(e) = transport.send(to, packed).await {
             self.remove_waiter(correlation_thid);
@@ -1305,6 +1345,63 @@ mod tests {
 
         // Promoting an unknown transport is a truthful error.
         assert!(svc.promote("nope").is_err());
+    }
+
+    #[tokio::test]
+    async fn request_via_proves_a_secondary_before_promotion() {
+        let h1 = mock();
+        let svc = Arc::new(MessagingService::new(
+            h1.transport.clone(),
+            Arc::new(InMemoryOutboxStore::new()),
+        ));
+        // A newly-added secondary (NOT the primary yet) — the mediator being proven.
+        let h2 = mock();
+        svc.add_transport("candidate".into(), h2.transport.clone());
+
+        // Trust-ping the peer over the CANDIDATE transport and await the pong.
+        let svc2 = svc.clone();
+        let req = tokio::spawn(async move {
+            svc2.request_via(
+                "candidate",
+                "did:example:bob",
+                b"ping".to_vec(),
+                "ping-thread",
+                Duration::from_secs(5),
+            )
+            .await
+        });
+
+        // Let the request register its waiter + send, then the pong arrives on the
+        // candidate transport (its forwarder feeds the same merged dispatcher).
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // The ping went out over the candidate, NOT the primary.
+        assert_eq!(h2.transport.sent.lock().unwrap().len(), 1);
+        assert!(h1.transport.sent.lock().unwrap().is_empty());
+
+        h2.inbound_tx
+            .send(inbound("pong", Some("ping-thread"), "q-pong"))
+            .unwrap();
+
+        let pong = req.await.unwrap().unwrap();
+        assert_eq!(pong.id, "pong");
+        // The candidate is still a secondary — proving it did NOT promote it.
+        assert_eq!(
+            svc.primary_transport().map(|t| t.kind()),
+            Some(TransportKind::Didcomm)
+        );
+
+        // Requesting via an unknown transport is a truthful error, no waiter leak.
+        assert!(
+            svc.request_via(
+                "nope",
+                "did:x",
+                b"x".to_vec(),
+                "t",
+                Duration::from_millis(100)
+            )
+            .await
+            .is_err()
+        );
     }
 
     #[tokio::test]
