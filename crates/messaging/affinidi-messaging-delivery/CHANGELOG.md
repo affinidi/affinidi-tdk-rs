@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.8] - 2026-07-18
+
+- **Fix: layer receipts carried over DIDComm are now recognised.** `receipt_key`
+  parsed the transport `payload` directly as a `Receipt`, but the DIDComm
+  transport sets `ReceivedMessage.payload` to the FULL plaintext message JSON
+  (`Message::to_json()`), where the receipt lives under `body` — so the whole
+  message never parsed as a `Receipt` and a layer receipt was silently ignored
+  (§5a confirmation via `with_receipts` never fired). `receipt_key` now tries the
+  payload as a receipt directly (a transport that surfaces the body, e.g. TSP)
+  and falls back to extracting the DIDComm message `body`. Additive; 2 new tests.
+
 ## [0.1.7] - 2026-07-17
 
 - Derive `Serialize`/`Deserialize` on `OutboxEntry` and `OutboxState` so a

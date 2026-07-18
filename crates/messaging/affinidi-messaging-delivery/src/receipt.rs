@@ -87,7 +87,27 @@ impl Receipt {
 /// non-JSON), so a caller can cheaply tell layer traffic from application
 /// traffic without a separate type channel.
 pub fn receipt_key(payload: &[u8]) -> Option<Key> {
-    let receipt: Receipt = serde_json::from_slice(payload).ok()?;
+    // Two wire shapes a transport can surface as `payload`:
+    // (1) the Receipt JSON **directly** — a transport whose payload is the
+    //     message body (e.g. TSP surfaces the unpacked payload).
+    if let Some(key) = parse_receipt(payload) {
+        return Some(key);
+    }
+    // (2) a **full DIDComm plaintext message** whose `body` is the Receipt — the
+    //     DIDComm transport sets `ReceivedMessage.payload = message.to_json()`,
+    //     so the receipt lives under `body`, not at the top level. Without this
+    //     a layer receipt over DIDComm is never recognised (the whole message
+    //     JSON is not a `Receipt`).
+    let message: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    let body = message.get("body")?;
+    parse_receipt(&serde_json::to_vec(body).ok()?)
+}
+
+/// Parse `bytes` as a [`Receipt`], returning its confirmed key iff the body
+/// carries the [`RECEIPT_TYPE`] marker (so application JSON that merely happens
+/// to be an object is not mistaken for a receipt).
+fn parse_receipt(bytes: &[u8]) -> Option<Key> {
+    let receipt: Receipt = serde_json::from_slice(bytes).ok()?;
     (receipt.kind == RECEIPT_TYPE).then_some(receipt.confirms)
 }
 
@@ -141,6 +161,42 @@ mod tests {
         let bytes = Receipt::new(key).encode();
         assert_eq!(receipt_key(&bytes).as_deref(), Some(key));
         assert_eq!(receipt_of(&message_with(bytes)).as_deref(), Some(key));
+    }
+
+    #[test]
+    fn recognises_a_receipt_carried_as_a_didcomm_message_body() {
+        // The DIDComm transport sets `payload` = the FULL plaintext message JSON
+        // (`Message::to_json()`), so the Receipt lives under `body`, not at the
+        // top level. This is the shape `to_inbound` produces — it must be
+        // recognised. (Regression: `receipt_key` used to parse the whole message
+        // as a `Receipt`, which never matched, so DIDComm layer receipts were
+        // silently ignored.)
+        let key = "did:example:bob:1737000000000:7";
+        let receipt_body =
+            serde_json::from_slice::<serde_json::Value>(&Receipt::new(key).encode()).unwrap();
+        let full_message = serde_json::json!({
+            "id": "urn:uuid:msg-1",
+            "typ": "application/didcomm-plain+json",
+            "from": "did:example:alice",
+            "to": ["did:example:bob"],
+            "body": receipt_body,
+        });
+        let payload = serde_json::to_vec(&full_message).unwrap();
+        assert_eq!(receipt_key(&payload).as_deref(), Some(key));
+        assert_eq!(receipt_of(&message_with(payload)).as_deref(), Some(key));
+    }
+
+    #[test]
+    fn a_didcomm_message_with_a_non_receipt_body_is_not_a_receipt() {
+        let full_message = serde_json::json!({
+            "id": "urn:uuid:msg-2",
+            "typ": "application/didcomm-plain+json",
+            "from": "did:example:alice",
+            "body": { "hello": "world" },
+        });
+        let payload = serde_json::to_vec(&full_message).unwrap();
+        assert_eq!(receipt_key(&payload), None);
+        assert_eq!(receipt_of(&message_with(payload)), None);
     }
 
     #[test]
