@@ -4,6 +4,42 @@ All notable changes to `affinidi-did-common` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-19
+
+### Added
+
+- `Document::also_known_as` (`alsoKnownAs`) is now a **typed field** (`Vec<String>`)
+  rather than an untyped entry in the flattened `parameters_set` map, plus
+  `DocumentBuilder::also_known_as` / `also_known_as_many` to set it.
+
+  The DID specification defines `alsoKnownAs` as a set, so it always *serializes*
+  as a JSON array and is omitted entirely when empty. Deserialization is
+  deliberately lenient and also accepts a **bare string**, because documents in
+  the wild emit that form; a bare string normalizes to a single-element array on
+  the next serialization.
+
+  This is groundwork for agent-name (DID shortcut) resolution, where the
+  mandatory anti-spoofing check is that a resolved DID Document's `alsoKnownAs`
+  contains the agent name that was used to reach it.
+
+  The change itself is additive: `Document` is `#[non_exhaustive]`, so consumers
+  already construct it via `Document::new` / `DocumentBuilder` / deserialization
+  rather than struct literals, and no consumer code needs to change.
+
+  Note for anyone who previously read the value out of the untyped map:
+  `parameters_set["alsoKnownAs"]` is now absent — read `doc.also_known_as`.
+
+### Changed
+
+- **Minor version bump to `0.4.0`.** Although the API change above is additive,
+  this is released as a minor rather than a patch, which means every consumer
+  must move its requirement from `"0.3"` to `"0.4"`. Per ADR 0003 §3 a minor bump
+  of this crate breaks any `[patch.crates-io]` redirect held by an external
+  crates.io consumer still pinning `"0.3"`, so those consumers must be released
+  first. The one such consumer, `didwebvh-rs`, is updated in lockstep
+  (`0.5.8`, requiring `affinidi-did-common "0.4"`); it needed only the dependency
+  bump, no code changes.
+
 ## [0.3.9] - 2026-06-23
 
 ### Fixed

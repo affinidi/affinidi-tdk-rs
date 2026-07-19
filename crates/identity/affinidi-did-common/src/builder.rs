@@ -14,6 +14,7 @@ use crate::{
 /// Builder for constructing a [`Document`] using a fluent API.
 pub struct DocumentBuilder {
     id: Url,
+    also_known_as: Vec<String>,
     verification_method: Vec<VerificationMethod>,
     authentication: Vec<VerificationRelationship>,
     assertion_method: Vec<VerificationRelationship>,
@@ -36,6 +37,7 @@ impl DocumentBuilder {
     pub fn from_url(id: Url) -> Self {
         Self {
             id,
+            also_known_as: Vec::new(),
             verification_method: Vec::new(),
             authentication: Vec::new(),
             assertion_method: Vec::new(),
@@ -82,6 +84,24 @@ impl DocumentBuilder {
     /// Add `https://www.w3.org/ns/did/v1.1` to `@context`.
     pub fn context_did_v1_1(self) -> Self {
         self.append_context("https://www.w3.org/ns/did/v1.1")
+    }
+
+    // --- Also Known As ---
+
+    /// Add a single `alsoKnownAs` identifier.
+    pub fn also_known_as(mut self, uri: impl Into<String>) -> Self {
+        self.also_known_as.push(uri.into());
+        self
+    }
+
+    /// Add multiple `alsoKnownAs` identifiers.
+    pub fn also_known_as_many<I, S>(mut self, uris: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.also_known_as.extend(uris.into_iter().map(Into::into));
+        self
     }
 
     /// Add a single verification method.
@@ -230,6 +250,7 @@ impl DocumentBuilder {
     pub fn build(self) -> Document {
         Document {
             id: self.id,
+            also_known_as: self.also_known_as,
             verification_method: self.verification_method,
             authentication: self.authentication,
             assertion_method: self.assertion_method,
@@ -427,6 +448,26 @@ mod tests {
         assert!(doc.capability_delegation.is_empty());
         assert!(doc.service.is_empty());
         assert!(doc.parameters_set.is_empty());
+    }
+
+    #[test]
+    fn also_known_as_single_and_many() {
+        let doc = DocumentBuilder::new("did:example:123")
+            .unwrap()
+            .also_known_as("example.com/@alice")
+            .also_known_as_many(["connect.me/@bob", "names.info/@carol"])
+            .build();
+
+        assert_eq!(
+            doc.also_known_as,
+            vec!["example.com/@alice", "connect.me/@bob", "names.info/@carol"]
+        );
+    }
+
+    #[test]
+    fn also_known_as_empty_by_default() {
+        let doc = DocumentBuilder::new("did:example:123").unwrap().build();
+        assert!(doc.also_known_as.is_empty());
     }
 
     #[test]

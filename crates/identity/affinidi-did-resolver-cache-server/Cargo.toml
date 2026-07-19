@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-server"
-version = "0.9.2"
+version = "0.9.3"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
@@ -23,11 +23,11 @@ network = ["affinidi-did-resolver-cache-sdk/network"]
 [dependencies]
 # Affinidi Crates
 affinidi-did-resolver-cache-sdk = { version = "0.8", default-features = true, path = "../affinidi-did-resolver-cache-sdk/" }
-affinidi-did-common = "0.3"
+affinidi-did-common = "0.4"
 # Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"
 
-didwebvh-rs = "0.5"
+didwebvh-rs = "0.5.8"
 
 # External Crates
 ahash = "0.8"

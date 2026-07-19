@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.17.2"
+version = "0.17.3"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -99,7 +99,7 @@ humantime = "2"
 clap = { version = "4", features = ["derive"] }
 ## DID resolution with in-memory cache (capacity: 1000 DIDs, TTL: 300s)
 affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }
-affinidi-did-common = "0.3"
+affinidi-did-common = "0.4"
 affinidi-secrets-resolver = "0.5"
 ## Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"
@@ -133,7 +133,7 @@ redis = { version = "1.2", features = [
 fjall = { version = "3.1", optional = true }
 
 # ── DID Infrastructure ───────────────────────────────────────────────────
-didwebvh-rs = "0.5.4"
+didwebvh-rs = "0.5.8"
 
 # ── AWS Integration (optional, behind `aws` feature) ────────────────────
 ## Used for Secrets Manager (aws_secrets://), Parameter Store (aws_parameter_store://)

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-traits"
-version = "0.1.2"
+version = "0.1.3"
 description = "Resolver traits for pluggable DID resolution"
 edition.workspace = true
 authors.workspace = true
@@ -13,7 +13,7 @@ readme = "README.md"
 rust-version.workspace = true
 
 [dependencies]
-affinidi-did-common = "0.3"
+affinidi-did-common = "0.4"
 thiserror = "2"
 
 [dev-dependencies]

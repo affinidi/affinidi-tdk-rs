@@ -2,6 +2,14 @@
 
 ## Changelog history
 
+## 19th July 2026
+
+### 0.17.3 — affinidi-did-common 0.4
+
+- Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
+  No functional change to this crate: `Document` gained a typed
+  `also_known_as` field, which is additive.
+
 ## 16th July 2026
 
 ### 0.17.2 — secp256k1 (ES256K) support + resolve sender key by JWE skid

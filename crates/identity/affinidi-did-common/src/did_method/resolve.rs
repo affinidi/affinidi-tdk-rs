@@ -112,6 +112,7 @@ fn resolve_key(did: &DID, identifier: &str) -> Result<Document, DIDError> {
 
     Ok(Document {
         id: did.url(),
+        also_known_as: vec![],
         verification_method: vms,
         authentication: vec![vm_relationship.clone()],
         assertion_method: vec![vm_relationship.clone()],
@@ -244,6 +245,7 @@ fn resolve_peer_2(did: &DID, identifier: &str) -> Result<Document, DIDError> {
 
     Ok(Document {
         id: did.url(),
+        also_known_as: vec![],
         verification_method: verification_methods,
         authentication,
         assertion_method,

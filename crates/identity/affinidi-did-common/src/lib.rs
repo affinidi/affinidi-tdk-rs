@@ -5,12 +5,13 @@
 use std::collections::HashMap;
 
 use affinidi_encoding::EncodingError;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use url::Url;
 
 use crate::{
+    one_or_many::OneOrMany,
     service::Service,
     verification_method::{VerificationMethod, VerificationRelationship},
 };
@@ -67,6 +68,22 @@ pub struct Document {
     /// <https://www.w3.org/TR/cid-1.0/#subjects>
     pub id: Url,
 
+    /// Other identifiers the DID subject is also known by
+    /// <https://www.w3.org/TR/did-1.1/#also-known-as>
+    ///
+    /// The DID specification defines this as a *set*, so it always serializes as
+    /// a JSON array. Deserialization additionally accepts a bare string, because
+    /// documents in the wild emit that form.
+    ///
+    /// This is the property an agent-name resolver checks to confirm that a
+    /// human-readable shortcut is actually authorized by the DID it resolved to.
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        default,
+        deserialize_with = "deserialize_also_known_as"
+    )]
+    pub also_known_as: Vec<String>,
+
     /// https://www.w3.org/TR/cid-1.0/#verification-methods
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub verification_method: Vec<VerificationMethod>,
@@ -100,11 +117,20 @@ pub struct Document {
     pub parameters_set: HashMap<String, Value>,
 }
 
+/// Accepts either a JSON array of strings or a single bare string.
+fn deserialize_also_known_as<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(OneOrMany::<String>::deserialize(deserializer)?.into_vec())
+}
+
 impl Default for Document {
     /// Creates a default example DID Document that is blank except for the id field
     fn default() -> Self {
         Self {
             id: Url::parse("did:example:123456789abcdefghi").unwrap(),
+            also_known_as: Vec::new(),
             verification_method: Vec::new(),
             authentication: Vec::new(),
             assertion_method: Vec::new(),
@@ -163,6 +189,78 @@ mod tests {
         let doc = Document::new("did:example:456").unwrap();
         let json = serde_json::to_string(&doc).unwrap();
         let back: Document = serde_json::from_str(&json).unwrap();
+        assert_eq!(doc, back);
+    }
+
+    // --- alsoKnownAs ---
+
+    #[test]
+    fn also_known_as_defaults_to_empty() {
+        let doc = Document::new("did:example:123").unwrap();
+        assert!(doc.also_known_as.is_empty());
+    }
+
+    #[test]
+    fn also_known_as_omitted_when_empty() {
+        let doc = Document::new("did:example:123").unwrap();
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(!json.contains("alsoKnownAs"));
+    }
+
+    #[test]
+    fn also_known_as_absent_from_json() {
+        let doc: Document = serde_json::from_str(r#"{"id":"did:example:123"}"#).unwrap();
+        assert!(doc.also_known_as.is_empty());
+    }
+
+    #[test]
+    fn also_known_as_deserializes_array() {
+        let doc: Document = serde_json::from_str(
+            r#"{"id":"did:example:123","alsoKnownAs":["example.com/@alice","connect.me/@bob"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            doc.also_known_as,
+            vec!["example.com/@alice", "connect.me/@bob"]
+        );
+    }
+
+    /// Documents in the wild emit a bare string; the DID spec says set. Accept both.
+    #[test]
+    fn also_known_as_deserializes_bare_string() {
+        let doc: Document =
+            serde_json::from_str(r#"{"id":"did:example:123","alsoKnownAs":"example.com/@alice"}"#)
+                .unwrap();
+        assert_eq!(doc.also_known_as, vec!["example.com/@alice"]);
+    }
+
+    /// Lenient on read, strict on write: a bare string normalizes to an array.
+    #[test]
+    fn also_known_as_always_serializes_as_array() {
+        let doc: Document =
+            serde_json::from_str(r#"{"id":"did:example:123","alsoKnownAs":"example.com/@alice"}"#)
+                .unwrap();
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains(r#""alsoKnownAs":["example.com/@alice"]"#));
+    }
+
+    /// Regression: alsoKnownAs used to land in the flattened `parameters_set` map.
+    /// It must now be a typed field and must NOT be duplicated into that map.
+    #[test]
+    fn also_known_as_not_captured_by_parameters_set() {
+        let doc: Document = serde_json::from_str(
+            r#"{"id":"did:example:123","alsoKnownAs":["example.com/@alice"]}"#,
+        )
+        .unwrap();
+        assert_eq!(doc.also_known_as, vec!["example.com/@alice"]);
+        assert!(!doc.parameters_set.contains_key("alsoKnownAs"));
+    }
+
+    #[test]
+    fn also_known_as_serde_roundtrip() {
+        let json = r#"{"id":"did:example:123","alsoKnownAs":["example.com/@alice"]}"#;
+        let doc: Document = serde_json::from_str(json).unwrap();
+        let back: Document = serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
         assert_eq!(doc, back);
     }
 }

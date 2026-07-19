@@ -154,6 +154,7 @@ mod tests {
     fn make_doc_with_services(services: Vec<Service>) -> Document {
         Document {
             id: Url::parse("did:test:1234").unwrap(),
+            also_known_as: vec![],
             verification_method: vec![],
             authentication: vec![],
             assertion_method: vec![],

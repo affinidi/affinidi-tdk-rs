@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.60] - 2026-07-19
+
+### Changed
+
+- Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
+  No functional change to this crate: `Document` gained a typed
+  `also_known_as` field, which is additive.
+
 ## [0.18.59] - 2026-07-18
 
 - **Fix: `DidCommTransport` dropped every inbound TSP frame** (regression in

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.8.3"
+version = "0.8.4"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -54,7 +54,7 @@ tsp = ["dep:affinidi-tsp"]
 
 [dependencies]
 affinidi-did-resolver-cache-sdk = "0.8"
-affinidi-did-common = "0.3"
+affinidi-did-common = "0.4"
 affinidi-messaging-sdk = { version = "0.18", optional = true }
 affinidi-messaging-didcomm = { path = "../../messaging/affinidi-messaging-didcomm", version = "0.15" }
 affinidi-did-authentication = "0.3"
