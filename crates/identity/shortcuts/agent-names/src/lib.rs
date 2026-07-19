@@ -66,11 +66,13 @@
  * resolution cache. This crate is the standalone, dependency-light half.
  */
 
+pub mod cache_server;
 pub mod error;
 pub mod name;
 pub mod resolver;
 pub mod verify;
 
+pub use cache_server::CacheServerResolver;
 pub use error::AgentNameError;
 pub use name::{AGENT_NAME_MARKER, AgentName};
 pub use resolver::{

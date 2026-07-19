@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-server"
-version = "0.9.4"
+version = "0.9.5"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
@@ -28,6 +28,7 @@ affinidi-did-common = "0.4"
 affinidi-task-utils = "0.1"
 
 didwebvh-rs = "0.6"
+agent-names = "0.1.2"
 
 # External Crates
 ahash = "0.8"
@@ -54,6 +55,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 affinidi-secrets-resolver = "0.5"
+tower = { version = "0.5", features = ["util"] }
 
 [lints]
 workspace = true

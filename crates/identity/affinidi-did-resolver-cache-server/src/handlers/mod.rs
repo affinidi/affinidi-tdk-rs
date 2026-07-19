@@ -5,6 +5,7 @@ use std::future::Future;
 use std::time::Duration;
 use tracing::{info, warn};
 
+pub(crate) mod agent_name;
 pub(crate) mod http;
 #[cfg(feature = "network")]
 pub(crate) mod websocket;
@@ -156,6 +157,16 @@ pub fn application_routes(shared_data: &SharedData, config: &Config) -> Router {
     if config.enable_http_endpoint {
         info!("Enabling HTTP Resolver endpoint");
         app = app.route("/resolve/{did}", get(http::resolver_handler));
+    }
+
+    if config.enable_agent_names {
+        // A wildcard capture is required: an agent name contains slashes
+        // (`example.com/@alice`), which a single path segment cannot match.
+        info!("Enabling Agent Name resolution endpoint (server will fetch caller-supplied URLs)");
+        app = app.route(
+            "/resolve-name/{*name}",
+            get(agent_name::resolve_name_handler),
+        );
     }
 
     Router::new()

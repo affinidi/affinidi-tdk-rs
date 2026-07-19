@@ -31,6 +31,9 @@ pub struct SharedData {
     /// Shared HTTP client for did:webvh log fetches, built once at startup so
     /// connections are pooled instead of a fresh client per request.
     pub webvh_client: reqwest::Client,
+    /// Present only when `enable_agent_names` is set. `None` means the feature
+    /// is off and the route is not registered.
+    pub agent_name_resolver: Option<Arc<agent_names::HttpRedirectResolver>>,
 }
 
 impl<S> FromRequestParts<S> for SharedData
