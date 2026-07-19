@@ -29,6 +29,14 @@ pub enum DIDCacheError {
     /// String parsing error
     #[error("Parsing error: {0}")]
     ParsingError(String),
+
+    /// An agent name (DID shortcut) failed to parse, resolve, or verify.
+    ///
+    /// Notably includes the mandatory `alsoKnownAs` check: a name that resolves
+    /// to a DID whose document does not claim the name back is rejected here.
+    #[cfg(feature = "agent-names")]
+    #[error("Agent name error: {0}")]
+    AgentNameError(String),
 }
 
 // Converts DIDCacheError to JsValue which is required for propagating errors to WASM

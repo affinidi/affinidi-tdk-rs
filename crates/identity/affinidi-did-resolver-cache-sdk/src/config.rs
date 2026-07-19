@@ -41,6 +41,10 @@ pub struct DIDCacheConfig {
     pub(crate) network_cache_limit_count: u32,
     pub(crate) max_did_parts: usize,
     pub(crate) max_did_size_in_bytes: usize,
+    #[cfg(feature = "agent-names")]
+    pub(crate) agent_name_ttl: u32,
+    #[cfg(feature = "agent-names")]
+    pub(crate) agent_name_cache_capacity: u32,
 }
 
 /// DID Cache Config Builder to construct options required for the client.
@@ -62,6 +66,10 @@ pub struct DIDCacheConfigBuilder {
     network_cache_limit_count: u32,
     max_did_parts: usize,
     max_did_size_in_bytes: usize,
+    #[cfg(feature = "agent-names")]
+    agent_name_ttl: u32,
+    #[cfg(feature = "agent-names")]
+    agent_name_cache_capacity: u32,
 }
 
 impl Default for DIDCacheConfigBuilder {
@@ -77,6 +85,10 @@ impl Default for DIDCacheConfigBuilder {
             network_cache_limit_count: 100,
             max_did_parts: 12,
             max_did_size_in_bytes: 1_000,
+            #[cfg(feature = "agent-names")]
+            agent_name_ttl: 300,
+            #[cfg(feature = "agent-names")]
+            agent_name_cache_capacity: 1_000,
         }
     }
 }
@@ -136,6 +148,29 @@ impl DIDCacheConfigBuilder {
         self
     }
 
+    /// Set the time-to-live in seconds for cached agent name to DID mappings.
+    ///
+    /// Unlike DID documents, this **always** applies: an agent name mapping is a
+    /// web redirect and is therefore always mutable, no matter how immutable the
+    /// DID it points at happens to be.
+    /// Default: 300 (5 minutes)
+    #[cfg(feature = "agent-names")]
+    pub fn with_agent_name_ttl(mut self, ttl: u32) -> Self {
+        self.agent_name_ttl = ttl;
+        self
+    }
+
+    /// Set the capacity of the agent name to DID mapping cache.
+    ///
+    /// Entries are short strings rather than whole documents, so this can be far
+    /// larger than the document cache for the same memory.
+    /// Default: 1000 items
+    #[cfg(feature = "agent-names")]
+    pub fn with_agent_name_cache_capacity(mut self, capacity: u32) -> Self {
+        self.agent_name_cache_capacity = capacity;
+        self
+    }
+
     /// Build the [ClientConfig].
     pub fn build(self) -> DIDCacheConfig {
         DIDCacheConfig {
@@ -149,6 +184,10 @@ impl DIDCacheConfigBuilder {
             network_cache_limit_count: self.network_cache_limit_count,
             max_did_parts: self.max_did_parts,
             max_did_size_in_bytes: self.max_did_size_in_bytes,
+            #[cfg(feature = "agent-names")]
+            agent_name_ttl: self.agent_name_ttl,
+            #[cfg(feature = "agent-names")]
+            agent_name_cache_capacity: self.agent_name_cache_capacity,
         }
     }
 }

@@ -69,8 +69,8 @@ async fn main() -> Result<(), DIDCacheError> {
     // the cache client dispatches to our resolver.
     let response = client.resolve("did:example:alice").await?;
     println!(
-        "resolved {} via a custom resolver -> document id {}",
-        "did:example:alice", response.doc.id
+        "resolved did:example:alice via a custom resolver -> document id {}",
+        response.doc.id
     );
 
     // Custom resolvers can also override a built-in method: registering for

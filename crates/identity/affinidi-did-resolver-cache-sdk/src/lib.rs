@@ -42,6 +42,8 @@ use tracing::warn;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::*;
 
+#[cfg(feature = "agent-names")]
+pub mod agent_names;
 pub mod config;
 pub mod errors;
 #[cfg(feature = "network")]
@@ -218,6 +220,14 @@ pub struct DIDCacheClient {
     #[cfg(feature = "did_example")]
     did_example_cache: did_example::DiDExampleCache,
     resolvers: Arc<HashMap<MethodName, VecDeque<Box<dyn AsyncResolver>>>>,
+    /// Agent name -> DID mappings. Deliberately a *separate* cache from the
+    /// document cache: the mapping is a web redirect and is therefore always
+    /// mutable, so it always carries a TTL, whereas `DIDExpiry` would derive
+    /// "no expiry" from an immutable resolved DID. See `agent_names`.
+    #[cfg(feature = "agent-names")]
+    agent_name_cache: Cache<[u64; 2], String>,
+    #[cfg(feature = "agent-names")]
+    agent_name_resolvers: Arc<Vec<Box<dyn ::agent_names::AgentNameResolver>>>,
     /// Single-flight map: concurrent cache misses for the same DID hash share
     /// one underlying resolution. The leader holds the `watch::Sender`; the
     /// stored `Receiver` is cloned by followers, who wake when the leader drops
@@ -241,6 +251,10 @@ impl Clone for DIDCacheClient {
             #[cfg(feature = "did_example")]
             did_example_cache: self.did_example_cache.clone(),
             resolvers: self.resolvers.clone(),
+            #[cfg(feature = "agent-names")]
+            agent_name_cache: self.agent_name_cache.clone(),
+            #[cfg(feature = "agent-names")]
+            agent_name_resolvers: self.agent_name_resolvers.clone(),
             inflight: self.inflight.clone(),
         }
     }
@@ -672,6 +686,20 @@ impl DIDCacheClient {
 
         let resolvers = Arc::new(resolvers);
 
+        // Agent name (DID shortcut) support. The mapping cache always carries a
+        // TTL: an agent name is a web redirect and can change at any time,
+        // regardless of how immutable the DID it currently points at is.
+        #[cfg(feature = "agent-names")]
+        let agent_name_cache: Cache<[u64; 2], String> = Cache::builder()
+            .max_capacity(config.agent_name_cache_capacity.into())
+            .time_to_live(Duration::from_secs(config.agent_name_ttl.into()))
+            .build();
+        #[cfg(feature = "agent-names")]
+        let agent_name_resolvers: Arc<Vec<Box<dyn ::agent_names::AgentNameResolver>>> =
+            Arc::new(vec![
+                Box::new(::agent_names::HttpRedirectResolver::new()) as Box<_>
+            ]);
+
         #[cfg(feature = "network")]
         let mut client = Self {
             config,
@@ -683,6 +711,10 @@ impl DIDCacheClient {
             #[cfg(feature = "did_example")]
             did_example_cache: did_example::DiDExampleCache::new(),
             resolvers: resolvers.clone(),
+            #[cfg(feature = "agent-names")]
+            agent_name_cache: agent_name_cache.clone(),
+            #[cfg(feature = "agent-names")]
+            agent_name_resolvers: agent_name_resolvers.clone(),
             inflight: Arc::new(StdMutex::new(HashMap::new())),
         };
         #[cfg(not(feature = "network"))]
@@ -692,6 +724,10 @@ impl DIDCacheClient {
             #[cfg(feature = "did_example")]
             did_example_cache: did_example::DiDExampleCache::new(),
             resolvers,
+            #[cfg(feature = "agent-names")]
+            agent_name_cache,
+            #[cfg(feature = "agent-names")]
+            agent_name_resolvers,
             inflight: Arc::new(StdMutex::new(HashMap::new())),
         };
 

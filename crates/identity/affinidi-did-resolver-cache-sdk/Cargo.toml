@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.14"
+version = "0.8.15"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -43,6 +43,8 @@ did_example = ["dep:did-example"]
 did-jwk = ["dep:did-jwk"]
 did-cheqd = ["dep:did-resolver-cheqd"]
 did-webvh = ["dep:didwebvh-rs"]
+# Agent names: human-memorable "/@" shortcuts resolvable via `resolve_any()`.
+agent-names = ["dep:agent-names"]
 did-scid = ["dep:did-scid"]
 did-ebsi = ["dep:did-ebsi"]
 
@@ -65,6 +67,7 @@ did-ebsi = { version = "0.1", path = "../did-methods/did-ebsi", optional = true 
 ahash = "0.8"
 base64 = { version = "0.22", optional = true }
 didwebvh-rs = { version = "0.6", optional = true }
+agent-names = { version = "0.1", optional = true }
 highway = "1"
 moka = { version = "0.12", features = ["future"] }
 rand = "0.10"
