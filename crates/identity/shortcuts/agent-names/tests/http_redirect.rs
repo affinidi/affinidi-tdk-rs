@@ -12,9 +12,12 @@ use wiremock::{
 
 const DID: &str = "did:webvh:QmScid:example.com";
 
-/// The mock server speaks plain HTTP, so the resolver must opt into it.
+/// The mock server speaks plain HTTP on 127.0.0.1, so the resolver must opt out
+/// of both the HTTPS requirement and the private-address block.
 fn resolver() -> HttpRedirectResolver {
-    HttpRedirectResolver::new().allow_insecure_http(true)
+    HttpRedirectResolver::new()
+        .allow_insecure_http(true)
+        .allow_private_addresses(true)
 }
 
 fn name_for(server: &MockServer, local: &str) -> AgentName {
@@ -181,21 +184,49 @@ async fn refuses_plain_http_by_default() {
         .mount(&server)
         .await;
 
-    let err = resolve(&HttpRedirectResolver::new(), &name_for(&server, "alice"))
-        .await
-        .unwrap_err();
+    let err = resolve(
+        &HttpRedirectResolver::new().allow_private_addresses(true),
+        &name_for(&server, "alice"),
+    )
+    .await
+    .unwrap_err();
     assert!(
         matches!(err, AgentNameError::InsecureScheme(_)),
         "got {err:?}"
     );
 }
 
-// NOTE: the mid-chain HTTPS downgrade check (`resolver.rs`, the per-hop scheme
-// test) is NOT covered here. Exercising it needs an entry point over real HTTPS
-// that then redirects to `http://`, and `wiremock` serves plain HTTP only — with
-// a single `allow_insecure_http` flag, a plain-HTTP mock either allows every hop
-// or refuses the first one, so any test written against it would pass for the
-// wrong reason. Covering this properly needs a TLS-capable mock server.
+/// The default resolver refuses a name pointing at a loopback address, which is
+/// what stops an agent name being used to make a *server* fetch its own network.
+#[tokio::test]
+async fn refuses_a_loopback_address_by_default() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/@alice"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", DID))
+        .mount(&server)
+        .await;
+
+    // Allow plain HTTP so the *address* check is what rejects this, not the scheme.
+    let err = resolve(
+        &HttpRedirectResolver::new().allow_insecure_http(true),
+        &name_for(&server, "alice"),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(err, AgentNameError::BlockedAddress { .. }),
+        "got {err:?}"
+    );
+}
+
+// NOTE: the *mid-chain* address check (a public host redirecting inward to a
+// private address) is NOT covered here, for the same reason as the mid-chain
+// HTTPS check below: `wiremock` binds 127.0.0.1, so the entry point is itself a
+// private address. With a single `allow_private_addresses` flag the mock either
+// allows every hop or is blocked at hop 0 — a test written against it passes for
+// the wrong reason. Covering this needs a mock reachable on a public address.
+// The per-hop check itself is exercised by the `is_public` unit tests.
 
 #[tokio::test]
 async fn honours_a_custom_hop_cap_of_one() {

@@ -1,7 +1,13 @@
 //! Backends that turn an agent name into a DID.
 
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{
+    future::Future,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    pin::Pin,
+    time::Duration,
+};
 
+use tokio::net::lookup_host;
 use tracing::debug;
 use url::Url;
 
@@ -68,6 +74,7 @@ pub struct HttpRedirectResolver {
     client: reqwest::Client,
     max_hops: u8,
     allow_insecure_http: bool,
+    allow_private_addresses: bool,
 }
 
 impl HttpRedirectResolver {
@@ -82,6 +89,7 @@ impl HttpRedirectResolver {
             client,
             max_hops: DEFAULT_MAX_HOPS,
             allow_insecure_http: false,
+            allow_private_addresses: false,
         }
     }
 
@@ -95,6 +103,7 @@ impl HttpRedirectResolver {
             client,
             max_hops: DEFAULT_MAX_HOPS,
             allow_insecure_http: false,
+            allow_private_addresses: false,
         }
     }
 
@@ -115,6 +124,81 @@ impl HttpRedirectResolver {
         self
     }
 
+    /// Permit agent names that resolve to private, loopback or link-local
+    /// addresses.
+    ///
+    /// Off by default. Agent names are public-web identifiers, so a name
+    /// pointing at `127.0.0.1`, `10.0.0.0/8` or the cloud metadata address
+    /// `169.254.169.254` is almost always an SSRF attempt rather than a real
+    /// name. That matters most when this resolver runs **server-side** (the DID
+    /// cache server), where the attacker supplies the name and the server makes
+    /// the request from inside your network.
+    ///
+    /// Turn it on only for local development and tests.
+    pub fn allow_private_addresses(mut self, allow: bool) -> Self {
+        self.allow_private_addresses = allow;
+        self
+    }
+
+    /// Reject a URL whose host is, or resolves to, a non-public address.
+    ///
+    /// # Limitation
+    ///
+    /// This checks the addresses a host resolves to *now*; the subsequent
+    /// request performs its own resolution. A hostile DNS server can therefore
+    /// answer differently for the two lookups (**DNS rebinding**) and reach an
+    /// internal address anyway. Closing that hole requires pinning the checked
+    /// IP into the connection itself, which `reqwest` does not expose. Treat
+    /// this as raising the cost of SSRF, not as eliminating it, and do not rely
+    /// on it as the only control on an untrusted network boundary.
+    async fn check_address(&self, url: &Url, name: &AgentName) -> Result<(), AgentNameError> {
+        if self.allow_private_addresses {
+            return Ok(());
+        }
+        let host = url.host_str().ok_or_else(|| AgentNameError::InvalidName {
+            input: url.to_string(),
+            reason: "no host".to_string(),
+        })?;
+        let port = url.port_or_known_default().unwrap_or(443);
+
+        // An IP literal needs no DNS lookup.
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return if is_public(&ip) {
+                Ok(())
+            } else {
+                Err(AgentNameError::BlockedAddress {
+                    name: name.as_str().to_string(),
+                    address: ip.to_string(),
+                })
+            };
+        }
+
+        let addrs = lookup_host((host, port))
+            .await
+            .map_err(|e| AgentNameError::InvalidName {
+                input: host.to_string(),
+                reason: format!("DNS lookup failed: {e}"),
+            })?;
+
+        let mut saw_any = false;
+        for addr in addrs {
+            saw_any = true;
+            if !is_public(&addr.ip()) {
+                return Err(AgentNameError::BlockedAddress {
+                    name: name.as_str().to_string(),
+                    address: addr.ip().to_string(),
+                });
+            }
+        }
+        if !saw_any {
+            return Err(AgentNameError::InvalidName {
+                input: host.to_string(),
+                reason: "host resolved to no addresses".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     async fn resolve_inner(&self, name: &AgentName) -> Result<String, AgentNameError> {
         if !name.is_https() && !self.allow_insecure_http {
             return Err(AgentNameError::InsecureScheme(name.as_str().to_string()));
@@ -123,6 +207,8 @@ impl HttpRedirectResolver {
         let mut url = name.resolution_url()?;
 
         for hop in 0..self.max_hops {
+            // Re-checked on *every* hop: a public host can redirect inward.
+            self.check_address(&url, name).await?;
             debug!(hop, %url, "resolving agent name");
             let response = self.client.get(url.clone()).send().await?;
             let status = response.status();
@@ -216,6 +302,51 @@ fn extract_did(target: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Is this address on the public internet?
+///
+/// Conservative: anything loopback, private, link-local, unspecified,
+/// multicast, broadcast or otherwise special-purpose is treated as non-public.
+/// `Ipv4Addr::is_global` is still unstable, so the ranges are spelled out.
+fn is_public(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_public_v4(v4),
+        IpAddr::V6(v6) => is_public_v6(v6),
+    }
+}
+
+fn is_public_v4(ip: &Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    !(ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        // 100.64.0.0/10 carrier-grade NAT
+        || (a == 100 && (64..128).contains(&b))
+        // 192.0.0.0/24 IETF protocol assignments
+        || (a == 192 && b == 0 && ip.octets()[2] == 0)
+        // 198.18.0.0/15 benchmarking
+        || (a == 198 && (18..20).contains(&b))
+        // 240.0.0.0/4 reserved
+        || a >= 240)
+}
+
+fn is_public_v6(ip: &Ipv6Addr) -> bool {
+    if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
+        return false;
+    }
+    // An IPv4-mapped address must be judged by its IPv4 rules, or
+    // ::ffff:127.0.0.1 would sail through.
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return is_public_v4(&v4);
+    }
+    let seg = ip.segments()[0];
+    // fc00::/7 unique-local, fe80::/10 link-local
+    !((seg & 0xfe00) == 0xfc00 || (seg & 0xffc0) == 0xfe80)
 }
 
 fn is_did(s: &str) -> bool {
@@ -324,6 +455,57 @@ mod tests {
         assert_eq!(percent_decode("plain").unwrap(), "plain");
         assert!(percent_decode("%zz").is_err());
         assert!(percent_decode("truncated%4").is_err());
+    }
+
+    // --- is_public ---
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn blocks_loopback_and_private_v4() {
+        for a in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "0.0.0.0",
+            "169.254.169.254", // cloud metadata — the classic SSRF target
+            "100.64.0.1",      // carrier-grade NAT
+            "198.18.0.1",      // benchmarking
+            "255.255.255.255",
+            "240.0.0.1",
+        ] {
+            assert!(!is_public(&ip(a)), "{a} must be blocked");
+        }
+    }
+
+    #[test]
+    fn allows_public_v4() {
+        for a in ["1.1.1.1", "8.8.8.8", "93.184.216.34", "172.32.0.1"] {
+            assert!(is_public(&ip(a)), "{a} should be allowed");
+        }
+    }
+
+    #[test]
+    fn blocks_loopback_and_local_v6() {
+        for a in ["::1", "::", "fc00::1", "fd00::1", "fe80::1", "ff02::1"] {
+            assert!(!is_public(&ip(a)), "{a} must be blocked");
+        }
+    }
+
+    /// ::ffff:127.0.0.1 must be judged by IPv4 rules, or it bypasses the check.
+    #[test]
+    fn blocks_ipv4_mapped_loopback() {
+        assert!(!is_public(&ip("::ffff:127.0.0.1")));
+        assert!(!is_public(&ip("::ffff:10.0.0.1")));
+        assert!(is_public(&ip("::ffff:8.8.8.8")));
+    }
+
+    #[test]
+    fn allows_public_v6() {
+        assert!(is_public(&ip("2606:4700:4700::1111")));
     }
 
     #[test]

@@ -48,6 +48,14 @@ pub enum AgentNameError {
     #[error("Response for agent name '{name}' exceeded the {limit} byte limit")]
     ResponseTooLarge { name: String, limit: usize },
 
+    /// The name resolved to a non-public address (loopback, private, link-local…).
+    ///
+    /// Almost always an SSRF attempt rather than a real agent name.
+    #[error(
+        "Agent name '{name}' resolves to the non-public address {address}; refusing to fetch it"
+    )]
+    BlockedAddress { name: String, address: String },
+
     /// No registered backend could resolve the name.
     #[error("No agent name resolver could resolve '{0}'")]
     Unresolvable(String),
