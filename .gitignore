@@ -16,6 +16,8 @@ docs/*
 !docs/testing/
 # TSP usage cookbook is tracked.
 !docs/tsp/
+# Release runbooks for publishes that can't just be "merge and let CI run".
+!docs/release/
 
 # mediator-setup wizard generated artifacts (may land in any directory)
 **/conf/secrets.json

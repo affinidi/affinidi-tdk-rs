@@ -171,6 +171,7 @@ mod tests {
     fn document() -> Document {
         Document {
             id: Url::parse("did:test:1234").unwrap(),
+            also_known_as: vec![],
             verification_method: vec![VerificationMethod {
                 id: Url::parse("did:test:1234#vm").unwrap(),
                 type_: "Ed25519VerificationKey2018".to_string(),

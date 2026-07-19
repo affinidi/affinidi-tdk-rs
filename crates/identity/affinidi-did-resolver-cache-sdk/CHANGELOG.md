@@ -2,6 +2,14 @@
 
 ## Changelog history
 
+## 19th July 2026
+
+### 0.8.13 — affinidi-did-common 0.4
+
+- Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
+  No functional change to this crate: `Document` gained a typed
+  `also_known_as` field, which is additive.
+
 ## 17th June 2026
 
 ### 0.8.11 — `did-cheqd` is now opt-in (no forced rustls `ring` backend)

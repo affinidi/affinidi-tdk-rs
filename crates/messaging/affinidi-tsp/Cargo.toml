@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-tsp"
 description = "Trust Spanning Protocol (TSP) implementation for the Affinidi TDK"
-version = "0.1.12"
+version = "0.1.13"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -29,7 +29,7 @@ affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1"
 
 # Optional Affinidi crates (for DID-based VID resolution)
 affinidi-did-resolver-cache-sdk = { path = "../../identity/affinidi-did-resolver-cache-sdk", version = "0.8", optional = true }
-affinidi-did-common = { path = "../../identity/affinidi-did-common", version = "0.3", optional = true }
+affinidi-did-common = { path = "../../identity/affinidi-did-common", version = "0.4", optional = true }
 affinidi-encoding = { path = "../../core/affinidi-encoding", version = "0.1", optional = true }
 
 # Crypto

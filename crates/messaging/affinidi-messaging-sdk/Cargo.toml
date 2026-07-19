@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.18.59"
+version = "0.18.60"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -51,7 +51,7 @@ reqwest = { version = "0.13", features = [
 ## call sites continue to resolve their old paths.
 affinidi-messaging-mediator-common = { path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common", version = "0.15", default-features = false }
 affinidi-did-authentication = "0.3"
-affinidi-did-common = { version = "0.3", features = ["key-agreement"] }
+affinidi-did-common = { version = "0.4", features = ["key-agreement"] }
 affinidi-encoding = "0.1"
 affinidi-secrets-resolver = "0.5"
 ## Shared background-task supervision (delete-handler restart + health)

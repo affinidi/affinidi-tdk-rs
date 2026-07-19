@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.20] - 2026-07-19
+
+### Changed
+
+- Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
+  No functional change to this crate: `Document` gained a typed
+  `also_known_as` field, which is additive.
+
 ## [0.3.19] - 2026-07-16
 
 - Ack (delete) live inbound messages only AFTER the handler has processed them,

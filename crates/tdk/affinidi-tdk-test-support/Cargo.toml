@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk-test-support"
-version = "0.8.0"
+version = "0.8.1"
 description = "Shared in-process test fixtures and harnesses for the Affinidi TDK workspace"
 edition.workspace = true
 authors.workspace = true
@@ -19,7 +19,7 @@ publish = true
 # ── TI2: did:web/webvh mock server + StaticResolver ──────────────────────
 ## `DID`/`Document` types and the resolver traits the StaticResolver implements.
 ## Path + explicit version so the crate stays publishable once the API settles.
-affinidi-did-common = { version = "0.3", path = "../../identity/affinidi-did-common" }
+affinidi-did-common = { version = "0.4", path = "../../identity/affinidi-did-common" }
 affinidi-did-resolver-traits = { version = "0.1", path = "../../identity/affinidi-did-resolver-traits" }
 ## In-process HTTP server backing MockDidWebServer.
 axum = "0.8"

@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
 
+## 0.6.6 — 2026-07-19
+
+### Changed
+
+- Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
+  No functional change to this crate: `Document` gained a typed
+  `also_known_as` field, which is additive.
+
 ## 0.6.5 — 2026-06-16
 
 ### Fixed

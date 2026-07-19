@@ -2,6 +2,14 @@
 
 ## Changelog history
 
+## 19th July 2026
+
+### 0.9.3 — affinidi-did-common 0.4
+
+- Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
+  No functional change to this crate: `Document` gained a typed
+  `also_known_as` field, which is additive.
+
 ## 14th June 2026
 
 ### 0.9.2 — non_exhaustive error enums (W7 sweep)

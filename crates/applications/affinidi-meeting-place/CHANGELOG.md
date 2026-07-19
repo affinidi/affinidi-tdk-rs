@@ -1,5 +1,11 @@
 # Meeting Place Changelog
 
+## 19th July 2026 (0.4.4)
+
+- Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
+  No functional change to this crate: `Document` gained a typed
+  `also_known_as` field, which is additive.
+
 ## 13th June 2026 (0.4.3)
 
 - **Publish fix.** The W9 semver wave (#448) added a wildcard match arm here
