@@ -4,6 +4,49 @@
 
 ## 19th July 2026
 
+### 0.8.15 — agent names (`resolve_any`)
+
+New optional `agent-names` feature. Off by default; nothing changes for existing
+callers when it is not enabled.
+
+- `DIDCacheClient::resolve_any(&str)` accepts **either** a DID or an agent name
+  (`example.com/@alice`) and returns the same `ResolveResponse`. A DID is passed
+  straight through to `resolve()` with identical behaviour, so switching costs
+  existing callers nothing. `resolve()` keeps its strict DID-only contract.
+- `Identifier` enum + `FromStr`, classifying an input on the `/@` marker with no
+  network access.
+- A **second** cache, `agent name -> DID`, in front of the document cache.
+  Keeping the mapping separate is deliberate:
+  - a name and its DID **share one document entry**, so neither form pays twice
+    and the two can never hold divergent copies;
+  - the mapping always carries a TTL. `DIDExpiry` derives expiry from the
+    *resolved document's* `id`, not the cache key, so a name pointing at an
+    immutable method (`did:key`) would otherwise inherit "never expires" and pin
+    a web redirect that can change at any moment. There is a regression test for
+    exactly this.
+- Layer-1 verification is enforced on every resolution: the resolved document
+  must claim the name via `alsoKnownAs`, or the call fails **and the mapping is
+  evicted** so a poisoned entry is not re-failed from cache until its TTL lapses.
+- `set_agent_name_resolvers` / `prepend_` / `append_` / `agent_name_resolver_names`
+  for the backend chain, and `remove_agent_name` to drop a cached mapping.
+  `agent_names::HttpRedirectResolver` is registered by default. As with the DID
+  resolver chain, registration must happen **before the client is cloned**.
+- Config: `with_agent_name_ttl` (default 300s) and
+  `with_agent_name_cache_capacity` (default 1000).
+- `DIDCacheError::AgentNameError`.
+
+`ResolveResponse` is deliberately **unchanged**. The plan had it gain a field
+naming the originating agent name, but the struct is not `#[non_exhaustive]`, so
+adding one is a breaking change — for marginal value, since a caller passing a
+name already knows it, and `did` reports the resolved DID either way.
+
+Not implemented: single-flight de-duplication of concurrent lookups of the *same
+name*. The expensive half (document resolution) is already de-duplicated by the
+existing `inflight` map; concurrent duplicate name lookups cost an extra backend
+call, which is an inefficiency rather than a correctness problem.
+
+## 19th July 2026
+
 ### 0.8.14 — didwebvh-rs 0.6
 
 - Bumped the `didwebvh-rs` requirement from `"0.5"` to `"0.6"`.
