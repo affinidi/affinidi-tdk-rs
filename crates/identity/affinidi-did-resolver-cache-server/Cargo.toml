@@ -27,7 +27,7 @@ affinidi-did-common = "0.4"
 # Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"
 
-didwebvh-rs = "0.5.8"
+didwebvh-rs = "0.5"
 
 # External Crates
 ahash = "0.8"
