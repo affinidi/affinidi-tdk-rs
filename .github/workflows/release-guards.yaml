@@ -10,7 +10,15 @@ name: release-guards
 #      edited-but-unbumped crate left stale source on crates.io that broke the
 #      registry-resolved publish verify build downstream.
 #
-#   3. test-clock      — the mediator-common `test-clock` feature (the
+#   3. workspace-dups  — no workspace member may ALSO be resolved from crates.io.
+#      A member depended on *by version* is only redirected to local source by a
+#      `[patch.crates-io]` entry; miss it and cargo silently builds the published
+#      copy alongside the local one, so local edits do nothing and two copies of
+#      the same types produce errors that point anywhere but at the cause. Bit us
+#      via `did-example` (#629) and `affinidi-messaging-core` (#630, long
+#      misdiagnosed as an unfixable vta-sdk failure).
+#
+#   4. test-clock      — the mediator-common `test-clock` feature (the
 #      advanceable TestClock, TI4b) must never be enabled for the mediator
 #      binary. Keeps the test-only clock out of production builds.
 #
@@ -42,6 +50,9 @@ jobs:
 
       - name: Version-bump guard for changed publishable crates
         run: bash scripts/check-version-bumps.sh "${{ github.event.pull_request.base.sha }}"
+
+      - name: Workspace duplicate guard (patch.crates-io coverage)
+        run: bash scripts/check-workspace-duplicates.sh
 
       - name: Test-clock isolation guard (mediator binary)
         run: bash scripts/check-test-clock-isolation.sh
