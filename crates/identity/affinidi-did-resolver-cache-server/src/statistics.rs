@@ -32,6 +32,8 @@ pub struct Statistics {
     resolver_error: u64,
     cache_hit: u64,
     method: HashMap<DIDMethod, u64>,
+    agent_name_success: u64,
+    agent_name_error: u64,
 }
 
 impl Display for Statistics {
@@ -54,6 +56,7 @@ impl Display for Statistics {
     Connections: ws_open({}) ws_close({}) ws_current({})
     Resolver: total({}) success({}) error({})
     Methods (METHOD: COUNT): {}
+    Agent Names: success({}) error({})
             "#,
             self.cache_size,
             self.cache_hit,
@@ -68,7 +71,9 @@ impl Display for Statistics {
                 .iter()
                 .map(|(k, v)| format!("({k}: {v})"))
                 .collect::<Vec<String>>()
-                .join(", ")
+                .join(", "),
+            self.agent_name_success,
+            self.agent_name_error
         )
     }
 }
@@ -87,7 +92,19 @@ impl Statistics {
                 .iter()
                 .map(|(k, v)| (k.clone(), v - previous.method.get(k).unwrap_or(&(0))))
                 .collect(),
+            agent_name_success: self.agent_name_success - previous.agent_name_success,
+            agent_name_error: self.agent_name_error - previous.agent_name_error,
         }
+    }
+
+    /// Increments the number of successful agent name lookups
+    pub fn increment_agent_name_success(&mut self) {
+        self.agent_name_success += 1;
+    }
+
+    /// Increments the number of failed agent name lookups
+    pub fn increment_agent_name_error(&mut self) {
+        self.agent_name_error += 1;
     }
 
     /// Increments the number of opened websocket connections

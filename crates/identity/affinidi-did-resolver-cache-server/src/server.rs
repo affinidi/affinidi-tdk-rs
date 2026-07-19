@@ -101,6 +101,16 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
             DIDCacheError::ConfigError(format!("Failed to build WebVH HTTP client: {e}"))
         })?;
 
+    // Agent name resolution is off unless explicitly enabled: it makes this
+    // server issue HTTP requests to caller-supplied hosts. The resolver keeps
+    // its default hardening (HTTPS only, non-public addresses refused on every
+    // redirect hop).
+    let agent_name_resolver = if config.enable_agent_names {
+        Some(Arc::new(agent_names::HttpRedirectResolver::new()))
+    } else {
+        None
+    };
+
     // Create the shared application State
     let shared_state = SharedData {
         service_start_timestamp: chrono::Utc::now(),
@@ -109,6 +119,7 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
         resolve_timeout: config.resolve_timeout,
         max_did_size: config.max_did_size,
         webvh_client,
+        agent_name_resolver,
     };
 
     // Supervise the statistics task through the shared TaskSupervisor: a

@@ -36,6 +36,10 @@ struct ConfigRaw {
     pub listen_address: String,
     pub enable_http_endpoint: String,
     pub enable_websocket_endpoint: String,
+    /// Agent name (DID shortcut) lookup endpoint. Defaults to **off**: it makes
+    /// the server fetch caller-supplied URLs. See handlers/agent_names.rs.
+    #[serde(default = "default_enable_agent_names")]
+    pub enable_agent_names: String,
     pub statistics_interval: String,
     #[serde(default = "default_resolve_timeout")]
     pub resolve_timeout: String,
@@ -56,11 +60,19 @@ fn default_max_did_size() -> String {
     "1024".into()
 }
 
+/// Agent name lookup defaults to **off**. Enabling it lets callers make this
+/// server issue HTTP requests to hosts of their choosing; see
+/// `handlers/agent_names.rs` for the SSRF considerations.
+fn default_enable_agent_names() -> String {
+    "false".into()
+}
+
 pub struct Config {
     pub log_level: LevelFilter,
     pub listen_address: String,
     pub enable_http_endpoint: bool,
     pub enable_websocket_endpoint: bool,
+    pub enable_agent_names: bool,
     pub statistics_interval: Duration,
     /// Maximum time a single upstream DID resolution may take before the
     /// request path gives up and returns an error instead of blocking.
@@ -78,6 +90,7 @@ impl fmt::Debug for Config {
             .field("log_level", &self.log_level)
             .field("listen_address", &self.listen_address)
             .field("enable_http_endpoint", &self.enable_http_endpoint)
+            .field("enable_agent_names", &self.enable_agent_names)
             .field("enable_websocket_endpoint", &self.enable_websocket_endpoint)
             .field(
                 "statistics_interval",
@@ -101,6 +114,7 @@ impl Default for Config {
             listen_address: "".into(),
             enable_http_endpoint: true,
             enable_websocket_endpoint: true,
+            enable_agent_names: false,
             statistics_interval: Duration::from_secs(60),
             resolve_timeout: Duration::from_secs(30),
             max_did_size: 1024,
@@ -129,6 +143,9 @@ impl TryFrom<ConfigRaw> for Config {
             listen_address: raw.listen_address,
             enable_http_endpoint: raw.enable_http_endpoint.parse().unwrap_or(true),
             enable_websocket_endpoint: raw.enable_websocket_endpoint.parse().unwrap_or(true),
+            // Defaults to false on a parse failure too: an unreadable value must
+            // not silently turn on a network-facing fetch.
+            enable_agent_names: raw.enable_agent_names.parse().unwrap_or(false),
             statistics_interval: Duration::from_secs(raw.statistics_interval.parse().unwrap_or(60)),
             resolve_timeout: Duration::from_secs(raw.resolve_timeout.parse().unwrap_or(30)),
             max_did_size: raw.max_did_size.parse().unwrap_or(1024),

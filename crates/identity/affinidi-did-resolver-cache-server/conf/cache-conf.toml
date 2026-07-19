@@ -32,6 +32,15 @@ enable_http_endpoint = "${ENABLE_HTTP_ENDPOINT:true}"
 ### Default: true
 ### If true, the server will make available /resolve endpoint for websocket requests
 ### that will resolve a DID Document from the cache.
+# Agent name (DID shortcut) lookup: GET /did/v1/resolve-name/{*name}
+#
+# OFF BY DEFAULT. Enabling it lets callers make this server issue HTTP requests
+# to hosts of their choosing. The resolver refuses non-public addresses
+# (loopback, private, link-local, cloud metadata) on every redirect hop, but
+# that is not complete SSRF protection: DNS rebinding remains possible, and this
+# server has no rate limiting. Enable only if you accept that.
+enable_agent_names = "${ENABLE_AGENT_NAMES:false}"
+
 enable_websocket_endpoint = "${ENABLE_WEBSOCKET_ENDPOINT:true}"
 
 [cache]

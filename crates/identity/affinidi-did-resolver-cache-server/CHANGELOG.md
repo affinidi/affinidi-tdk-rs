@@ -4,6 +4,54 @@
 
 ## 19th July 2026
 
+### 0.9.5 — agent name lookup endpoint
+
+Adds `GET /did/v1/resolve-name/{*name}`, mapping an agent name
+(`example.com/@alice`) to a DID.
+
+**Off by default.** Set `enable_agent_names = "true"` to enable it.
+
+#### Scope: it returns a DID, not a document
+
+Following the redirect is the network-facing, cacheable half of agent name
+resolution and is worth centralising; turning the resulting DID into a document
+is already served by `/resolve/{did}`.
+
+More importantly it keeps the trust model honest. The mandatory Layer-1 check —
+that the resolved document's `alsoKnownAs` claims the name — must be performed
+by the **client**, against a document the client resolved itself. A server
+answering "here is the name, the DID, and the document, and I promise they
+agree" would be asking to be trusted as an authority. It is a cache, never a
+trust anchor, matching how clients re-verify `did:webvh` logs rather than
+believing the server.
+
+#### Why it is off by default
+
+The name is entirely caller-supplied, so this endpoint makes the server issue an
+HTTP request to a host of the caller's choosing. Mitigations:
+
+- the flag itself, defaulting to off (and to off on a parse failure, so an
+  unreadable config value cannot silently enable a network-facing fetch);
+- the resolver refuses non-public addresses — loopback, private, link-local,
+  cloud metadata — on **every** redirect hop.
+
+Neither is complete: the address check and the request resolve DNS separately,
+so DNS rebinding remains possible. Note also that this server still has **no
+rate limiting**, so an enabled endpoint is an unmetered outbound fetch primitive.
+Enable it only if you accept that.
+
+#### Also
+
+- Statistics gain `agent_name_success` / `agent_name_error`, reported in the
+  periodic log line.
+- Response shape: `200 {"name": "<canonical>", "did": "<did>"}`. The canonical
+  name is echoed so callers can see what normalisation did. Errors are `400`
+  (malformed / oversize), `404` (no backend resolved it), `502` (upstream
+  failure, including a blocked address) and `504` (timeout).
+- The route uses a wildcard capture because an agent name contains slashes,
+  which a single path segment cannot match. `/resolve/{did}` is untouched.
+## 19th July 2026
+
 ### 0.9.4 — didwebvh-rs 0.6
 
 - Bumped the `didwebvh-rs` requirement from `"0.5"` to `"0.6"`.

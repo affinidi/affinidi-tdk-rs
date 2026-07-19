@@ -4,6 +4,31 @@ All notable changes to `agent-names` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-07-19
+
+### Added
+
+- `CacheServerResolver` — an `AgentNameResolver` backend that asks an
+  `affinidi-did-resolver-cache-server` to map a name to a DID, instead of
+  following the redirect locally. Centralising the fetch means it happens once
+  for many clients, and the SSRF exposure of fetching caller-supplied URLs sits
+  on one hardened host rather than on every client.
+
+  It returns **only a DID**. The mandatory Layer-1 `alsoKnownAs` check is still
+  performed by the client against a document the client resolved itself — the
+  server is a cache, never a trust anchor. This mirrors how the SDK re-verifies
+  `did:webvh` logs locally rather than believing the server's document.
+
+- `AgentNameError::CacheServer { name, status, message }`.
+
+### Fixed
+
+- The cache-server backend now reads the response body as text and parses it
+  deliberately, rather than deserializing before checking the status. A server
+  without the endpoint (an older build, or `enable_agent_names = false`) answers
+  404, and an intermediary may answer with HTML; parsing first turned all of
+  those into an opaque deserialization error instead of surfacing the status.
+
 ## [0.1.1] - 2026-07-19
 
 ### Security

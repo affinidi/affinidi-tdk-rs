@@ -56,6 +56,14 @@ pub enum AgentNameError {
     )]
     BlockedAddress { name: String, address: String },
 
+    /// A cache server rejected or could not answer the lookup.
+    #[error("Cache server returned HTTP {status} resolving '{name}': {message}")]
+    CacheServer {
+        name: String,
+        status: u16,
+        message: String,
+    },
+
     /// No registered backend could resolve the name.
     #[error("No agent name resolver could resolve '{0}'")]
     Unresolvable(String),
