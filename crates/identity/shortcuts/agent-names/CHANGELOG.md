@@ -4,6 +4,41 @@ All notable changes to `agent-names` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-07-19
+
+### Security
+
+- `HttpRedirectResolver` now refuses names that resolve to **non-public
+  addresses** — loopback, RFC1918 private, link-local (including the cloud
+  metadata address `169.254.169.254`), carrier-grade NAT, benchmarking,
+  documentation and reserved ranges, plus their IPv6 equivalents and
+  IPv4-mapped forms such as `::ffff:127.0.0.1`. Controlled by
+  `allow_private_addresses(bool)`, **off by default**; the check runs on
+  **every** redirect hop, since a public host can redirect inward.
+
+  This matters most when the resolver runs **server-side**: an agent name is
+  attacker-supplied, so without this a caller could make the DID cache server
+  issue requests from inside your network. It is a prerequisite for exposing
+  agent name resolution on the cache server.
+
+  **Limitation, stated plainly:** the check resolves the host and inspects the
+  addresses it gets *now*; the subsequent request resolves again. A hostile DNS
+  server can answer differently for the two lookups (**DNS rebinding**) and
+  reach an internal address anyway. Closing that requires pinning the checked IP
+  into the connection, which `reqwest` does not expose. This raises the cost of
+  SSRF; it does not eliminate it. Do not rely on it as the only control at an
+  untrusted network boundary.
+
+- New `AgentNameError::BlockedAddress { name, address }`.
+
+### Known gaps
+
+- The *mid-chain* address check (a public host redirecting inward) is not
+  integration-tested, for the same reason as the mid-chain HTTPS check:
+  `wiremock` binds `127.0.0.1`, so the entry point is itself private and the
+  test would pass for the wrong reason. The per-hop logic is covered by
+  `is_public` unit tests.
+
 ## [0.1.0] - 2026-07-19
 
 Initial release. Agent names — human-memorable shortcuts of the form

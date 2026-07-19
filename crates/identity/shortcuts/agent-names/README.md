@@ -108,6 +108,15 @@ down later should not disturb them.
   mirrors `affinidi-did-web`'s SSRF hardening.
 - Plain HTTP is refused unless `allow_insecure_http(true)` is set. That switch is
   for local development and tests only.
+- Names resolving to **non-public addresses** (loopback, private, link-local
+  including `169.254.169.254`, and their IPv6/IPv4-mapped forms) are refused
+  unless `allow_private_addresses(true)`. Checked on every hop, since a public
+  host can redirect inward. This matters most server-side, where the name is
+  attacker-supplied and the request originates inside your network.
+
+  It is **not** complete SSRF protection: the check and the request resolve DNS
+  separately, so DNS rebinding can still reach an internal address. It raises
+  the cost; it does not close the hole.
 
 ## DID → name
 

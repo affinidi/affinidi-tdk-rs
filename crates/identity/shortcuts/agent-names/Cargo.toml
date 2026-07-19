@@ -1,6 +1,6 @@
 [package]
 name = "agent-names"
-version = "0.1.0"
+version = "0.1.1"
 description = "Agent Name (DID shortcut) parsing, resolution and verification for the Affinidi TDK"
 repository.workspace = true
 edition.workspace = true
@@ -23,6 +23,7 @@ reqwest = { version = "0.13", default-features = false, features = [
   "http2",
 ] }
 thiserror = "2"
+tokio = { version = "1", features = ["net"] }
 tracing = "0.1"
 url = "2"
 
