@@ -4,6 +4,24 @@
 
 ## 19th July 2026
 
+### 0.17.4 — didwebvh-rs 0.6
+
+- Bumped the `didwebvh-rs` requirement from `"0.5"` to `"0.6"`.
+
+  0.6.0 requires `affinidi-did-common "0.4"`. Until now `didwebvh-rs 0.5.7`
+  still required `"0.3"`, so the workspace carried **two** copies of
+  `affinidi-did-common` (0.3.9 and 0.4.0); it compiled only because no types
+  cross the `didwebvh-rs` boundary — `WebvhResolver` builds its own `Document`
+  via `serde_json::from_value`. This collapses the graph back to a single
+  `affinidi-did-common 0.4.0`.
+
+  0.6.0 is a breaking release (`DIDWebVHError`, `URLType` and
+  `LogEntryValidationStatus` became `#[non_exhaustive]`), but no code change was
+  needed here: the only use is a `#[from] DIDWebVHError` conversion in
+  `did-scid`'s error type, not an exhaustive `match`.
+
+## 19th July 2026
+
 ### 0.17.3 — affinidi-did-common 0.4
 
 - Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
