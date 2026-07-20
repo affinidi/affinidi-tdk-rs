@@ -45,6 +45,8 @@ pub struct DIDCacheConfig {
     pub(crate) agent_name_ttl: u32,
     #[cfg(feature = "agent-names")]
     pub(crate) agent_name_cache_capacity: u32,
+    #[cfg(all(feature = "agent-names", feature = "network"))]
+    pub(crate) agent_names_over_websocket: bool,
 }
 
 /// DID Cache Config Builder to construct options required for the client.
@@ -70,6 +72,8 @@ pub struct DIDCacheConfigBuilder {
     agent_name_ttl: u32,
     #[cfg(feature = "agent-names")]
     agent_name_cache_capacity: u32,
+    #[cfg(all(feature = "agent-names", feature = "network"))]
+    agent_names_over_websocket: bool,
 }
 
 impl Default for DIDCacheConfigBuilder {
@@ -89,6 +93,8 @@ impl Default for DIDCacheConfigBuilder {
             agent_name_ttl: 300,
             #[cfg(feature = "agent-names")]
             agent_name_cache_capacity: 1_000,
+            #[cfg(all(feature = "agent-names", feature = "network"))]
+            agent_names_over_websocket: false,
         }
     }
 }
@@ -171,6 +177,25 @@ impl DIDCacheConfigBuilder {
         self
     }
 
+    /// Resolve agent names over the WebSocket connection instead of through the
+    /// registered backends.
+    ///
+    /// Saves a round trip and a transport: the cache server does name → DID →
+    /// document in one exchange, rather than the client making an HTTP call for
+    /// name → DID and then a WebSocket call for DID → document.
+    ///
+    /// **Requires `affinidi-did-resolver-cache-server` 0.9.9 or newer.** Off by
+    /// default, and deliberately not auto-detected: an older server answers a
+    /// name request with a generic "failed to parse DID" error, and telling that
+    /// apart from a real failure would mean matching on error strings. The
+    /// failure is at least clean — a reported error, not a hang — so enabling
+    /// this against an old server is safe, just useless.
+    #[cfg(all(feature = "agent-names", feature = "network"))]
+    pub fn with_agent_names_over_websocket(mut self, enabled: bool) -> Self {
+        self.agent_names_over_websocket = enabled;
+        self
+    }
+
     /// Build the [ClientConfig].
     pub fn build(self) -> DIDCacheConfig {
         DIDCacheConfig {
@@ -188,6 +213,8 @@ impl DIDCacheConfigBuilder {
             agent_name_ttl: self.agent_name_ttl,
             #[cfg(feature = "agent-names")]
             agent_name_cache_capacity: self.agent_name_cache_capacity,
+            #[cfg(all(feature = "agent-names", feature = "network"))]
+            agent_names_over_websocket: self.agent_names_over_websocket,
         }
     }
 }

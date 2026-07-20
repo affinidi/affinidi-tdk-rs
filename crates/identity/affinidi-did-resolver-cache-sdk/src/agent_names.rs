@@ -108,6 +108,33 @@ impl DIDCacheClient {
     ) -> Result<ResolveResponse, DIDCacheError> {
         let name_hash = Self::hash_did(name.as_str());
 
+        // One-round-trip path: the cache server resolves name -> DID -> document
+        // in a single exchange, so there is no separate DID resolution to do.
+        // Verification still happens here, against a document this client
+        // received directly — the server is a cache, never a trust anchor.
+        #[cfg(all(feature = "agent-names", feature = "network"))]
+        if self.config.agent_names_over_websocket && self.network_task_tx.is_some() {
+            let (did, doc) = self.network_resolve_agent_name(name.as_str()).await?;
+
+            if let Err(e) = verify_also_known_as(&doc, name) {
+                warn!("agent name verification failed: {e}");
+                return Err(DIDCacheError::from(e));
+            }
+
+            let did_hash = Self::hash_did(&did);
+            // Populate the shared document cache so a later lookup by DID hits.
+            self.cache.insert(did_hash, doc.clone()).await;
+            self.agent_name_cache.insert(name_hash, did.clone()).await;
+
+            let method: crate::DIDMethod = did
+                .split(':')
+                .nth(1)
+                .and_then(|m| crate::DIDMethod::try_from(m).ok())
+                .unwrap_or(crate::DIDMethod::OTHER);
+
+            return Ok(ResolveResponse::new(did, method, did_hash, doc, false));
+        }
+
         let did = match self.agent_name_cache.get(&name_hash).await {
             Some(did) => {
                 debug!("agent name cache hit: {name}");

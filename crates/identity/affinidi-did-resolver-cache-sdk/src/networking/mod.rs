@@ -33,14 +33,43 @@ mod request_queue;
 #[derive(Debug, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct WSRequest {
-    /// The DID to resolve.
+    /// The identifier to resolve.
+    ///
+    /// For an agent name request this carries the **name**, not a DID. That is
+    /// deliberate: `did` is the only field an older server requires, so a name
+    /// request still deserializes there. It then fails to parse as a DID and
+    /// comes back as a clean [`WSResponseError`] whose `hash` still matches what
+    /// the client registered — an error the caller can see, rather than a frame
+    /// the client cannot correlate and a wait to `network_timeout`.
     pub did: String,
+
+    /// Set when `did` carries an agent name rather than a DID.
+    ///
+    /// Additive and optional, so an older server ignores it (see above) and an
+    /// older client never sends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
 }
 
 impl WSRequest {
     /// Request resolution of `did`.
     pub fn new(did: impl Into<String>) -> Self {
-        Self { did: did.into() }
+        Self {
+            did: did.into(),
+            agent_name: None,
+        }
+    }
+
+    /// Request resolution of an agent name.
+    ///
+    /// `name` must be the **canonical** form, since the server echoes its hash
+    /// back for correlation and the client matches on the hash of what it sent.
+    pub fn for_agent_name(name: impl Into<String>) -> Self {
+        let name = name.into();
+        Self {
+            did: name.clone(),
+            agent_name: Some(name),
+        }
     }
 }
 
@@ -62,6 +91,11 @@ pub struct WSResponse {
     pub did_log: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub did_witness_log: Option<String>,
+    /// Echoed when the request carried an agent name, so the client can confirm
+    /// which name this document was resolved for before verifying `alsoKnownAs`
+    /// against it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
 }
 
 impl WSResponse {
@@ -78,7 +112,14 @@ impl WSResponse {
             document,
             did_log: None,
             did_witness_log: None,
+            agent_name: None,
         }
+    }
+
+    /// Record the agent name this document was resolved for.
+    pub fn with_agent_name(mut self, agent_name: Option<String>) -> Self {
+        self.agent_name = agent_name;
+        self
     }
 
     /// Attach the raw `did:webvh` logs, letting the client verify the document
@@ -140,6 +181,104 @@ pub enum WSResponseType {
 }
 
 impl DIDCacheClient {
+    /// Resolve an agent name via the cache server, in **one** round trip.
+    ///
+    /// Returns `(resolved DID, document)`. Without this, a name lookup in
+    /// network mode costs two round trips over two transports: HTTP to the
+    /// server for name → DID, then WebSocket for DID → document.
+    ///
+    /// # Talking to an older server
+    ///
+    /// The name travels in `WSRequest::did` with `agent_name` alongside it. A
+    /// server that predates this ignores the unknown field, tries to parse the
+    /// name as a DID, fails, and answers with a `WSResponseError` carrying the
+    /// hash of what we sent — which is what we registered against, so it
+    /// surfaces as a clean transport error rather than a frame we cannot
+    /// correlate and a wait to `network_timeout`.
+    ///
+    /// It is still gated behind `agent_names_over_websocket` rather than
+    /// attempted optimistically, because distinguishing "old server" from "real
+    /// failure" would mean matching on error strings.
+    #[cfg(feature = "agent-names")]
+    pub(crate) async fn network_resolve_agent_name(
+        &self,
+        canonical_name: &str,
+    ) -> Result<(String, Document), DIDCacheError> {
+        let _span = span!(Level::DEBUG, "network_resolve_agent_name");
+        async move {
+            let name_hash = DIDCacheClient::hash_did(canonical_name);
+            debug!("resolving agent name ({canonical_name}) via network");
+
+            let network_task_tx = self.network_task_tx.clone().unwrap();
+            let (tx, rx) = oneshot::channel::<WSCommands>();
+            let unique_id: String = rand::rng()
+                .sample_iter(&Alphanumeric)
+                .take(8)
+                .map(char::from)
+                .collect();
+
+            network_task_tx
+                .send(WSCommands::Send(
+                    tx,
+                    unique_id.clone(),
+                    WSRequest::for_agent_name(canonical_name),
+                ))
+                .await
+                .map_err(|e| {
+                    DIDCacheError::TransportError(format!(
+                        "Couldn't send request to network_task. Reason: {e}",
+                    ))
+                })?;
+
+            let sleep = tokio::time::sleep(self.config.network_timeout);
+            tokio::pin!(sleep);
+
+            select! {
+                _ = &mut sleep => {
+                    warn!("Timeout resolving agent name ({canonical_name})");
+                    network_task_tx
+                        .send(WSCommands::TimeOut(unique_id, name_hash))
+                        .await
+                        .map_err(|err| {
+                            DIDCacheError::TransportError(format!(
+                                "Could not send timeout message to ws_handler: {err:?}"
+                            ))
+                        })?;
+                    Err(DIDCacheError::NetworkTimeout)
+                }
+                value = rx => {
+                    match value {
+                        Ok(WSCommands::ResponseReceived(response)) => {
+                            let response = *response;
+                            // The server reports the DID it resolved the name to;
+                            // `response.did` is that DID, not the name we sent.
+                            let did = response.did.clone();
+                            let document = Self::verify_network_response(
+                                &did,
+                                response.document,
+                                response.did_log,
+                                response.did_witness_log,
+                            )
+                            .await?;
+                            Ok((did, document))
+                        }
+                        Ok(WSCommands::ErrorReceived(msg)) => {
+                            Err(DIDCacheError::TransportError(msg))
+                        }
+                        Ok(_) => Err(DIDCacheError::TransportError(
+                            "Unexpected response from network task".into(),
+                        )),
+                        Err(e) => Err(DIDCacheError::TransportError(format!(
+                            "Error receiving response from network task: {e:?}"
+                        ))),
+                    }
+                }
+            }
+        }
+        .instrument(_span)
+        .await
+    }
+
     /// Resolve a DID via the network
     /// Returns the resolved DID Document, or an error
     ///
@@ -198,9 +337,16 @@ impl DIDCacheClient {
                     }
                     value = rx => {
                         match value {
-                            Ok(WSCommands::ResponseReceived(doc, did_log, did_witness_log)) => {
+                            Ok(WSCommands::ResponseReceived(response)) => {
                                 debug!("Received response from network task ({:#?})", did_hash);
-                                Self::verify_network_response(did, *doc, did_log, did_witness_log).await
+                                let response = *response;
+                                Self::verify_network_response(
+                                    did,
+                                    response.document,
+                                    response.did_log,
+                                    response.did_witness_log,
+                                )
+                                .await
                             }
                             Ok(WSCommands::ErrorReceived(msg)) => {
                                 warn!("Received error response from network task");
@@ -379,5 +525,68 @@ mod wire_tests {
         assert_eq!(back.did, "did:example:123");
         assert_eq!(back.hash, [7, 8]);
         assert_eq!(back.error, "boom");
+    }
+}
+
+#[cfg(test)]
+mod agent_name_wire_tests {
+    use super::*;
+
+    /// The name travels in `did` as well as `agent_name`. That is what makes an
+    /// older server — which only knows `did` — answer with a correlatable error
+    /// rather than leaving the caller to time out.
+    #[test]
+    fn agent_name_request_also_populates_did() {
+        let req = WSRequest::for_agent_name("https://example.com/@alice");
+        assert_eq!(req.did, "https://example.com/@alice");
+        assert_eq!(
+            req.agent_name.as_deref(),
+            Some("https://example.com/@alice")
+        );
+    }
+
+    #[test]
+    fn plain_did_request_sends_no_agent_name() {
+        let json = serde_json::to_string(&WSRequest::new("did:example:123")).unwrap();
+        assert_eq!(json, r#"{"did":"did:example:123"}"#);
+    }
+
+    #[test]
+    fn agent_name_request_serializes_both_fields() {
+        let json = serde_json::to_string(&WSRequest::for_agent_name("example.com/@alice")).unwrap();
+        assert!(json.contains(r#""did":"example.com/@alice""#), "got {json}");
+        assert!(
+            json.contains(r#""agent_name":"example.com/@alice""#),
+            "got {json}"
+        );
+    }
+
+    /// An older *client* sends no `agent_name`; a newer server must still parse.
+    #[test]
+    fn request_without_agent_name_parses() {
+        let req: WSRequest = serde_json::from_str(r#"{"did":"did:example:123"}"#).unwrap();
+        assert!(req.agent_name.is_none());
+    }
+
+    /// An older *server* echoes no `agent_name`; a newer client must still parse.
+    #[test]
+    fn response_without_agent_name_parses() {
+        let json = r#"{"did":"did:example:123","hash":[1,2],"document":{"id":"did:example:123"}}"#;
+        let response: WSResponse = serde_json::from_str(json).unwrap();
+        assert!(response.agent_name.is_none());
+    }
+
+    #[test]
+    fn response_round_trips_the_agent_name() {
+        let doc = Document::new("did:example:123").unwrap();
+        let original = WSResponse::new("did:example:123", [1, 2], doc)
+            .with_agent_name(Some("https://example.com/@alice".into()));
+        let back: WSResponse =
+            serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
+        assert_eq!(
+            back.agent_name.as_deref(),
+            Some("https://example.com/@alice")
+        );
+        assert_eq!(back.did, "did:example:123", "did carries the RESOLVED did");
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-server"
-version = "0.9.8"
+version = "0.9.9"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
@@ -22,9 +22,8 @@ network = ["affinidi-did-resolver-cache-sdk/network"]
 
 [dependencies]
 # Affinidi Crates
-# Requires 0.8.18 for the sealed WebSocket wire types' constructors
-# (WSResponse::new / with_logs, WSResponseError::new).
-affinidi-did-resolver-cache-sdk = { version = "0.8.18", default-features = true, path = "../affinidi-did-resolver-cache-sdk/" }
+# Requires 0.8.19 for WSRequest::agent_name / WSResponse::with_agent_name.
+affinidi-did-resolver-cache-sdk = { version = "0.8.19", default-features = true, path = "../affinidi-did-resolver-cache-sdk/" }
 affinidi-did-common = "0.4"
 # Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"

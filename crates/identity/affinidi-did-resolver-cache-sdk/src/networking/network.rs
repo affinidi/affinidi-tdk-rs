@@ -8,12 +8,11 @@
 
 use affinidi_task_utils::CancellationToken;
 
-use super::{WSResponseType, request_queue::RequestList};
+use super::{WSResponse, WSResponseType, request_queue::RequestList};
 use crate::{
     DIDCacheClient, WSRequest, config::DIDCacheConfig, errors::DIDCacheError,
     networking::utils::connect,
 };
-use affinidi_did_common::Document;
 use std::{pin::Pin, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncWrite, BufReader},
@@ -34,7 +33,10 @@ use web_socket::{CloseCode, DataType, Event, MessageType, WebSocket};
 /// Connected: Signals that the websocket is connected
 /// Exit: Exits the websocket handler
 /// Send: Sends the response string to the websocket (Channel, ID, WSRequest)
-/// ResponseReceived: Response received from the websocket (Document, optional DID log, optional witness log)
+/// ResponseReceived: the full response frame from the websocket. Carrying the
+///   whole `WSResponse` rather than picked-apart fields means the agent name
+///   path can read the *resolved* DID and the echoed name, and future fields
+///   need no further change here.
 /// ErrorReceived: Error received from the remote server
 /// NotFound: Response not found in the cache
 /// TimeOut: SDK request timed out, contains ID and did_hash we were looking for
@@ -42,7 +44,7 @@ use web_socket::{CloseCode, DataType, Event, MessageType, WebSocket};
 pub(crate) enum WSCommands {
     Connected,
     Send(Responder, String, WSRequest),
-    ResponseReceived(Box<Document>, Option<String>, Option<String>),
+    ResponseReceived(Box<WSResponse>),
     ErrorReceived(String),
     TimeOut(String, [u64; 2]),
 }
@@ -320,11 +322,15 @@ impl NetworkTask {
                 if let Some(channels) = self.cache.remove(&response.hash, None) {
                     // Loop through and notify each registered channel
                     for channel in channels {
-                        let _ = channel.send(WSCommands::ResponseReceived(
-                            Box::new(response.document.clone()),
-                            response.did_log.clone(),
-                            response.did_witness_log.clone(),
-                        ));
+                        let _ = channel.send(WSCommands::ResponseReceived(Box::new(
+                            WSResponse::new(
+                                response.did.clone(),
+                                response.hash,
+                                response.document.clone(),
+                            )
+                            .with_logs(response.did_log.clone(), response.did_witness_log.clone())
+                            .with_agent_name(response.agent_name.clone()),
+                        )));
                     }
                 } else {
                     warn!("Response not found in request list: {:#?}", response.hash);
