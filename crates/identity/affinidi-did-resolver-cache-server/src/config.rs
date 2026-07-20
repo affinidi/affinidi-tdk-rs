@@ -44,6 +44,10 @@ struct ConfigRaw {
     /// `default_agent_name_concurrency`.
     #[serde(default = "default_agent_name_concurrency")]
     pub agent_name_concurrency: String,
+    #[serde(default = "default_rate_limit_per_ip")]
+    pub rate_limit_per_ip: String,
+    #[serde(default = "default_rate_limit_burst")]
+    pub rate_limit_burst: String,
     pub statistics_interval: String,
     #[serde(default = "default_resolve_timeout")]
     pub resolve_timeout: String,
@@ -90,6 +94,24 @@ fn default_agent_name_concurrency() -> String {
     "16".into()
 }
 
+/// Sustained requests per second per client IP; `0` disables limiting.
+///
+/// Matches the mediator's default. Generous for a resolver cache, whose whole
+/// purpose is that most lookups are served from memory.
+///
+/// **Raise or disable this behind a load balancer or NAT**, where many clients
+/// share one source address: `ConnectInfo` reports the *peer* address, so every
+/// client behind a proxy is charged to one bucket and legitimate traffic gets
+/// throttled.
+fn default_rate_limit_per_ip() -> String {
+    "100".into()
+}
+
+/// Token-bucket depth above the sustained per-IP rate.
+fn default_rate_limit_burst() -> String {
+    "50".into()
+}
+
 pub struct Config {
     pub log_level: LevelFilter,
     pub listen_address: String,
@@ -97,6 +119,8 @@ pub struct Config {
     pub enable_websocket_endpoint: bool,
     pub enable_agent_names: bool,
     pub agent_name_concurrency: usize,
+    pub rate_limit_per_ip: u32,
+    pub rate_limit_burst: u32,
     pub statistics_interval: Duration,
     /// Maximum time a single upstream DID resolution may take before the
     /// request path gives up and returns an error instead of blocking.
@@ -116,6 +140,8 @@ impl fmt::Debug for Config {
             .field("enable_http_endpoint", &self.enable_http_endpoint)
             .field("enable_agent_names", &self.enable_agent_names)
             .field("agent_name_concurrency", &self.agent_name_concurrency)
+            .field("rate_limit_per_ip", &self.rate_limit_per_ip)
+            .field("rate_limit_burst", &self.rate_limit_burst)
             .field("enable_websocket_endpoint", &self.enable_websocket_endpoint)
             .field(
                 "statistics_interval",
@@ -141,6 +167,8 @@ impl Default for Config {
             enable_websocket_endpoint: true,
             enable_agent_names: false,
             agent_name_concurrency: 16,
+            rate_limit_per_ip: 100,
+            rate_limit_burst: 50,
             statistics_interval: Duration::from_secs(60),
             resolve_timeout: Duration::from_secs(30),
             max_did_size: 1024,
@@ -180,6 +208,11 @@ impl TryFrom<ConfigRaw> for Config {
                 .ok()
                 .filter(|n: &usize| *n > 0)
                 .unwrap_or(16),
+            // An unparseable value falls back to the default rather than to 0:
+            // 0 means "disabled", and a typo must not silently remove limiting.
+            // An explicit "0" still disables, which is the documented way to.
+            rate_limit_per_ip: raw.rate_limit_per_ip.parse().unwrap_or(100),
+            rate_limit_burst: raw.rate_limit_burst.parse().unwrap_or(50),
             statistics_interval: Duration::from_secs(raw.statistics_interval.parse().unwrap_or(60)),
             resolve_timeout: Duration::from_secs(raw.resolve_timeout.parse().unwrap_or(30)),
             max_did_size: raw.max_did_size.parse().unwrap_or(1024),

@@ -7,6 +7,7 @@ use crate::{
 use affinidi_did_resolver_cache_sdk::{
     DIDCacheClient, config::DIDCacheConfigBuilder, errors::DIDCacheError,
 };
+use affinidi_rate_limit::{RateLimitLayer, RateLimiterState};
 use affinidi_task_utils::TaskSupervisor;
 use axum::{Router, routing::get};
 use http::Method;
@@ -145,6 +146,25 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
     }
 
     // build our application routes
+    // Per-IP rate limiting. `ConnectInfo` is attached below via
+    // `into_make_service_with_connect_info`, which the layer requires: a
+    // request it cannot attribute to an IP is refused rather than exempted.
+    let rate_limiter = RateLimiterState::new(config.rate_limit_per_ip, config.rate_limit_burst);
+    rate_limiter.spawn_gc(shutdown.clone());
+    if rate_limiter.is_enabled() {
+        event!(
+            Level::INFO,
+            "Rate limiting enabled: {} req/s per IP, burst {}",
+            config.rate_limit_per_ip,
+            config.rate_limit_burst
+        );
+    } else {
+        event!(
+            Level::WARN,
+            "Rate limiting is DISABLED (rate_limit_per_ip = 0)"
+        );
+    }
+
     let app: Router = application_routes(&shared_state, &config);
 
     // Add middleware to all routes
@@ -167,7 +187,13 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
         .route(
             "/did/healthchecker",
             get(health_checker_handler).with_state(shared_state),
-        );
+        )
+        // Outermost: rate limiting runs before routing, so a throttled client
+        // costs nothing beyond the token-bucket check. Placed after the
+        // healthcheck route in builder order, which means it wraps that too —
+        // deliberate, since an unlimited healthcheck is itself a cheap way to
+        // hold a connection open.
+        .layer(RateLimitLayer::new(rate_limiter));
 
     let listen_address = config
         .listen_address

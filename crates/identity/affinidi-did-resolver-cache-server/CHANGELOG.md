@@ -4,6 +4,45 @@
 
 ## 20th July 2026
 
+### 0.9.7 — per-IP rate limiting
+
+The server previously had **no rate limiting of any kind**. It now applies a
+per-IP token bucket, via the shared `affinidi-rate-limit` crate extracted from
+the mediator.
+
+#### ⚠ On by default — check this before upgrading
+
+`rate_limit_per_ip` defaults to **100 req/s per IP, burst 50**, matching the
+mediator. That is generous for a resolver cache, whose whole purpose is that most
+lookups are served from memory.
+
+**But raise or disable it behind a load balancer or NAT.** The limiter keys on
+the peer address, so if you terminate TLS or route through a CDN, the only
+address this server sees is the proxy's — every client shares one bucket and
+legitimate traffic gets 429s. Set `rate_limit_per_ip = "0"` to disable.
+
+An unparseable value falls back to the default rather than to 0, so a config typo
+cannot silently remove limiting. An explicit `"0"` still disables.
+
+#### Behaviour
+
+- Over-quota requests get `429` with an accurate `Retry-After`, taken from
+  `governor`'s estimate of when the next token arrives, floored at 1 second.
+- A request whose client IP cannot be determined is **refused with 403**, not
+  exempted — failing open would make per-IP limiting trivially bypassable. The
+  server already binds with `into_make_service_with_connect_info`, so this only
+  bites if that is ever removed.
+- The layer sits outermost, so a throttled client costs nothing beyond the
+  token-bucket check. It wraps the healthcheck route too, deliberately: an
+  unlimited healthcheck is itself a cheap way to hold connections open.
+- The keyed bucket store is swept periodically. Without that it grows once per
+  source IP for the process lifetime — see the `affinidi-rate-limit` README.
+
+This complements, rather than replaces, `agent_name_concurrency` (0.9.6). Rate
+limiting bounds what any one client can ask for; the concurrency cap bounds total
+outbound fan-out however many clients ask.
+## 20th July 2026
+
 ### 0.9.6 — bound the agent name endpoint's outbound fetches
 
 Adds `agent_name_concurrency` (default **16**): a ceiling on how many agent name
