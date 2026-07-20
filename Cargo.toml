@@ -4,6 +4,7 @@ members = [
   "crates/core/affinidi-cesr",
   "crates/core/affinidi-encoding",
   "crates/core/affinidi-crypto",
+  "crates/core/affinidi-rate-limit",
   "crates/core/affinidi-secrets-resolver",
   "crates/core/affinidi-bbs",
   "crates/core/affinidi-task-utils",
@@ -90,6 +91,7 @@ lto = true
 [patch.crates-io]
 affinidi-secrets-resolver = { path = "crates/core/affinidi-secrets-resolver" }
 affinidi-task-utils = { path = "crates/core/affinidi-task-utils" }
+affinidi-rate-limit = { path = "crates/core/affinidi-rate-limit" }
 affinidi-did-resolver-cache-sdk = { path = "crates/identity/affinidi-did-resolver-cache-sdk" }
 affinidi-did-common = { path = "crates/identity/affinidi-did-common" }
 affinidi-crypto = { path = "crates/core/affinidi-crypto" }

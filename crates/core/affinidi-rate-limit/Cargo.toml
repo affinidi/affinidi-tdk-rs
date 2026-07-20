@@ -1,0 +1,28 @@
+[package]
+name = "affinidi-rate-limit"
+version = "0.1.0"
+description = "Per-IP request rate limiting middleware for axum services in the Affinidi TDK"
+repository.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+publish.workspace = true
+license.workspace = true
+readme = "README.md"
+rust-version.workspace = true
+
+[dependencies]
+axum = "0.8"
+governor = "0.10"
+http = "1"
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+tokio-util = "0.7"
+tower = "0.5"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "test-util"] }
+
+[lints]
+workspace = true
