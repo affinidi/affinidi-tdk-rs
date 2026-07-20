@@ -10,7 +10,6 @@ use crate::{
         did_rate_limiter::DidRateLimiter,
         error_codes,
         metrics::{self, metrics_handler, names::WS_SEND_BUFFER_AVAILABLE_BYTES},
-        rate_limiter::{RateLimitLayer, RateLimiterState},
         request_id::RequestIdLayer,
         ws_budget::WsSendBudget,
     },
@@ -29,6 +28,7 @@ use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_mediator_common::tasks::forwarding::ForwardingProcessor;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
+use affinidi_rate_limit::{RateLimitLayer, RateLimiterState, Refusal};
 use axum::{Router, routing::get};
 use std::{
     collections::HashSet, env, net::SocketAddr, sync::Arc, sync::atomic::AtomicUsize,
@@ -661,10 +661,18 @@ pub async fn serve_internal(
 
     let app: Router = application_routes(&api_prefix, &shared_state);
 
+    // The `RATE_LIMITED_TOTAL` metric used to be emitted inside the limiter
+    // itself. It now rides on the refusal callback, so the shared crate stays
+    // free of any metrics dependency.
     let rate_limiter = RateLimiterState::new(
         config.limits.rate_limit_per_ip,
         config.limits.rate_limit_burst,
-    );
+    )
+    .on_refused(|refusal| {
+        if matches!(refusal, Refusal::RateLimited { .. }) {
+            ::metrics::counter!(crate::common::metrics::names::RATE_LIMITED_TOTAL).increment(1);
+        }
+    });
     rate_limiter.spawn_gc(shutdown_token.clone());
     if config.limits.rate_limit_per_ip > 0 {
         info!(
