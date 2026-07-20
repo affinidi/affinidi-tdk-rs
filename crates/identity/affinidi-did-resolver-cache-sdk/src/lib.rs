@@ -269,6 +269,14 @@ pub struct DIDCacheClient {
     agent_name_cache: Cache<[u64; 2], String>,
     #[cfg(feature = "agent-names")]
     agent_name_resolvers: Arc<Vec<Box<dyn ::agent_names::AgentNameResolver>>>,
+    /// Single-flight map for the name -> DID step, mirroring `inflight`.
+    ///
+    /// Deliberately separate from `inflight` rather than shared: the two key
+    /// spaces are different (a hashed agent name vs a hashed DID), and keeping
+    /// them apart means a hash collision between the two can never make one
+    /// wait on the other.
+    #[cfg(feature = "agent-names")]
+    agent_name_inflight: Arc<StdMutex<HashMap<[u64; 2], watch::Receiver<()>>>>,
     /// Single-flight map: concurrent cache misses for the same DID hash share
     /// one underlying resolution. The leader holds the `watch::Sender`; the
     /// stored `Receiver` is cloned by followers, who wake when the leader drops
@@ -296,6 +304,8 @@ impl Clone for DIDCacheClient {
             agent_name_cache: self.agent_name_cache.clone(),
             #[cfg(feature = "agent-names")]
             agent_name_resolvers: self.agent_name_resolvers.clone(),
+            #[cfg(feature = "agent-names")]
+            agent_name_inflight: self.agent_name_inflight.clone(),
             inflight: self.inflight.clone(),
         }
     }
@@ -756,6 +766,8 @@ impl DIDCacheClient {
             agent_name_cache: agent_name_cache.clone(),
             #[cfg(feature = "agent-names")]
             agent_name_resolvers: agent_name_resolvers.clone(),
+            #[cfg(feature = "agent-names")]
+            agent_name_inflight: Arc::new(StdMutex::new(HashMap::new())),
             inflight: Arc::new(StdMutex::new(HashMap::new())),
         };
         #[cfg(not(feature = "network"))]
@@ -769,6 +781,8 @@ impl DIDCacheClient {
             agent_name_cache,
             #[cfg(feature = "agent-names")]
             agent_name_resolvers,
+            #[cfg(feature = "agent-names")]
+            agent_name_inflight: Arc::new(StdMutex::new(HashMap::new())),
             inflight: Arc::new(StdMutex::new(HashMap::new())),
         };
 
