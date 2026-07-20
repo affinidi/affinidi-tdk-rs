@@ -110,6 +110,12 @@ did-scid = { path = "crates/identity/did-methods/did-scid" }
 did-example = { path = "crates/identity/did-methods/did-example" }
 affinidi-messaging-core = { path = "crates/messaging/affinidi-messaging-core" }
 agent-names = { path = "crates/identity/shortcuts/agent-names" }
+affinidi-vc = { path = "crates/credentials/affinidi-vc" }
+affinidi-sd-jwt = { path = "crates/credentials/affinidi-sd-jwt" }
+affinidi-oid4vc-core = { path = "crates/protocols/affinidi-oid4vc-core" }
+affinidi-openid4vci = { path = "crates/protocols/affinidi-openid4vci" }
+affinidi-openid4vp = { path = "crates/protocols/affinidi-openid4vp" }
+affinidi-messaging-delivery = { path = "crates/messaging/affinidi-messaging-delivery" }
 
 [workspace.lints.clippy]
 uninlined_format_args = "warn"
