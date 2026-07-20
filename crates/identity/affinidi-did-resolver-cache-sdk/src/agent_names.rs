@@ -24,6 +24,7 @@
 //!    cache, with an unconditional TTL, makes that structurally impossible.
 
 use agent_names::{AgentName, AgentNameError, AgentNameResolver, verify_also_known_as};
+use tokio::sync::watch;
 use tracing::{debug, warn};
 
 use crate::{DIDCacheClient, ResolveResponse, errors::DIDCacheError};
@@ -114,9 +115,7 @@ impl DIDCacheClient {
             }
             None => {
                 debug!("agent name cache miss: {name}");
-                let did = self.resolve_name_to_did(name).await?;
-                self.agent_name_cache.insert(name_hash, did.clone()).await;
-                did
+                self.resolve_name_deduplicated(name, name_hash).await?
             }
         };
 
@@ -144,6 +143,85 @@ impl DIDCacheClient {
         }
 
         Ok(response)
+    }
+
+    /// Resolve a name to a DID, collapsing concurrent lookups of the *same*
+    /// name into one backend call.
+    ///
+    /// Mirrors the document cache's single-flight in
+    /// `DIDCacheClient::resolve_uncached`: one caller becomes the leader and
+    /// does the work, the rest wait on a `watch` channel and then re-read the
+    /// mapping cache.
+    ///
+    /// Without this, N concurrent first-time lookups of one name make N
+    /// outbound HTTP requests. That matters more than the equivalent for DIDs,
+    /// because a name lookup is an uncached fetch against somebody else's web
+    /// server — the thing a shared resolver exists to avoid doing repeatedly.
+    async fn resolve_name_deduplicated(
+        &self,
+        name: &AgentName,
+        name_hash: [u64; 2],
+    ) -> Result<String, DIDCacheError> {
+        loop {
+            // Decide our role under the lock; no `.await` is held across it.
+            enum Role {
+                Leader(watch::Sender<()>),
+                Follower(watch::Receiver<()>),
+            }
+            let role = {
+                let mut map = self
+                    .agent_name_inflight
+                    .lock()
+                    .expect("agent name inflight mutex not poisoned");
+                if let Some(rx) = map.get(&name_hash) {
+                    Role::Follower(rx.clone())
+                } else {
+                    let (tx, rx) = watch::channel(());
+                    map.insert(name_hash, rx);
+                    Role::Leader(tx)
+                }
+            };
+
+            match role {
+                Role::Follower(mut rx) => {
+                    // The leader drops its sender when done, which closes the
+                    // channel and resolves `changed()`.
+                    let _ = rx.changed().await;
+                    if let Some(did) = self.agent_name_cache.get(&name_hash).await {
+                        debug!("agent name '{name}' resolved by another caller");
+                        return Ok(did);
+                    }
+                    // The leader errored and cached nothing. Loop and try to
+                    // become the leader ourselves.
+                    continue;
+                }
+                Role::Leader(tx) => {
+                    // A prior leader may have populated the mapping between our
+                    // cache miss and our acquiring leadership.
+                    if let Some(did) = self.agent_name_cache.get(&name_hash).await {
+                        self.release_name_leadership(name_hash, tx);
+                        return Ok(did);
+                    }
+
+                    let result = self.resolve_name_to_did(name).await;
+                    if let Ok(ref did) = result {
+                        self.agent_name_cache.insert(name_hash, did.clone()).await;
+                    }
+                    // Release leadership and wake followers regardless of
+                    // outcome — an early return here would hang every waiter.
+                    self.release_name_leadership(name_hash, tx);
+                    return result;
+                }
+            }
+        }
+    }
+
+    fn release_name_leadership(&self, name_hash: [u64; 2], tx: watch::Sender<()>) {
+        self.agent_name_inflight
+            .lock()
+            .expect("agent name inflight mutex not poisoned")
+            .remove(&name_hash);
+        drop(tx);
     }
 
     /// Walk the registered backends until one resolves the name.

@@ -397,3 +397,127 @@ async fn an_email_is_not_treated_as_an_agent_name() {
     assert!(matches!(err, DIDCacheError::DIDError(_)), "got {err:?}");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
+
+/// A backend that blocks until released, so several callers are provably
+/// in-flight at the same moment.
+struct GatedResolver {
+    gate: Arc<tokio::sync::Notify>,
+    calls: Arc<AtomicUsize>,
+    did: String,
+}
+
+impl AgentNameResolver for GatedResolver {
+    fn name(&self) -> &str {
+        "gated"
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        _name: &'a AgentName,
+    ) -> Pin<Box<dyn Future<Output = NameResolution> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.gate.notified().await;
+            Some(Ok(self.did.clone()))
+        })
+    }
+}
+
+/// Concurrent first-time lookups of the *same* name must make **one** backend
+/// call, not one each.
+///
+/// This is the property that matters for a shared resolver: a name lookup is an
+/// uncached fetch against somebody else's web server, so N concurrent callers
+/// fanning out N requests is exactly what centralising resolution is meant to
+/// avoid.
+#[tokio::test]
+async fn concurrent_lookups_of_one_name_resolve_exactly_once() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let calls = Arc::new(AtomicUsize::new(0));
+
+    let config = DIDCacheConfigBuilder::default().build();
+    let mut client = DIDCacheClient::new(config).await.unwrap();
+    client.set_agent_name_resolvers(vec![Box::new(GatedResolver {
+        gate: gate.clone(),
+        calls: calls.clone(),
+        did: IMMUTABLE_DID.to_string(),
+    })]);
+    client
+        .add_did_document(IMMUTABLE_DID, doc_claiming(IMMUTABLE_DID, &[CANONICAL]))
+        .await;
+
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let c = client.clone();
+        handles.push(tokio::spawn(async move { c.resolve_any(NAME).await }));
+    }
+
+    // Let every task reach the backend (or block behind the leader), then
+    // release the one that got through.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    gate.notify_waiters();
+
+    for handle in handles {
+        handle.await.unwrap().expect("every caller should resolve");
+    }
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "8 concurrent lookups of one name should make exactly one backend call"
+    );
+}
+
+/// Different names must not block each other — the single-flight is per name,
+/// not a global lock.
+#[tokio::test]
+async fn concurrent_lookups_of_different_names_do_not_serialise() {
+    let (resolver, calls) = MapResolver::new(&[
+        (CANONICAL, IMMUTABLE_DID),
+        ("https://example.com/@bob", IMMUTABLE_DID),
+    ]);
+
+    let config = DIDCacheConfigBuilder::default().build();
+    let mut client = DIDCacheClient::new(config).await.unwrap();
+    client.set_agent_name_resolvers(vec![Box::new(resolver)]);
+    client
+        .add_did_document(
+            IMMUTABLE_DID,
+            doc_claiming(IMMUTABLE_DID, &[CANONICAL, "https://example.com/@bob"]),
+        )
+        .await;
+
+    let (a, b) = tokio::join!(
+        client.resolve_any("example.com/@alice"),
+        client.resolve_any("example.com/@bob"),
+    );
+    assert!(a.is_ok() && b.is_ok());
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "two distinct names should each be resolved"
+    );
+}
+
+/// A leader whose lookup FAILS must still wake its followers, and they must be
+/// able to retry rather than hang.
+#[tokio::test]
+async fn a_failed_leader_does_not_strand_followers() {
+    let (client, calls) = client_with(IMMUTABLE_DID, &[CANONICAL], &[], 300).await;
+
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let c = client.clone();
+        handles.push(tokio::spawn(async move { c.resolve_any(NAME).await }));
+    }
+
+    for handle in handles {
+        // The point is that these complete at all — a stranded follower would
+        // hang here and fail the test by timeout.
+        assert!(handle.await.unwrap().is_err());
+    }
+    assert!(
+        calls.load(Ordering::SeqCst) >= 1,
+        "at least one caller should have attempted resolution"
+    );
+}

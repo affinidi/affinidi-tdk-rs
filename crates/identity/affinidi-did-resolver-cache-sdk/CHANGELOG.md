@@ -4,6 +4,32 @@
 
 ## 20th July 2026
 
+### 0.8.17 — single-flight for concurrent agent name lookups
+
+Concurrent first-time lookups of the *same* agent name now collapse into one
+backend call, mirroring the single-flight the document cache has always had.
+
+Previously N concurrent callers made N outbound HTTP requests. That matters more
+here than for DIDs: a name lookup is an uncached fetch against somebody else's
+web server, so fanning out duplicate requests is precisely what a shared resolver
+exists to avoid. A verified regression test asserts one call where there were
+eight.
+
+The map is deliberately **separate** from the DID `inflight` map rather than
+shared. The two key spaces are different — a hashed agent name versus a hashed
+DID — and keeping them apart means a hash collision between the two can never
+make one wait on the other.
+
+The leader releases leadership and wakes its followers **regardless of outcome**.
+A leader that returned early on error would strand every waiter until its
+timeout; there is a test for that path specifically, since it is the failure mode
+that would only appear under concurrent load in production.
+
+Deferred from 0.8.15, where it was called out as an inefficiency rather than a
+correctness problem. It remains an optimisation — no behaviour changes for a
+single caller.
+## 20th July 2026
+
 ### 0.8.16 — seal `ResolveResponse`
 
 `ResolveResponse` is now `#[non_exhaustive]`, with `ResolveResponse::new(..)` as
