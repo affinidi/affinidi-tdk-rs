@@ -62,3 +62,18 @@ capacity_count = "${CACHE_CAPACITY_COUNT:1000}"
 ### expire: Cache Time To Live (TTL) for a cached entry in seconds
 ### Default: 300 (5 minutes)
 expire = "${EXPIRE:300}"
+
+# Sustained requests per second per client IP. 0 disables rate limiting.
+#
+# ⚠ RAISE OR DISABLE THIS BEHIND A LOAD BALANCER OR NAT. The limiter keys on the
+# peer address, so every client behind a proxy shares one bucket and legitimate
+# traffic gets throttled. If you terminate TLS or route through a CDN, the only
+# address this server sees is the proxy's.
+#
+# An unparseable value falls back to the default rather than to 0, so a typo
+# cannot silently disable limiting. Set "0" explicitly to disable.
+rate_limit_per_ip = "${RATE_LIMIT_PER_IP:100}"
+
+# Token-bucket depth above the sustained per-IP rate — how large a burst is
+# tolerated before 429s begin.
+rate_limit_burst = "${RATE_LIMIT_BURST:50}"

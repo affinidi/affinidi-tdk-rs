@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-server"
-version = "0.9.6"
+version = "0.9.7"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
@@ -26,6 +26,7 @@ affinidi-did-resolver-cache-sdk = { version = "0.8", default-features = true, pa
 affinidi-did-common = "0.4"
 # Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"
+affinidi-rate-limit = "0.1"
 
 didwebvh-rs = "0.6"
 agent-names = "0.1.2"
