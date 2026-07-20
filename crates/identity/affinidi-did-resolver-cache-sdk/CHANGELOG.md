@@ -4,6 +4,40 @@
 
 ## 20th July 2026
 
+### 0.8.18 — seal the WebSocket wire types
+
+`WSRequest`, `WSResponse`, `WSResponseError` and `WSResponseType` are now
+`#[non_exhaustive]`, with `WSRequest::new`, `WSResponse::new` / `with_logs` and
+`WSResponseError::new` as the construction paths.
+
+Groundwork for carrying agent names over the WebSocket transport: today a name
+lookup in network mode costs **two round trips over two transports** — HTTP to
+the cache server for name→DID, then WebSocket for DID→document. Collapsing that
+onto the connection the client already holds means growing these types, and
+growing them should not require a breaking release each time.
+
+#### The wire rule these types now document
+
+Sealing records a Rust-level constraint. The wire-level one is stricter and
+matters more, so it is written on `WSResponseType`:
+
+> **Do not add variants.** The enum is externally tagged, so a new variant
+> serializes as an unrecognised key. An older client fails to deserialize it and
+> `ws_recv` *drops the frame* — leaving the caller to wait out its full
+> `network_timeout` with no error to report.
+
+A silent hang is a far worse failure than a clean error. Protocol growth
+therefore belongs in additive optional fields (as `did_log` already does), never
+in a new variant.
+
+Eight tests pin the wire format itself: the request shape, that a minimal
+payload from an older peer still deserializes, that unknown fields are ignored
+rather than rejected, that absent logs are omitted, and that the enum really is
+externally tagged.
+
+No behaviour change — this is types and construction paths only.
+## 20th July 2026
+
 ### 0.8.17 — single-flight for concurrent agent name lookups
 
 Concurrent first-time lookups of the *same* agent name now collapse into one

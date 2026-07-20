@@ -4,6 +4,15 @@
 
 ## 20th July 2026
 
+### 0.9.8 — build WebSocket responses via constructors
+
+Follows `affinidi-did-resolver-cache-sdk 0.8.18`, which sealed the WebSocket wire
+types. `build_response` and the two error paths now use `WSResponse::new` /
+`with_logs` and `WSResponseError::new` instead of struct literals.
+
+No behaviour change; the emitted frames are byte-identical.
+## 20th July 2026
+
 ### 0.9.7 — per-IP rate limiting
 
 The server previously had **no rate limiting of any kind**. It now applies a

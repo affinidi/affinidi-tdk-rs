@@ -25,13 +25,10 @@ async fn build_response(client: &reqwest::Client, response: ResolveResponse) -> 
         (None, None)
     };
 
-    WSResponseType::Response(Box::new(WSResponse {
-        did: response.did.clone(),
-        hash: response.did_hash,
-        document: response.doc,
-        did_log,
-        did_witness_log,
-    }))
+    WSResponseType::Response(Box::new(
+        WSResponse::new(response.did.clone(), response.did_hash, response.doc)
+            .with_logs(did_log, did_witness_log),
+    ))
 }
 
 /// Serialize and send a WS response. Returns `false` if the connection should
@@ -66,11 +63,11 @@ async fn resolve_and_respond(socket: &mut WebSocket, state: &SharedData, did: St
         let hash = DIDCacheClient::hash_did(&did);
         warn!("ws: rejecting oversized DID ({} bytes)", did.len());
         state.stats().await.increment_resolver_error();
-        let message = WSResponseType::Error(WSResponseError {
+        let message = WSResponseType::Error(WSResponseError::new(
             did,
             hash,
-            error: format!("DID exceeds maximum length of {} bytes", state.max_did_size),
-        });
+            format!("DID exceeds maximum length of {} bytes", state.max_did_size),
+        ));
         return send_response(socket, &message).await;
     }
 
@@ -96,11 +93,7 @@ async fn resolve_and_respond(socket: &mut WebSocket, state: &SharedData, did: St
             let hash = DIDCacheClient::hash_did(&did);
             warn!("Couldn't resolve DID: ({did}) Reason: {e}");
             state.stats().await.increment_resolver_error();
-            let message = WSResponseType::Error(WSResponseError {
-                did,
-                hash,
-                error: e.to_string(),
-            });
+            let message = WSResponseType::Error(WSResponseError::new(did, hash, e.to_string()));
             send_response(socket, &message).await
         }
     }

@@ -19,11 +19,29 @@ pub mod network;
 pub(crate) mod utils;
 
 mod request_queue;
-/// WSRequest is the request format to the websocket connection
-/// did: DID to resolve
+/// A resolution request sent over the WebSocket connection.
+///
+/// `#[non_exhaustive]`: build via [`WSRequest::new`]. Fields stay public for
+/// reads.
+///
+/// Sealing matters here specifically because this is a **wire type**. Growing
+/// the protocol means adding fields, and every added field must be
+/// `#[serde(default, skip_serializing_if = ...)]` so an older peer that does not
+/// know it simply ignores it — the pattern `did_log` already follows on
+/// [`WSResponse`]. Sealing makes those additions non-breaking for Rust callers
+/// too, rather than forcing a major release for each one.
 #[derive(Debug, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct WSRequest {
+    /// The DID to resolve.
     pub did: String,
+}
+
+impl WSRequest {
+    /// Request resolution of `did`.
+    pub fn new(did: impl Into<String>) -> Self {
+        Self { did: did.into() }
+    }
 }
 
 /// WSResponse is the response format from the websocket connection
@@ -33,7 +51,9 @@ pub struct WSRequest {
 /// did_log: Raw JSONL DID log for verifiable DID methods (e.g. did:webvh)
 ///          Enables client-side cryptographic verification of the document
 /// did_witness_log: Raw witness proofs JSON for DID methods that use witnesses
+/// `#[non_exhaustive]`: build via [`WSResponse::new`] and the `with_*` setters.
 #[derive(Debug, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct WSResponse {
     pub did: String,
     pub hash: [u64; 2],
@@ -44,23 +64,78 @@ pub struct WSResponse {
     pub did_witness_log: Option<String>,
 }
 
+impl WSResponse {
+    /// A response carrying a resolved document.
+    ///
+    /// `hash` must be the hash of whatever string the *client* sent, since that
+    /// is what the client matches the response against. It is not necessarily
+    /// `hash_did(&did)` — see `network.rs`, where inbound responses are
+    /// correlated by the server-supplied `hash` rather than by re-hashing `did`.
+    pub fn new(did: impl Into<String>, hash: [u64; 2], document: Document) -> Self {
+        Self {
+            did: did.into(),
+            hash,
+            document,
+            did_log: None,
+            did_witness_log: None,
+        }
+    }
+
+    /// Attach the raw `did:webvh` logs, letting the client verify the document
+    /// itself rather than trusting this server.
+    pub fn with_logs(mut self, did_log: Option<String>, did_witness_log: Option<String>) -> Self {
+        self.did_log = did_log;
+        self.did_witness_log = did_witness_log;
+        self
+    }
+}
+
 /// WSResponseError is the response format from the websocket connection if an error occurred server side.
 /// did: DID associated with the error
 /// hash: HighwayHash128 of the DID
 /// error: Error message
+/// `#[non_exhaustive]`: build via [`WSResponseError::new`].
 #[derive(Debug, Deserialize, Serialize)]
+#[non_exhaustive]
 pub struct WSResponseError {
     pub did: String,
     pub hash: [u64; 2],
     pub error: String,
 }
 
-/// WSResponseType is the type of response received from the websocket connection
-/// Response: A successful response
-/// Error: An error response
+impl WSResponseError {
+    /// An error response. `hash` follows the same rule as [`WSResponse::new`]:
+    /// it must match what the client sent, or the caller never sees this and
+    /// waits out its timeout instead.
+    pub fn new(did: impl Into<String>, hash: [u64; 2], error: impl Into<String>) -> Self {
+        Self {
+            did: did.into(),
+            hash,
+            error: error.into(),
+        }
+    }
+}
+
+/// What came back over the WebSocket connection.
+///
+/// # Do not add variants
+///
+/// `#[non_exhaustive]` here records a Rust-level rule, but the **wire**-level one
+/// is stricter and matters more: this is an externally-tagged enum, so a new
+/// variant serializes as an unrecognised key. An older client fails to
+/// deserialize it, and `ws_recv` in `network.rs` logs the parse failure and
+/// *drops the frame* — leaving the caller waiting out its full `network_timeout`
+/// with no error to report.
+///
+/// A silent hang is a far worse failure than a clean error, so protocol growth
+/// belongs in **additive optional fields** on [`WSResponse`] and
+/// [`WSResponseError`] (as `did_log` does), never in a new variant here.
 #[derive(Debug, Deserialize, Serialize)]
+#[non_exhaustive]
 pub enum WSResponseType {
+    /// A successful resolution.
     Response(Box<WSResponse>),
+    /// A failure attributable to a specific request.
     Error(WSResponseError),
 }
 
@@ -99,7 +174,7 @@ impl DIDCacheClient {
 
             // 1. Send the request to the network task, which will then send via websocket to the remote server
             network_task_tx
-                .send(WSCommands::Send(tx, unique_id.clone(), WSRequest { did: did.into() }))
+                .send(WSCommands::Send(tx, unique_id.clone(), WSRequest::new(did)))
                 .await
                 .map_err(|e| {
                     DIDCacheError::TransportError(format!(
@@ -212,5 +287,97 @@ impl DIDCacheClient {
         }
 
         Ok(doc)
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    fn doc() -> Document {
+        Document::new("did:example:123").unwrap()
+    }
+
+    #[test]
+    fn request_serializes_to_the_documented_shape() {
+        let json = serde_json::to_string(&WSRequest::new("did:example:123")).unwrap();
+        assert_eq!(json, r#"{"did":"did:example:123"}"#);
+    }
+
+    /// An older peer sends only `did`. That must still deserialize, or every
+    /// existing client breaks the moment this type grows a field.
+    #[test]
+    fn request_accepts_a_minimal_payload() {
+        let req: WSRequest = serde_json::from_str(r#"{"did":"did:example:123"}"#).unwrap();
+        assert_eq!(req.did, "did:example:123");
+    }
+
+    /// Unknown fields must be ignored, not rejected — this is what lets a newer
+    /// client talk to an older server without a negotiation step.
+    #[test]
+    fn request_ignores_unknown_fields() {
+        let req: WSRequest =
+            serde_json::from_str(r#"{"did":"did:example:123","future_field":"x"}"#).unwrap();
+        assert_eq!(req.did, "did:example:123");
+    }
+
+    #[test]
+    fn response_omits_absent_logs() {
+        let json =
+            serde_json::to_string(&WSResponse::new("did:example:123", [1, 2], doc())).unwrap();
+        assert!(!json.contains("did_log"), "got {json}");
+        assert!(!json.contains("did_witness_log"), "got {json}");
+    }
+
+    #[test]
+    fn response_round_trips_with_logs() {
+        let original = WSResponse::new("did:example:123", [1, 2], doc())
+            .with_logs(Some("log".into()), Some("witness".into()));
+        let back: WSResponse =
+            serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
+        assert_eq!(back.did, "did:example:123");
+        assert_eq!(back.hash, [1, 2]);
+        assert_eq!(back.did_log.as_deref(), Some("log"));
+        assert_eq!(back.did_witness_log.as_deref(), Some("witness"));
+    }
+
+    /// A response from an older server carries no logs at all.
+    #[test]
+    fn response_accepts_a_payload_without_logs() {
+        let json = r#"{"did":"did:example:123","hash":[1,2],"document":{"id":"did:example:123"}}"#;
+        let response: WSResponse = serde_json::from_str(json).unwrap();
+        assert!(response.did_log.is_none());
+    }
+
+    /// The enum is externally tagged. This is pinned deliberately: the tagging
+    /// is what makes an added variant unparseable to older clients, which is why
+    /// the type documents that variants must not be added.
+    #[test]
+    fn response_type_is_externally_tagged() {
+        let json = serde_json::to_string(&WSResponseType::Error(WSResponseError::new(
+            "d",
+            [0, 0],
+            "e",
+        )))
+        .unwrap();
+        assert!(json.starts_with(r#"{"Error":"#), "got {json}");
+
+        let json = serde_json::to_string(&WSResponseType::Response(Box::new(WSResponse::new(
+            "d",
+            [0, 0],
+            doc(),
+        ))))
+        .unwrap();
+        assert!(json.starts_with(r#"{"Response":"#), "got {json}");
+    }
+
+    #[test]
+    fn error_round_trips() {
+        let original = WSResponseError::new("did:example:123", [7, 8], "boom");
+        let back: WSResponseError =
+            serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
+        assert_eq!(back.did, "did:example:123");
+        assert_eq!(back.hash, [7, 8]);
+        assert_eq!(back.error, "boom");
     }
 }
