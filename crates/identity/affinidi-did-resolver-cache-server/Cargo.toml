@@ -22,7 +22,9 @@ network = ["affinidi-did-resolver-cache-sdk/network"]
 
 [dependencies]
 # Affinidi Crates
-affinidi-did-resolver-cache-sdk = { version = "0.8", default-features = true, path = "../affinidi-did-resolver-cache-sdk/" }
+# Requires 0.8.18 for the sealed WebSocket wire types' constructors
+# (WSResponse::new / with_logs, WSResponseError::new).
+affinidi-did-resolver-cache-sdk = { version = "0.8.18", default-features = true, path = "../affinidi-did-resolver-cache-sdk/" }
 affinidi-did-common = "0.4"
 # Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"
