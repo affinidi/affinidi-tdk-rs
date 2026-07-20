@@ -4,6 +4,30 @@
 
 ## 20th July 2026
 
+### 0.9.9 — agent name resolution over WebSocket
+
+A `WSRequest` carrying `agent_name` is now resolved name → DID → document in one
+exchange, matching `GET /did/v1/resolve-name/{*name}` but on the connection the
+client already holds.
+
+Gated by the same `enable_agent_names` flag and subject to the same
+`agent_name_concurrency` ceiling as the HTTP endpoint, including shedding rather
+than queueing when saturated.
+
+#### The correlation rule
+
+The response's `hash` is the hash of the **name as sent**, not of the resolved
+DID. Clients register their waiter under the hash of what they sent and
+`ws_recv` drops frames it cannot correlate — so hashing the resolved DID instead
+would leave every caller waiting out its full timeout with no error. `did`
+carries the resolved DID and `agent_name` echoes the name.
+
+#### Still a cache, not a trust anchor
+
+No `alsoKnownAs` verification is performed or claimed here. The client re-verifies
+against the document it received, exactly as it re-verifies `did:webvh` logs.
+## 20th July 2026
+
 ### 0.9.8 — build WebSocket responses via constructors
 
 Follows `affinidi-did-resolver-cache-sdk 0.8.18`, which sealed the WebSocket wire

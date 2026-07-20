@@ -4,6 +4,45 @@
 
 ## 20th July 2026
 
+### 0.8.19 — resolve agent names over the WebSocket connection
+
+Opt in with `with_agent_names_over_websocket(true)`. **Off by default**, and
+requires `affinidi-did-resolver-cache-server` 0.9.9 or newer.
+
+A name lookup in network mode previously cost **two round trips over two
+transports**: HTTP to the cache server for name → DID, then WebSocket for
+DID → document. The server now does both in one exchange on the connection the
+client already holds.
+
+#### How it stays compatible
+
+The name travels in `WSRequest::did` *and* in a new optional `agent_name`. A
+server that predates this ignores the unknown field, tries to parse the name as a
+DID, fails, and answers with a `WSResponseError` carrying the hash of what the
+client sent — which is what the client registered its waiter under. The caller
+sees a **clean error rather than a hang**, which is the failure mode that
+mattered: `ws_recv` drops frames it cannot correlate, so a mismatched hash costs
+a full `network_timeout` with nothing to report.
+
+`WSResponse` gains an optional `agent_name` echo. No new `WSResponseType`
+variant — see the note on that type for why.
+
+#### Not auto-detected, deliberately
+
+An older server's response to a name request is a generic "failed to parse DID",
+indistinguishable from a real failure without matching on error strings. Enabling
+this against an old server is therefore safe but useless — you get an error, not
+a hang. Capability discovery is the proper answer and is not attempted here.
+
+#### Verification is unchanged
+
+`alsoKnownAs` is still checked client-side, against the document this client
+received. The server resolves and caches; it is not trusted to have verified
+anything. `WSCommands::ResponseReceived` now carries the whole `WSResponse`
+rather than picked-apart fields, so the resolved DID and echoed name are
+available without further protocol changes.
+## 20th July 2026
+
 ### 0.8.18 — seal the WebSocket wire types
 
 `WSRequest`, `WSResponse`, `WSResponseError` and `WSResponseType` are now
