@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use session::SessionError;
 use statistics::Statistics;
 use std::{fmt::Debug, sync::Arc, time::Duration};
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::{Mutex, MutexGuard, Semaphore};
 
 pub(crate) mod common;
 pub mod config;
@@ -34,6 +34,13 @@ pub struct SharedData {
     /// Present only when `enable_agent_names` is set. `None` means the feature
     /// is off and the route is not registered.
     pub agent_name_resolver: Option<Arc<agent_names::HttpRedirectResolver>>,
+    /// Ceiling on agent name lookups fetching upstream at once.
+    ///
+    /// Agent name resolution turns one cheap inbound request into one outbound
+    /// request to a caller-chosen host. This bounds that fan-out globally —
+    /// something per-IP rate limiting cannot do, because the cap has to hold
+    /// however many source addresses the load arrives from.
+    pub agent_name_permits: Arc<Semaphore>,
 }
 
 impl<S> FromRequestParts<S> for SharedData

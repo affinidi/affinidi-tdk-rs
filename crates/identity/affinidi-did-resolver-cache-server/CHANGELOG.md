@@ -2,6 +2,31 @@
 
 ## Changelog history
 
+## 20th July 2026
+
+### 0.9.6 — bound the agent name endpoint's outbound fetches
+
+Adds `agent_name_concurrency` (default **16**): a ceiling on how many agent name
+lookups may be fetching upstream at once.
+
+Agent name resolution turns one cheap inbound request into one outbound HTTP
+request to a host the *caller* chose. Without a ceiling that is an amplification
+primitive — a shared cache server can be driven to fan out arbitrary traffic at
+third parties, or used to scan them, at a cost to the attacker of one request
+each.
+
+The cap bounds that fan-out **however many source addresses the load arrives
+from**, which is the property per-IP rate limiting cannot give you. Requests over
+the ceiling are shed with `503` rather than queued: queueing would convert a
+fetch ceiling into an unbounded backlog of pending outbound requests, which is
+the thing being defended against.
+
+A zero or unparseable value falls back to the default rather than meaning "no
+limit", so a config typo cannot silently remove the ceiling.
+
+Note this is **not** general rate limiting — the server still has none, and that
+remains worth adding. This bounds the *outbound* amplification specifically,
+which is the harm this endpoint can do to third parties rather than to itself.
 ## 19th July 2026
 
 ### 0.9.5 — agent name lookup endpoint

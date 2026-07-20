@@ -40,6 +40,10 @@ struct ConfigRaw {
     /// the server fetch caller-supplied URLs. See handlers/agent_names.rs.
     #[serde(default = "default_enable_agent_names")]
     pub enable_agent_names: String,
+    /// Ceiling on agent name lookups fetching upstream at once. See
+    /// `default_agent_name_concurrency`.
+    #[serde(default = "default_agent_name_concurrency")]
+    pub agent_name_concurrency: String,
     pub statistics_interval: String,
     #[serde(default = "default_resolve_timeout")]
     pub resolve_timeout: String,
@@ -67,12 +71,32 @@ fn default_enable_agent_names() -> String {
     "false".into()
 }
 
+/// Ceiling on agent name lookups fetching upstream at once.
+///
+/// Agent name resolution turns one cheap inbound request into one outbound HTTP
+/// request to a host the *caller* chose. Without a ceiling that is an
+/// amplification primitive: a shared cache server can be driven to fan out
+/// arbitrary traffic at third parties, or used to scan them, at a cost to the
+/// attacker of one request each.
+///
+/// The cap bounds that fan-out regardless of how many source addresses the load
+/// arrives from, which per-IP rate limiting alone cannot do. Requests beyond it
+/// are rejected immediately with 503 rather than queued, so a saturated server
+/// sheds load instead of growing an unbounded backlog of pending fetches.
+///
+/// 16 is deliberately modest: agent name lookups are cache-warming, not a hot
+/// path, and a cache server exists precisely so the fetch happens rarely.
+fn default_agent_name_concurrency() -> String {
+    "16".into()
+}
+
 pub struct Config {
     pub log_level: LevelFilter,
     pub listen_address: String,
     pub enable_http_endpoint: bool,
     pub enable_websocket_endpoint: bool,
     pub enable_agent_names: bool,
+    pub agent_name_concurrency: usize,
     pub statistics_interval: Duration,
     /// Maximum time a single upstream DID resolution may take before the
     /// request path gives up and returns an error instead of blocking.
@@ -91,6 +115,7 @@ impl fmt::Debug for Config {
             .field("listen_address", &self.listen_address)
             .field("enable_http_endpoint", &self.enable_http_endpoint)
             .field("enable_agent_names", &self.enable_agent_names)
+            .field("agent_name_concurrency", &self.agent_name_concurrency)
             .field("enable_websocket_endpoint", &self.enable_websocket_endpoint)
             .field(
                 "statistics_interval",
@@ -115,6 +140,7 @@ impl Default for Config {
             enable_http_endpoint: true,
             enable_websocket_endpoint: true,
             enable_agent_names: false,
+            agent_name_concurrency: 16,
             statistics_interval: Duration::from_secs(60),
             resolve_timeout: Duration::from_secs(30),
             max_did_size: 1024,
@@ -146,6 +172,14 @@ impl TryFrom<ConfigRaw> for Config {
             // Defaults to false on a parse failure too: an unreadable value must
             // not silently turn on a network-facing fetch.
             enable_agent_names: raw.enable_agent_names.parse().unwrap_or(false),
+            // A zero or unparseable cap would mean "no limit", which is the
+            // opposite of what this setting is for; fall back to the default.
+            agent_name_concurrency: raw
+                .agent_name_concurrency
+                .parse()
+                .ok()
+                .filter(|n: &usize| *n > 0)
+                .unwrap_or(16),
             statistics_interval: Duration::from_secs(raw.statistics_interval.parse().unwrap_or(60)),
             resolve_timeout: Duration::from_secs(raw.resolve_timeout.parse().unwrap_or(30)),
             max_did_size: raw.max_did_size.parse().unwrap_or(1024),
