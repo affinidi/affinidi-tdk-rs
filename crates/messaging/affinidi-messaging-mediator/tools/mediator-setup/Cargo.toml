@@ -95,7 +95,7 @@ didwebvh-rs = "0.6"
 ##                   `sealed-transfer`), so this single feature covers the
 ##                   wizard's online VTA flow plus the sealed-handoff bundle
 ##                   handling in `sealed_handoff.rs`.
-vta-sdk = { version = "0.18", features = ["provision-client"] }
+vta-sdk = { version = "0.19.14", features = ["provision-client"] }
 
 # ── DID Resolution ───────────────────────────────────────────────────────
 ## Used to resolve the VTA's DID document and extract VTARest /
@@ -162,7 +162,7 @@ aws-sdk-s3 = { version = "1", optional = true }
 ## Additive — `cargo test` unions [dependencies] + [dev-dependencies]
 ## features, so this lands the `test-support` flag without affecting
 ## release builds.
-vta-sdk = { version = "0.18", features = ["test-support"] }
+vta-sdk = { version = "0.19.14", features = ["test-support"] }
 ## Used by setup_key persistence tests to create scoped temporary paths.
 tempfile = "3"
 ## Required by `bootstrap_headless` tests that mutate CWD via

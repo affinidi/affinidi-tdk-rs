@@ -7,18 +7,12 @@
 # Only add an entry when the duplicate cannot be fixed from this repository.
 # A missing `[patch.crates-io]` entry is fixable here and does not belong.
 #
+#
 # ---------------------------------------------------------------------------
 #
-# affinidi-did-common
-#   Pulled in at 0.3.9 by `vta-sdk` -> `didwebvh-rs 0.5.x`, which still requires
-#   affinidi-did-common "0.3"; our local copy is 0.4.x, so the patch redirect
-#   does not satisfy that range and cargo falls back to the registry.
+# (empty)
 #
-#   Harmless today only by luck of interface shape: no `Document` crosses the
-#   didwebvh-rs boundary (`WebvhResolver` builds its own via
-#   `serde_json::from_value`). The moment any didwebvh-rs API returns a
-#   `Document`, this becomes a hard E0308.
-#
-#   Clears when `vta-sdk` moves to `didwebvh-rs 0.6` (which requires
-#   affinidi-did-common "0.4"). That is a change in the OpenVTC repository.
-affinidi-did-common
+# The affinidi-did-common entry that lived here was cleared on 2026-07-20:
+# vta-sdk 0.19.14 shipped on didwebvh-rs 0.6, which requires
+# affinidi-did-common "0.4", so the registry copy at 0.3.9 no longer enters the
+# graph.
