@@ -151,13 +151,54 @@ impl DIDMethod {
     }
 }
 
+/// The result of resolving an identifier.
+///
+/// `#[non_exhaustive]`: build via [`ResolveResponse::new`] rather than a struct
+/// literal. Fields stay public for reads.
+///
+/// This is a *returned* type — callers read it, they do not normally construct
+/// one — so sealing it costs nothing in practice and buys the ability to report
+/// more about a resolution later without a breaking release. Per
+/// [ADR 0003](https://github.com/affinidi/affinidi-tdk-rs/blob/main/docs/adr/0003-public-api-semver-policy.md),
+/// new fields on a sealed struct are additive.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ResolveResponse {
+    /// The identifier that was resolved. For [`DIDCacheClient::resolve_any`]
+    /// given an agent name, this is the **DID the name resolved to**, not the
+    /// name.
     pub did: String,
+    /// The DID method of [`Self::did`].
     pub method: DIDMethod,
+    /// HighwayHash128 of [`Self::did`] — the document cache key.
     pub did_hash: [u64; 2],
+    /// The resolved DID Document.
     pub doc: Document,
+    /// Whether the document came from cache rather than a fresh resolution.
     pub cache_hit: bool,
+}
+
+impl ResolveResponse {
+    /// Assemble a response.
+    ///
+    /// The construction path for a `#[non_exhaustive]` struct. Mainly useful to
+    /// consumers building a fixture or a mock resolver; the client returns these
+    /// itself in normal use.
+    pub fn new(
+        did: String,
+        method: DIDMethod,
+        did_hash: [u64; 2],
+        doc: Document,
+        cache_hit: bool,
+    ) -> Self {
+        Self {
+            did,
+            method,
+            did_hash,
+            doc,
+            cache_hit,
+        }
+    }
 }
 
 /// Per-entry expiry policy for the DID document cache.
@@ -1121,6 +1162,30 @@ mod tests {
                 Some(Ok(doc))
             })
         }
+    }
+
+    /// `ResolveResponse` is `#[non_exhaustive]`, so `new` is the construction
+    /// path for anything outside this crate — a fixture or a mock resolver.
+    /// Fields stay readable.
+    #[test]
+    fn resolve_response_is_built_via_new() {
+        let doc = Document::new("did:example:123").unwrap();
+        let response = ResolveResponse::new(
+            "did:example:123".to_string(),
+            DIDMethod::EXAMPLE,
+            DIDCacheClient::hash_did("did:example:123"),
+            doc,
+            true,
+        );
+
+        assert_eq!(response.did, "did:example:123");
+        assert_eq!(response.method, DIDMethod::EXAMPLE);
+        assert_eq!(
+            response.did_hash,
+            DIDCacheClient::hash_did("did:example:123")
+        );
+        assert_eq!(response.doc.id.as_str(), "did:example:123");
+        assert!(response.cache_hit);
     }
 
     #[tokio::test]
