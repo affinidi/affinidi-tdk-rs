@@ -2,6 +2,33 @@
 
 ## Changelog history
 
+## 20th July 2026
+
+### 0.8.16 — seal `ResolveResponse`
+
+`ResolveResponse` is now `#[non_exhaustive]`, with `ResolveResponse::new(..)` as
+the construction path. Fields remain `pub` for reads (ADR 0003 Option B).
+
+This is a *returned* type — callers read it, they do not normally build one — so
+sealing costs nothing in practice and removes the barrier to reporting more about
+a resolution later. That barrier was real: `resolve_any()` in 0.8.15 wanted to
+report which agent name a response was resolved under, and the field was dropped
+precisely because adding it to an unsealed struct would have been breaking for
+marginal value. Sealed, such a field becomes additive whenever there is a genuine
+need for it.
+
+Released as a patch bump per ADR 0003 §3: adding `#[non_exhaustive]` is
+technically breaking, but shipping it as a minor would invalidate the
+`[patch.crates-io]` redirects held by externally-pinned consumers. Nothing in
+this workspace constructs a `ResolveResponse` outside this crate — the cache
+server only reads its fields, which sealing still permits — so nothing needed
+changing.
+
+Not done here: the WebSocket wire types (`WSRequest`, `WSResponse`,
+`WSResponseType`, `WSResponseError`) are also unsealed, and sealing them would be
+a prerequisite for evolving the protocol additively. They are *constructed* by
+the cache server, so sealing needs constructors designed alongside whatever
+protocol change actually needs them, rather than speculatively.
 ## 19th July 2026
 
 ### 0.8.15 — agent names (`resolve_any`)
