@@ -11,7 +11,7 @@ use affinidi_task_utils::TaskSupervisor;
 use axum::{Router, routing::get};
 use http::Method;
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tower_http::{
     cors::CorsLayer,
@@ -120,6 +120,7 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
         max_did_size: config.max_did_size,
         webvh_client,
         agent_name_resolver,
+        agent_name_permits: Arc::new(Semaphore::new(config.agent_name_concurrency)),
     };
 
     // Supervise the statistics task through the shared TaskSupervisor: a

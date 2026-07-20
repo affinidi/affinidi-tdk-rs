@@ -41,6 +41,17 @@ enable_http_endpoint = "${ENABLE_HTTP_ENDPOINT:true}"
 # server has no rate limiting. Enable only if you accept that.
 enable_agent_names = "${ENABLE_AGENT_NAMES:false}"
 
+# Ceiling on agent name lookups fetching upstream at once.
+#
+# Agent name resolution turns one cheap inbound request into one outbound
+# request to a host the CALLER chose. Without a ceiling that is an amplification
+# primitive: this server can be driven to fan out traffic at third parties, or
+# to scan them, at a cost of one request each. The cap bounds that fan-out
+# however many source addresses the load arrives from. Requests over it are shed
+# with 503 rather than queued, so a saturated server does not accumulate an
+# unbounded backlog of pending fetches.
+agent_name_concurrency = "${AGENT_NAME_CONCURRENCY:16}"
+
 enable_websocket_endpoint = "${ENABLE_WEBSOCKET_ENDPOINT:true}"
 
 [cache]

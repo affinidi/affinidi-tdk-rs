@@ -13,10 +13,16 @@ use axum::{
 };
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tower::ServiceExt;
 
 /// A router with agent name resolution either on or off.
 async fn app(enable_agent_names: bool) -> axum::Router {
+    app_with_permits(enable_agent_names, 16).await
+}
+
+/// A router with an explicit outbound-fetch ceiling.
+async fn app_with_permits(enable_agent_names: bool, permits: usize) -> axum::Router {
     let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
         .await
         .unwrap();
@@ -38,6 +44,7 @@ async fn app(enable_agent_names: bool) -> axum::Router {
         } else {
             None
         },
+        agent_name_permits: Arc::new(Semaphore::new(permits)),
     };
 
     application_routes(&state, &config)
@@ -126,4 +133,70 @@ async fn did_resolution_still_works() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("did:key:"), "got {body}");
+}
+
+/// With every outbound-fetch permit already taken, a lookup must be **shed**
+/// rather than queued. Queueing would turn the fetch ceiling into an unbounded
+/// backlog, which is precisely what the ceiling exists to prevent.
+#[tokio::test]
+async fn sheds_lookups_once_the_fetch_ceiling_is_reached() {
+    let permits = Arc::new(Semaphore::new(1));
+    let held = permits.clone().acquire_owned().await.unwrap();
+
+    let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+        .await
+        .unwrap();
+    let state = SharedData {
+        service_start_timestamp: chrono::Utc::now(),
+        stats: Arc::new(Mutex::new(Statistics::default())),
+        resolver,
+        resolve_timeout: Duration::from_secs(5),
+        max_did_size: 1024,
+        webvh_client: reqwest::Client::new(),
+        agent_name_resolver: Some(Arc::new(agent_names::HttpRedirectResolver::new())),
+        agent_name_permits: permits.clone(),
+    };
+    let config = Config {
+        enable_agent_names: true,
+        ..Default::default()
+    };
+
+    let (status, body) = get(
+        application_routes(&state, &config),
+        "/did/v1/resolve-name/example.com/@alice",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body: {body}");
+    assert!(body.contains("retry shortly"), "got {body}");
+
+    // Releasing the permit lets lookups through again — the ceiling must not
+    // latch. This one fails upstream (no such host), which is fine: anything
+    // other than 503 proves the permit was reacquired.
+    drop(held);
+    let (status, _) = get(
+        application_routes(&state, &config),
+        "/did/v1/resolve-name/127.0.0.1/@alice",
+    )
+    .await;
+    assert_ne!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the ceiling should not latch after a permit is released"
+    );
+}
+
+/// A permit must be returned when a lookup fails, not leaked. A ceiling that
+/// drains on the error path would wedge the endpoint permanently.
+#[tokio::test]
+async fn a_failed_lookup_returns_its_permit() {
+    let app = app_with_permits(true, 1).await;
+    // Blocked-address failures, repeated well past the ceiling of 1.
+    for i in 0..5 {
+        let (status, _) = get(app.clone(), "/did/v1/resolve-name/127.0.0.1/@alice").await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_GATEWAY,
+            "iteration {i} should still reach the resolver, not exhaust permits"
+        );
+    }
 }

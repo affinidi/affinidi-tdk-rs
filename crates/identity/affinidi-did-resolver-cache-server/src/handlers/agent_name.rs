@@ -23,6 +23,11 @@
 //! - It is **off by default** (`enable_agent_names` in the config).
 //! - The resolver refuses non-public addresses (loopback, private, link-local,
 //!   cloud metadata) on every redirect hop.
+//! - At most `agent_name_concurrency` lookups fetch upstream at once, so the
+//!   endpoint cannot be used to fan out arbitrary traffic at third parties (or
+//!   to scan them) faster than that. Requests over the ceiling are shed with
+//!   503 rather than queued: a saturated server must not accumulate an
+//!   unbounded backlog of pending outbound fetches.
 //!
 //! Neither is complete — see `agent_names::HttpRedirectResolver::allow_private_addresses`
 //! on the residual DNS-rebinding exposure. Enable this only if you accept that
@@ -82,6 +87,20 @@ pub async fn resolve_name_handler(
         return (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "Agent name resolution is not enabled on this server" })),
+        );
+    };
+
+    // Take an outbound-fetch permit, or shed the request. `try_acquire` rather
+    // than `acquire` is the point: queueing here would convert a fetch ceiling
+    // into an unbounded backlog, which is the thing being defended against.
+    let Ok(_permit) = state.agent_name_permits.try_acquire() else {
+        state.stats.lock().await.increment_agent_name_error();
+        warn!("shedding agent name lookup '{parsed}': outbound fetch ceiling reached");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "Too many agent name lookups in flight; retry shortly"
+            })),
         );
     };
 
