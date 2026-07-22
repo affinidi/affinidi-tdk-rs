@@ -629,7 +629,10 @@ impl TryFrom<ConfigRaw> for Config {
                 mediator_secrets.clone(),
                 ttl_secs,
                 secrets_resolver.clone(),
-            );
+            )
+            // Our own DID, so each refresh tick can tell whether the VTA routes
+            // back through us and pick REST if it does.
+            .with_mediator_did(result.did.clone());
 
             Some((result, refresher))
         } else {

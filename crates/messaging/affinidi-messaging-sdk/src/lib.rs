@@ -203,13 +203,18 @@ use config::ATMConfig;
 use delete_handler::DeletionHandlerCommands;
 use errors::ATMError;
 use profiles::Profiles;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tokio::sync::{
     Mutex, RwLock, broadcast,
     mpsc::{self, Receiver, Sender},
 };
-use tracing::debug;
+use tracing::{debug, warn};
 use transports::websockets::WebSocketResponses;
+
+/// Upper bound on how long [`ATM::graceful_shutdown`] waits for the Deletion
+/// Handler to acknowledge its stop. Generous for a live handler, bounded so a
+/// dead or wedged one cannot hold shutdown open.
+const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 //pub mod authentication;
 pub mod config;
@@ -285,26 +290,47 @@ impl ATM {
         Ok(atm)
     }
 
+    /// Shut the SDK down: stop every profile's websocket transport, then stop
+    /// the Deletion Handler.
+    ///
+    /// Ordering is load-bearing. The websocket transports go FIRST because they
+    /// are the only part of the SDK that keeps acting on the outside world after
+    /// a shutdown begins: each one auto-reconnects on its own timer and holds
+    /// the mediator's one-socket-per-DID slot for its profile. Stopping the
+    /// Deletion Handler first (the historical order) left a window — and, if the
+    /// handler was already gone so no `Exit` ever arrived, an unbounded wait —
+    /// in which a half-shut-down session still owned a live, reconnecting socket
+    /// that the caller believed was closed. That window is how a service that
+    /// opens a session per refresh cycle accumulates orphaned sockets which then
+    /// duel over the same DID.
+    ///
+    /// Every step is bounded: shutdown must not be able to hang on a wedged
+    /// background task.
     pub async fn graceful_shutdown(&self) {
         debug!("Shutting down ATM SDK");
 
-        // turn off incoming messages on websockets
-
-        // Send a shutdown message to the Deletion Handler
-        let _ = self.abort_deletion_handler().await;
-        {
-            let mut guard = self.inner.deletion_handler_recv_stream.lock().await;
-            let _ = guard.recv().await;
-            // Only ever send back a closing command
-            // safe to exit now
-            debug!("Deletion Handler stopped");
-        }
-
+        // 1. Stop the websocket transports. `stop_websocket` clears the
+        //    profile's channel slot, so this is idempotent across repeat calls.
         {
             let profiles = &*self.inner.profiles.read().await;
             for (_, profile) in profiles.0.iter() {
-                // Send a Stop command to each profile
                 let _ = profile.stop_websocket().await;
+            }
+        }
+
+        // 2. Stop the Deletion Handler and wait (briefly) for its `Exit`. A
+        //    handler that already died sends nothing, so this wait is bounded —
+        //    never let a dead background task hold shutdown open.
+        let _ = self.abort_deletion_handler().await;
+        {
+            let mut guard = self.inner.deletion_handler_recv_stream.lock().await;
+            match tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, guard.recv()).await {
+                Ok(_) => debug!("Deletion Handler stopped"),
+                Err(_) => warn!(
+                    "Deletion Handler did not acknowledge shutdown within {}s; \
+                     continuing (its websockets are already stopped)",
+                    SHUTDOWN_DRAIN_TIMEOUT.as_secs()
+                ),
             }
         }
     }

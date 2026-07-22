@@ -30,12 +30,15 @@ use crate::common::metrics::names;
 use affinidi_messaging_mediator_common::MediatorSecrets;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
 use std::{
+    borrow::Cow,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
-use vta_sdk::integration::{self, FallbackReason, SecretSource, VtaServiceConfig};
+use vta_sdk::integration::{
+    self, FallbackReason, SecretSource, TransportPreference, VtaServiceConfig,
+};
 
 /// Default refresh interval when `cache_ttl == 0` (no-expiry policy).
 /// Picks a sensible cadence so the cache still tracks the latest VTA
@@ -73,6 +76,10 @@ pub struct VtaRefresher {
     pub cache_ttl_secs: u64,
     pub secrets_resolver: Arc<ThreadedSecretsResolver>,
     pub interval: Duration,
+    /// This mediator's own DID. Compared against the VTA's advertised DIDComm
+    /// mediator each tick to detect the self-mediated topology — see
+    /// [`Self::tick_config`].
+    pub mediator_did: String,
 }
 
 impl VtaRefresher {
@@ -89,6 +96,61 @@ impl VtaRefresher {
             cache_ttl_secs,
             secrets_resolver,
             interval,
+            // Empty = "unknown", which disables the self-mediation probe and
+            // leaves the configured transport untouched. Set it with
+            // [`Self::with_mediator_did`]; `new` keeps its original signature so
+            // this stays a non-breaking addition.
+            mediator_did: String::new(),
+        }
+    }
+
+    /// Tell the refresher this mediator's own DID, enabling the self-mediation
+    /// check in [`Self::tick_config`]. Without it, refresh ticks use the
+    /// configured transport preference unchanged.
+    pub fn with_mediator_did(mut self, mediator_did: String) -> Self {
+        self.mediator_did = mediator_did;
+        self
+    }
+
+    /// Pick the transport for one refresh tick.
+    ///
+    /// [`bootstrap_vta`] detects the self-mediated topology at boot, but the
+    /// refresh path used to re-run with `Auto` every time on the assumption that
+    /// "by the time this runs the listener is up, so DIDComm to ourselves
+    /// resolves cleanly". It does connect — and that is the problem. Each tick
+    /// then opens a *client* websocket, authenticated as the mediator's admin
+    /// DID, back into this same mediator. The mediator allows one socket per
+    /// DID, so every such session competes for the admin DID's slot with any
+    /// other session that outlived its owner; the result is an eviction duel
+    /// that saturates the server with connect/close churn.
+    ///
+    /// So: when the VTA routes through us, refresh over REST. Nothing is lost —
+    /// REST is the same authenticated fetch — and the mediator never dials
+    /// itself. Probe failures fall back to the configured preference; a probe
+    /// must never be the reason a refresh doesn't happen.
+    ///
+    /// [`bootstrap_vta`]: crate::common::config::vta_bootstrap::bootstrap_vta
+    async fn tick_config(&self) -> Cow<'_, VtaServiceConfig> {
+        if self.mediator_did.is_empty() {
+            return Cow::Borrowed(&self.service_config);
+        }
+
+        let vta_did = &self.service_config.auth.credential.vta_did;
+        match vta_sdk::session::resolve_mediator_did(vta_did).await {
+            Ok(Some(vta_mediator)) if vta_mediator == self.mediator_did => {
+                debug!(
+                    mediator_did = %self.mediator_did,
+                    "VTA is self-mediated; refreshing over REST to avoid dialling ourselves"
+                );
+                let mut config = self.service_config.clone();
+                config.context.transport_preference = TransportPreference::PreferRest;
+                Cow::Owned(config)
+            }
+            Ok(_) => Cow::Borrowed(&self.service_config),
+            Err(e) => {
+                debug!("Self-mediation probe failed ({e}); using the configured transport");
+                Cow::Borrowed(&self.service_config)
+            }
         }
     }
 
@@ -113,7 +175,8 @@ impl VtaRefresher {
             }
 
             let started = Instant::now();
-            let outcome = integration::startup_with_reason(&self.service_config, &cache).await;
+            let tick_config = self.tick_config().await;
+            let outcome = integration::startup_with_reason(&tick_config, &cache).await;
             metrics::histogram!(names::VTA_REFRESH_DURATION_SECONDS)
                 .record(started.elapsed().as_secs_f64());
 

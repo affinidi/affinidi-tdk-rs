@@ -184,10 +184,25 @@ impl ATMProfile {
 
     /// Stops the WebSocket connection for this profile
     /// This will stop the WebSocket connection and any related tasks
+    ///
+    /// Takes the command sender out of the profile rather than leaving it in
+    /// place. Two reasons: the transport task only exits once every sender is
+    /// gone or it has seen `Stop`, and `profile_enable_websocket` treats a
+    /// populated `ws_channel_tx` as "already connected" — so leaving the stale
+    /// sender behind made a stopped profile impossible to restart, silently
+    /// returning `Ok` while no transport was running. Idempotent: stopping an
+    /// already-stopped profile is a no-op.
     pub async fn stop_websocket(&self) -> Result<(), ATMError> {
-        if let Some(mediator) = &*self.inner.mediator
-            && let Some(channel) = &*mediator.ws_channel_tx.read().await
-        {
+        let Some(mediator) = &*self.inner.mediator else {
+            return Ok(());
+        };
+
+        let channel = mediator.ws_channel_tx.write().await.take();
+        // Drop the connection-state receiver with the sender; a fresh one is
+        // installed by the next `WebSocketTransport::start`.
+        let _ = mediator.ws_conn_state_rx.write().await.take();
+
+        if let Some(channel) = channel {
             channel.send(WebSocketCommands::Stop).await.map_err(|err| {
                 ATMError::TransportError(format!("Could not send websocket Stop command: {err:?}"))
             })?;
