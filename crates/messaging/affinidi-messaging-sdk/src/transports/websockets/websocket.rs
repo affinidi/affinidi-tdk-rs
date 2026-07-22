@@ -28,6 +28,13 @@ use tracing::{Instrument, Level, debug, error, span, warn};
 
 type WebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// How long a socket must stay up before we treat the connection as proven.
+///
+/// Longer than the 20s watchdog interval, so a "stable" connection is one that
+/// completed at least one ping/pong round-trip. See
+/// [`WebSocketTransport::on_disconnected`] for why this gate exists.
+const STABLE_CONNECTION: Duration = Duration::from_secs(30);
+
 /// A standalone task that manages the WebSocket connection to a mediator for a DID Profile
 pub(crate) struct WebSocketTransport {
     /// The ATM Profile that this WebSocket connection is associated with
@@ -49,6 +56,11 @@ pub(crate) struct WebSocketTransport {
     /// Counter tracking Websocket Ping/Pong responses
     /// Used to help with detecting when a websocket connection is lost
     awaiting_pong: bool,
+
+    /// When the current socket was established. `None` while disconnected.
+    /// Read by [`Self::on_disconnected`] to decide whether the connection
+    /// lived long enough to earn a backoff reset.
+    connected_at: Option<tokio::time::Instant>,
 
     /// Unix-seconds expiry of the access token the current socket was opened
     /// with. The mediator force-closes the socket at this time, so we use it
@@ -138,6 +150,7 @@ impl WebSocketTransport {
                 connect_delay_timer: None,
                 connect_delay: 0,
                 awaiting_pong: false,
+                connected_at: None,
                 access_expires_at: None,
                 inbound_cache: MessageCache {
                     fetch_cache_limit_count: shared.config.fetch_cache_limit_count,
@@ -177,6 +190,7 @@ impl WebSocketTransport {
                 connect_delay_timer: None,
                 connect_delay: 0,
                 awaiting_pong: false,
+                connected_at: None,
                 access_expires_at: None,
                 inbound_cache: MessageCache {
                     fetch_cache_limit_count: shared.config.fetch_cache_limit_count,
@@ -276,6 +290,10 @@ impl WebSocketTransport {
                         }
                         self.web_socket = None;
                         self.fail_pending_requests();
+                        // Self-initiated reconnect (not a failure): keep the
+                        // immediate retry, but clear the stability marker so the
+                        // fresh socket has to earn its own reset.
+                        self.connected_at = None;
                         self.connect_delay = 0;
                         self.connect_delay_timer = None;
                     },
@@ -287,7 +305,7 @@ impl WebSocketTransport {
                             }
                             self.web_socket = None;
                             self.fail_pending_requests();
-                            self.backoff_delay();
+                            self.on_disconnected();
                         } else if let Some(web_socket) = self.web_socket.as_mut() {
                             let _ = web_socket.send(Message::Ping(Bytes::new())).await;
                         }
@@ -464,7 +482,7 @@ impl WebSocketTransport {
                     debug!("WebSocket connection closed by server");
                     self.web_socket = None;
                     self.fail_pending_requests();
-                    self.backoff_delay();
+                    self.on_disconnected();
                 }
                 _ => {
                     warn!("Received unknown message type: {:?}", ws_msg);
@@ -477,13 +495,13 @@ impl WebSocketTransport {
                 warn!("WebSocket connection dropped");
                 self.web_socket = None;
                 self.fail_pending_requests();
-                self.backoff_delay();
+                self.on_disconnected();
             }
             Err(e) => {
                 error!("Generic websocket error: {:?}", e);
                 self.web_socket = None;
                 self.fail_pending_requests();
-                self.backoff_delay();
+                self.on_disconnected();
             }
         }
     }
@@ -605,15 +623,39 @@ impl WebSocketTransport {
         }
     }
 
+    /// Record that the live socket went away, and pick the next reconnect delay.
+    ///
+    /// A socket that survived [`STABLE_CONNECTION`] proved the endpoint healthy,
+    /// so its loss earns an immediate retry. A socket that died young did *not*.
+    ///
+    /// This distinction is load-bearing: resetting the backoff on connect alone
+    /// makes a connect-then-immediately-closed cycle unthrottled, because every
+    /// attempt "succeeds" before being killed. That is exactly what happens when
+    /// two clients for the same DID duel over the mediator's one-socket-per-DID
+    /// slot — each eviction is preceded by a successful connect, so the delay
+    /// never escalates past the first step and the pair reconnect at ~1 Hz
+    /// forever. Escalating on short-lived connections lets the duel decay to the
+    /// 60s cap instead.
+    fn on_disconnected(&mut self) {
+        let connected_for = self.connected_at.map(|since| since.elapsed());
+        self.connected_at = None;
+
+        let next = delay_after_disconnect(self.connect_delay, connected_for);
+        if next > self.connect_delay {
+            debug!(
+                connect_delay = next,
+                "Short-lived websocket connection; escalating reconnect backoff"
+            );
+        }
+        self.connect_delay = next;
+        self.connect_delay_timer = None;
+    }
+
     /// Calculate exponential backoff delay: 0→1→2→4→8→16→32→60s (capped).
     /// Jitter is applied separately at timer-creation time
     /// ([`jittered_backoff`]) so this base sequence stays deterministic.
     fn backoff_delay(&mut self) {
-        self.connect_delay = match self.connect_delay {
-            0 => 1,
-            d if d < 60 => (d * 2).min(60),
-            _ => 60,
-        };
+        self.connect_delay = escalate_delay(self.connect_delay);
         self.connect_delay_timer = None;
     }
 
@@ -635,8 +677,11 @@ impl WebSocketTransport {
         // Do toggle_live_delivery on this socket if not skipped
         if self.skip_toggle_live_delivery {
             debug!("Skipping toggle_live_delivery as requested");
-            self.connect_delay = 0;
+            // NB: the backoff is deliberately NOT reset here — connecting is not
+            // the same as staying connected. `on_disconnected` resets it once
+            // this socket has survived `STABLE_CONNECTION`.
             self.connect_delay_timer = None;
+            self.connected_at = Some(tokio::time::Instant::now());
             self.awaiting_pong = false;
             Some(web_socket)
         } else {
@@ -664,8 +709,10 @@ impl WebSocketTransport {
             match send_result {
                 Ok(()) => {
                     debug!("Live streaming enabled");
-                    self.connect_delay = 0;
+                    // See the sibling branch: the backoff reset belongs to
+                    // `on_disconnected`, not to a bare successful connect.
                     self.connect_delay_timer = None;
+                    self.connected_at = Some(tokio::time::Instant::now());
                     self.awaiting_pong = false;
                     Some(web_socket)
                 }
@@ -774,6 +821,28 @@ fn jittered_backoff(base_secs: u8) -> Duration {
     Duration::from_secs_f64(base_secs as f64 * factor)
 }
 
+/// Next backoff step: 0→1→2→4→8→16→32→60s (capped).
+fn escalate_delay(current: u8) -> u8 {
+    match current {
+        0 => 1,
+        d if d < 60 => (d * 2).min(60),
+        _ => 60,
+    }
+}
+
+/// Next `connect_delay` after the live socket went away.
+///
+/// `connected_for` is how long the socket that just died had been up (`None` if
+/// there was no live socket — i.e. the connect attempt itself failed). Only a
+/// connection that lasted [`STABLE_CONNECTION`] earns a reset; see
+/// [`WebSocketTransport::on_disconnected`] for why anything else must escalate.
+fn delay_after_disconnect(current: u8, connected_for: Option<Duration>) -> u8 {
+    match connected_for {
+        Some(lifetime) if lifetime >= STABLE_CONNECTION => 0,
+        _ => escalate_delay(current),
+    }
+}
+
 /// How long after connecting to proactively refresh the access token and
 /// reconnect: 80% of the token's remaining lifetime, leaving the final ~20%
 /// as budget to refresh + reconnect before the mediator force-closes the
@@ -786,6 +855,65 @@ fn refresh_after_secs(ttl_secs: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_lived_connection_earns_an_immediate_retry() {
+        // A socket that proved itself and then dropped should come straight
+        // back, whatever the delay had climbed to beforehand.
+        for current in [0u8, 1, 8, 60] {
+            assert_eq!(
+                delay_after_disconnect(current, Some(STABLE_CONNECTION)),
+                0,
+                "a stable connection must reset the backoff"
+            );
+        }
+        assert_eq!(
+            delay_after_disconnect(4, Some(STABLE_CONNECTION + Duration::from_secs(3600))),
+            0
+        );
+    }
+
+    #[test]
+    fn a_short_lived_connection_escalates_instead_of_resetting() {
+        // The duel case: connect succeeds, then the peer is evicted moments
+        // later. Every attempt "succeeds", so if success alone reset the delay
+        // this pair would reconnect at ~1Hz forever. Walk the full ladder to
+        // the cap to prove it decays instead.
+        let brief = Some(Duration::from_millis(200));
+        let mut delay = 0u8;
+        for expected in [1u8, 2, 4, 8, 16, 32, 60] {
+            delay = delay_after_disconnect(delay, brief);
+            assert_eq!(delay, expected, "backoff must escalate on a short session");
+        }
+        // Capped, not wrapping (u8 would overflow at 128).
+        for _ in 0..10 {
+            delay = delay_after_disconnect(delay, brief);
+            assert_eq!(delay, 60);
+        }
+    }
+
+    #[test]
+    fn a_failed_connect_attempt_escalates() {
+        // No socket ever came up, so there is nothing to have been stable.
+        assert_eq!(delay_after_disconnect(0, None), 1);
+        assert_eq!(delay_after_disconnect(16, None), 32);
+        assert_eq!(delay_after_disconnect(60, None), 60);
+    }
+
+    #[test]
+    fn stability_threshold_outlasts_the_watchdog_interval() {
+        // "Stable" must mean at least one completed ping/pong round-trip,
+        // otherwise a connection we never proved could reset the backoff.
+        assert!(
+            STABLE_CONNECTION > Duration::from_secs(20),
+            "STABLE_CONNECTION must exceed the 20s watchdog interval"
+        );
+        // Just under the threshold still escalates — no off-by-one grace.
+        assert_eq!(
+            delay_after_disconnect(2, Some(STABLE_CONNECTION - Duration::from_millis(1))),
+            4
+        );
+    }
 
     #[test]
     fn refresh_fires_before_expiry_with_budget_to_spare() {

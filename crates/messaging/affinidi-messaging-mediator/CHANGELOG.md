@@ -2,6 +2,46 @@
 
 ## Changelog history
 
+## 22nd July 2026
+
+### 0.17.6 — stop the mediator dialling itself, and damp duplicate-socket duels
+
+Two independent faults combined into a self-inflicted connection storm: a
+mediator whose VTA routes DIDComm back through it saturated itself with
+websocket connect/close churn on its own admin DID (observed: ~40 connects/sec,
+plus a matching flood of `DELETE /mediator/v1/delete`).
+
+- **The VTA refresh task no longer opens a DIDComm session to this mediator.**
+  `vta_bootstrap` detects the self-mediated topology at boot, but
+  `tasks::vta_refresh` re-ran with `TransportPreference::Auto` on every tick
+  (every `cache_ttl/4`, clamped to 5min–1h) on the assumption that DIDComm to
+  ourselves "resolves cleanly once the listener is up". It connects — that is
+  the problem. Each tick opened a *client* websocket, authenticated as the
+  mediator's admin DID (which is also its VTA credential), back into this same
+  mediator, competing for that DID's one-socket slot. Each tick now re-checks
+  whether the VTA's advertised DIDComm mediator is us and refreshes over REST
+  when it is. Probe failures fall back to the configured preference — a probe
+  must never stop a refresh.
+
+  `VtaRefresher::with_mediator_did` supplies the DID for that check;
+  `VtaRefresher::new` is unchanged and an unset DID keeps the previous
+  behaviour.
+
+- **Duplicate-socket duels are damped instead of amplified.** Newest-wins is
+  right for an isolated duplicate — a client reconnecting after a half-open
+  socket must be able to reclaim its slot — but wrong for a sustained duel:
+  every takeover evicts a peer that immediately reconnects and takes the slot
+  straight back. After `CHURN_REFUSE_STREAK` (3) replacements inside the 5s
+  churn window, the incumbent keeps the slot and the contender is closed,
+  *provided the incumbent's channel is still alive* — a dead incumbent can
+  never lock a DID out. Self-limiting: refusals don't refresh the incumbent's
+  registration time, so once it ages past the churn window the next contender
+  is accepted normally. New counter: `websocket_churn_refused_total`.
+
+Requires `affinidi-messaging-sdk` 0.18.61, which stops client-side reconnect
+backoff from resetting on a connection that is immediately closed — the third
+leg of the same storm.
+
 ## 19th July 2026
 
 ### 0.17.4 — didwebvh-rs 0.6

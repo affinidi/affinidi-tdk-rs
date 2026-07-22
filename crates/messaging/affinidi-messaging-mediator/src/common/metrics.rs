@@ -102,6 +102,11 @@ pub mod names {
     pub const WEBSOCKET_REDELIVERED_MESSAGES_TOTAL: &str = "websocket_redelivered_messages_total";
     /// counter: Duplicate replacements occurring within the churn window (flip-flop signal)
     pub const WEBSOCKET_DUPLICATE_CHURN_TOTAL: &str = "websocket_duplicate_churn_total";
+    /// counter: New WebSocket registrations refused because the DID was in a
+    /// sustained replacement duel and the incumbent socket was still alive.
+    /// Non-zero means the duel damper is holding a DID's slot steady — pair it
+    /// with `WEBSOCKET_DUPLICATE_CHURN_TOTAL` to find the offending DID.
+    pub const WEBSOCKET_CHURN_REFUSED_TOTAL: &str = "websocket_churn_refused_total";
 
     // ── Rate limiting ───────────────────────────────────────────────────────
 

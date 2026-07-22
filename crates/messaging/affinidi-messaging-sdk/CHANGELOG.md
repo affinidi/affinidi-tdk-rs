@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.18.61] - 2026-07-22
+
+### Fixed
+
+- **Reconnect backoff no longer resets on a connection that doesn't survive.**
+  `connect_delay` was zeroed the moment a socket connected and the
+  live-delivery frame was written; it only escalated on connect *failures*. A
+  socket that connects and is then closed by the mediator therefore never
+  backed off past the first step. Two clients authenticated as the same DID
+  duelling over the mediator's one-socket-per-DID slot each saw
+  "connect → success → evicted", pinning both at a ~1s reconnect loop
+  indefinitely (observed: ~40 connects/sec sustained against a production
+  mediator). A connection must now stay up for 30s — longer than the 20s
+  watchdog, so at least one ping/pong completed — before its loss earns an
+  immediate retry; anything shorter escalates 1→2→4→…→60s as a connect failure
+  always did.
+
+  **Behavioural change:** a client evicted by a duplicate session for its DID
+  now reconnects on the backoff ladder rather than instantly. Deployments
+  running a single session per DID are unaffected.
+
+- **`graceful_shutdown` now stops websockets first, and cannot hang.** The
+  Deletion Handler was stopped first, followed by an *unbounded* wait for its
+  `Exit`; the profiles' websocket transports were stopped only afterwards. A
+  handler that had already died sent no `Exit`, so shutdown could stall with
+  the websocket transports still running — and those auto-reconnect on their
+  own timer and hold the mediator's slot for the profile's DID. Callers that
+  open a session per refresh cycle accumulated orphaned, reconnecting sockets
+  this way. Websockets are now torn down first and the handler drain is bounded
+  at 5s.
+
+- **`ATMProfile::stop_websocket` clears the profile's channel slot.** It left
+  the stale `Sender` in place, so `profile_enable_websocket` saw a populated
+  slot, reported "already connected" and returned `Ok` — leaving a stopped
+  profile permanently unable to reconnect. Now idempotent, and a stopped
+  profile can be re-enabled.
+
 ## [0.18.60] - 2026-07-19
 
 ### Changed
