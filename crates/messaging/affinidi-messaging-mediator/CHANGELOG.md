@@ -2,6 +2,57 @@
 
 ## Changelog history
 
+## 23rd July 2026
+
+### 0.17.9 — streaming Start/Stop act only for the session that owns the DID's slot
+
+`clients` is keyed by DID hash, not by connection, so a `live-delivery-change`
+from a session that had already been replaced flipped delivery for its
+*successor*. A stale `Stop` cleared both `active` and the stored `Live` state,
+leaving a healthy socket connected and silently no longer receiving pushes —
+the same shape as the `Deregister` bug fixed in 0.17.7, and just as invisible
+from either end.
+
+Both variants now carry their `session_id` and are applied only while that
+session still holds the slot. An activation for a DID with no registered client
+is dropped rather than written through to the store: marking a DID `Live` with
+no channel to deliver on only produces "not in clients HashMap" warnings later.
+(#653)
+
+### 0.17.8 — opt-in delete-to-ack for raw-TSP delivery (`tsp-ack`)
+
+Raw-TSP deleted a message the moment it was written to the socket and documented
+that as at-least-once. It was not: a successful send means the frame reached the
+mediator's local sink, not the peer, so a connection dropping in between lost the
+message with nothing left to redeliver.
+
+A client offering the `tsp-ack` subprotocol now gets send-and-keep; it
+acknowledges by deleting through the ordinary authenticated path once it holds
+the frame. Nothing is deleted on send in that mode, and anything un-acked when
+the connection dies is redelivered on reconnect.
+
+**Opt-in.** Plain `tsp` keeps delete-on-send byte for byte, so no deployed client
+changes behaviour. Clients that opt in must be **idempotent** — at-least-once
+means a frame can arrive twice. Note the subprotocol negotiation is ordering-
+sensitive by design: a mediator that predates this echoes the client's list
+unchanged, so clients list `tsp` first and this mediator narrows its offer to
+`tsp-ack`, making the echo a trustworthy capability signal. (#651)
+
+### 0.17.7 — TSP frames arriving after the socket is open are actually delivered
+
+A raw-TSP websocket was only ever `Registered`, never `Live`: only `Start`
+promotes a client, and `Start` came solely from the DIDComm
+`messagepickup/3.0/live-delivery-change` message, which a binary-only raw-TSP
+socket cannot send. With the client not live, `store_message` skipped the
+streaming publish, so the socket's re-drain never fired and **flush-on-connect
+was the only delivery it ever got** — everything arriving afterwards was stored
+and left in the inbox. Reproduced at 0 of 10 frames delivered between two local
+accounts; 10 of 10 after the fix.
+
+Also fixed: a `Deregister` from a session that had already been replaced removed
+its successor's channel from the client map, closing a healthy socket with
+"streaming task unavailable". Deregistration now names its session. (#646)
+
 ## 22nd July 2026
 
 ### 0.17.6 — stop the mediator dialling itself, and damp duplicate-socket duels

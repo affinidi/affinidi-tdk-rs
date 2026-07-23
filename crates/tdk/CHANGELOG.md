@@ -1,5 +1,15 @@
 # Affinidi TDK Changelog
 
+> [!IMPORTANT]
+> **This file is no longer updated** (last entry: 24th March 2026). Release
+> notes live in each crate's own `CHANGELOG.md`:
+>
+> - [`affinidi-tdk`](affinidi-tdk/CHANGELOG.md)
+> - [`affinidi-tdk-common`](affinidi-tdk-common/CHANGELOG.md)
+> - [`affinidi-tdk-test-support`](affinidi-tdk-test-support/CHANGELOG.md)
+>
+> The history below is kept for the record.
+
 ## 10th March 2026
 
 - **CHORE:** Updated `affinidi-messaging-didcomm` re-export to 0.13.0

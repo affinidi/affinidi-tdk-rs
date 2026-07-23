@@ -2,6 +2,39 @@
 
 ## Changelog history
 
+## 23rd July 2026
+
+### 0.2.42 — a slow consumer must not lose packed frames
+
+- `tsp_pickup_socket.rs`: `a_slow_consumer_does_not_lose_packed_frames` sends 130
+  frames (the SDK's default cache limit is 100) while the consumer polls for
+  nothing at all, then drains and requires every one. Under the previous
+  drop-oldest policy it fails with exactly the predicted loss — 30 frames, oldest
+  first. Sends are paced 15ms apart because the mediator rate-limits inbound at
+  100 req/s per IP with a burst of 50. (#655)
+
+### 0.2.41 — delete-to-ack coverage
+
+- `tsp_websocket.rs`: `tsp_ack_mode_keeps_the_message_until_the_client_acks` (the
+  message is still in the inbox after delivery, gone after the ack),
+  `an_unacked_tsp_message_is_redelivered_on_reconnect` (the loss window closed —
+  under delete-on-send that frame is gone for good),
+  `an_unacked_message_is_not_resent_within_the_same_connection` (redelivery stays
+  a reconnect-time recovery, not the steady state), and
+  `tsp_ack_is_selected_even_though_the_client_lists_it_second` (pins the
+  subprotocol negotiation, without which mediator support is indistinguishable
+  from the echo an older mediator gives anyway). (#651)
+
+### 0.2.40 — live raw-TSP delivery coverage
+
+- `tsp_websocket.rs`: `tsp_websocket_delivers_messages_that_arrive_after_connect`.
+  Every existing raw-TSP test queued its message *before* connecting, so all of
+  them passed on flush-on-connect alone — which is how a total delivery failure
+  shipped unnoticed. This one connects first, against an empty inbox, then sends.
+- New `tsp_pickup_socket.rs`: `tsp_frame_arriving_between_polls_is_not_dropped`
+  sleeps before polling so the frame provably lands with no `Next` outstanding.
+  (#646)
+
 ## 2nd July 2026
 
 ### 0.2.36 — TSP capability-learning e2e

@@ -2,6 +2,25 @@
 
 ## Changelog history
 
+> [!IMPORTANT]
+> **This file is no longer updated.** Release notes live in each crate's own
+> `CHANGELOG.md` — a directory-level file cannot say which crate a change
+> shipped in, and every crate here versions independently. Start with:
+>
+> - [`affinidi-messaging-mediator`](affinidi-messaging-mediator/CHANGELOG.md)
+> - [`affinidi-messaging-sdk`](affinidi-messaging-sdk/CHANGELOG.md)
+> - [`affinidi-messaging-didcomm`](affinidi-messaging-didcomm/CHANGELOG.md)
+> - [`affinidi-messaging-didcomm-service`](affinidi-messaging-didcomm-service/CHANGELOG.md)
+> - [`affinidi-messaging-delivery`](affinidi-messaging-delivery/CHANGELOG.md)
+> - [`affinidi-messaging-test-mediator`](affinidi-messaging-test-mediator/CHANGELOG.md)
+> - [`affinidi-tsp`](affinidi-tsp/CHANGELOG.md)
+>
+> The history below is kept for the record and stops at Mediator 0.15.5
+> (24th May 2026). Anything after that is in the per-crate files — this file
+> being both stale and plausible is how a recent change got written to it by
+> mistake.
+
+
 Why are there skipped version numbers? Sometimes when deploying via CI/CD Pipeline
 we find little issues that only affect deployment.
 
@@ -24,64 +43,6 @@ tooling.
   that stalls stalls its own connection instead. The queue is bounded by
   the same count *and* byte limits as the DIDComm cache
   (`fetch_cache_limit_count` / `fetch_cache_limit_bytes`).
-
-## 23rd July 2026
-
-### Mediator (0.17.9) / SDK (0.18.63) / Test Mediator (0.2.41)
-
-Raw-TSP WebSocket delivery: one outright delivery failure, one delivery
-guarantee that was documented but not implemented, and one silent
-stop-delivering bug. All three were invisible from both ends of the wire —
-the sender saw success and the recipient saw nothing.
-
-- **FIX: TSP frames arriving after the socket was open were never
-  delivered** (#646, mediator 0.17.7 / SDK 0.18.62). Two independent
-  faults. (1) A raw-TSP websocket was only ever `Registered`, never
-  `Live`: only `Start` promotes a client, and `Start` came solely from
-  the DIDComm `messagepickup/3.0/live-delivery-change` message, which a
-  binary-only raw-TSP socket cannot send. With the client not live,
-  `store_message` skipped the streaming publish, so the socket's re-drain
-  never fired and **flush-on-connect was the only delivery it ever got** —
-  everything arriving afterwards was stored and left in the inbox. (2) The
-  SDK dropped packed frames (all TSP frames) that arrived with no `Next`
-  request outstanding and no direct channel attached: the DIDComm branch
-  caches an unmatched message, the packed branch had nowhere to put one, so
-  a polling consumer lost any frame landing between polls. Also: a
-  `Deregister` from a replaced session evicted its successor's channel
-  (closing a healthy socket with "streaming task unavailable"), and
-  `TspWebSocket::recv` collapsed close frames to `Ok(None)`, discarding the
-  reason the mediator gave for closing.
-
-  *Reproduced at 0 of 10 frames delivered between two local accounts; 10 of
-  10 after the fix.*
-
-- **FEAT: opt-in delete-to-ack for raw-TSP (`tsp-ack`)** (#651, mediator
-  0.17.8 / SDK 0.18.63). Raw-TSP deleted a message the moment it was
-  written to the socket and documented that as at-least-once. It wasn't: a
-  successful send means the frame reached the mediator's local sink, not
-  the peer, so a connection dropping in between lost the message with
-  nothing left to redeliver. A client offering the `tsp-ack` subprotocol
-  now gets send-and-keep, acknowledging via the ordinary authenticated
-  delete once it holds the frame; anything un-acked when the connection
-  dies is redelivered on reconnect. No new wire protocol — the delete key
-  is `sha256` of the stored body, which is the base64url of exactly the
-  bytes on the wire, so the client derives the id itself.
-
-  **Opt-in on purpose.** Plain `tsp` keeps delete-on-send byte for byte, so
-  no deployed client changes behaviour. Clients that opt in **must be
-  idempotent**: at-least-once means a frame may arrive twice. Note the
-  subprotocol ordering is load-bearing — clients list `tsp` before
-  `tsp-ack`, because an older mediator reflects the client's list and would
-  otherwise echo `tsp-ack` without implementing it.
-
-- **FIX: streaming `Start`/`Stop` acted on the wrong connection** (#653,
-  mediator 0.17.9). `clients` is keyed by DID hash, not by connection, so a
-  `live-delivery-change` from a session that had already been replaced
-  flipped delivery for its *successor*. A stale `Stop` cleared both
-  `active` and the stored `Live` state, leaving a healthy socket connected
-  and silently no longer receiving pushes. Both variants now carry their
-  `session_id` and are applied only when that session still owns the slot —
-  completing the same fix made for `Deregister` in #646.
 
 ## 24th May 2026
 

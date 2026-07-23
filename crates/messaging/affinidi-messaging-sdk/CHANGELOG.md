@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.18.64] - 2026-07-23
+
+### Fixed
+
+- **A slow consumer silently lost packed (TSP) frames.** The packed-frame queue
+  added in 0.18.62 sat outside the socket-read backpressure guard, so the only
+  way to honour its bound was to discard the oldest frame — and a discarded
+  packed frame is unrecoverable, because under delete-on-send the mediator drops
+  its copy the moment it writes it. A consumer that stopped polling long enough
+  lost messages outright, with a `warn!` as the only trace. Measured: 130 frames
+  sent while the consumer idled lost exactly 30 (the amount over the 100-frame
+  default limit), oldest first.
+
+  Both inbound caches now share one policy — **back-pressure, never discard**.
+  When either queue is full the select loop stops reading the socket; a consumer
+  that has stopped consuming stalls its own connection, a visible failure,
+  rather than silently losing messages. The packed queue is bounded by the same
+  count *and* byte limits as the DIDComm cache. (#655)
+
+## [0.18.63] - 2026-07-23
+
+### Added
+
+- **`connect_websocket_acked` — opt-in delete-to-ack for raw-TSP** (`tsp-ack`
+  subprotocol). The mediator sends and keeps; `TspWebSocket::ack` releases its
+  copy once you actually hold the frame. Anything un-acked when the connection
+  dies is redelivered on reconnect, so consumers **must be idempotent**. The
+  message id is derived, not transmitted — `sha256` of the stored body, which is
+  the base64url of exactly the bytes on the wire — so no protocol change was
+  needed. `is_acked()` reports what was really negotiated: a mediator predating
+  the mode echoes the client's subprotocol list unchanged, so a downgrade is
+  detected and warned about rather than silently leaving you at-most-once.
+  Plain `connect_websocket` is unchanged. (#651)
+
+### Changed
+
+- **`TspWebSocket::recv` surfaces the close reason.** A close frame is now an
+  `Err` carrying the mediator's RFC 6455 code and reason ("replaced by a newer
+  connection", "authentication token expired", "streaming task unavailable"),
+  instead of collapsing every one of them — and a socket that merely went quiet
+  — into a bare `Ok(None)`. A stream that ends with no close frame still returns
+  `Ok(None)`. (#651)
+
+## [0.18.62] - 2026-07-23
+
+### Fixed
+
+- **Packed (TSP) frames arriving between polls were dropped.** A TSP frame is
+  handed back packed and was delivered only if a `Next` request happened to be
+  outstanding at that instant or a direct channel was attached; otherwise it fell
+  off the end of the function. The DIDComm branch caches an unmatched message,
+  but the packed branch had nowhere to put one — `inbound_cache` is keyed by
+  unpacked DIDComm message id. A polling consumer always leaves a gap between one
+  poll returning and the next being registered, so this was a race it could only
+  lose. Packed frames now go to a queue that the next `Next` drains, and every
+  arm hands the frame onward rather than dropping it. (#646)
+
 ## [0.18.61] - 2026-07-22
 
 ### Fixed
