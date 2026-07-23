@@ -100,7 +100,14 @@ pub enum StreamingUpdateState {
     },
     Start,
     Stop,
-    Deregister,
+    /// Remove the map entry for this DID — but only if it is still *this*
+    /// session's entry. `clients` is keyed by DID hash, not by connection, so a
+    /// deregistration must name the session it belongs to: a socket that has
+    /// already been replaced (one DID, one slot) would otherwise evict its
+    /// successor on the way out. See the session-id check in the handler.
+    Deregister {
+        session_id: String,
+    },
 }
 
 /// Used to send commands from the streaming task to the websocket handler
@@ -324,18 +331,42 @@ impl StreamingTask {
                                         error!("Error stopping streaming for client ({}): {}",value.did_hash, err);
                                     }
                                 },
-                                StreamingUpdateState::Deregister => {
-                                    let count = if !clients.is_empty() {
-                                        clients.len() - 1
-                                    } else {
-                                        warn!("Duplicate websocket channels has us off by one");
-                                        0
-                                    };
-                                    info!("Deregistered streaming for DID: ({}) registered_clients({})", value.did_hash, count);
-                                    if let Err(err) = database.streaming_set_state(&value.did_hash, &self.uuid, StreamingClientState::Deregistered).await {
-                                        error!("Error stopping streaming for client ({}): {}",value.did_hash, err);
+                                StreamingUpdateState::Deregister { session_id } => {
+                                    // Only the session that currently owns the slot may
+                                    // vacate it. One DID has one entry, so a socket that
+                                    // was already replaced still runs its own teardown —
+                                    // and an unconditional remove here would take the
+                                    // *successor's* channel out with it. Dropping that
+                                    // `tx` closes the live socket's command channel, so
+                                    // its handler exits with "streaming task unavailable"
+                                    // and the client sees the connection closed for no
+                                    // reason it can act on. Common whenever one DID hands
+                                    // off between transports (a DIDComm session closing
+                                    // as a raw-TSP socket opens).
+                                    match clients.get(value.did_hash.as_str()) {
+                                        Some(entry) if entry.session_id != *session_id => {
+                                            debug!(
+                                                did_hash = %value.did_hash,
+                                                leaving_session = %session_id,
+                                                current_session = %entry.session_id,
+                                                "Ignoring deregistration from a replaced session; the slot belongs to a newer connection",
+                                            );
+                                        }
+                                        Some(_) => {
+                                            clients.remove(value.did_hash.as_str());
+                                            info!("Deregistered streaming for DID: ({}) registered_clients({})", value.did_hash, clients.len());
+                                            if let Err(err) = database.streaming_set_state(&value.did_hash, &self.uuid, StreamingClientState::Deregistered).await {
+                                                error!("Error stopping streaming for client ({}): {}",value.did_hash, err);
+                                            }
+                                        }
+                                        None => {
+                                            debug!(
+                                                did_hash = %value.did_hash,
+                                                leaving_session = %session_id,
+                                                "Deregistration for a DID with no registered client",
+                                            );
+                                        }
                                     }
-                                    clients.remove(value.did_hash.as_str());
                                 }
                             }
                         }

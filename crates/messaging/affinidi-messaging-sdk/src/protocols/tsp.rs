@@ -1457,9 +1457,22 @@ impl TspWebSocket {
     /// Receive the next raw qb2 TSP frame.
     ///
     /// Returns `Ok(Some(bytes))` for a delivered message (unpack it with
-    /// [`TspOps::unpack_bytes`]), or `Ok(None)` when the socket closes / the
-    /// stream ends. Control frames (`Ping`/`Pong`) and any `Text` frames are
-    /// skipped transparently.
+    /// [`TspOps::unpack_bytes`]). Control frames (`Ping`/`Pong`) and any `Text`
+    /// frames are skipped transparently.
+    ///
+    /// When the socket goes away:
+    /// - the peer sent a **close frame** → `Err`, carrying its RFC 6455 code and
+    ///   reason. The mediator always states why it closed a socket
+    ///   ("replaced by a newer connection", "authentication token expired",
+    ///   "streaming task unavailable", …) and that reason is the difference
+    ///   between an operator diagnosing the problem and guessing at it. It used
+    ///   to be discarded, collapsing every one of those into a bare `Ok(None)`
+    ///   that read, to the caller, exactly like "nothing arrived".
+    /// - the stream **ended with no close frame** (peer vanished / transport
+    ///   died) → `Ok(None)`. There is genuinely nothing to report.
+    ///
+    /// Either way the socket is finished: polling again cannot produce a
+    /// message, so callers should reconnect rather than retry.
     pub async fn recv(&mut self) -> Result<Option<Vec<u8>>, ATMError> {
         use futures_util::StreamExt;
         use tokio_tungstenite::tungstenite::Message;
@@ -1467,7 +1480,21 @@ impl TspWebSocket {
         loop {
             match self.ws.next().await {
                 Some(Ok(Message::Binary(bytes))) => return Ok(Some(bytes.to_vec())),
-                Some(Ok(Message::Close(_))) | None => return Ok(None),
+                Some(Ok(Message::Close(frame))) => {
+                    return Err(ATMError::TransportError(match frame {
+                        Some(frame) if !frame.reason.is_empty() => format!(
+                            "TSP websocket closed by the mediator: {} ({})",
+                            frame.reason, frame.code
+                        ),
+                        Some(frame) => {
+                            format!("TSP websocket closed by the mediator: code {}", frame.code)
+                        }
+                        None => {
+                            "TSP websocket closed by the mediator (no reason given)".to_string()
+                        }
+                    }));
+                }
+                None => return Ok(None),
                 Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Text(_))) => continue,
                 Some(Ok(Message::Frame(_))) => continue,
                 Some(Err(e)) => {
