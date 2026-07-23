@@ -4,6 +4,20 @@
 
 ## 23rd July 2026
 
+### 0.8.21 — `resolve_any` accepts a community name
+
+`resolve_any("example.com/@")` now classifies as an agent name and resolves,
+where it previously failed as malformed. The agent name FAQ gives a name with
+an empty local part to the verifiable trust community that owns the domain,
+and `agent-names` 0.1.3 parses it. Requires that version or later — the
+manifest requirement stays `0.1` because both crates release together, so a
+`0.1.3` floor would not resolve at publish time.
+
+`example.com/@/path` is still rejected: the community name takes no path.
+
+No API change. `AgentName::is_community()` distinguishes the form for callers
+that key storage by local name and need to route it elsewhere.
+
 ### 0.8.20 — a display name for a resolved DID
 
 `ResolveResponse::display_name()` returns the verified human name for a DID

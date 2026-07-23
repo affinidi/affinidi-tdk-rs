@@ -18,7 +18,24 @@ pub const AGENT_NAME_MARKER: &str = "/@";
 /// connect.me/@bob
 /// names.somewhere.info/@john-smith
 /// firstperson.network/@drummond/h2hsummit
+/// example.com/@                             # the community name
 /// ```
+///
+/// # The community name
+///
+/// A name whose local part is empty — `example.com/@` — belongs to the
+/// verifiable trust community (VTC) that owns the domain, and resolves to that
+/// community's VTA. The FAQ puts it as "exactly the same syntax — only without
+/// adding any path except the @ sign".
+///
+/// "Except the @ sign" is load-bearing: the community name carries **no** path,
+/// so `example.com/@/anything` is rejected rather than read as a context-
+/// qualified community name. Distinguish the form with [`AgentName::is_community`].
+///
+/// Whether a given domain lets anyone *claim* its community name is the issuing
+/// host's policy, not this crate's business — parsing says the string is
+/// well-formed, and Layer-1 verification still decides whether the DID it
+/// resolves to genuinely claims it back.
 ///
 /// # Canonicalisation
 ///
@@ -116,8 +133,19 @@ impl AgentName {
             .ok_or_else(|| invalid("path does not begin with '/@'"))?
             .to_string();
 
-        if local_name.is_empty() {
-            return Err(invalid("empty local name after '@'"));
+        // An empty local part is the community name (`example.com/@`) — the VTC
+        // that owns the domain. It is the one case where "no local name" is
+        // meaningful rather than a truncated `example.com/@alice`.
+        //
+        // The FAQ allows it "without adding any path except the @ sign", so a
+        // trailing path is not a context-qualified community name, it is
+        // malformed. Rejecting here also keeps `/@` unambiguous: without this,
+        // `example.com/@/alice` and `example.com/@alice` would differ only by a
+        // slash while looking near-identical in a URL bar.
+        if local_name.is_empty() && !segments.is_empty() {
+            return Err(invalid(
+                "the community name '/@' must not be followed by a path",
+            ));
         }
         // Only the first segment may carry the marker; `a/@b/@c` is ambiguous.
         if segments.iter().any(|s| s.starts_with('@')) {
@@ -162,8 +190,23 @@ impl AgentName {
     }
 
     /// The local name, without its `@`: `alice`.
+    ///
+    /// Empty for the community name (`example.com/@`); prefer
+    /// [`is_community`](Self::is_community) over testing this for emptiness, so
+    /// the intent is legible at the call site.
     pub fn local_name(&self) -> &str {
         &self.local_name
+    }
+
+    /// Is this the domain's community name — `example.com/@`?
+    ///
+    /// Such a name resolves to the VTA of the verifiable trust community that
+    /// owns the authority, rather than to an individual agent under it. Callers
+    /// that map names onto per-agent storage usually need to route this case
+    /// somewhere else (the domain's own identity), so it is worth branching on
+    /// rather than letting an empty key fall through.
+    pub fn is_community(&self) -> bool {
+        self.local_name.is_empty()
     }
 
     /// Trailing context path segments, if any: `["h2hsummit"]`.
@@ -276,6 +319,81 @@ mod tests {
         assert_eq!(n.path_segments(), ["can", "include", "paths"]);
     }
 
+    // --- the community name ---
+
+    /// The FAQ's three worked examples of a VTC name.
+    #[test]
+    fn parses_community_names() {
+        for (input, expected) in [
+            ("example.com/@", "https://example.com/@"),
+            ("connect.me/@", "https://connect.me/@"),
+            ("firstperson.network/@", "https://firstperson.network/@"),
+        ] {
+            let n = AgentName::parse(input).unwrap();
+            assert_eq!(n.as_str(), expected);
+            assert_eq!(n.local_name(), "");
+            assert!(n.is_community(), "{input} should be a community name");
+            assert!(n.path_segments().is_empty());
+        }
+    }
+
+    #[test]
+    fn community_name_keeps_its_authority() {
+        let n = AgentName::parse("https://example.com:8443/@").unwrap();
+        assert_eq!(n.authority(), "example.com:8443");
+        assert_eq!(n.as_str(), "https://example.com:8443/@");
+    }
+
+    #[test]
+    fn community_name_writes_without_scheme_as_the_faq_does() {
+        let n = AgentName::parse("https://example.com/@").unwrap();
+        assert_eq!(n.without_scheme(), "example.com/@");
+    }
+
+    /// A named agent is not the community, and vice versa.
+    #[test]
+    fn community_and_named_agents_are_distinct() {
+        let community = AgentName::parse("example.com/@").unwrap();
+        let alice = AgentName::parse("example.com/@alice").unwrap();
+        assert!(community.is_community());
+        assert!(!alice.is_community());
+        assert_ne!(community, alice);
+    }
+
+    /// Same convergence guarantee as a named agent — Layer-1 compares strings.
+    #[test]
+    fn all_spellings_of_a_community_name_converge() {
+        let forms = [
+            "example.com/@",
+            "https://example.com/@",
+            "https://EXAMPLE.com/@",
+            "https://example.com:443/@",
+            "https://example.com/@/",
+            "  example.com/@  ",
+        ];
+        let canonical: Vec<_> = forms
+            .iter()
+            .map(|f| {
+                AgentName::parse(f)
+                    .unwrap_or_else(|e| panic!("{f} should parse: {e}"))
+                    .as_str()
+                    .to_string()
+            })
+            .collect();
+        assert!(
+            canonical.windows(2).all(|w| w[0] == w[1]),
+            "spellings diverged: {canonical:?}"
+        );
+    }
+
+    #[test]
+    fn community_name_round_trips_through_display_and_from_str() {
+        let n: AgentName = "example.com/@".parse().unwrap();
+        assert_eq!(n.to_string(), "https://example.com/@");
+        let again: AgentName = n.to_string().parse().unwrap();
+        assert_eq!(n, again);
+    }
+
     // --- canonicalisation: the load-bearing cases for Layer-1 ---
 
     #[test]
@@ -357,10 +475,11 @@ mod tests {
         assert!(AgentName::parse("did:web:example.com").is_err());
     }
 
+    /// The community name is well-formed, but a path after `/@` is not.
     #[test]
-    fn rejects_empty_local_name() {
-        assert!(AgentName::parse("example.com/@").is_err());
+    fn rejects_community_name_with_a_path() {
         assert!(AgentName::parse("example.com/@/path").is_err());
+        assert!(AgentName::parse("example.com/@/alice/deeper").is_err());
     }
 
     #[test]
