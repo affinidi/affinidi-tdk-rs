@@ -82,8 +82,8 @@ async fn route_exists_when_enabled() {
 
 #[tokio::test]
 async fn rejects_a_malformed_agent_name() {
-    // Reaches the route (contains '/@') but has an empty local name.
-    let (status, body) = get(app(true).await, "/did/v1/resolve-name/example.com/@").await;
+    // Reaches the route (contains '/@'), but the community name takes no path.
+    let (status, body) = get(app(true).await, "/did/v1/resolve-name/example.com/@/path").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("error"), "got {body}");
 }

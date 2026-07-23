@@ -379,7 +379,9 @@ async fn backends_are_tried_in_order() {
 async fn a_malformed_agent_name_is_rejected_before_any_lookup() {
     let (client, calls) = client_with(IMMUTABLE_DID, &[], &[], 300).await;
 
-    assert!(client.resolve_any("example.com/@").await.is_err());
+    // A community name takes no path, so this is malformed rather than a
+    // context-qualified `example.com/@`.
+    assert!(client.resolve_any("example.com/@/path").await.is_err());
     assert_eq!(
         calls.load(Ordering::SeqCst),
         0,

@@ -178,6 +178,41 @@ mod tests {
         assert!(verify_also_known_as(&doc, &name("firstperson.network/@drummond")).is_err());
     }
 
+    // --- the community name ---
+
+    #[test]
+    fn accepts_community_name_claimed_by_the_document() {
+        let doc = doc_with(&["https://example.com/@"]);
+        assert!(verify_also_known_as(&doc, &name("example.com/@")).is_ok());
+    }
+
+    #[test]
+    fn accepts_scheme_less_community_entry() {
+        let doc = doc_with(&["example.com/@"]);
+        assert!(verify_also_known_as(&doc, &name("https://example.com/@")).is_ok());
+    }
+
+    /// The community name is not a prefix of the names under it: holding
+    /// `example.com/@` must not let a document answer for `@alice`.
+    #[test]
+    fn rejects_community_entry_for_a_named_agent_request() {
+        let doc = doc_with(&["https://example.com/@"]);
+        assert!(verify_also_known_as(&doc, &name("example.com/@alice")).is_err());
+    }
+
+    /// …and the reverse: an agent under the domain does not answer for the VTC.
+    #[test]
+    fn rejects_named_agent_entry_for_a_community_request() {
+        let doc = doc_with(&["https://example.com/@alice"]);
+        assert!(verify_also_known_as(&doc, &name("example.com/@")).is_err());
+    }
+
+    #[test]
+    fn rejects_community_name_of_a_different_domain() {
+        let doc = doc_with(&["https://evil.com/@"]);
+        assert!(verify_also_known_as(&doc, &name("example.com/@")).is_err());
+    }
+
     /// A near-miss that a naive `contains()` would wrongly accept.
     #[test]
     fn rejects_substring_near_miss() {

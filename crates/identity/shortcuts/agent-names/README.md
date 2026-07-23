@@ -10,7 +10,15 @@ example.com/@alice
 connect.me/@bob
 names.somewhere.info/@john-smith
 firstperson.network/@drummond/h2hsummit   # trailing path adds context
+example.com/@                             # the domain's own community
 ```
+
+A name with an empty local part is the **community name**: it belongs to the
+verifiable trust community (VTC) owning the domain and resolves to that
+community's VTA. It takes no path — `example.com/@/anything` is malformed — and
+`AgentName::is_community()` identifies it. It is otherwise an ordinary agent
+name, and is **not** a prefix of the names beneath it: claiming `example.com/@`
+does not let a document answer for `example.com/@alice`.
 
 An agent name is **not** a DID method. It is a shortcut layer in front of DID
 resolution, and the specification anticipates other shortcut kinds later — hence

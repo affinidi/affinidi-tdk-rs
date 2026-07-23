@@ -4,6 +4,35 @@ All notable changes to `agent-names` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-07-23
+
+### Added
+
+- Support for the **community name** — an agent name with an empty local part,
+  `example.com/@`, which the agent name FAQ defines as the name of the
+  verifiable trust community (VTC) owning the domain and which resolves to that
+  community's VTA. It was previously rejected as an "empty local name", so no
+  conforming implementation built on this crate could parse, resolve or verify
+  one.
+
+- `AgentName::is_community()` — true for `example.com/@`. Preferred over
+  testing `local_name()` for emptiness: consumers that key per-agent storage by
+  local name generally need to route the community case to the domain's own
+  identity instead of writing an empty key.
+
+### Changed
+
+- `example.com/@/path` is still rejected, now with the reason "the community
+  name '/@' must not be followed by a path" rather than "empty local name after
+  '@'". The FAQ admits the community form "without adding any path except the @
+  sign", so a trailing path is malformed rather than a context-qualified
+  community name.
+
+The community name is an ordinary agent name otherwise: it canonicalises by the
+same rules, and Layer-1 `alsoKnownAs` verification applies unchanged. It is
+**not** a prefix of the names beneath it — a document claiming `example.com/@`
+does not answer for `example.com/@alice`, nor the reverse.
+
 ## [0.1.2] - 2026-07-19
 
 ### Added

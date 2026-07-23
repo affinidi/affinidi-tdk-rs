@@ -9,10 +9,24 @@
  * connect.me/@bob
  * names.somewhere.info/@john-smith
  * firstperson.network/@drummond/h2hsummit   # trailing path adds context
+ * example.com/@                             # the domain's own community
  * ```
  *
  * An agent name is **not** a DID method. It is a shortcut layer in front of DID
  * resolution, and the specification anticipates other shortcut kinds later.
+ *
+ * # The community name
+ *
+ * A name with an empty local part — `example.com/@` — is the agent name of the
+ * verifiable trust community (VTC) that owns the domain, and resolves to that
+ * community's VTA. It carries no path: `example.com/@/anything` is malformed,
+ * not a context-qualified community name. Test for it with
+ * [`AgentName::is_community`] rather than checking `local_name()` for emptiness.
+ *
+ * The community name is an ordinary agent name in every other respect — same
+ * canonicalisation, and the same mandatory Layer-1 check below. In particular
+ * it is **not** a prefix of the names under it: a document claiming
+ * `example.com/@` does not thereby answer for `example.com/@alice`.
  *
  * # Resolution is two-stage, and the second stage is the important one
  *

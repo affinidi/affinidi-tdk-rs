@@ -436,7 +436,17 @@ mod tests {
     #[test]
     fn rejects_a_malformed_agent_name() {
         // Contains the marker, so it is treated as a name — and is invalid.
-        assert!(Identifier::parse("example.com/@").is_err());
+        // A community name takes no path, so this is not a qualified `/@`.
+        assert!(Identifier::parse("example.com/@/path").is_err());
+    }
+
+    /// `example.com/@` is the domain's community name, not a truncation.
+    #[test]
+    fn parses_a_community_name_as_an_agent_name() {
+        let Identifier::AgentName(name) = Identifier::parse("example.com/@").unwrap() else {
+            panic!("the community name should classify as an agent name");
+        };
+        assert!(name.is_community());
     }
 
     #[test]
