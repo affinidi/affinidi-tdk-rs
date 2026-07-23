@@ -1069,6 +1069,11 @@ mod tests {
 
     /// A document claiming no names yields no shortcut even with the option on —
     /// and, importantly, does not error.
+    ///
+    /// Gated: the shortcut *type* and field exist unconditionally so callers can
+    /// use `display_name()` in any build, but establishing one — and hence
+    /// `with_resolve_shortcuts` — needs the `agent-names` feature.
+    #[cfg(feature = "agent-names")]
     #[tokio::test]
     async fn no_claimed_names_yields_no_shortcut() {
         let config = config::DIDCacheConfigBuilder::default()

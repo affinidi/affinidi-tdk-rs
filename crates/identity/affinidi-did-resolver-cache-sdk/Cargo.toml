@@ -107,5 +107,13 @@ num-format = "0.4"
 number_prefix = "0.4"
 rayon = "1"
 
+# Exercises `resolve_any` and `with_resolve_shortcuts`, so it only builds with
+# the feature that provides them. Without this, `cargo test` on a build that
+# does not enable `agent-names` fails compiling the example rather than running
+# the suite.
+[[example]]
+name = "agent_name_diagnose"
+required-features = ["agent-names"]
+
 [lints]
 workspace = true
