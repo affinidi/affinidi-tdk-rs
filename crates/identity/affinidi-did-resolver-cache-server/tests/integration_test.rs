@@ -8,8 +8,9 @@ use affinidi_did_common::{
     PeerServiceEndpointLong, one_or_many::OneOrMany,
 };
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-use affinidi_did_resolver_cache_server::server::start;
+use affinidi_did_resolver_cache_server::server::start_with_config;
 use affinidi_secrets_resolver::secrets::Secret;
+use std::{net::TcpListener as StdTcpListener, path::PathBuf};
 use tokio::time::{Duration, sleep};
 
 const DID_ETHR: &str = "did:ethr:0x1:0xb9c5714089478a327f09197987f16f9e5d936e8a";
@@ -20,13 +21,13 @@ const DID_PKH: &str =
 #[tokio::test]
 async fn test_cache_server() {
     //  Run cache server
-    _start_cache_server().await;
+    let port = _start_cache_server().await;
 
     let did_peer = _create_and_validate_did_peer();
 
     // Build config with network
     let config = DIDCacheConfigBuilder::default()
-        .with_network_mode("ws://127.0.0.1:8080/did/v1/ws")
+        .with_network_mode(&format!("ws://127.0.0.1:{port}/did/v1/ws"))
         .with_cache_ttl(10)
         .build();
 
@@ -92,9 +93,99 @@ async fn test_cache_server() {
     );
 }
 
-async fn _start_cache_server() {
-    tokio::spawn(async move { start().await });
-    println!("Server running");
+/// Start the cache server on an ephemeral port, wait until it answers, and
+/// return the port the client should dial.
+///
+/// This used to hard-code 8080 for both server and client, spawn `start()` and
+/// drop the `JoinHandle`. Three faults compounded (#656):
+///
+/// 1. **The bind error was discarded.** Dropping the handle threw away the
+///    `Result`, so the test could not tell "port already taken" from "server
+///    started fine".
+/// 2. **Nothing waited for readiness.** The client was built immediately after
+///    the spawn, racing the bind even when the port was free.
+/// 3. **The port was fixed.** Anything else holding 8080 — a parallel run, a
+///    stray `python -m http.server` — meant the client connected to *that*
+///    process instead, which answers a plain 404 rather than a 101 upgrade.
+///
+/// Together they turned a port conflict into `NetworkTimeout` from the first
+/// resolve, 15 seconds later, pointing at the network rather than at the port.
+/// Two people diagnosed that by hand before the cause was found.
+async fn _start_cache_server() -> u16 {
+    // Ask the OS for a free port, then hand it to the server. A small window
+    // remains between releasing it here and the server binding it; losing that
+    // race now fails loudly below instead of silently.
+    let port = StdTcpListener::bind("127.0.0.1:0")
+        .expect("bind an ephemeral port")
+        .local_addr()
+        .expect("read the ephemeral port")
+        .port();
+
+    let config_path = _write_config_for_port(port);
+    let server = tokio::spawn(async move { start_with_config(&config_path).await });
+
+    // Poll the server's own health endpoint rather than a bare TCP connect:
+    // on a port some other process holds, TCP would connect and tell us
+    // nothing. This confirms *our* server is the one answering.
+    let health = format!("http://127.0.0.1:{port}/did/healthchecker");
+    let client = reqwest::Client::new();
+    let mut ready = false;
+    for _ in 0..100 {
+        if server.is_finished() {
+            break;
+        }
+        if let Ok(res) = client.get(&health).send().await
+            && res.status().is_success()
+        {
+            ready = true;
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+
+    if !ready {
+        if server.is_finished() {
+            // Surface the real error — almost always a failed bind.
+            panic!(
+                "cache server exited before becoming ready: {:?}",
+                server.await
+            );
+        }
+        panic!("cache server did not become ready on 127.0.0.1:{port} within 10s");
+    }
+
+    println!("Server running on 127.0.0.1:{port}");
+    port
+}
+
+/// Copy the shipped config, overriding only `listen_address`.
+///
+/// Rewriting one line rather than writing a minimal config from scratch keeps
+/// the test running against the real configuration — including any settings
+/// added to it later.
+fn _write_config_for_port(port: u16) -> String {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("conf/cache-conf.toml");
+    let raw = std::fs::read_to_string(&src).expect("read the shipped cache-conf.toml");
+
+    let mut out = String::with_capacity(raw.len());
+    let mut replaced = false;
+    for line in raw.lines() {
+        if line.trim_start().starts_with("listen_address") {
+            out.push_str(&format!("listen_address = \"127.0.0.1:{port}\"\n"));
+            replaced = true;
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    assert!(
+        replaced,
+        "conf/cache-conf.toml no longer has a listen_address line to override"
+    );
+
+    let path = std::env::temp_dir().join(format!("cache-conf-test-{port}.toml"));
+    std::fs::write(&path, out).expect("write the test config");
+    path.to_string_lossy().into_owned()
 }
 
 fn _create_and_validate_did_peer() -> String {
