@@ -92,7 +92,21 @@ pub(crate) struct WebSocketTransport {
     /// that gap was gone — the send succeeded, the mediator delivered, and the
     /// consumer waited forever. Queue them here instead and let the next `Next`
     /// drain the queue.
+    ///
+    /// Bounded by the same count/byte limits as [`Self::inbound_cache`], and
+    /// with the same policy: when it fills, the socket-read arm of the select
+    /// loop stops reading (backpressure) rather than the cache discarding
+    /// anything. See [`Self::packed_cache_is_full`].
     packed_cache: VecDeque<String>,
+
+    /// Running total of `packed_cache`'s payload bytes, so fullness can be
+    /// judged without walking the queue.
+    packed_cache_bytes: u64,
+
+    /// Latched when `packed_cache` exceeds either limit; cleared once the
+    /// consumer has drained it back under both. Mirrors `MessageCache`'s
+    /// `cache_full` so the two caches behave identically.
+    packed_cache_full: bool,
 
     /// Skip calling toggle_live_delivery during connection setup
     skip_toggle_live_delivery: bool,
@@ -175,6 +189,8 @@ impl WebSocketTransport {
                 next_requests: HashMap::new(),
                 next_requests_list: VecDeque::new(),
                 packed_cache: VecDeque::new(),
+                packed_cache_bytes: 0,
+                packed_cache_full: false,
                 skip_toggle_live_delivery: false,
                 skip_unpack_messages: false,
                 conn_state_tx,
@@ -216,6 +232,8 @@ impl WebSocketTransport {
                 next_requests: HashMap::new(),
                 next_requests_list: VecDeque::new(),
                 packed_cache: VecDeque::new(),
+                packed_cache_bytes: 0,
+                packed_cache_full: false,
                 skip_toggle_live_delivery,
                 skip_unpack_messages,
                 conn_state_tx,
@@ -379,7 +397,7 @@ impl WebSocketTransport {
                                 // anything a later poll could produce, and they have no
                                 // other way out — the DIDComm cache is keyed by unpacked
                                 // message id and cannot hold them.
-                                if let Some(packed) = self.packed_cache.pop_front() {
+                                if let Some(packed) = self.pop_packed() {
                                     debug!("Serving packed message from cache");
                                     let _ = sender.send(WebSocketResponses::PackedMessageReceived(Box::new(packed)));
                                 } else if let Some((message, metadata)) = self.inbound_cache.next() {
@@ -409,7 +427,13 @@ impl WebSocketTransport {
                             None => break,
                         }
                     },
-                    Some(msg) = WebSocketTransport::conditional_websocket(&mut self.web_socket), if !self.inbound_cache.is_full() => {
+                    // Read only while BOTH inbound queues have room. The packed
+                    // queue was previously outside this guard, which left
+                    // discarding a frame as the only way to honour its bound —
+                    // unrecoverable, since delete-on-send means the mediator no
+                    // longer holds it. One policy for both caches: stop reading,
+                    // never discard.
+                    Some(msg) = WebSocketTransport::conditional_websocket(&mut self.web_socket), if !self.inbound_cache.is_full() && !self.packed_cache_is_full() => {
                         self.handle_inbound_message(&atm, msg).await;
                     }
                 }
@@ -529,6 +553,42 @@ impl WebSocketTransport {
         }
     }
 
+    /// Queue a packed frame, updating the byte total and the full latch.
+    fn push_packed(&mut self, message: String) {
+        self.packed_cache_bytes += message.len() as u64;
+        self.packed_cache.push_back(message);
+        if self.packed_cache.len() as u32 > self.shared.config.fetch_cache_limit_count
+            || self.packed_cache_bytes > self.shared.config.fetch_cache_limit_bytes
+        {
+            self.packed_cache_full = true;
+        }
+        debug!(
+            "Cached packed message ({} queued, {} bytes)",
+            self.packed_cache.len(),
+            self.packed_cache_bytes
+        );
+    }
+
+    /// Take the oldest queued packed frame, clearing the full latch once the
+    /// queue is back under both limits.
+    fn pop_packed(&mut self) -> Option<String> {
+        let message = self.packed_cache.pop_front()?;
+        self.packed_cache_bytes = self.packed_cache_bytes.saturating_sub(message.len() as u64);
+        if self.packed_cache_full
+            && (self.packed_cache.len() as u32) <= self.shared.config.fetch_cache_limit_count
+            && self.packed_cache_bytes <= self.shared.config.fetch_cache_limit_bytes
+        {
+            self.packed_cache_full = false;
+        }
+        Some(message)
+    }
+
+    /// Whether the packed queue has hit its limits and the socket should stop
+    /// being read until the consumer catches up.
+    fn packed_cache_is_full(&self) -> bool {
+        self.packed_cache_full
+    }
+
     async fn process_inbound_didcomm_message(&mut self, atm: &ATM, message: String) {
         debug!("Received text message ({})", message);
 
@@ -597,21 +657,18 @@ impl WebSocketTransport {
                 }
             }
 
-            // 3. Cache it for the next `Next`. Bounded by the same count limit
-            //    as the DIDComm cache; at the limit the OLDEST frame is dropped
-            //    (a stalled consumer should not be able to block live traffic
-            //    indefinitely) and we say so — a silent drop here is the exact
-            //    failure this cache exists to prevent.
-            let limit = self.shared.config.fetch_cache_limit_count as usize;
-            if self.packed_cache.len() >= limit {
-                warn!(
-                    "Packed message cache is full ({limit} frames); dropping the oldest frame. \
-                     Nothing is consuming inbound frames fast enough."
-                );
-                self.packed_cache.pop_front();
-            }
-            self.packed_cache.push_back(message);
-            debug!("Cached packed message ({} queued)", self.packed_cache.len());
+            // 3. Cache it for the next `Next`.
+            //
+            //    Never dropped to make room. This cache exists precisely because
+            //    a dropped packed frame is unrecoverable — under delete-on-send
+            //    the mediator has already forgotten it — so discarding here to
+            //    honour a memory bound would reintroduce the bug in a quieter
+            //    form. Instead the queue is allowed to reach its limit and the
+            //    socket-read arm stops reading, which is the same backpressure
+            //    the DIDComm cache applies. A consumer that has stopped
+            //    consuming stalls its own connection rather than silently losing
+            //    messages.
+            self.push_packed(message);
             return;
         }
 
