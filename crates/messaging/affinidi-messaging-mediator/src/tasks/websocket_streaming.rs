@@ -98,16 +98,21 @@ pub enum StreamingUpdateState {
         session_id: String,
         did: String,
     },
-    Start,
-    Stop,
+    /// Enable live delivery for the socket owned by `session_id`.
+    ///
+    /// Session-scoped for the same reason [`Deregister`](Self::Deregister) is:
+    /// `clients` is keyed by DID hash, so an update that doesn't name its
+    /// session acts on whichever connection currently holds the slot — which
+    /// may not be the one that sent it.
+    Start { session_id: String },
+    /// Disable live delivery for the socket owned by `session_id`.
+    Stop { session_id: String },
     /// Remove the map entry for this DID — but only if it is still *this*
     /// session's entry. `clients` is keyed by DID hash, not by connection, so a
     /// deregistration must name the session it belongs to: a socket that has
     /// already been replaced (one DID, one slot) would otherwise evict its
     /// successor on the way out. See the session-id check in the handler.
-    Deregister {
-        session_id: String,
-    },
+    Deregister { session_id: String },
 }
 
 /// Used to send commands from the streaming task to the websocket handler
@@ -310,26 +315,11 @@ impl StreamingTask {
                                 StreamingUpdateState::Register { .. } => {
                                     self._handle_registration(&database, &mut clients, &replay_in_progress, value).await;
                                 },
-                                StreamingUpdateState::Start => {
-                                    if let Some(entry) = clients.get_mut(&value.did_hash) {
-                                        info!("Starting streaming for DID: ({})", value.did_hash);
-                                        entry.active = true;
-                                    };
-
-                                    if let Err(err) = database.streaming_set_state(&value.did_hash, &self.uuid, StreamingClientState::Live).await {
-                                        error!("Error starting streaming to client ({}) streaming: {}",value.did_hash, err);
-                                    }
+                                StreamingUpdateState::Start { session_id } => {
+                                    self._handle_activation(&database, &mut clients, &value.did_hash, session_id, true).await;
                                 },
-                                StreamingUpdateState::Stop => {
-                                    // Set active to false
-                                    if let Some(entry) = clients.get_mut(&value.did_hash) {
-                                        info!("Stopping streaming for DID: ({})", value.did_hash);
-                                        entry.active = false;
-                                    };
-
-                                    if let Err(err) = database.streaming_set_state(&value.did_hash, &self.uuid, StreamingClientState::Registered).await {
-                                        error!("Error stopping streaming for client ({}): {}",value.did_hash, err);
-                                    }
+                                StreamingUpdateState::Stop { session_id } => {
+                                    self._handle_activation(&database, &mut clients, &value.did_hash, session_id, false).await;
                                 },
                                 StreamingUpdateState::Deregister { session_id } => {
                                     // Only the session that currently owns the slot may
@@ -445,6 +435,72 @@ impl StreamingTask {
                     "pub/sub msg received for did_hash({did_hash}) but it doesn't exist in clients HashMap"
                 );
             }
+        }
+    }
+
+    /// Turn live delivery on or off for **the session that owns the DID's slot**.
+    ///
+    /// `clients` is keyed by DID hash, not by connection, so an update that
+    /// doesn't name its session acts on whoever holds the slot now. That is a
+    /// real hazard for a DID whose sessions overlap: a `live-delivery-change`
+    /// from a connection that has since been replaced would otherwise flip
+    /// delivery for its *successor* — and a stale `Stop` is the bad one,
+    /// because it clears both `active` and the stored `Live` state, so the
+    /// healthy socket stays connected and simply stops receiving pushes. That
+    /// is the same silent stop-delivering failure as the `Deregister` bug, and
+    /// just as hard to see from either end.
+    ///
+    /// An update whose session no longer owns the slot — or that arrives when
+    /// there is no slot at all — is dropped. A slot-less `Start` is worth
+    /// dropping in its own right: marking a DID `Live` with no channel to
+    /// deliver on only produces "not in clients HashMap" warnings when messages
+    /// arrive. Ordering makes this safe for legitimate traffic: `Register` and
+    /// `Start` travel the same FIFO channel, so a live session's own `Start`
+    /// always finds its entry.
+    async fn _handle_activation(
+        &self,
+        database: &Arc<dyn MediatorStore>,
+        clients: &mut HashMap<String, ClientEntry>,
+        did_hash: &str,
+        session_id: &str,
+        active: bool,
+    ) {
+        match clients.get_mut(did_hash) {
+            Some(entry) if entry.session_id == session_id => {
+                entry.active = active;
+            }
+            Some(entry) => {
+                debug!(
+                    did_hash = %did_hash,
+                    requesting_session = %session_id,
+                    current_session = %entry.session_id,
+                    active,
+                    "Ignoring a live-delivery change from a session that no longer owns this DID's slot",
+                );
+                return;
+            }
+            None => {
+                debug!(
+                    did_hash = %did_hash,
+                    requesting_session = %session_id,
+                    active,
+                    "Ignoring a live-delivery change for a DID with no registered client",
+                );
+                return;
+            }
+        }
+
+        let (state, verb) = if active {
+            (StreamingClientState::Live, "Starting")
+        } else {
+            (StreamingClientState::Registered, "Stopping")
+        };
+        info!("{verb} streaming for DID: ({did_hash})");
+        if let Err(err) = database
+            .streaming_set_state(did_hash, &self.uuid, state)
+            .await
+        {
+            error!("Error changing streaming state for client ({did_hash}): {err}");
         }
     }
 
@@ -775,6 +831,152 @@ mod tests {
             // buffer exhaustion (which `ws_budget` covers directly).
             send_budget: WsSendBudget::new(16 * 1024 * 1024),
         }
+    }
+
+    /// Build a client map holding one entry, owned by `session_id`.
+    fn clients_with(
+        did_hash: &str,
+        session_id: &str,
+        active: bool,
+    ) -> HashMap<String, ClientEntry> {
+        let (tx, _rx) = mpsc::channel(5);
+        let mut clients = HashMap::new();
+        clients.insert(
+            did_hash.to_string(),
+            ClientEntry {
+                tx,
+                session_id: session_id.to_string(),
+                active,
+                registered_at: Instant::now(),
+                churn_streak: 0,
+            },
+        );
+        clients
+    }
+
+    /// A `Stop` from a session that has already been replaced must not switch
+    /// live delivery off for the connection that replaced it.
+    ///
+    /// This is the bad direction of the bug: `clients` is keyed by DID hash, so
+    /// an unscoped `Stop` clears both `active` and the stored `Live` state for
+    /// whoever holds the slot. The healthy socket stays connected and simply
+    /// stops receiving pushes — the same silent stop-delivering failure as the
+    /// `Deregister` bug, invisible from both ends.
+    #[tokio::test]
+    async fn a_stale_sessions_stop_does_not_deactivate_the_current_socket() {
+        let database: Arc<dyn MediatorStore> = Arc::new(MemoryStore::new());
+        let did_hash = digest("did:example:alice");
+        let task = streaming_task();
+
+        // Session B currently owns the slot and is live.
+        let mut clients = clients_with(&did_hash, "B", true);
+        database
+            .streaming_set_state(&did_hash, &task.uuid, StreamingClientState::Live)
+            .await
+            .expect("mark live");
+
+        // Session A — long since replaced — disables live delivery on its way out.
+        task._handle_activation(&database, &mut clients, &did_hash, "A", false)
+            .await;
+
+        assert!(
+            clients.get(&did_hash).expect("entry still present").active,
+            "a replaced session must not deactivate its successor"
+        );
+        assert!(
+            database
+                .streaming_is_client_live(&did_hash, false)
+                .await
+                .is_some(),
+            "the stored Live state belongs to the owning session and must survive"
+        );
+    }
+
+    /// The mirror: a stale `Start` must not switch delivery on for a socket
+    /// that deliberately turned it off.
+    #[tokio::test]
+    async fn a_stale_sessions_start_does_not_activate_the_current_socket() {
+        let database: Arc<dyn MediatorStore> = Arc::new(MemoryStore::new());
+        let did_hash = digest("did:example:bob");
+        let task = streaming_task();
+
+        let mut clients = clients_with(&did_hash, "B", false);
+
+        task._handle_activation(&database, &mut clients, &did_hash, "A", true)
+            .await;
+
+        assert!(
+            !clients.get(&did_hash).expect("entry still present").active,
+            "a replaced session must not activate its successor"
+        );
+        assert!(
+            database
+                .streaming_is_client_live(&did_hash, false)
+                .await
+                .is_none(),
+            "no Live state may be written on behalf of a session that does not own the slot"
+        );
+    }
+
+    /// The owning session still works — without this, "ignore everything" would
+    /// satisfy the two tests above.
+    #[tokio::test]
+    async fn the_owning_sessions_activation_is_applied() {
+        let database: Arc<dyn MediatorStore> = Arc::new(MemoryStore::new());
+        let did_hash = digest("did:example:carol");
+        let task = streaming_task();
+
+        let mut clients = clients_with(&did_hash, "B", false);
+
+        task._handle_activation(&database, &mut clients, &did_hash, "B", true)
+            .await;
+        assert!(
+            clients.get(&did_hash).expect("entry").active,
+            "the owning session's start must apply"
+        );
+        assert!(
+            database
+                .streaming_is_client_live(&did_hash, false)
+                .await
+                .is_some(),
+            "and must be reflected in the stored streaming state"
+        );
+
+        task._handle_activation(&database, &mut clients, &did_hash, "B", false)
+            .await;
+        assert!(
+            !clients.get(&did_hash).expect("entry").active,
+            "and its stop must apply too"
+        );
+        assert!(
+            database
+                .streaming_is_client_live(&did_hash, false)
+                .await
+                .is_none(),
+            "stopping must clear the stored Live state"
+        );
+    }
+
+    /// An activation for a DID with no registered client is dropped. Marking a
+    /// DID `Live` with no channel to deliver on only produces "not in clients
+    /// HashMap" warnings when messages arrive for it.
+    #[tokio::test]
+    async fn an_activation_without_a_registered_client_is_ignored() {
+        let database: Arc<dyn MediatorStore> = Arc::new(MemoryStore::new());
+        let did_hash = digest("did:example:dave");
+        let task = streaming_task();
+
+        let mut clients: HashMap<String, ClientEntry> = HashMap::new();
+        task._handle_activation(&database, &mut clients, &did_hash, "A", true)
+            .await;
+
+        assert!(
+            database
+                .streaming_is_client_live(&did_hash, false)
+                .await
+                .is_none(),
+            "a DID with no socket must not be marked live"
+        );
     }
 
     /// Issue #374: a duplicate connect for a DID with an in-flight (stored but
