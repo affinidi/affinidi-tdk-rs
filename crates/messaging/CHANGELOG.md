@@ -8,6 +8,23 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 24th July 2026
+
+### SDK (0.18.64) / Test Mediator (0.2.42)
+
+- **FIX: a slow consumer silently lost packed (TSP) frames** (#647). The
+  packed-frame queue added in #646 sat outside the socket-read
+  backpressure guard, so the only way to honour its bound was to discard
+  the oldest frame — and a discarded packed frame is unrecoverable,
+  because under delete-on-send the mediator dropped its copy the moment
+  it wrote it. A consumer that stopped polling for long enough therefore
+  lost messages outright, with only a `warn!` to show for it. Both
+  inbound caches now share one policy: when either is full the select
+  loop stops reading the socket, and nothing is discarded. A consumer
+  that stalls stalls its own connection instead. The queue is bounded by
+  the same count *and* byte limits as the DIDComm cache
+  (`fetch_cache_limit_count` / `fetch_cache_limit_bytes`).
+
 ## 23rd July 2026
 
 ### Mediator (0.17.9) / SDK (0.18.63) / Test Mediator (0.2.41)
