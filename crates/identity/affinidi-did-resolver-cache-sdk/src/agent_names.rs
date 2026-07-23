@@ -27,7 +27,16 @@ use agent_names::{AgentName, AgentNameError, AgentNameResolver, verify_also_know
 use tokio::sync::watch;
 use tracing::{debug, warn};
 
-use crate::{DIDCacheClient, ResolveResponse, errors::DIDCacheError};
+use crate::{DIDCacheClient, DidShortcut, ResolveResponse, errors::DIDCacheError};
+
+/// How many claimed names to check before giving up establishing a shortcut.
+///
+/// Each candidate costs a request to its naming host, and a hostile document is
+/// free to list hundreds, so the work one resolve can provoke has to be capped.
+/// The first candidate that verifies wins, so a well-formed document — one name,
+/// or a few — never reaches this limit.
+#[cfg(feature = "agent-names")]
+const MAX_SHORTCUT_CANDIDATES: usize = 4;
 
 /// Either a DID or an agent name.
 ///
@@ -132,7 +141,10 @@ impl DIDCacheClient {
                 .and_then(|m| crate::DIDMethod::try_from(m).ok())
                 .unwrap_or(crate::DIDMethod::OTHER);
 
-            return Ok(ResolveResponse::new(did, method, did_hash, doc, false));
+            // Verification succeeded just above, so the name is safe to carry
+            // back as this DID's display shortcut.
+            return Ok(ResolveResponse::new(did, method, did_hash, doc, false)
+                .with_shortcut(DidShortcut::AgentName(name.without_scheme().to_string())));
         }
 
         let did = match self.agent_name_cache.get(&name_hash).await {
@@ -146,7 +158,10 @@ impl DIDCacheClient {
             }
         };
 
-        let response = match self.resolve(&did).await {
+        // `resolve_document`, not `resolve`: we already hold the name and attach
+        // it below, so letting `resolve` establish a shortcut here would repeat
+        // the same lookup we are in the middle of.
+        let response = match self.resolve_document(&did).await {
             Ok(response) => response,
             Err(e) => {
                 // The mapping points at a DID that will not resolve. Drop it so a
@@ -169,7 +184,63 @@ impl DIDCacheClient {
             return Err(DIDCacheError::from(e));
         }
 
-        Ok(response)
+        // Past verification: the caller asked by name and the DID claimed it
+        // back, so the name is this DID's display shortcut. Without this the
+        // name the caller supplied would be dropped from the response and every
+        // consumer would have to re-derive it.
+        Ok(response.with_shortcut(DidShortcut::AgentName(name.without_scheme().to_string())))
+    }
+
+    /// Establish a verified display shortcut for a document we have already
+    /// resolved, or `None` if no claimed name checks out.
+    ///
+    /// This completes the same three-stage check as [`Self::resolve_agent_name`],
+    /// just entered from the other end — from a DID rather than from a name:
+    ///
+    /// 1. the candidate names come from *this* document's `alsoKnownAs`, so the
+    ///    DID demonstrably claims them (the stage that stops anyone labelling
+    ///    someone else's DID);
+    /// 2. the document is the one just resolved for `did`;
+    /// 3. each candidate's forward resolution must land back on `did` — the
+    ///    stage that stops a document claiming a name it does not own, since
+    ///    only the name's controller decides where it points.
+    ///
+    /// Candidates are resolved through the name backends directly rather than
+    /// through [`Self::resolve_any`]. That is what keeps this non-recursive:
+    /// `resolve_any` would resolve the DID again, re-entering shortcut
+    /// derivation and recursing without bound. It also skips a redundant
+    /// document fetch, since stage 2 is already satisfied.
+    pub(crate) async fn derive_shortcut(
+        &self,
+        did: &str,
+        doc: &affinidi_did_common::Document,
+    ) -> Option<DidShortcut> {
+        for name in agent_names::extract_agent_names(doc)
+            .into_iter()
+            .take(MAX_SHORTCUT_CANDIDATES)
+        {
+            let name_hash = Self::hash_did(name.as_str());
+            let resolved = match self.agent_name_cache.get(&name_hash).await {
+                Some(cached) => Some(cached),
+                None => self
+                    .resolve_name_deduplicated(&name, name_hash)
+                    .await
+                    .map_err(|e| debug!("agent name '{name}' did not resolve: {e}"))
+                    .ok(),
+            };
+            match resolved.as_deref() {
+                Some(got) if got == did => {
+                    return Some(DidShortcut::AgentName(name.without_scheme().to_string()));
+                }
+                // Claimed, but the name belongs to someone else. Never display
+                // it, and keep looking rather than failing the whole resolve.
+                Some(other) => {
+                    warn!("agent name '{name}' claimed by {did} resolves to {other}; ignoring");
+                }
+                None => {}
+            }
+        }
+        None
     }
 
     /// Resolve a name to a DID, collapsing concurrent lookups of the *same*
