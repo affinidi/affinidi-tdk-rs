@@ -2,6 +2,64 @@
 
 ## Changelog history
 
+## 23rd July 2026
+
+### 0.8.20 — a display name for a resolved DID
+
+`ResolveResponse::display_name()` returns the verified human name for a DID
+when one is known, and the DID itself otherwise. It is the call display code
+should make:
+
+```rust
+let resolved = client.resolve(did).await?;
+println!("{}", resolved.display_name()); // "example.com/@alice", or the DID
+```
+
+Every consumer that shows a DID to a person previously had to re-derive this:
+resolve the DID, read `alsoKnownAs`, resolve each claimed name, check it points
+back. The resolver already holds every piece.
+
+#### It cannot show an unverified name
+
+`ResolveResponse::shortcut` is only ever populated after verification, so a UI
+that routes every DID through `display_name()` degrades to the full DID rather
+than to a spoofable one. Displaying a name straight from `alsoKnownAs` is a
+phishing surface — anyone may claim `bigbank.com/@support` in their own
+document.
+
+#### Extensible by design
+
+The value is a `DidShortcut`, a `#[non_exhaustive]` enum rather than a bare
+`Option<String>`, so further shortcut schemes can be added without a breaking
+release. Agent names are the only kind today. A caller that only wants
+something printable uses `display_name()` and never matches at all.
+
+`ResolveResponse` gains a field rather than changing `new` — additive on a
+sealed struct, per ADR 0003.
+
+#### Two directions, one of them opt-in
+
+From a name (`resolve_any` / `resolve_agent_name`) the shortcut is free:
+verification has just run, and the name was previously discarded from the
+response.
+
+From a DID, `resolve` establishes one only when `with_resolve_shortcuts(true)`
+is set. **Off by default**: it costs a network round-trip to the naming host,
+which a caller that only wants a document should not pay unasked. Behaviour and
+latency for existing consumers are unchanged.
+
+#### Verification is the same three stages
+
+Entered from the DID end, `derive_shortcut` requires that the candidate come
+from this document's `alsoKnownAs`, that the document be the one just resolved,
+and that the candidate's forward resolution land back on this DID.
+
+Candidates resolve through the name backends directly rather than through
+`resolve_any` — that is what keeps it non-recursive, since `resolve_any` would
+resolve the DID again and re-enter derivation without bound. Candidates are
+capped, as a hostile document may claim hundreds. A name a document claims but
+which resolves elsewhere is logged and skipped, never displayed.
+
 ## 20th July 2026
 
 ### 0.8.19 — resolve agent names over the WebSocket connection
