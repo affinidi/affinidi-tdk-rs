@@ -242,7 +242,48 @@ pub async fn websocket_handler(
     // subprotocol, not the bearer entry), so the client learns the mode was
     // accepted from the 101 response's `Sec-WebSocket-Protocol` header.
     #[cfg(feature = "tsp")]
-    let tsp_mode = app_protocols.iter().any(|p| p == "tsp");
+    let tsp_mode = app_protocols.iter().any(|p| p == "tsp" || p == "tsp-ack");
+
+    // `tsp-ack` opts into DELETE-TO-ACK delivery. Plain `tsp` keeps the
+    // original delete-on-send contract, which is at-most-once past the socket
+    // write: the frame is deleted as soon as it has been handed to the local
+    // sink, so a connection that dies before the peer reads it loses the
+    // message with nothing left to redeliver. That is fine for a liveness probe
+    // and wrong for anything that matters.
+    //
+    // In `tsp-ack` mode the mediator sends and keeps. The client acknowledges
+    // by deleting the message through the ordinary authenticated delete path
+    // once it has taken the frame — the id is `sha256` of the stored body,
+    // which is exactly the bytes on the wire, so the client can derive it
+    // without the mediator sending ids and without any change to the frame
+    // format. An un-acked message is simply still there on the next connect.
+    //
+    // Opt-in on purpose: flipping every client at once would trade silent loss
+    // for silent duplication, since a client that never acks would be
+    // redelivered its whole inbox on every reconnect.
+    #[cfg(feature = "tsp")]
+    let tsp_ack_mode = app_protocols.iter().any(|p| p == "tsp-ack");
+
+    // The echo has to be a HONEST capability signal, and by default it isn't:
+    // the offered list is just the client's own list reflected back, so a
+    // mediator that has never heard of a subprotocol still echoes it. A client
+    // asking for `tsp-ack` against an older mediator would therefore be told
+    // "yes" and silently get delete-on-send — the exact silent downgrade
+    // delete-to-ack exists to prevent.
+    //
+    // Fixed by ordering. Clients offer `tsp` BEFORE `tsp-ack`, and axum selects
+    // the first client-requested protocol that the server also lists:
+    //   * older mediator — reflects the client's list, so it selects the
+    //     client's first entry, `tsp`. The client sees no ack support. Correct.
+    //   * this mediator — narrows the offer to `tsp-ack` alone, so that is what
+    //     gets selected despite being second. The client sees ack support, and
+    //     only a mediator that implements it can produce that answer.
+    #[cfg(feature = "tsp")]
+    let app_protocols = if tsp_ack_mode {
+        vec!["tsp-ack".to_string()]
+    } else {
+        app_protocols
+    };
 
     let ws = if app_protocols.is_empty() {
         ws
@@ -258,9 +299,13 @@ pub async fn websocket_handler(
 
     #[cfg(feature = "tsp")]
     {
-        async move { ws.on_upgrade(move |socket| handle_socket(socket, state, session, tsp_mode)) }
-            .instrument(_span)
-            .await
+        async move {
+            ws.on_upgrade(move |socket| {
+                handle_socket(socket, state, session, tsp_mode, tsp_ack_mode)
+            })
+        }
+        .instrument(_span)
+        .await
     }
     #[cfg(not(feature = "tsp"))]
     {
@@ -318,6 +363,7 @@ async fn handle_socket(
     state: SharedData,
     session: Session,
     #[cfg(feature = "tsp")] tsp_mode: bool,
+    #[cfg(feature = "tsp")] tsp_ack_mode: bool,
 ) {
     let _span = span!(
         tracing::Level::INFO,
@@ -458,11 +504,31 @@ async fn handle_socket(
         let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
         ping_interval.reset(); // Skip the immediate first tick
 
-        // Flush-on-connect for raw-TSP delivery: drain whatever is already queued
-        // for this DID straight onto the socket (delete-on-send) before entering
-        // the live-delivery loop. If the socket is already gone, exit cleanly.
+        // Sent-but-not-yet-acked message ids, for `tsp-ack` mode only.
+        //
+        // In ack mode the mediator no longer deletes on send, so every drain
+        // re-fetches the same un-acked messages and would re-send them on each
+        // live-delivery wake-up — turning "may see a duplicate after a
+        // reconnect" into "sees duplicates constantly". This set is what makes
+        // redelivery a *recovery* mechanism rather than the steady state:
+        // within one connection a frame is sent once, and the set dies with the
+        // connection, so a reconnect legitimately re-sends whatever was never
+        // acked.
+        //
+        // Bounded implicitly: it only ever holds ids the inbox still contains,
+        // and it is pruned against each completed drain, so client acks remove
+        // entries. The inbox itself is capped by
+        // `queued_receive_messages_hard` and message expiry.
         #[cfg(feature = "tsp")]
-        if tsp_mode && drain_tsp_inbox(&state, &session, &mut socket).await.is_break() {
+        let mut tsp_inflight: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // Flush-on-connect for raw-TSP delivery: drain whatever is already queued
+        // for this DID straight onto the socket before entering the live-delivery
+        // loop. If the socket is already gone, exit cleanly.
+        #[cfg(feature = "tsp")]
+        if tsp_mode && drain_tsp_inbox(&state, &session, &mut socket, tsp_ack_mode, &mut tsp_inflight)
+            .await
+            .is_break() {
             if let Some(streaming) = &state.streaming_task {
                 let stop = StreamingUpdate {
                     did_hash: session.did_hash.clone(),
@@ -613,7 +679,9 @@ async fn handle_socket(
                                 #[cfg(feature = "tsp")]
                                 if tsp_mode {
                                     let _ = &msg; // body intentionally ignored in TSP mode
-                                    if drain_tsp_inbox(&state, &session, &mut socket).await.is_break() {
+                                    if drain_tsp_inbox(&state, &session, &mut socket, tsp_ack_mode, &mut tsp_inflight)
+            .await
+            .is_break() {
                                         close_reason = (close_code::GOING_AWAY, "client disconnected");
                                         break;
                                     }
@@ -692,15 +760,37 @@ const TSP_DRAIN_PAGE: usize = 50;
 const TSP_DRAIN_MAX: usize = 1000;
 
 /// Drain the recipient's undelivered inbox to a **raw TSP** WebSocket,
-/// inline on the connection, with a *delete-on-successful-send* contract.
+/// inline on the connection. Each stored message is decoded to its raw qb2
+/// bytes and sent as a `Binary` frame; what happens next depends on the mode
+/// the client negotiated at the upgrade.
 ///
-/// This is the outbound (delivery) half of the TSP WebSocket mode. Unlike
-/// the DIDComm message-pickup path (delete-to-ack) or the streaming
-/// redelivery (notification re-cover with `DoNotDelete`), here the socket
-/// itself is the ack: each stored TSP message is decoded to its raw qb2
-/// bytes, sent as a `Binary` frame, and only then deleted. If the send
-/// fails the socket is gone — the message (and the rest of the inbox) is
-/// left intact for the next connection, so delivery is at-least-once.
+/// ## `ack_mode = false` (subprotocol `tsp`) — delete-on-send, at-most-once
+///
+/// The socket write itself is treated as the ack: the message is deleted the
+/// moment `send` returns. A successful `send` means the frame was accepted by
+/// the local sink, **not** that the peer received it, so a connection that
+/// drops between the write and the peer reading it loses the message with
+/// nothing left to redeliver — the mediator has already forgotten it. This is
+/// the historical behaviour and is kept for compatibility. It is appropriate
+/// for a liveness probe and not for anything that matters.
+///
+/// (If the *send* fails, the socket is gone and the message and the rest of
+/// the inbox are left intact for the next connection.)
+///
+/// ## `ack_mode = true` (subprotocol `tsp-ack`) — delete-to-ack, at-least-once
+///
+/// The mediator sends and keeps. The client acknowledges out of band, by
+/// deleting the message through the ordinary authenticated delete path once it
+/// has actually taken the frame; the id is `sha256` of the stored body, which
+/// is exactly the bytes on the wire, so the client derives it without the
+/// mediator sending ids and without any change to the frame format. A message
+/// the client never acks is simply still in the inbox on the next connect and
+/// is redelivered — so a consumer may see a duplicate, and must be idempotent,
+/// which is the standard trade for not losing messages.
+///
+/// Un-acked messages are bounded by the same limits as any other queued
+/// message (`queued_receive_messages_hard`, message expiry); nothing new can
+/// grow without limit here.
 ///
 /// Returns:
 /// - [`ControlFlow::Break`] when the socket send failed (caller should
@@ -712,9 +802,15 @@ async fn drain_tsp_inbox(
     state: &SharedData,
     session: &Session,
     socket: &mut WebSocket,
+    ack_mode: bool,
+    inflight: &mut std::collections::HashSet<String>,
 ) -> ControlFlow<(), ()> {
     let mut start_id: Option<String> = None;
     let mut total: usize = 0;
+    // Every id this drain walked past (ack mode only) — used to prune `inflight`
+    // once the walk completes, so ids the client has since acked (and which the
+    // inbox therefore no longer returns) stop occupying the set.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     loop {
         let options = FetchOptions {
@@ -751,6 +847,14 @@ async fn drain_tsp_inbox(
             // optimistic-delete fetch path uses; `receive_id` is only the stream
             // cursor, not a valid delete key.
             let id = element.msg_id;
+            if ack_mode {
+                seen.insert(id.clone());
+                // Already on the wire for this connection and not yet acked —
+                // sending it again would duplicate within a single session.
+                if inflight.contains(&id) {
+                    continue;
+                }
+            }
 
             // Stored body is base64url(qb2). Decode back to raw qb2 bytes for
             // the wire. A malformed entry is skipped (not deleted) so it can be
@@ -774,9 +878,20 @@ async fn drain_tsp_inbox(
                 return ControlFlow::Break(());
             }
 
-            // Delivered — delete it. A delete error is logged but not fatal: the
-            // message was already delivered, so we continue.
-            if let Err(err) = state
+            if ack_mode {
+                // Delete-to-ack: the write is not the acknowledgement, so keep
+                // the message. The client deletes it once it has taken the
+                // frame; until then it stays recoverable across a reconnect.
+                inflight.insert(id.clone());
+                debug!(
+                    did_hash = %session.did_hash,
+                    message_id = %id,
+                    "Sent TSP message, awaiting client ack (tsp-ack mode)"
+                );
+            } else if let Err(err) = state
+                // Delete-on-send: delivered as far as this mode is concerned. A
+                // delete error is logged but not fatal — the frame is already
+                // on the wire, so we continue.
                 .database
                 .delete_message(
                     &id,
@@ -800,13 +915,28 @@ async fn drain_tsp_inbox(
                     max = TSP_DRAIN_MAX,
                     "TSP inbox drain hit its safety cap; remaining messages left for the next drain"
                 );
+                // Returns WITHOUT pruning `inflight` below, deliberately: only a
+                // complete walk proves an absent id was acked, and pruning
+                // against a walk cut short by the cap would resurrect
+                // still-in-flight messages as duplicates.
                 return ControlFlow::Continue(());
             }
         }
     }
 
+    if ack_mode {
+        // Anything no longer in the inbox has been acked (or expired): drop it
+        // so the set tracks only what is genuinely outstanding.
+        inflight.retain(|id| seen.contains(id));
+    }
+
     if total > 0 {
-        debug!(did_hash = %session.did_hash, total, "TSP inbox drain complete");
+        debug!(
+            did_hash = %session.did_hash,
+            total,
+            awaiting_ack = inflight.len(),
+            "TSP inbox drain complete"
+        );
     }
     ControlFlow::Continue(())
 }

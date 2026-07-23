@@ -1282,6 +1282,40 @@ impl TspOps<'_> {
         &self,
         profile: &Arc<ATMProfile>,
     ) -> Result<TspWebSocket, ATMError> {
+        self.connect_websocket_inner(profile, false).await
+    }
+
+    /// Open the mediator's raw-TSP WebSocket in **delete-to-ack** mode
+    /// (subprotocol `tsp-ack`).
+    ///
+    /// Identical to [`connect_websocket`](Self::connect_websocket) except that
+    /// the mediator does not delete a message when it writes it to the socket.
+    /// It keeps it until this client acknowledges, via
+    /// [`TspWebSocket::ack`], which you call once the frame is safely in your
+    /// hands.
+    ///
+    /// Use this whenever losing a message matters. Plain `connect_websocket`
+    /// is at-most-once past the socket write: a successful write means the
+    /// frame reached the mediator's local sink, so a connection that dies
+    /// before your process reads it takes the message with it — the mediator
+    /// has already forgotten it.
+    ///
+    /// The trade is the usual one. Anything sent but not acked when the
+    /// connection drops is redelivered on the next connect, so a consumer
+    /// **must be idempotent**: it may see a frame twice. Within a single
+    /// connection the mediator will not re-send an un-acked frame.
+    pub async fn connect_websocket_acked(
+        &self,
+        profile: &Arc<ATMProfile>,
+    ) -> Result<TspWebSocket, ATMError> {
+        self.connect_websocket_inner(profile, true).await
+    }
+
+    async fn connect_websocket_inner(
+        &self,
+        profile: &Arc<ATMProfile>,
+        ack: bool,
+    ) -> Result<TspWebSocket, ATMError> {
         use tokio_tungstenite::tungstenite::{ClientRequestBuilder, http::Uri};
 
         let (profile_did, mediator_did) = profile.dids()?;
@@ -1341,10 +1375,30 @@ impl TspOps<'_> {
                 80
             });
 
-        // Offer `bearer.<jwt>` (auth) + `tsp` (raw-TSP mode) subprotocols.
-        let builder = ClientRequestBuilder::new(uri)
-            .with_sub_protocol(format!("bearer.{access_token}"))
-            .with_sub_protocol("tsp");
+        // Offer `bearer.<jwt>` (auth) + the raw-TSP mode subprotocol(s).
+        //
+        // `tsp` is offered BEFORE `tsp-ack`, and the order is load-bearing.
+        //
+        // A mediator that predates `tsp-ack` echoes the client's subprotocol
+        // list back unchanged, so it would happily echo `tsp-ack` without
+        // implementing it — and we would believe we had delete-to-ack while it
+        // deleted on send, silently losing the very guarantee we asked for.
+        //
+        // Selection takes the first client-listed protocol the server also
+        // offers. An older mediator offers back our own list and so selects our
+        // first entry, `tsp`; a mediator that supports the mode narrows its
+        // offer to `tsp-ack` and so selects that despite it being second. Only
+        // a mediator that implements delete-to-ack can answer `tsp-ack`, which
+        // is what makes the echoed value trustworthy.
+        let builder =
+            ClientRequestBuilder::new(uri).with_sub_protocol(format!("bearer.{access_token}"));
+        let builder = if ack {
+            builder
+                .with_sub_protocol("tsp")
+                .with_sub_protocol("tsp-ack")
+        } else {
+            builder.with_sub_protocol("tsp")
+        };
 
         let (ws, response) =
             crate::transports::websockets::proxy::connect_websocket(builder, &host, port)
@@ -1359,19 +1413,41 @@ impl TspOps<'_> {
         // The 101 should echo `tsp`, confirming the mode was accepted.
         // tokio-tungstenite already enforces subprotocol agreement, so a
         // mismatch here is informational only — warn, don't hard-fail.
-        match response
+        let echoed = response
             .headers()
             .get("sec-websocket-protocol")
             .and_then(|v| v.to_str().ok())
-        {
-            Some("tsp") => {}
-            other => tracing::warn!(
-                "TSP websocket did not echo the `tsp` subprotocol (got {other:?}); \
-                 raw-TSP mode may not be active"
-            ),
-        }
+            .map(str::to_string);
+        let acked = match echoed.as_deref() {
+            Some("tsp-ack") => true,
+            Some("tsp") => {
+                // A downgrade is silent otherwise, and silently losing the
+                // delivery guarantee you asked for is exactly the failure this
+                // mode exists to prevent — say so loudly.
+                if ack {
+                    tracing::warn!(
+                        "requested `tsp-ack` but the mediator echoed `tsp`: it predates \
+                         delete-to-ack, so delivery on this socket is at-most-once past \
+                         the write and `ack()` will not be honoured"
+                    );
+                }
+                false
+            }
+            other => {
+                tracing::warn!(
+                    "TSP websocket did not echo a known subprotocol (got {other:?}); \
+                     raw-TSP mode may not be active"
+                );
+                false
+            }
+        };
 
-        Ok(TspWebSocket { ws })
+        Ok(TspWebSocket {
+            ws,
+            ack_mode: acked,
+            atm: self.atm.clone(),
+            profile: profile.clone(),
+        })
     }
 
     // ── Internal helpers ────────────────────────────────────────────────────
@@ -1451,6 +1527,15 @@ pub struct TspWebSocket {
     ws: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
+    /// Whether the mediator agreed to `tsp-ack` (delete-to-ack). False for a
+    /// plain `tsp` socket, including when a `tsp-ack` request was downgraded by
+    /// an older mediator.
+    ack_mode: bool,
+    /// Held so [`ack`](TspWebSocket::ack) can reach the delete path; the ack
+    /// travels over the SDK's ordinary authenticated deletion channel, not over
+    /// this socket.
+    atm: ATM,
+    profile: Arc<ATMProfile>,
 }
 
 impl TspWebSocket {
@@ -1516,6 +1601,52 @@ impl TspWebSocket {
             .send(Message::Binary(tsp_message.to_vec().into()))
             .await
             .map_err(|e| ATMError::TransportError(format!("TSP websocket send error: {e}")))
+    }
+
+    /// Whether this socket negotiated `tsp-ack` (delete-to-ack delivery).
+    ///
+    /// False on a plain `tsp` socket **and** when a `tsp-ack` request was
+    /// downgraded by a mediator that predates the mode — check this if you need
+    /// to know whether the guarantee you asked for is actually in force.
+    pub fn is_acked(&self) -> bool {
+        self.ack_mode
+    }
+
+    /// Acknowledge a frame returned by [`recv`](TspWebSocket::recv), releasing
+    /// the mediator's copy.
+    ///
+    /// Call this once the frame is safely handled — persisted, dispatched,
+    /// whatever "received" means for you — not merely once it has been read off
+    /// the socket. Everything not acked when the connection drops is
+    /// redelivered on the next connect, which is the entire point: that window
+    /// is what makes this at-least-once instead of at-most-once.
+    ///
+    /// The message id is derived, not transmitted: the mediator keys deletion on
+    /// `sha256` of the stored body, and the stored body for a TSP message is the
+    /// base64url encoding of exactly these bytes. So the ack needs no id from
+    /// the mediator and no change to the frame format.
+    ///
+    /// Deletion is queued on the SDK's background deletion handler, so this does
+    /// not block on a round trip.
+    ///
+    /// Returns an error on a socket that did not negotiate `tsp-ack` — there,
+    /// the mediator deleted the message when it sent it and there is nothing to
+    /// acknowledge. Guard with [`is_acked`](TspWebSocket::is_acked) in code that
+    /// handles both modes.
+    pub async fn ack(&self, qb2: &[u8]) -> Result<(), ATMError> {
+        if !self.ack_mode {
+            return Err(ATMError::ConfigError(
+                "ack() on a socket that did not negotiate `tsp-ack`: the mediator already \
+                 deleted this message when it sent it. Open the socket with \
+                 `connect_websocket_acked` to use delete-to-ack."
+                    .into(),
+            ));
+        }
+        let stored = BASE64_URL_SAFE_NO_PAD.encode(qb2);
+        let message_id = sha256::digest(stored.as_str());
+        self.atm
+            .delete_message_background(&self.profile, &message_id)
+            .await
     }
 
     /// Close the socket gracefully.
