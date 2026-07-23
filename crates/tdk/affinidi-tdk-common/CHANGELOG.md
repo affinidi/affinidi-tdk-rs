@@ -6,6 +6,26 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
 
+## 0.6.7 — 2026-07-23
+
+### Fixed
+
+- **Idle pooled connections are dropped after 15s instead of reqwest's 90s
+  default.** The client's idle window was *wider* than the keep-alive of the
+  servers in front of our endpoints (nginx defaults to 75s, an AWS ALB to 60s),
+  which loses a race: the peer closes a connection the pool still believes is
+  good, the next request is written into it, and the caller sees the EOF as
+  `hyper::Error(IncompleteMessage)` on send.
+
+  Periodic traffic sat squarely in the danger zone — a 60s health-check leaves a
+  connection idle for about as long as a proxy will hold it, so a percentage of
+  cycles failed with no retry to cover them. It surfaced downstream as recurring
+  `Failed to send TSP reply … IncompleteMessage` warnings against the mediator's
+  `/inbound` endpoint, one dropped reply per affected cycle.
+
+  Erring short costs one extra TLS handshake; erring long costs a dropped
+  request.
+
 ## 0.6.6 — 2026-07-19
 
 ### Changed

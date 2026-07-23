@@ -107,8 +107,33 @@ pub struct TDKSharedState {
     pub(crate) authentication: AuthenticationCache,
 }
 
+/// How long an idle pooled connection may be reused before it is discarded.
+///
+/// **Deliberately shorter than any plausible server-side keep-alive.** reqwest's
+/// default is 90s, which is *longer* than the common defaults in front of our
+/// endpoints — nginx's `keepalive_timeout` is 75s and an AWS ALB's idle timeout
+/// is 60s. When the client's window is the wider one there is a race: the peer
+/// closes a connection the pool still believes is good, the next request is
+/// written into it, and the caller sees the EOF as
+/// `hyper::Error(IncompleteMessage)` on send.
+///
+/// That is not theoretical. Periodic traffic sits squarely in the danger zone:
+/// a 60s health-check leaves a connection idle for exactly as long as the proxy
+/// is willing to hold it, so a percentage of cycles fail with no retry to cover
+/// them (observed as recurring "Failed to send TSP reply" warnings).
+///
+/// 15s keeps the pool useful for bursty traffic while guaranteeing we drop a
+/// connection well before any of those servers would. The cost of being wrong
+/// in this direction is one extra TLS handshake; the cost of being wrong in the
+/// other is a dropped request.
+const POOL_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Build a reusable HTTP/HTTPS [`Client`] backed by `rustls` with the platform
 /// trust verifier, optionally extended with `extra_roots`.
+///
+/// Idle pooled connections are dropped after [`POOL_IDLE_TIMEOUT`] rather than
+/// reqwest's 90s default — see that constant for why the shorter window is the
+/// safe direction to err in.
 ///
 /// Pass an empty slice for the default behaviour (platform trust store only).
 /// Non-empty `extra_roots` are added on top of the platform store via
@@ -184,6 +209,7 @@ pub fn create_http_client(extra_roots: &[CertificateDer<'static>]) -> Result<Cli
     reqwest::ClientBuilder::new()
         .use_rustls_tls()
         .use_preconfigured_tls(tls_config)
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
         .user_agent(format!(
             "Affinidi Trust Development Kit {}",
             env!("CARGO_PKG_VERSION")
