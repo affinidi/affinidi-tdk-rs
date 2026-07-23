@@ -239,7 +239,9 @@ pub(crate) async fn toggle_live_delivery(
                     .channel
                     .send(StreamingUpdate {
                         did_hash: session.did_hash.clone(),
-                        state: StreamingUpdateState::Start,
+                        state: StreamingUpdateState::Start {
+                            session_id: session.session_id.clone(),
+                        },
                     })
                     .await
                     .map_err(|e| {
@@ -264,7 +266,9 @@ pub(crate) async fn toggle_live_delivery(
                     .channel
                     .send(StreamingUpdate {
                         did_hash: session.did_hash.clone(),
-                        state: StreamingUpdateState::Stop,
+                        state: StreamingUpdateState::Stop {
+                            session_id: session.session_id.clone(),
+                        },
                     })
                     .await
                     .map_err(|e| {

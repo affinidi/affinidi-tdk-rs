@@ -464,7 +464,9 @@ async fn handle_socket(
             if tsp_mode {
                 let live = StreamingUpdate {
                     did_hash: session.did_hash.clone(),
-                    state: StreamingUpdateState::Start,
+                    state: StreamingUpdateState::Start {
+                        session_id: session.session_id.clone(),
+                    },
                 };
                 match streaming.channel.send(live).await {
                     Ok(_) => {
