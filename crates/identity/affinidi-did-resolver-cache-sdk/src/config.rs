@@ -47,6 +47,8 @@ pub struct DIDCacheConfig {
     pub(crate) agent_name_cache_capacity: u32,
     #[cfg(all(feature = "agent-names", feature = "network"))]
     pub(crate) agent_names_over_websocket: bool,
+    #[cfg(feature = "agent-names")]
+    pub(crate) resolve_shortcuts: bool,
 }
 
 /// DID Cache Config Builder to construct options required for the client.
@@ -74,6 +76,8 @@ pub struct DIDCacheConfigBuilder {
     agent_name_cache_capacity: u32,
     #[cfg(all(feature = "agent-names", feature = "network"))]
     agent_names_over_websocket: bool,
+    #[cfg(feature = "agent-names")]
+    resolve_shortcuts: bool,
 }
 
 impl Default for DIDCacheConfigBuilder {
@@ -95,6 +99,8 @@ impl Default for DIDCacheConfigBuilder {
             agent_name_cache_capacity: 1_000,
             #[cfg(all(feature = "agent-names", feature = "network"))]
             agent_names_over_websocket: false,
+            #[cfg(feature = "agent-names")]
+            resolve_shortcuts: false,
         }
     }
 }
@@ -196,6 +202,22 @@ impl DIDCacheConfigBuilder {
         self
     }
 
+    /// Populate a verified [`DidShortcut`](crate::DidShortcut) on every
+    /// [`resolve`](crate::DIDCacheClient::resolve), so
+    /// [`display_name`](crate::ResolveResponse::display_name) yields a
+    /// human-facing name instead of the DID.
+    ///
+    /// **Off by default.** Establishing a shortcut means resolving each name the
+    /// document claims, to check it points back at this DID — a network
+    /// round-trip to the naming host that a caller who only wants a document
+    /// should not pay unasked. Turn it on in an application that displays DIDs
+    /// to people; leave it off in a service that does not.
+    #[cfg(feature = "agent-names")]
+    pub fn with_resolve_shortcuts(mut self, enabled: bool) -> Self {
+        self.resolve_shortcuts = enabled;
+        self
+    }
+
     /// Build the [ClientConfig].
     pub fn build(self) -> DIDCacheConfig {
         DIDCacheConfig {
@@ -215,6 +237,8 @@ impl DIDCacheConfigBuilder {
             agent_name_cache_capacity: self.agent_name_cache_capacity,
             #[cfg(all(feature = "agent-names", feature = "network"))]
             agent_names_over_websocket: self.agent_names_over_websocket,
+            #[cfg(feature = "agent-names")]
+            resolve_shortcuts: self.resolve_shortcuts,
         }
     }
 }

@@ -176,10 +176,15 @@ pub struct ResolveResponse {
     pub doc: Document,
     /// Whether the document came from cache rather than a fresh resolution.
     pub cache_hit: bool,
+    /// A **verified** human-facing shortcut for [`Self::did`], when one is
+    /// known. `None` means no shortcut was verified — which includes the case
+    /// where none was looked for. Read it through [`Self::display_name`] rather
+    /// than branching on it.
+    pub shortcut: Option<DidShortcut>,
 }
 
 impl ResolveResponse {
-    /// Assemble a response.
+    /// Assemble a response with no shortcut.
     ///
     /// The construction path for a `#[non_exhaustive]` struct. Mainly useful to
     /// consumers building a fixture or a mock resolver; the client returns these
@@ -197,7 +202,85 @@ impl ResolveResponse {
             did_hash,
             doc,
             cache_hit,
+            shortcut: None,
         }
+    }
+
+    /// Attach a verified shortcut.
+    ///
+    /// Separate from [`Self::new`] so adding shortcut support did not break the
+    /// existing construction sites. The caller is asserting the shortcut has
+    /// been **verified** to belong to this DID — see [`DidShortcut`].
+    #[must_use]
+    pub fn with_shortcut(mut self, shortcut: DidShortcut) -> Self {
+        self.shortcut = Some(shortcut);
+        self
+    }
+
+    /// What to show a human for this DID: the verified shortcut's label when
+    /// there is one, otherwise the DID itself.
+    ///
+    /// This is the call display code should make. It cannot show an unverified
+    /// name, because [`Self::shortcut`] is only ever populated after
+    /// verification — so a UI that routes every DID through here degrades to the
+    /// full DID rather than to a spoofable one.
+    ///
+    /// ```no_run
+    /// # use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+    /// # async fn f() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let client = DIDCacheClient::new(DIDCacheConfigBuilder::default().build()).await?;
+    /// let resolved = client.resolve("did:webvh:QmScid:example.com").await?;
+    /// println!("{}", resolved.display_name()); // "example.com/@alice", or the DID
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.shortcut
+            .as_ref()
+            .map_or(self.did.as_str(), DidShortcut::label)
+    }
+}
+
+/// A verified human-facing shortcut standing in for a DID.
+///
+/// Agent names (`example.com/@alice`) are the only kind today. The enum is
+/// `#[non_exhaustive]` so further shortcut schemes can be added without a
+/// breaking release — a caller that matches on it must carry a wildcard arm,
+/// and one that only wants something printable should use
+/// [`ResolveResponse::display_name`] and never match at all.
+///
+/// A value of this type is a claim that verification **already happened**.
+/// Constructing one from an unverified source (a document's `alsoKnownAs`, say)
+/// defeats the guarantee [`ResolveResponse::display_name`] rests on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DidShortcut {
+    /// A verified agent name, in its scheme-less spelling
+    /// (`example.com/@alice`).
+    AgentName(String),
+}
+
+impl DidShortcut {
+    /// The label to display.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        match self {
+            DidShortcut::AgentName(name) => name,
+        }
+    }
+
+    /// A stable identifier for the kind of shortcut, for logs and metrics.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            DidShortcut::AgentName(_) => "agent-name",
+        }
+    }
+}
+
+impl std::fmt::Display for DidShortcut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
     }
 }
 
@@ -417,7 +500,37 @@ impl DIDCacheClient {
     /// Returns the initial DID, the hashed DID, and the resolved DID Document
     /// NOTE: The DID Document id may be different to the requested DID due to the DID having been updated.
     ///       The original DID should be in the `also_known_as` field of the DID Document.
+    ///
+    /// When [`resolve_shortcuts`](config::DIDCacheConfigBuilder::with_resolve_shortcuts)
+    /// is enabled, the response also carries a verified
+    /// [`DidShortcut`] where one could be established, so
+    /// [`ResolveResponse::display_name`] yields a human-facing name rather than
+    /// the DID. That option is **off by default**: establishing a shortcut costs
+    /// a network round-trip to the naming host, which callers that only want a
+    /// document should not silently pay.
     pub async fn resolve(&self, did: &str) -> Result<ResolveResponse, DIDCacheError> {
+        let response = self.resolve_document(did).await?;
+
+        #[cfg(feature = "agent-names")]
+        if self.config.resolve_shortcuts {
+            if let Some(shortcut) = self.derive_shortcut(&response.did, &response.doc).await {
+                return Ok(response.with_shortcut(shortcut));
+            }
+        }
+
+        Ok(response)
+    }
+
+    /// Resolve a DID to its document, without attempting any shortcut lookup.
+    ///
+    /// The shortcut derivation in [`Self::resolve`] is layered on top of this
+    /// rather than inside it, so that the verification path — which resolves an
+    /// agent name in order to check it points back here — can reach a document
+    /// without re-entering shortcut derivation and recursing.
+    pub(crate) async fn resolve_document(
+        &self,
+        did: &str,
+    ) -> Result<ResolveResponse, DIDCacheError> {
         // Size guard before any parsing
         if did.len() > self.config.max_did_size_in_bytes {
             return Err(DIDCacheError::DIDError(format!(
@@ -467,6 +580,7 @@ impl DIDCacheClient {
                 did_hash: hash,
                 doc: doc.clone(),
                 cache_hit: true,
+                shortcut: None,
             });
         }
 
@@ -479,6 +593,7 @@ impl DIDCacheClient {
                 did_hash: hash,
                 doc,
                 cache_hit: true,
+                shortcut: None,
             })
         } else {
             debug!("DID cache miss: {}", did);
@@ -526,6 +641,7 @@ impl DIDCacheClient {
                             did_hash: hash,
                             doc,
                             cache_hit: true,
+                            shortcut: None,
                         });
                     }
                     // Leader didn't populate the cache (it errored). Loop and
@@ -547,6 +663,7 @@ impl DIDCacheClient {
                             did_hash: hash,
                             doc,
                             cache_hit: true,
+                            shortcut: None,
                         });
                     }
 
@@ -568,6 +685,7 @@ impl DIDCacheClient {
                         did_hash: hash,
                         doc,
                         cache_hit: false,
+                        shortcut: None,
                     });
                 }
             }
@@ -892,6 +1010,82 @@ mod tests {
     use super::*;
 
     const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";
+
+    // -----------------------------------------------------------------------
+    // Display shortcuts
+    // -----------------------------------------------------------------------
+
+    fn response_for(did: &str) -> ResolveResponse {
+        ResolveResponse::new(
+            did.to_string(),
+            DIDMethod::WEBVH,
+            DIDCacheClient::hash_did(did),
+            Document::default(),
+            false,
+        )
+    }
+
+    /// With no shortcut established, display falls back to the DID — never to a
+    /// blank or a partial. A UI routing everything through `display_name` still
+    /// shows something addressable.
+    #[test]
+    fn display_name_falls_back_to_the_did() {
+        let did = "did:webvh:QmScid:example.com";
+        let resp = response_for(did);
+        assert_eq!(resp.shortcut, None);
+        assert_eq!(resp.display_name(), did);
+    }
+
+    /// With one established, display is the shortcut's label, not the DID.
+    #[test]
+    fn display_name_prefers_a_verified_shortcut() {
+        let resp = response_for("did:webvh:QmScid:example.com")
+            .with_shortcut(DidShortcut::AgentName("example.com/@alice".to_string()));
+        assert_eq!(resp.display_name(), "example.com/@alice");
+    }
+
+    /// The label is the scheme-less name; `kind` stays stable for logs, and
+    /// `Display` matches `label` so the type can be printed directly.
+    #[test]
+    fn shortcut_exposes_label_and_kind() {
+        let shortcut = DidShortcut::AgentName("example.com/@alice".to_string());
+        assert_eq!(shortcut.label(), "example.com/@alice");
+        assert_eq!(shortcut.kind(), "agent-name");
+        assert_eq!(shortcut.to_string(), "example.com/@alice");
+    }
+
+    /// Shortcut derivation is opt-in: a default client must not pay a naming-host
+    /// round-trip, so a plain resolve leaves the shortcut unset.
+    #[tokio::test]
+    async fn shortcuts_are_off_by_default() {
+        let client = basic_local_client().await;
+        let resp = client.resolve(DID_KEY).await.unwrap();
+        assert_eq!(
+            resp.shortcut, None,
+            "a default client must not attempt shortcut resolution"
+        );
+        assert_eq!(resp.display_name(), DID_KEY);
+    }
+
+    /// A document claiming no names yields no shortcut even with the option on —
+    /// and, importantly, does not error.
+    ///
+    /// Gated: the shortcut *type* and field exist unconditionally so callers can
+    /// use `display_name()` in any build, but establishing one — and hence
+    /// `with_resolve_shortcuts` — needs the `agent-names` feature.
+    #[cfg(feature = "agent-names")]
+    #[tokio::test]
+    async fn no_claimed_names_yields_no_shortcut() {
+        let config = config::DIDCacheConfigBuilder::default()
+            .with_resolve_shortcuts(true)
+            .build();
+        let client = DIDCacheClient::new(config).await.unwrap();
+        // did:key documents carry no `alsoKnownAs`, so there is nothing to check
+        // and no network request is made.
+        let resp = client.resolve(DID_KEY).await.unwrap();
+        assert_eq!(resp.shortcut, None);
+        assert_eq!(resp.display_name(), DID_KEY);
+    }
 
     async fn basic_local_client() -> DIDCacheClient {
         let config = config::DIDCacheConfigBuilder::default().build();
