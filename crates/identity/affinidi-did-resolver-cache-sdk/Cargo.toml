@@ -67,9 +67,11 @@ did-ebsi = { version = "0.1", path = "../did-methods/did-ebsi", optional = true 
 ahash = "0.8"
 base64 = { version = "0.22", optional = true }
 didwebvh-rs = { version = "0.6", optional = true }
-# 0.1.3 is the floor: it is the first release that parses the community name
-# (`example.com/@`), which `resolve_any` now accepts.
-agent-names = { version = "0.1.3", optional = true }
+# Community-name support (`example.com/@`) needs agent-names >= 0.1.3. The
+# requirement stays at `0.1` rather than pinning that floor: both crates
+# release from the same commit, so a `0.1.3` floor cannot resolve against the
+# registry at publish time. Cargo picks the newest 0.1.x anyway.
+agent-names = { version = "0.1", optional = true }
 highway = "1"
 moka = { version = "0.12", features = ["future"] }
 rand = "0.10"

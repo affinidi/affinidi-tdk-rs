@@ -9,8 +9,9 @@
 `resolve_any("example.com/@")` now classifies as an agent name and resolves,
 where it previously failed as malformed. The agent name FAQ gives a name with
 an empty local part to the verifiable trust community that owns the domain,
-and `agent-names` 0.1.3 parses it — this release raises the floor to that
-version so the behaviour is guaranteed rather than incidental.
+and `agent-names` 0.1.3 parses it. Requires that version or later — the
+manifest requirement stays `0.1` because both crates release together, so a
+`0.1.3` floor would not resolve at publish time.
 
 `example.com/@/path` is still rejected: the community name takes no path.
 
