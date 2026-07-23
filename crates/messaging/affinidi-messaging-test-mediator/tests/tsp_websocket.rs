@@ -297,3 +297,291 @@ async fn tsp_websocket_delivers_messages_that_arrive_after_connect() {
     ws.close().await.ok();
     env.shutdown().await.expect("shutdown");
 }
+
+/// Poll Bob's mailbox until it is empty, or give up. Deletion is queued on the
+/// SDK's background handler, so the ack is not synchronous with the delete.
+async fn wait_for_empty_inbox(env: &TestEnvironment, user: &TestUser) -> bool {
+    for _ in 0..40 {
+        let fetched = env
+            .atm
+            .fetch_messages(&user.profile, &FetchOptions::default())
+            .await
+            .expect("fetch messages");
+        if fetched.success.is_empty() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// **`tsp-ack`: send and keep.** The mediator must NOT delete the message when
+/// it writes it to the socket — only when the client acknowledges.
+///
+/// Plain `tsp` deletes on send, which is at-most-once past the write: a
+/// successful write means the frame reached the local sink, so a connection
+/// that dies before the peer reads it loses the message with nothing left to
+/// redeliver. That is fine for a liveness probe and wrong for anything that
+/// matters, so `tsp-ack` moves the delete to the ack.
+#[tokio::test]
+async fn tsp_ack_mode_keeps_the_message_until_the_client_acks() {
+    init_tracing();
+
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+
+    let payload = b"a TSP message that must survive until acked";
+    env.atm
+        .tsp()
+        .send(&alice.profile, &bob.did, payload)
+        .await
+        .expect("alice sends a TSP message to bob");
+
+    let mut ws = env
+        .atm
+        .tsp()
+        .connect_websocket_acked(&bob.profile)
+        .await
+        .expect("bob opens the TSP websocket in ack mode");
+    assert!(
+        ws.is_acked(),
+        "the mediator must negotiate `tsp-ack`; a silent downgrade would leave \
+         delivery at-most-once while the caller believes otherwise"
+    );
+
+    let qb2 = timeout(Duration::from_secs(5), ws.recv())
+        .await
+        .expect("a frame arrives within the timeout")
+        .expect("recv succeeds")
+        .expect("a flushed frame");
+
+    let (recovered, sender) = env
+        .atm
+        .tsp()
+        .unpack_bytes(&bob.profile, &qb2)
+        .await
+        .expect("bob unpacks the message");
+    assert_eq!(recovered, payload, "payload round-trips");
+    assert_eq!(sender, alice.did, "sender VID is recovered");
+
+    // THE POINT: delivered to the socket, still held by the mediator.
+    let fetched = env
+        .atm
+        .fetch_messages(&bob.profile, &FetchOptions::default())
+        .await
+        .expect("bob fetches messages");
+    assert_eq!(
+        fetched.success.len(),
+        1,
+        "in tsp-ack mode the message must still be held until acked — deleting on \
+         send is what loses it when the socket dies mid-flight"
+    );
+
+    // Ack, and only now may it go.
+    ws.ack(&qb2).await.expect("ack succeeds");
+    assert!(
+        wait_for_empty_inbox(&env, &bob).await,
+        "the acked message must be deleted"
+    );
+
+    ws.close().await.ok();
+    env.shutdown().await.expect("shutdown");
+}
+
+/// The recovery this buys: a frame that was sent but never acked is still there
+/// on the next connection. Under delete-on-send it would be gone for good.
+#[tokio::test]
+async fn an_unacked_tsp_message_is_redelivered_on_reconnect() {
+    init_tracing();
+
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+
+    let payload = b"a TSP message the client never acknowledges";
+    env.atm
+        .tsp()
+        .send(&alice.profile, &bob.did, payload)
+        .await
+        .expect("alice sends a TSP message to bob");
+
+    // First connection: receive it, then walk away without acking — standing in
+    // for a consumer that crashed between reading the frame and handling it.
+    {
+        let mut ws = env
+            .atm
+            .tsp()
+            .connect_websocket_acked(&bob.profile)
+            .await
+            .expect("bob connects in ack mode");
+        let first = timeout(Duration::from_secs(5), ws.recv())
+            .await
+            .expect("a frame arrives")
+            .expect("recv succeeds")
+            .expect("a flushed frame");
+        assert!(!first.is_empty(), "a non-empty frame");
+        ws.close().await.ok();
+    }
+
+    // Second connection: it is still ours to collect.
+    let mut ws = env
+        .atm
+        .tsp()
+        .connect_websocket_acked(&bob.profile)
+        .await
+        .expect("bob reconnects in ack mode");
+    let again = timeout(Duration::from_secs(5), ws.recv())
+        .await
+        .expect(
+            "the un-acked message must be redelivered on reconnect — this is the \
+             at-most-once loss window that tsp-ack closes",
+        )
+        .expect("recv succeeds")
+        .expect("a redelivered frame");
+
+    let (recovered, _) = env
+        .atm
+        .tsp()
+        .unpack_bytes(&bob.profile, &again)
+        .await
+        .expect("bob unpacks the redelivered message");
+    assert_eq!(recovered, payload, "the same message came back");
+
+    ws.ack(&again).await.expect("ack succeeds");
+    assert!(
+        wait_for_empty_inbox(&env, &bob).await,
+        "the acked message must be deleted"
+    );
+
+    ws.close().await.ok();
+    env.shutdown().await.expect("shutdown");
+}
+
+/// Redelivery is for *recovery*, not the steady state: within one connection an
+/// un-acked frame must not be sent again. Without the in-flight set, every
+/// live-delivery wake-up re-walks the inbox and re-sends everything not yet
+/// acked, so a consumer that acks a moment later sees constant duplicates.
+#[tokio::test]
+async fn an_unacked_message_is_not_resent_within_the_same_connection() {
+    init_tracing();
+
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+
+    let mut ws = env
+        .atm
+        .tsp()
+        .connect_websocket_acked(&bob.profile)
+        .await
+        .expect("bob connects in ack mode");
+
+    // Two messages, neither acked. Each must arrive exactly once.
+    for round in 0..2u8 {
+        let payload = format!("unacked message {round}").into_bytes();
+        env.atm
+            .tsp()
+            .send(&alice.profile, &bob.did, &payload)
+            .await
+            .expect("alice sends");
+
+        let qb2 = timeout(Duration::from_secs(5), ws.recv())
+            .await
+            .unwrap_or_else(|_| panic!("frame {round} arrives"))
+            .expect("recv succeeds")
+            .expect("a pushed frame");
+        let (recovered, _) = env
+            .atm
+            .tsp()
+            .unpack_bytes(&bob.profile, &qb2)
+            .await
+            .expect("unpack");
+        assert_eq!(recovered, payload, "frame {round} is the one just sent");
+    }
+
+    // Nothing further: no re-send of the two outstanding frames.
+    let extra = timeout(Duration::from_secs(2), ws.recv()).await;
+    assert!(
+        extra.is_err(),
+        "an un-acked frame must not be re-sent on the same connection — \
+         redelivery is a reconnect-time recovery, not the steady state"
+    );
+
+    ws.close().await.ok();
+    env.shutdown().await.expect("shutdown");
+}
+
+/// **The negotiation must be an honest capability signal.**
+///
+/// By default the mediator echoes the client's subprotocol list back unchanged,
+/// which means a mediator that has never heard of a subprotocol still echoes
+/// it. Left alone, a client asking for `tsp-ack` against an older mediator
+/// would be told "yes" and silently get delete-on-send — the same silent loss
+/// delete-to-ack exists to remove.
+///
+/// The fix is ordering: clients list `tsp` first, and selection picks the first
+/// client-listed protocol the server also offers. An older mediator reflects
+/// the client's list and so lands on `tsp`; this mediator narrows its offer to
+/// `tsp-ack` and so lands on `tsp-ack` despite it being second. This test pins
+/// that override — if the mediator ever goes back to plain reflection, a client
+/// would read `tsp` here and correctly (if unhelpfully) conclude there is no
+/// ack support, but the *positive* signal must keep working.
+#[tokio::test]
+async fn tsp_ack_is_selected_even_though_the_client_lists_it_second() {
+    init_tracing();
+
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+    let bob = env.add_user("bob").await.expect("add bob");
+    let (access_token, ws_uri) = token_and_ws_uri(&env, &bob).await;
+
+    // Client order mirrors the SDK: `tsp` first, `tsp-ack` second.
+    let request = ClientRequestBuilder::new(ws_uri.clone())
+        .with_sub_protocol(format!("bearer.{access_token}"))
+        .with_sub_protocol("tsp")
+        .with_sub_protocol("tsp-ack");
+    let (stream, response) = connect_async(request)
+        .await
+        .expect("bob upgrades offering tsp + tsp-ack");
+    assert_eq!(
+        response
+            .headers()
+            .get("sec-websocket-protocol")
+            .and_then(|v| v.to_str().ok()),
+        Some("tsp-ack"),
+        "a mediator that supports delete-to-ack must answer `tsp-ack`, or the \
+         client cannot tell support from mere reflection"
+    );
+    drop(stream);
+
+    // And a plain `tsp` client still negotiates plain `tsp`.
+    let (access_token, ws_uri) = token_and_ws_uri(&env, &bob).await;
+    let request = ClientRequestBuilder::new(ws_uri)
+        .with_sub_protocol(format!("bearer.{access_token}"))
+        .with_sub_protocol("tsp");
+    let (stream, response) = connect_async(request)
+        .await
+        .expect("bob upgrades offering tsp only");
+    assert_eq!(
+        response
+            .headers()
+            .get("sec-websocket-protocol")
+            .and_then(|v| v.to_str().ok()),
+        Some("tsp"),
+        "a client that did not ask for delete-to-ack must not be given it"
+    );
+    drop(stream);
+
+    env.shutdown().await.expect("shutdown");
+}
