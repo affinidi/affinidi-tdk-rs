@@ -51,6 +51,9 @@ jobs:
       - name: Version-bump guard for changed publishable crates
         run: bash scripts/check-version-bumps.sh "${{ github.event.pull_request.base.sha }}"
 
+      - name: Changelog guard for bumped publishable crates
+        run: bash scripts/check-changelogs.sh "${{ github.event.pull_request.base.sha }}"
+
       - name: Workspace duplicate guard (patch.crates-io coverage)
         run: bash scripts/check-workspace-duplicates.sh
 
