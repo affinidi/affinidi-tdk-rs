@@ -17,7 +17,12 @@
 # An undocumented release is a silent breaking change waiting to happen.
 #
 # The rule: if a publishable crate's VERSION changed in this PR, that crate's
-# CHANGELOG.md must have changed too.
+# CHANGELOG.md must MENTION THE NEW VERSION.
+#
+# Deliberately not the weaker "the changelog file was touched". A PR that edits
+# a changelog for one reason and bumps a version for another would satisfy that
+# and still ship an undocumented release — which is exactly how the first draft
+# of this guard passed a version bump it should have caught.
 #
 # Not circular with check-version-bumps.sh — that script explicitly excludes
 # CHANGELOG* from "source changes", so a changelog-only PR needs no bump, and a
@@ -77,10 +82,16 @@ while IFS="$(printf '\t')" read -r name dir; do
   [ "$old_version" != "$new_version" ] || continue
 
   found=1
-  if echo "$changed" | grep -qx "$dir/CHANGELOG.md"; then
-    echo "  ${GREEN}ok${NC}   $name: ${old_version:-<new>} -> $new_version (changelog updated)"
+  changelog="$dir/CHANGELOG.md"
+  if [ ! -f "$changelog" ]; then
+    echo "  ${RED}MISSING${NC} $name: ${old_version:-<new>} -> $new_version but $changelog does not exist"
+    fail=1
+  # Match the version as a whole token: a plain substring search would let
+  # `0.1.30`'s entry satisfy a bump to `0.1.3`.
+  elif grep -qE "(^|[^0-9.])$(printf '%s' "$new_version" | sed 's/\./\\./g')([^0-9.]|\$)" "$changelog"; then
+    echo "  ${GREEN}ok${NC}   $name: ${old_version:-<new>} -> $new_version (documented)"
   else
-    echo "  ${RED}MISSING${NC} $name: ${old_version:-<new>} -> $new_version but $dir/CHANGELOG.md is untouched"
+    echo "  ${RED}MISSING${NC} $name: ${old_version:-<new>} -> $new_version, but $new_version does not appear in $changelog"
     fail=1
   fi
 done <<EOF
@@ -97,7 +108,7 @@ if [ "$fail" -ne 0 ]; then
   echo "${RED}A crate is being published with no record of what changed.${NC}"
   echo "Consumers pin these crates loosely, so a behavioural change is breaking for"
   echo "them even when no signature changes — the changelog is where they find out."
-  echo "Add an entry for the new version to the crate's ${CYAN}CHANGELOG.md${NC}."
+  echo "Add an entry naming the new version to the crate's ${CYAN}CHANGELOG.md${NC}."
   exit 1
 fi
 
