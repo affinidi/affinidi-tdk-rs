@@ -80,6 +80,20 @@ pub(crate) struct WebSocketTransport {
     next_requests: HashMap<u32, oneshot::Sender<WebSocketResponses>>,
     next_requests_list: VecDeque<u32>,
 
+    /// Inbound frames that are handed back **packed** (TSP frames, and every
+    /// frame when `skip_unpack_messages` is set) and arrived with nowhere to go.
+    ///
+    /// These cannot live in [`Self::inbound_cache`], which is keyed by unpacked
+    /// DIDComm message id. Without a home of their own they were dropped: the
+    /// packed path delivered a frame only if a `Next` request happened to be
+    /// outstanding at that instant, or a direct channel was attached. A polling
+    /// consumer (`live_stream_next_frame`) leaves microsecond-wide gaps between
+    /// one poll returning and the next being registered, and a frame landing in
+    /// that gap was gone — the send succeeded, the mediator delivered, and the
+    /// consumer waited forever. Queue them here instead and let the next `Next`
+    /// drain the queue.
+    packed_cache: VecDeque<String>,
+
     /// Skip calling toggle_live_delivery during connection setup
     skip_toggle_live_delivery: bool,
 
@@ -160,6 +174,7 @@ impl WebSocketTransport {
                 direct_channel,
                 next_requests: HashMap::new(),
                 next_requests_list: VecDeque::new(),
+                packed_cache: VecDeque::new(),
                 skip_toggle_live_delivery: false,
                 skip_unpack_messages: false,
                 conn_state_tx,
@@ -200,6 +215,7 @@ impl WebSocketTransport {
                 direct_channel,
                 next_requests: HashMap::new(),
                 next_requests_list: VecDeque::new(),
+                packed_cache: VecDeque::new(),
                 skip_toggle_live_delivery,
                 skip_unpack_messages,
                 conn_state_tx,
@@ -359,7 +375,14 @@ impl WebSocketTransport {
                             },
                             Some(WebSocketCommands::Next(id, sender)) => {
                                 debug!("Next message requested");
-                                if let Some((message, metadata)) = self.inbound_cache.next() {
+                                // Packed frames first: they are strictly older than
+                                // anything a later poll could produce, and they have no
+                                // other way out — the DIDComm cache is keyed by unpacked
+                                // message id and cannot hold them.
+                                if let Some(packed) = self.packed_cache.pop_front() {
+                                    debug!("Serving packed message from cache");
+                                    let _ = sender.send(WebSocketResponses::PackedMessageReceived(Box::new(packed)));
+                                } else if let Some((message, metadata)) = self.inbound_cache.next() {
                                     let _ = sender.send(WebSocketResponses::MessageReceived(Box::new(message), Box::new(metadata)));
                                 } else {
                                     self.next_requests.insert(id, sender);
@@ -520,27 +543,75 @@ impl WebSocketTransport {
 
         // If skip_unpack_messages is true, send the packed message directly
         if self.skip_unpack_messages || force_packed {
-            // for packed messages skip cache lookup
-            if let Some(next_request) = self.next_requests_list.pop_front() {
-                debug!("Next message found, sending to requestor packed");
-                if let Some(sender) = self.next_requests.remove(&next_request) {
-                    let _ =
-                        sender.send(WebSocketResponses::PackedMessageReceived(Box::new(message)));
-                    return;
-                } else {
+            // A packed frame has exactly three possible homes, tried in order:
+            // an outstanding `Next` request, the direct channel, or the packed
+            // cache. It must reach one of them — every arm that gives up on the
+            // frame has to hand it to the next arm rather than let it fall off
+            // the end, which is how these frames used to vanish.
+            let mut message = message;
+
+            // 1. Outstanding `Next` requests. A waiter whose receiver has gone
+            //    away (its poll timed out between our `pop_front` and this
+            //    `send`) hands the frame back, so we try the next waiter rather
+            //    than losing it to a race we just lost.
+            while let Some(next_request) = self.next_requests_list.pop_front() {
+                let Some(sender) = self.next_requests.remove(&next_request) else {
                     error!(
-                        "Next message requestor not found - bug in the SDK - inbound message may be lost"
+                        "Next message requestor ({next_request}) not found - bug in the SDK - trying the next waiter"
                     );
+                    continue;
+                };
+                match sender.send(WebSocketResponses::PackedMessageReceived(Box::new(message))) {
+                    Ok(()) => {
+                        debug!("Next message found, sending to requestor packed");
+                        return;
+                    }
+                    Err(WebSocketResponses::PackedMessageReceived(returned)) => {
+                        debug!("Next requestor ({next_request}) is gone; re-homing the frame");
+                        message = *returned;
+                    }
+                    // `send` returns the value we passed, which is the variant
+                    // constructed one line above.
+                    Err(_) => unreachable!("oneshot returns the value it was given"),
                 }
             }
 
+            // 2. The direct channel, when one is attached and has receivers.
+            //    `send` fails only when every receiver has dropped, which makes
+            //    the channel no better than no channel for this frame.
             if let Some(direct_channel) = self.direct_channel.as_mut() {
-                debug!("Sending message to direct channel packed");
-                let _ = direct_channel
-                    .send(WebSocketResponses::PackedMessageReceived(Box::new(message)));
-            } else {
-                debug!("No direct channel, should be cached");
+                match direct_channel
+                    .send(WebSocketResponses::PackedMessageReceived(Box::new(message)))
+                {
+                    Ok(_) => {
+                        debug!("Sending message to direct channel packed");
+                        return;
+                    }
+                    Err(returned) => {
+                        let WebSocketResponses::PackedMessageReceived(returned) = returned.0 else {
+                            unreachable!("broadcast returns the value it was given")
+                        };
+                        debug!("Direct channel has no receivers; caching the packed frame");
+                        message = *returned;
+                    }
+                }
             }
+
+            // 3. Cache it for the next `Next`. Bounded by the same count limit
+            //    as the DIDComm cache; at the limit the OLDEST frame is dropped
+            //    (a stalled consumer should not be able to block live traffic
+            //    indefinitely) and we say so — a silent drop here is the exact
+            //    failure this cache exists to prevent.
+            let limit = self.shared.config.fetch_cache_limit_count as usize;
+            if self.packed_cache.len() >= limit {
+                warn!(
+                    "Packed message cache is full ({limit} frames); dropping the oldest frame. \
+                     Nothing is consuming inbound frames fast enough."
+                );
+                self.packed_cache.pop_front();
+            }
+            self.packed_cache.push_back(message);
+            debug!("Cached packed message ({} queued)", self.packed_cache.len());
             return;
         }
 

@@ -218,3 +218,82 @@ async fn tsp_websocket_sdk_consumer_flushes_and_deletes() {
     ws.close().await.ok();
     env.shutdown().await.expect("shutdown");
 }
+
+/// **Live delivery**: a message sent while the raw-TSP socket is already open
+/// must be pushed onto it, not left in the inbox.
+///
+/// Every test above queues the message *before* Bob connects, so they all pass
+/// on flush-on-connect alone — which is exactly how this shipped broken. A
+/// raw-TSP socket registered with the streaming task but never reached
+/// `StreamingClientState::Live` (only the DIDComm `live-delivery-change`
+/// message promotes a client, and a raw-TSP socket cannot send one), so
+/// `store_message` skipped the streaming publish and the socket's re-drain
+/// never fired. Delivery worked exactly once, at connect time, and every
+/// message after that was stored and forgotten: senders saw success, receivers
+/// heard nothing, and the whole transport looked intermittent because the
+/// outcome depended on whether the frame beat the socket.
+#[tokio::test]
+async fn tsp_websocket_delivers_messages_that_arrive_after_connect() {
+    init_tracing();
+
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+
+    // Bob connects FIRST, with an empty inbox — so nothing here can be
+    // satisfied by the flush-on-connect drain.
+    let mut ws = env
+        .atm
+        .tsp()
+        .connect_websocket(&bob.profile)
+        .await
+        .expect("bob opens the TSP websocket");
+
+    // Several messages, to catch a fix that only pushes the first one.
+    for round in 0..3u8 {
+        let payload = format!("live TSP frame {round}").into_bytes();
+        env.atm
+            .tsp()
+            .send(&alice.profile, &bob.did, &payload)
+            .await
+            .unwrap_or_else(|e| panic!("alice sends live TSP message {round}: {e}"));
+
+        let qb2 = timeout(Duration::from_secs(5), ws.recv())
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "TSP frame {round} was sent successfully but never delivered — the socket is \
+                     open and the mediator is holding the message"
+                )
+            })
+            .expect("recv succeeds")
+            .expect("a pushed frame");
+
+        let (recovered, sender) = env
+            .atm
+            .tsp()
+            .unpack_bytes(&bob.profile, &qb2)
+            .await
+            .expect("bob unpacks the pushed TSP message");
+        assert_eq!(recovered, payload, "payload round-trips (frame {round})");
+        assert_eq!(sender, alice.did, "sender VID is recovered (frame {round})");
+    }
+
+    // Delete-on-send holds for pushed frames too.
+    let fetched = env
+        .atm
+        .fetch_messages(&bob.profile, &FetchOptions::default())
+        .await
+        .expect("bob fetches messages");
+    assert!(
+        fetched.success.is_empty(),
+        "pushed TSP messages must be deleted on send, got {} left in the inbox",
+        fetched.success.len()
+    );
+
+    ws.close().await.ok();
+    env.shutdown().await.expect("shutdown");
+}

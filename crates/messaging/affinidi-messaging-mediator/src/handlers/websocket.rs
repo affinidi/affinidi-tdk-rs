@@ -395,6 +395,41 @@ async fn handle_socket(
                     return;
                 }
             }
+
+            // Raw-TSP mode is live by construction — enable it here.
+            //
+            // `Register` alone leaves the client in `StreamingClientState::
+            // Registered` ("has a socket but has not enabled live delivery"),
+            // and only `Start` promotes it to `Live`. The DIDComm client gets
+            // there by sending `messagepickup/3.0/live-delivery-change`; a
+            // raw-TSP socket has no such message — it carries binary TSP frames
+            // and nothing else — so it stayed `Registered` forever. With the
+            // client not live, `store_message` skips the streaming publish
+            // entirely, so the `rx.recv()` re-drain arm below never fired and
+            // the ONLY delivery this socket ever got was flush-on-connect.
+            // Every frame that arrived after the socket came up was stored and
+            // left sitting in the inbox: the sender saw a successful send and
+            // the recipient heard nothing.
+            //
+            // Push delivery isn't an opt-in here the way it is for DIDComm —
+            // it is the raw-TSP contract (flush-on-connect + delete-on-send),
+            // so the socket declares itself live the moment it registers.
+            #[cfg(feature = "tsp")]
+            if tsp_mode {
+                let live = StreamingUpdate {
+                    did_hash: session.did_hash.clone(),
+                    state: StreamingUpdateState::Start,
+                };
+                match streaming.channel.send(live).await {
+                    Ok(_) => {
+                        debug!("Raw-TSP socket: enabled live delivery");
+                    }
+                    Err(e) => {
+                        warn!("Error enabling live delivery for raw-TSP socket: {:?}", e);
+                        return;
+                    }
+                }
+            }
         }
 
         let _ = state
@@ -431,7 +466,9 @@ async fn handle_socket(
             if let Some(streaming) = &state.streaming_task {
                 let stop = StreamingUpdate {
                     did_hash: session.did_hash.clone(),
-                    state: StreamingUpdateState::Deregister,
+                    state: StreamingUpdateState::Deregister {
+                        session_id: session.session_id.clone(),
+                    },
                 };
                 let _ = streaming.channel.send(stop).await;
             }
@@ -613,7 +650,9 @@ async fn handle_socket(
             if let Some(streaming) = &state.streaming_task  {
                 let stop = StreamingUpdate {
                     did_hash: session.did_hash.clone(),
-                    state: StreamingUpdateState::Deregister,
+                    state: StreamingUpdateState::Deregister {
+                        session_id: session.session_id.clone(),
+                    },
                 };
                 let _ = streaming.channel.send(stop).await;
             }
