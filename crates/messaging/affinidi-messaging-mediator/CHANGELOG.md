@@ -2,6 +2,24 @@
 
 ## Changelog history
 
+## 26th July 2026
+
+### 0.17.10 — accept `vta-sdk` 0.20
+
+`vta-sdk` 0.20 is a breaking release (`VtaEndpoint` gained a `Tsp` variant and
+became `#[non_exhaustive]`; `ResolvedVta` gained two fields) shipped for TSP
+client enablement — OpenVTC/verifiable-trust-infrastructure#765/#766/#767.
+
+Our `vta-sdk = "0.19.0"` requirement excluded it. Under 0.x semver `^0.19` does
+not match 0.20, so a workspace that depends on both this crate and `vta-sdk`
+0.20 could not resolve a single copy: it kept a second, stale 0.19 node purely
+to satisfy us. That is not cosmetic — `cargo publish --locked` verifies
+dependent crates against the pinned registry copy, so a dependent would be
+built against 0.19 source while the workspace built against 0.20.
+
+No source change was needed here: the mediator does not touch either broken
+type. This is the requirement bump only.
+
 ## 23rd July 2026
 
 ### 0.17.9 — streaming Start/Stop act only for the session that owns the DID's slot

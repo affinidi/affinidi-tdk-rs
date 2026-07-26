@@ -2,6 +2,18 @@
 
 ## Changelog history
 
+## 26th July 2026
+
+### 0.1.23 — accept `vta-sdk` 0.20
+
+Requirement bump to match `affinidi-messaging-mediator` 0.17.10; see its
+changelog for why `^0.19` had to move.
+
+`vta-sdk` 0.20 added TSP discovery, so `ResolvedVta` grew a
+`tsp_mediator_did` field. Two test fixtures that build the struct by literal
+now set it to `None` — these cover the DIDComm/REST fallback ladder, so the
+VTA under test advertises no `#tsp` service. No behaviour change.
+
 ## 16th July 2026
 
 ### 0.1.22 — publish the did:webvh log, and a read-only probe for AWS-managed backends
