@@ -523,6 +523,10 @@ mod tests {
     fn resolved(mediator_did: Option<&str>, rest_url: Option<&str>) -> ResolvedVta {
         ResolvedVta {
             vta_did: "did:webvh:vta.test".into(),
+            // vta-sdk 0.20 added TSP discovery. These fixtures cover the
+            // DIDComm/REST fallback ladder, so the VTA under test advertises
+            // no `#tsp` service.
+            tsp_mediator_did: None,
             mediator_did: mediator_did.map(str::to_string),
             rest_url: rest_url.map(str::to_string),
         }
