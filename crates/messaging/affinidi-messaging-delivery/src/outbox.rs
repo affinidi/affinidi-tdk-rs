@@ -47,7 +47,9 @@ impl OutboxState {
 /// A durable, transport-independent unit of delivery-critical work.
 ///
 /// The entry records **who** the message is for (`dest_did`), not which wire —
-/// the transport is resolved at drain time. Timestamps are Unix milliseconds;
+/// the transport is resolved at drain time. The one exception is
+/// [`via`](Self::via), which pins an entry to a specific transport when the
+/// sending *identity* matters; see its docs. Timestamps are Unix milliseconds;
 /// the drain takes the clock as a parameter so it stays deterministic in tests.
 ///
 /// `Serialize`/`Deserialize` so a durable [`OutboxStore`] can persist entries
@@ -64,6 +66,26 @@ pub struct OutboxEntry {
     /// `None` = drain in parallel; `Some(k)` = per-`k` FIFO (an entry is due only
     /// if no earlier-enqueued entry with the same key is still non-terminal).
     pub ordering_key: Option<Key>,
+    /// The transport (by `MessagingService` transport id) this entry **must** go
+    /// out over, or `None` for "whichever transport is primary at drain time".
+    ///
+    /// `None` is the right default for a single-identity service, and is what
+    /// makes mediator migration work: a queued entry follows `promote` to the new
+    /// primary rather than being pinned to the mediator that was current when it
+    /// was enqueued.
+    ///
+    /// `Some(id)` exists for the case where the transport *is* the identity — a
+    /// service holding one transport per DID (per persona, per agent). There the
+    /// wire is not interchangeable: draining a message enqueued for identity A
+    /// over identity B's socket sends it from the wrong sender, which the
+    /// recipient authenticates and the mediator ACL judges. Such an entry is
+    /// drained only by [`drain_once_via`](crate::drain_once_via) for the matching
+    /// id, never by [`drain_once`](crate::drain_once).
+    ///
+    /// `#[serde(default)]` so entries persisted before this field existed load as
+    /// unbound.
+    #[serde(default)]
+    pub via: Option<String>,
     /// The already-packed message to hand to `MessageTransport::send`.
     pub packed: Vec<u8>,
     /// Lifecycle state.
@@ -103,6 +125,7 @@ impl OutboxEntry {
             idempotency_key: idempotency_key.into(),
             dest_did: dest_did.into(),
             ordering_key: None,
+            via: None,
             packed,
             state: OutboxState::Queued,
             attempts: 0,
@@ -117,6 +140,12 @@ impl OutboxEntry {
     /// Builder-style: set the ordering key (per-key FIFO drain).
     pub fn with_ordering_key(mut self, key: impl Into<Key>) -> Self {
         self.ordering_key = Some(key.into());
+        self
+    }
+
+    /// Builder-style: pin this entry to one transport (see [`via`](Self::via)).
+    pub fn with_via(mut self, transport_id: impl Into<String>) -> Self {
+        self.via = Some(transport_id.into());
         self
     }
 }
@@ -351,5 +380,34 @@ mod tests {
         let due = store.due(1_000).await.unwrap();
         let keys: Vec<_> = due.iter().map(|e| e.idempotency_key.as_str()).collect();
         assert_eq!(keys, vec!["c", "b"]);
+    }
+
+    #[test]
+    fn a_fresh_entry_is_unbound() {
+        assert_eq!(entry("k1", 1_000).via, None);
+    }
+
+    #[test]
+    fn with_via_pins_the_entry() {
+        assert_eq!(
+            entry("k1", 1_000).with_via("persona-a").via.as_deref(),
+            Some("persona-a")
+        );
+    }
+
+    /// A durable store holds entries written before `via` existed. They must load
+    /// as unbound rather than failing the whole store open.
+    #[test]
+    fn an_entry_persisted_without_via_loads_as_unbound() {
+        let mut without_via = serde_json::to_value(entry("k1", 1_000)).unwrap();
+        without_via
+            .as_object_mut()
+            .expect("entry serialises as an object")
+            .remove("via")
+            .expect("the current struct serialises via");
+
+        let loaded: OutboxEntry = serde_json::from_value(without_via).unwrap();
+        assert_eq!(loaded.via, None);
+        assert_eq!(loaded.idempotency_key, "k1");
     }
 }

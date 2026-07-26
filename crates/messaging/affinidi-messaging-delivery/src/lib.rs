@@ -34,7 +34,7 @@ pub use confirm::{
     confirmation_loop, confirmation_loop_with, outbox_drain_loop, poll_outbox_drain,
     sweep_confirmations, sweep_confirmations_with,
 };
-pub use drain::{DrainReport, drain_loop, drain_once};
+pub use drain::{DrainReport, drain_loop, drain_loop_via, drain_once, drain_once_via};
 pub use outbox::{InMemoryOutboxStore, Key, OutboxEntry, OutboxError, OutboxState, OutboxStore};
 pub use receipt::{RECEIPT_TYPE, Receipt, ReceiptPacker, receipt_key, receipt_of};
 pub use service::{Delivery, MessagingService, MessagingStatus, Sent};

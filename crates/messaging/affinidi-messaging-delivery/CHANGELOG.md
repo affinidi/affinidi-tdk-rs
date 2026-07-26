@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.1.12] - 2026-07-26
+
+- **`MessagingService` is now usable multi-identity**, where each transport *is* a
+  sender identity (one per persona / agent DID) rather than an alternative wire to
+  the same peer. The multi-transport core from 0.1.10 already supported holding N
+  of them; what was missing was outbound selection, drain routing, and a truthful
+  per-transport status. Additive; 11 new tests (58 total).
+  - **`send_via(transport_id, to, packed, delivery)`** — the outbound counterpart
+    of 0.1.11's `request_via`. `send` routes to the primary, which is correct when
+    transports are interchangeable wires and wrong when the transport determines
+    the proven sender. `BestEffort` sends over the named transport; `Guaranteed`
+    pins the outbox entry to it.
+  - **`OutboxEntry::via: Option<String>`** (+ `with_via`) — the transport an entry
+    **must** drain over. `None` keeps today's behaviour and is what makes mediator
+    migration work: an unbound entry follows `promote` to the new primary rather
+    than being pinned to the mediator current when it was enqueued. `Some(id)` is
+    for the identity case, where draining entry A over identity B's socket would
+    send it from the wrong sender — which the recipient authenticates and the
+    mediator ACL judges.
+  - **`drain_once_via` / `drain_loop_via`** — the per-identity drain. Over one
+    shared store, every entry is claimed by **exactly one** drain: an unbound entry
+    by `drain_once`, a pinned entry by the `_via` drain naming it. Nothing
+    double-sends and nothing is orphaned.
+  - **`transport_states()` / `transport_state(id)`** — per-transport live
+    `ConnState`. `status()`'s aggregate assumes transports are alternative wires to
+    one peer, so its `Degraded` means "a standby is down"; under multi-identity the
+    same value would mean "one identity is offline", which is a different operator
+    action. Rather than redefine `status()`, the per-identity view is its own
+    accessor, and `status()` now documents the assumption it makes.
+- **Behavioural change to `drain_once`, called out per R3.6:** it now **skips**
+  entries with `via` set, leaving them to `drain_once_via`. No consumer is affected
+  today — `via` is new and defaults to `None`, so every existing entry is still
+  claimed by `drain_once` exactly as before — but a consumer that starts setting
+  `via` must run a `_via` drain for those entries or they will sit queued until
+  their delivery window settles them.
+- `OutboxEntry` gains a field. `#[serde(default)]` keeps entries persisted by
+  earlier versions loading (as unbound), and every known consumer constructs via
+  `OutboxEntry::new`, so no `OutboxStore` implementation needs changing.
+
 ## [0.1.11] - 2026-07-18
 
 - Add **`MessagingService::request_via(transport_id, …)`** — a correlated

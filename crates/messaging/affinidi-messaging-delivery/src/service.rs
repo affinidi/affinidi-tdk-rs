@@ -211,6 +211,25 @@ impl ServiceInner {
             .map(|slot| slot.transport.clone())
     }
 
+    /// Every transport's id and live connection state.
+    fn transport_states(&self) -> Vec<(TransportId, ConnState)> {
+        self.transports
+            .lock()
+            .expect("transports mutex")
+            .iter()
+            .map(|(id, slot)| (id.clone(), *slot.transport.connection_state().borrow()))
+            .collect()
+    }
+
+    /// One transport's live connection state, or `None` if not installed.
+    fn transport_state(&self, id: &str) -> Option<ConnState> {
+        self.transports
+            .lock()
+            .expect("transports mutex")
+            .get(id)
+            .map(|slot| *slot.transport.connection_state().borrow())
+    }
+
     /// Aggregate connectivity across all transports (see [`MessagingStatus`]).
     fn status(&self) -> MessagingStatus {
         let Some(primary_id) = self.primary.lock().expect("primary mutex").clone() else {
@@ -407,6 +426,63 @@ impl MessagingService {
         }
     }
 
+    /// Like [`send`](Self::send), but over a **specific** installed transport
+    /// rather than the primary.
+    ///
+    /// This is the outbound half of multi-identity operation, and the counterpart
+    /// of [`request_via`](Self::request_via). Where the service holds one transport
+    /// per identity — one per persona, one per agent DID — the wire is not
+    /// interchangeable: the transport determines the proven sender, so "send as
+    /// this identity" is a different question from "send over whatever is
+    /// primary".
+    ///
+    /// `BestEffort` sends over `transport_id` directly. `Guaranteed` pins the
+    /// outbox entry to it ([`OutboxEntry::via`](crate::OutboxEntry::via)), so the
+    /// retry lands on the same identity that the first attempt would have — drain
+    /// it with [`drain_loop_via`](crate::drain_loop_via) for the same id.
+    ///
+    /// `Err` if `transport_id` is not currently installed. A `Guaranteed` send
+    /// still enqueues in that case only if the id resolves; an unknown id is
+    /// rejected up front rather than queueing work nothing will drain.
+    pub async fn send_via(
+        &self,
+        transport_id: &str,
+        to: &str,
+        packed: Vec<u8>,
+        delivery: Delivery,
+    ) -> Result<Sent, MessagingError> {
+        let transport = self.inner.transport_by_id(transport_id).ok_or_else(|| {
+            MessagingError::Transport(format!("cannot send via unknown transport: {transport_id}"))
+        })?;
+        match delivery {
+            Delivery::BestEffort => {
+                transport.send(to, packed).await?;
+                Ok(Sent::Accepted)
+            }
+            Delivery::Guaranteed {
+                idempotency_key,
+                ordering_key,
+                deliver_by,
+            } => {
+                let now = now_unix_ms();
+                let key = idempotency_key.unwrap_or_else(|| default_key(to, now));
+                let mut entry = OutboxEntry::new(
+                    key,
+                    to,
+                    packed,
+                    now,
+                    now.saturating_add(deliver_by.as_millis() as u64),
+                );
+                entry.ordering_key = ordering_key;
+                entry.via = Some(transport_id.to_string());
+                self.inner.outbox.put(entry).await.map_err(|e| {
+                    MessagingError::Transport(format!("outbox enqueue failed: {e}"))
+                })?;
+                Ok(Sent::Accepted)
+            }
+        }
+    }
+
     /// Send `packed` over the primary and await a reply correlated by
     /// `correlation_thid` — the thread id the caller minted on the outgoing
     /// message — up to `timeout`.
@@ -516,8 +592,35 @@ impl MessagingService {
 
     /// The one status a health endpoint reads, aggregated across all transports
     /// off their live connection signals (see [`MessagingStatus`]).
+    ///
+    /// **This aggregate assumes the transports are alternative wires to the same
+    /// peer** — the mediator-lifecycle case it was written for, where
+    /// [`Degraded`](MessagingStatus::Degraded) means "outbound is fine, a standby
+    /// is down". Where instead each transport *is* an identity, the same value
+    /// means "one identity is offline", which is a different fact and a different
+    /// operator action. Read [`transport_states`](Self::transport_states) for that
+    /// case rather than reinterpreting this one.
     pub fn status(&self) -> MessagingStatus {
         self.inner.status()
+    }
+
+    /// Every installed transport's id paired with its live connection state.
+    ///
+    /// The per-transport view [`status`](Self::status) deliberately does not try to
+    /// express. A multi-identity service needs to report *which* identity is
+    /// offline — collapsing that into one tri-state loses the only thing the
+    /// operator can act on.
+    ///
+    /// Read off each transport's live `connection_state()`, never a boot-time
+    /// latch (R6.2). Order is unspecified.
+    pub fn transport_states(&self) -> Vec<(TransportId, ConnState)> {
+        self.inner.transport_states()
+    }
+
+    /// One installed transport's live connection state, or `None` if `id` is not
+    /// installed.
+    pub fn transport_state(&self, id: &str) -> Option<ConnState> {
+        self.inner.transport_state(id)
     }
 
     /// Record end-to-end delivery evidence for a `Guaranteed` send:
@@ -1447,5 +1550,137 @@ mod tests {
         handle.send("did:x", b"b".to_vec()).await.unwrap();
         assert_eq!(h2.transport.sent.lock().unwrap().len(), 1);
         assert_eq!(h1.transport.sent.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn send_via_uses_the_named_transport_not_the_primary() {
+        let h1 = mock();
+        let svc = MessagingService::new(h1.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let h2 = mock();
+        svc.add_transport("persona-a".into(), h2.transport.clone());
+
+        svc.send_via("persona-a", "did:x", b"a".to_vec(), Delivery::BestEffort)
+            .await
+            .unwrap();
+
+        assert_eq!(h2.transport.sent.lock().unwrap().len(), 1);
+        assert!(
+            h1.transport.sent.lock().unwrap().is_empty(),
+            "the primary must not carry an identity-bound send"
+        );
+    }
+
+    /// A promote must not silently move an identity-bound send onto another
+    /// identity's wire — the pin outranks the primary.
+    #[tokio::test]
+    async fn send_via_ignores_the_primary_after_a_promote() {
+        let h1 = mock();
+        let svc = MessagingService::new(h1.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let h2 = mock();
+        svc.add_transport("persona-a".into(), h2.transport.clone());
+        svc.promote("persona-a").unwrap();
+
+        svc.send_via("default", "did:x", b"a".to_vec(), Delivery::BestEffort)
+            .await
+            .unwrap();
+
+        assert_eq!(h1.transport.sent.lock().unwrap().len(), 1);
+        assert!(h2.transport.sent.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn send_via_pins_a_guaranteed_entry_to_that_transport() {
+        let outbox = Arc::new(InMemoryOutboxStore::new());
+        let h1 = mock();
+        let svc = MessagingService::new(h1.transport.clone(), outbox.clone());
+        svc.add_transport("persona-a".into(), mock().transport);
+
+        svc.send_via(
+            "persona-a",
+            "did:x",
+            b"a".to_vec(),
+            Delivery::Guaranteed {
+                idempotency_key: Some("k1".into()),
+                ordering_key: None,
+                deliver_by: Duration::from_secs(60),
+            },
+        )
+        .await
+        .unwrap();
+
+        let entry = outbox.get("k1").await.unwrap().expect("entry was enqueued");
+        assert_eq!(entry.via.as_deref(), Some("persona-a"));
+        assert!(
+            h1.transport.sent.lock().unwrap().is_empty(),
+            "a Guaranteed send queues rather than sending inline"
+        );
+    }
+
+    /// Rejected up front rather than queueing work no drain would ever claim.
+    #[tokio::test]
+    async fn send_via_an_unknown_transport_errors_without_enqueueing() {
+        let outbox = Arc::new(InMemoryOutboxStore::new());
+        let h1 = mock();
+        let svc = MessagingService::new(h1.transport.clone(), outbox.clone());
+
+        assert!(
+            svc.send_via(
+                "nope",
+                "did:x",
+                b"a".to_vec(),
+                Delivery::Guaranteed {
+                    idempotency_key: Some("k1".into()),
+                    ordering_key: None,
+                    deliver_by: Duration::from_secs(60),
+                },
+            )
+            .await
+            .is_err()
+        );
+        assert!(outbox.get("k1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn transport_states_reports_each_transport_separately() {
+        let h1 = mock();
+        let svc = MessagingService::new(h1.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let h2 = mock();
+        svc.add_transport("persona-a".into(), h2.transport.clone());
+
+        let mut states = svc.transport_states();
+        states.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let ids: Vec<_> = states.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["default", "persona-a"]);
+        assert!(
+            states
+                .iter()
+                .all(|(_, state)| *state == ConnState::Connected)
+        );
+
+        assert_eq!(svc.transport_state("persona-a"), Some(ConnState::Connected));
+        assert_eq!(svc.transport_state("nope"), None);
+    }
+
+    /// The per-identity view has to distinguish *which* identity is down — the
+    /// thing the aggregate `status()` deliberately collapses.
+    #[tokio::test]
+    async fn transport_state_names_the_disconnected_identity() {
+        let h1 = mock();
+        let svc = MessagingService::new(h1.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let h2 = mock();
+        svc.add_transport("persona-a".into(), h2.transport.clone());
+
+        h2.conn_tx.send(ConnState::Disconnected).unwrap();
+
+        assert_eq!(svc.transport_state("default"), Some(ConnState::Connected));
+        assert_eq!(
+            svc.transport_state("persona-a"),
+            Some(ConnState::Disconnected)
+        );
+        assert_eq!(
+            svc.status(),
+            MessagingStatus::Degraded,
+            "the aggregate says only that something is down"
+        );
     }
 }
