@@ -187,9 +187,8 @@ mod tests {
         use chrono::{TimeDelta, Utc};
         let mut p = sample_proof().await;
         p.created = Some((Utc::now() + TimeDelta::seconds(5)).to_rfc3339());
-        let err =
-            verify_conformance_with_skew(&p, CryptoSuite::EddsaJcs2022, TimeDelta::zero())
-                .unwrap_err();
+        let err = verify_conformance_with_skew(&p, CryptoSuite::EddsaJcs2022, TimeDelta::zero())
+            .unwrap_err();
         assert!(matches!(err, DataIntegrityError::Conformance(_)));
     }
 

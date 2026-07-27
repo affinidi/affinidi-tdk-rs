@@ -574,9 +574,7 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
 
-    use crate::{
-        DataIntegrityError, DataIntegrityProof, SignOptions, VerifyOptions, hashing_jcs,
-    };
+    use crate::{DataIntegrityError, DataIntegrityProof, SignOptions, VerifyOptions, hashing_jcs};
 
     #[test]
     fn hashing_working() {
@@ -726,7 +724,10 @@ mod tests {
             .expect_err("an hour ahead is well beyond 60s");
         let msg = format!("{err}");
         assert!(msg.contains("future"), "unexpected message: {msg}");
-        assert!(msg.contains("60s"), "message should name the allowance: {msg}");
+        assert!(
+            msg.contains("60s"),
+            "message should name the allowance: {msg}"
+        );
     }
 
     /// Zero skew restores the strict pre-allowance behaviour for callers
