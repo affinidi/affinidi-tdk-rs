@@ -2,6 +2,54 @@
 
 ## Changelog history
 
+## 27th July 2026 (2)
+
+### 0.17.12 — direct delivery does one recipient lookup instead of three
+
+Performance follow-up to the ACL audit in 0.17.11. No behavioural change to
+who may deliver to whom; the same gates run in the same order and return the
+same problem codes.
+
+Direct delivery asked the store three separate questions about the *same*
+recipient record:
+
+- `account_exists` — does the account exist?
+- `get_did_acl` — what are its ACL bits? (added by 0.17.11's
+  `RECEIVE_MESSAGES` gate)
+- `access_list_allowed` — does its access list admit this sender? (which
+  internally re-reads the ACL bits to get the mode)
+
+All three are derivable from one read. The new
+`MediatorStore::delivery_decision` returns them together — `None` for an
+unknown recipient, otherwise the ACL set plus the already-interpreted
+access-list verdict — taking the DIDComm and TSP direct-delivery paths from
+four store round trips to two (sender ACL, then recipient decision). On
+Redis the recipient half is a single pipelined `SISMEMBER` + `HGET` that was
+already there; it now serves all three answers instead of one.
+
+The trait method ships with a default implementation in terms of the
+existing calls, so third-party backends keep compiling unchanged. Redis,
+Fjall and Memory each override it, and a new
+`delivery_decision_matches_access_list` conformance check pins every
+backend's optimised version against `access_list_allowed` on the same store
+— including the anonymous-sender branch, where the verdict comes from
+`anon_receive` rather than the list.
+
+Also:
+
+- `digest(to_did)` was being recomputed three times per message on the
+  DIDComm direct-delivery path (a SHA-256 over the DID string each time).
+  Hoisted to one, matching what the TSP path already did.
+- The Redis `access_list_allowed` is now expressed in terms of
+  `delivery_decision`, and applies the allowlist/denylist rule via the
+  shared `store::ops::access_list_allowed` rather than its own inline copy —
+  removing the third implementation of that rule. Fail-closed behaviour on a
+  missing account or backend error is unchanged.
+- Edge-case note: a corrupt account record that exists but has no `ACLS`
+  field now reports `direct_delivery.recipient.unknown` (72) where it
+  previously reported `authorization.access_list.denied` (73). Both deny
+  delivery; only the problem code differs.
+
 ## 27th July 2026
 
 ### 0.17.11 — ACL audit: privilege-escalation fix, `RECEIVE_MESSAGES` now enforced, ACL guide

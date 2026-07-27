@@ -27,9 +27,9 @@ use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{
-        DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MediatorStore,
-        MessageMetaData, MetadataStats, PubSubRecord, Session, SessionSweepReport, StatCounter,
-        StoreHealth, StreamingClientState, ops,
+        DeletionAuthority, DeliveryDecision, ExpiryReport, ForwardQueueEntry, InboxStatusReply,
+        MediatorStore, MessageMetaData, MetadataStats, PubSubRecord, Session, SessionSweepReport,
+        StatCounter, StoreHealth, StreamingClientState, ops,
     },
     types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
@@ -1065,9 +1065,21 @@ impl MediatorStore for MemoryStore {
     }
 
     async fn access_list_allowed(&self, to_hash: &str, from_hash: Option<&str>) -> bool {
+        matches!(
+            self.delivery_decision(to_hash, from_hash).await,
+            Ok(Some(decision)) if decision.access_list_allows
+        )
+    }
+
+    /// One lock acquisition serves the ACL set and the membership probe.
+    async fn delivery_decision(
+        &self,
+        to_hash: &str,
+        from_hash: Option<&str>,
+    ) -> Result<Option<DeliveryDecision>, MediatorError> {
         let state = self.state.lock().await;
         let Some(account) = state.accounts.get(to_hash) else {
-            return false;
+            return Ok(None);
         };
         let sender = match from_hash {
             Some(from) => ops::Sender::Known {
@@ -1079,7 +1091,11 @@ impl MediatorStore for MemoryStore {
             },
             None => ops::Sender::Anonymous,
         };
-        ops::access_list_allowed(&account.acls, sender)
+        let access_list_allows = ops::access_list_allowed(&account.acls, sender);
+        Ok(Some(DeliveryDecision {
+            acls: account.acls.clone(),
+            access_list_allows,
+        }))
     }
 
     async fn access_list_list(

@@ -57,9 +57,9 @@ use affinidi_messaging_mediator_common::{
     circuit_breaker::CircuitBreaker,
     errors::MediatorError,
     store::{
-        DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MediatorStore,
-        MessageMetaData, MetadataStats, PubSubRecord, Session, SessionState, SessionSweepReport,
-        StatCounter, StoreHealth, StreamingClientState, ops,
+        DeletionAuthority, DeliveryDecision, ExpiryReport, ForwardQueueEntry, InboxStatusReply,
+        MediatorStore, MessageMetaData, MetadataStats, PubSubRecord, Session, SessionState,
+        SessionSweepReport, StatCounter, StoreHealth, StreamingClientState, ops,
     },
     types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
@@ -1875,12 +1875,26 @@ impl MediatorStore for FjallStore {
     }
 
     async fn access_list_allowed(&self, to_hash: &str, from_hash: Option<&str>) -> bool {
+        matches!(
+            self.delivery_decision(to_hash, from_hash).await,
+            Ok(Some(decision)) if decision.access_list_allows
+        )
+    }
+
+    /// One account-partition read serves the ACL set and existence; the
+    /// membership probe is a separate prefix lookup only when the sender is
+    /// known.
+    async fn delivery_decision(
+        &self,
+        to_hash: &str,
+        from_hash: Option<&str>,
+    ) -> Result<Option<DeliveryDecision>, MediatorError> {
         let Ok(Some(raw)) = self.accounts.get(to_hash.as_bytes()) else {
-            return false;
+            return Ok(None);
         };
         let acc: StoredAccount = match Self::decode(&raw) {
             Ok(a) => a,
-            Err(_) => return false,
+            Err(_) => return Ok(None),
         };
         let acls = MediatorACLSet::from_u64(acc.acls);
         let sender = match from_hash {
@@ -1889,7 +1903,11 @@ impl MediatorStore for FjallStore {
             },
             None => ops::Sender::Anonymous,
         };
-        ops::access_list_allowed(&acls, sender)
+        let access_list_allows = ops::access_list_allowed(&acls, sender);
+        Ok(Some(DeliveryDecision {
+            acls,
+            access_list_allows,
+        }))
     }
 
     async fn access_list_list(
