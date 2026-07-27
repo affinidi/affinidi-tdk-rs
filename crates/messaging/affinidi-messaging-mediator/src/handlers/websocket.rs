@@ -5,6 +5,7 @@ use crate::didcomm_compat;
 use crate::messages::inbound::handle_inbound_tsp;
 use crate::{
     SharedData,
+    common::authz::{self, Capability},
     common::config::{CorsOriginPolicy, origin_matches},
     common::jwt_auth::{AuthError, authenticate_token},
     common::session::Session,
@@ -211,7 +212,7 @@ pub async fn websocket_handler(
     );
 
     // 3. ACL Check (websockets only work on local DID's).
-    if !session.acls.get_local() {
+    if authz::require_capability(&session.acls, Capability::Local).is_err() {
         let error: AppError = MediatorError::problem(
             40,
             session.session_id,

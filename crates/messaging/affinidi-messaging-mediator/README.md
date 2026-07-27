@@ -323,44 +323,62 @@ mediator rotate-admin                # actually rotate
 
 ## Access Control Lists (ACLs)
 
-The mediator provides granular access control at both the mediator and DID level.
+**See [`docs/acls.md`](./docs/acls.md) for the full guide.** Summary below.
 
-### Mediator-level ACLs
+Access control is four independent layers:
 
-| Flag | Description |
+| Layer | Scope | What it decides |
+|---|---|---|
+| `mediator_acl_mode` | mediator-wide | Who may pre-register *other* DIDs via `account_add` |
+| `global_acl_default` | mediator-wide | The ACL set given to every new/unknown DID |
+| `MediatorACLSet` | per DID | What that DID may do |
+| Access list | per DID | Which senders that DID accepts messages from |
+
+### `mediator_acl_mode`
+
+| Value | Meaning |
 |---|---|
-| `explicit_allow` | Deny all DIDs except those explicitly allowed |
-| `explicit_deny` | Allow all DIDs unless explicitly denied |
-| `local_direct_delivery_allowed` | Allow direct messaging to local DIDs |
+| `explicit_allow` | Only admins may add accounts via `account_add` |
+| `explicit_deny` | Any authenticated DID may add accounts (always with `global_acl_default`) |
+
+> **This mode does not gate authentication.** In either mode, any DID that
+> completes the challenge is auto-registered with `global_acl_default` and
+> issued a session. `global_acl_default` — not this mode — is what controls
+> a public mediator. Earlier revisions of this table described
+> `explicit_allow` as "deny all DIDs except those explicitly allowed"; the
+> mediator has never behaved that way.
 
 ### DID-level ACLs
 
 | Flag | Description |
 |---|---|
-| `ALLOW_ALL` | Allow all operations (default) |
-| `DENY_ALL` | Deny all operations |
-| `LOCAL` | Store messages for this DID |
+| `ALLOW_ALL` | Every capability, every self-change bit, open inbox (denylist) |
+| `DENY_ALL` | No capability, no self-management, closed inbox (allowlist) |
+| `LOCAL` | DID has an inbox — required for fetch/list/delete and WebSocket |
 | `SEND_MESSAGES` | DID can send messages |
-| `RECEIVE_MESSAGES` | DID can receive messages |
+| `RECEIVE_MESSAGES` | DID can receive directly-delivered messages |
 | `SEND_FORWARDED` | DID can send forwarded messages |
 | `RECEIVE_FORWARDED` | DID can receive forwarded messages |
 | `ANON_RECEIVE` | DID can receive anonymous messages |
 | `CREATE_INVITES` | DID can create OOB invites |
+| `BLOCKED` | DID cannot authenticate at all |
 
-Self-change flags (e.g., `SEND_MESSAGES_CHANGE`, `SELF_MANAGE_LIST`) allow users
-to update their own ACLs when permitted by the administrator.
+Self-change flags (e.g. `SEND_MESSAGES_CHANGE`) let a DID flip that one
+capability itself. `LOCAL`, `BLOCKED` and the `SELF_MANAGE_*` flags are
+admin-only and have no self-change variant.
 
 ## Operating Modes
 
-| Mode | Mediator ACL | DID ACL | Direct Delivery | Use Case |
-|---|---|---|---|---|
-| **Private Closed** | `explicit_allow` | `DENY_ALL + LOCAL + SEND + RECEIVE` | Yes | Restricted corporate network |
-| **Private Open** | `explicit_allow` | `ALLOW_ALL` | Yes | Internal company messaging |
-| **Public Closed** | `explicit_deny` | `ALLOW_ALL + MODE_EXPLICIT_ALLOW` | No | Consent-based messaging |
-| **Public Open** | `explicit_deny` | `ALLOW_ALL` | No | Unrestricted relay |
-| **Public Mixed** | `explicit_deny` | `ALLOW_ALL + MODE_EXPLICIT_ALLOW` | No | Discovery + private channels |
+| Mode | `mediator_acl_mode` | `global_acl_default` | Use Case |
+|---|---|---|---|
+| **Open** | `explicit_deny` | `ALLOW_ALL` | Unrestricted public mediator |
+| **Consent-based** | `explicit_deny` | `ALLOW_ALL + MODE_EXPLICIT_ALLOW` | Anyone may register; each inbox is an allowlist |
+| **Direct messaging** | `explicit_deny` | `DENY_ALL + LOCAL + SEND + RECEIVE` | Shipped default — no relay, no invites |
+| **Relay only** | `explicit_deny` | `DENY_ALL + SEND_FORWARDED + RECEIVE_FORWARDED` | Pure inter-mediator relay, no inboxes |
+| **Closed** | `explicit_allow` | `DENY_ALL` | Unknown DIDs authenticate but can do nothing until an admin grants capabilities |
 
-See the `mediator.toml` configuration file for details on each mode.
+See [`docs/acls.md`](./docs/acls.md) for the reasoning behind each, and
+`mediator.toml` for the settings.
 
 ## Sub-crates
 

@@ -428,7 +428,9 @@ async fn deliver_forward(
         }
     };
 
-    if next_envelope.from_did.is_none() && !next_acls.get_anon_receive().0 {
+    if next_envelope.from_did.is_none()
+        && authz::require_capability(next_acls, Capability::AnonReceive).is_err()
+    {
         return Err(MediatorError::problem(
             69,
             &session.session_id,

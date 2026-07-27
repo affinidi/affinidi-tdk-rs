@@ -409,20 +409,31 @@ pub async fn authentication_response(
     .await
 }
 
-/// Check if the DID is already registered and set up (as needed)
-/// A DID is only registered if local accounts are enabled via ACL
+/// Backstop registration for a DID that reached the response step without an
+/// account record.
+///
+/// In the normal flow this is a no-op: `/authenticate/challenge` already
+/// registered the DID with `global_acl_default` (unconditionally — see the
+/// note there), and a session must exist to get this far, so
+/// `account_exists` is true every time. It is kept as a backstop in case the
+/// account is removed between the two auth steps.
+///
+/// Registration here uses the same ACLs and the same unconditional policy as
+/// the challenge step. It previously registered only when
+/// `global_acl_default` granted `LOCAL`, which could never actually differ
+/// from the challenge step's behaviour but read as though the two steps
+/// disagreed about who gets an account.
 async fn _register_did_and_setup(state: &SharedData, did_hash: &str) -> Result<(), MediatorError> {
     // Do we already know about this DID?
     if state.database.account_exists(did_hash).await? {
         debug!("DID({}) already registered", did_hash);
         return Ok(());
-    } else if state.config.security.global_acl_default.get_local() {
-        // Register the DID as a local DID
-        state
-            .database
-            .account_add(did_hash, &state.config.security.global_acl_default, None)
-            .await?;
     }
+
+    state
+        .database
+        .account_add(did_hash, &state.config.security.global_acl_default, None)
+        .await?;
 
     Ok(())
 }

@@ -1,0 +1,329 @@
+# Mediator Access Control Guide
+
+How the Affinidi mediator decides whether a DID may connect, send, receive,
+forward, or administer. This is the reference for operators configuring a
+deployment and for developers adding a permission check.
+
+**The one thing to take away:** `global_acl_default` is the setting that
+controls a public mediator. `mediator_acl_mode` is much narrower than its
+name suggests and does **not** gate who may connect.
+
+---
+
+## 1. The four layers
+
+Access control is four independent mechanisms. They are often confused
+because two of them use the same `ExplicitAllow` / `ExplicitDeny` enum while
+meaning entirely different things.
+
+| # | Layer | Scope | Set by | What it decides |
+|---|-------|-------|--------|-----------------|
+| 1 | `mediator_acl_mode` | mediator-wide | `mediator.toml` | Who may **pre-register other DIDs** via `account_add`. Nothing else. |
+| 2 | `global_acl_default` | mediator-wide | `mediator.toml` | The ACL set handed to every new or unknown DID. |
+| 3 | `MediatorACLSet` | per DID | admin, or the DID itself where delegated | What that DID may do (19 permission bits). |
+| 4 | Access list | per DID | the DID (if delegated) or an admin | Which **senders** that DID accepts messages from. |
+
+Layers 1 and 4 both use `AccessListModeType`. They are unrelated:
+
+- **Layer 1** (`mediator_acl_mode`): `ExplicitAllow` = only admins may add
+  accounts. `ExplicitDeny` = any authenticated DID may.
+- **Layer 4** (a DID's own `access_list_mode` bit): `ExplicitAllow` = the
+  access list is an **allowlist** (empty list ⇒ nobody may send to me).
+  `ExplicitDeny` = it is a **denylist** (empty list ⇒ anybody may).
+
+Note the inversion: for layer 4, `ExplicitAllow` is the *closed*, secure
+posture, and it is `MediatorACLSet::default()`.
+
+---
+
+## 2. `mediator_acl_mode` — what it does and does not do
+
+```toml
+[security]
+mediator_acl_mode = "explicit_deny"   # or "explicit_allow"
+```
+
+It has exactly two effects, both on the `account_add` operation:
+
+| Mode | Effect on `messaging/account/add` (DIDComm admin protocol and Trust Tasks) |
+|------|---------------------------------------------------------------------------|
+| `explicit_allow` | Only `Admin` / `RootAdmin` accounts may add accounts. |
+| `explicit_deny` | Any authenticated DID may add accounts. |
+
+**It does not gate authentication.** In *either* mode, any DID that completes
+the authentication challenge is auto-registered and issued a session. There
+is no allowlist of DIDs permitted to connect.
+
+**It does not affect message delivery.** No send, receive, forward, or
+pickup decision reads it.
+
+**It does not let a non-admin grant privileges.** A non-admin using
+`account_add` in `explicit_deny` mode always creates the account with
+`global_acl_default`; any ACLs it supplies are ignored. Only admins may
+specify custom ACLs. So in `explicit_deny` the worst a non-admin can do is
+create account records that would have been created anyway on first
+authentication — consider `explicit_allow` if you want to deny even that
+(it is a minor storage-growth vector on an open mediator).
+
+> **Historical note.** Older documentation described `explicit_allow` as
+> "deny all DIDs except those explicitly allowed". The mediator has never
+> implemented that. If you need a genuinely closed mediator, use a denying
+> `global_acl_default` (§7) — an unknown DID then authenticates but can do
+> nothing until an admin grants it capabilities.
+
+---
+
+## 3. `global_acl_default` — the real control
+
+```toml
+[security]
+global_acl_default = "DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES"
+```
+
+This is the ACL set applied to every DID the mediator has not seen before,
+and the fallback whenever a permission check runs against a DID with no
+stored record. It therefore decides what an arbitrary DID off the internet
+can do with your mediator.
+
+It is consumed in four places:
+
+1. **Registration.** Written verbatim as the new account's ACL set on every
+   auto-registration path (§4).
+2. **Fallback.** Any check on a DID with no account record uses it
+   (`authz::effective_acls`).
+3. **Seeding the inbox mode.** Its `access_list_mode` bit becomes each new
+   DID's own allowlist/denylist mode (layer 4).
+4. **Implicit relay.** If it grants `SEND_FORWARDED`, the mediator accepts
+   anonymous inter-mediator relay on `/inbound` even without
+   `enable_inter_mediator_relay = "true"`. This is deprecated and warns at
+   boot; a future release will require the explicit flag.
+
+### Ruleset syntax
+
+A comma-separated string. `ALLOW_ALL` or `DENY_ALL` must come **first** if
+present; later flags layer on top.
+
+| Keyword | Effect |
+|---------|--------|
+| `ALLOW_ALL` | Every capability, every self-change bit, every `self_manage_*`, and `access_list_mode = ExplicitDeny` (open inbox). |
+| `DENY_ALL` | No capability, no self-change, no self-management, and `access_list_mode = ExplicitAllow` (closed inbox). |
+| `ALLOW_ALL_SELF_CHANGE` / `DENY_ALL_SELF_CHANGE` | Set/clear every self-change bit, leaving the capability values alone. |
+| `MODE_EXPLICIT_ALLOW` / `MODE_EXPLICIT_DENY` | This DID's own access-list mode (layer 4). |
+| `MODE_SELF_CHANGE` | Let the DID change its own access-list mode. |
+| `LOCAL` | Grant an inbox (message storage). No `_CHANGE` variant — admin-only. |
+| `SEND_MESSAGES`, `RECEIVE_MESSAGES`, `SEND_FORWARDED`, `RECEIVE_FORWARDED`, `CREATE_INVITES`, `ANON_RECEIVE` | Grant that capability. Each has a `_CHANGE` variant granting the DID the right to flip it itself. |
+| `SELF_MANAGE_LIST` | Let the DID edit its own access list. Admin-only to set. |
+| `SELF_MANAGE_SEND_QUEUE_LIMIT`, `SELF_MANAGE_RECEIVE_QUEUE_LIMIT` | Let the DID set its own queue limits. Admin-only to set. |
+| `BLOCKED` | Marks the DID blocked. **Never put this in `global_acl_default`** — it blocks every new DID from authenticating. |
+
+Watch the mode inversion: `ALLOW_ALL` gives every new DID an *open* inbox
+(denylist), while `DENY_ALL` gives a *closed* one (allowlist). Boot-time
+validation warns when `mediator_acl_mode = explicit_deny` is combined with
+`global_acl_default = ALLOW_ALL`, since that combination accepts everything
+from everyone.
+
+---
+
+## 4. How a DID gets an account
+
+Five paths, and they do **not** all grant the same ACLs:
+
+| Path | Trigger | ACLs granted |
+|------|---------|--------------|
+| Authentication challenge | Any DID completing `/authenticate/challenge` | `global_acl_default` |
+| Authentication response | Backstop if the record vanished mid-flow | `global_acl_default` |
+| `account_add` by an admin | Admin protocol or Trust Task | Admin's choice, else `global_acl_default` |
+| `account_add` by a non-admin | Only in `explicit_deny` mode | Always `global_acl_default` |
+| Forward routing | An unseen DID relays a forward through the mediator | **Least privilege**: `DENY_ALL` + `SEND_FORWARDED`, and only if `global_acl_default` grants `SEND_FORWARDED`. A DID that has only ever relayed a forward does not get `LOCAL`, `RECEIVE_*`, invites, or self-management. |
+
+The first path is the one that surprises people: **registration is
+automatic and unconditional.** There is no approval step and no mode that
+turns it off.
+
+---
+
+## 5. The permission bits
+
+A DID's `MediatorACLSet` is a packed `u64`. Most permissions occupy a
+*pair* of bits — the capability, and a self-change bit saying whether the
+DID may flip it without an admin.
+
+| Bit | Flag | Enforced at |
+|-----|------|-------------|
+| 0 | `access_list_mode` | Access-list evaluation on every delivery (§6) |
+| 1 | `access_list_mode_change` | Self-service gate for bit 0 |
+| 2 | `did_blocked` | Authentication (both steps), session load, token refresh |
+| 3 | `did_local` | Inbox fetch, message list, message delete, outbound, WebSocket upgrade |
+| 4 / 5 | `send_messages` (+change) | Inbound handler (session), direct-delivery sender check |
+| 6 / 7 | `receive_messages` (+change) | Direct-delivery recipient check (DIDComm and TSP) |
+| 8 / 9 | `send_forwarded` (+change) | Forward gate (sender); anonymous inter-mediator relay |
+| 10 / 11 | `receive_forwarded` (+change) | Forward gate (next hop) |
+| 12 / 13 | `create_invites` (+change) | OOB invite handler |
+| 14 / 15 | `anon_receive` (+change) | Anonymous senders in access-list evaluation; anonymous forward next hop |
+| 16 | `self_manage_list` | Access-list add / remove / clear |
+| 17 | `self_manage_send_queue_limit` | Setting one's own send queue limit |
+| 18 | `self_manage_receive_queue_limit` | Setting one's own receive queue limit |
+
+Bits 19–63 are unassigned and must stay zero.
+
+`did_blocked` is the only bit checked at authentication. Everything else is
+checked at the point of use, which means **a DID with `DENY_ALL` still
+authenticates successfully** — it just cannot do anything afterwards. That
+is by design, but it does mean "the DID connected fine" tells you nothing
+about its permissions.
+
+### Two classes of bit
+
+- **Self-changeable** (bits 0, 4, 6, 8, 10, 12, 14): the DID may flip the
+  value when the paired `_change` bit is set. It may **never** flip the
+  `_change` bit itself.
+- **Admin-only** (bits 2, 3, 16, 17, 18): no self-change bit exists.
+  `blocked` and `local` are the mediator's own gates; the `self_manage_*`
+  bits are what delegate self-service in the first place, so a DID that
+  could set them would be granting itself the authority you withheld.
+
+A DID can therefore only ever *exercise* delegated authority, never widen
+it.
+
+---
+
+## 6. Decision walkthroughs
+
+### Authentication
+
+```
+/authenticate/challenge
+  ├─ DID is `did:`-shaped?                      else 400
+  ├─ resolve ACLs: stored, else global_acl_default
+  ├─ blocked?                                   else 403 authentication.blocked
+  ├─ unknown? → register with global_acl_default
+  └─ issue challenge
+```
+
+`mediator_acl_mode` is not consulted. Neither is any capability bit other
+than `blocked`.
+
+### Direct delivery (DIDComm and TSP)
+
+```
+├─ local_direct_delivery_allowed?               else 403 direct_delivery.denied
+├─ recipient has an account?                    else 403 direct_delivery.recipient.unknown
+├─ force_session_did_match: envelope sender == session DID?
+├─ sender has SEND_MESSAGES?                    else 403 authorization.send
+│    (anonymous sender: local_direct_delivery_allow_anon?)
+├─ recipient has RECEIVE_MESSAGES?              else 403 authorization.receive
+└─ recipient's access list admits the sender?   else 403 authorization.access_list.denied
+```
+
+### Forwarding
+
+```
+├─ sender has SEND_FORWARDED?                   else 403
+├─ next hop has RECEIVE_FORWARDED?              else 403
+├─ anonymous envelope → next hop has ANON_RECEIVE? else 403
+└─ access list check
+```
+
+### Access-list evaluation
+
+The single decision, applied on every delivery:
+
+| Sender | Recipient's mode | Verdict |
+|--------|------------------|---------|
+| Anonymous | (irrelevant) | Allowed iff `anon_receive` |
+| Known | `ExplicitAllow` (allowlist) | Allowed iff on the list |
+| Known | `ExplicitDeny` (denylist) | Allowed iff **not** on the list |
+
+### Pickup and streaming
+
+Inbox fetch, message list, message delete, outbound, and the WebSocket
+upgrade all require `LOCAL` and nothing else. Clearing `LOCAL` is the
+blunt instrument for cutting a DID off from its inbox.
+
+---
+
+## 7. Recipes
+
+| Goal | Configuration |
+|------|---------------|
+| **Open public mediator** | `mediator_acl_mode = "explicit_deny"`, `global_acl_default = "ALLOW_ALL"`. Anyone may do anything; deny per-DID afterwards. Boot warns — this accepts everything from everyone. |
+| **Open, consent-based** | `global_acl_default = "ALLOW_ALL,MODE_EXPLICIT_ALLOW"`. Anyone may register and send, but each DID's inbox is an allowlist, so nobody receives until they add senders. Add `SELF_MANAGE_LIST` so users can curate it themselves. |
+| **Direct messaging only, no relay** | `global_acl_default = "DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES"` (the shipped default). No forwarding, no invites, no self-management. |
+| **Relay only** | `global_acl_default = "DENY_ALL,SEND_FORWARDED,RECEIVE_FORWARDED"` plus `enable_inter_mediator_relay = "true"`. No inboxes: nothing is stored, nothing is picked up. |
+| **Closed / invitation-only** | `mediator_acl_mode = "explicit_allow"` and `global_acl_default = "DENY_ALL"`. Unknown DIDs still authenticate but can do nothing; an admin must grant capabilities per DID. This is the closest the mediator gets to an allowlist. |
+| **Let users manage their own privacy** | Add `MODE_SELF_CHANGE,SELF_MANAGE_LIST` and the `_CHANGE` variants of whichever capabilities you want users to control. |
+
+---
+
+## 8. Administration
+
+### Account types
+
+`Standard`, `Admin`, `RootAdmin`, `Mediator`. Admin and RootAdmin may
+operate on any DID; a Standard account may only target its own DID hash.
+Creating an Admin requires admin rights; creating a RootAdmin requires
+RootAdmin.
+
+### Admin message hardening
+
+- `block_remote_admin_msgs = "true"` (default) requires admin messages to
+  be signed by a key belonging to the session DID, so admin operations
+  cannot be relayed in from elsewhere.
+- `admin_messages_expiry` bounds replay of captured admin messages. It is
+  enforced for every admin account regardless of the setting above, and
+  rejects future-dated `created_time` as well as stale ones.
+
+### Changing ACLs
+
+Two equivalent surfaces, with identical rules:
+
+- DIDComm admin protocol: `messaging/acls/set`
+- Trust Task: `messaging/account/acl-set`
+
+An admin may set anything. A non-admin may only target its own DID, may
+only change capabilities whose self-change bit is set, may never change a
+self-change bit, and may never change an admin-only flag (§5).
+
+### Limits
+
+`access_list_limit` and `local_max_acl` cap per-DID list growth;
+`queued_send_messages_*` / `queued_receive_messages_*` cap queue depth,
+overridable per DID only when the matching `self_manage_*_queue_limit` bit
+is set.
+
+---
+
+## 9. Troubleshooting
+
+| Symptom | Likely cause |
+|---------|--------------|
+| DID authenticates fine but every operation is 403 | `global_acl_default` is `DENY_ALL`, or too narrow. Authentication only checks `blocked`. |
+| `authorization.local` on fetch/list/WebSocket | The DID lacks `LOCAL`. |
+| `authorization.receive` on delivery | The **recipient** lacks `RECEIVE_MESSAGES`. |
+| `authorization.send` on delivery | The **sender** lacks `SEND_MESSAGES`. |
+| `authorization.access_list.denied` | Recipient's access list rejects the sender. Check the recipient's `access_list_mode`: in `ExplicitAllow` an *empty* list denies everyone. |
+| Messages silently not received, no error | Recipient's inbox mode is `ExplicitAllow` with an empty list, or `anon_receive` is unset for an anonymous sender. |
+| Setting `explicit_allow` did not stop unknown DIDs connecting | Expected. The mode does not gate authentication (§2). |
+| `acl/set` rejected with "admin-only" | You tried to change `blocked`, `local`, or a `self_manage_*` flag as a non-admin. |
+| Every new DID is blocked | `BLOCKED` was included in `global_acl_default`. |
+
+---
+
+## 10. Implementation notes
+
+Every permission decision resolves through `src/common/authz.rs`:
+
+- `require_capability` / `grants` — the capability gate
+- `check_access_list` — the sender↔recipient verdict
+- `effective_acls` — stored ACLs, else `global_acl_default`
+- `authentication_check` — the pre-auth blocked gate
+- `acl_change_ok` — non-admin self-service rules
+
+The `Capability` enum deliberately carries no `#[allow(dead_code)]`: an
+unused variant means a permission bit the mediator advertises but never
+enforces, and the dead-code warning is the tripwire for that.
+
+The backend-agnostic parts of the access-list decision live in
+`affinidi-messaging-mediator-common/src/store/ops.rs` so the Fjall and
+memory backends cannot drift; the Redis backend implements the equivalent
+logic in Lua and is kept aligned by the store conformance suite.

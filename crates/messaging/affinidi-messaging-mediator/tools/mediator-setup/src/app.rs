@@ -2746,7 +2746,7 @@ impl WizardApp {
                 } else if self.security_phase == Some(SecurityPhase::NetworkMode) {
                     match self.selection_index {
                         0 => "Open mode emits `mediator_acl_mode = \"explicit_deny\"`, `global_acl_default = \"ALLOW_ALL\"`, and `local_direct_delivery_allowed = \"true\"`. Any DID may reach any other by default; use the ACL to deny on a per-DID basis.".into(),
-                        1 => "Closed mode keeps the historical posture: `mediator_acl_mode = \"explicit_allow\"` with a denying default ACL. Every cross-DID exchange requires an explicit ACL grant. Pick this for restricted or invitation-only deployments.".into(),
+                        1 => "Closed mode emits `mediator_acl_mode = \"explicit_allow\"` (only admins may pre-register other DIDs) with a denying default ACL, so a DID that self-registers gets no capabilities until an admin grants them. Note that neither mode blocks authentication itself — the denying default ACL is what makes this closed. Pick this for restricted or invitation-only deployments.".into(),
                         _ => String::new(),
                     }
                 } else if self.security_phase == Some(SecurityPhase::JwtMode) {

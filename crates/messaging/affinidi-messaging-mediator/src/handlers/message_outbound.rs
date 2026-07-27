@@ -10,7 +10,11 @@ use axum::{Json, extract::State};
 use http::StatusCode;
 use tracing::{Instrument, Level, debug, span};
 
-use crate::{SharedData, common::session::Session};
+use crate::{
+    SharedData,
+    common::authz::{self, Capability},
+    common::session::Session,
+};
 
 /// Delivers messages to the client for given message_ids
 /// outbound refers to outbound from the mediator perspective
@@ -28,7 +32,7 @@ pub async fn message_outbound_handler(
     );
     async move {
         // ACL Check
-        if !session.acls.get_local() {
+        if authz::require_capability(&session.acls, Capability::Local).is_err() {
             return Err(MediatorError::problem(
                 40,
                 session.session_id,

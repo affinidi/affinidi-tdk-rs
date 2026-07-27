@@ -1,4 +1,8 @@
-use crate::{SharedData, common::session::Session};
+use crate::{
+    SharedData,
+    common::authz::{self, Capability},
+    common::session::Session,
+};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::{
@@ -42,7 +46,7 @@ pub async fn message_list_handler(
     );
     async move {
         // ACL Check
-        if !session.acls.get_local() {
+        if authz::require_capability(&session.acls, Capability::Local).is_err() {
             return Err(MediatorError::problem(
                 40,
                 session.session_id,

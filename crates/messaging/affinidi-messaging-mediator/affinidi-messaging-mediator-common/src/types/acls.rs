@@ -59,31 +59,62 @@ impl Display for AccessListModeType {
     }
 }
 
-/// The ACL Set for a DID
+/// The ACL Set for a single DID — what that DID may do on the mediator, and
+/// which of those permissions it may change itself.
+///
+/// # The two classes of bit
+///
+/// Most permissions occupy a *pair* of bits: the capability itself, and a
+/// `_change` (self-change) bit saying whether the DID may flip that
+/// capability without an admin. `set_*` takes `(value, self_change, admin)`
+/// and enforces this: a non-admin caller is refused unless the self-change
+/// bit is already set, and only an admin may modify the self-change bit
+/// itself. So a DID can never widen its own authority — only exercise
+/// authority an admin delegated to it.
+///
+/// The remaining flags (`did_blocked`, `did_local`, and the three
+/// `self_manage_*` bits) have **no** self-change bit: they are admin-only,
+/// always. `did_blocked` and `did_local` are the mediator's own gates, and
+/// the `self_manage_*` bits are what delegate self-service in the first
+/// place. `crate::store` consumers and the mediator's
+/// `authz::acl_change_ok` both depend on this split.
+///
+/// # Representation
+///
+/// `acl` (the packed `u64`) is the **source of truth**: every getter reads
+/// its bits, `PartialEq` compares it alone, and it is what gets persisted
+/// (as hex) and sent on the wire. The named fields are a denormalized
+/// mirror kept in sync by the setters and by [`from_u64`](Self::from_u64),
+/// present so the struct serializes to a self-describing JSON object.
+/// Never set a named field directly — write through the setters, or the
+/// mirror and the bits will disagree.
+///
+/// ```text
+/// Bit position mapping                       class
+///     0: access_list_mode (0 = explicit_allow, 1 = explicit_deny)
+///     1: access_list_mode_change (0 = admin_only, 1 = self)
+///     2: did_blocked (0 = allow, 1 = blocked)          admin-only
+///     3: did_local (0 = false, 1 = true/local)         admin-only
+///     4: send_messages (0 = false, 1 = true)
+///     5: send_messages_change (0 = admin_only, 1 = self)
+///     6: receive_messages (0 = false, 1 = true)
+///     7: receive_messages_change (0 = admin_only, 1 = self)
+///     8: send_forwarded (0 = no, 1 = yes)
+///     9: send_forwarded_change (0 = admin_only, 1 = self)
+///    10: receive_forwarded (0 = no, 1 = yes)
+///    11: receive_forwarded_change (0 = admin_only, 1 = self)
+///    12: create_invites (0 = no, 1 = yes)
+///    13: create_invites_change (0 = admin_only, 1 = self)
+///    14: anon_receive (0 = no, 1 = yes)
+///    15: anon_receive_change (0 = admin_only, 1 = self)
+///    16: self_manage_list (0 = admin_only, 1 = self)    admin-only
+///    17: self_manage_send_queue_limit                   admin-only
+///    18: self_manage_receive_queue_limit                admin-only
+/// ```
+///
+/// Bits 19-63 are unassigned and must stay zero.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct MediatorACLSet {
-    /*
-    Bit position mapping
-        0: access_list_mode (0 = explicit_allow, 1 = explicit_deny)
-        1: access_list_mode_change (0 = admin_only, 1 = self)
-        2: did_blocked (0 = allow, 1 = blocked)
-        3: did_local (0 = false, 1 = true/local)
-        4: send_messages (0 = false, 1 = true)
-        5: send_messages_change (0 = admin_only, 1 = self)
-        6: receive_messages (0 = false, 1 = true)
-        7: receive_messages_change (0 = admin_only, 1 = self)
-        8: send_forwarded (0 = no, 1 = yes)
-        9: send_forwarded_change (0 = admin_only, 1 = self)
-       10: receive_forwarded (0 = no, 1 = yes)
-       11: receive_forwarded_change (0 = admin_only, 1 = self)
-       12: create_invites (0 = no, 1 = yes)
-       13: create_invites_change (0 = admin_only, 1 = self)
-       14: anon_receive (0 = no, 1 = yes)
-       15: anon_receive_change (0 = admin_only, 1 = self)
-       16: self_manage_list (0 = admin_only, 1 = self)
-       17: self_manage_send_queue_limit
-       18: self_manage_receive_queue_limit
-    */
     access_list_mode: AccessListModeType,
     access_list_mode_self_change: bool,
     did_blocked: bool,
@@ -229,14 +260,14 @@ impl MediatorACLSet {
                 "mode_explicit_allow" => {
                     default_acl.set_access_list_mode(
                         AccessListModeType::ExplicitAllow,
-                        default_acl.get_access_list_mode_admin_change(),
+                        default_acl.get_access_list_mode_self_change(),
                         true,
                     )?;
                 }
                 "mode_explicit_deny" => {
                     default_acl.set_access_list_mode(
                         AccessListModeType::ExplicitDeny,
-                        default_acl.get_access_list_mode_admin_change(),
+                        default_acl.get_access_list_mode_self_change(),
                         true,
                     )?;
                 }
@@ -357,7 +388,7 @@ impl MediatorACLSet {
         };
 
         acls.access_list_mode = acls.get_access_list_mode().0;
-        acls.access_list_mode_self_change = acls.get_access_list_mode_admin_change();
+        acls.access_list_mode_self_change = acls.get_access_list_mode_self_change();
         acls.did_blocked = acls.get_blocked();
         acls.did_local = acls.get_local();
         acls.send_messages = acls.get_send_messages().0;
@@ -437,7 +468,7 @@ impl MediatorACLSet {
         // BIT 0 :: DID access list Mode (0 = explicit_allow, 1 = explicit_deny)
         // BIT 1 :: DID access list Mode Change (0 = admin_only, 1 = self)
 
-        let change = self.get_access_list_mode_admin_change();
+        let change = self.get_access_list_mode_self_change();
 
         if !change && !admin {
             Err(ACLError::Denied(
@@ -460,10 +491,27 @@ impl MediatorACLSet {
         }
     }
 
-    /// Do you need to have admin rights to change the access list Mode?
-    pub fn get_access_list_mode_admin_change(&self) -> bool {
+    /// May the DID change its own access list Mode?
+    ///
+    /// `true` = the DID may change it itself; `false` = admin only. This is
+    /// the same self-change bit returned as the second element of
+    /// [`get_access_list_mode`](Self::get_access_list_mode).
+    pub fn get_access_list_mode_self_change(&self) -> bool {
         // BIT Position 1
         self._generic_get(1)
+    }
+
+    /// Renamed to [`get_access_list_mode_self_change`](Self::get_access_list_mode_self_change).
+    ///
+    /// The old name read as "do you need admin rights to change the mode?",
+    /// which is the inverse of what the bit means: it returns `true` when
+    /// the DID *may* change the mode itself. The behaviour is unchanged.
+    #[deprecated(
+        since = "0.15.31",
+        note = "misleading name — the bit is a self-change grant, not an admin requirement. Use `get_access_list_mode_self_change`"
+    )]
+    pub fn get_access_list_mode_admin_change(&self) -> bool {
+        self.get_access_list_mode_self_change()
     }
 
     /// Is this DID blocked from the mediator?
@@ -829,7 +877,7 @@ mod tests {
             acl.get_access_list_mode(),
             (AccessListModeType::ExplicitAllow, false)
         ));
-        assert!(!acl.get_access_list_mode_admin_change());
+        assert!(!acl.get_access_list_mode_self_change());
     }
 
     #[test]
@@ -845,7 +893,7 @@ mod tests {
             acl.get_access_list_mode(),
             (AccessListModeType::ExplicitDeny, true)
         ));
-        assert!(acl.get_access_list_mode_admin_change());
+        assert!(acl.get_access_list_mode_self_change());
 
         // Test that we can flip back to the default
         assert!(
@@ -856,7 +904,7 @@ mod tests {
             acl.get_access_list_mode(),
             (AccessListModeType::ExplicitAllow, false)
         ));
-        assert!(!acl.get_access_list_mode_admin_change());
+        assert!(!acl.get_access_list_mode_self_change());
     }
 
     #[test]
@@ -872,7 +920,7 @@ mod tests {
             acl.get_access_list_mode(),
             (AccessListModeType::ExplicitAllow, false)
         ));
-        assert!(!acl.get_access_list_mode_admin_change());
+        assert!(!acl.get_access_list_mode_self_change());
     }
 
     #[test]
@@ -894,7 +942,7 @@ mod tests {
             acl.get_access_list_mode(),
             (AccessListModeType::ExplicitDeny, true)
         ));
-        assert!(acl.get_access_list_mode_admin_change());
+        assert!(acl.get_access_list_mode_self_change());
     }
 
     #[test]

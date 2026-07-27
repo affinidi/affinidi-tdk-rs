@@ -2,6 +2,28 @@
 
 ## Changelog history
 
+## 27th July 2026
+
+### 0.15.31 — `MediatorACLSet` documentation + one renamed getter
+
+Documentation and naming only; no behaviour change. Part of the mediator's
+ACL audit — see `affinidi-messaging-mediator` 0.17.11.
+
+- `get_access_list_mode_admin_change` is **deprecated** in favour of
+  `get_access_list_mode_self_change`. The old name read as "do you need
+  admin rights to change the mode?", which is the inverse of what bit 1
+  means: it returns `true` when the DID *may* change the mode itself. Same
+  bit, same return value — the alias is kept and delegates, so this is not
+  a breaking change.
+- `MediatorACLSet` now documents the model it implements: the two classes
+  of bit (capability + self-change pair vs. the admin-only `did_blocked`,
+  `did_local` and `self_manage_*` flags), and the fact that the packed
+  `acl: u64` is the source of truth while the named fields are a
+  denormalized mirror maintained by the setters and `from_u64`. Getters
+  read bits, never the fields; writing a field directly desynchronises the
+  two. The bit map is now a doc comment rather than an inline block, and
+  labels which bits are admin-only.
+
 ## 14th July 2026
 
 ### 0.15.30 — shared `s3://` target parser

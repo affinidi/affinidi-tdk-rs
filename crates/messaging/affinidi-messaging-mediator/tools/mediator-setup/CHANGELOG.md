@@ -2,6 +2,19 @@
 
 ## Changelog history
 
+## 27th July 2026
+
+### 0.1.24 — correct the Closed network-mode help text
+
+The wizard described Closed mode as "`mediator_acl_mode = explicit_allow`
+… every cross-DID exchange requires an explicit ACL grant". The mode does
+not do that — it governs only who may pre-register other DIDs via
+`account_add`, and never gates authentication. What actually makes Closed
+mode closed is the denying `global_acl_default` the wizard emits alongside
+it. The help text now says so. Emitted config is unchanged.
+
+See `affinidi-messaging-mediator` 0.17.11 and its `docs/acls.md`.
+
 ## 26th July 2026
 
 ### 0.1.23 — accept `vta-sdk` 0.20
