@@ -90,14 +90,30 @@ impl SignOptions {
     }
 }
 
+/// Default tolerance applied to a proof's `created` timestamp when it
+/// sits in the verifier's future: 60 seconds.
+///
+/// `created` is stamped by the *signer's* clock and checked against the
+/// *verifier's*. With zero tolerance, acceptance of an otherwise-valid
+/// proof becomes a race between clock skew and delivery latency — the
+/// same signed request is accepted or rejected depending on how quickly
+/// it arrives. 60s matches the leeway conventionally applied to JWT
+/// `iat`/`nbf` (and `jsonwebtoken`'s own default), so a signer skewed
+/// further than this generally fails bearer-token validation anyway.
+///
+/// This governs only how far *ahead* `created` may be. It is not a
+/// freshness window: this library does not reject old proofs, so replay
+/// protection must come from the surrounding protocol.
+pub const DEFAULT_CLOCK_SKEW: chrono::TimeDelta = chrono::TimeDelta::seconds(60);
+
 /// Options for verifying a Data Integrity proof.
 ///
 /// Currently carries the document's externally-supplied `@context` (for
-/// comparison with the proof's declared context) and an optional allowlist
-/// of acceptable cryptosuites. More fields will be added as the library
-/// grows — `#[non_exhaustive]` ensures future additions do not break
-/// callers.
-#[derive(Clone, Debug, Default)]
+/// comparison with the proof's declared context), an optional allowlist
+/// of acceptable cryptosuites, and the tolerance applied to a future
+/// `created` timestamp. More fields will be added as the library grows —
+/// `#[non_exhaustive]` ensures future additions do not break callers.
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct VerifyOptions {
     /// Expected `@context` of the signed document. When `Some`, the
@@ -109,10 +125,30 @@ pub struct VerifyOptions {
     /// accept (e.g. refuse `bbs-2023` in a context that requires full
     /// disclosure).
     pub allowed_suites: Vec<CryptoSuite>,
+
+    /// How far into the verifier's future a proof's `created` may sit
+    /// before it is rejected as non-conformant. Defaults to
+    /// [`DEFAULT_CLOCK_SKEW`]; set to zero for strict rejection of any
+    /// future timestamp. Negative values are treated as zero.
+    pub clock_skew: chrono::TimeDelta,
+}
+
+impl Default for VerifyOptions {
+    /// All checks off except a [`DEFAULT_CLOCK_SKEW`] allowance on
+    /// `created` — deliberately *not* `#[derive]`d, which would mean zero
+    /// tolerance and make verification skew-sensitive by default.
+    fn default() -> Self {
+        Self {
+            expected_context: None,
+            allowed_suites: Vec::new(),
+            clock_skew: DEFAULT_CLOCK_SKEW,
+        }
+    }
 }
 
 impl VerifyOptions {
-    /// Constructs an empty `VerifyOptions`. Equivalent to
+    /// Constructs a `VerifyOptions` with no context or cryptosuite
+    /// restrictions and the default clock-skew allowance. Equivalent to
     /// [`VerifyOptions::default`].
     #[must_use = "constructed options must be passed to sign/verify to take effect"]
     pub fn new() -> Self {
@@ -130,6 +166,15 @@ impl VerifyOptions {
     #[must_use = "chained builder call returns self; assign or chain further"]
     pub fn with_allowed_suites(mut self, suites: Vec<CryptoSuite>) -> Self {
         self.allowed_suites = suites;
+        self
+    }
+
+    /// Overrides the tolerance for a `created` timestamp in the
+    /// verifier's future. Pass [`chrono::TimeDelta::zero`] to reject any
+    /// future timestamp outright.
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_clock_skew(mut self, skew: chrono::TimeDelta) -> Self {
+        self.clock_skew = skew;
         self
     }
 }
