@@ -337,6 +337,33 @@ that need different semantics:
   for tests that exercise multi-mediator coordination, but requires
   a reachable Redis instance.
 
+## Feature flags and what CI runs
+
+`default = []`, so the two optional features have to be asked for
+explicitly — and a plain `cargo test` silently compiles their tests
+*out* rather than failing:
+
+| Feature | Enables |
+|---|---|
+| `fjall-backend` | `FjallStore` + the tests gated on it |
+| `tsp` | mediator TSP support, `atm.tsp()`, and every `#[cfg(feature = "tsp")]` test (TSP delivery, auth, websocket, pickup, federation, cross-mediator routing, capability discovery) |
+
+To run everything locally:
+
+```sh
+cargo test -p affinidi-messaging-test-mediator --features tsp,fjall-backend --tests
+```
+
+CI covers all three axes as separate jobs in `checks-storage.yaml` —
+`test-mediator (memory)`, `(fjall)` and `(tsp)`. The `tsp` job was
+added after the feature spent a long time uncovered: because `tsp`
+isn't default, a fully green CI run had been saying nothing at all
+about the TSP transport. If you add a test behind a new feature gate,
+add the matching job too, or it will not run.
+
+Note that no part of this suite requires Redis. `skip_if_no_redis()`
+in `tests/common` is a retained no-op that always returns `false`.
+
 ## Cross-workspace consumption
 
 When using this crate from outside the `affinidi-tdk-rs` workspace

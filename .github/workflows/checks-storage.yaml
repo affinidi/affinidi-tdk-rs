@@ -1,5 +1,6 @@
 name: checks-storage
-# Matrix check for the mediator's swappable storage backends.
+# Matrix check for the mediator's swappable storage backends, plus the
+# dual-protocol (DIDComm / TSP) axis.
 #
 # `redis-backend` is the default and is exercised by `checks.yaml`
 # (which spins up a Redis service container via `useRedis: true`).
@@ -14,8 +15,14 @@ name: checks-storage
 #                --lib store::<short>_store
 #
 # Plus a "kitchen sink" job that compiles the mediator with every
-# backend feature enabled at once. Catches accidental name collisions
-# between feature-gated modules.
+# backend feature enabled at once (and `tsp`). Catches accidental name
+# collisions between feature-gated modules.
+#
+# The e2e jobs cover the fixture on both stores (`test-mediator (memory)`
+# / `(fjall)`) and on the TSP protocol (`test-mediator (tsp)`). The last
+# one matters because `tsp` is not a default feature: without it every
+# `#[cfg(feature = "tsp")]` test compiles out, so an all-green CI run said
+# nothing whatsoever about the TSP transport.
 #
 # `storage-secrets-matrix` adds a representative storage x secrets
 # cross-check. `checks.yaml` exercises the default (redis + keyring) and
@@ -252,12 +259,56 @@ jobs:
             --features fjall-backend \
             --tests
 
+  test-mediator-e2e-tsp:
+    # The dual-protocol axis. `tsp` is not a default feature of
+    # `affinidi-messaging-test-mediator`, so the two jobs above compile
+    # every `#[cfg(feature = "tsp")]` test out — which left the whole TSP
+    # e2e suite (TSP delivery, auth, websocket, pickup, federation,
+    # cross-mediator routing, capability discovery, and the recipient-side
+    # ACL gates) passing unobserved: green CI said nothing about any of it.
+    #
+    # The mediator ships TSP as a first-class transport alongside DIDComm,
+    # so the protocol axis deserves the same standing coverage the storage
+    # backends get.
+    name: test-mediator (tsp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test-mediator-e2e-tsp
+
+      - name: cargo test -p affinidi-messaging-test-mediator --features tsp --tests
+        run: |
+          cargo test \
+            -p affinidi-messaging-test-mediator \
+            --features tsp \
+            --tests
+
   all-backends-compile:
     # Compile the mediator with every backend feature enabled at
-    # once. Doesn't run any tests — the test commands per-backend
-    # above already do that — but a successful build here proves
-    # the feature-gated modules don't conflict (duplicate symbols,
-    # incompatible deps, etc.) when bundled together.
+    # once, plus `tsp`. Doesn't run any tests — the test commands
+    # per-backend above already do that — but a successful build here
+    # proves the feature-gated modules don't conflict (duplicate
+    # symbols, incompatible deps, etc.) when bundled together.
+    #
+    # `tsp` is in the list because it gates ~39 sites in the mediator
+    # source and was previously compiled by no job in any workflow: the
+    # only `tsp` in CI was a `cargo check` on the `affinidi-tdk` facade,
+    # which does not pull the mediator's TSP code. A type error behind
+    # that gate could reach a release unseen.
     name: all-backends compile
     runs-on: ubuntu-latest
     steps:
@@ -278,9 +329,9 @@ jobs:
         with:
           key: all-backends-compile
 
-      - name: cargo check --features redis-backend,fjall-backend,memory-backend
+      - name: cargo check --features tsp,redis-backend,fjall-backend,memory-backend
         run: |
           cargo check \
             -p affinidi-messaging-mediator \
             --no-default-features \
-            --features "didcomm,redis-backend,fjall-backend,memory-backend"
+            --features "didcomm,tsp,redis-backend,fjall-backend,memory-backend"
