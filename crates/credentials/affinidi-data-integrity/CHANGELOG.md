@@ -1,5 +1,36 @@
 # Affinidi Data Integrity Changelog
 
+## 27th July 2026 Release 0.7.8
+
+### Fixed
+
+- **Verification no longer fails on ordinary clock skew.** A proof's
+  `created` is stamped by the *signer's* clock and was compared strictly
+  (`created > now`) against the *verifier's*, so a signer even
+  milliseconds ahead made acceptance a race between clock skew and
+  delivery latency: the same signed request was accepted or rejected
+  depending on how quickly it arrived, with no way to configure a
+  tolerance. Verification now allows a clock-skew window on a future
+  `created`, defaulting to 60 seconds (`DEFAULT_CLOCK_SKEW`) — matching
+  the leeway conventionally applied to JWT `iat`/`nbf`, past which a
+  signer generally fails bearer-token validation anyway. This governs
+  only how far *ahead* `created` may be; the library still does not
+  reject old proofs, so replay protection remains the surrounding
+  protocol's job.
+
+### Added
+
+- `VerifyOptions::with_clock_skew(TimeDelta)` and the `DEFAULT_CLOCK_SKEW`
+  constant. Pass `TimeDelta::zero()` for the previous strict behaviour.
+- `verify_conformance_with_skew(..)`, the explicit-tolerance form of
+  `verify_conformance` (which had the same strict check and now applies
+  `DEFAULT_CLOCK_SKEW`).
+
+Note: `VerifyOptions` no longer `#[derive]`s `Default` — it has a manual
+impl carrying the non-zero default. Behaviour of `VerifyOptions::new()` /
+`::default()` is otherwise unchanged, and the struct remains
+`#[non_exhaustive]`, so the added field is not a breaking change.
+
 ## 19th July 2026 Release 0.7.7
 
 ### Changed

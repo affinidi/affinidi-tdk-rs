@@ -13,6 +13,7 @@
 //! slightly differently.
 
 use crate::crypto_suites::CryptoSuite;
+use crate::options::DEFAULT_CLOCK_SKEW;
 use crate::{DataIntegrityError, DataIntegrityProof};
 
 /// Checks that `proof` conforms to the W3C Data Integrity spec.
@@ -25,8 +26,10 @@ use crate::{DataIntegrityError, DataIntegrityProof};
 /// 3. `proofPurpose` is present and non-empty.
 /// 4. `verificationMethod` is present and non-empty.
 /// 5. `proofValue` is present and multibase-decodable.
-/// 6. `created`, if present, parses as RFC 3339 and is not in the
-///    future.
+/// 6. `created`, if present, parses as RFC 3339 and is no further into
+///    the future than [`DEFAULT_CLOCK_SKEW`] (the signer's clock is not
+///    the verifier's; see [`verify_conformance_with_skew`] to choose the
+///    allowance).
 ///
 /// Returns `Ok(())` if all structural checks pass. The cryptographic
 /// signature is **not** verified here — use
@@ -37,6 +40,19 @@ use crate::{DataIntegrityError, DataIntegrityProof};
 pub fn verify_conformance(
     proof: &DataIntegrityProof,
     expected: CryptoSuite,
+) -> Result<(), DataIntegrityError> {
+    verify_conformance_with_skew(proof, expected, DEFAULT_CLOCK_SKEW)
+}
+
+/// [`verify_conformance`], with an explicit tolerance for a `created`
+/// timestamp in the verifier's future.
+///
+/// Pass [`chrono::TimeDelta::zero`] to reject any future timestamp
+/// outright. Negative values are treated as zero.
+pub fn verify_conformance_with_skew(
+    proof: &DataIntegrityProof,
+    expected: CryptoSuite,
+    clock_skew: chrono::TimeDelta,
 ) -> Result<(), DataIntegrityError> {
     if proof.type_ != "DataIntegrityProof" {
         return Err(DataIntegrityError::Conformance(format!(
@@ -74,16 +90,21 @@ pub fn verify_conformance(
     })?;
 
     if let Some(created) = &proof.created {
-        use chrono::{DateTime, Utc};
+        use chrono::{DateTime, TimeDelta, Utc};
         let parsed: DateTime<Utc> = created.parse().map_err(|e| {
             DataIntegrityError::Conformance(format!(
                 "created does not parse as RFC 3339 ({e}): {created}"
             ))
         })?;
-        if parsed > Utc::now() {
-            return Err(DataIntegrityError::Conformance(
-                "created timestamp is in the future".into(),
-            ));
+        let skew = clock_skew.max(TimeDelta::zero());
+        let horizon = Utc::now()
+            .checked_add_signed(skew)
+            .unwrap_or(DateTime::<Utc>::MAX_UTC);
+        if parsed > horizon {
+            return Err(DataIntegrityError::Conformance(format!(
+                "created timestamp is in the future (beyond the {}s clock-skew allowance)",
+                skew.num_seconds()
+            )));
         }
     }
 
@@ -146,6 +167,29 @@ mod tests {
         let mut p = sample_proof().await;
         p.created = Some("3000-01-01T00:00:00Z".to_string());
         let err = verify_conformance(&p, CryptoSuite::EddsaJcs2022).unwrap_err();
+        assert!(matches!(err, DataIntegrityError::Conformance(_)));
+    }
+
+    /// Ordinary signer-vs-verifier clock skew is not a conformance
+    /// failure — only a `created` beyond the allowance is.
+    #[tokio::test]
+    async fn conformance_tolerates_default_clock_skew() {
+        use chrono::{TimeDelta, Utc};
+        let mut p = sample_proof().await;
+        p.created = Some((Utc::now() + TimeDelta::seconds(5)).to_rfc3339());
+        verify_conformance(&p, CryptoSuite::EddsaJcs2022)
+            .expect("5s ahead is inside the default 60s allowance");
+    }
+
+    /// Zero skew restores the strict behaviour for callers that want it.
+    #[tokio::test]
+    async fn conformance_zero_skew_rejects_any_future_created() {
+        use chrono::{TimeDelta, Utc};
+        let mut p = sample_proof().await;
+        p.created = Some((Utc::now() + TimeDelta::seconds(5)).to_rfc3339());
+        let err =
+            verify_conformance_with_skew(&p, CryptoSuite::EddsaJcs2022, TimeDelta::zero())
+                .unwrap_err();
         assert!(matches!(err, DataIntegrityError::Conformance(_)));
     }
 

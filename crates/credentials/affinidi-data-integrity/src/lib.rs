@@ -84,7 +84,7 @@ pub mod suite_ops;
 pub mod verification_proof;
 
 pub use caching_signer::{CachingSigner, GetPrivateBytes};
-pub use conformance::verify_conformance;
+pub use conformance::{verify_conformance, verify_conformance_with_skew};
 pub use did_vm::{DidKeyResolver, ResolvedKey, VerificationMethodResolver};
 pub use multi::{MultiVerifyResult, VerifyPolicy, verify_multi};
 
@@ -104,7 +104,7 @@ pub mod bbs_2023;
 pub mod bbs_2023_transform;
 
 pub use error::{DataIntegrityError, SignatureFailure};
-pub use options::{SignOptions, VerifyOptions};
+pub use options::{DEFAULT_CLOCK_SKEW, SignOptions, VerifyOptions};
 
 /// Serialized Data Integrity proof.
 ///
@@ -432,15 +432,26 @@ where
         ));
     }
 
+    // `created` is stamped by the signer's clock and checked against
+    // ours, so a strict comparison makes acceptance a race between clock
+    // skew and delivery latency. Allow `options.clock_skew` (default 60s)
+    // of drift; a negative setting is clamped to zero rather than making
+    // the check *stricter* than exact.
     if let Some(created) = &proof_config.created {
-        let now = Utc::now();
+        let skew = options.clock_skew.max(chrono::TimeDelta::zero());
+        // `checked_add_signed` so an absurd caller-supplied skew saturates
+        // instead of panicking on overflow, as `+` would.
+        let horizon = Utc::now()
+            .checked_add_signed(skew)
+            .unwrap_or(DateTime::<Utc>::MAX_UTC);
         let created = created
             .parse::<DateTime<Utc>>()
             .map_err(|e| DataIntegrityError::Conformance(format!("Invalid created date: {e}")))?;
-        if created > now {
-            return Err(DataIntegrityError::Conformance(
-                "Created date is in the future".to_string(),
-            ));
+        if created > horizon {
+            return Err(DataIntegrityError::Conformance(format!(
+                "Created date is in the future (beyond the {}s clock-skew allowance)",
+                skew.num_seconds()
+            )));
         }
     }
 
@@ -560,9 +571,12 @@ fn format_created(dt: DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use affinidi_secrets_resolver::secrets::Secret;
+    use chrono::Utc;
     use serde_json::json;
 
-    use crate::{DataIntegrityProof, SignOptions, VerifyOptions, hashing_jcs};
+    use crate::{
+        DataIntegrityError, DataIntegrityProof, SignOptions, VerifyOptions, hashing_jcs,
+    };
 
     #[test]
     fn hashing_working() {
@@ -668,6 +682,75 @@ mod tests {
             err,
             crate::DataIntegrityError::KeyTypeMismatch { .. }
         ));
+    }
+
+    /// A signer whose clock runs slightly ahead of the verifier's stamps
+    /// `created` in the verifier's future. With zero tolerance this made
+    /// acceptance a race between clock skew and delivery latency — the
+    /// same proof verified or not depending on how fast it arrived. The
+    /// default allowance must absorb it.
+    #[tokio::test]
+    async fn verify_tolerates_default_clock_skew_on_created() {
+        let secret = Secret::generate_ed25519(Some("did:key:k#k"), Some(&[3u8; 32]));
+        let doc = json!({"skewed": true});
+        let proof = DataIntegrityProof::sign(
+            &doc,
+            &secret,
+            SignOptions::new().with_created(Utc::now() + chrono::TimeDelta::seconds(5)),
+        )
+        .await
+        .expect("sign");
+
+        proof
+            .verify_with_public_key(&doc, secret.get_public_bytes(), VerifyOptions::new())
+            .expect("a 5s-ahead signer is inside the default 60s allowance");
+    }
+
+    /// The allowance is bounded: a `created` beyond it is still rejected,
+    /// and the error names the allowance so the cause is diagnosable from
+    /// the wire message alone.
+    #[tokio::test]
+    async fn verify_rejects_created_beyond_the_allowance() {
+        let secret = Secret::generate_ed25519(Some("did:key:k#k"), Some(&[4u8; 32]));
+        let doc = json!({"skewed": "far"});
+        let proof = DataIntegrityProof::sign(
+            &doc,
+            &secret,
+            SignOptions::new().with_created(Utc::now() + chrono::TimeDelta::hours(1)),
+        )
+        .await
+        .expect("sign");
+
+        let err = proof
+            .verify_with_public_key(&doc, secret.get_public_bytes(), VerifyOptions::new())
+            .expect_err("an hour ahead is well beyond 60s");
+        let msg = format!("{err}");
+        assert!(msg.contains("future"), "unexpected message: {msg}");
+        assert!(msg.contains("60s"), "message should name the allowance: {msg}");
+    }
+
+    /// Zero skew restores the strict pre-allowance behaviour for callers
+    /// that want it.
+    #[tokio::test]
+    async fn verify_zero_skew_rejects_any_future_created() {
+        let secret = Secret::generate_ed25519(Some("did:key:k#k"), Some(&[5u8; 32]));
+        let doc = json!({"strict": true});
+        let proof = DataIntegrityProof::sign(
+            &doc,
+            &secret,
+            SignOptions::new().with_created(Utc::now() + chrono::TimeDelta::seconds(5)),
+        )
+        .await
+        .expect("sign");
+
+        let err = proof
+            .verify_with_public_key(
+                &doc,
+                secret.get_public_bytes(),
+                VerifyOptions::new().with_clock_skew(chrono::TimeDelta::zero()),
+            )
+            .expect_err("zero tolerance must reject a future created");
+        assert!(matches!(err, DataIntegrityError::Conformance(_)));
     }
 
     /// An attacker rewrites the `cryptosuite` field on a proof they
