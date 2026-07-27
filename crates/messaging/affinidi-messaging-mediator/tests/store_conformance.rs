@@ -551,6 +551,73 @@ async fn check_access_list_mode_semantics(store: Arc<dyn MediatorStore>) {
     );
 }
 
+/// `delivery_decision` must answer exactly what the three calls it replaces
+/// would have: `None` for an unknown recipient (standing in for
+/// `account_exists`), the recipient's stored ACL set (standing in for
+/// `get_did_acl`), and a verdict identical to `access_list_allowed`.
+///
+/// The direct-delivery path now trusts this single call for all three facts,
+/// and backends are free to implement it as one batched read, so a backend
+/// whose optimised version drifts from the generic path would silently change
+/// who may deliver to whom. Pinning it against `access_list_allowed` on the
+/// same store keeps the fast path honest.
+async fn check_delivery_decision_matches_access_list(store: Arc<dyn MediatorStore>) {
+    let listed = "did_hash_dd_listed".to_string();
+    let unlisted = "did_hash_dd_unlisted";
+
+    // Unknown recipient → None. This is what replaces the `account_exists`
+    // probe, so it has to be a *distinguishable* answer, not a denying one.
+    assert!(
+        store
+            .delivery_decision("did_hash_dd_nobody", Some(&listed))
+            .await
+            .expect("delivery_decision on unknown recipient")
+            .is_none(),
+        "unknown recipient yields None"
+    );
+
+    // Both access-list modes, and for each: a listed sender, an unlisted
+    // sender, and an anonymous sender (whose verdict comes from anon_receive
+    // rather than the list).
+    for mode in [
+        AccessListModeType::ExplicitAllow,
+        AccessListModeType::ExplicitDeny,
+    ] {
+        let owner = match mode {
+            AccessListModeType::ExplicitAllow => "did_hash_dd_allow_owner",
+            AccessListModeType::ExplicitDeny => "did_hash_dd_deny_owner",
+        };
+        let acls = acls_with_mode(mode);
+        store
+            .account_add(owner, &acls, None)
+            .await
+            .expect("add delivery-decision owner");
+        store
+            .access_list_add(1000, owner, std::slice::from_ref(&listed))
+            .await
+            .expect("add to access list");
+
+        for sender in [Some(listed.as_str()), Some(unlisted), None] {
+            let decision = store
+                .delivery_decision(owner, sender)
+                .await
+                .expect("delivery_decision")
+                .expect("known recipient yields Some");
+
+            assert_eq!(
+                decision.acls.to_u64(),
+                acls.to_u64(),
+                "returns the recipient's stored ACL set (owner={owner}, sender={sender:?})"
+            );
+            assert_eq!(
+                decision.access_list_allows,
+                store.access_list_allowed(owner, sender).await,
+                "verdict matches access_list_allowed (owner={owner}, sender={sender:?})"
+            );
+        }
+    }
+}
+
 // ─── Backend instantiation + test generation ────────────────────────────────
 
 /// A constructed backend plus anything that must outlive it (Fjall's temp dir).
@@ -833,6 +900,10 @@ macro_rules! conformance_for {
             async fn oob_discovery_roundtrip() {
                 check_oob_discovery_roundtrip(ready($ctor).await).await;
             }
+            #[tokio::test]
+            async fn delivery_decision_matches_access_list() {
+                check_delivery_decision_matches_access_list(ready($ctor).await).await;
+            }
         }
     };
 }
@@ -878,4 +949,5 @@ conformance_for_redis!(redis,
     access_list_mode_semantics => check_access_list_mode_semantics @ 10,
     audit_log_lifecycle      => check_audit_log_lifecycle      @ 11,
     oob_discovery_roundtrip  => check_oob_discovery_roundtrip  @ 12,
+    delivery_decision_matches_access_list => check_delivery_decision_matches_access_list @ 13,
 );

@@ -2,6 +2,30 @@
 
 ## Changelog history
 
+## 27th July 2026 (2)
+
+### 0.15.32 — `MediatorStore::delivery_decision`
+
+New trait method plus the `DeliveryDecision` type it returns. Additive: it
+carries a default implementation written in terms of the existing
+`get_did_acl` + `access_list_allowed`, so existing backends outside this
+workspace keep compiling and behaving identically.
+
+It exists so a backend can answer the three questions the recipient side of
+direct delivery asks — does this account exist, what are its ACL bits, does
+its access list admit this sender — from one read of the single record they
+all derive from, instead of three. Backends that can batch should override
+it; `RedisStore` does, serving all three from the pipelined `SISMEMBER` +
+`HGET` it already issued.
+
+`RedisStore::access_list_allowed` is now expressed in terms of the new
+method and applies the allowlist/denylist rule via the shared
+`store::ops::access_list_allowed` instead of its own inline copy, so that
+rule now has one implementation rather than three. Its fail-closed contract
+(missing account or backend error ⇒ `false`) is unchanged.
+
+See `affinidi-messaging-mediator` 0.17.12.
+
 ## 27th July 2026
 
 ### 0.15.31 — `MediatorACLSet` documentation + one renamed getter

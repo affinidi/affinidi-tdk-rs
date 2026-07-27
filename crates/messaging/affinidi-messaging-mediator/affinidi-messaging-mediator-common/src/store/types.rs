@@ -317,6 +317,23 @@ impl DeletionAuthority {
     }
 }
 
+/// The recipient-side facts a delivery gate needs, resolved in one lookup.
+///
+/// Returned by [`MediatorStore::delivery_decision`]. Existence is carried by
+/// the `Option` around this struct, so a caller that would otherwise call
+/// `account_exists` separately does not need to.
+///
+/// [`MediatorStore::delivery_decision`]: crate::store::MediatorStore::delivery_decision
+#[derive(Clone, Debug)]
+pub struct DeliveryDecision {
+    /// The recipient's stored ACL set — check capabilities against this.
+    pub acls: MediatorACLSet,
+    /// Whether the recipient's access list admits this particular sender,
+    /// already interpreted per the recipient's allowlist/denylist mode (and,
+    /// for an anonymous sender, per its `anon_receive` bit).
+    pub access_list_allows: bool,
+}
+
 // ─── Live streaming state ───────────────────────────────────────────────────
 
 /// State of a live-streaming subscriber, set by the WebSocket task as

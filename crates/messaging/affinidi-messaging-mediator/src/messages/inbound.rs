@@ -304,8 +304,17 @@ async fn deliver_opaque(
     bytes: &[u8],
 ) -> Result<InboundMessageResponse, MediatorError> {
     let to_hash = digest(to_vid.as_bytes());
+    let from_hash = digest(from_vid.as_bytes());
 
-    if !state.database.account_exists(&to_hash).await? {
+    // Recipient-side ACL checks, mirroring DIDComm direct delivery: existence,
+    // RECEIVE_MESSAGES and the access-list verdict all come from one lookup.
+    // The mediator routes on the authenticated sender and the recipient
+    // verifies the (opaque) message end-to-end on pickup.
+    let Some(recipient) = state
+        .database
+        .delivery_decision(&to_hash, Some(&from_hash))
+        .await?
+    else {
         return Err(tsp_problem(
             session,
             58,
@@ -314,13 +323,9 @@ async fn deliver_opaque(
                 .to_string(),
             StatusCode::NOT_FOUND,
         ));
-    }
+    };
 
-    // Recipient-side ACL checks, mirroring DIDComm direct delivery. The
-    // mediator routes on the authenticated sender and the recipient verifies
-    // the (opaque) message end-to-end on pickup.
-    let to_acls = authz::effective_acls(state, &to_hash).await?;
-    if authz::require_capability(&to_acls, Capability::ReceiveMessages).is_err() {
+    if authz::require_capability(&recipient.acls, Capability::ReceiveMessages).is_err() {
         return Err(tsp_problem(
             session,
             74,
@@ -330,11 +335,7 @@ async fn deliver_opaque(
         ));
     }
 
-    let from_hash = digest(from_vid.as_bytes());
-    if authz::check_access_list(state.database.as_ref(), &to_hash, Some(&from_hash))
-        .await
-        .is_err()
-    {
+    if !recipient.access_list_allows {
         return Err(tsp_problem(
             session,
             73,
@@ -670,8 +671,17 @@ async fn handle_inbound_didcomm(
                         ));
                     }
 
-                    // Check that the recipient account is local to the mediator
-                    if !state.database.account_exists(&digest(to_did)).await? {
+                    // Everything the recipient side needs — existence, ACL bits
+                    // and the access-list verdict — comes from one lookup. The
+                    // three facts all derive from the same stored record, so
+                    // asking for them separately cost three reads of it.
+                    let to_hash = digest(to_did);
+                    let from_hash = envelope.from_did.as_ref().map(digest);
+                    let Some(recipient) = state
+                        .database
+                        .delivery_decision(&to_hash, from_hash.as_deref())
+                        .await?
+                    else {
                         return Err(MediatorError::problem(
                             72,
                             &session.session_id,
@@ -683,7 +693,7 @@ async fn handle_inbound_didcomm(
                             vec![],
                             StatusCode::FORBIDDEN,
                         ));
-                    }
+                    };
 
                     // The mediator cannot decrypt a direct-delivery envelope, so the
                     // claimed sender (JWE `skid` header) is unverified. When
@@ -707,10 +717,9 @@ async fn handle_inbound_didcomm(
                         ));
                     }
 
-                    let from_hash = envelope.from_did.as_ref().map(digest);
                     // Check if the message will pass ACL Checks
-                    if let Some(from) = &envelope.from_did {
-                        let from_acls = authz::effective_acls(state, &digest(from)).await?;
+                    if let Some(from_hash) = from_hash.as_deref() {
+                        let from_acls = authz::effective_acls(state, from_hash).await?;
 
                         if authz::require_capability(&from_acls, Capability::SendMessages).is_err() {
                             return Err(MediatorError::problem(
@@ -738,13 +747,15 @@ async fn handle_inbound_didcomm(
                             StatusCode::FORBIDDEN,
                         ));
                     }
-                    // Recipient-side gate, mirroring the sender's SEND_MESSAGES
-                    // check above: a DID whose ACLs withhold RECEIVE_MESSAGES
-                    // does not accept directly-delivered messages at all,
-                    // regardless of who the sender is. Checked before the access
-                    // list because it is the coarser of the two.
-                    let to_acls = authz::effective_acls(state, &digest(to_did)).await?;
-                    if authz::require_capability(&to_acls, Capability::ReceiveMessages).is_err() {
+                    // Recipient-side gates, both answered from the single
+                    // lookup above. RECEIVE_MESSAGES mirrors the sender's
+                    // SEND_MESSAGES check: a DID whose ACLs withhold it does
+                    // not accept directly-delivered messages at all, whoever
+                    // the sender is. Checked before the access list because it
+                    // is the coarser of the two.
+                    if authz::require_capability(&recipient.acls, Capability::ReceiveMessages)
+                        .is_err()
+                    {
                         return Err(MediatorError::problem(
                             74,
                             &session.session_id,
@@ -758,14 +769,7 @@ async fn handle_inbound_didcomm(
                         ));
                     }
 
-                    if authz::check_access_list(
-                        state.database.as_ref(),
-                        &digest(to_did),
-                        from_hash.as_deref(),
-                    )
-                    .await
-                    .is_err()
-                    {
+                    if !recipient.access_list_allows {
                         return Err(MediatorError::problem(
                             73,
                             &session.session_id,

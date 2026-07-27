@@ -67,9 +67,9 @@ pub mod ops;
 pub mod redis;
 
 pub use types::{
-    DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MessageMetaData,
-    MetadataStats, PubSubRecord, Session, SessionClaims, SessionState, SessionSweepReport,
-    StatCounter, StoreHealth, StreamingClientState,
+    DeletionAuthority, DeliveryDecision, ExpiryReport, ForwardQueueEntry, InboxStatusReply,
+    MessageMetaData, MetadataStats, PubSubRecord, Session, SessionClaims, SessionState,
+    SessionSweepReport, StatCounter, StoreHealth, StreamingClientState,
 };
 
 /// Fail-closed session rename used by the default
@@ -364,6 +364,37 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// ExplicitDeny). For anonymous senders (`from_hash = None`),
     /// consults `to_hash`'s `anon_receive` ACL bit.
     async fn access_list_allowed(&self, to_hash: &str, from_hash: Option<&str>) -> bool;
+
+    /// Everything the recipient-side delivery gate needs about `to_hash`, in
+    /// as few round trips as the backend can manage. Returns `None` when the
+    /// account does not exist.
+    ///
+    /// The direct-delivery path needs three facts about one recipient — does
+    /// the account exist, does it grant `RECEIVE_MESSAGES`, and does its
+    /// access list admit this sender — which are all derivable from the same
+    /// stored record. Fetching them via `account_exists` + `get_did_acl` +
+    /// `access_list_allowed` costs three reads of that record; this method
+    /// exists so a backend can serve all three from one.
+    ///
+    /// The default implementation is the unoptimised two-call version, so
+    /// third-party backends keep working unchanged. Backends that can batch
+    /// should override it — [`RedisStore`] already pipelines the membership
+    /// probe and the ACL read into a single round trip, and the in-process
+    /// backends read one record.
+    async fn delivery_decision(
+        &self,
+        to_hash: &str,
+        from_hash: Option<&str>,
+    ) -> Result<Option<DeliveryDecision>, MediatorError> {
+        let Some(acls) = self.get_did_acl(to_hash).await? else {
+            return Ok(None);
+        };
+        let access_list_allows = self.access_list_allowed(to_hash, from_hash).await;
+        Ok(Some(DeliveryDecision {
+            acls,
+            access_list_allows,
+        }))
+    }
 
     /// Page through a DID's access list using a server-side cursor. Pass `0` to
     /// start; feed the returned `cursor` back in for the next page.

@@ -1,5 +1,6 @@
 use super::Database;
 use crate::errors::MediatorError;
+use crate::store::{DeliveryDecision, ops};
 use crate::types::{
     acls::{AccessListModeType, MediatorACLSet},
     acls_handler::{
@@ -143,14 +144,41 @@ impl Database {
     /// - `from_hash` - Hash of the DID we are checking for (typically the FROM address)
     ///
     /// Returns true if it exists, false otherwise
+    ///
+    /// Expressed in terms of [`Self::delivery_decision`] so the mode
+    /// interpretation lives in exactly one place. Preserves the fail-closed
+    /// contract: a missing account or a backend error is `false`.
     pub async fn access_list_allowed(&self, to_hash: &str, from_hash: Option<&str>) -> bool {
-        let Ok(mut con) = self.get_connection().await else {
-            warn!("Failed to get database connection");
-            return false;
-        };
+        match self.delivery_decision(to_hash, from_hash).await {
+            Ok(Some(decision)) => decision.access_list_allows,
+            Ok(None) => {
+                debug!("ACL not found for DID: {}", to_hash);
+                false
+            }
+            Err(err) => {
+                warn!("access_list_allowed failed. Reason: {}", err);
+                false
+            }
+        }
+    }
 
-        if let Some(from_hash) = from_hash {
-            let (exists, acl): (bool, Option<String>) = match redis::pipe()
+    /// Recipient-side delivery inputs in a single round trip.
+    ///
+    /// For a known sender this is one pipelined `SISMEMBER` + `HGET`: the
+    /// access-list membership probe and the recipient's ACL bitmask come back
+    /// together, and the mode is then applied in-process by
+    /// [`ops::access_list_allowed`]. Callers that also need existence and a
+    /// capability check get them from the same result rather than issuing
+    /// `account_exists` and `get_did_acl` of their own.
+    pub(crate) async fn delivery_decision(
+        &self,
+        to_hash: &str,
+        from_hash: Option<&str>,
+    ) -> Result<Option<DeliveryDecision>, MediatorError> {
+        let mut con = self.get_connection().await?;
+
+        let (acl, sender) = if let Some(from_hash) = from_hash {
+            let (on_access_list, acl): (bool, Option<String>) = redis::pipe()
                 .atomic()
                 .cmd("SISMEMBER")
                 .arg(["ACCESS_LIST:", to_hash].concat())
@@ -164,48 +192,45 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("access_list_allowed failed. Reason: {err}"),
+                        format!("delivery_decision failed. Reason: {err}"),
                     )
-                }) {
-                Ok(result) => result,
-                Err(err) => {
-                    warn!("access_list_allowed failed. Reason: {}", err);
-                    return false;
-                }
-            };
+                })?;
 
-            let acl = if let Some(acl) = acl {
-                if let Ok(acls) = MediatorACLSet::from_hex_string(&acl) {
-                    acls
-                } else {
-                    warn!("Failed to parse ACL for to_hash({})", to_hash);
-                    return false;
-                }
-            } else {
-                debug!("ACL not found for DID: {}", to_hash);
-                return false;
-            };
-
-            if acl.get_access_list_mode().0 == AccessListModeType::ExplicitAllow {
-                debug!(
-                    "access_list_allowed == true for to_hash({}), from_hash({})",
-                    to_hash, from_hash
-                );
-                exists
-            } else {
-                debug!(
-                    "access_list_allowed == false for to_hash({}), from_hash({})",
-                    to_hash, from_hash
-                );
-                !exists
-            }
+            (acl, ops::Sender::Known { on_access_list })
         } else {
-            // Anonymous Message
-            match self.get_did_acl(to_hash).await {
-                Ok(Some(acl)) => acl.get_anon_receive().0,
-                _ => false,
-            }
-        }
+            // Anonymous sender: the access list is irrelevant, only the
+            // recipient's anon_receive bit matters — so skip the membership
+            // probe and read the ACL alone.
+            let acl: Option<String> = Cmd::hget(["DID:", to_hash].concat(), "ACLS")
+                .query_async(&mut con)
+                .await
+                .map_err(|err| {
+                    MediatorError::DatabaseError(
+                        14,
+                        "NA".to_string(),
+                        format!("delivery_decision failed. Reason: {err}"),
+                    )
+                })?;
+
+            (acl, ops::Sender::Anonymous)
+        };
+
+        let Some(acl) = acl else {
+            return Ok(None);
+        };
+        let acls = MediatorACLSet::from_hex_string(&acl)
+            .map_err(|e| MediatorError::InternalError(26, to_hash.into(), e.to_string()))?;
+        let access_list_allows = ops::access_list_allowed(&acls, sender);
+
+        debug!(
+            to_hash,
+            access_list_allows, "delivery_decision resolved for recipient"
+        );
+
+        Ok(Some(DeliveryDecision {
+            acls,
+            access_list_allows,
+        }))
     }
 
     /// Retrieves DID hashes from the Access List

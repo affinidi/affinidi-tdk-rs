@@ -13,6 +13,7 @@
 //! subscribers can share one Redis pubsub bridge.
 
 use crate::circuit_breaker::CircuitBreaker;
+use crate::store::DeliveryDecision;
 use crate::store::redis::database::{
     forwarding::ForwardQueueEntry as InnerForwardEntry, stats::MetadataStats as InnerMetadataStats,
     store::MessageMetaData as InnerMessageMetaData,
@@ -706,6 +707,14 @@ impl MediatorStore for RedisStore {
 
     async fn access_list_allowed(&self, to_hash: &str, from_hash: Option<&str>) -> bool {
         self.access_list_allowed(to_hash, from_hash).await
+    }
+
+    async fn delivery_decision(
+        &self,
+        to_hash: &str,
+        from_hash: Option<&str>,
+    ) -> Result<Option<DeliveryDecision>, MediatorError> {
+        self.delivery_decision(to_hash, from_hash).await
     }
 
     async fn access_list_list(
