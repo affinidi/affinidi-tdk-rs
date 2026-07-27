@@ -62,11 +62,18 @@ pub async fn authentication_challenge(
         did_hash = session.did_hash.clone()
     );
     async move {
-        // ACL Checks to be done
-        // 1. Do we know this DID?
-        //   1.1 If yes, then is it blocked?
-        // 2. If not known, then does the mediator acl_mode allow for new accounts?
-        // 3. If yes, then add the account and continue
+        // ACL checks at the door:
+        // 1. Do we know this DID? If so, is it blocked?
+        // 2. If we don't know it, register it with `global_acl_default`.
+        //
+        // Note what is deliberately NOT here: `mediator_acl_mode` plays no
+        // part in authentication. Any DID that can complete the challenge
+        // gets an account, and `global_acl_default` decides what that
+        // account may then do — including `DENY_ALL`, which authenticates
+        // fine but can do nothing. The mode governs who may *pre-register
+        // other* DIDs (see the account_add handlers), not who may connect.
+        // `global_acl_default` is the control that gates a public mediator;
+        // see docs/acls.md.
 
         // Check if DID is allowed to connect
         let (allowed, known) = authz::authentication_check(&state, &session.did_hash, None).await?;

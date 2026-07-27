@@ -13,7 +13,11 @@
  Alice and Bob then swap messages and create a confidential communication channel between themselves.
 */
 
-use crate::{SharedData, common::session::Session};
+use crate::{
+    SharedData,
+    common::authz::{self, Capability},
+    common::session::Session,
+};
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{
@@ -44,7 +48,7 @@ pub async fn oob_invite_handler(
     Json(body): Json<Message>,
 ) -> Result<(StatusCode, Json<SuccessResponse<OOBInviteResponse>>), AppError> {
     // ACL Check
-    if !session.acls.get_create_invites().0 {
+    if authz::require_capability(&session.acls, Capability::CreateInvites).is_err() {
         return Err(MediatorError::problem(
             45,
             session.session_id,

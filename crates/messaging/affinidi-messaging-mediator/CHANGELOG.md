@@ -2,6 +2,79 @@
 
 ## Changelog history
 
+## 27th July 2026
+
+### 0.17.11 — ACL audit: privilege-escalation fix, `RECEIVE_MESSAGES` now enforced, ACL guide
+
+A full review of every ACL call site in the mediator. Three behavioural
+changes, all tightening; read the first two before upgrading.
+
+**SECURITY — a non-admin could grant itself admin-only ACL flags.**
+`messaging/acls/set` validated only the seven capability bits that carry a
+self-change flag. The five flags that have *no* self-change bit —
+`blocked`, `local`, `self_manage_list`, `self_manage_send_queue_limit`,
+`self_manage_receive_queue_limit` — were not checked at all, and
+`check_permissions` lets a Standard account target its own DID. A standard
+DID could therefore grant itself `LOCAL` (an inbox, message storage and
+WebSocket access) on a mediator whose default withholds it, grant itself
+`self_manage_list` to curate its own access list, grant itself the
+queue-limit overrides, or clear its own `blocked` bit while holding a valid
+session. The equivalent Trust Task path (`ensure_self_manageable`) already
+refused all five and documented itself as "faithful to the legacy `acls_set`
+rules" — the DIDComm path was the outlier. Both paths now enforce the same
+rule. `acl_change_ok` is table-driven over the two classes of bit, with an
+exhaustiveness test (`every_acl_field_is_classified`) that fails if any
+future ACL field is left unclassified, since an unclassified field silently
+becomes self-service.
+
+**BEHAVIOURAL — `RECEIVE_MESSAGES` is now enforced.** The bit was settable,
+shipped in the default ACL string, reported over the wire, gated for
+self-change and documented as "DID can receive messages" — but no code path
+ever read it. Clearing it did nothing. Direct delivery now checks the
+recipient's `RECEIVE_MESSAGES` (DIDComm and TSP alike), mirroring the
+existing sender-side `SEND_MESSAGES` gate, and rejects with
+`authorization.receive` / problem code 74. **Any local DID whose stored ACL
+omits `RECEIVE_MESSAGES` stops receiving directly-delivered messages.** The
+shipped defaults include the bit, so a default deployment is unaffected;
+audit any account provisioned with a custom ACL. Forwarded delivery is
+unchanged — it is governed by `RECEIVE_FORWARDED`, which was already
+enforced.
+
+**CONFIG — the shipped `mediator_acl_mode` default is now `explicit_deny`.**
+`conf/mediator.toml` and `docker/conf/mediator.toml` shipped
+`explicit_allow`, which reads as a closed allowlist but is not one: the mode
+governs only who may pre-register *other* DIDs via `account_add`, and never
+gates authentication. `explicit_deny` is an honest description of what an
+out-of-the-box mediator does, and matches the built-in code default and what
+the setup wizard already emits for its default "Open" profile. The
+consequence of the change itself is that non-admins may now call
+`account_add` — bounded, because a non-admin's `account_add` always applies
+`global_acl_default`, which is what the target DID would have received by
+self-registering anyway. Set `explicit_allow` explicitly to keep the old
+restriction.
+
+Also in this release:
+
+- Every handler, routing and storage ACL gate now resolves through
+  `common::authz` rather than reading ACL bits inline. The `Capability` enum
+  lost its `#[allow(dead_code)]`, so a capability nothing enforces now shows
+  up as a dead-code warning — that allow is how `RECEIVE_MESSAGES` stayed
+  inert unnoticed.
+- New `authz::effective_acls` centralises "stored ACLs, else
+  `global_acl_default`", which was inlined at three call sites.
+- The authentication-response registration backstop no longer applies a
+  different condition (`global_acl_default` grants `LOCAL`) from the
+  challenge step, which registers unconditionally. The condition could never
+  actually fire — a session must exist to reach it — but it read as though
+  the two steps disagreed about who gets an account.
+- Corrected the README's ACL section, which described `explicit_allow` as
+  "deny all DIDs except those explicitly allowed". The mediator has never
+  behaved that way.
+- New [`docs/acls.md`](./docs/acls.md): the four layers, every permission
+  bit and where it is enforced, all five registration paths, the
+  decision walkthroughs, deployment recipes, and a symptom→cause
+  troubleshooting table.
+
 ## 26th July 2026
 
 ### 0.17.10 — accept `vta-sdk` 0.20

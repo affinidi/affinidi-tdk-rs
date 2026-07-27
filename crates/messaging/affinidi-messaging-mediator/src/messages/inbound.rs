@@ -316,9 +316,20 @@ async fn deliver_opaque(
         ));
     }
 
-    // Access-list check (sender → recipient), mirroring DIDComm direct delivery.
-    // The mediator routes on the authenticated sender and the recipient verifies
+    // Recipient-side ACL checks, mirroring DIDComm direct delivery. The
+    // mediator routes on the authenticated sender and the recipient verifies
     // the (opaque) message end-to-end on pickup.
+    let to_acls = authz::effective_acls(state, &to_hash).await?;
+    if authz::require_capability(&to_acls, Capability::ReceiveMessages).is_err() {
+        return Err(tsp_problem(
+            session,
+            74,
+            "authorization.receive",
+            "Recipient DID is not authorized to receive messages through this mediator".to_string(),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
     let from_hash = digest(from_vid.as_bytes());
     if authz::check_access_list(state.database.as_ref(), &to_hash, Some(&from_hash))
         .await
@@ -699,14 +710,7 @@ async fn handle_inbound_didcomm(
                     let from_hash = envelope.from_did.as_ref().map(digest);
                     // Check if the message will pass ACL Checks
                     if let Some(from) = &envelope.from_did {
-                        let from_acls = if let Some(acl) = state
-                            .database
-                            .get_did_acl(&digest(from))
-                            .await? {
-                                acl
-                        } else {
-                            state.config.security.global_acl_default.clone()
-                        };
+                        let from_acls = authz::effective_acls(state, &digest(from)).await?;
 
                         if authz::require_capability(&from_acls, Capability::SendMessages).is_err() {
                             return Err(MediatorError::problem(
@@ -734,6 +738,26 @@ async fn handle_inbound_didcomm(
                             StatusCode::FORBIDDEN,
                         ));
                     }
+                    // Recipient-side gate, mirroring the sender's SEND_MESSAGES
+                    // check above: a DID whose ACLs withhold RECEIVE_MESSAGES
+                    // does not accept directly-delivered messages at all,
+                    // regardless of who the sender is. Checked before the access
+                    // list because it is the coarser of the two.
+                    let to_acls = authz::effective_acls(state, &digest(to_did)).await?;
+                    if authz::require_capability(&to_acls, Capability::ReceiveMessages).is_err() {
+                        return Err(MediatorError::problem(
+                            74,
+                            &session.session_id,
+                            None,
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "authorization.receive",
+                            "Recipient DID is not authorized to receive messages through this mediator",
+                            vec![],
+                            StatusCode::FORBIDDEN,
+                        ));
+                    }
+
                     if authz::check_access_list(
                         state.database.as_ref(),
                         &digest(to_did),

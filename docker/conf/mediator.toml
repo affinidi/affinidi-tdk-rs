@@ -59,7 +59,9 @@ database_url = "redis://redis:6379/"
 database_timeout = "2"
 
 [security]
-mediator_acl_mode = "explicit_allow"
+### Governs who may pre-register other DIDs, NOT who may authenticate.
+### global_acl_default below is what gates an arbitrary DID. See docs/acls.md.
+mediator_acl_mode = "explicit_deny"
 global_acl_default = "DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES"
 local_direct_delivery_allowed = "true"
 local_direct_delivery_allow_anon = "false"
