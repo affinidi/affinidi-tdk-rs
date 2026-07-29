@@ -329,7 +329,7 @@ Access control is four independent layers:
 
 | Layer | Scope | What it decides |
 |---|---|---|
-| `mediator_acl_mode` | mediator-wide | Who may pre-register *other* DIDs via `account_add` |
+| `mediator_acl_mode` | mediator-wide | Whether unknown DIDs may authenticate; who may pre-register other DIDs via `account_add` |
 | `global_acl_default` | mediator-wide | The ACL set given to every new/unknown DID |
 | `MediatorACLSet` | per DID | What that DID may do |
 | Access list | per DID | Which senders that DID accepts messages from |
@@ -338,15 +338,13 @@ Access control is four independent layers:
 
 | Value | Meaning |
 |---|---|
-| `explicit_allow` | Only admins may add accounts via `account_add` |
-| `explicit_deny` | Any authenticated DID may add accounts (always with `global_acl_default`) |
+| `explicit_allow` | **Closed.** Only pre-registered DIDs may authenticate — unknown DIDs are rejected at the challenge step. Only admins may add accounts via `account_add`. |
+| `explicit_deny` | **Open.** Any DID may authenticate; unknown DIDs are auto-registered with `global_acl_default`. Any authenticated DID may add accounts (always with `global_acl_default`). |
 
-> **This mode does not gate authentication.** In either mode, any DID that
-> completes the challenge is auto-registered with `global_acl_default` and
-> issued a session. `global_acl_default` — not this mode — is what controls
-> a public mediator. Earlier revisions of this table described
-> `explicit_allow` as "deny all DIDs except those explicitly allowed"; the
-> mediator has never behaved that way.
+> On an open (`explicit_deny`) mediator, `global_acl_default` is what
+> controls what an arbitrary DID may do. Before mediator 0.18.0,
+> `explicit_allow` did not gate authentication — see the historical note in
+> `docs/acls.md` §2.
 
 ### DID-level ACLs
 

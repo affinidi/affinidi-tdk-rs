@@ -4,6 +4,34 @@
 
 ## 29th July 2026
 
+### 0.18.0 — BREAKING: `explicit_allow` now closes the mediator at authentication (#669)
+
+`mediator_acl_mode = "explicit_allow"` now does what its name always
+promised: an unknown DID is rejected at `/authenticate/challenge` with
+`403 authentication.blocked`, and no account record is created for it. Only
+DIDs pre-registered by an admin (via `account_add`) may authenticate.
+Previously the mode never gated authentication — in *either* mode, any DID
+completing the challenge was auto-registered with `global_acl_default` and
+issued a session.
+
+- The unknown-DID rejection is deliberately identical to the blocked-DID
+  rejection (same status, error code, and problem report — only the
+  per-request session id differs), so the unauthenticated challenge
+  endpoint cannot be used to probe which DIDs hold accounts.
+- The response-step backstop applies the same policy: an account deleted
+  between the challenge and the response is treated as a revocation and
+  rejected, not silently re-registered.
+- `explicit_deny` (the shipped default) is unchanged: any DID may
+  authenticate and unknown DIDs are auto-registered with
+  `global_acl_default`.
+- **Migration:** deployments running `explicit_allow` that relied on
+  unknown DIDs self-registering must either pre-register their DIDs or
+  switch to `explicit_deny` with a restrictive `global_acl_default`.
+- `docs/acls.md`, the README ACL summary, and the `conf/mediator.toml`
+  template are rewritten for the new semantics; the new
+  `explicit_allow_auth_gate.rs` e2e suite pins both modes and the
+  indistinguishability property.
+
 ### 0.17.13 — messaging/* trust-task family rationalized: 19 → 9 tasks, clean cutover (#667)
 
 The mediator's Trust Task consumer now speaks the rationalized `messaging/*`

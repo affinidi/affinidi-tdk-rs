@@ -13,6 +13,7 @@ use affinidi_messaging_sdk::messages::{
     known::MessageType,
     problem_report::{ProblemReportScope, ProblemReportSorter},
 };
+use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
 use axum::{Json, extract::State};
 use http::StatusCode;
 use sha256::digest;
@@ -413,21 +414,40 @@ pub async fn authentication_response(
 /// account record.
 ///
 /// In the normal flow this is a no-op: `/authenticate/challenge` already
-/// registered the DID with `global_acl_default` (unconditionally — see the
-/// note there), and a session must exist to get this far, so
-/// `account_exists` is true every time. It is kept as a backstop in case the
-/// account is removed between the two auth steps.
+/// registered the DID with `global_acl_default` (or, in `explicit_allow`
+/// mode, rejected it — see the note there), and a session must exist to get
+/// this far, so `account_exists` is true every time. It is kept as a
+/// backstop in case the account is removed between the two auth steps.
 ///
-/// Registration here uses the same ACLs and the same unconditional policy as
-/// the challenge step. It previously registered only when
-/// `global_acl_default` granted `LOCAL`, which could never actually differ
-/// from the challenge step's behaviour but read as though the two steps
-/// disagreed about who gets an account.
+/// The backstop applies the same policy as the challenge step. In
+/// `explicit_allow` mode a missing account at this point means an admin
+/// deleted it after the challenge was issued — that is a revocation, and
+/// re-registering here would silently resurrect the account, so the
+/// response is rejected instead (with the same problem report the challenge
+/// step uses, keeping the two steps indistinguishable to a prober).
 async fn _register_did_and_setup(state: &SharedData, did_hash: &str) -> Result<(), MediatorError> {
     // Do we already know about this DID?
     if state.database.account_exists(did_hash).await? {
         debug!("DID({}) already registered", did_hash);
         return Ok(());
+    }
+
+    if state.config.security.mediator_acl_mode == AccessListModeType::ExplicitAllow {
+        info!(
+            "DID({}) has no account and mediator_acl_mode is explicit_allow — rejecting",
+            did_hash
+        );
+        return Err(MediatorError::problem(
+            25,
+            "",
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "authentication.blocked",
+            "DID is blocked",
+            vec![],
+            StatusCode::FORBIDDEN,
+        ));
     }
 
     state

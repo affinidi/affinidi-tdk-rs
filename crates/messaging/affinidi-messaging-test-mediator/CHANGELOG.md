@@ -4,6 +4,14 @@
 
 ## 29th July 2026
 
+### 0.2.44 — track mediator 0.18 (explicit_allow authentication gate) (#669)
+
+Dependency pin bump for mediator 0.18.0, which makes
+`mediator_acl_mode = "explicit_allow"` reject unknown DIDs at
+authentication. The fixture's own behaviour is unchanged — `add_user`
+pre-registers every user DID, so existing suites run identically in either
+mode. New e2e suite `explicit_allow_auth_gate.rs` covers the gate.
+
 ### 0.2.43 — trust-task integration tests follow the rationalized messaging/* family
 
 The `trust_tasks.rs` integration suite now drives the rationalized surface

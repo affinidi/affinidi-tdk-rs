@@ -8,7 +8,10 @@ use crate::{
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReportScope, ProblemReportSorter},
-    protocols::mediator::{accounts::AccountType, acls::MediatorACLSet},
+    protocols::mediator::{
+        accounts::AccountType,
+        acls::{AccessListModeType, MediatorACLSet},
+    },
 };
 use axum::{Json, extract::State};
 use http::StatusCode;
@@ -64,16 +67,17 @@ pub async fn authentication_challenge(
     async move {
         // ACL checks at the door:
         // 1. Do we know this DID? If so, is it blocked?
-        // 2. If we don't know it, register it with `global_acl_default`.
+        // 2. If we don't know it, `mediator_acl_mode` decides:
+        //    - `explicit_allow`: reject. Only DIDs pre-registered by an
+        //      admin (via `account_add`) may authenticate.
+        //    - `explicit_deny`: register it with `global_acl_default`,
+        //      which decides what the new account may then do — including
+        //      `DENY_ALL`, which authenticates fine but can do nothing.
         //
-        // Note what is deliberately NOT here: `mediator_acl_mode` plays no
-        // part in authentication. Any DID that can complete the challenge
-        // gets an account, and `global_acl_default` decides what that
-        // account may then do — including `DENY_ALL`, which authenticates
-        // fine but can do nothing. The mode governs who may *pre-register
-        // other* DIDs (see the account_add handlers), not who may connect.
-        // `global_acl_default` is the control that gates a public mediator;
-        // see docs/acls.md.
+        // The unknown-DID rejection reuses the `authentication.blocked`
+        // problem report verbatim: this endpoint is unauthenticated, and a
+        // distinguishable error would let anyone probe whether an arbitrary
+        // DID holds an account here. See docs/acls.md §2.
 
         // Check if DID is allowed to connect
         let (allowed, known) = authz::authentication_check(&state, &session.did_hash, None).await?;
@@ -93,6 +97,25 @@ pub async fn authentication_challenge(
             )
             .into());
         } else if !known {
+            if state.config.security.mediator_acl_mode == AccessListModeType::ExplicitAllow {
+                info!(
+                    "DID({}) is unknown and mediator_acl_mode is explicit_allow — rejecting",
+                    session.did
+                );
+                return Err(MediatorError::problem(
+                    25,
+                    session.session_id,
+                    None,
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authentication.blocked",
+                    "DID is blocked",
+                    vec![],
+                    StatusCode::FORBIDDEN,
+                )
+                .into());
+            }
+
             // Register the DID as a local DID
             state
                 .database

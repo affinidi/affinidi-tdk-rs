@@ -134,15 +134,18 @@ database_timeout = "2"
 ### ****************************************************************************************************************************
 [security]
 ### Env: MEDIATOR_ACL_MODE
-### Who may pre-register OTHER DIDs via the account_add admin protocol:
-###   explicit_deny  — any authenticated DID may add accounts (they are always
-###                    created with global_acl_default, never wider)
-###   explicit_allow — only admin accounts may add accounts
+### Whether the mediator is open or closed to unknown DIDs:
+###   explicit_deny  — OPEN. Any DID may authenticate; unknown DIDs are
+###                    auto-registered with global_acl_default. Any
+###                    authenticated DID may also pre-register other DIDs via
+###                    account_add (always created with global_acl_default,
+###                    never wider).
+###   explicit_allow — CLOSED. Only DIDs pre-registered by an admin may
+###                    authenticate; an unknown DID is rejected at the
+###                    challenge step. Only admin accounts may add accounts.
 ###
-### IMPORTANT: this mode does NOT gate authentication. Any DID that completes
-### the challenge is auto-registered with global_acl_default, in either mode.
-### `global_acl_default` is the setting that controls what an arbitrary DID
-### can do on this mediator. See docs/acls.md.
+### In explicit_deny mode, `global_acl_default` is the setting that controls
+### what an arbitrary self-registered DID may do. See docs/acls.md.
 mediator_acl_mode = "explicit_deny"
 
 ### Env: GLOBAL_DEFAULT_ACL
