@@ -2837,7 +2837,27 @@ mod tests {
         let secret = Secret::from_str(kid, jwk).expect("import recipient JWK");
         println!("imported recipient secret id={}", secret.id);
 
-        let atm = create_atm_with_secrets(vec![secret]).await;
+        // Cross-impl *crypto* interop: accept every wrapping so this exercises
+        // decrypt/verify for all 7 IANA types (the secure default's wrapping
+        // allow-list is covered by dedicated tests, not this experiment).
+        let atm = create_atm_with_policy(
+            vec![secret],
+            UnpackPolicy {
+                expected: vec![
+                    MessageWrappingType::Plaintext,
+                    MessageWrappingType::SignedPlaintext,
+                    MessageWrappingType::AnoncryptPlaintext,
+                    MessageWrappingType::AuthcryptPlaintext,
+                    MessageWrappingType::AnoncryptSignPlaintext,
+                    MessageWrappingType::AuthcryptSignPlaintext,
+                    MessageWrappingType::AnoncryptAuthcryptPlaintext,
+                ],
+                validate_addressing_consistency: false,
+                max_signatures: 5,
+                max_recipients: 100,
+            },
+        )
+        .await;
 
         let files = [
             "1_plaintext",
