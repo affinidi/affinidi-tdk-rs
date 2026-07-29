@@ -314,6 +314,10 @@ impl VtaConnectState {
             return false;
         }
         match protocol {
+            // The SDK runner degrades TSP to DIDComm/REST internally, so a
+            // TSP record as the *last* attempt means the VTA was TSP-only —
+            // there is no alternate transport for the consumer to offer.
+            Protocol::Tsp => false,
             Protocol::DidComm => resolved.rest_url.is_some() && self.attempted.rest.is_none(),
             Protocol::Rest => resolved.mediator_did.is_some() && self.attempted.didcomm.is_none(),
         }
@@ -471,6 +475,7 @@ impl VtaConnectState {
                     at: Instant::now(),
                 };
                 match protocol {
+                    Protocol::Tsp => self.attempted.tsp = Some(result),
                     Protocol::DidComm => self.attempted.didcomm = Some(result),
                     Protocol::Rest => self.attempted.rest = Some(result),
                 }

@@ -59,6 +59,7 @@ pub enum HeadlessFailureKind {
 /// it directly; the format is stable and grep-friendly for CI logs.
 #[derive(Debug)]
 pub struct HeadlessVtaError {
+    pub tsp: Option<String>,
     pub didcomm: Option<String>,
     pub rest: Option<String>,
     pub kind: HeadlessFailureKind,
@@ -67,13 +68,16 @@ pub struct HeadlessVtaError {
 impl fmt::Display for HeadlessVtaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Headless VTA setup failed.")?;
+        if let Some(reason) = &self.tsp {
+            writeln!(f, "  TSP: {reason}")?;
+        }
         if let Some(reason) = &self.didcomm {
             writeln!(f, "  DIDComm: {reason}")?;
         }
         if let Some(reason) = &self.rest {
             writeln!(f, "  REST: {reason}")?;
         }
-        if self.didcomm.is_none() && self.rest.is_none() {
+        if self.tsp.is_none() && self.didcomm.is_none() && self.rest.is_none() {
             writeln!(f, "  No transport advertised by the VTA's DID document.")?;
         }
         writeln!(f)?;
@@ -190,6 +194,7 @@ pub async fn run_phase2_connect(
     wait_for_acl: Option<u64>,
 ) -> Result<(), HeadlessVtaError> {
     let key = EphemeralSetupKey::load_from(key_path).map_err(|e| HeadlessVtaError {
+        tsp: None,
         didcomm: Some(format!("could not load setup key: {e}")),
         rest: None,
         kind: HeadlessFailureKind::NoTransport,
@@ -210,6 +215,7 @@ pub async fn run_phase2_connect(
     // auto-fallback can see what's already been tried.
     let mut force_transport: Option<Protocol> = None;
     let mut resolved: Option<ResolvedVta> = None;
+    let mut tsp_failure: Option<String> = None;
     let mut didcomm_failure: Option<String> = None;
     let mut rest_failure: Option<String> = None;
 
@@ -217,6 +223,7 @@ pub async fn run_phase2_connect(
         attempt += 1;
         if attempt > 1 {
             match force_transport {
+                Some(Protocol::Tsp) => println!("  Retrying TSP (attempt {attempt})…"),
                 Some(Protocol::Rest) => println!("  Falling back to REST (attempt {attempt})…"),
                 Some(Protocol::DidComm) => {
                     println!("  Retrying DIDComm (attempt {attempt})…")
@@ -284,6 +291,7 @@ pub async fn run_phase2_connect(
                     | AttemptResultKind::PostAuthFailure(reason) = &outcome
                     {
                         match protocol {
+                            Protocol::Tsp => tsp_failure = Some(reason.clone()),
                             Protocol::DidComm => didcomm_failure = Some(reason.clone()),
                             Protocol::Rest => rest_failure = Some(reason.clone()),
                         }
@@ -311,6 +319,7 @@ pub async fn run_phase2_connect(
             // rejection.
             if matches!(outcome, AttemptResultKind::PostAuthFailure(_)) {
                 return Err(HeadlessVtaError {
+                    tsp: tsp_failure,
                     didcomm: didcomm_failure,
                     rest: rest_failure,
                     kind: HeadlessFailureKind::PostAuthFailed,
@@ -348,9 +357,11 @@ pub async fn run_phase2_connect(
             // loop's "attempted" check doesn't block another
             // attempt. Keep the other transport's failure intact.
             match force_transport {
+                Some(Protocol::Tsp) => tsp_failure = None,
                 Some(Protocol::DidComm) => didcomm_failure = None,
                 Some(Protocol::Rest) => rest_failure = None,
                 None => {
+                    tsp_failure = None;
                     didcomm_failure = None;
                     rest_failure = None;
                 }
@@ -360,6 +371,7 @@ pub async fn run_phase2_connect(
 
         // Terminal failure. Pick the kind based on what we observed.
         return Err(HeadlessVtaError {
+            tsp: tsp_failure,
             didcomm: didcomm_failure,
             rest: rest_failure,
             kind: HeadlessFailureKind::NoTransport,
@@ -492,6 +504,7 @@ mod tests {
     #[test]
     fn headless_error_display_names_both_protocols() {
         let err = HeadlessVtaError {
+            tsp: None,
             didcomm: Some("ACL not found".into()),
             rest: Some("REST 401".into()),
             kind: HeadlessFailureKind::NoTransport,
@@ -505,12 +518,14 @@ mod tests {
     #[test]
     fn headless_error_display_no_transport_message_differs_from_post_auth() {
         let no_transport = HeadlessVtaError {
+            tsp: None,
             didcomm: Some("network".into()),
             rest: None,
             kind: HeadlessFailureKind::NoTransport,
         }
         .to_string();
         let post_auth = HeadlessVtaError {
+            tsp: None,
             didcomm: Some("template error".into()),
             rest: None,
             kind: HeadlessFailureKind::PostAuthFailed,
