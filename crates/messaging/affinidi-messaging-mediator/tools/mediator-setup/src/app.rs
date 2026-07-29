@@ -1536,9 +1536,11 @@ impl WizardApp {
         // about to be retried so the recovery / fallback prompts
         // don't see stale "already attempted" data.
         match force_transport {
+            Some(crate::vta::Protocol::Tsp) => st.attempted.tsp = None,
             Some(crate::vta::Protocol::DidComm) => st.attempted.didcomm = None,
             Some(crate::vta::Protocol::Rest) => st.attempted.rest = None,
             None => {
+                st.attempted.tsp = None;
                 st.attempted.didcomm = None;
                 st.attempted.rest = None;
             }

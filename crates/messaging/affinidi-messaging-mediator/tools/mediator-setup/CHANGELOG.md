@@ -2,6 +2,22 @@
 
 ## Changelog history
 
+## 29th July 2026
+
+### 0.1.25 — cover vta-sdk 0.20.26's new `Protocol::Tsp` transport (#670)
+
+vta-sdk 0.20.26 added TSP as a third provision-client transport
+(`Protocol::Tsp`, highest preference), which broke this crate's exhaustive
+matches on every fresh dependency resolve. The wizard and headless CLI now
+track TSP attempts first-class: `AttemptLog.tsp` is recorded and cleared
+like the other transports, TSP failures appear in the headless
+terminal-error report, and a TSP-only VTA routes to the recovery prompt
+(the SDK runner already degrades TSP to DIDComm/REST internally, so the
+consumer-side fallback logic is unchanged). vta-sdk pinned to `0.20.26` —
+the minimum version where `Protocol::Tsp` and `AttemptLog.tsp` exist.
+This build ships without vta-sdk's `tsp` feature, so a TSP leg reports
+"unavailable" and the runner continues on DIDComm/REST.
+
 ## 27th July 2026
 
 ### 0.1.24 — correct the Closed network-mode help text
