@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.21] - 2026-07-29
+
+### Changed
+
+- Startup ACL-mode configuration now sends `messaging/account/update` (the
+  `acl` member) instead of the retired `messaging/acl/set`, following the
+  `messaging/*` trust-task rationalization (affinidi/affinidi-tdk-rs#667;
+  affinidi-messaging-sdk 0.18.65). Same partial-update semantics — only
+  `accessListMode` is set, everything else is left unchanged.
+
 ## [0.3.20] - 2026-07-19
 
 ### Changed

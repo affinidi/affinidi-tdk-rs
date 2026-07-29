@@ -8,7 +8,7 @@ use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use console::style;
 use dialoguer::{MultiSelect, Select, theme::ColorfulTheme};
 use std::sync::Arc;
-use trust_tasks_rs::specs::messaging::{account, acl};
+use trust_tasks_rs::specs::messaging::account;
 
 /// Convert a partial / per-module `MediatorAcl` into the canonical
 /// `account::get::v0_1::MediatorAcl` we hold on the account across the screen.
@@ -179,11 +179,11 @@ async fn _modify_acl_flags(
     }
 
     // Build a full ACL set from the chosen flags.
-    let new_acl = acl::set::v0_1::MediatorAcl {
+    let new_acl = account::update::v0_1::MediatorAcl {
         access_list_mode: Some(if flags[0] {
-            acl::set::v0_1::MediatorAclAccessListMode::ExplicitDeny
+            account::update::v0_1::MediatorAclAccessListMode::ExplicitDeny
         } else {
-            acl::set::v0_1::MediatorAclAccessListMode::ExplicitAllow
+            account::update::v0_1::MediatorAclAccessListMode::ExplicitAllow
         }),
         blocked: Some(flags[1]),
         local: Some(flags[2]),
@@ -209,12 +209,18 @@ async fn _modify_acl_flags(
 
     match atm
         .trust_tasks()
-        .acl_set(profile, account.did.as_str().to_string(), new_acl.clone())
+        .account_update(
+            profile,
+            Some(account.did.as_str().to_string()),
+            None,
+            Some(new_acl.clone()),
+            None,
+        )
         .await
     {
         Ok(updated) => {
             println!("{}", style("ACLs updated").green());
-            Ok(to_get_acl(&updated))
+            Ok(to_get_acl(&updated.acl))
         }
         Err(e) => {
             println!("{}", style(format!("Error updating ACLs: {e}")).red());
@@ -236,6 +242,7 @@ async fn _access_list_list(
                 profile,
                 Some(account.did.as_str().to_string()),
                 cursor,
+                None,
                 None,
             )
             .await?;
@@ -261,10 +268,12 @@ async fn _access_list_add(
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     if let Some(hash) = manually_enter_did_or_hash(theme) {
         atm.trust_tasks()
-            .access_list_add(
+            .access_list_update(
                 profile,
                 Some(account.did.as_str().to_string()),
+                false,
                 vec![hash.clone()],
+                vec![],
             )
             .await?;
         Ok(Some(hash))
@@ -282,7 +291,13 @@ async fn _access_list_remove(
     if let Some(hash) = manually_enter_did_or_hash(theme) {
         let response = atm
             .trust_tasks()
-            .access_list_remove(profile, Some(account.did.as_str().to_string()), vec![hash])
+            .access_list_update(
+                profile,
+                Some(account.did.as_str().to_string()),
+                false,
+                vec![],
+                vec![hash],
+            )
             .await?;
         Ok(response.removed.len())
     } else {
@@ -299,14 +314,20 @@ async fn _access_list_get(
     if let Some(hash) = manually_enter_did_or_hash(theme) {
         let result = atm
             .trust_tasks()
-            .access_list_get(profile, Some(account.did.as_str().to_string()), vec![hash])
+            .access_list_list(
+                profile,
+                Some(account.did.as_str().to_string()),
+                None,
+                None,
+                Some(vec![hash]),
+            )
             .await?;
 
         println!("{}", style("DID Hashes Found:").blue());
-        for hash in &result.present {
+        for hash in &result.entries {
             println!("  {}", style(hash.as_str()).blue());
         }
-        if result.present.is_empty() {
+        if result.entries.is_empty() {
             println!("{}", style("No DID Hashes found").yellow());
         }
     }
@@ -319,7 +340,13 @@ async fn _access_list_clear(
     account: &account::get::v0_1::Account,
 ) -> Result<(), Box<dyn std::error::Error>> {
     atm.trust_tasks()
-        .access_list_clear(profile, Some(account.did.as_str().to_string()))
+        .access_list_update(
+            profile,
+            Some(account.did.as_str().to_string()),
+            true,
+            vec![],
+            vec![],
+        )
         .await?;
     Ok(())
 }

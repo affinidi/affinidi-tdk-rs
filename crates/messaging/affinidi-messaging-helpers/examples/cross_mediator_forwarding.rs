@@ -384,13 +384,25 @@ async fn apply_access(
         party
             .atm
             .trust_tasks()
-            .access_list_add(&party.profile, None, vec![peer_hash.to_string()])
+            .access_list_update(
+                &party.profile,
+                None,
+                false,
+                vec![peer_hash.to_string()],
+                vec![],
+            )
             .await?;
     } else {
         party
             .atm
             .trust_tasks()
-            .access_list_remove(&party.profile, None, vec![peer_hash.to_string()])
+            .access_list_update(
+                &party.profile,
+                None,
+                false,
+                vec![],
+                vec![peer_hash.to_string()],
+            )
             .await?;
     }
     Ok(())

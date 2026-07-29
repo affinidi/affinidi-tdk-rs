@@ -57,7 +57,7 @@ pub async fn manual_connect_setup(
         // Add the remote secure DID to our secure DID
         if let Err(e) = atm
             .trust_tasks()
-            .access_list_add(&profile, None, vec![digest(remote_did)])
+            .access_list_update(&profile, None, false, vec![digest(remote_did)], vec![])
             .await
         {
             warn!(

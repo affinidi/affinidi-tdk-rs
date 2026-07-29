@@ -2,6 +2,42 @@
 
 ## Changelog history
 
+## 29th July 2026
+
+### 0.17.13 — messaging/* trust-task family rationalized: 19 → 9 tasks, clean cutover (#667)
+
+The mediator's Trust Task consumer now speaks the rationalized `messaging/*`
+surface (trust-tasks-rs 0.2.46). This is a **clean cutover** — the retired URIs
+are no longer accepted and answer `protocol.trust_task.unsupported`:
+
+- `messaging/account/update` replaces `account/change-type`,
+  `account/change-queue-limits`, and `acl/set` — one partial update for role +
+  capabilities + queue limits, with the same per-member guards (root-admin
+  gating, self-manage gating, hard queue caps) ported from the three retired
+  handlers. Guards run before anything is applied.
+- `messaging/access-list/update` replaces `access-list/{add,remove,clear}` —
+  applied in the spec's fixed order `clear`, `add`, `remove`.
+- `messaging/account/list` gains the `accountType` role filter (per page),
+  replacing `admin/list`; `admin/add` / `admin/strip` are `account/update`
+  with `accountType: admin` / `standard`.
+- `messaging/access-list/list` gains the `entries` membership filter,
+  replacing `access-list/get`.
+- The generic `audit/list` replaces `admin/audit-log` (entries as
+  `AuditEnvelope`s with a minted content-digest `eventId`; `action` / `actor` /
+  `from` / `to` filters applied per page; the log tracks neither `outcome` nor
+  `contextId`, so those filters match nothing).
+- The generic `config/show` replaces `admin/config` (one `ConfigField` per
+  top-level config member, `source: mediator`, `requiresRestart: true`; the
+  software version is the `mediator.version` key).
+
+Removed (no longer accepted) URIs, for consumer sweeps:
+`messaging/account/change-type/0.1`, `messaging/account/change-queue-limits/0.1`,
+`messaging/acl/set/0.1`, `messaging/access-list/add/0.1`,
+`messaging/access-list/remove/0.1`, `messaging/access-list/clear/0.1`,
+`messaging/access-list/get/0.1`, `messaging/admin/add/0.1`,
+`messaging/admin/strip/0.1`, `messaging/admin/list/0.1`,
+`messaging/admin/audit-log/0.1`, `messaging/admin/config/0.1`.
+
 ## 27th July 2026 (2)
 
 ### 0.17.12 — direct delivery does one recipient lookup instead of three

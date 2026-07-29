@@ -7,7 +7,7 @@ use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use sha256::digest;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
-use trust_tasks_rs::specs::messaging::acl;
+use trust_tasks_rs::specs::messaging::account;
 
 use super::listener::Listener;
 use crate::error::{DIDCommServiceError, StartupError};
@@ -33,18 +33,24 @@ impl Listener {
         // self-service gating applies it (the rest of the ACL is left unchanged).
         let mode = match acl_mode {
             AccessListModeType::ExplicitAllow => {
-                acl::set::v0_1::MediatorAclAccessListMode::ExplicitAllow
+                account::update::v0_1::MediatorAclAccessListMode::ExplicitAllow
             }
             AccessListModeType::ExplicitDeny => {
-                acl::set::v0_1::MediatorAclAccessListMode::ExplicitDeny
+                account::update::v0_1::MediatorAclAccessListMode::ExplicitDeny
             }
         };
-        let acl = acl::set::v0_1::MediatorAcl {
+        let acl = account::update::v0_1::MediatorAcl {
             access_list_mode: Some(mode),
             ..Default::default()
         };
         atm.trust_tasks()
-            .acl_set(profile, digest(&profile.inner.did), acl)
+            .account_update(
+                profile,
+                Some(digest(&profile.inner.did)),
+                None,
+                Some(acl),
+                None,
+            )
             .await
             .map_err(StartupError::AclApply)?;
 

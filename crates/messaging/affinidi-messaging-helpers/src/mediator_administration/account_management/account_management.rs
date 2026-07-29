@@ -259,10 +259,10 @@ async fn _change_account_type(
     account: &account::get::v0_1::Account,
 ) -> Result<account::get::v0_1::Account, Box<dyn std::error::Error>> {
     let options = [
-        account::change_type::v0_1::AccountType::Standard,
-        account::change_type::v0_1::AccountType::Admin,
-        account::change_type::v0_1::AccountType::RootAdmin,
-        account::change_type::v0_1::AccountType::Mediator,
+        account::update::v0_1::AccountType::Standard,
+        account::update::v0_1::AccountType::Admin,
+        account::update::v0_1::AccountType::RootAdmin,
+        account::update::v0_1::AccountType::Mediator,
     ];
 
     let mut selections = options
@@ -295,7 +295,13 @@ async fn _change_account_type(
     } else {
         let updated = atm
             .trust_tasks()
-            .account_change_type(profile, account.did.as_str().to_string(), new_type)
+            .account_update(
+                profile,
+                Some(account.did.as_str().to_string()),
+                Some(new_type),
+                None,
+                None,
+            )
             .await
             .map_err(|e| e.to_string())?;
         println!("{}", style("Account type changed successfully").green());
@@ -397,11 +403,15 @@ async fn _change_account_queue_limit(
 
     let updated = atm
         .trust_tasks()
-        .account_change_queue_limits(
+        .account_update(
             profile,
             Some(account.did.as_str().to_string()),
-            send_queue_limit,
-            receive_queue_limit,
+            None,
+            None,
+            Some(account::update::v0_1::QueueLimits {
+                send_queue_limit,
+                receive_queue_limit,
+            }),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -473,7 +483,7 @@ async fn _select_from_existing_dids(
 ) -> Result<Option<account::get::v0_1::Account>, Box<dyn std::error::Error>> {
     let dids = atm
         .trust_tasks()
-        .account_list(profile, cursor, Some(2))
+        .account_list(profile, cursor, Some(2), None)
         .await?;
 
     if dids.accounts.is_empty() {

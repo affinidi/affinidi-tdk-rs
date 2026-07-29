@@ -1,11 +1,14 @@
 //! UI Related functions
+use affinidi_messaging_sdk::errors::ATMError;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use console::style;
 use dialoguer::{Confirm, Input, MultiSelect, Select, theme::ColorfulTheme};
 use regex::Regex;
 use sha256::digest;
 use std::sync::Arc;
-use trust_tasks_rs::specs::messaging::admin::list::v0_1::AccountType;
+use trust_tasks_rs::specs::messaging::account;
+use trust_tasks_rs::specs::messaging::account::list::v0_1::AccountType;
+use trust_tasks_rs::specs::messaging::account::update::v0_1::AccountType as UpdateAccountType;
 
 use crate::SharedConfig;
 
@@ -46,16 +49,34 @@ pub(crate) async fn administration_accounts_menu(
     }
 }
 
+/// The mediator's administrator accounts — `account/list` filtered per admin
+/// role (`rootAdmin`, then `admin`), replacing the retired `admin/list` task.
+async fn admin_accounts(
+    atm: &ATM,
+    profile: &Arc<ATMProfile>,
+) -> Result<Vec<account::list::v0_1::Account>, ATMError> {
+    let mut accounts = Vec::new();
+    for role in [AccountType::RootAdmin, AccountType::Admin] {
+        accounts.extend(
+            atm.trust_tasks()
+                .account_list(profile, None, None, Some(role))
+                .await?
+                .accounts,
+        );
+    }
+    Ok(accounts)
+}
+
 /// List first 100 Administration DIDs
 pub(crate) async fn list_admins(atm: &ATM, profile: &Arc<ATMProfile>, config: &SharedConfig) {
-    match atm.trust_tasks().admin_list(profile, None, None).await {
-        Ok(response) => {
+    match admin_accounts(atm, profile).await {
+        Ok(admins) => {
             println!(
                 "{}",
                 style("Listing Administration DIDs (SHA256 Hashed DID's). NOTE: Will only list first 100 admin accounts!").green()
             );
 
-            for (idx, admin) in response.admins.iter().enumerate() {
+            for (idx, admin) in admins.iter().enumerate() {
                 print!(
                     "  {}",
                     style(format!("{}: {}", idx, admin.did.as_str())).yellow(),
@@ -108,10 +129,16 @@ pub(crate) async fn add_admin(atm: &ATM, profile: &Arc<ATMProfile>, theme: &Colo
     {
         match atm
             .trust_tasks()
-            .admin_add(profile, vec![input.clone()])
+            .account_update(
+                profile,
+                Some(digest(&input)),
+                Some(UpdateAccountType::Admin),
+                None,
+                None,
+            )
             .await
         {
-            Ok(_admins) => {
+            Ok(_account) => {
                 println!(
                     "{}",
                     style(format!("DID ({}) is now an administrator", &input)).green()
@@ -135,11 +162,10 @@ pub(crate) async fn strip_admins(
     config: &SharedConfig,
     theme: &ColorfulTheme,
 ) {
-    match atm.trust_tasks().admin_list(profile, None, None).await {
+    match admin_accounts(atm, profile).await {
         Ok(response) => {
             // remove the mediator administrator account from the list
             let admins: Vec<String> = response
-                .admins
                 .iter()
                 .filter_map(|x| {
                     if x.did.as_str() != config.our_admin_hash.as_str()
@@ -187,15 +213,33 @@ pub(crate) async fn strip_admins(
                     .iter()
                     .map(|&idx| admins[idx].clone())
                     .collect::<Vec<_>>();
-                match atm.trust_tasks().admin_strip(profile, admins).await {
-                    Ok(result) => {
-                        println!(
-                            "{}",
-                            style(format!("Stripped admin rights from {} DIDs", result.len()))
-                                .green()
-                        );
+                // One `account/update` per DID — each demotion is its own
+                // signed, auditable document (the batched admin/strip is retired).
+                let mut stripped = 0usize;
+                let mut errors: Vec<String> = Vec::new();
+                for did in &admins {
+                    match atm
+                        .trust_tasks()
+                        .account_update(
+                            profile,
+                            Some(did.clone()),
+                            Some(UpdateAccountType::Standard),
+                            None,
+                            None,
+                        )
+                        .await
+                    {
+                        Ok(_) => stripped += 1,
+                        Err(e) => errors.push(format!("{did}: {e}")),
                     }
-                    Err(e) => {
+                }
+                if errors.is_empty() {
+                    println!(
+                        "{}",
+                        style(format!("Stripped admin rights from {stripped} DIDs")).green()
+                    );
+                } else {
+                    for e in &errors {
                         println!("{}", style(format!("Error: {e}")).red());
                     }
                 }
