@@ -111,12 +111,24 @@ async fn main() -> Result<(), ATMError> {
     if let Some(MediatorAclAccessListMode::ExplicitAllow) = alice_acl_mode {
         // Ensure Bob is added to Alice explicit allow list
         atm.trust_tasks()
-            .access_list_add(&atm_alice, None, vec![bob_info.did.as_str().to_string()])
+            .access_list_update(
+                &atm_alice,
+                None,
+                false,
+                vec![bob_info.did.as_str().to_string()],
+                vec![],
+            )
             .await?;
     } else {
         // Ensure Bob is removed from Alice explicit deny list
         atm.trust_tasks()
-            .access_list_remove(&atm_alice, None, vec![bob_info.did.as_str().to_string()])
+            .access_list_update(
+                &atm_alice,
+                None,
+                false,
+                vec![],
+                vec![bob_info.did.as_str().to_string()],
+            )
             .await?;
     }
     info!("Alice Access Lists reset");
@@ -125,12 +137,24 @@ async fn main() -> Result<(), ATMError> {
     if let Some(MediatorAclAccessListMode::ExplicitAllow) = bob_acl_mode {
         // Ensure Bob is added to Bob explicit allow list
         atm.trust_tasks()
-            .access_list_add(&atm_bob, None, vec![alice_info.did.as_str().to_string()])
+            .access_list_update(
+                &atm_bob,
+                None,
+                false,
+                vec![alice_info.did.as_str().to_string()],
+                vec![],
+            )
             .await?;
     } else {
         // Ensure Bob is removed from Bob explicit deny list
         atm.trust_tasks()
-            .access_list_remove(&atm_bob, None, vec![alice_info.did.as_str().to_string()])
+            .access_list_update(
+                &atm_bob,
+                None,
+                false,
+                vec![],
+                vec![alice_info.did.as_str().to_string()],
+            )
             .await?;
     }
     info!("Bob Access Lists reset");

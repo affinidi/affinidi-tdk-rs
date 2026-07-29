@@ -240,10 +240,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("{}", style("Admin account connected...").green());
 
     println!("{}", style("Fetching Mediator Configuration...").blue());
-    let config_response = atm.trust_tasks().admin_config(&admin).await?;
+    // Generic `config/show` (replacing the retired admin/config): the version is
+    // the `mediator.version` key; every other field re-forms the config object.
+    let config_response = atm.trust_tasks().config_show(&admin, None).await?;
+    let mut version = Value::Null;
+    let mut config_object = serde_json::Map::new();
+    for field in &config_response.fields {
+        if (*field.key).as_str() == "mediator.version" {
+            version = field.value.clone();
+        } else {
+            config_object.insert((*field.key).clone(), field.value.clone());
+        }
+    }
     let shared_config: HashMap<String, Value> = serde_json::from_value(serde_json::json!({
-        "version": config_response.version,
-        "config": config_response.config,
+        "version": version,
+        "config": Value::Object(config_object),
     }))?;
     let mut mediator_config = SharedConfig::new(shared_config)?;
     println!(

@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.18.65] - 2026-07-29
+
+### Changed
+
+- **BREAKING (`trust_tasks()` surface): the `messaging/*` Trust Task family is
+  rationalized 19 → 9 tasks** (affinidi/affinidi-tdk-rs#667, trust-tasks-rs
+  0.2.46), matching the mediator's clean cutover in 0.17.13 — the retired URIs
+  are no longer accepted server-side, so the superseded senders are removed
+  rather than deprecated:
+  - `account_update(profile, did_hash, account_type, acl, queue_limits)`
+    replaces `account_change_type`, `account_change_queue_limits`, `acl_set`,
+    `admin_add`, and `admin_strip` (one `account/update` per DID for the old
+    batched admin grant/strip).
+  - `access_list_update(profile, did_hash, clear, add, remove)` replaces
+    `access_list_add`, `access_list_remove`, and `access_list_clear`.
+  - `account_list` gains an `account_type: Option<AccountType>` role-filter
+    parameter, replacing `admin_list`.
+  - `access_list_list` gains an `entries: Option<Vec<String>>` membership-filter
+    parameter, replacing `access_list_get` (returned `entries` = the old
+    `present`; the remainder of the supplied set = the old `absent`).
+  - `audit_list(profile, cursor, page_size)` (generic `audit/list`) replaces
+    `admin_audit_log`; `config_show(profile, keys)` (generic `config/show`)
+    replaces `admin_config` (the mediator version is the `mediator.version`
+    key).
+
 ## [0.18.64] - 2026-07-23
 
 ### Fixed

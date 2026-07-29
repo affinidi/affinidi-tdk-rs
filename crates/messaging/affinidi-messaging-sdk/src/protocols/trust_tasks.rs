@@ -6,9 +6,15 @@
 //! `type` is the [`ENVELOPE_TYPE`] and whose `body` is the document). The mediator
 //! consumes it through the Trust Tasks framework and returns a `TrustTask<R>`.
 //!
-//! This exposes `ping` and `account_get`; the rest of the account / acl /
-//! access-list families follow, and the legacy `atm.mediator()` / `atm.trust_ping()`
-//! methods will route through this same core.
+//! This is the **rationalized** `messaging/*` surface (19 → 9 active tasks,
+//! affinidi/affinidi-tdk-rs#667): partial updates go through `account_update`
+//! (role + capabilities + queue limits in one task, superseding
+//! `change-type` / `change-queue-limits` / `acl/set` / `admin/add` / `admin/strip`)
+//! and `access_list_update` (`clear` → `add` → `remove`, superseding the three
+//! single-verb writers); role-filtered `account_list` supersedes `admin/list`;
+//! the `entries` membership filter on `access_list_list` supersedes
+//! `access-list/get`; and the generic `audit/list` / `config/show` tasks replace
+//! `admin/audit-log` / `admin/config`.
 //!
 //! [Trust Tasks]: https://trusttasks.org
 
@@ -22,7 +28,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sha256::digest;
 use trust_tasks_rs::TrustTask;
-use trust_tasks_rs::specs::messaging::{access_list, account, acl, admin, ping};
+use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping};
+use trust_tasks_rs::specs::{audit, config};
 use uuid::Uuid;
 
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};
@@ -80,11 +87,15 @@ impl TrustTasksOps<'_> {
     /// Send a `messaging/account/list` Trust Task (admin only) and return one page
     /// of accounts plus an opaque `next_cursor` (present only when more remain).
     /// Pass the previous page's cursor to continue; `None` starts from the top.
+    /// `account_type` filters the enumeration to one role — `Some(Admin)` /
+    /// `Some(RootAdmin)` enumerates the mediator's administrators (this supersedes
+    /// the retired `messaging/admin/list`).
     pub async fn account_list(
         &self,
         profile: &Arc<ATMProfile>,
         cursor: Option<String>,
         limit: Option<u32>,
+        account_type: Option<account::list::v0_1::AccountType>,
     ) -> Result<account::list::v0_1::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
 
@@ -97,6 +108,7 @@ impl TrustTasksOps<'_> {
         let mut task = TrustTask::for_payload(
             new_id(),
             account::list::v0_1::Payload {
+                account_type,
                 cursor,
                 ext: None,
                 limit,
@@ -110,38 +122,47 @@ impl TrustTasksOps<'_> {
         Ok(response.payload)
     }
 
-    /// Send a `messaging/account/change-queue-limits` Trust Task and return the
-    /// updated account view. `did_hash` names the target; `None` is the caller's own
-    /// account. Each limit is an `Option`: `Some(-1)` = unlimited, `Some(n)` = a cap,
-    /// `None` = leave that limit unchanged. A standard account may only change limits
-    /// it self-manages (others are silently left unchanged).
-    pub async fn account_change_queue_limits(
+    /// Send a `messaging/account/update` Trust Task — one partial update for a
+    /// served account's role, capabilities, and queue limits (superseding the
+    /// retired `change-type` / `change-queue-limits` / `acl/set` /
+    /// `admin/add` / `admin/strip`). `did_hash` names the target; `None` is the
+    /// caller's own account. Every member is optional and an omitted member leaves
+    /// that facet unchanged:
+    /// - `account_type` — admin only; assigning or touching `rootAdmin` requires a
+    ///   root admin.
+    /// - `acl` — partial capability update; a non-admin may only change flags it
+    ///   self-manages.
+    /// - `queue_limits` — `Some(-1)` = unlimited, `None` member = unchanged; a
+    ///   standard account may only change limits it self-manages.
+    ///
+    /// Returns the account's realized view after the update.
+    pub async fn account_update(
         &self,
         profile: &Arc<ATMProfile>,
         did_hash: Option<String>,
-        send_queue_limit: Option<i64>,
-        receive_queue_limit: Option<i64>,
-    ) -> Result<account::change_queue_limits::v0_1::Account, ATMError> {
+        account_type: Option<account::update::v0_1::AccountType>,
+        acl: Option<account::update::v0_1::MediatorAcl>,
+        queue_limits: Option<account::update::v0_1::QueueLimits>,
+    ) -> Result<account::update::v0_1::Account, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
         let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
 
-        let did = account::change_queue_limits::v0_1::Vid::from_str(&target)
+        let did = account::update::v0_1::Vid::from_str(&target)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
         let mut task = TrustTask::for_payload(
             new_id(),
-            account::change_queue_limits::v0_1::Payload {
+            account::update::v0_1::Payload {
+                account_type,
+                acl,
                 did,
                 ext: None,
-                queue_limits: account::change_queue_limits::v0_1::QueueLimits {
-                    receive_queue_limit,
-                    send_queue_limit,
-                },
+                queue_limits,
             },
         );
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
-        let response: TrustTask<account::change_queue_limits::v0_1::Response> =
+        let response: TrustTask<account::update::v0_1::Response> =
             self.exchange(profile, &task).await?;
         Ok(response.payload.account)
     }
@@ -169,36 +190,6 @@ impl TrustTasksOps<'_> {
         Ok(response.payload.removed)
     }
 
-    /// Send a `messaging/account/change-type` Trust Task (admin only) and return the
-    /// account's realized view after the role change. Only a root admin may assign the
-    /// root-admin role or modify a root-admin account. `account_type` is the
-    /// [`account::change_type::v0_1::AccountType`] to set.
-    pub async fn account_change_type(
-        &self,
-        profile: &Arc<ATMProfile>,
-        did_hash: String,
-        account_type: account::change_type::v0_1::AccountType,
-    ) -> Result<account::change_type::v0_1::Account, ATMError> {
-        let (profile_did, mediator_did) = profile.dids()?;
-
-        let did = account::change_type::v0_1::Vid::from_str(&did_hash)
-            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            account::change_type::v0_1::Payload {
-                account_type,
-                did,
-                ext: None,
-            },
-        );
-        task.issuer = Some(profile_did.to_string());
-        task.recipient = Some(mediator_did.to_string());
-
-        let response: TrustTask<account::change_type::v0_1::Response> =
-            self.exchange(profile, &task).await?;
-        Ok(response.payload.account)
-    }
-
     /// Send a `messaging/acl/get` Trust Task (self-or-admin) for one or more accounts.
     /// Returns the per-DID ACL entries plus the DIDs the mediator didn't recognise.
     pub async fn acl_get(
@@ -220,36 +211,6 @@ impl TrustTasksOps<'_> {
 
         let response: TrustTask<acl::get::v0_1::Response> = self.exchange(profile, &task).await?;
         Ok(response.payload)
-    }
-
-    /// Send a `messaging/acl/set` Trust Task. The `acl` is applied as a partial update
-    /// — flags present are set, flags absent are left unchanged — and the realized ACL
-    /// is returned. An admin may set any account's ACL; a non-admin may set its own,
-    /// but only the capabilities it is permitted to self-manage (the admin-only flags
-    /// `blocked` / `local` / `selfManage*` are refused).
-    pub async fn acl_set(
-        &self,
-        profile: &Arc<ATMProfile>,
-        did_hash: String,
-        acl: acl::set::v0_1::MediatorAcl,
-    ) -> Result<acl::set::v0_1::MediatorAcl, ATMError> {
-        let (profile_did, mediator_did) = profile.dids()?;
-
-        let did = acl::set::v0_1::Vid::from_str(&did_hash)
-            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            acl::set::v0_1::Payload {
-                acl,
-                did,
-                ext: None,
-            },
-        );
-        task.issuer = Some(profile_did.to_string());
-        task.recipient = Some(mediator_did.to_string());
-
-        let response: TrustTask<acl::set::v0_1::Response> = self.exchange(profile, &task).await?;
-        Ok(response.payload.acl)
     }
 
     /// Send a `messaging/account/add` Trust Task and return the created account's view.
@@ -276,7 +237,7 @@ impl TrustTasksOps<'_> {
                 did,
                 ext: None,
                 // Initial queue limits use the mediator default; adjust with
-                // `account_change_queue_limits` after creation.
+                // `account_update` after creation.
                 queue_limits: None,
             },
         );
@@ -288,132 +249,59 @@ impl TrustTasksOps<'_> {
         Ok(response.payload.account)
     }
 
-    /// `messaging/access-list/add` — add entries to an account's access list (self-or-
-    /// admin; `None` = own list). Returns the inserted entries and the new count.
-    pub async fn access_list_add(
+    /// `messaging/access-list/update` — modify an account's access list in one
+    /// task (self-or-admin; `None` = own list), superseding the retired
+    /// `access-list/add` / `remove` / `clear`. Members are applied in the fixed
+    /// order **`clear`, `add`, `remove`**, so `clear + add` replaces the list
+    /// wholesale. Returns the entries actually added and removed plus the new count.
+    pub async fn access_list_update(
         &self,
         profile: &Arc<ATMProfile>,
         did_hash: Option<String>,
-        entries: Vec<String>,
-    ) -> Result<access_list::add::v0_1::Response, ATMError> {
+        clear: bool,
+        add: Vec<String>,
+        remove: Vec<String>,
+    ) -> Result<access_list::update::v0_1::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
         let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
-        let did = access_list::add::v0_1::Vid::from_str(&target)
+        let did = access_list::update::v0_1::Vid::from_str(&target)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let entries = entries
-            .iter()
-            .map(|e| access_list::add::v0_1::Vid::from_str(e))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| ATMError::MsgSendError(format!("invalid access-list entry: {e}")))?;
+        let to_vids = |entries: Vec<String>| {
+            entries
+                .iter()
+                .map(|e| access_list::update::v0_1::Vid::from_str(e))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| ATMError::MsgSendError(format!("invalid access-list entry: {e}")))
+        };
         let mut task = TrustTask::for_payload(
             new_id(),
-            access_list::add::v0_1::Payload {
+            access_list::update::v0_1::Payload {
+                add: to_vids(add)?,
+                clear: clear.then_some(true),
                 did,
-                entries,
                 ext: None,
+                remove: to_vids(remove)?,
             },
         );
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
-        let response: TrustTask<access_list::add::v0_1::Response> =
-            self.exchange(profile, &task).await?;
-        Ok(response.payload)
-    }
-
-    /// `messaging/access-list/remove` — remove entries (self-or-admin; `None` = own
-    /// list). Returns which of the requested entries were present (and so removed).
-    pub async fn access_list_remove(
-        &self,
-        profile: &Arc<ATMProfile>,
-        did_hash: Option<String>,
-        entries: Vec<String>,
-    ) -> Result<access_list::remove::v0_1::Response, ATMError> {
-        let (profile_did, mediator_did) = profile.dids()?;
-        let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
-        let did = access_list::remove::v0_1::Vid::from_str(&target)
-            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let entries = entries
-            .iter()
-            .map(|e| access_list::remove::v0_1::Vid::from_str(e))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| ATMError::MsgSendError(format!("invalid access-list entry: {e}")))?;
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            access_list::remove::v0_1::Payload {
-                did,
-                entries,
-                ext: None,
-            },
-        );
-        task.issuer = Some(profile_did.to_string());
-        task.recipient = Some(mediator_did.to_string());
-        let response: TrustTask<access_list::remove::v0_1::Response> =
-            self.exchange(profile, &task).await?;
-        Ok(response.payload)
-    }
-
-    /// `messaging/access-list/clear` — drop the entire access list (self-or-admin;
-    /// `None` = own list).
-    pub async fn access_list_clear(
-        &self,
-        profile: &Arc<ATMProfile>,
-        did_hash: Option<String>,
-    ) -> Result<access_list::clear::v0_1::Response, ATMError> {
-        let (profile_did, mediator_did) = profile.dids()?;
-        let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
-        let did = access_list::clear::v0_1::Vid::from_str(&target)
-            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            access_list::clear::v0_1::Payload { did, ext: None },
-        );
-        task.issuer = Some(profile_did.to_string());
-        task.recipient = Some(mediator_did.to_string());
-        let response: TrustTask<access_list::clear::v0_1::Response> =
-            self.exchange(profile, &task).await?;
-        Ok(response.payload)
-    }
-
-    /// `messaging/access-list/get` — partition the queried entries into those present
-    /// in the list and those absent (self-or-admin; `None` = own list).
-    pub async fn access_list_get(
-        &self,
-        profile: &Arc<ATMProfile>,
-        did_hash: Option<String>,
-        entries: Vec<String>,
-    ) -> Result<access_list::get::v0_1::Response, ATMError> {
-        let (profile_did, mediator_did) = profile.dids()?;
-        let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
-        let did = access_list::get::v0_1::Vid::from_str(&target)
-            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let entries = entries
-            .iter()
-            .map(|e| access_list::get::v0_1::Vid::from_str(e))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| ATMError::MsgSendError(format!("invalid access-list entry: {e}")))?;
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            access_list::get::v0_1::Payload {
-                did,
-                entries,
-                ext: None,
-            },
-        );
-        task.issuer = Some(profile_did.to_string());
-        task.recipient = Some(mediator_did.to_string());
-        let response: TrustTask<access_list::get::v0_1::Response> =
+        let response: TrustTask<access_list::update::v0_1::Response> =
             self.exchange(profile, &task).await?;
         Ok(response.payload)
     }
 
     /// `messaging/access-list/list` — page through an account's access list (self-or-
     /// admin; `None` = own list). Returns entries plus an opaque `next_cursor`.
+    /// `entries` turns the enumeration into a **membership check** (superseding the
+    /// retired `access-list/get`): only the supplied DIDs present in the list are
+    /// returned, so a supplied DID absent from the response is not a member.
     pub async fn access_list_list(
         &self,
         profile: &Arc<ATMProfile>,
         did_hash: Option<String>,
         cursor: Option<String>,
         limit: Option<u32>,
+        entries: Option<Vec<String>>,
     ) -> Result<access_list::list::v0_1::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
         let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
@@ -424,11 +312,18 @@ impl TrustTasksOps<'_> {
             .transpose()
             .map_err(|e| ATMError::MsgSendError(format!("invalid cursor: {e}")))?;
         let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
+        let entries = entries
+            .unwrap_or_default()
+            .iter()
+            .map(|e| access_list::list::v0_1::Vid::from_str(e))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid access-list entry: {e}")))?;
         let mut task = TrustTask::for_payload(
             new_id(),
             access_list::list::v0_1::Payload {
                 cursor,
                 did,
+                entries,
                 ext: None,
                 limit,
             },
@@ -440,126 +335,59 @@ impl TrustTasksOps<'_> {
         Ok(response.payload)
     }
 
-    /// `messaging/admin/add` (admin only) — grant admin rights to the named accounts.
-    /// Returns the now-admin account identifiers.
-    pub async fn admin_add(
-        &self,
-        profile: &Arc<ATMProfile>,
-        did_hashes: Vec<String>,
-    ) -> Result<Vec<String>, ATMError> {
-        let (profile_did, mediator_did) = profile.dids()?;
-        let dids = did_hashes
-            .iter()
-            .map(|d| admin::add::v0_1::Vid::from_str(d))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task =
-            TrustTask::for_payload(new_id(), admin::add::v0_1::Payload { dids, ext: None });
-        task.issuer = Some(profile_did.to_string());
-        task.recipient = Some(mediator_did.to_string());
-        let response: TrustTask<admin::add::v0_1::Response> = self.exchange(profile, &task).await?;
-        Ok(response
-            .payload
-            .admins
-            .iter()
-            .map(|v| v.to_string())
-            .collect())
-    }
-
-    /// `messaging/admin/strip` (admin only) — revoke admin rights from the named
-    /// accounts. Returns the stripped account identifiers.
-    pub async fn admin_strip(
-        &self,
-        profile: &Arc<ATMProfile>,
-        did_hashes: Vec<String>,
-    ) -> Result<Vec<String>, ATMError> {
-        let (profile_did, mediator_did) = profile.dids()?;
-        let dids = did_hashes
-            .iter()
-            .map(|d| admin::strip::v0_1::Vid::from_str(d))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task =
-            TrustTask::for_payload(new_id(), admin::strip::v0_1::Payload { dids, ext: None });
-        task.issuer = Some(profile_did.to_string());
-        task.recipient = Some(mediator_did.to_string());
-        let response: TrustTask<admin::strip::v0_1::Response> =
-            self.exchange(profile, &task).await?;
-        Ok(response
-            .payload
-            .stripped
-            .iter()
-            .map(|v| v.to_string())
-            .collect())
-    }
-
-    /// `messaging/admin/list` (admin only) — page the mediator's admin accounts.
-    pub async fn admin_list(
+    /// Generic `audit/list` (admin only) — page the mediator's privileged-change
+    /// audit log, newest first (superseding the retired `messaging/admin/audit-log`).
+    pub async fn audit_list(
         &self,
         profile: &Arc<ATMProfile>,
         cursor: Option<String>,
-        limit: Option<u32>,
-    ) -> Result<admin::list::v0_1::Response, ATMError> {
+        page_size: Option<u32>,
+    ) -> Result<audit::list::v0_1::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
-        let cursor = cursor
-            .map(|c| admin::list::v0_1::PayloadCursor::from_str(&c))
-            .transpose()
-            .map_err(|e| ATMError::MsgSendError(format!("invalid cursor: {e}")))?;
-        let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
         let mut task = TrustTask::for_payload(
             new_id(),
-            admin::list::v0_1::Payload {
+            audit::list::v0_1::Payload {
+                action: None,
+                actor: None,
+                context_id: None,
                 cursor,
                 ext: None,
-                limit,
+                from: None,
+                outcome: None,
+                page_size: page_size.and_then(|l| std::num::NonZeroU64::new(l as u64)),
+                to: None,
             },
         );
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
-        let response: TrustTask<admin::list::v0_1::Response> =
+        let response: TrustTask<audit::list::v0_1::Response> =
             self.exchange(profile, &task).await?;
         Ok(response.payload)
     }
 
-    /// `messaging/admin/audit-log` (admin only) — page the privileged-change log,
-    /// newest first.
-    pub async fn admin_audit_log(
+    /// Generic `config/show` (admin only) — read the mediator's effective runtime
+    /// configuration as per-key fields (superseding the retired
+    /// `messaging/admin/config`; the software version is the `mediator.version` key).
+    /// `keys` narrows the result; `None` returns every key.
+    pub async fn config_show(
         &self,
         profile: &Arc<ATMProfile>,
-        cursor: Option<String>,
-        limit: Option<u32>,
-    ) -> Result<admin::audit_log::v0_1::Response, ATMError> {
+        keys: Option<Vec<String>>,
+    ) -> Result<config::show::v0_1::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
-        let cursor = cursor
-            .map(|c| admin::audit_log::v0_1::PayloadCursor::from_str(&c))
+        let keys = keys
+            .map(|ks| {
+                ks.iter()
+                    .map(|k| config::show::v0_1::PayloadKeysItem::from_str(k))
+                    .collect::<Result<Vec<_>, _>>()
+            })
             .transpose()
-            .map_err(|e| ATMError::MsgSendError(format!("invalid cursor: {e}")))?;
-        let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            admin::audit_log::v0_1::Payload {
-                cursor,
-                ext: None,
-                limit,
-            },
-        );
+            .map_err(|e| ATMError::MsgSendError(format!("invalid configuration key: {e}")))?;
+        let mut task =
+            TrustTask::for_payload(new_id(), config::show::v0_1::Payload { ext: None, keys });
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
-        let response: TrustTask<admin::audit_log::v0_1::Response> =
-            self.exchange(profile, &task).await?;
-        Ok(response.payload)
-    }
-
-    /// `messaging/admin/config` (admin only) — read the mediator's version + config.
-    pub async fn admin_config(
-        &self,
-        profile: &Arc<ATMProfile>,
-    ) -> Result<admin::config::v0_1::Response, ATMError> {
-        let (profile_did, mediator_did) = profile.dids()?;
-        let mut task = TrustTask::for_payload(new_id(), admin::config::v0_1::Payload { ext: None });
-        task.issuer = Some(profile_did.to_string());
-        task.recipient = Some(mediator_did.to_string());
-        let response: TrustTask<admin::config::v0_1::Response> =
+        let response: TrustTask<config::show::v0_1::Response> =
             self.exchange(profile, &task).await?;
         Ok(response.payload)
     }

@@ -2,6 +2,17 @@
 
 ## Changelog history
 
+## 29th July 2026
+
+### 0.2.43 — trust-task integration tests follow the rationalized messaging/* family
+
+The `trust_tasks.rs` integration suite now drives the rationalized surface
+(affinidi/affinidi-tdk-rs#667; sdk 0.18.65 / mediator 0.17.13): queue-limit,
+role, and ACL tests go through `account/update`; the access-list lifecycle
+goes through `access-list/update` and the `entries` membership filter on
+`access-list/list`; the admin-only-reader denial test covers the generic
+`audit/list` / `config/show`. No harness changes.
+
 ## 23rd July 2026
 
 ### 0.2.42 — a slow consumer must not lose packed frames

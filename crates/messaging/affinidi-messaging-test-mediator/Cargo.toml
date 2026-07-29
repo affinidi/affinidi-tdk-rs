@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.2.42"
+version = "0.2.43"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -90,7 +90,7 @@ affinidi-tsp = { version = "0.1", path = "../affinidi-tsp" }
 ## the stored base64url form so the SDK can unpack it (tsp_websocket test).
 base64 = "0.22"
 ## Trust Tasks payload types named by the Trust Tasks integration tests.
-trust-tasks-rs = "0.2"
+trust-tasks-rs = "0.2.46"
 ## Tracing subscriber for test diagnostics.
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ## WebSocket handshake test.

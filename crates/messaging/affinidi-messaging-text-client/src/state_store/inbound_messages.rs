@@ -209,7 +209,13 @@ async fn _handle_connection_setup(
         // Add the new remote secure DID to our new secure DID
         match atm
             .trust_tasks()
-            .access_list_add(&our_new_profile, None, vec![digest(&remote_secure_did)])
+            .access_list_update(
+                &our_new_profile,
+                None,
+                false,
+                vec![digest(&remote_secure_did)],
+                vec![],
+            )
             .await
         {
             Ok(_) => {}
@@ -691,7 +697,13 @@ pub async fn handle_message(
                 // Add the remote secure DID to this profile's ACL
                 match atm
                     .trust_tasks()
-                    .access_list_add(&our_secure_profile, None, vec![digest(&remote_secure_did)])
+                    .access_list_update(
+                        &our_secure_profile,
+                        None,
+                        false,
+                        vec![digest(&remote_secure_did)],
+                        vec![],
+                    )
                     .await
                 {
                     Ok(_) => {

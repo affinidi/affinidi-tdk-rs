@@ -137,22 +137,26 @@ async fn main() -> Result<(), ATMError> {
     if let Some(MediatorAclAccessListMode::ExplicitAllow) = alice_acl_mode {
         // Ensure Bob and Mallory are removed from explicit allow list
         atm.trust_tasks()
-            .access_list_remove(
+            .access_list_update(
                 &atm_alice,
                 None,
+                false,
+                vec![],
                 vec![mallory_info.did.as_str().to_string()],
             )
             .await?;
     } else {
         // Ensure Mallory is removed from Bob explicit deny list
         atm.trust_tasks()
-            .access_list_add(
+            .access_list_update(
                 &atm_alice,
                 None,
+                false,
                 vec![
                     bob_info.did.as_str().to_string(),
                     mallory_info.did.as_str().to_string(),
                 ],
+                vec![],
             )
             .await?;
     }
@@ -162,12 +166,24 @@ async fn main() -> Result<(), ATMError> {
     if let Some(MediatorAclAccessListMode::ExplicitAllow) = bob_acl_mode {
         // Ensure Mallory is added to Bob explicit allow list
         atm.trust_tasks()
-            .access_list_add(&atm_bob, None, vec![mallory_info.did.as_str().to_string()])
+            .access_list_update(
+                &atm_bob,
+                None,
+                false,
+                vec![mallory_info.did.as_str().to_string()],
+                vec![],
+            )
             .await?;
     } else {
         // Ensure Mallory is removed from Bob explicit deny list
         atm.trust_tasks()
-            .access_list_remove(&atm_bob, None, vec![mallory_info.did.as_str().to_string()])
+            .access_list_update(
+                &atm_bob,
+                None,
+                false,
+                vec![],
+                vec![mallory_info.did.as_str().to_string()],
+            )
             .await?;
     }
     info!("Bob Access Lists reset");
@@ -176,12 +192,24 @@ async fn main() -> Result<(), ATMError> {
     if let Some(MediatorAclAccessListMode::ExplicitAllow) = mallory_acl_mode {
         // Ensure Bob is added to Mallory explicit allow list
         atm.trust_tasks()
-            .access_list_add(&atm_mallory, None, vec![bob_info.did.as_str().to_string()])
+            .access_list_update(
+                &atm_mallory,
+                None,
+                false,
+                vec![bob_info.did.as_str().to_string()],
+                vec![],
+            )
             .await?;
     } else {
         // Ensure Bob is removed from Mallory explicit deny list
         atm.trust_tasks()
-            .access_list_remove(&atm_mallory, None, vec![bob_info.did.as_str().to_string()])
+            .access_list_update(
+                &atm_mallory,
+                None,
+                false,
+                vec![],
+                vec![bob_info.did.as_str().to_string()],
+            )
             .await?;
     }
     info!("Mallory Access Lists reset");

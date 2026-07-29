@@ -97,13 +97,15 @@ async fn account_list_denies_a_non_admin() {
     let denied = env
         .atm
         .trust_tasks()
-        .account_list(&alice.profile, None, None)
+        .account_list(&alice.profile, None, None, None)
         .await;
     assert!(denied.is_err(), "a non-admin must not list accounts");
 }
 
 #[tokio::test]
-async fn account_change_queue_limits_self_applies_caps_and_persists() {
+async fn account_update_queue_limits_self_applies_caps_and_persists() {
+    use trust_tasks_rs::specs::messaging::account::update::v0_1::QueueLimits;
+
     let env = TestEnvironment::spawn()
         .await
         .expect("spawn test environment");
@@ -119,7 +121,16 @@ async fn account_change_queue_limits_self_applies_caps_and_persists() {
     let updated = env
         .atm
         .trust_tasks()
-        .account_change_queue_limits(&alice.profile, None, Some(42), Some(-1))
+        .account_update(
+            &alice.profile,
+            None,
+            None,
+            None,
+            Some(QueueLimits {
+                send_queue_limit: Some(42),
+                receive_queue_limit: Some(-1),
+            }),
+        )
         .await
         .expect("alice changes her own queue limits");
     let q = updated.queue_limits.expect("queue limits present");
@@ -142,7 +153,16 @@ async fn account_change_queue_limits_self_applies_caps_and_persists() {
     let capped = env
         .atm
         .trust_tasks()
-        .account_change_queue_limits(&alice.profile, None, Some(5000), None)
+        .account_update(
+            &alice.profile,
+            None,
+            None,
+            None,
+            Some(QueueLimits {
+                send_queue_limit: Some(5000),
+                receive_queue_limit: None,
+            }),
+        )
         .await
         .expect("over-limit request is accepted but capped");
     assert_eq!(
@@ -185,10 +205,11 @@ async fn account_remove_self_removes_the_account() {
 }
 
 #[tokio::test]
-async fn account_change_type_denies_a_non_admin() {
-    use trust_tasks_rs::specs::messaging::account::change_type::v0_1::AccountType;
+async fn account_update_role_denies_a_non_admin() {
+    use trust_tasks_rs::specs::messaging::account::update::v0_1::AccountType;
 
-    // `account/change-type` is admin-only. A standard account must be refused.
+    // A role change through `account/update` is admin-only. A standard account
+    // must be refused.
     // (The admin happy-path — promotion/demotion across the admin set — isn't driven
     // here: an admin authenticates by DID resolution but isn't a streaming-registered
     // account, so the synchronous WebSocket response can't be established on the
@@ -207,7 +228,13 @@ async fn account_change_type_denies_a_non_admin() {
     let denied = env
         .atm
         .trust_tasks()
-        .account_change_type(&alice.profile, bob.did_hash(), AccountType::Admin)
+        .account_update(
+            &alice.profile,
+            Some(bob.did_hash()),
+            Some(AccountType::Admin),
+            None,
+            None,
+        )
         .await;
     assert!(denied.is_err(), "a non-admin must not change account types");
 }
@@ -240,8 +267,8 @@ async fn acl_get_self_returns_the_decoded_acl() {
 }
 
 #[tokio::test]
-async fn acl_set_denies_a_non_admin() {
-    use trust_tasks_rs::specs::messaging::acl::set::v0_1::MediatorAcl;
+async fn account_update_acl_denies_a_non_admin() {
+    use trust_tasks_rs::specs::messaging::account::update::v0_1::MediatorAcl;
 
     // A non-admin may set its *own* ACL (self-service, covered below), but never
     // another account's. (The reverse mapping is covered by the mediator's
@@ -264,7 +291,7 @@ async fn acl_set_denies_a_non_admin() {
     let denied = env
         .atm
         .trust_tasks()
-        .acl_set(&alice.profile, bob.did_hash(), acl)
+        .account_update(&alice.profile, Some(bob.did_hash()), None, Some(acl), None)
         .await;
     assert!(denied.is_err(), "a non-admin must not set ACLs");
 }
@@ -349,31 +376,41 @@ async fn access_list_self_lifecycle() {
     let added = env
         .atm
         .trust_tasks()
-        .access_list_add(&alice.profile, None, vec![bob.did_hash(), carol.did_hash()])
+        .access_list_update(
+            &alice.profile,
+            None,
+            false,
+            vec![bob.did_hash(), carol.did_hash()],
+            vec![],
+        )
         .await
         .expect("add to access list");
     assert_eq!(added.added.len(), 2);
     assert_eq!(added.access_list_count, 2);
 
-    // Get: bob is present, an unknown hash is absent.
+    // Membership filter (the retired access-list/get): bob is present, an unknown
+    // hash is absent from the filtered entries.
     let got = env
         .atm
         .trust_tasks()
-        .access_list_get(
+        .access_list_list(
             &alice.profile,
             None,
-            vec![bob.did_hash(), "not-in-the-list".to_string()],
+            None,
+            None,
+            Some(vec![bob.did_hash(), "not-in-the-list".to_string()]),
         )
         .await
-        .expect("query access list");
-    assert!(got.present.iter().any(|v| v.as_str() == bob.did_hash()));
-    assert!(got.absent.iter().any(|v| v.as_str() == "not-in-the-list"));
+        .expect("query access list membership");
+    assert!(got.entries.iter().any(|v| v.as_str() == bob.did_hash()));
+    assert!(!got.entries.iter().any(|v| v.as_str() == "not-in-the-list"));
+    assert_eq!(got.access_list_count, 2, "count stays the whole-list total");
 
     // List: both entries, single page.
     let listed = env
         .atm
         .trust_tasks()
-        .access_list_list(&alice.profile, None, None, None)
+        .access_list_list(&alice.profile, None, None, None, None)
         .await
         .expect("list access list");
     assert_eq!(listed.access_list_count, 2);
@@ -384,7 +421,7 @@ async fn access_list_self_lifecycle() {
     let removed = env
         .atm
         .trust_tasks()
-        .access_list_remove(&alice.profile, None, vec![bob.did_hash()])
+        .access_list_update(&alice.profile, None, false, vec![], vec![bob.did_hash()])
         .await
         .expect("remove from access list");
     assert_eq!(removed.removed.len(), 1);
@@ -394,18 +431,19 @@ async fn access_list_self_lifecycle() {
     let cleared = env
         .atm
         .trust_tasks()
-        .access_list_clear(&alice.profile, None)
+        .access_list_update(&alice.profile, None, true, vec![], vec![])
         .await
         .expect("clear access list");
     assert_eq!(cleared.access_list_count, 0);
 }
 
 #[tokio::test]
-async fn admin_family_denies_a_non_admin() {
-    // Every messaging/admin/* task is admin-only. A standard account must be refused
-    // for all of them. (The admin happy paths aren't exercised: an add_admin identity
-    // isn't a streaming-registered account, so admin-over-WS doesn't run on the
-    // in-memory harness — the handlers mirror the legacy admin-management protocol.)
+async fn audit_and_config_readers_deny_a_non_admin() {
+    // The generic audit/list and config/show consumers (which replaced the
+    // retired messaging/admin/* readers) are admin-only. A standard account must
+    // be refused for both. (Role grants/strips are account/update, whose
+    // non-admin denial is covered above; admin/list is the accountType filter on
+    // account/list, whose non-admin denial is covered above too.)
     let env = TestEnvironment::spawn()
         .await
         .expect("spawn test environment");
@@ -415,53 +453,28 @@ async fn admin_family_denies_a_non_admin() {
         .profile_add(&alice.profile, true)
         .await
         .expect("enable websocket for alice");
-    let bob = env.add_user("bob").await.expect("add bob");
 
     assert!(
         env.atm
             .trust_tasks()
-            .admin_add(&alice.profile, vec![bob.did_hash()])
+            .audit_list(&alice.profile, None, None)
             .await
             .is_err(),
-        "non-admin admin/add must be refused"
+        "non-admin audit/list must be refused"
     );
     assert!(
         env.atm
             .trust_tasks()
-            .admin_strip(&alice.profile, vec![bob.did_hash()])
+            .config_show(&alice.profile, None)
             .await
             .is_err(),
-        "non-admin admin/strip must be refused"
-    );
-    assert!(
-        env.atm
-            .trust_tasks()
-            .admin_list(&alice.profile, None, None)
-            .await
-            .is_err(),
-        "non-admin admin/list must be refused"
-    );
-    assert!(
-        env.atm
-            .trust_tasks()
-            .admin_audit_log(&alice.profile, None, None)
-            .await
-            .is_err(),
-        "non-admin admin/audit-log must be refused"
-    );
-    assert!(
-        env.atm
-            .trust_tasks()
-            .admin_config(&alice.profile)
-            .await
-            .is_err(),
-        "non-admin admin/config must be refused"
+        "non-admin config/show must be refused"
     );
 }
 
 #[tokio::test]
-async fn acl_set_self_service_changes_a_self_manageable_flag() {
-    use trust_tasks_rs::specs::messaging::acl::set::v0_1::MediatorAcl;
+async fn account_update_acl_self_service_changes_a_self_manageable_flag() {
+    use trust_tasks_rs::specs::messaging::account::update::v0_1::MediatorAcl;
 
     let env = TestEnvironment::spawn()
         .await
@@ -482,10 +495,10 @@ async fn acl_set_self_service_changes_a_self_manageable_flag() {
     let updated = env
         .atm
         .trust_tasks()
-        .acl_set(&alice.profile, alice.did_hash(), acl)
+        .account_update(&alice.profile, None, None, Some(acl), None)
         .await
         .expect("alice self-manages her own ACL");
-    assert_eq!(updated.anon_receive, Some(false));
+    assert_eq!(updated.acl.anon_receive, Some(false));
 
     // Persisted across a fresh read.
     let got = env
@@ -498,8 +511,8 @@ async fn acl_set_self_service_changes_a_self_manageable_flag() {
 }
 
 #[tokio::test]
-async fn acl_set_self_service_refuses_an_admin_only_flag() {
-    use trust_tasks_rs::specs::messaging::acl::set::v0_1::MediatorAcl;
+async fn account_update_acl_self_service_refuses_an_admin_only_flag() {
+    use trust_tasks_rs::specs::messaging::account::update::v0_1::MediatorAcl;
 
     let env = TestEnvironment::spawn()
         .await
@@ -519,7 +532,7 @@ async fn acl_set_self_service_refuses_an_admin_only_flag() {
     let denied = env
         .atm
         .trust_tasks()
-        .acl_set(&alice.profile, alice.did_hash(), acl)
+        .account_update(&alice.profile, None, None, Some(acl), None)
         .await;
     assert!(
         denied.is_err(),

@@ -18,8 +18,8 @@ use std::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::warn;
+use trust_tasks_rs::specs::messaging::account;
 use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
-use trust_tasks_rs::specs::messaging::acl;
 use uuid::Uuid;
 
 use crate::state_store::{
@@ -221,7 +221,13 @@ pub async fn send_invitation_accept(
         // Add the invite DID to this profile's ACL
         match atm
             .trust_tasks()
-            .access_list_add(&accept_temp_profile, None, vec![digest(&invite_did)])
+            .access_list_update(
+                &accept_temp_profile,
+                None,
+                false,
+                vec![digest(&invite_did)],
+                vec![],
+            )
             .await
         {
             Ok(_) => {}
@@ -496,15 +502,21 @@ pub async fn create_invitation(
                             // Flip the access-list mode to explicit_deny. This is a
                             // self-service change; the mediator refuses it if this account
                             // may not self-manage its access-list mode.
-                            let new_acl = acl::set::v0_1::MediatorAcl {
+                            let new_acl = account::update::v0_1::MediatorAcl {
                                 access_list_mode: Some(
-                                    acl::set::v0_1::MediatorAclAccessListMode::ExplicitDeny,
+                                    account::update::v0_1::MediatorAclAccessListMode::ExplicitDeny,
                                 ),
                                 ..Default::default()
                             };
                             if let Err(e) = atm
                                 .trust_tasks()
-                                .acl_set(&profile, digest(&profile.inner.did), new_acl)
+                                .account_update(
+                                    &profile,
+                                    Some(digest(&profile.inner.did)),
+                                    None,
+                                    Some(new_acl),
+                                    None,
+                                )
                                 .await
                             {
                                 state.invite_popup.messages.push(Line::from(Span::styled(
