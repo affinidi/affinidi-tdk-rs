@@ -9,6 +9,72 @@ use std::{fs::File, io::BufReader, sync::Arc, time::Duration};
 use tokio::sync::{RwLock, broadcast::Sender};
 use tracing::error;
 
+pub use crate::messages::wrapping::MessageWrappingType;
+
+/// Policy applied to every received envelope — by both [`crate::ATM::unpack`]
+/// and the message-pickup delivery drain — to enforce which envelope *wrapping
+/// types* are accepted and whether message-layer addressing consistency is
+/// enforced.
+///
+/// The [`Default`] is the DIDComm v2 secure baseline — accept only
+/// authenticated encryption, `authcrypt(plaintext)` and
+/// `authcrypt(sign(plaintext))`, and enforce addressing consistency — so an app
+/// that simply calls `atm.unpack` is protected against envelope-downgrade and
+/// forged-sender (`from` ≠ authcrypt `skid`) attacks without any extra code.
+/// Relax it explicitly via [`ATMConfigBuilder::with_unpack_policy`] when a
+/// protocol legitimately expects other wrappings (e.g. anoncrypt receipts, or
+/// the layered `anoncrypt(authcrypt(plaintext))`).
+#[derive(Debug, Clone)]
+pub struct UnpackPolicy {
+    /// Exactly which wrapping types `unpack` accepts. A message classified
+    /// outside this set is rejected. No presets — list precisely what your
+    /// protocol expects.
+    pub expected: Vec<MessageWrappingType>,
+    /// Enforce message-layer addressing consistency across the unwrapped
+    /// layers: the inner `from` DID must equal the authcrypt `skid` DID (when
+    /// encrypted) and a verified signer's DID (when signed). Disable only for
+    /// debugging in trusted environments.
+    pub validate_addressing_consistency: bool,
+    /// Maximum number of signatures accepted on a signed message, enforced
+    /// *before* any signer DID is resolved — so it doubles as the guard
+    /// against resolution-amplification DoS. Every signature within the cap is
+    /// verified; a message carrying more is rejected without resolving any key.
+    /// Defaults to `5` (enough for co-signed / multi-signer messages); raise it
+    /// to any value your protocol expects — there is no absolute ceiling above
+    /// your configured policy.
+    pub max_signatures: usize,
+    /// Maximum number of recipients a single JWE (encryption) layer may address
+    /// before it is rejected. Unlike [`Self::max_signatures`], the secure
+    /// default is **permissive** (`100`, the absolute hard cap): a receiver is
+    /// legitimately only one of several recipients, so a restrictive default
+    /// would reject ordinary group/broadcast messages. Decrypting runs the key
+    /// agreement once (for the matched recipient), so this bounds parse /
+    /// allocation cost, not asymmetric-crypto work. Lower it for stricter
+    /// (e.g. one-to-one only) deployments.
+    pub max_recipients: usize,
+}
+
+impl Default for UnpackPolicy {
+    fn default() -> Self {
+        UnpackPolicy {
+            expected: vec![
+                MessageWrappingType::AuthcryptPlaintext,
+                MessageWrappingType::AuthcryptSignPlaintext,
+            ],
+            validate_addressing_consistency: true,
+            max_signatures: crate::messages::unpack::DEFAULT_MAX_SIGNATURES,
+            max_recipients: crate::messages::unpack::DEFAULT_MAX_RECIPIENTS,
+        }
+    }
+}
+
+impl UnpackPolicy {
+    /// True when `wrapping` is accepted by this policy.
+    pub fn accepts(&self, wrapping: MessageWrappingType) -> bool {
+        self.expected.contains(&wrapping)
+    }
+}
+
 /// Configuration for the Affinidi Trusted Messaging (ATM) Service
 /// You need to use the `builder()` method to create a new instance of `ATMConfig`
 /// Example:
@@ -26,8 +92,23 @@ pub struct ATMConfig {
     /// If you want to aggregate inbound messages from the SDK to a channel to be used by the client
     pub(crate) inbound_message_channel: Option<Sender<WebSocketResponses>>,
 
+    /// Optional broadcast channel that receives a
+    /// [`crate::protocols::message_pickup::PoisonMessage`] for every
+    /// undeliverable pickup attachment *before* the drain purges it, so a
+    /// consumer can retain/quarantine it. `None` (default) = poison messages are
+    /// only logged and purged.
+    pub(crate) poison_message_channel:
+        Option<Sender<crate::protocols::message_pickup::PoisonMessage>>,
+
     /// Should we auto unpack forwarded messages?
     pub(crate) unpack_forwards: bool,
+
+    /// Policy enforced on every received envelope — both [`crate::ATM::unpack`]
+    /// and the message-pickup delivery drain — governing which wrapping types
+    /// are accepted and whether addressing consistency is enforced. Defaults to
+    /// the secure authcrypt-only baseline, so messages pulled via pickup get the
+    /// same guarantees as a direct `unpack`.
+    pub(crate) unpack_policy: UnpackPolicy,
 
     /// Can configure any protocol discoverable information here
     pub(crate) discover_features: Arc<RwLock<DiscoverFeatures>>,
@@ -85,6 +166,11 @@ impl ATMConfig {
         self.request_timeout
     }
 
+    /// The policy [`crate::ATM::unpack`] enforces on received envelopes.
+    pub fn unpack_policy(&self) -> &UnpackPolicy {
+        &self.unpack_policy
+    }
+
     /// The clock backing the SDK's expiry / TTL decisions.
     pub(crate) fn clock(&self) -> &Arc<dyn Clock> {
         &self.clock
@@ -138,7 +224,9 @@ pub struct ATMConfigBuilder {
     fetch_cache_limit_count: u32,
     fetch_cache_limit_bytes: u64,
     inbound_message_channel: Option<Sender<WebSocketResponses>>,
+    poison_message_channel: Option<Sender<crate::protocols::message_pickup::PoisonMessage>>,
     unpack_forwards: bool,
+    unpack_policy: UnpackPolicy,
     discover_features: DiscoverFeatures,
     curve_preference: Option<Vec<Curve>>,
     request_timeout: Duration,
@@ -158,7 +246,9 @@ impl Default for ATMConfigBuilder {
             fetch_cache_limit_count: 100,
             fetch_cache_limit_bytes: 1024 * 1024 * 10, // Defaults to 10MB Cache
             inbound_message_channel: None,
+            poison_message_channel: None,
             unpack_forwards: true,
+            unpack_policy: UnpackPolicy::default(),
             discover_features: DiscoverFeatures::default(),
             curve_preference: None,
             request_timeout: Duration::from_secs(15),
@@ -210,11 +300,49 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// Enable a broadcast channel that receives a
+    /// [`crate::protocols::message_pickup::PoisonMessage`] for every
+    /// undeliverable pickup attachment *before* it is purged from the mediator.
+    /// Subscribe with [`crate::ATM::get_poison_channel`] to retain or quarantine
+    /// poison messages instead of silently dropping them. `capacity` bounds the
+    /// broadcast buffer.
+    pub fn with_poison_message_channel(mut self, capacity: usize) -> Self {
+        let (poison_message_channel, _) = tokio::sync::broadcast::channel(capacity);
+        self.poison_message_channel = Some(poison_message_channel);
+        self
+    }
+
     /// When unpacking a message, if it is of type forward, try and unpack the forwarded message
     /// and return the innermost message instead of the forward message
     /// Default: true (will unpack the forward message)
     pub fn with_unpack_forwards(mut self, unpack_forwards: bool) -> Self {
         self.unpack_forwards = unpack_forwards;
+        self
+    }
+
+    /// Set the policy [`crate::ATM::unpack`] enforces on received envelopes:
+    /// which wrapping types are accepted and whether addressing consistency is
+    /// checked. Defaults to the secure authcrypt-only baseline
+    /// ([`UnpackPolicy::default`]); relax it when a protocol expects other
+    /// wrappings.
+    ///
+    /// ```
+    /// use affinidi_messaging_sdk::config::{ATMConfig, MessageWrappingType, UnpackPolicy};
+    ///
+    /// let config = ATMConfig::builder()
+    ///     .with_unpack_policy(UnpackPolicy {
+    ///         expected: vec![
+    ///             MessageWrappingType::AuthcryptPlaintext,
+    ///             MessageWrappingType::AnoncryptAuthcryptPlaintext,
+    ///         ],
+    ///         validate_addressing_consistency: true,
+    ///         max_signatures: 2,
+    ///         max_recipients: 100,
+    ///     })
+    ///     .build();
+    /// ```
+    pub fn with_unpack_policy(mut self, policy: UnpackPolicy) -> Self {
+        self.unpack_policy = policy;
         self
     }
 
@@ -363,7 +491,9 @@ impl ATMConfigBuilder {
             fetch_cache_limit_count: self.fetch_cache_limit_count,
             fetch_cache_limit_bytes: self.fetch_cache_limit_bytes,
             inbound_message_channel: self.inbound_message_channel,
+            poison_message_channel: self.poison_message_channel,
             unpack_forwards: self.unpack_forwards,
+            unpack_policy: self.unpack_policy,
             discover_features: Arc::new(RwLock::new(discover_features)),
             curve_preference: self.curve_preference,
             request_timeout: self.request_timeout,

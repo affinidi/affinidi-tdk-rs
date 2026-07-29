@@ -27,9 +27,10 @@ arbitrary = ["dep:arbitrary"]
 affinidi-crypto = { version = "0.2", features = ["jose"] }
 
 # Curve crates — still used directly by the adapter for SEC1 point
-# encoding (`ToEncodedPoint`) on resolved public keys.
-p256 = { version = "0.14", features = ["ecdh"] }
-k256 = { version = "0.14", features = ["ecdh"] }
+# encoding (`ToEncodedPoint`) on resolved public keys. The `ecdsa` feature
+# adds ES256 / ES256K signing for the multi-signature pack helpers.
+p256 = { version = "0.14", features = ["ecdh", "ecdsa"] }
+k256 = { version = "0.14", features = ["ecdh", "ecdsa"] }
 
 # Ed25519 — test helpers generate keys directly.
 ed25519-dalek = { version = "3", features = ["rand_core"] }

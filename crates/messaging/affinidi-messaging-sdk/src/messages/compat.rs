@@ -20,6 +20,16 @@ pub struct UnpackMetadata {
     pub sign_from: Option<String>,
     /// SHA-256 hash of the packed message (computed by the SDK before unpacking)
     pub sha256_hash: String,
+    /// The classified envelope wrapping type of the unpacked message
+    /// (authcrypt / anoncrypt / signed / layered combinations). Populated by
+    /// `unpack`; defaults to [`MessageWrappingType::Plaintext`].
+    #[serde(default)]
+    pub wrapping: crate::messages::wrapping::MessageWrappingType,
+    /// Every verified signer `kid` found across all JWS signature layers
+    /// (a signed message may carry multiple signatures). Empty for unsigned
+    /// messages.
+    #[serde(default)]
+    pub signers: Vec<String>,
 }
 
 /// Compatibility type for the legacy `PackEncryptedMetadata`.

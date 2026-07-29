@@ -125,6 +125,124 @@ pub fn verify_secp256k1(jws_str: &str, public_key: &[u8]) -> Result<VerifiedJws,
     )
 }
 
+/// A single signature entry parsed from a JWS but **not yet verified**.
+///
+/// The multi-signature flow ([`parse_jws`] + [`verify_parsed_signature`])
+/// splits parsing from verification so an async caller (the SDK) can resolve
+/// each signer's key from its DID document between the two steps. The legacy
+/// single-signature helpers ([`verify_ed25519`] etc.) remain for callers that
+/// already hold the key.
+pub struct ParsedSignature {
+    /// Signer KID — protected header preferred, then the per-signature
+    /// unprotected header (RFC 7515 §7.2.1, where DIDComm / credo-ts /
+    /// didcomm-python place it). Attribution only; verification uses the
+    /// caller-resolved key.
+    pub kid: Option<String>,
+    /// JWS `alg` from this signature's protected header (`EdDSA`/`Ed25519`,
+    /// `ES256`, or `ES256K`).
+    pub alg: String,
+    /// ASCII signing input: `BASE64URL(protected) || '.' || BASE64URL(payload)`.
+    pub signing_input: Vec<u8>,
+    /// Raw 64-byte signature (`R||S` for Ed25519, `r||s` for ECDSA).
+    pub signature: [u8; 64],
+}
+
+/// A JWS parsed into its decoded payload plus every (unverified) signature.
+pub struct ParsedJws {
+    /// The decoded JWS payload bytes (the signed DIDComm message).
+    pub payload: Vec<u8>,
+    /// Every signature entry, in wire order.
+    pub signatures: Vec<ParsedSignature>,
+}
+
+/// Resolved public-key material, tagged by curve family so
+/// [`verify_parsed_signature`] can enforce that the key matches the
+/// signature's `alg`.
+pub enum VerifyKey {
+    /// Ed25519 verifying key (32 octets).
+    Ed25519([u8; 32]),
+    /// SEC1-encoded P-256 verifying key (compressed 33 / uncompressed 65).
+    P256(Vec<u8>),
+    /// SEC1-encoded secp256k1 verifying key (compressed 33 / uncompressed 65).
+    Secp256k1(Vec<u8>),
+}
+
+/// Parse a JWS (General JSON Serialization) into its payload and **all**
+/// signature entries, without verifying any of them.
+///
+/// Unlike [`verify_jws`] (which only touches `signatures[0]`), this preserves
+/// every signature so the caller can verify each one. Errors only on
+/// structural / base64 problems; an empty `signatures` array is rejected.
+pub fn parse_jws(jws_str: &str) -> Result<ParsedJws, DIDCommError> {
+    let jws: Jws = serde_json::from_str(jws_str)
+        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid JWS JSON: {e}")))?;
+
+    if jws.signatures.is_empty() {
+        return Err(DIDCommError::InvalidMessage("no signatures in JWS".into()));
+    }
+
+    let mut signatures = Vec::with_capacity(jws.signatures.len());
+    for sig_entry in &jws.signatures {
+        let header_bytes = Base64UrlUnpadded::decode_vec(&sig_entry.protected)
+            .map_err(|e| DIDCommError::InvalidMessage(format!("invalid protected header: {e}")))?;
+        let header: JwsProtectedHeader = serde_json::from_slice(&header_bytes)
+            .map_err(|e| DIDCommError::InvalidMessage(format!("invalid header JSON: {e}")))?;
+
+        let sig_bytes = Base64UrlUnpadded::decode_vec(&sig_entry.signature)
+            .map_err(|e| DIDCommError::InvalidMessage(format!("invalid signature base64: {e}")))?;
+        let signature: [u8; 64] = sig_bytes
+            .try_into()
+            .map_err(|_| DIDCommError::InvalidMessage("signature must be 64 bytes".into()))?;
+
+        // Signing input never includes the unprotected header (it is not
+        // integrity-protected), so reconstruct from protected + payload only.
+        let signing_input = format!("{}.{}", sig_entry.protected, jws.payload).into_bytes();
+
+        let kid = header
+            .kid
+            .or_else(|| sig_entry.header.as_ref().and_then(|h| h.kid.clone()));
+
+        signatures.push(ParsedSignature {
+            kid,
+            alg: header.alg,
+            signing_input,
+            signature,
+        });
+    }
+
+    let payload = Base64UrlUnpadded::decode_vec(&jws.payload)
+        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid payload base64: {e}")))?;
+
+    Ok(ParsedJws {
+        payload,
+        signatures,
+    })
+}
+
+/// Verify one [`ParsedSignature`] against resolved key material.
+///
+/// The key family must match the signature's `alg`
+/// (`EdDSA`/`Ed25519` → [`VerifyKey::Ed25519`], `ES256` → [`VerifyKey::P256`],
+/// `ES256K` → [`VerifyKey::Secp256k1`]); a mismatch is an error so a message
+/// cannot smuggle a signature verified under an unexpected key type.
+pub fn verify_parsed_signature(sig: &ParsedSignature, key: &VerifyKey) -> Result<(), DIDCommError> {
+    match (sig.alg.as_str(), key) {
+        ("EdDSA" | "Ed25519", VerifyKey::Ed25519(pk)) => {
+            signing::verify(&sig.signing_input, &sig.signature, pk).map_err(DIDCommError::from)
+        }
+        ("ES256", VerifyKey::P256(pk)) => {
+            signing::verify_p256(&sig.signing_input, &sig.signature, pk).map_err(DIDCommError::from)
+        }
+        ("ES256K", VerifyKey::Secp256k1(pk)) => {
+            signing::verify_secp256k1(&sig.signing_input, &sig.signature, pk)
+                .map_err(DIDCommError::from)
+        }
+        (alg, _) => Err(DIDCommError::UnsupportedAlgorithm(format!(
+            "signature alg '{alg}' does not match the resolved key type"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,6 +627,129 @@ mod tests {
         assert_eq!(
             result.signer_kid.as_deref(),
             Some("did:example:alice#k256-1")
+        );
+    }
+
+    // ─── Multi-signature (parse_jws + verify_parsed_signature) ──────────────
+
+    /// A JWS carrying three signatures over the same payload (Ed25519, P-256,
+    /// secp256k1) parses into three entries, each of which verifies against
+    /// its own resolved key with the correct `alg`/kid attribution.
+    #[test]
+    fn multi_signature_all_verify() {
+        use crate::jws::sign::{JwsSigner, sign_multi};
+
+        let ed = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let p256 = P256SigningKey::random(&mut rand_core::OsRng);
+        let k256 = K256SigningKey::random(&mut rand_core::OsRng);
+
+        let payload = b"{\"type\":\"test\",\"from\":\"did:example:alice\"}";
+        let jws_str = sign_multi(
+            payload,
+            &[
+                JwsSigner::Ed25519 {
+                    kid: "did:example:alice#ed",
+                    private: &ed.to_bytes(),
+                },
+                JwsSigner::P256 {
+                    kid: "did:example:alice#p256",
+                    private: &p256.to_bytes().into(),
+                },
+                JwsSigner::Secp256k1 {
+                    kid: "did:example:alice#k256",
+                    private: &k256.to_bytes().into(),
+                },
+            ],
+        )
+        .unwrap();
+
+        let parsed = parse_jws(&jws_str).unwrap();
+        assert_eq!(parsed.payload, payload);
+        assert_eq!(parsed.signatures.len(), 3);
+
+        let keys = [
+            VerifyKey::Ed25519(ed.verifying_key().to_bytes()),
+            VerifyKey::P256(p256_pub_sec1(&p256)),
+            VerifyKey::Secp256k1(k256_pub_sec1(&k256)),
+        ];
+        for (sig, key) in parsed.signatures.iter().zip(keys.iter()) {
+            verify_parsed_signature(sig, key).expect("each signature verifies");
+        }
+
+        let kids: Vec<_> = parsed
+            .signatures
+            .iter()
+            .filter_map(|s| s.kid.clone())
+            .collect();
+        assert!(kids.contains(&"did:example:alice#ed".to_string()));
+        assert!(kids.contains(&"did:example:alice#p256".to_string()));
+        assert!(kids.contains(&"did:example:alice#k256".to_string()));
+    }
+
+    /// A signature whose resolved key family does not match its declared `alg`
+    /// must be rejected (algorithm/key confusion guard for the multi-sig path).
+    #[test]
+    fn verify_parsed_rejects_key_type_mismatch() {
+        use crate::jws::sign::{JwsSigner, sign_multi};
+
+        let ed = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let jws_str = sign_multi(
+            b"x",
+            &[JwsSigner::Ed25519 {
+                kid: "did:example:alice#ed",
+                private: &ed.to_bytes(),
+            }],
+        )
+        .unwrap();
+
+        let parsed = parse_jws(&jws_str).unwrap();
+        // Feed a P-256 key to an EdDSA signature.
+        let wrong = VerifyKey::P256(vec![0x04u8; 65]);
+        assert!(matches!(
+            verify_parsed_signature(&parsed.signatures[0], &wrong),
+            Err(DIDCommError::UnsupportedAlgorithm(_))
+        ));
+    }
+
+    /// One bad signature in an otherwise-valid multi-sig JWS is detectable —
+    /// the caller's strict "all must verify" policy relies on this.
+    #[test]
+    fn multi_signature_detects_one_bad() {
+        use crate::jws::sign::{JwsSigner, sign_multi};
+
+        let ed = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let p256 = P256SigningKey::random(&mut rand_core::OsRng);
+        let other_p256 = P256SigningKey::random(&mut rand_core::OsRng);
+
+        let jws_str = sign_multi(
+            b"payload",
+            &[
+                JwsSigner::Ed25519 {
+                    kid: "did:example:alice#ed",
+                    private: &ed.to_bytes(),
+                },
+                JwsSigner::P256 {
+                    kid: "did:example:alice#p256",
+                    private: &p256.to_bytes().into(),
+                },
+            ],
+        )
+        .unwrap();
+
+        let parsed = parse_jws(&jws_str).unwrap();
+        // Ed25519 sig verifies, but the P-256 sig checked against the WRONG key fails.
+        verify_parsed_signature(
+            &parsed.signatures[0],
+            &VerifyKey::Ed25519(ed.verifying_key().to_bytes()),
+        )
+        .expect("ed25519 ok");
+        assert!(
+            verify_parsed_signature(
+                &parsed.signatures[1],
+                &VerifyKey::P256(p256_pub_sec1(&other_p256))
+            )
+            .is_err(),
+            "wrong P-256 key must fail"
         );
     }
 }

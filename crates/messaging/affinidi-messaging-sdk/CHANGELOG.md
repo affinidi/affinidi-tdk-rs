@@ -1,5 +1,116 @@
 # Changelog
 
+## [0.19.0] - 2026-07-29
+
+> **BREAKING CHANGE.** `atm.unpack` now rejects non-authenticated envelopes by
+> default — it accepts only the authenticated-encryption wrappings
+> `authcrypt(plaintext)` and `authcrypt(sign(plaintext))`. Because the default
+> behaviour changes for every caller, this is a breaking release: the version
+> bumps `0.18 → 0.19` (a SemVer minor bump is the breaking increment for a `0.x`
+> crate). Restore the previous "accept anything" behaviour explicitly with
+> `ATMConfigBuilder::with_unpack_policy(UnpackPolicy { .. })` — see below.
+
+### Changed
+
+- **`atm.unpack` is now secure by default (behavioural change).** Unpacking now
+  enforces an [`UnpackPolicy`](src/config.rs) whose default accepts only
+  authenticated encryption — `authcrypt(plaintext)` and
+  `authcrypt(sign(plaintext))` — and enforces message-layer addressing
+  consistency: the inner `from` must equal the authcrypt sender key (`skid`)
+  DID (and a verified signer's DID when signed). This closes a forged-sender
+  authentication-bypass class where a message authcrypted by one key claims
+  another party's `from`. Apps that previously reconciled
+  `from`/`encrypted_from_kid` themselves can now trust `msg.from` on a returned
+  `Ok` and drop that logic.
+
+  Configure via `ATMConfigBuilder::with_unpack_policy(...)`. The policy is an
+  explicit allow-list of `MessageWrappingType` values (no `secure`/`permissive`
+  presets), so protocols expecting other wrappings (anoncrypt receipts, or the
+  layered `anoncrypt(authcrypt(plaintext))`) list exactly what they accept. The
+  same policy governs the message-pickup delivery drain, so messages pulled via
+  pickup get the identical secure-by-default guarantees as a direct `unpack`.
+
+### Added
+
+- **Layered (double) envelope unpacking.** `unpack` now iteratively removes
+  nested cryptographic layers, so the DIDComm-defined two-layer wrappings —
+  `anoncrypt(authcrypt(plaintext))`, `authcrypt(sign(plaintext))` and
+  `anoncrypt(sign(plaintext))` — decrypt/verify end-to-end (previously only a
+  single encryption layer plus an optional inner signature was handled).
+- **Multi-signature verification.** All JWS signatures are now verified (not
+  just the first), across Ed25519 / P-256 / secp256k1 signers. Addressing
+  consistency requires a verified signer whose DID matches the inner `from`, and
+  — for an `authcrypt(sign(plaintext))` message — the authcrypt `skid` must
+  match it too, binding `from == signer == authcrypt sender`.
+- **`UnpackMetadata` additive fields:** `wrapping: MessageWrappingType` (the
+  classified envelope combination) and `signers: Vec<String>` (every verified
+  signer `kid`).
+- **Opt-in poison-message channel.**
+  `ATMConfigBuilder::with_poison_message_channel(capacity)` enables a broadcast
+  channel (subscribe via `ATM::get_poison_channel`) that receives a
+  `PoisonMessage { attachment_id, raw, reason }` for every undeliverable inbound
+  message. All three inbound paths — the batch drain, the TSP-aware
+  `send_delivery_request_frames` drain, and live WebSocket delivery — report on
+  it *before* the message is purged/dropped, so a consumer can retain or
+  quarantine it instead of losing it to a log line. Off by default (unchanged
+  behaviour when not configured).
+
+### Security
+
+- **Message pickup is now secure by default (no more `accept_all`).** The
+  delivery drain unpacks every pulled attachment under the *configured*
+  `UnpackPolicy` — the same authenticated-encryption default as `atm.unpack` —
+  instead of a permissive "accept every wrapping" policy. An unauthenticated or
+  forged-`from` message sitting in the mediator queue is no longer surfaced to
+  the application; it is rejected (and purged) exactly as a direct `unpack`
+  would reject it. This closes an authentication-bypass gap where the pickup
+  transport did not honour the app's secure policy.
+- **Poison-message resistance on message pickup.** The delivery drain purges
+  (best-effort, by message id) any delivered attachment it *deterministically*
+  cannot process — malformed base64/utf8, an unsupported attachment type, or a
+  message the policy rejects (a disallowed wrapping, too many signatures, an
+  addressing mismatch, or a non-conformant envelope) — from the mediator, so a
+  crafted "poison" message can't be redelivered every pickup cycle and stall the
+  queue (or, under backpressure, the mediator connection). Failures that might
+  be *transient* (e.g. a temporarily unresolvable signer DID) are left queued
+  for retry. All three inbound paths — `send_delivery_request`, the TSP-aware
+  `send_delivery_request_frames`, and live WebSocket delivery — apply this
+  policy, and each reports undeliverable messages to the opt-in poison channel
+  (see *Added*) before purging/dropping them.
+- **`UnpackPolicy::max_signatures` (default `5`) — bounded signature
+  verification.** The policy's signature cap is enforced *before* any signer
+  DID is resolved, so a crafted message stuffed with signature entries cannot
+  amplify (potentially networked) DID-resolution work: a JWS carrying more than
+  `max_signatures` entries is rejected with `ATMError::UnexpectedEnvelope`
+  without resolving a single key. The default accepts up to **5** signers; raise
+  it to any value your protocol expects (there is no absolute ceiling above your
+  policy) or lower it (e.g. `max_signatures: 1`) for single-signer only. Every
+  signature within the cap is fully verified.
+- **Bounded JWE recipients (DoS guard) + `UnpackPolicy::max_recipients`.** A JWE
+  layer addressing more than `max_recipients` (default `100`) recipients is
+  rejected before the recipient-matching loop — the same policy-driven bound as
+  `max_signatures`, with no separate absolute ceiling above your policy. The
+  default is deliberately permissive because a receiver is legitimately one of
+  many recipients; decryption runs the key agreement once (for the matched
+  recipient), so this bounds parse/allocation cost, not asymmetric-crypto work.
+  Lower it (e.g. `max_recipients: 1`) for stricter one-to-one deployments.
+- **Anonymous (`anoncrypt`) messages must not claim a `from`.** With addressing
+  consistency enabled (the default), a pure `anoncrypt(plaintext)` that declares
+  an inner `from` is rejected (`ATMError::AddressingMismatch`): anonymous
+  encryption carries no authenticated sender, so a `from` there is an unbacked,
+  spoofable claim. `anoncrypt(sign(plaintext))` is unaffected — the signature
+  authenticates the `from`, which is preserved under the anoncrypt wrapping.
+- **Removed the non-conformant `anoncrypt(authcrypt(sign(plaintext)))` wrapping.**
+  The DIDComm v2 spec (§IANA Media Types) explicitly states this combination
+  MUST NOT be used (`anoncrypt(sign(plaintext))` covers the same need). The
+  `MessageWrappingType::AnoncryptAuthcryptSignPlaintext` variant is removed, and
+  `unpack` now rejects the triple layering as `ATMError::UnexpectedEnvelope`.
+- **Cryptographic nesting capped at 2 layers.** No DIDComm-defined wrapping
+  nests more than two crypto layers, so `unpack` now rejects a third (or deeper)
+  JWE/JWS layer *before* removing it (`ATMError::UnexpectedEnvelope`), replacing
+  the previous depth-6 guard. This enforces the taxonomy structurally and bounds
+  decrypt/verify work against a nested-envelope DoS.
+
 ## [0.18.65] - 2026-07-29
 
 ### Changed

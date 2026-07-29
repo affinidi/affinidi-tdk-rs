@@ -10,6 +10,7 @@ pub mod pack;
 pub mod problem_report;
 pub mod sending;
 pub mod unpack;
+pub mod wrapping;
 
 // ── Re-exports of the storage-trait–facing message vocabulary ──────────
 //
