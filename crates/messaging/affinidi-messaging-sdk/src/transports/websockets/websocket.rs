@@ -713,7 +713,10 @@ impl WebSocketTransport {
                 // A live frame that fails to unpack (e.g. an unauthenticated
                 // wrapping the secure policy rejects) is dropped here; surface it
                 // on the optional poison channel so a consumer can observe or
-                // quarantine it instead of losing it to a log line.
+                // quarantine it instead of losing it to a log line. The mediator
+                // ids a message by `sha256(packed message)` and live-delivers
+                // those exact bytes, so `sha256(&message)` is the mediator
+                // message id — the same identifier the pickup drain reports.
                 crate::protocols::message_pickup::emit_poison(
                     atm,
                     Some(sha256::digest(&message)),
@@ -1163,6 +1166,11 @@ mod tests {
         .to("did:example:recipient".to_string())
         .finalize();
         let raw = serde_json::to_string(&plaintext).unwrap();
+        // The mediator derives a message's id as `sha256(packed message)` and
+        // live-delivers those exact bytes (see the mediator store's
+        // `store_message` / `store_and_stream`), so hashing the received frame
+        // reproduces the mediator message id — the same identifier the pickup
+        // drain reports and deletes by.
         let hash = sha256::digest(&raw);
 
         ws.process_inbound_didcomm_message(&atm, raw.clone()).await;
@@ -1172,7 +1180,7 @@ mod tests {
         assert_eq!(
             p.attachment_id.as_deref(),
             Some(hash.as_str()),
-            "reported with the mediator message id (sha256 of the frame)"
+            "reported with the mediator message id (sha256 of the delivered frame)"
         );
         assert!(!p.reason.is_empty(), "a rejection reason is included");
         assert!(rx.try_recv().is_err(), "exactly one poison event");
