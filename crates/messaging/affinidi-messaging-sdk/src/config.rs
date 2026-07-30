@@ -34,8 +34,11 @@ pub struct UnpackPolicy {
     pub expected: Vec<MessageWrappingType>,
     /// Enforce message-layer addressing consistency across the unwrapped
     /// layers: the inner `from` DID must equal the authcrypt `skid` DID (when
-    /// encrypted) and a verified signer's DID (when signed). Disable only for
-    /// debugging in trusted environments.
+    /// encrypted) and a verified signer's DID (when signed). An **authenticated**
+    /// message (signed or authcrypt) with **no** `from` is therefore rejected —
+    /// it has an authenticated identity but nothing to bind it to, so `msg.from`
+    /// could not be trusted; a pure `anoncrypt` message is anonymous and may
+    /// omit `from`. Disable only for debugging in trusted environments.
     pub validate_addressing_consistency: bool,
     /// Maximum number of signatures accepted on a signed message, enforced
     /// *before* any signer DID is resolved — so it doubles as the guard

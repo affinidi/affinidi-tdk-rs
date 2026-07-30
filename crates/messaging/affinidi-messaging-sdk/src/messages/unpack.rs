@@ -594,6 +594,14 @@ impl SharedState {
     /// - an authcrypt layer requires its `skid` DID to equal the inner `from`
     ///   DID.
     ///
+    /// Consequently an **authenticated** message (signed or authcrypt) that
+    /// carries **no** `from` is rejected as an [`ATMError::AddressingMismatch`]:
+    /// it has an authenticated identity but no `from` to bind it to, so
+    /// `msg.from` could not be trusted. This is intentional and symmetric across
+    /// the two branches. A pure `anoncrypt` message is *anonymous* and may
+    /// legitimately omit `from` (accepted); only a `from` it cannot back is
+    /// rejected.
+    ///
     /// Together these bind `from` == signer == authcrypt sender across up to
     /// three layers.
     fn enforce_policy(
