@@ -187,6 +187,7 @@ impl SharedState {
         let mut encrypted_from_kid: Option<String> = None;
         let mut encrypted_to_kids: Vec<String> = Vec::new();
         let mut signers: Vec<String> = Vec::new();
+        let mut unverified_signers: Vec<String> = Vec::new();
 
         loop {
             let value: serde_json::Value = serde_json::from_str(&current).map_err(|e| {
@@ -225,16 +226,18 @@ impl SharedState {
                 current = plaintext;
                 continue;
             } else if is_jws {
-                // JWS — verify every signature and attribute each signer.
-                let (payload, signer_kids) =
+                // JWS — verify each signature and attribute the signers.
+                let (payload, verified_kids, unverified_kids) =
                     self.verify_all_signatures(&current, policy, budget).await?;
                 non_repudiation = true;
                 // Accumulate across layers (outermost first) rather than
                 // overwrite — a second JWS layer must not erase the outer
                 // signer from metadata. (Such a stack is rejected by the
                 // wrapping taxonomy in `enforce_policy`, but the metadata must
-                // still be faithful.)
-                signers.extend(signer_kids);
+                // still be faithful.) `unverified_kids` is non-empty only when
+                // `allow_invalid_signatures` tolerated a failed co-signature.
+                signers.extend(verified_kids);
+                unverified_signers.extend(unverified_kids);
                 layers.push(EnvLayer::Signed);
                 current = payload;
                 continue;
@@ -255,6 +258,7 @@ impl SharedState {
                     encrypted_from_kid,
                     encrypted_to_kids,
                     signers,
+                    unverified_signers,
                     sha256_hash: sha256_hash.to_string(),
                     ..Default::default()
                 };
@@ -473,12 +477,25 @@ impl SharedState {
     /// their *targets*; constraining which hosts may be reached (resolver
     /// allow-list / SSRF protection) is the DID resolver's responsibility, not
     /// `unpack`'s.
+    /// Verify signatures on a JWS layer, resolving each signer's key (Ed25519 /
+    /// P-256 / secp256k1) from its DID document. Returns the decoded payload
+    /// (which may be a further envelope), the **verified** signer `kid`s, and any
+    /// **unverified** ones.
+    ///
+    /// Strict by default: any signature that lacks a `kid`, whose key cannot be
+    /// resolved (unknown DID or a curve this build doesn't support), or whose
+    /// signature is invalid, fails the whole unpack. When
+    /// [`ATMConfig::allow_invalid_signatures`] is set, such a signature is
+    /// instead recorded in the returned *unverified* list and unpacking
+    /// continues — the authoritative (`from`-matching) signature is still
+    /// required to verify by the addressing-consistency check, so only
+    /// supplementary co-signatures are relaxed.
     async fn verify_all_signatures(
         &self,
         jws_str: &str,
         policy: &UnpackPolicy,
         budget: &mut usize,
-    ) -> Result<(String, Vec<String>), ATMError> {
+    ) -> Result<(String, Vec<String>, Vec<String>), ATMError> {
         use affinidi_messaging_didcomm::jws::verify::{parse_jws, verify_parsed_signature};
 
         let parsed = parse_jws(jws_str)
@@ -495,39 +512,55 @@ impl SharedState {
             )));
         }
 
-        let mut signer_kids = Vec::with_capacity(parsed.signatures.len());
+        let tolerate = self.config.allow_invalid_signatures();
+        let mut verified: Vec<String> = Vec::with_capacity(parsed.signatures.len());
+        let mut unverified: Vec<String> = Vec::new();
         for sig in &parsed.signatures {
-            let kid = sig.kid.clone().ok_or_else(|| {
-                ATMError::DidcommError(
+            // Missing signer kid: nothing to resolve or attribute.
+            let Some(kid) = sig.kid.clone() else {
+                if tolerate {
+                    unverified.push("<no kid>".to_string());
+                    continue;
+                }
+                return Err(ATMError::DidcommError(
                     "Invalid JWS".into(),
                     "a signature is missing its signer kid".into(),
-                )
-            })?;
+                ));
+            };
             // Charge the per-message resolution budget before resolving the
             // signer DID (a networked fetch for `did:web`).
             charge_resolution(budget)?;
-            let key = self.resolve_verify_key(&kid).await.ok_or_else(|| {
-                ATMError::DidcommError(
+            let Some(key) = self.resolve_verify_key(&kid).await else {
+                // Unresolvable DID or a curve this build can't handle.
+                if tolerate {
+                    unverified.push(kid);
+                    continue;
+                }
+                return Err(ATMError::DidcommError(
                     "Couldn't verify JWS".into(),
                     format!("could not resolve a verification key for '{kid}'"),
-                )
-            })?;
-            verify_parsed_signature(sig, &key).map_err(|e| {
-                // A verification failure (bad signature or alg/key mismatch) is
-                // *deterministic* — unlike the resolution failure above, it
-                // fails identically on every retry, so it is a distinct variant
-                // the pickup drain can purge instead of re-queuing forever.
-                ATMError::VerificationFailed(format!("signer '{kid}': {e}"))
-            })?;
-            // Prefer the kid the signature actually carried.
-            signer_kids.push(kid);
+                ));
+            };
+            match verify_parsed_signature(sig, &key) {
+                Ok(()) => verified.push(kid),
+                Err(e) => {
+                    // A verification failure (bad signature or alg/key mismatch)
+                    // is *deterministic* — the pickup drain purges it (distinct
+                    // `VerificationFailed` variant) rather than re-queuing.
+                    if tolerate {
+                        unverified.push(kid);
+                        continue;
+                    }
+                    return Err(ATMError::VerificationFailed(format!("signer '{kid}': {e}")));
+                }
+            }
         }
 
         let payload = String::from_utf8(parsed.payload).map_err(|e| {
             ATMError::DidcommError("JWS payload is not valid UTF-8".into(), e.to_string())
         })?;
 
-        Ok((payload, signer_kids))
+        Ok((payload, verified, unverified))
     }
 
     /// Resolve a signer's public verification key for a `kid` by resolving its
@@ -2748,6 +2781,140 @@ mod tests {
             matches!(err, ATMError::VerificationFailed(_)),
             "one invalid signature must fail the whole unpack as a \
              (deterministic) VerificationFailed, got: {err:?}"
+        );
+    }
+
+    /// Build a `sign(sender) + sign(cosigner)` plaintext, then corrupt one of the
+    /// two signatures. `corrupt_index` selects which (0 = the `from` signer).
+    fn signed_with_one_corrupt_signature(
+        sender_did: &str,
+        sed_priv: &[u8; 32],
+        cosigner_did: &str,
+        ced_priv: &[u8; 32],
+        corrupt_index: usize,
+    ) -> String {
+        let plaintext = build_plaintext(sender_did, "did:example:recipient");
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[
+                JwsSigner::Ed25519 {
+                    kid: &format!("{sender_did}#key-1"),
+                    private: sed_priv,
+                },
+                JwsSigner::Ed25519 {
+                    kid: &format!("{cosigner_did}#key-1"),
+                    private: ced_priv,
+                },
+            ],
+        )
+        .unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&signed).unwrap();
+        let sig = v["signatures"][corrupt_index]["signature"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let first = sig.chars().next().unwrap();
+        let repl = if first == 'A' { 'B' } else { 'A' };
+        let corrupted: String = std::iter::once(repl).chain(sig.chars().skip(1)).collect();
+        v["signatures"][corrupt_index]["signature"] = serde_json::Value::String(corrupted);
+        serde_json::to_string(&v).unwrap()
+    }
+
+    /// An ATM built with the given policy and `allow_invalid_signatures`.
+    async fn atm_with_policy_and_tolerance(policy: UnpackPolicy, tolerate: bool) -> ATM {
+        use affinidi_tdk_common::config::TDKConfig;
+        let config = ATMConfig::builder()
+            .with_unpack_policy(policy)
+            .with_allow_invalid_signatures(tolerate)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        ATM::new(config, tdk).await.unwrap()
+    }
+
+    /// `allow_invalid_signatures = true` tolerates a *supplementary* co-signature
+    /// that doesn't verify: the message still unpacks, the valid `from` signer is
+    /// bound to `sign_from`, and the bad co-signer is recorded in
+    /// `metadata.unverified_signers` (not `signers`). The default (strict) mode
+    /// rejects the same message.
+    #[tokio::test]
+    async fn allow_invalid_signatures_tolerates_a_bad_cosignature() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+        let (cosigner_did, ced, _cx) = generate_peer_did_full();
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let ced_priv: [u8; 32] = ced.get_private_bytes().try_into().unwrap();
+
+        // The co-signer (signature #1) is corrupt; the `from` signer (#0) is fine.
+        let tampered =
+            signed_with_one_corrupt_signature(&sender_did, &sed_priv, &cosigner_did, &ced_priv, 1);
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 2,
+            max_recipients: 2,
+        };
+
+        // Strict (default): the bad co-signature fails the whole unpack.
+        let strict = create_atm_with_policy(vec![], policy.clone()).await;
+        assert!(
+            matches!(
+                strict.unpack(&tampered).await.unwrap_err(),
+                ATMError::VerificationFailed(_)
+            ),
+            "strict mode must reject a message with any invalid signature"
+        );
+
+        // Tolerant: unpacks, binds the valid `from` signer, records the co-signer.
+        let lenient = atm_with_policy_and_tolerance(policy, true).await;
+        let (msg, meta) = lenient
+            .unpack(&tampered)
+            .await
+            .expect("a bad co-signature is tolerated when allow_invalid_signatures is set");
+        assert_eq!(msg.from.as_deref(), Some(sender_did.as_str()));
+        assert_eq!(meta.signers, vec![format!("{sender_did}#key-1")]);
+        assert_eq!(
+            meta.unverified_signers,
+            vec![format!("{cosigner_did}#key-1")]
+        );
+        assert_eq!(
+            meta.sign_from.as_deref(),
+            Some(format!("{sender_did}#key-1").as_str()),
+            "sign_from is bound to the verified `from` signer, never an unverified one"
+        );
+    }
+
+    /// Even with `allow_invalid_signatures = true`, the **authoritative**
+    /// (`from`-matching) signature must still verify: if it is the one that's
+    /// bad, addressing consistency has no verified signer matching `from`, so the
+    /// message is rejected. Tolerance only ever relaxes co-signatures.
+    #[tokio::test]
+    async fn allow_invalid_signatures_still_requires_the_authoritative_signature() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+        let (cosigner_did, ced, _cx) = generate_peer_did_full();
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let ced_priv: [u8; 32] = ced.get_private_bytes().try_into().unwrap();
+
+        // This time the `from` signer's own signature (#0) is corrupt.
+        let tampered =
+            signed_with_one_corrupt_signature(&sender_did, &sed_priv, &cosigner_did, &ced_priv, 0);
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 2,
+            max_recipients: 2,
+        };
+        let lenient = atm_with_policy_and_tolerance(policy, true).await;
+
+        let err = lenient.unpack(&tampered).await.unwrap_err();
+        assert!(
+            matches!(err, ATMError::AddressingMismatch(_)),
+            "the authoritative `from` signature must verify even in tolerant mode, got: {err:?}"
         );
     }
 

@@ -51,11 +51,22 @@
   consistency requires a verified signer whose DID matches the inner `from`, and
   — for an `authcrypt(sign(plaintext))` message — the authcrypt `skid` must
   match it too, binding `from == signer == authcrypt sender`.
-- **`UnpackMetadata` additive fields + sealing.** Two new public fields —
-  `wrapping: MessageWrappingType` (the classified envelope combination) and
-  `signers: Vec<String>` (every verified signer `kid`). The struct is now
-  `#[non_exhaustive]`: it is a value the SDK *returns* (downstream reads it), so
-  sealing it makes future field additions non-breaking. Downstream code that
+- **Tolerate non-authoritative signatures (opt-in).** By default every
+  signature must verify, so a single co-signature you don't control (a missing
+  `kid`, an unresolvable signer DID, a curve this build can't handle — e.g.
+  P-384, or an invalid signature) makes the whole message undeliverable.
+  `ATMConfigBuilder::with_allow_invalid_signatures(true)` keeps unpacking such a
+  message and records the offending signers in the new
+  `UnpackMetadata::unverified_signers` list instead — the authoritative
+  (`from`-matching) signature must still verify under addressing consistency, so
+  only *supplementary* co-signatures are relaxed.
+- **`UnpackMetadata` additive fields + sealing.** New public fields —
+  `wrapping: MessageWrappingType` (the classified envelope combination),
+  `signers: Vec<String>` (every *verified* signer `kid`), and
+  `unverified_signers: Vec<String>` (signers tolerated by
+  `allow_invalid_signatures`; empty in the default strict mode). The struct is
+  now `#[non_exhaustive]`: it is a value the SDK *returns* (downstream reads it),
+  so sealing it makes future field additions non-breaking. Downstream code that
   built it by struct literal must switch to reading it (or, if it must produce
   one, `UnpackMetadata::default()` + field assignment).
 - **Opt-in unprocessable-message channel.**

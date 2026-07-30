@@ -116,6 +116,17 @@ pub struct ATMConfig {
     /// relaxing the policy instead of being permanently deleted.
     pub(crate) delete_unprocessable_messages: bool,
 
+    /// When a signed message carries multiple signatures, whether to tolerate
+    /// non-authoritative ones that don't verify. `false` (default) fails the
+    /// whole unpack if *any* signature is missing a `kid`, has an unresolvable
+    /// signer DID, uses an unsupported curve, or is invalid. `true` records such
+    /// signatures in [`crate::messages::compat::UnpackMetadata::unverified_signers`]
+    /// and keeps unpacking — the authoritative (`from`-matching) signature must
+    /// still verify under `unpack_policy.validate_addressing_consistency`, so
+    /// this only relaxes *supplementary* co-signatures (e.g. a notary using a
+    /// curve this build can't resolve).
+    pub(crate) allow_invalid_signatures: bool,
+
     /// Should we auto unpack forwarded messages?
     pub(crate) unpack_forwards: bool,
 
@@ -193,6 +204,14 @@ impl ATMConfig {
         self.delete_unprocessable_messages
     }
 
+    /// Whether unpack tolerates non-authoritative signatures that don't verify
+    /// (recording them in
+    /// [`crate::messages::compat::UnpackMetadata::unverified_signers`]).
+    /// Default `false`.
+    pub fn allow_invalid_signatures(&self) -> bool {
+        self.allow_invalid_signatures
+    }
+
     /// The clock backing the SDK's expiry / TTL decisions.
     pub(crate) fn clock(&self) -> &Arc<dyn Clock> {
         &self.clock
@@ -249,6 +268,7 @@ pub struct ATMConfigBuilder {
     unprocessable_message_channel:
         Option<Sender<crate::protocols::message_pickup::UnprocessableMessage>>,
     delete_unprocessable_messages: bool,
+    allow_invalid_signatures: bool,
     unpack_forwards: bool,
     unpack_policy: UnpackPolicy,
     discover_features: DiscoverFeatures,
@@ -272,6 +292,7 @@ impl Default for ATMConfigBuilder {
             inbound_message_channel: None,
             unprocessable_message_channel: None,
             delete_unprocessable_messages: true,
+            allow_invalid_signatures: false,
             unpack_forwards: true,
             unpack_policy: UnpackPolicy::default(),
             discover_features: DiscoverFeatures::default(),
@@ -347,6 +368,21 @@ impl ATMConfigBuilder {
     /// [`Self::with_unprocessable_message_channel`] to observe what is affected.
     pub fn with_delete_unprocessable_messages(mut self, delete: bool) -> Self {
         self.delete_unprocessable_messages = delete;
+        self
+    }
+
+    /// Tolerate non-authoritative signatures that fail to verify when a signed
+    /// message carries more than one signature. Default `false` (strict: any
+    /// signature that is missing a `kid`, has an unresolvable/unsupported signer
+    /// key, or is invalid fails the whole unpack). Set `true` to keep unpacking
+    /// and record the offending signatures in
+    /// [`UnpackMetadata::unverified_signers`](crate::messages::compat::UnpackMetadata)
+    /// instead — the authoritative (`from`-matching) signature must still verify
+    /// under `validate_addressing_consistency`, so this relaxes only
+    /// supplementary co-signatures (e.g. a third-party notary using a curve this
+    /// build can't resolve).
+    pub fn with_allow_invalid_signatures(mut self, allow: bool) -> Self {
+        self.allow_invalid_signatures = allow;
         self
     }
 
@@ -531,6 +567,7 @@ impl ATMConfigBuilder {
             inbound_message_channel: self.inbound_message_channel,
             unprocessable_message_channel: self.unprocessable_message_channel,
             delete_unprocessable_messages: self.delete_unprocessable_messages,
+            allow_invalid_signatures: self.allow_invalid_signatures,
             unpack_forwards: self.unpack_forwards,
             unpack_policy: self.unpack_policy,
             discover_features: Arc::new(RwLock::new(discover_features)),

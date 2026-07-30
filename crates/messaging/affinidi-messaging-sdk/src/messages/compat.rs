@@ -38,6 +38,14 @@ pub struct UnpackMetadata {
     /// messages.
     #[serde(default)]
     pub signers: Vec<String>,
+    /// Signer `kid`s whose signature could **not** be verified (missing `kid`,
+    /// unresolvable signer DID, unsupported curve, or an invalid signature),
+    /// recorded only when [`crate::config::ATMConfig::allow_invalid_signatures`]
+    /// tolerated them instead of failing the unpack. Empty in the default
+    /// (strict) mode. The authoritative (`from`-matching) signature is never
+    /// here when addressing consistency is enforced: it must verify.
+    #[serde(default)]
+    pub unverified_signers: Vec<String>,
 }
 
 /// Compatibility type for the legacy `PackEncryptedMetadata`.
