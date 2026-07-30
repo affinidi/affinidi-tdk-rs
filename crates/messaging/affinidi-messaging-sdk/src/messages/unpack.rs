@@ -5,7 +5,7 @@ use base64::{Engine, prelude::BASE64_URL_SAFE};
 use tracing::{Instrument, Level, debug, span, warn};
 
 use crate::config::UnpackPolicy;
-use crate::messages::wrapping::{EncLayerKind, MessageWrappingType};
+use crate::messages::wrapping::{CryptoLayer, EncLayerKind, MessageWrappingType};
 
 impl ATM {
     pub async fn unpack(&self, message: &str) -> Result<(Message, UnpackMetadata), ATMError> {
@@ -185,7 +185,12 @@ impl SharedState {
                 // JWS — verify every signature and attribute each signer.
                 let (payload, signer_kids) = self.verify_all_signatures(&current, policy).await?;
                 non_repudiation = true;
-                signers = signer_kids;
+                // Accumulate across layers (outermost first) rather than
+                // overwrite — a second JWS layer must not erase the outer
+                // signer from metadata. (Such a stack is rejected by the
+                // wrapping taxonomy in `enforce_policy`, but the metadata must
+                // still be faithful.)
+                signers.extend(signer_kids);
                 layers.push(EnvLayer::Signed);
                 current = payload;
                 continue;
@@ -522,23 +527,26 @@ impl SharedState {
         layers: &[EnvLayer],
         policy: &UnpackPolicy,
     ) -> Result<(), ATMError> {
-        // Encryption layers, outermost-first, plus whether a signature layer exists.
-        let mut enc_layers: Vec<EncLayerKind> = Vec::new();
+        // Rebuild the ordered layer stack (outermost-first), preserving each
+        // signature's position relative to the encryption layers — the wrapping
+        // taxonomy depends on it (`sign(authcrypt(pt))` is not the same as
+        // `authcrypt(sign(pt))`). Also capture the authcrypt sender `skid` for
+        // the addressing-consistency check below.
+        let mut crypto_layers: Vec<CryptoLayer> = Vec::with_capacity(layers.len());
         let mut authcrypt_skid: Option<String> = None;
-        let mut signed = false;
         for layer in layers {
             match layer {
                 EnvLayer::Encrypted { kind, skid } => {
-                    enc_layers.push(*kind);
+                    crypto_layers.push(CryptoLayer::Encrypted(*kind));
                     if *kind == EncLayerKind::Authcrypt && authcrypt_skid.is_none() {
                         authcrypt_skid = skid.clone();
                     }
                 }
-                EnvLayer::Signed => signed = true,
+                EnvLayer::Signed => crypto_layers.push(CryptoLayer::Sign),
             }
         }
 
-        let wrapping = MessageWrappingType::classify(&enc_layers, signed).ok_or_else(|| {
+        let wrapping = MessageWrappingType::classify(&crypto_layers).ok_or_else(|| {
             ATMError::UnexpectedEnvelope(
                 "message envelope layering is outside the DIDComm-defined wrapping taxonomy".into(),
             )
@@ -559,7 +567,7 @@ impl SharedState {
 
         // Attribute a signer to `sign_from` (best-effort): prefer the signature
         // whose DID matches `from`, else the first signer.
-        if signed {
+        if wrapping.is_signed() {
             let matching = from.and_then(|f| {
                 metadata
                     .signers
@@ -1927,6 +1935,45 @@ mod tests {
         assert!(
             matches!(err, ATMError::AddressingMismatch(_)),
             "forged `from` must be an AddressingMismatch, got: {err:?}"
+        );
+    }
+
+    /// The impostor wrapping `sign(authcrypt(plaintext))` — signature *outside*
+    /// the encryption — must be rejected, even though `authcrypt(sign(pt))`
+    /// (signature inside) is accepted by the same default policy. The two are
+    /// not equivalent: with the signature outside, any intermediary can strip
+    /// the outer JWS and forward the bare authcrypt. Classification is
+    /// layer-order sensitive, so this lands as `UnexpectedEnvelope` (outside the
+    /// taxonomy), not as the `AuthcryptSignPlaintext` it superficially resembles.
+    #[tokio::test]
+    async fn default_policy_rejects_sign_over_authcrypt() {
+        let (sender_did, sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+        let recipient = create_atm_with_policy(vec![rx.clone()], UnpackPolicy::default()).await;
+
+        // authcrypt first, then sign the JWE — i.e. sign(authcrypt(pt)).
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let jwe = authcrypt(
+            plaintext.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &x25519_priv(&sx),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let outer_signed = sign_multi(
+            jwe.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{sender_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+
+        let err = recipient.unpack(&outer_signed).await.unwrap_err();
+        assert!(
+            matches!(err, ATMError::UnexpectedEnvelope(_)),
+            "sign-over-authcrypt must be rejected as outside the taxonomy, got: {err:?}"
         );
     }
 
