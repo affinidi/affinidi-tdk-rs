@@ -160,6 +160,18 @@
   JWE/JWS layer *before* removing it (`ATMError::UnexpectedEnvelope`), replacing
   the previous depth-6 guard. This enforces the taxonomy structurally and bounds
   decrypt/verify work against a nested-envelope DoS.
+- **Scope note — this hardens the SDK `unpack`, not the mediator's own unpack
+  path (follow-up).** The mediator authenticates callers through its separate
+  `didcomm_compat` unpack, which this release does not change, so it does *not*
+  yet enforce the new layer-ordering `UnpackPolicy` (e.g. rejecting
+  sign-outside-encrypt or repeated encryption layers). This is not a mediator
+  admin-auth bypass: mediator identity is anchored on the authcrypt sender key
+  (`skid`) proven by ECDH-1PU decryption and bound to the authenticated session
+  DID (`force_session_did_match`), with the `explicit_allow` gate rejecting
+  unknown DIDs — the plaintext `from` is only ever checked *against* that
+  cryptographic identity, never trusted on its own. Converging the mediator's
+  `didcomm_compat` path onto the same `UnpackPolicy` is a tracked follow-up so
+  both unpack paths enforce identical crypto-layer policy.
 
 ## [0.18.65] - 2026-07-29
 

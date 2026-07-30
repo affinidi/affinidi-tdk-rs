@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
+## [0.8.5] - 2026-07-30
+
+### Changed
+
+- Track `affinidi-messaging-sdk` 0.19.0 (secure-by-default `unpack`). Dependency
+  bump only; no API or behavioural change in this crate.
+
 ## [0.8.4] - 2026-07-19
 
 ### Changed
