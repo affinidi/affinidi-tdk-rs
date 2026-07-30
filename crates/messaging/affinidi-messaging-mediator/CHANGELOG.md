@@ -74,6 +74,15 @@ No behavioural change to send/ack/reconnect semantics.
 
 ## Changelog history
 
+## 30th July 2026
+
+### 0.18.1 — track affinidi-messaging-sdk 0.19.0
+
+Dependency bump to `affinidi-messaging-sdk` 0.19.0 (secure-by-default `unpack`).
+Adapts the `didcomm_compat` shim to the now-sealed (`#[non_exhaustive]`)
+`UnpackMetadata` / `PackEncryptedMetadata` by constructing them via `Default` +
+field assignment. No change to mediator behaviour or wire protocol.
+
 ## 29th July 2026
 
 ### 0.18.0 — BREAKING: `explicit_allow` now closes the mediator at authentication (#669)

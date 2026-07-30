@@ -27,6 +27,14 @@ back.
 
 ## Changelog history
 
+## 30th July 2026
+
+### 0.2.45 — track mediator 0.18.1 / sdk 0.19.0
+
+Dependency bump for `affinidi-messaging-mediator` 0.18.1 and
+`affinidi-messaging-sdk` 0.19.0 (secure-by-default `unpack`). The fixture's own
+behaviour is unchanged.
+
 ## 29th July 2026
 
 ### 0.2.44 — track mediator 0.18 (explicit_allow authentication gate) (#669)
