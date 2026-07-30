@@ -457,6 +457,22 @@ impl SharedState {
     /// signature is invalid, fails the whole unpack. Returns the decoded
     /// payload (which may be a further envelope) and every verified signer
     /// `kid`.
+    ///
+    /// # Security
+    ///
+    /// The `kid` that selects which DID is resolved comes from the signature
+    /// header — the protected header if present, otherwise the per-signature
+    /// *unprotected* header (`parse_jws`'s interop fallback) — and is read
+    /// *before* the signature is verified. On an untrusted JWS this DID is
+    /// therefore attacker-chosen: a JWS that will ultimately fail verification
+    /// can still trigger resolution of a `did:web` (an outbound HTTPS fetch) of
+    /// the attacker's choosing, and — because the unprotected header is not
+    /// covered by the signature — an intermediary can even redirect it on a
+    /// message whose protected header omits `kid`. The per-message
+    /// [`resolution_budget`] bounds the *count* of these resolutions but not
+    /// their *targets*; constraining which hosts may be reached (resolver
+    /// allow-list / SSRF protection) is the DID resolver's responsibility, not
+    /// `unpack`'s.
     async fn verify_all_signatures(
         &self,
         jws_str: &str,
