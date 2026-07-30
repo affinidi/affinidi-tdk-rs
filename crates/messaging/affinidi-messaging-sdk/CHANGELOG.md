@@ -83,13 +83,25 @@
   it *before* the message is deleted/dropped, so a consumer can observe or
   quarantine it instead of losing it to a log line. Off by default (unchanged
   behaviour when not configured).
-- **Configurable deletion of unprocessable messages.**
-  `ATMConfigBuilder::with_delete_unprocessable_messages(bool)` (default `true`)
-  controls whether the pickup drain deletes an unprocessable message from the
-  mediator queue. Set `false` to *retain* such messages — useful during an
+- **Configurable deletion of policy-rejected pickup messages
+  (`with_purge_policy_rejected_messages`).** The pickup drain decides deletion
+  by *recoverability*. Non-recoverable input — malformed base64/UTF-8, an
+  unsupported attachment type, or a cryptographically invalid signature
+  (`VerificationFailed`) — is **always** deleted so it can't be redelivered every
+  pickup and fill the queue. A message the *policy* rejected — a disallowed
+  wrapping (`UnexpectedEnvelope`) or an addressing mismatch
+  (`AddressingMismatch`) — is also **deleted by default**, because the mediator's
+  per-recipient queue is bounded (a fixed message limit) and a retained reject is
+  redelivered every pickup, so it would accumulate and eventually fill the queue,
+  blocking new inbound messages. Set
+  `ATMConfigBuilder::with_purge_policy_rejected_messages(false)` to *retain*
+  policy-rejected messages instead — e.g. for a bounded window during an
   `unpack_policy` tightening/upgrade, so a message rejected only by the stricter
-  policy can be recovered by relaxing the policy rather than being permanently
-  deleted. Pair with the channel above to observe what would be affected.
+  policy can be recovered by relaxing the policy (accepting that retained rejects
+  count against the queue limit). Pair with the channel above to observe what is
+  affected. (Review note: an opt-in *purge* was suggested, but the mediator's
+  bounded per-recipient queue makes delete-by-default the safe choice — so the
+  deletion stays the default and an opt-in *retain* is provided instead.)
 
 ### Security
 
@@ -102,20 +114,23 @@
   would reject it. This closes an authentication-bypass gap where the pickup
   transport did not honour the app's secure policy.
 - **Unprocessable-message resistance on message pickup.** The delivery drain
-  deletes (best-effort, by message id) any delivered attachment it
-  *deterministically* cannot process — malformed base64/utf8, an unsupported
-  attachment type, or a message that fails to unpack (a disallowed wrapping, an
-  invalid signature, too many signatures, an addressing mismatch, or a
-  non-conformant envelope) — from the mediator, so a crafted "poison" message
-  can't be redelivered every pickup cycle and stall the queue (or, under
-  backpressure, the mediator connection). Failures that might be *transient*
-  (e.g. a temporarily unresolvable signer DID) are always left queued for retry.
-  Deletion is on by default but can be disabled with
-  `with_delete_unprocessable_messages(false)` (see *Added*) to retain such
-  messages on the mediator. All three inbound paths — `send_delivery_request`,
-  the TSP-aware `send_delivery_request_frames`, and live WebSocket delivery —
-  apply this policy and report to the opt-in unprocessable-message channel before
-  deleting/dropping.
+  removes messages it can never process so a crafted "poison" message can't be
+  redelivered every pickup cycle, fill the bounded queue, and stall it (or, under
+  backpressure, the mediator connection). Deletion is split by *recoverability*:
+  non-recoverable input — malformed base64/utf8, an unsupported attachment type,
+  or a cryptographically invalid signature (`VerificationFailed`) — is **always**
+  deleted; a *policy*-rejected message (a disallowed wrapping, too many
+  signatures/recipients, an addressing mismatch, a non-conformant envelope) is
+  also **deleted by default** — the mediator's per-recipient queue is bounded, so
+  a retained reject redelivered every pickup would accumulate and fill it — but
+  can be **retained** with `with_purge_policy_rejected_messages(false)` (see
+  *Added*) for a bounded window during an `unpack_policy` upgrade, so a message
+  rejected only by the stricter policy can be recovered by relaxing the policy.
+  Failures that might be *transient* (e.g. a temporarily unresolvable signer DID)
+  are always left queued for retry. All three inbound paths —
+  `send_delivery_request`, the TSP-aware `send_delivery_request_frames`, and live
+  WebSocket delivery — apply this policy and report to the opt-in
+  unprocessable-message channel before deleting/dropping.
 - **`UnpackPolicy::max_signatures` (default `5`) — bounded signature
   verification.** The policy's signature cap is enforced *before* any signer
   DID is resolved, so a crafted message stuffed with signature entries cannot

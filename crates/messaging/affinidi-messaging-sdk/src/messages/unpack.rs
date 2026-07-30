@@ -455,12 +455,19 @@ impl SharedState {
         PublicKeyAgreement::from_raw_bytes(curve, &key_bytes).ok()
     }
 
-    /// Verify **every** signature on a JWS layer, resolving each signer's key
-    /// (Ed25519 / P-256 / secp256k1) from its DID document. Strict: any
-    /// signature that lacks a `kid`, whose key cannot be resolved, or whose
-    /// signature is invalid, fails the whole unpack. Returns the decoded
-    /// payload (which may be a further envelope) and every verified signer
-    /// `kid`.
+    /// Verify signatures on a JWS layer, resolving each signer's key (Ed25519 /
+    /// P-256 / secp256k1) from its DID document. Returns the decoded payload
+    /// (which may be a further envelope), the **verified** signer `kid`s, and any
+    /// **unverified** ones.
+    ///
+    /// Strict by default: any signature that lacks a `kid`, whose key cannot be
+    /// resolved (unknown DID or a curve this build doesn't support), or whose
+    /// signature is invalid, fails the whole unpack. When
+    /// [`ATMConfig::allow_invalid_signatures`] is set, such a signature is
+    /// instead recorded in the returned *unverified* list and unpacking
+    /// continues — the authoritative (`from`-matching) signature is still
+    /// required to verify by the addressing-consistency check, so only
+    /// supplementary co-signatures are relaxed.
     ///
     /// # Security
     ///
@@ -477,19 +484,6 @@ impl SharedState {
     /// their *targets*; constraining which hosts may be reached (resolver
     /// allow-list / SSRF protection) is the DID resolver's responsibility, not
     /// `unpack`'s.
-    /// Verify signatures on a JWS layer, resolving each signer's key (Ed25519 /
-    /// P-256 / secp256k1) from its DID document. Returns the decoded payload
-    /// (which may be a further envelope), the **verified** signer `kid`s, and any
-    /// **unverified** ones.
-    ///
-    /// Strict by default: any signature that lacks a `kid`, whose key cannot be
-    /// resolved (unknown DID or a curve this build doesn't support), or whose
-    /// signature is invalid, fails the whole unpack. When
-    /// [`ATMConfig::allow_invalid_signatures`] is set, such a signature is
-    /// instead recorded in the returned *unverified* list and unpacking
-    /// continues — the authoritative (`from`-matching) signature is still
-    /// required to verify by the addressing-consistency check, so only
-    /// supplementary co-signatures are relaxed.
     async fn verify_all_signatures(
         &self,
         jws_str: &str,

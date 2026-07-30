@@ -108,13 +108,23 @@ pub struct ATMConfig {
     pub(crate) unprocessable_message_channel:
         Option<Sender<crate::protocols::message_pickup::UnprocessableMessage>>,
 
-    /// Whether the message-pickup drain deletes an unprocessable message from
-    /// the mediator queue (so it can't be redelivered every pickup). `true`
-    /// (default) deletes it; set `false` to retain
-    /// unprocessable messages on the mediator — e.g. during an upgrade, so a
-    /// message rejected only by a stricter `unpack_policy` can be recovered by
-    /// relaxing the policy instead of being permanently deleted.
-    pub(crate) delete_unprocessable_messages: bool,
+    /// Whether the message-pickup drain deletes a message the *`unpack_policy`*
+    /// rejected — a disallowed wrapping (`UnexpectedEnvelope`) or an addressing
+    /// mismatch (`AddressingMismatch`). `true` (default) **deletes** it: the
+    /// mediator's per-recipient queue is bounded (a fixed message limit), and a
+    /// retained reject is redelivered every pickup, so it would accumulate and
+    /// eventually fill the queue, blocking new inbound messages. Set `false` to
+    /// *retain* such messages instead — e.g. for a bounded window during an
+    /// `unpack_policy` tightening/upgrade, so a message rejected only by the
+    /// stricter policy can be recovered by relaxing the policy — accepting that
+    /// retained rejects count against the queue limit until processed or expired.
+    ///
+    /// This flag does **not** govern non-recoverable input — malformed
+    /// base64/UTF-8, an unsupported attachment type, or a cryptographically
+    /// invalid signature (`VerificationFailed`). Those can never become
+    /// processable regardless of policy and are *always* deleted so they can't
+    /// be redelivered every pickup and fill the bounded queue.
+    pub(crate) purge_policy_rejected_messages: bool,
 
     /// When a signed message carries multiple signatures, whether to tolerate
     /// non-authoritative ones that don't verify. `false` (default) fails the
@@ -198,10 +208,15 @@ impl ATMConfig {
         &self.unpack_policy
     }
 
-    /// Whether the message-pickup drain deletes an unprocessable message from
-    /// the mediator queue. Default `true`.
-    pub fn delete_unprocessable_messages(&self) -> bool {
-        self.delete_unprocessable_messages
+    /// Whether the message-pickup drain deletes a policy-rejected message
+    /// (`UnexpectedEnvelope` / `AddressingMismatch`) from the mediator queue.
+    /// Default `true` (delete — the mediator queue is bounded, so retained
+    /// rejects redelivered every pickup would accumulate and fill it). Set
+    /// `false` to retain. Non-recoverable input (malformed base64/UTF-8,
+    /// unsupported type, invalid signature) is always deleted regardless of this
+    /// flag.
+    pub fn purge_policy_rejected_messages(&self) -> bool {
+        self.purge_policy_rejected_messages
     }
 
     /// Whether unpack tolerates non-authoritative signatures that don't verify
@@ -267,7 +282,7 @@ pub struct ATMConfigBuilder {
     inbound_message_channel: Option<Sender<WebSocketResponses>>,
     unprocessable_message_channel:
         Option<Sender<crate::protocols::message_pickup::UnprocessableMessage>>,
-    delete_unprocessable_messages: bool,
+    purge_policy_rejected_messages: bool,
     allow_invalid_signatures: bool,
     unpack_forwards: bool,
     unpack_policy: UnpackPolicy,
@@ -291,7 +306,7 @@ impl Default for ATMConfigBuilder {
             fetch_cache_limit_bytes: 1024 * 1024 * 10, // Defaults to 10MB Cache
             inbound_message_channel: None,
             unprocessable_message_channel: None,
-            delete_unprocessable_messages: true,
+            purge_policy_rejected_messages: true,
             allow_invalid_signatures: false,
             unpack_forwards: true,
             unpack_policy: UnpackPolicy::default(),
@@ -358,16 +373,25 @@ impl ATMConfigBuilder {
         self
     }
 
-    /// Control whether the message-pickup drain **deletes** an unprocessable
-    /// message from the mediator queue. Default `true` (a
-    /// message that can never be processed is removed so it can't be redelivered
-    /// every pickup). Set `false` to retain unprocessable messages on the
-    /// mediator — useful during an `unpack_policy` tightening/upgrade so a
-    /// message rejected only by the stricter policy can be recovered by relaxing
-    /// the policy rather than being permanently deleted. Pair with
+    /// Control whether the message-pickup drain **deletes** a message that the
+    /// configured `unpack_policy` rejected — a disallowed wrapping
+    /// (`UnexpectedEnvelope`) or an addressing mismatch (`AddressingMismatch`).
+    /// Default `true`: such messages are **deleted**, because the mediator's
+    /// per-recipient queue is bounded (a fixed message limit) and a retained
+    /// reject is redelivered every pickup, so it would accumulate and eventually
+    /// fill the queue and block new inbound messages. Set `false` to **retain**
+    /// them instead — e.g. for a bounded window during an `unpack_policy`
+    /// tightening/upgrade, so a message rejected only by the stricter policy can
+    /// be recovered by relaxing the policy — accepting that retained rejects
+    /// count against the queue limit until processed or expired. Pair with
     /// [`Self::with_unprocessable_message_channel`] to observe what is affected.
-    pub fn with_delete_unprocessable_messages(mut self, delete: bool) -> Self {
-        self.delete_unprocessable_messages = delete;
+    ///
+    /// Non-recoverable input — malformed base64/UTF-8, an unsupported attachment
+    /// type, or a cryptographically invalid signature (`VerificationFailed`) —
+    /// is **always** deleted (it can never become processable), independent of
+    /// this flag.
+    pub fn with_purge_policy_rejected_messages(mut self, purge: bool) -> Self {
+        self.purge_policy_rejected_messages = purge;
         self
     }
 
@@ -566,7 +590,7 @@ impl ATMConfigBuilder {
             fetch_cache_limit_bytes: self.fetch_cache_limit_bytes,
             inbound_message_channel: self.inbound_message_channel,
             unprocessable_message_channel: self.unprocessable_message_channel,
-            delete_unprocessable_messages: self.delete_unprocessable_messages,
+            purge_policy_rejected_messages: self.purge_policy_rejected_messages,
             allow_invalid_signatures: self.allow_invalid_signatures,
             unpack_forwards: self.unpack_forwards,
             unpack_policy: self.unpack_policy,
@@ -619,5 +643,26 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(config.clock().unix_secs(), 1_234);
+    }
+
+    /// Policy-rejected pickup messages are **deleted by default** — the
+    /// mediator queue is bounded, so a retained reject redelivered every pickup
+    /// would accumulate and fill it. Operators opt into retention explicitly.
+    #[test]
+    fn policy_rejected_messages_are_deleted_by_default() {
+        let config = ATMConfig::builder().build().unwrap();
+        assert!(
+            config.purge_policy_rejected_messages(),
+            "the default deletes policy-rejected messages (bounded mediator queue)"
+        );
+
+        let retained = ATMConfig::builder()
+            .with_purge_policy_rejected_messages(false)
+            .build()
+            .unwrap();
+        assert!(
+            !retained.purge_policy_rejected_messages(),
+            "opting out retains policy-rejected messages"
+        );
     }
 }

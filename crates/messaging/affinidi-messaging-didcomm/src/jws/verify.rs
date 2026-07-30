@@ -69,6 +69,12 @@ fn verify_jws(
     // per-signature unprotected header (where DIDComm / credo-ts /
     // didcomm-python place it). Verification itself doesn't depend on
     // kid — the caller supplies the key — but attribution does.
+    //
+    // SECURITY: an unprotected-header kid is not integrity-protected; here it
+    // only attributes an *already-verified* signature (the key was supplied by
+    // the caller), so it can't steer verification. The riskier case — a kid read
+    // *before* verification, to choose which DID to resolve — is in `parse_jws`;
+    // see its `SECURITY` note.
     let signer_kid = header
         .kid
         .or_else(|| sig_entry.header.as_ref().and_then(|h| h.kid.clone()));
@@ -198,6 +204,21 @@ pub fn parse_jws(jws_str: &str) -> Result<ParsedJws, DIDCommError> {
         // integrity-protected), so reconstruct from protected + payload only.
         let signing_input = format!("{}.{}", sig_entry.protected, jws.payload).into_bytes();
 
+        // Signer kid: prefer the protected header, else fall back to the
+        // per-signature *unprotected* header (interop with credo-ts /
+        // didcomm-python, issue #323).
+        //
+        // SECURITY: a kid taken from the unprotected header is *not* covered by
+        // the signature, and this kid is read *before* verification runs, so on
+        // an untrusted JWS it names an attacker-chosen DID to resolve — an
+        // outbound `did:web` fetch that an intermediary can even redirect on a
+        // message whose protected header omits `kid`. Verification never trusts
+        // this kid (the caller supplies the verifying key — only attribution
+        // uses it), but a caller that resolves it MUST bound how many such
+        // resolutions one message can drive and constrain which hosts are
+        // reachable. The SDK does exactly this — see the `resolution_budget`
+        // and the `# Security` note in `affinidi-messaging-sdk`'s `unpack` —
+        // and host allow-listing / SSRF protection is the DID resolver's job.
         let kid = header
             .kid
             .or_else(|| sig_entry.header.as_ref().and_then(|h| h.kid.clone()));

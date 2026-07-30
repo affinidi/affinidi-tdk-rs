@@ -456,6 +456,12 @@ impl MessagePickup {
                         }
                         Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
                             if auto_delete {
+                                // The live path carries no attachment id, so the
+                                // message id is reconstructed as sha256 of the
+                                // received frame. This matches the mediator's id
+                                // derivation (`msg_id = digest(body)`), since it
+                                // streams the exact bytes it stored — locked by
+                                // the mediator's `message_id_is_sha256_of_body`.
                                 let sha256_hash = sha256::digest(packed_msg.as_str());
                                 atm.delete_message_background(profile, &sha256_hash).await?;
                             }
@@ -798,19 +804,27 @@ impl MessagePickup {
     /// authenticated-encryption default that [`crate::ATM::unpack`] applies — so
     /// messages pulled via pickup get the same guarantees as a direct unpack.
     ///
-    /// An attachment that can never be processed — malformed base64/utf8, an
-    /// unsupported attachment type, or a message that *deterministically* fails
-    /// to unpack (a disallowed wrapping, an invalid signature, too many
-    /// signatures, an addressing mismatch, a non-conformant envelope) — is
-    /// **deleted from the mediator** (best-effort, by its message id) so it
-    /// can't be redelivered forever — unless retention is configured via
-    /// [`ATMConfigBuilder::with_delete_unprocessable_messages(false)`](crate::config::ATMConfigBuilder::with_delete_unprocessable_messages),
-    /// which keeps such messages on the mediator (e.g. so a message rejected only
-    /// by a stricter `unpack_policy` can be recovered by relaxing the policy).
-    /// Without deletion an unprocessable message would be handed back every
-    /// pickup, stalling the queue and, under backpressure, the mediator
-    /// connection. Failures that might be *transient* (e.g. a temporarily
-    /// unresolvable signer DID) are always left queued for retry.
+    /// An attachment is handled by *recoverability*:
+    /// - **Non-recoverable** — malformed base64/utf8, an unsupported attachment
+    ///   type, or a cryptographically invalid signature (`VerificationFailed`) —
+    ///   can never become processable, so it is **always deleted from the
+    ///   mediator** (best-effort, by its message id) to stop it being
+    ///   redelivered every pickup (which would stall the queue and, under
+    ///   backpressure, the mediator connection).
+    /// - **Policy-rejected** — a disallowed wrapping (`UnexpectedEnvelope`) or an
+    ///   addressing mismatch (`AddressingMismatch`) — is **deleted by default**,
+    ///   because the mediator's per-recipient queue is bounded (a fixed message
+    ///   limit) and a retained reject is redelivered every pickup, so it would
+    ///   accumulate and fill the queue, blocking new inbound messages. Opt in to
+    ///   *retain* these (e.g. for a bounded window during an `unpack_policy`
+    ///   upgrade) via
+    ///   [`ATMConfigBuilder::with_purge_policy_rejected_messages(false)`](crate::config::ATMConfigBuilder::with_purge_policy_rejected_messages).
+    /// - **Transient** — e.g. a temporarily unresolvable signer DID — is always
+    ///   left queued for retry.
+    ///
+    /// Every rejected attachment is reported on the optional
+    /// unprocessable-message channel *before* any deletion, so a consumer can
+    /// observe or quarantine it.
     pub(crate) async fn _handle_delivery(
         &self,
         atm: &ATM,
@@ -820,25 +834,49 @@ impl MessagePickup {
         let mut response: Vec<(Message, UnpackMetadata)> = Vec::new();
 
         // Report the unprocessable message on the optional channel (so a
-        // consumer can observe/quarantine it) and, unless retention is
-        // configured via `with_delete_unprocessable_messages(false)`, delete it
-        // from the mediator by its id (== the delivery attachment id) so it
-        // can't be redelivered every pickup.
-        async fn report_and_maybe_delete(
+        // consumer can observe/quarantine it), then decide deletion by
+        // recoverability. `delete_if_present` is the shared best-effort delete
+        // by message id (== the delivery attachment id, which is the mediator's
+        // sha256-of-body message id) so it can't be redelivered every pickup.
+        async fn delete_if_present(atm: &ATM, profile: &Arc<ATMProfile>, id: &Option<String>) {
+            if let Some(id) = id
+                && let Err(e) = atm.delete_message_background(profile, id).await
+            {
+                warn!("Couldn't delete unprocessable message id({id}): {e:?}");
+            }
+        }
+
+        // Non-recoverable input (malformed base64/utf8, unsupported type, an
+        // invalid signature): report, then *always* delete — it can never become
+        // processable, so retaining it would only poison-loop the queue.
+        async fn report_and_delete(
             atm: &ATM,
             profile: &Arc<ATMProfile>,
             id: &Option<String>,
             raw: String,
             reason: String,
         ) {
-            // Report first, then delete — unless the caller opted to retain
-            // unprocessable messages on the mediator.
             emit_unprocessable(atm, id.clone(), raw, reason);
-            if atm.inner.config.delete_unprocessable_messages()
-                && let Some(id) = id
-                && let Err(e) = atm.delete_message_background(profile, id).await
-            {
-                warn!("Couldn't delete unprocessable message id({id}): {e:?}");
+            delete_if_present(atm, profile, id).await;
+        }
+
+        // Policy rejection (`UnexpectedEnvelope` / `AddressingMismatch`): report,
+        // then delete by default. The mediator's per-recipient queue is bounded
+        // (a fixed message limit), and a retained reject is redelivered every
+        // pickup, so leaving it queued would accumulate and eventually fill the
+        // queue, blocking new inbound messages. An operator can opt to retain it
+        // (e.g. for a bounded upgrade window) via
+        // `with_purge_policy_rejected_messages(false)`.
+        async fn report_policy_rejected(
+            atm: &ATM,
+            profile: &Arc<ATMProfile>,
+            id: &Option<String>,
+            raw: String,
+            reason: String,
+        ) {
+            emit_unprocessable(atm, id.clone(), raw, reason);
+            if atm.inner.config.purge_policy_rejected_messages() {
+                delete_if_present(atm, profile, id).await;
             }
         }
 
@@ -853,7 +891,7 @@ impl MessagePickup {
                                     "Undeliverable attachment (not utf8: {e:?}); purging. id({:?})",
                                     attachment.id
                                 );
-                                report_and_maybe_delete(
+                                report_and_delete(
                                     atm,
                                     profile,
                                     &attachment.id,
@@ -869,7 +907,7 @@ impl MessagePickup {
                                 "Undeliverable attachment (bad base64: {e:?}); purging. id({:?})",
                                 attachment.id
                             );
-                            report_and_maybe_delete(
+                            report_and_delete(
                                 atm,
                                 profile,
                                 &attachment.id,
@@ -892,23 +930,43 @@ impl MessagePickup {
                             }
                             response.push((m, u))
                         }
-                        // A deterministic rejection — a disallowed wrapping or
-                        // an addressing mismatch (policy), or an invalid
-                        // signature (crypto) — fails identically on every
-                        // redelivery, so it is unprocessable: delete it (unless
-                        // retention is configured). Anything else (e.g. a
-                        // transiently unresolvable signer DID) may recover, so
-                        // leave it queued for retry.
-                        Err(
-                            e @ (ATMError::UnexpectedEnvelope(_)
-                            | ATMError::AddressingMismatch(_)
-                            | ATMError::VerificationFailed(_)),
-                        ) => {
+                        // A cryptographically invalid signature is deterministic
+                        // garbage — it will never verify on any redelivery — so
+                        // purge it regardless of the policy-retention flag.
+                        Err(e @ ATMError::VerificationFailed(_)) => {
                             warn!(
-                                "Unprocessable message (deterministic reject: {e:?}). id({:?})",
+                                "Unprocessable message (invalid signature: {e:?}); purging. id({:?})",
                                 attachment.id
                             );
-                            report_and_maybe_delete(
+                            report_and_delete(
+                                atm,
+                                profile,
+                                &attachment.id,
+                                decoded.clone(),
+                                e.to_string(),
+                            )
+                            .await;
+                            continue;
+                        }
+                        // A policy rejection — a disallowed wrapping
+                        // (`UnexpectedEnvelope`) or an addressing mismatch
+                        // (`AddressingMismatch`) — is deleted by default: the
+                        // mediator queue is bounded, so a retained reject
+                        // redelivered every pickup would fill it. An operator can
+                        // opt to retain it instead.
+                        Err(
+                            e @ (ATMError::UnexpectedEnvelope(_) | ATMError::AddressingMismatch(_)),
+                        ) => {
+                            warn!(
+                                "Policy-rejected message ({e:?}); {}. id({:?})",
+                                if atm.inner.config.purge_policy_rejected_messages() {
+                                    "purging"
+                                } else {
+                                    "retained"
+                                },
+                                attachment.id
+                            );
+                            report_policy_rejected(
                                 atm,
                                 profile,
                                 &attachment.id,
@@ -931,7 +989,7 @@ impl MessagePickup {
                         "Undeliverable attachment (unsupported type: {:?}); purging. id({:?})",
                         attachment.data, attachment.id
                     );
-                    report_and_maybe_delete(
+                    report_and_delete(
                         atm,
                         profile,
                         &attachment.id,
@@ -1508,7 +1566,8 @@ mod tests {
 
     /// With an unprocessable-message channel configured, an unprocessable
     /// attachment is broadcast (id + retained raw payload + reason) *before* it
-    /// is deleted, while a valid message is delivered normally and never reported.
+    /// is deleted or retained, while a valid message is delivered normally and
+    /// never reported.
     #[tokio::test]
     async fn unprocessable_messages_are_reported_on_the_channel() {
         let (sender_did, sender_x) = peer_with_x25519();
@@ -1579,6 +1638,76 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "only the unprocessable message is reported, not the valid one"
+        );
+    }
+
+    /// Malformed / non-recoverable input — invalid base64, valid base64 that
+    /// isn't UTF-8, and an unsupported (non-base64) attachment type — is still
+    /// reported on the unprocessable-message channel (each with its id and a
+    /// reason) *before* it is deleted. This guards the guarantee across the
+    /// delete-by-default path: reporting happens regardless of whether the
+    /// message is subsequently purged, so a consumer observes every one.
+    #[tokio::test]
+    async fn malformed_messages_are_reported_on_the_channel() {
+        let config = ATMConfig::builder()
+            .with_unprocessable_message_channel(16)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        let atm = ATM::new(config, tdk).await.unwrap();
+        let mut rx = atm
+            .get_unprocessable_message_channel()
+            .expect("unprocessable channel");
+        let profile = fake_profile();
+
+        // Invalid base64, valid base64 that isn't UTF-8, and an unsupported
+        // (non-base64) attachment type — three distinct non-recoverable paths.
+        let bad_b64 = Attachment::base64("!!!not-valid-base64!!!".to_string())
+            .id("bad-base64".to_string())
+            .finalize();
+        let bad_utf8 = Attachment::base64(BASE64_URL_SAFE_NO_PAD.encode([0xFF, 0xFE, 0xFD]))
+            .id("bad-utf8".to_string())
+            .finalize();
+        let unsupported = Attachment::json(json!({"not": "base64"}))
+            .id("unsupported-json".to_string())
+            .finalize();
+
+        let out = MessagePickup {}
+            ._handle_delivery(
+                &atm,
+                &profile,
+                &delivery_with(vec![bad_b64, bad_utf8, unsupported]),
+            )
+            .await
+            .expect("drain must not error");
+        assert!(out.is_empty(), "no malformed message surfaces");
+
+        // Every malformed attachment is reported, each with a non-empty reason.
+        let mut reported = std::collections::HashMap::new();
+        while let Ok(p) = rx.try_recv() {
+            assert!(!p.reason.is_empty(), "a reason is included");
+            reported.insert(p.attachment_id.clone().unwrap_or_default(), p.reason);
+        }
+        assert_eq!(
+            reported.len(),
+            3,
+            "all three malformed attachments are reported, got: {reported:?}"
+        );
+        assert!(
+            reported.contains_key("bad-base64"),
+            "invalid base64 reported"
+        );
+        assert!(
+            reported.contains_key("bad-utf8"),
+            "non-UTF-8 payload reported"
+        );
+        assert!(
+            reported.contains_key("unsupported-json"),
+            "unsupported attachment type reported"
         );
     }
 

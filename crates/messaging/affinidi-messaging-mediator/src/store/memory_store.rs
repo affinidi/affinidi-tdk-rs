@@ -1773,6 +1773,28 @@ mod tests {
         assert!(after_list.is_empty());
     }
 
+    /// The mediator's message id is the SHA-256 hex digest of the exact stored
+    /// message body. The SDK relies on this when it deletes a *live-delivered*
+    /// frame by `sha256::digest(packed_msg)`: the live path carries no
+    /// attachment id, but the mediator streams the same bytes it stores, so the
+    /// SDK reconstructs this id from the received frame. If this derivation ever
+    /// changes, the SDK's live-delivery auto-delete silently stops matching.
+    #[tokio::test]
+    async fn message_id_is_sha256_of_body() {
+        let store = MemoryStore::new();
+        let body = r#"{"protected":"x","ciphertext":"y"}"#;
+        let msg_id = store
+            .store_message("s", body, "alice", Some("bob"), 0, 0)
+            .await
+            .expect("store");
+        assert_eq!(
+            msg_id,
+            digest(body.as_bytes()),
+            "the mediator message id must equal sha256(body) so the SDK can \
+             reconstruct it from a live-delivered frame"
+        );
+    }
+
     #[tokio::test]
     async fn delete_rejects_non_owner_non_admin() {
         let store = MemoryStore::new();
