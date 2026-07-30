@@ -712,12 +712,12 @@ impl WebSocketTransport {
                 error!("Error unpacking message: {:?}", e);
                 // A live frame that fails to unpack (e.g. an unauthenticated
                 // wrapping the secure policy rejects) is dropped here; surface it
-                // on the optional poison channel so a consumer can observe or
-                // quarantine it instead of losing it to a log line. The mediator
-                // ids a message by `sha256(packed message)` and live-delivers
-                // those exact bytes, so `sha256(&message)` is the mediator
-                // message id — the same identifier the pickup drain reports.
-                crate::protocols::message_pickup::emit_poison(
+                // on the optional unprocessable-message channel so a consumer can
+                // observe or quarantine it instead of losing it to a log line. The
+                // mediator ids a message by `sha256(packed message)` and
+                // live-delivers those exact bytes, so `sha256(&message)` is the
+                // mediator message id — the same identifier the pickup drain reports.
+                crate::protocols::message_pickup::emit_unprocessable(
                     atm,
                     Some(sha256::digest(&message)),
                     message.clone(),
@@ -1132,17 +1132,17 @@ mod tests {
 
     /// A live-delivery frame that fails to unpack (here a plaintext the secure
     /// default policy rejects) is dropped by the WebSocket handler *and*
-    /// reported on the poison channel, so a consumer can observe / quarantine it
-    /// instead of losing it to a log line.
+    /// reported on the unprocessable-message channel, so a consumer can observe /
+    /// quarantine it instead of losing it to a log line.
     #[tokio::test]
-    async fn live_delivery_reports_poison_on_the_channel() {
+    async fn live_delivery_reports_unprocessable_on_the_channel() {
         use crate::config::ATMConfig;
         use affinidi_messaging_didcomm::message::Message as DcMessage;
         use affinidi_tdk_common::{TDKSharedState, config::TDKConfig};
         use serde_json::json;
 
         let config = ATMConfig::builder()
-            .with_poison_message_channel(16)
+            .with_unprocessable_message_channel(16)
             .build()
             .unwrap();
         let tdk = Arc::new(
@@ -1151,7 +1151,9 @@ mod tests {
                 .unwrap(),
         );
         let atm = ATM::new(config, tdk).await.unwrap();
-        let mut rx = atm.get_poison_channel().expect("poison channel configured");
+        let mut rx = atm
+            .get_unprocessable_message_channel()
+            .expect("unprocessable channel");
 
         let mut ws = test_transport(&atm);
 
@@ -1175,7 +1177,9 @@ mod tests {
 
         ws.process_inbound_didcomm_message(&atm, raw.clone()).await;
 
-        let p = rx.try_recv().expect("a live poison frame must be reported");
+        let p = rx
+            .try_recv()
+            .expect("a live unprocessable frame must be reported");
         assert_eq!(p.raw, raw, "the raw frame is retained for quarantine");
         assert_eq!(
             p.attachment_id.as_deref(),
@@ -1183,6 +1187,6 @@ mod tests {
             "reported with the mediator message id (sha256 of the delivered frame)"
         );
         assert!(!p.reason.is_empty(), "a rejection reason is included");
-        assert!(rx.try_recv().is_err(), "exactly one poison event");
+        assert!(rx.try_recv().is_err(), "exactly one unprocessable event");
     }
 }

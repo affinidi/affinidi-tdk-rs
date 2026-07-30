@@ -33,27 +33,33 @@ use crate::{
 #[derive(Default)]
 pub struct MessagePickup {}
 
-/// A pickup attachment the drain could not deliver and is about to purge.
-/// Broadcast on the optional poison channel (enable it with
-/// [`crate::config::ATMConfigBuilder::with_poison_message_channel`], subscribe
-/// with [`crate::ATM::get_poison_channel`]) *before* the purge, so a consumer
-/// can retain or quarantine it instead of losing it to the best-effort delete.
+/// An inbound message the drain could not process, surfaced before it is
+/// deleted or dropped. Broadcast on the optional unprocessable-message channel
+/// (enable it with
+/// [`crate::config::ATMConfigBuilder::with_unprocessable_message_channel`],
+/// subscribe with [`crate::ATM::get_unprocessable_message_channel`]) so a
+/// consumer can observe or quarantine it instead of losing it to a log line.
 #[derive(Clone, Debug)]
-pub struct PoisonMessage {
+pub struct UnprocessableMessage {
     /// The delivery attachment id (== the mediator message id), if present.
     pub attachment_id: Option<String>,
     /// The raw attachment payload as received. Empty when the attachment had no
     /// base64 body.
     pub raw: String,
-    /// Human-readable reason the message was rejected.
+    /// Human-readable reason the message could not be processed.
     pub reason: String,
 }
 
-/// Broadcast a [`PoisonMessage`] on the configured poison channel, if any.
+/// Broadcast an [`UnprocessableMessage`] on the configured channel, if any.
 /// A full or closed channel must never block or fail the caller.
-pub(crate) fn emit_poison(atm: &ATM, attachment_id: Option<String>, raw: String, reason: String) {
-    if let Some(ch) = &atm.inner.config.poison_message_channel {
-        let _ = ch.send(PoisonMessage {
+pub(crate) fn emit_unprocessable(
+    atm: &ATM,
+    attachment_id: Option<String>,
+    raw: String,
+    reason: String,
+) {
+    if let Some(ch) = &atm.inner.config.unprocessable_message_channel {
+        let _ = ch.send(UnprocessableMessage {
             attachment_id,
             raw,
             reason,
@@ -606,7 +612,7 @@ impl MessagePickup {
     /// message as an [`InboundFrame`] (DIDComm or TSP) paired with the
     /// attachment id needed to acknowledge/delete it — so an offline-sync
     /// consumer can route TSP frames to a TSP handler instead of DIDComm-
-    /// unpacking (and poison-looping on) them. Undeliverable attachments yield
+    /// unpacking (and looping on) them. Undeliverable attachments yield
     /// `(None, id)` so the caller still acks them. Requires the `tsp` feature.
     #[cfg(feature = "tsp")]
     pub async fn send_delivery_request_frames(
@@ -696,7 +702,7 @@ impl MessagePickup {
     /// with the attachment id needed to ack/delete it. Undeliverable
     /// attachments — bad base64/utf8, or a non-TSP frame that fails DIDComm
     /// unpack — yield `(None, id)` so the caller still acks them and the
-    /// mediator stops redelivering (no poison loop). Unlike [`_handle_delivery`],
+    /// mediator stops redelivering (no redelivery loop). Unlike [`_handle_delivery`],
     /// a TSP frame is surfaced (`InboundFrame::Tsp`) rather than DIDComm-unpacked
     /// and dropped.
     #[cfg(feature = "tsp")]
@@ -720,7 +726,7 @@ impl MessagePickup {
             };
             let Some(b64) = &attachment.data.base64 else {
                 warn!("Attachment type not supported: {:?}", attachment.data);
-                emit_poison(
+                emit_unprocessable(
                     atm,
                     Some(id.clone()),
                     String::new(),
@@ -734,7 +740,7 @@ impl MessagePickup {
                     Ok(s) => s,
                     Err(e) => {
                         warn!("Error decoding attachment to utf8: ({e:?}). id({id})");
-                        emit_poison(
+                        emit_unprocessable(
                             atm,
                             Some(id.clone()),
                             b64.clone(),
@@ -746,7 +752,7 @@ impl MessagePickup {
                 },
                 Err(e) => {
                     warn!("Error decoding base64: ({e:?}). id({id})");
-                    emit_poison(
+                    emit_unprocessable(
                         atm,
                         Some(id.clone()),
                         b64.clone(),
@@ -775,7 +781,7 @@ impl MessagePickup {
                     }
                     Err(e) => {
                         warn!("Error unpacking message: ({e:?}); dropping. id({id})");
-                        emit_poison(atm, Some(id.clone()), decoded.clone(), e.to_string());
+                        emit_unprocessable(atm, Some(id.clone()), decoded.clone(), e.to_string());
                         out.push((None, id));
                     }
                 }
@@ -796,11 +802,15 @@ impl MessagePickup {
     /// unsupported attachment type, or a message that *deterministically* fails
     /// to unpack (a disallowed wrapping, an invalid signature, too many
     /// signatures, an addressing mismatch, a non-conformant envelope) — is
-    /// **purged from the mediator** (best-effort, by its message id) so it can't
-    /// be redelivered forever. Without this a "poison" message would be handed
-    /// back every pickup, stalling the queue and, under backpressure, the
-    /// mediator connection. Failures that might be *transient* (e.g. a
-    /// temporarily unresolvable signer DID) are left queued for retry.
+    /// **deleted from the mediator** (best-effort, by its message id) so it
+    /// can't be redelivered forever — unless retention is configured via
+    /// [`ATMConfigBuilder::with_delete_unprocessable_messages(false)`](crate::config::ATMConfigBuilder::with_delete_unprocessable_messages),
+    /// which keeps such messages on the mediator (e.g. so a message rejected only
+    /// by a stricter `unpack_policy` can be recovered by relaxing the policy).
+    /// Without deletion an unprocessable message would be handed back every
+    /// pickup, stalling the queue and, under backpressure, the mediator
+    /// connection. Failures that might be *transient* (e.g. a temporarily
+    /// unresolvable signer DID) are always left queued for retry.
     pub(crate) async fn _handle_delivery(
         &self,
         atm: &ATM,
@@ -809,22 +819,26 @@ impl MessagePickup {
     ) -> Result<Vec<(Message, UnpackMetadata)>, ATMError> {
         let mut response: Vec<(Message, UnpackMetadata)> = Vec::new();
 
-        // Best-effort: report the poison message on the optional channel (so a
-        // consumer can retain/quarantine it) then remove it from the mediator by
-        // its id (== the delivery attachment id) so it cannot poison-loop.
-        async fn report_and_purge(
+        // Report the unprocessable message on the optional channel (so a
+        // consumer can observe/quarantine it) and, unless retention is
+        // configured via `with_delete_unprocessable_messages(false)`, delete it
+        // from the mediator by its id (== the delivery attachment id) so it
+        // can't be redelivered every pickup.
+        async fn report_and_maybe_delete(
             atm: &ATM,
             profile: &Arc<ATMProfile>,
             id: &Option<String>,
             raw: String,
             reason: String,
         ) {
-            // Report first (so a consumer can retain/quarantine it), then purge.
-            emit_poison(atm, id.clone(), raw, reason);
-            if let Some(id) = id
+            // Report first, then delete — unless the caller opted to retain
+            // unprocessable messages on the mediator.
+            emit_unprocessable(atm, id.clone(), raw, reason);
+            if atm.inner.config.delete_unprocessable_messages()
+                && let Some(id) = id
                 && let Err(e) = atm.delete_message_background(profile, id).await
             {
-                warn!("Couldn't purge undeliverable message id({id}): {e:?}");
+                warn!("Couldn't delete unprocessable message id({id}): {e:?}");
             }
         }
 
@@ -839,7 +853,7 @@ impl MessagePickup {
                                     "Undeliverable attachment (not utf8: {e:?}); purging. id({:?})",
                                     attachment.id
                                 );
-                                report_and_purge(
+                                report_and_maybe_delete(
                                     atm,
                                     profile,
                                     &attachment.id,
@@ -855,7 +869,7 @@ impl MessagePickup {
                                 "Undeliverable attachment (bad base64: {e:?}); purging. id({:?})",
                                 attachment.id
                             );
-                            report_and_purge(
+                            report_and_maybe_delete(
                                 atm,
                                 profile,
                                 &attachment.id,
@@ -881,19 +895,20 @@ impl MessagePickup {
                         // A deterministic rejection — a disallowed wrapping or
                         // an addressing mismatch (policy), or an invalid
                         // signature (crypto) — fails identically on every
-                        // redelivery, so it is a poison message: purge it.
-                        // Anything else (e.g. a transiently unresolvable signer
-                        // DID) may recover, so leave it queued for retry.
+                        // redelivery, so it is unprocessable: delete it (unless
+                        // retention is configured). Anything else (e.g. a
+                        // transiently unresolvable signer DID) may recover, so
+                        // leave it queued for retry.
                         Err(
                             e @ (ATMError::UnexpectedEnvelope(_)
                             | ATMError::AddressingMismatch(_)
                             | ATMError::VerificationFailed(_)),
                         ) => {
                             warn!(
-                                "Purging poison message (deterministic reject: {e:?}). id({:?})",
+                                "Unprocessable message (deterministic reject: {e:?}). id({:?})",
                                 attachment.id
                             );
-                            report_and_purge(
+                            report_and_maybe_delete(
                                 atm,
                                 profile,
                                 &attachment.id,
@@ -916,7 +931,7 @@ impl MessagePickup {
                         "Undeliverable attachment (unsupported type: {:?}); purging. id({:?})",
                         attachment.data, attachment.id
                     );
-                    report_and_purge(
+                    report_and_maybe_delete(
                         atm,
                         profile,
                         &attachment.id,
@@ -1265,15 +1280,15 @@ impl<'a> MessagePickupOps<'a> {
 
 #[cfg(test)]
 mod tests {
-    //! Poison-message resistance of the delivery drain ([`MessagePickup::_handle_delivery`]).
+    //! Unprocessable-message resistance of the delivery drain ([`MessagePickup::_handle_delivery`]).
     //!
     //! A pickup delivery batch is attacker-influenced: anyone can forward an
     //! arbitrary (malformed, or policy-rejected) envelope into a recipient's
     //! mediator queue. These tests confirm such a message cannot take the drain
-    //! (and therefore the pickup loop / mediator connection) down: every poison
-    //! attachment is skipped (purged best-effort) while the valid messages
-    //! around it are still surfaced, and the call never panics, errors, or
-    //! hangs.
+    //! (and therefore the pickup loop / mediator connection) down: every
+    //! unprocessable attachment is skipped (deleted best-effort) while the valid
+    //! messages around it are still surfaced, and the call never panics, errors,
+    //! or hangs.
     use super::*;
     use crate::config::ATMConfig;
     use crate::profiles::{ATMProfile, ATMProfileInner};
@@ -1375,20 +1390,20 @@ mod tests {
         b.finalize()
     }
 
-    /// A batch interleaving valid messages with four kinds of poison —
-    /// malformed base64, valid-base64-but-not-utf8, an unsupported attachment
-    /// type, and a policy-rejected plaintext — must not panic, error, or abort:
-    /// the drain skips each poison attachment and still surfaces the valid
-    /// messages that came *before and after* them.
+    /// A batch interleaving valid messages with four kinds of unprocessable
+    /// input — malformed base64, valid-base64-but-not-utf8, an unsupported
+    /// attachment type, and a policy-rejected plaintext — must not panic, error,
+    /// or abort: the drain skips each unprocessable attachment and still surfaces
+    /// the valid messages that came *before and after* them.
     #[tokio::test]
-    async fn poison_messages_are_skipped_and_do_not_stall_the_drain() {
+    async fn unprocessable_messages_are_skipped_and_do_not_stall_the_drain() {
         let (sender_did, sender_x) = peer_with_x25519();
         let (recipient_did, recipient_x) = peer_with_x25519();
         let atm = atm_with_secret(recipient_x.clone()).await;
         let profile = fake_profile();
 
         // Valid authcrypt messages (must be surfaced), one before and one after
-        // the poison, to prove the batch keeps going.
+        // the unprocessable ones, to prove the batch keeps going.
         let good1 = Attachment::base64(authcrypt_b64(
             &sender_did,
             &sender_x,
@@ -1408,15 +1423,15 @@ mod tests {
         .id("good-2".to_string())
         .finalize();
 
-        // Poison 1: malformed base64.
+        // Unprocessable 1: malformed base64.
         let bad_b64 = Attachment::base64("!!!not-valid-base64!!!".to_string())
-            .id("poison-b64".to_string())
+            .id("bad-base64".to_string())
             .finalize();
-        // Poison 2: valid base64 but not utf8.
+        // Unprocessable 2: valid base64 but not utf8.
         let bad_utf8 = Attachment::base64(BASE64_URL_SAFE_NO_PAD.encode([0xFF, 0xFE, 0xFD]))
-            .id("poison-utf8".to_string())
+            .id("bad-utf8".to_string())
             .finalize();
-        // Poison 3: a plaintext the secure default policy rejects.
+        // Unprocessable 3: a plaintext the secure default policy rejects.
         let plaintext = DcMessage::build(
             "evil".to_string(),
             "example/v1".to_string(),
@@ -1425,21 +1440,21 @@ mod tests {
         .from(sender_did.clone())
         .to(recipient_did.clone())
         .finalize();
-        let poison_plaintext = Attachment::base64(
+        let rejected_plaintext = Attachment::base64(
             BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_string(&plaintext).unwrap().as_bytes()),
         )
-        .id("poison-plaintext".to_string())
+        .id("rejected-plaintext".to_string())
         .finalize();
-        // Poison 4: unsupported attachment type (json, no base64).
+        // Unprocessable 4: unsupported attachment type (json, no base64).
         let unsupported = Attachment::json(json!({"not": "base64"}))
-            .id("poison-json".to_string())
+            .id("unsupported-json".to_string())
             .finalize();
 
         let delivery = delivery_with(vec![
             good1,
             bad_b64,
             bad_utf8,
-            poison_plaintext,
+            rejected_plaintext,
             unsupported,
             good2,
         ]);
@@ -1447,9 +1462,9 @@ mod tests {
         let out = MessagePickup {}
             ._handle_delivery(&atm, &profile, &delivery)
             .await
-            .expect("the drain must not error on a poison batch");
+            .expect("the drain must not error on an unprocessable batch");
 
-        // Only the two valid authcrypt messages surface; every poison is skipped.
+        // Only the two valid authcrypt messages surface; every unprocessable one is skipped.
         let ids: Vec<&str> = out.iter().map(|(m, _)| m.id.as_str()).collect();
         assert_eq!(
             out.len(),
@@ -1467,10 +1482,10 @@ mod tests {
         }
     }
 
-    /// An *entirely* poison batch surfaces nothing and still returns `Ok` — a
-    /// fully-hostile delivery cannot take the drain (or the pickup loop) down.
+    /// An *entirely* unprocessable batch surfaces nothing and still returns `Ok`
+    /// — a fully-hostile delivery cannot take the drain (or the pickup loop) down.
     #[tokio::test]
-    async fn all_poison_batch_surfaces_nothing_without_error() {
+    async fn all_unprocessable_batch_surfaces_nothing_without_error() {
         let (_recipient_did, recipient_x) = peer_with_x25519();
         let atm = atm_with_secret(recipient_x).await;
         let profile = fake_profile();
@@ -1487,21 +1502,21 @@ mod tests {
         let out = MessagePickup {}
             ._handle_delivery(&atm, &profile, &delivery)
             .await
-            .expect("all-poison batch must not error");
-        assert!(out.is_empty(), "no poison message should surface");
+            .expect("all-unprocessable batch must not error");
+        assert!(out.is_empty(), "no unprocessable message should surface");
     }
 
-    /// With a poison channel configured, an undeliverable attachment is
-    /// broadcast (id + retained raw payload + reason) *before* it is purged,
-    /// while a valid message is delivered normally and never reported.
+    /// With an unprocessable-message channel configured, an unprocessable
+    /// attachment is broadcast (id + retained raw payload + reason) *before* it
+    /// is deleted, while a valid message is delivered normally and never reported.
     #[tokio::test]
-    async fn poison_messages_are_reported_on_the_channel() {
+    async fn unprocessable_messages_are_reported_on_the_channel() {
         let (sender_did, sender_x) = peer_with_x25519();
         let (recipient_did, recipient_x) = peer_with_x25519();
 
-        // ATM with the secure default policy *and* a poison channel.
+        // ATM with the secure default policy *and* an unprocessable-message channel.
         let config = ATMConfig::builder()
-            .with_poison_message_channel(16)
+            .with_unprocessable_message_channel(16)
             .build()
             .unwrap();
         let tdk = Arc::new(
@@ -1511,10 +1526,12 @@ mod tests {
         );
         tdk.secrets_resolver().insert(recipient_x.clone()).await;
         let atm = ATM::new(config, tdk).await.unwrap();
-        let mut rx = atm.get_poison_channel().expect("poison channel configured");
+        let mut rx = atm
+            .get_unprocessable_message_channel()
+            .expect("unprocessable channel");
         let profile = fake_profile();
 
-        // One valid authcrypt (delivered, never reported) + one poison plaintext
+        // One valid authcrypt (delivered, never reported) + one rejected plaintext
         // (the secure default rejects the unauthenticated wrapping).
         let good = Attachment::base64(authcrypt_b64(
             &sender_did,
@@ -1533,14 +1550,14 @@ mod tests {
         .from(sender_did.clone())
         .to(recipient_did.clone())
         .finalize();
-        let poison = Attachment::base64(
+        let rejected = Attachment::base64(
             BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_string(&plaintext).unwrap().as_bytes()),
         )
-        .id("poison-1".to_string())
+        .id("rejected-1".to_string())
         .finalize();
 
         let out = MessagePickup {}
-            ._handle_delivery(&atm, &profile, &delivery_with(vec![good, poison]))
+            ._handle_delivery(&atm, &profile, &delivery_with(vec![good, rejected]))
             .await
             .expect("drain must not error");
 
@@ -1548,12 +1565,12 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0.id, "good-1");
 
-        // Exactly one poison event — for the plaintext — carrying its id, the
-        // retained raw payload, and a reason. The good message is not reported.
+        // Exactly one unprocessable event — for the plaintext — carrying its id,
+        // the retained raw payload, and a reason. The good message is not reported.
         let p = rx
             .try_recv()
-            .expect("the poison message should be reported");
-        assert_eq!(p.attachment_id.as_deref(), Some("poison-1"));
+            .expect("the unprocessable message should be reported");
+        assert_eq!(p.attachment_id.as_deref(), Some("rejected-1"));
         assert!(
             !p.raw.is_empty(),
             "the raw payload is retained for quarantine"
@@ -1561,17 +1578,17 @@ mod tests {
         assert!(!p.reason.is_empty(), "a rejection reason is included");
         assert!(
             rx.try_recv().is_err(),
-            "only the poison message is reported, not the valid one"
+            "only the unprocessable message is reported, not the valid one"
         );
     }
 
-    /// The poison channel is purely opt-in: with none configured the drain still
-    /// skips/purges poison without error.
+    /// The unprocessable-message channel is purely opt-in: with none configured
+    /// the drain still skips/deletes unprocessable messages without error.
     #[tokio::test]
-    async fn poison_channel_is_optional() {
+    async fn unprocessable_channel_is_optional() {
         let (_recipient_did, recipient_x) = peer_with_x25519();
-        let atm = atm_with_secret(recipient_x).await; // no poison channel
-        assert!(atm.get_poison_channel().is_none());
+        let atm = atm_with_secret(recipient_x).await; // no unprocessable-message channel
+        assert!(atm.get_unprocessable_message_channel().is_none());
         let profile = fake_profile();
 
         let delivery = delivery_with(vec![
@@ -1582,7 +1599,7 @@ mod tests {
         let out = MessagePickup {}
             ._handle_delivery(&atm, &profile, &delivery)
             .await
-            .expect("drain must not error without a poison channel");
+            .expect("drain must not error without an unprocessable channel");
         assert!(out.is_empty());
     }
 
@@ -1606,15 +1623,15 @@ mod tests {
 
     /// Regression: a message with an **invalid signature** is a *deterministic*
     /// failure (it fails verification identically on every redelivery), so the
-    /// drain must **purge** it, not leave it queued to poison-loop forever. A
+    /// drain must **delete** it, not leave it queued to loop forever. A
     /// transiently unresolvable signer DID would instead be left queued — the
     /// distinction the [`ATMError::VerificationFailed`] variant draws.
     ///
     /// The signature is verified during layer unwrapping, *before* the wrapping
     /// allow-list runs, so the policy here accepts `SignedPlaintext` to prove
     /// the purge is driven by the bad signature and not a wrapping rejection.
-    /// Observed via the poison channel: the "left queued for retry" path does
-    /// **not** report poison, so a poison report proves the purge path was taken.
+    /// Observed via the unprocessable-message channel: the "left queued for
+    /// retry" path does **not** report, so a report proves the delete path ran.
     #[tokio::test]
     async fn invalid_signature_is_purged_not_left_queued() {
         use crate::config::{MessageWrappingType, UnpackPolicy};
@@ -1623,7 +1640,7 @@ mod tests {
 
         // Accept signed-only so the only possible failure is the bad signature.
         let config = ATMConfig::builder()
-            .with_poison_message_channel(16)
+            .with_unprocessable_message_channel(16)
             .with_unpack_policy(UnpackPolicy {
                 expected: vec![MessageWrappingType::SignedPlaintext],
                 validate_addressing_consistency: false,
@@ -1638,7 +1655,9 @@ mod tests {
                 .unwrap(),
         );
         let atm = ATM::new(config, tdk).await.unwrap();
-        let mut rx = atm.get_poison_channel().expect("poison channel configured");
+        let mut rx = atm
+            .get_unprocessable_message_channel()
+            .expect("unprocessable channel");
         let profile = fake_profile();
 
         // Sign a plaintext, then corrupt the signature bytes.
@@ -1684,7 +1703,7 @@ mod tests {
             "an invalid-signature message is not surfaced"
         );
 
-        // A poison report proves the deterministic-purge path ran; the
+        // A report proves the deterministic-delete path ran; the
         // "left queued for retry" path emits nothing.
         let p = rx
             .try_recv()
@@ -1695,21 +1714,21 @@ mod tests {
             "reason should name the verification failure, got: {}",
             p.reason
         );
-        assert!(rx.try_recv().is_err(), "exactly one poison event");
+        assert!(rx.try_recv().is_err(), "exactly one unprocessable event");
     }
 
-    /// The TSP-aware frames drain reports poison on the channel too: a poison
-    /// attachment is yielded as `(None, id)` for the caller to ack *and*
-    /// broadcast on the poison channel, while a valid message is delivered as a
-    /// `DidComm` frame and never reported.
+    /// The TSP-aware frames drain reports unprocessable messages on the channel
+    /// too: an unprocessable attachment is yielded as `(None, id)` for the caller
+    /// to ack *and* broadcast on the channel, while a valid message is delivered
+    /// as a `DidComm` frame and never reported.
     #[cfg(feature = "tsp")]
     #[tokio::test]
-    async fn frames_drain_reports_poison_on_the_channel() {
+    async fn frames_drain_reports_unprocessable_on_the_channel() {
         let (sender_did, sender_x) = peer_with_x25519();
         let (recipient_did, recipient_x) = peer_with_x25519();
 
         let config = ATMConfig::builder()
-            .with_poison_message_channel(16)
+            .with_unprocessable_message_channel(16)
             .build()
             .unwrap();
         let tdk = Arc::new(
@@ -1719,7 +1738,9 @@ mod tests {
         );
         tdk.secrets_resolver().insert(recipient_x.clone()).await;
         let atm = ATM::new(config, tdk).await.unwrap();
-        let mut rx = atm.get_poison_channel().expect("poison channel configured");
+        let mut rx = atm
+            .get_unprocessable_message_channel()
+            .expect("unprocessable channel");
 
         let good = Attachment::base64(authcrypt_b64(
             &sender_did,
@@ -1738,29 +1759,31 @@ mod tests {
         .from(sender_did.clone())
         .to(recipient_did.clone())
         .finalize();
-        let poison = Attachment::base64(
+        let rejected = Attachment::base64(
             BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_string(&plaintext).unwrap().as_bytes()),
         )
-        .id("poison-1".to_string())
+        .id("rejected-1".to_string())
         .finalize();
 
         let out = MessagePickup {}
-            ._handle_delivery_frames(&atm, &delivery_with(vec![good, poison]))
+            ._handle_delivery_frames(&atm, &delivery_with(vec![good, rejected]))
             .await
             .expect("frames drain must not error");
 
-        // Good delivered as a frame; poison yielded as (None, id) for the caller.
+        // Good delivered as a frame; the unprocessable one yielded as (None, id).
         assert_eq!(out.len(), 2);
         assert!(out.iter().any(|(f, id)| id == "good-1" && f.is_some()));
-        assert!(out.iter().any(|(f, id)| id == "poison-1" && f.is_none()));
+        assert!(out.iter().any(|(f, id)| id == "rejected-1" && f.is_none()));
 
-        // The poison frame is also reported on the channel.
-        let p = rx.try_recv().expect("the poison frame should be reported");
-        assert_eq!(p.attachment_id.as_deref(), Some("poison-1"));
+        // The unprocessable frame is also reported on the channel.
+        let p = rx
+            .try_recv()
+            .expect("the unprocessable frame should be reported");
+        assert_eq!(p.attachment_id.as_deref(), Some("rejected-1"));
         assert!(!p.raw.is_empty(), "the raw payload is retained");
         assert!(
             rx.try_recv().is_err(),
-            "only the poison frame is reported, not the valid one"
+            "only the unprocessable frame is reported, not the valid one"
         );
     }
 }

@@ -345,17 +345,19 @@ impl ATM {
             .map(|sender| sender.subscribe())
     }
 
-    /// Subscribe to the poison-message channel, if configured via
-    /// [`crate::config::ATMConfigBuilder::with_poison_message_channel`]. Each
-    /// undeliverable pickup attachment is broadcast here (with its raw payload
-    /// and rejection reason) just before the drain purges it, so you can retain
-    /// or quarantine it. `None` if no channel was configured.
-    pub fn get_poison_channel(
+    /// Subscribe to the unprocessable-message channel, if configured via
+    /// [`crate::config::ATMConfigBuilder::with_unprocessable_message_channel`].
+    /// Each inbound message the SDK can't process — malformed base64/UTF-8, a
+    /// failed signature check, an unexpected/rejected wrapping, or another unpack
+    /// failure — is broadcast here (with its raw payload and failure reason)
+    /// just before the drain deletes/drops it, so you can observe or quarantine
+    /// it. `None` if no channel was configured.
+    pub fn get_unprocessable_message_channel(
         &self,
-    ) -> Option<broadcast::Receiver<crate::protocols::message_pickup::PoisonMessage>> {
+    ) -> Option<broadcast::Receiver<crate::protocols::message_pickup::UnprocessableMessage>> {
         self.inner
             .config
-            .poison_message_channel
+            .unprocessable_message_channel
             .as_ref()
             .map(|sender| sender.subscribe())
     }

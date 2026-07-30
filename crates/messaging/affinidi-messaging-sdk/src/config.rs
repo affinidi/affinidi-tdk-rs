@@ -99,13 +99,22 @@ pub struct ATMConfig {
     /// If you want to aggregate inbound messages from the SDK to a channel to be used by the client
     pub(crate) inbound_message_channel: Option<Sender<WebSocketResponses>>,
 
-    /// Optional broadcast channel that receives a
-    /// [`crate::protocols::message_pickup::PoisonMessage`] for every
-    /// undeliverable pickup attachment *before* the drain purges it, so a
-    /// consumer can retain/quarantine it. `None` (default) = poison messages are
-    /// only logged and purged.
-    pub(crate) poison_message_channel:
-        Option<Sender<crate::protocols::message_pickup::PoisonMessage>>,
+    /// Optional broadcast channel that receives an
+    /// [`crate::protocols::message_pickup::UnprocessableMessage`] for every
+    /// inbound message the SDK can't process — malformed base64/UTF-8, an
+    /// unpack/verification failure, or a policy rejection — *before* the drain
+    /// deletes/drops it, so a consumer can observe or quarantine it. `None`
+    /// (default) = unprocessable messages are only logged.
+    pub(crate) unprocessable_message_channel:
+        Option<Sender<crate::protocols::message_pickup::UnprocessableMessage>>,
+
+    /// Whether the message-pickup drain deletes an unprocessable message from
+    /// the mediator queue (so it can't be redelivered every pickup). `true`
+    /// (default) deletes it; set `false` to retain
+    /// unprocessable messages on the mediator — e.g. during an upgrade, so a
+    /// message rejected only by a stricter `unpack_policy` can be recovered by
+    /// relaxing the policy instead of being permanently deleted.
+    pub(crate) delete_unprocessable_messages: bool,
 
     /// Should we auto unpack forwarded messages?
     pub(crate) unpack_forwards: bool,
@@ -178,6 +187,12 @@ impl ATMConfig {
         &self.unpack_policy
     }
 
+    /// Whether the message-pickup drain deletes an unprocessable message from
+    /// the mediator queue. Default `true`.
+    pub fn delete_unprocessable_messages(&self) -> bool {
+        self.delete_unprocessable_messages
+    }
+
     /// The clock backing the SDK's expiry / TTL decisions.
     pub(crate) fn clock(&self) -> &Arc<dyn Clock> {
         &self.clock
@@ -231,7 +246,9 @@ pub struct ATMConfigBuilder {
     fetch_cache_limit_count: u32,
     fetch_cache_limit_bytes: u64,
     inbound_message_channel: Option<Sender<WebSocketResponses>>,
-    poison_message_channel: Option<Sender<crate::protocols::message_pickup::PoisonMessage>>,
+    unprocessable_message_channel:
+        Option<Sender<crate::protocols::message_pickup::UnprocessableMessage>>,
+    delete_unprocessable_messages: bool,
     unpack_forwards: bool,
     unpack_policy: UnpackPolicy,
     discover_features: DiscoverFeatures,
@@ -253,7 +270,8 @@ impl Default for ATMConfigBuilder {
             fetch_cache_limit_count: 100,
             fetch_cache_limit_bytes: 1024 * 1024 * 10, // Defaults to 10MB Cache
             inbound_message_channel: None,
-            poison_message_channel: None,
+            unprocessable_message_channel: None,
+            delete_unprocessable_messages: true,
             unpack_forwards: true,
             unpack_policy: UnpackPolicy::default(),
             discover_features: DiscoverFeatures::default(),
@@ -307,15 +325,28 @@ impl ATMConfigBuilder {
         self
     }
 
-    /// Enable a broadcast channel that receives a
-    /// [`crate::protocols::message_pickup::PoisonMessage`] for every
-    /// undeliverable pickup attachment *before* it is purged from the mediator.
-    /// Subscribe with [`crate::ATM::get_poison_channel`] to retain or quarantine
-    /// poison messages instead of silently dropping them. `capacity` bounds the
-    /// broadcast buffer.
-    pub fn with_poison_message_channel(mut self, capacity: usize) -> Self {
-        let (poison_message_channel, _) = tokio::sync::broadcast::channel(capacity);
-        self.poison_message_channel = Some(poison_message_channel);
+    /// Enable a broadcast channel that receives an
+    /// [`crate::protocols::message_pickup::UnprocessableMessage`] for every
+    /// inbound message the SDK can't process *before* it is deleted/dropped.
+    /// Subscribe with [`crate::ATM::get_unprocessable_message_channel`] to
+    /// observe or quarantine such messages instead of losing them to a log line.
+    /// `capacity` bounds the broadcast buffer.
+    pub fn with_unprocessable_message_channel(mut self, capacity: usize) -> Self {
+        let (unprocessable_message_channel, _) = tokio::sync::broadcast::channel(capacity);
+        self.unprocessable_message_channel = Some(unprocessable_message_channel);
+        self
+    }
+
+    /// Control whether the message-pickup drain **deletes** an unprocessable
+    /// message from the mediator queue. Default `true` (a
+    /// message that can never be processed is removed so it can't be redelivered
+    /// every pickup). Set `false` to retain unprocessable messages on the
+    /// mediator — useful during an `unpack_policy` tightening/upgrade so a
+    /// message rejected only by the stricter policy can be recovered by relaxing
+    /// the policy rather than being permanently deleted. Pair with
+    /// [`Self::with_unprocessable_message_channel`] to observe what is affected.
+    pub fn with_delete_unprocessable_messages(mut self, delete: bool) -> Self {
+        self.delete_unprocessable_messages = delete;
         self
     }
 
@@ -498,7 +529,8 @@ impl ATMConfigBuilder {
             fetch_cache_limit_count: self.fetch_cache_limit_count,
             fetch_cache_limit_bytes: self.fetch_cache_limit_bytes,
             inbound_message_channel: self.inbound_message_channel,
-            poison_message_channel: self.poison_message_channel,
+            unprocessable_message_channel: self.unprocessable_message_channel,
+            delete_unprocessable_messages: self.delete_unprocessable_messages,
             unpack_forwards: self.unpack_forwards,
             unpack_policy: self.unpack_policy,
             discover_features: Arc::new(RwLock::new(discover_features)),

@@ -58,15 +58,27 @@
   sealing it makes future field additions non-breaking. Downstream code that
   built it by struct literal must switch to reading it (or, if it must produce
   one, `UnpackMetadata::default()` + field assignment).
-- **Opt-in poison-message channel.**
-  `ATMConfigBuilder::with_poison_message_channel(capacity)` enables a broadcast
-  channel (subscribe via `ATM::get_poison_channel`) that receives a
-  `PoisonMessage { attachment_id, raw, reason }` for every undeliverable inbound
-  message. All three inbound paths — the batch drain, the TSP-aware
+- **Opt-in unprocessable-message channel.**
+  `ATMConfigBuilder::with_unprocessable_message_channel(capacity)` enables a
+  broadcast channel (subscribe via `ATM::get_unprocessable_message_channel`)
+  that receives an `UnprocessableMessage { attachment_id, raw, reason }` for
+  every inbound message the SDK can't process. Concretely, a message is sent to
+  this channel when it fails to unpack for any reason — an unexpected/rejected
+  wrapping (`UnexpectedEnvelope`), an invalid signature (`VerificationFailed`),
+  an addressing mismatch (`AddressingMismatch`), too many signatures/recipients,
+  or malformed base64/UTF-8 — carrying the attachment id, the raw payload, and
+  the failure reason. All three inbound paths — the batch drain, the TSP-aware
   `send_delivery_request_frames` drain, and live WebSocket delivery — report on
-  it *before* the message is purged/dropped, so a consumer can retain or
+  it *before* the message is deleted/dropped, so a consumer can observe or
   quarantine it instead of losing it to a log line. Off by default (unchanged
   behaviour when not configured).
+- **Configurable deletion of unprocessable messages.**
+  `ATMConfigBuilder::with_delete_unprocessable_messages(bool)` (default `true`)
+  controls whether the pickup drain deletes an unprocessable message from the
+  mediator queue. Set `false` to *retain* such messages — useful during an
+  `unpack_policy` tightening/upgrade, so a message rejected only by the stricter
+  policy can be recovered by relaxing the policy rather than being permanently
+  deleted. Pair with the channel above to observe what would be affected.
 
 ### Security
 
@@ -78,18 +90,21 @@
   the application; it is rejected (and purged) exactly as a direct `unpack`
   would reject it. This closes an authentication-bypass gap where the pickup
   transport did not honour the app's secure policy.
-- **Poison-message resistance on message pickup.** The delivery drain purges
-  (best-effort, by message id) any delivered attachment it *deterministically*
-  cannot process — malformed base64/utf8, an unsupported attachment type, or a
-  message the policy rejects (a disallowed wrapping, too many signatures, an
-  addressing mismatch, or a non-conformant envelope) — from the mediator, so a
-  crafted "poison" message can't be redelivered every pickup cycle and stall the
-  queue (or, under backpressure, the mediator connection). Failures that might
-  be *transient* (e.g. a temporarily unresolvable signer DID) are left queued
-  for retry. All three inbound paths — `send_delivery_request`, the TSP-aware
-  `send_delivery_request_frames`, and live WebSocket delivery — apply this
-  policy, and each reports undeliverable messages to the opt-in poison channel
-  (see *Added*) before purging/dropping them.
+- **Unprocessable-message resistance on message pickup.** The delivery drain
+  deletes (best-effort, by message id) any delivered attachment it
+  *deterministically* cannot process — malformed base64/utf8, an unsupported
+  attachment type, or a message that fails to unpack (a disallowed wrapping, an
+  invalid signature, too many signatures, an addressing mismatch, or a
+  non-conformant envelope) — from the mediator, so a crafted "poison" message
+  can't be redelivered every pickup cycle and stall the queue (or, under
+  backpressure, the mediator connection). Failures that might be *transient*
+  (e.g. a temporarily unresolvable signer DID) are always left queued for retry.
+  Deletion is on by default but can be disabled with
+  `with_delete_unprocessable_messages(false)` (see *Added*) to retain such
+  messages on the mediator. All three inbound paths — `send_delivery_request`,
+  the TSP-aware `send_delivery_request_frames`, and live WebSocket delivery —
+  apply this policy and report to the opt-in unprocessable-message channel before
+  deleting/dropping.
 - **`UnpackPolicy::max_signatures` (default `5`) — bounded signature
   verification.** The policy's signature cap is enforced *before* any signer
   DID is resolved, so a crafted message stuffed with signature entries cannot
