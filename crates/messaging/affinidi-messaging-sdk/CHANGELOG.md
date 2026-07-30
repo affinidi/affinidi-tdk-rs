@@ -88,6 +88,17 @@
   it to any value your protocol expects (there is no absolute ceiling above your
   policy) or lower it (e.g. `max_signatures: 1`) for single-signer only. Every
   signature within the cap is fully verified.
+- **Per-message DID-resolution budget (DoS guard).** The wrapping allow-list is
+  necessarily enforced *after* layers are decrypted and signatures verified, and
+  each signer/sender key is a DID resolution (an outbound HTTPS fetch for
+  `did:web`). A single shared budget now spans every cryptographic layer **and**
+  every forward hop of one `unpack` (it is *not* reset per hop), so a frame that
+  is ultimately rejected can no longer drive
+  `MAX_CRYPTO_LAYERS × MAX_FORWARD_DEPTH × max_signatures` attacker-chosen
+  resolutions. The budget scales with `max_signatures` plus headroom for a
+  sender key per layer and one resolution per forward hop (default ceiling
+  `5 + 2 + 10 = 17` per frame); exceeding it fails with
+  `ATMError::UnexpectedEnvelope`.
 - **Bounded JWE recipients (DoS guard) + `UnpackPolicy::max_recipients`.** A JWE
   layer addressing more than `max_recipients` (default `100`) recipients is
   rejected before the recipient-matching loop — the same policy-driven bound as

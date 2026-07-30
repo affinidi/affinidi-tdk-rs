@@ -58,6 +58,40 @@ pub(crate) const DEFAULT_MAX_SIGNATURES: usize = 5;
 /// `to_recipients` default.
 pub(crate) const DEFAULT_MAX_RECIPIENTS: usize = 100;
 
+/// Per-message DID-resolution budget for a single `unpack` call, spanning every
+/// cryptographic layer **and** every forward hop (it is *not* reset per hop).
+///
+/// `enforce_policy`'s wrapping allow-list can only run *after* the layers are
+/// decrypted and their signatures verified — and each signer/sender key is a
+/// DID resolution, which for `did:web` is an outbound HTTPS fetch. Without a
+/// shared ceiling, a frame that is ultimately rejected could still drive
+/// `MAX_CRYPTO_LAYERS × MAX_FORWARD_DEPTH × max_signatures` attacker-chosen
+/// resolutions. This budget scales with the caller's `max_signatures` (so a
+/// legitimately multi-signed message still resolves) plus headroom for one
+/// sender key per crypto layer and one resolution per forward hop — but
+/// crucially does **not** multiply those together. With the defaults the ceiling
+/// is `5 + 2 + 10 = 17` resolutions per inbound frame.
+fn resolution_budget(policy: &UnpackPolicy) -> usize {
+    policy
+        .max_signatures
+        .saturating_add(MAX_CRYPTO_LAYERS)
+        .saturating_add(MAX_FORWARD_DEPTH)
+}
+
+/// Charge one DID resolution against the per-message [`resolution_budget`],
+/// erroring when it is exhausted (so cross-layer / cross-hop resolution
+/// amplification is bounded).
+fn charge_resolution(budget: &mut usize) -> Result<(), ATMError> {
+    *budget = budget.checked_sub(1).ok_or_else(|| {
+        ATMError::UnexpectedEnvelope(
+            "message exceeded its DID-resolution budget: too many signer/sender \
+             keys to resolve across its cryptographic layers and forward hops"
+                .to_string(),
+        )
+    })?;
+    Ok(())
+}
+
 /// One cryptographic layer removed while unwrapping a message, recorded
 /// outermost-first so the stack can be classified into a
 /// [`MessageWrappingType`] and checked for addressing consistency.
@@ -94,6 +128,14 @@ impl SharedState {
         let mut msg_string = message.to_string();
         let mut forward_depth: usize = 0;
 
+        // Per-message DID-resolution budget, shared across every crypto layer
+        // *and* every forward hop of this single `unpack` (deliberately not
+        // reset per hop). Bounds attacker-driven outbound resolution — a
+        // `did:web` resolve is an arbitrary HTTPS fetch — so a frame that is
+        // ultimately policy-rejected can't first drive resolution across
+        // `MAX_CRYPTO_LAYERS × MAX_FORWARD_DEPTH × max_signatures` signers.
+        let mut budget = resolution_budget(policy);
+
         loop {
             // Compute SHA-256 hash of the packed message
             let sha256_hash = sha256::digest(&msg_string);
@@ -101,7 +143,7 @@ impl SharedState {
             // Unwrap every cryptographic layer (JWE/JWS), building the layer
             // stack and metadata.
             let (msg, mut metadata, layers) = self
-                .unpack_layers(&msg_string, &sha256_hash, policy)
+                .unpack_layers(&msg_string, &sha256_hash, policy, &mut budget)
                 .await?;
 
             if self.config.unpack_forwards && msg.typ == "https://didcomm.org/routing/2.0/forward" {
@@ -134,6 +176,7 @@ impl SharedState {
         input: &str,
         sha256_hash: &str,
         policy: &UnpackPolicy,
+        budget: &mut usize,
     ) -> Result<(Message, UnpackMetadata, Vec<EnvLayer>), ATMError> {
         let mut current = input.to_string();
         let mut layers: Vec<EnvLayer> = Vec::new();
@@ -167,7 +210,7 @@ impl SharedState {
             if is_jwe {
                 // JWE — decrypt one encryption layer.
                 let (plaintext, kind, skid, recipient_kid) =
-                    self.decrypt_layer(&current, &value, policy).await?;
+                    self.decrypt_layer(&current, &value, policy, budget).await?;
                 encrypted = true;
                 if kind == EncLayerKind::Authcrypt {
                     authenticated = true;
@@ -183,7 +226,8 @@ impl SharedState {
                 continue;
             } else if is_jws {
                 // JWS — verify every signature and attribute each signer.
-                let (payload, signer_kids) = self.verify_all_signatures(&current, policy).await?;
+                let (payload, signer_kids) =
+                    self.verify_all_signatures(&current, policy, budget).await?;
                 non_repudiation = true;
                 // Accumulate across layers (outermost first) rather than
                 // overwrite — a second JWS layer must not erase the outer
@@ -234,6 +278,7 @@ impl SharedState {
         jwe_str: &str,
         value: &serde_json::Value,
         policy: &UnpackPolicy,
+        budget: &mut usize,
     ) -> Result<(String, EncLayerKind, Option<String>, String), ATMError> {
         use affinidi_crypto::jose::key_agreement::PrivateKeyAgreement;
         use affinidi_messaging_didcomm::jwe::decrypt::decrypt;
@@ -285,7 +330,7 @@ impl SharedState {
 
         // Try to detect sender for authcrypt
         // Check if there is a skid (sender key ID) in the protected header
-        let sender_public = self.try_resolve_sender_public(jwe_str).await;
+        let sender_public = self.try_resolve_sender_public(jwe_str, budget).await;
 
         let decrypted = decrypt(
             jwe_str,
@@ -319,6 +364,7 @@ impl SharedState {
     async fn try_resolve_sender_public(
         &self,
         jwe_str: &str,
+        budget: &mut usize,
     ) -> Option<affinidi_crypto::jose::key_agreement::PublicKeyAgreement> {
         use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 
@@ -342,6 +388,15 @@ impl SharedState {
         } else {
             skid
         };
+
+        // Charge the per-message resolution budget before the (networked for
+        // `did:web`) sender-DID resolution. On exhaustion, behave as "no sender
+        // key": the authcrypt decrypt below then fails cleanly, without issuing
+        // the outbound fetch.
+        if *budget == 0 {
+            return None;
+        }
+        *budget -= 1;
 
         // Resolve the sender DID document
         let sender_doc = self
@@ -406,6 +461,7 @@ impl SharedState {
         &self,
         jws_str: &str,
         policy: &UnpackPolicy,
+        budget: &mut usize,
     ) -> Result<(String, Vec<String>), ATMError> {
         use affinidi_messaging_didcomm::jws::verify::{parse_jws, verify_parsed_signature};
 
@@ -431,6 +487,9 @@ impl SharedState {
                     "a signature is missing its signer kid".into(),
                 )
             })?;
+            // Charge the per-message resolution budget before resolving the
+            // signer DID (a networked fetch for `did:web`).
+            charge_resolution(budget)?;
             let key = self.resolve_verify_key(&kid).await.ok_or_else(|| {
                 ATMError::DidcommError(
                     "Couldn't verify JWS".into(),
@@ -2873,6 +2932,62 @@ mod tests {
             .await
             .expect("a cap of 2 accepts two recipients");
         assert_eq!(meta.wrapping, MessageWrappingType::AnoncryptPlaintext);
+    }
+
+    /// Per-message DID-resolution budget: a rejected frame cannot drive
+    /// unbounded outbound resolution across forward hops. Each hop here is
+    /// `sign(sign(forward(..)))` — two signer resolutions per hop — so with
+    /// `max_signatures = 1` (budget `1 + MAX_CRYPTO_LAYERS + MAX_FORWARD_DEPTH =
+    /// 13`) the chain is refused on the budget after ~7 hops, well within
+    /// `MAX_FORWARD_DEPTH`, rather than resolving all 16 signer DIDs.
+    #[tokio::test]
+    async fn resolution_budget_caps_cross_hop_amplification() {
+        let (signer_did, sed, _sx) = generate_peer_did_full();
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let sign_kid = format!("{signer_did}#key-1");
+
+        // One hop = sign(sign(forward(inner))): two JWS layers wrapping a
+        // forward envelope, each layer a separate signer resolution.
+        let hop = |inner: String| -> String {
+            let forward = wrap_in_forward_json(&inner, None);
+            let forward_json = serde_json::to_string(&forward).unwrap();
+            let s1 = sign_multi(
+                forward_json.as_bytes(),
+                &[JwsSigner::Ed25519 {
+                    kid: &sign_kid,
+                    private: &sed_priv,
+                }],
+            )
+            .unwrap();
+            sign_multi(
+                s1.as_bytes(),
+                &[JwsSigner::Ed25519 {
+                    kid: &sign_kid,
+                    private: &sed_priv,
+                }],
+            )
+            .unwrap()
+        };
+
+        // Final delivered payload wrapped in 8 double-signed forward hops.
+        let mut current = build_plaintext(&signer_did, "did:example:recipient");
+        for _ in 0..8 {
+            current = hop(current);
+        }
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::Plaintext],
+            validate_addressing_consistency: false,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let atm = create_atm_with_policy(vec![], policy).await;
+
+        let err = atm.unpack(&current).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::UnexpectedEnvelope(m) if m.contains("resolution budget")),
+            "cross-hop resolution amplification must hit the per-message budget, got: {err:?}"
+        );
     }
 
     /// EXPERIMENT (not committed): unpack Dart-generated messages for every
