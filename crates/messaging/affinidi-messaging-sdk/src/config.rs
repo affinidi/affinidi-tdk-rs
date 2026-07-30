@@ -47,12 +47,13 @@ pub struct UnpackPolicy {
     pub max_signatures: usize,
     /// Maximum number of recipients a single JWE (encryption) layer may address
     /// before it is rejected. Unlike [`Self::max_signatures`], the secure
-    /// default is **permissive** (`100`, the absolute hard cap): a receiver is
-    /// legitimately only one of several recipients, so a restrictive default
-    /// would reject ordinary group/broadcast messages. Decrypting runs the key
-    /// agreement once (for the matched recipient), so this bounds parse /
-    /// allocation cost, not asymmetric-crypto work. Lower it for stricter
-    /// (e.g. one-to-one only) deployments.
+    /// default is **permissive** (`100`): a receiver is legitimately only one of
+    /// several recipients, so a restrictive default would reject ordinary
+    /// group/broadcast messages. Like `max_signatures`, this is a default, not
+    /// an absolute ceiling — raise it to any value your protocol expects (or
+    /// lower it for stricter, e.g. one-to-one, deployments). Decrypting runs the
+    /// key agreement once (for the matched recipient), so this bounds parse /
+    /// allocation cost, not asymmetric-crypto work.
     pub max_recipients: usize,
 }
 
