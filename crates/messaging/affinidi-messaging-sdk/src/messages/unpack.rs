@@ -741,7 +741,8 @@ mod tests {
     }
 
     /// Helper: create an ATM instance with secrets pre-loaded for the given
-    /// party, using the **secure default** unpack policy (authcrypt-only). Tests
+    /// party, using the **secure default** unpack policy (authenticated
+    /// encryption only). Tests
     /// that exercise other wrappings pass an explicit minimal policy via
     /// `create_atm_with_policy`.
     async fn create_atm_with_secrets(secrets: Vec<Secret>) -> ATM {
@@ -2125,12 +2126,18 @@ mod tests {
             Some(format!("{sender_did}#key-2").as_str())
         );
 
-        // The same message is rejected by the secure default (authcrypt-only).
+        // The secure default also accepts it: it is authenticated encryption
+        // (the inner authcrypt binds the sender) and strictly more private than
+        // bare authcrypt, so it is in the default allow-list.
         let strict = create_atm_with_policy(vec![rx], UnpackPolicy::default()).await;
-        assert!(matches!(
-            strict.unpack(&outer).await.unwrap_err(),
-            ATMError::UnexpectedEnvelope(_)
-        ));
+        let (_msg, meta) = strict
+            .unpack(&outer)
+            .await
+            .expect("anoncrypt(authcrypt) is in the secure default set");
+        assert_eq!(
+            meta.wrapping,
+            MessageWrappingType::AnoncryptAuthcryptPlaintext
+        );
     }
 
     /// `anoncrypt(sign(plaintext))` (a DIDComm-defined wrapping) with two

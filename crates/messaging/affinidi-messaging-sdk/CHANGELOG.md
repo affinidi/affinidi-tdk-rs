@@ -4,7 +4,8 @@
 
 > **BREAKING CHANGE.** `atm.unpack` now rejects non-authenticated envelopes by
 > default — it accepts only the authenticated-encryption wrappings
-> `authcrypt(plaintext)` and `authcrypt(sign(plaintext))`. Because the default
+> `authcrypt(plaintext)`, `authcrypt(sign(plaintext))` and
+> `anoncrypt(authcrypt(plaintext))`. Because the default
 > behaviour changes for every caller, this is a breaking release: the version
 > bumps `0.18 → 0.19` (a SemVer minor bump is the breaking increment for a `0.x`
 > crate). Restore the previous "accept anything" behaviour explicitly with
@@ -14,8 +15,9 @@
 
 - **`atm.unpack` is now secure by default (behavioural change).** Unpacking now
   enforces an [`UnpackPolicy`](src/config.rs) whose default accepts only
-  authenticated encryption — `authcrypt(plaintext)` and
-  `authcrypt(sign(plaintext))` — and enforces message-layer addressing
+  authenticated encryption — `authcrypt(plaintext)`, `authcrypt(sign(plaintext))`
+  and `anoncrypt(authcrypt(plaintext))` (which additionally hides the sender key
+  id from intermediaries) — and enforces message-layer addressing
   consistency: the inner `from` must equal the authcrypt sender key (`skid`)
   DID (and a verified signer's DID when signed). This closes a forged-sender
   authentication-bypass class where a message authcrypted by one key claims
@@ -25,8 +27,8 @@
 
   Configure via `ATMConfigBuilder::with_unpack_policy(...)`. The policy is an
   explicit allow-list of `MessageWrappingType` values (no `secure`/`permissive`
-  presets), so protocols expecting other wrappings (anoncrypt receipts, or the
-  layered `anoncrypt(authcrypt(plaintext))`) list exactly what they accept. The
+  presets), so protocols expecting an unauthenticated wrapping (anoncrypt
+  receipts or signed-only notifications) list exactly what they accept. The
   same policy governs the message-pickup delivery drain, so messages pulled via
   pickup get the identical secure-by-default guarantees as a direct `unpack`.
 

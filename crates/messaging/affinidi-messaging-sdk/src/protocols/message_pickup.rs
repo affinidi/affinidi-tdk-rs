@@ -789,8 +789,8 @@ impl MessagePickup {
     ///
     /// Each attachment is unpacked under the **configured
     /// [`UnpackPolicy`](crate::config::UnpackPolicy)** — the same secure
-    /// authcrypt-only default that [`crate::ATM::unpack`] applies — so messages
-    /// pulled via pickup get the same guarantees as a direct unpack.
+    /// authenticated-encryption default that [`crate::ATM::unpack`] applies — so
+    /// messages pulled via pickup get the same guarantees as a direct unpack.
     ///
     /// An attachment that can never be processed — malformed base64/utf8, an
     /// unsupported attachment type, or a message the policy *deterministically*

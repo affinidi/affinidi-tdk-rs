@@ -17,13 +17,15 @@ pub use crate::messages::wrapping::MessageWrappingType;
 /// enforced.
 ///
 /// The [`Default`] is the DIDComm v2 secure baseline — accept only
-/// authenticated encryption, `authcrypt(plaintext)` and
-/// `authcrypt(sign(plaintext))`, and enforce addressing consistency — so an app
+/// authenticated encryption (every accepted wrapping carries an authcrypt layer
+/// that binds the sender): `authcrypt(plaintext)`, `authcrypt(sign(plaintext))`,
+/// and `anoncrypt(authcrypt(plaintext))` (which additionally hides the sender
+/// key id from intermediaries) — and enforce addressing consistency, so an app
 /// that simply calls `atm.unpack` is protected against envelope-downgrade and
 /// forged-sender (`from` ≠ authcrypt `skid`) attacks without any extra code.
 /// Relax it explicitly via [`ATMConfigBuilder::with_unpack_policy`] when a
-/// protocol legitimately expects other wrappings (e.g. anoncrypt receipts, or
-/// the layered `anoncrypt(authcrypt(plaintext))`).
+/// protocol legitimately expects an unauthenticated wrapping (e.g. anoncrypt
+/// receipts or signed-only notifications).
 #[derive(Debug, Clone)]
 pub struct UnpackPolicy {
     /// Exactly which wrapping types `unpack` accepts. A message classified
@@ -60,6 +62,7 @@ impl Default for UnpackPolicy {
             expected: vec![
                 MessageWrappingType::AuthcryptPlaintext,
                 MessageWrappingType::AuthcryptSignPlaintext,
+                MessageWrappingType::AnoncryptAuthcryptPlaintext,
             ],
             validate_addressing_consistency: true,
             max_signatures: crate::messages::unpack::DEFAULT_MAX_SIGNATURES,
@@ -106,8 +109,8 @@ pub struct ATMConfig {
     /// Policy enforced on every received envelope — both [`crate::ATM::unpack`]
     /// and the message-pickup delivery drain — governing which wrapping types
     /// are accepted and whether addressing consistency is enforced. Defaults to
-    /// the secure authcrypt-only baseline, so messages pulled via pickup get the
-    /// same guarantees as a direct `unpack`.
+    /// the secure authenticated-encryption baseline, so messages pulled via
+    /// pickup get the same guarantees as a direct `unpack`.
     pub(crate) unpack_policy: UnpackPolicy,
 
     /// Can configure any protocol discoverable information here
