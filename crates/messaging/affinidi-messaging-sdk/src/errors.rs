@@ -38,6 +38,8 @@ pub enum ATMError {
     UnexpectedEnvelope(String),
     #[error("Addressing consistency error: {0}")]
     AddressingMismatch(String),
+    #[error("Verification failed: {0}")]
+    VerificationFailed(String),
     #[error("SDK Error: {0}")]
     SDKError(String),
     #[error("TDK Error: {0}")]

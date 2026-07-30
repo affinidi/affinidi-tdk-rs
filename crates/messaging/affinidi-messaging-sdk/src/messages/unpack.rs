@@ -513,10 +513,11 @@ impl SharedState {
                 )
             })?;
             verify_parsed_signature(sig, &key).map_err(|e| {
-                ATMError::DidcommError(
-                    "JWS signature verification failed".into(),
-                    format!("signer '{kid}': {e}"),
-                )
+                // A verification failure (bad signature or alg/key mismatch) is
+                // *deterministic* — unlike the resolution failure above, it
+                // fails identically on every retry, so it is a distinct variant
+                // the pickup drain can purge instead of re-queuing forever.
+                ATMError::VerificationFailed(format!("signer '{kid}': {e}"))
             })?;
             // Prefer the kid the signature actually carried.
             signer_kids.push(kid);
@@ -2744,8 +2745,9 @@ mod tests {
 
         let err = recipient.unpack(&tampered).await.unwrap_err();
         assert!(
-            matches!(err, ATMError::DidcommError(_, _)),
-            "one invalid signature must fail the whole unpack, got: {err:?}"
+            matches!(err, ATMError::VerificationFailed(_)),
+            "one invalid signature must fail the whole unpack as a \
+             (deterministic) VerificationFailed, got: {err:?}"
         );
     }
 

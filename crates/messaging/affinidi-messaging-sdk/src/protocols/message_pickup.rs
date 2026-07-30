@@ -793,14 +793,14 @@ impl MessagePickup {
     /// messages pulled via pickup get the same guarantees as a direct unpack.
     ///
     /// An attachment that can never be processed — malformed base64/utf8, an
-    /// unsupported attachment type, or a message the policy *deterministically*
-    /// rejects (a disallowed wrapping, too many signatures, an addressing
-    /// mismatch, a non-conformant envelope) — is **purged from the mediator**
-    /// (best-effort, by its message id) so it can't be redelivered forever.
-    /// Without this a "poison" message would be handed back every pickup,
-    /// stalling the queue and, under backpressure, the mediator connection.
-    /// Failures that might be *transient* (e.g. a temporarily unresolvable
-    /// signer DID) are left queued for retry.
+    /// unsupported attachment type, or a message that *deterministically* fails
+    /// to unpack (a disallowed wrapping, an invalid signature, too many
+    /// signatures, an addressing mismatch, a non-conformant envelope) — is
+    /// **purged from the mediator** (best-effort, by its message id) so it can't
+    /// be redelivered forever. Without this a "poison" message would be handed
+    /// back every pickup, stalling the queue and, under backpressure, the
+    /// mediator connection. Failures that might be *transient* (e.g. a
+    /// temporarily unresolvable signer DID) are left queued for retry.
     pub(crate) async fn _handle_delivery(
         &self,
         atm: &ATM,
@@ -878,12 +878,16 @@ impl MessagePickup {
                             }
                             response.push((m, u))
                         }
-                        // A deterministic policy/addressing/format rejection will
-                        // fail identically on every redelivery — a poison
-                        // message. Purge it. Anything else may be transient, so
-                        // leave it queued for retry.
+                        // A deterministic rejection — a disallowed wrapping or
+                        // an addressing mismatch (policy), or an invalid
+                        // signature (crypto) — fails identically on every
+                        // redelivery, so it is a poison message: purge it.
+                        // Anything else (e.g. a transiently unresolvable signer
+                        // DID) may recover, so leave it queued for retry.
                         Err(
-                            e @ (ATMError::UnexpectedEnvelope(_) | ATMError::AddressingMismatch(_)),
+                            e @ (ATMError::UnexpectedEnvelope(_)
+                            | ATMError::AddressingMismatch(_)
+                            | ATMError::VerificationFailed(_)),
                         ) => {
                             warn!(
                                 "Purging poison message (deterministic reject: {e:?}). id({:?})",
@@ -1276,6 +1280,7 @@ mod tests {
     use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
     use affinidi_did_common::{DID, PeerCreateKey, PeerKeyPurpose, PeerKeyType};
     use affinidi_messaging_didcomm::jwe::encrypt::authcrypt;
+    use affinidi_messaging_didcomm::jws::sign::{JwsSigner, sign_multi};
     use affinidi_messaging_didcomm::message::{Attachment, Message as DcMessage};
     use affinidi_secrets_resolver::SecretsResolver;
     use affinidi_secrets_resolver::secrets::Secret;
@@ -1579,6 +1584,118 @@ mod tests {
             .await
             .expect("drain must not error without a poison channel");
         assert!(out.is_empty());
+    }
+
+    /// A did:peer:2 with Ed25519 (V, #key-1) + X25519 (E, #key-2); returns the
+    /// DID and the Ed25519 *signing* secret keyed at `#key-1`.
+    fn peer_with_ed25519() -> (String, Secret) {
+        let ed = Secret::generate_ed25519(Some("t"), None);
+        let ed_mb = ed.get_public_keymultibase().unwrap();
+        let x = Secret::generate_x25519(Some("t"), None).unwrap();
+        let x_mb = x.get_public_keymultibase().unwrap();
+        let keys = vec![
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Verification, ed_mb),
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, x_mb),
+        ];
+        let (did, _) = DID::generate_peer(&keys, None).unwrap();
+        let did = did.to_string();
+        let mut ed = ed;
+        ed.id = format!("{did}#key-1");
+        (did, ed)
+    }
+
+    /// Regression: a message with an **invalid signature** is a *deterministic*
+    /// failure (it fails verification identically on every redelivery), so the
+    /// drain must **purge** it, not leave it queued to poison-loop forever. A
+    /// transiently unresolvable signer DID would instead be left queued — the
+    /// distinction the [`ATMError::VerificationFailed`] variant draws.
+    ///
+    /// The signature is verified during layer unwrapping, *before* the wrapping
+    /// allow-list runs, so the policy here accepts `SignedPlaintext` to prove
+    /// the purge is driven by the bad signature and not a wrapping rejection.
+    /// Observed via the poison channel: the "left queued for retry" path does
+    /// **not** report poison, so a poison report proves the purge path was taken.
+    #[tokio::test]
+    async fn invalid_signature_is_purged_not_left_queued() {
+        use crate::config::{MessageWrappingType, UnpackPolicy};
+
+        let (signer_did, ed) = peer_with_ed25519();
+
+        // Accept signed-only so the only possible failure is the bad signature.
+        let config = ATMConfig::builder()
+            .with_poison_message_channel(16)
+            .with_unpack_policy(UnpackPolicy {
+                expected: vec![MessageWrappingType::SignedPlaintext],
+                validate_addressing_consistency: false,
+                max_signatures: 5,
+                max_recipients: 100,
+            })
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        let atm = ATM::new(config, tdk).await.unwrap();
+        let mut rx = atm.get_poison_channel().expect("poison channel configured");
+        let profile = fake_profile();
+
+        // Sign a plaintext, then corrupt the signature bytes.
+        let msg = DcMessage::build(
+            "evil-sig".to_string(),
+            "example/v1".to_string(),
+            json!({"x": 1}),
+        )
+        .from(signer_did.clone())
+        .to("did:example:recipient".to_string())
+        .finalize();
+        let plaintext = serde_json::to_string(&msg).unwrap();
+        let ed_priv: [u8; 32] = ed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{signer_did}#key-1"),
+                private: &ed_priv,
+            }],
+        )
+        .unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&signed).unwrap();
+        let sig = v["signatures"][0]["signature"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let first = sig.chars().next().unwrap();
+        let repl = if first == 'A' { 'B' } else { 'A' };
+        let corrupted: String = std::iter::once(repl).chain(sig.chars().skip(1)).collect();
+        v["signatures"][0]["signature"] = serde_json::Value::String(corrupted);
+        let tampered = serde_json::to_string(&v).unwrap();
+
+        let attachment = Attachment::base64(BASE64_URL_SAFE_NO_PAD.encode(tampered.as_bytes()))
+            .id("bad-sig".to_string())
+            .finalize();
+
+        let out = MessagePickup {}
+            ._handle_delivery(&atm, &profile, &delivery_with(vec![attachment]))
+            .await
+            .expect("drain must not error");
+        assert!(
+            out.is_empty(),
+            "an invalid-signature message is not surfaced"
+        );
+
+        // A poison report proves the deterministic-purge path ran; the
+        // "left queued for retry" path emits nothing.
+        let p = rx
+            .try_recv()
+            .expect("an invalid signature must be purged (reported), not left queued");
+        assert_eq!(p.attachment_id.as_deref(), Some("bad-sig"));
+        assert!(
+            p.reason.contains("Verification failed"),
+            "reason should name the verification failure, got: {}",
+            p.reason
+        );
+        assert!(rx.try_recv().is_err(), "exactly one poison event");
     }
 
     /// The TSP-aware frames drain reports poison on the channel too: a poison
