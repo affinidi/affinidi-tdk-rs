@@ -8,7 +8,15 @@
 /// The new `affinidi_messaging_didcomm` crate returns structured `UnpackResult` variants
 /// instead of a flat metadata struct. This shim is populated from those variants
 /// so that existing SDK callers can keep working.
+///
+/// **Sealed (`#[non_exhaustive]`).** This is a *returned* value — the SDK
+/// constructs it, downstream code only reads its (public) fields — so it is
+/// sealed to allow future fields to be added without a breaking change.
+/// External crates cannot build it with a struct literal; workspace crates that
+/// do produce it (the mediator's `didcomm_compat`) use `UnpackMetadata::default()`
+/// followed by field assignment.
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct UnpackMetadata {
     pub encrypted: bool,
     pub authenticated: bool,

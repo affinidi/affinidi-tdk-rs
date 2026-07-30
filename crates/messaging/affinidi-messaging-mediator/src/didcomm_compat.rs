@@ -201,10 +201,8 @@ impl MetaEnvelope {
         } else if self.parsed.get("type").is_some() {
             let msg = Message::from_json(self.raw.as_bytes())
                 .map_err(|e| format!("Cannot parse plaintext message: {e}"))?;
-            let metadata = UnpackMetadata {
-                sha256_hash: self.sha256_hash.clone(),
-                ..Default::default()
-            };
+            let mut metadata = UnpackMetadata::default();
+            metadata.sha256_hash = self.sha256_hash.clone();
             Ok((msg, metadata))
         } else {
             Err("Cannot detect message format".to_string())
@@ -273,15 +271,13 @@ impl MetaEnvelope {
         // may be promoted below if the decrypted plaintext is itself a signed
         // JWS or a nested authcrypt JWE (the regression this fixes: the old
         // shim stopped here and mis-classified those as anonymous).
-        let mut metadata = UnpackMetadata {
-            encrypted: true,
-            authenticated: decrypted.authenticated,
-            anonymous_sender: !decrypted.authenticated,
-            encrypted_from_kid: decrypted.sender_kid,
-            encrypted_to_kids: vec![decrypted.recipient_kid],
-            sha256_hash: self.sha256_hash.clone(),
-            ..Default::default()
-        };
+        let mut metadata = UnpackMetadata::default();
+        metadata.encrypted = true;
+        metadata.authenticated = decrypted.authenticated;
+        metadata.anonymous_sender = !decrypted.authenticated;
+        metadata.encrypted_from_kid = decrypted.sender_kid;
+        metadata.encrypted_to_kids = vec![decrypted.recipient_kid];
+        metadata.sha256_hash = self.sha256_hash.clone();
 
         let msg = recurse_decrypted_plaintext(
             &decrypted.plaintext,
@@ -551,12 +547,10 @@ async fn unpack_jws(
     let msg = Message::from_json(&verified.payload)
         .map_err(|e| format!("Cannot parse JWS payload: {e}"))?;
 
-    let metadata = UnpackMetadata {
-        non_repudiation: true,
-        sign_from: verified.signer_kid.or(Some(signer_kid)),
-        sha256_hash: sha256_hash.to_string(),
-        ..Default::default()
-    };
+    let mut metadata = UnpackMetadata::default();
+    metadata.non_repudiation = true;
+    metadata.sign_from = verified.signer_kid.or(Some(signer_kid));
+    metadata.sha256_hash = sha256_hash.to_string();
 
     Ok((msg, metadata))
 }

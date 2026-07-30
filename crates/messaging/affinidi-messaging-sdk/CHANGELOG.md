@@ -10,6 +10,13 @@
 > bumps `0.18 → 0.19` (a SemVer minor bump is the breaking increment for a `0.x`
 > crate). Restore the previous "accept anything" behaviour explicitly with
 > `ATMConfigBuilder::with_unpack_policy(UnpackPolicy { .. })` — see below.
+>
+> **Also breaking:** `UnpackMetadata` gains two public fields (`wrapping`,
+> `signers`), which breaks any struct-literal construction of it downstream. It
+> is now sealed with `#[non_exhaustive]`, so future field additions will *not*
+> be breaking — external code should read its (public) fields rather than
+> construct it, and use `UnpackMetadata::default()` + field assignment if it
+> ever needs to build one.
 
 ### Changed
 
@@ -44,9 +51,13 @@
   consistency requires a verified signer whose DID matches the inner `from`, and
   — for an `authcrypt(sign(plaintext))` message — the authcrypt `skid` must
   match it too, binding `from == signer == authcrypt sender`.
-- **`UnpackMetadata` additive fields:** `wrapping: MessageWrappingType` (the
-  classified envelope combination) and `signers: Vec<String>` (every verified
-  signer `kid`).
+- **`UnpackMetadata` additive fields + sealing.** Two new public fields —
+  `wrapping: MessageWrappingType` (the classified envelope combination) and
+  `signers: Vec<String>` (every verified signer `kid`). The struct is now
+  `#[non_exhaustive]`: it is a value the SDK *returns* (downstream reads it), so
+  sealing it makes future field additions non-breaking. Downstream code that
+  built it by struct literal must switch to reading it (or, if it must produce
+  one, `UnpackMetadata::default()` + field assignment).
 - **Opt-in poison-message channel.**
   `ATMConfigBuilder::with_poison_message_channel(capacity)` enables a broadcast
   channel (subscribe via `ATM::get_poison_channel`) that receives a
