@@ -142,7 +142,6 @@ mod tests {
     use super::*;
     use crate::message::direct::unpack;
     use ed25519_dalek::SigningKey;
-    use rand_core::OsRng;
     use x25519_dalek::{PublicKey, StaticSecret};
 
     struct Party {
@@ -154,8 +153,8 @@ mod tests {
     }
 
     fn party(vid: &str) -> Party {
-        let sign = SigningKey::generate(&mut OsRng);
-        let enc = StaticSecret::random_from_rng(OsRng);
+        let sign = SigningKey::generate(&mut rand_10::rng());
+        let enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         Party {
             vid: vid.to_string(),
             sign_sk: sign.to_bytes(),

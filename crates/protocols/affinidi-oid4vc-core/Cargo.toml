@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-oid4vc-core"
 description = "Shared types for the OpenID for Verifiable Credentials (OID4VC) protocol family."
-version = "0.1.5"
+version = "0.1.6"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -16,13 +16,13 @@ rust-version.workspace = true
 default = ["es256", "eddsa"]
 _test-utils = []
 es256 = ["dep:p256"]
-eddsa = ["dep:ed25519-dalek", "dep:rand_core"]
+eddsa = ["dep:ed25519-dalek", "dep:rand_10"]
 
 [dependencies]
 base64 = "0.22"
-ed25519-dalek = { version = "2", features = ["rand_core"], optional = true }
+ed25519-dalek = { version = "3", features = ["rand_core"], optional = true }
 p256 = { version = "0.13", features = ["ecdsa", "arithmetic"], optional = true }
-rand_core = { version = "0.6", features = ["getrandom"], optional = true }
+rand_10 = { package = "rand", version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

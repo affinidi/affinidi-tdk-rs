@@ -81,13 +81,12 @@ mod tests {
     use super::*;
     use crate::message::direct;
     use ed25519_dalek::SigningKey;
-    use rand_core::OsRng;
     use x25519_dalek::{PublicKey, StaticSecret};
 
     fn packed() -> direct::PackedMessage {
-        let sign = SigningKey::generate(&mut OsRng);
-        let sender_enc = StaticSecret::random_from_rng(OsRng);
-        let recv_enc = StaticSecret::random_from_rng(OsRng);
+        let sign = SigningKey::generate(&mut rand_10::rng());
+        let sender_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
+        let recv_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         direct::pack(
             b"payload",
             MessageType::Direct,
@@ -136,9 +135,9 @@ mod tests {
     fn meta_envelope_reads_addressing_for_routed_message() {
         // In the interop format the kind is encrypted, so a keys-free parse only
         // recovers addressing (and reports Direct as a placeholder kind).
-        let sign = SigningKey::generate(&mut OsRng);
-        let sender_enc = StaticSecret::random_from_rng(OsRng);
-        let recv_enc = StaticSecret::random_from_rng(OsRng);
+        let sign = SigningKey::generate(&mut rand_10::rng());
+        let sender_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
+        let recv_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         let msg = direct::pack(
             b"routing-layer",
             MessageType::Routed,

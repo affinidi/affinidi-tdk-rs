@@ -22,7 +22,7 @@
 
 use affinidi_secrets_resolver::secrets::{KeyType, Secret};
 use async_trait::async_trait;
-use ed25519_dalek::{SigningKey, ed25519::signature::SignerMut};
+use ed25519_dalek::{Signer as _, SigningKey};
 use zeroize::Zeroizing;
 
 use crate::DataIntegrityError;
@@ -106,8 +106,8 @@ impl Signer for Secret {
                             reason: "Ed25519 private key must be exactly 32 bytes".to_string(),
                         }
                     })?);
-                let mut signing_key = SigningKey::from_bytes(&private_bytes);
-                Ok(signing_key.sign(data).to_vec())
+                let signing_key = SigningKey::from_bytes(&private_bytes);
+                Ok(signing_key.sign(data).to_bytes().to_vec())
             }
             #[cfg(feature = "ml-dsa")]
             KeyType::MlDsa44 => {

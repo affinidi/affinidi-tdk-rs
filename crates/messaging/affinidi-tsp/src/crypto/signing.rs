@@ -33,11 +33,10 @@ pub fn public_key_from_private(private_key: &[u8; 32]) -> [u8; 32] {
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
-    use rand_core::OsRng;
 
     #[test]
     fn sign_verify_roundtrip() {
-        let sk = SigningKey::generate(&mut OsRng);
+        let sk = SigningKey::generate(&mut rand_10::rng());
         let pk = sk.verifying_key().to_bytes();
         let data = b"test message for TSP signing";
 
@@ -47,8 +46,10 @@ mod tests {
 
     #[test]
     fn wrong_key_fails() {
-        let sk = SigningKey::generate(&mut OsRng);
-        let wrong_pk = SigningKey::generate(&mut OsRng).verifying_key().to_bytes();
+        let sk = SigningKey::generate(&mut rand_10::rng());
+        let wrong_pk = SigningKey::generate(&mut rand_10::rng())
+            .verifying_key()
+            .to_bytes();
         let data = b"test";
 
         let sig = sign(data, &sk.to_bytes()).unwrap();
@@ -57,7 +58,7 @@ mod tests {
 
     #[test]
     fn tampered_data_fails() {
-        let sk = SigningKey::generate(&mut OsRng);
+        let sk = SigningKey::generate(&mut rand_10::rng());
         let pk = sk.verifying_key().to_bytes();
 
         let sig = sign(b"original", &sk.to_bytes()).unwrap();
@@ -66,7 +67,7 @@ mod tests {
 
     #[test]
     fn public_key_derivation() {
-        let sk = SigningKey::generate(&mut OsRng);
+        let sk = SigningKey::generate(&mut rand_10::rng());
         let expected_pk = sk.verifying_key().to_bytes();
         let derived_pk = public_key_from_private(&sk.to_bytes());
         assert_eq!(expected_pk, derived_pk);

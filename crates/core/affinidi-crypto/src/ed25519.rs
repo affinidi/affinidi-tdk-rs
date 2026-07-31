@@ -4,7 +4,6 @@ use affinidi_encoding::{ED25519_PUB, MultiEncoded, MultiEncodedBuf, X25519_PUB};
 use base58::{FromBase58, ToBase58};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use rand_core::OsRng;
 use sha2::{Digest, Sha512};
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -40,7 +39,7 @@ impl KeyPair {
 pub fn generate(seed: Option<&[u8; 32]>) -> KeyPair {
     let signing_key = match seed {
         Some(seed) => SigningKey::from_bytes(seed),
-        None => SigningKey::generate(&mut OsRng),
+        None => SigningKey::generate(&mut rand_10::rng()),
     };
 
     let private_bytes = signing_key.to_bytes().to_vec();

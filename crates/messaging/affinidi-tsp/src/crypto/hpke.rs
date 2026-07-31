@@ -8,7 +8,6 @@
 
 use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, KeyInit, aead::generic_array::GenericArray};
 use hkdf::Hkdf;
-use rand_core::OsRng;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
@@ -129,7 +128,7 @@ fn auth_encap(
     sk_s: &StaticSecret,
 ) -> Result<([u8; N_SECRET], [u8; 32]), TspError> {
     // Generate ephemeral keypair
-    let sk_e = StaticSecret::random_from_rng(OsRng);
+    let sk_e = StaticSecret::random_from_rng(&mut rand_10::rng());
     let pk_e = PublicKey::from(&sk_e);
 
     // Two DH operations
@@ -312,9 +311,9 @@ mod tests {
 
     #[test]
     fn seal_open_roundtrip() {
-        let sender_sk = StaticSecret::random_from_rng(OsRng);
+        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let sender_pk = PublicKey::from(&sender_sk);
-        let recipient_sk = StaticSecret::random_from_rng(OsRng);
+        let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
 
         let plaintext = b"Hello, TSP!";
@@ -348,10 +347,10 @@ mod tests {
 
     #[test]
     fn wrong_recipient_key_fails() {
-        let sender_sk = StaticSecret::random_from_rng(OsRng);
-        let recipient_sk = StaticSecret::random_from_rng(OsRng);
+        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
+        let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
-        let wrong_sk = StaticSecret::random_from_rng(OsRng);
+        let wrong_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
 
         let sealed = seal(
             b"secret",
@@ -377,8 +376,8 @@ mod tests {
 
     #[test]
     fn wrong_sender_key_fails() {
-        let sender_sk = StaticSecret::random_from_rng(OsRng);
-        let recipient_sk = StaticSecret::random_from_rng(OsRng);
+        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
+        let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
 
         let sealed = seal(
@@ -391,7 +390,7 @@ mod tests {
         .unwrap();
 
         // Try to open with wrong sender public key
-        let wrong_pk = PublicKey::from(&StaticSecret::random_from_rng(OsRng));
+        let wrong_pk = PublicKey::from(&StaticSecret::random_from_rng(&mut rand_10::rng()));
         let result = open(
             &sealed.ciphertext,
             b"aad",
@@ -406,9 +405,9 @@ mod tests {
 
     #[test]
     fn tampered_aad_fails() {
-        let sender_sk = StaticSecret::random_from_rng(OsRng);
+        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let sender_pk = PublicKey::from(&sender_sk);
-        let recipient_sk = StaticSecret::random_from_rng(OsRng);
+        let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
 
         let sealed = seal(
@@ -434,9 +433,9 @@ mod tests {
 
     #[test]
     fn tampered_ciphertext_fails() {
-        let sender_sk = StaticSecret::random_from_rng(OsRng);
+        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let sender_pk = PublicKey::from(&sender_sk);
-        let recipient_sk = StaticSecret::random_from_rng(OsRng);
+        let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
 
         let sealed = seal(
@@ -465,9 +464,9 @@ mod tests {
 
     #[test]
     fn empty_plaintext() {
-        let sender_sk = StaticSecret::random_from_rng(OsRng);
+        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let sender_pk = PublicKey::from(&sender_sk);
-        let recipient_sk = StaticSecret::random_from_rng(OsRng);
+        let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
 
         let sealed = seal(
@@ -496,9 +495,9 @@ mod tests {
 
     #[test]
     fn large_plaintext() {
-        let sender_sk = StaticSecret::random_from_rng(OsRng);
+        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let sender_pk = PublicKey::from(&sender_sk);
-        let recipient_sk = StaticSecret::random_from_rng(OsRng);
+        let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
 
         let plaintext = vec![0x42u8; 65536];

@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn sign_produces_valid_jws() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
 
         let jws_str = sign_ed25519(
             b"{\"type\":\"test\"}",

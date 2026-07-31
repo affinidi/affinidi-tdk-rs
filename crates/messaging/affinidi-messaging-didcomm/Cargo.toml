@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-didcomm"
 description = "DIDComm v2.1 messaging implementation for the Affinidi TDK"
-version = "0.15.5"
+version = "0.15.6"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -32,7 +32,7 @@ p256 = { version = "0.13", features = ["ecdh", "jwk"] }
 k256 = { version = "0.13", features = ["ecdh", "jwk"] }
 
 # Ed25519 — test helpers generate keys directly.
-ed25519-dalek = { version = "2", features = ["rand_core"] }
+ed25519-dalek = { version = "3", features = ["rand_core"] }
 sha2 = "0.10"
 
 # Encoding / serialization
@@ -45,6 +45,7 @@ uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 # Misc
 rand_core = { version = "0.6", features = ["getrandom"] }
+rand_10 = { package = "rand", version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 
 # Optional — messaging-core trait integration
 affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1", optional = true }

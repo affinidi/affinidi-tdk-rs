@@ -259,7 +259,15 @@ fn ec_point_from_jwk(jwk: &Value) -> Result<Vec<u8>, CryptoError> {
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 #[non_exhaustive]
 pub enum PrivateKeyAgreement {
-    X25519(#[zeroize(skip)] x25519_dalek::StaticSecret),
+    /// Raw 32-byte X25519 scalar.
+    ///
+    /// Deliberately **not** an `x25519_dalek::StaticSecret`: holding the
+    /// dalek type here put the x25519-dalek major version in this crate's
+    /// public API, so every dalek bump became a breaking change for every
+    /// consumer. Raw bytes keep the API dalek-agnostic, and — unlike the
+    /// `#[zeroize(skip)]` `StaticSecret` this replaces — they are actually
+    /// zeroized on drop. The `StaticSecret` is rebuilt at the point of use.
+    X25519([u8; 32]),
     P256(#[zeroize(skip)] p256::SecretKey),
     K256(#[zeroize(skip)] k256::SecretKey),
     P384(#[zeroize(skip)] p384::SecretKey),
@@ -289,9 +297,7 @@ impl PrivateKeyAgreement {
                 let arr: [u8; 32] = bytes.try_into().map_err(|_| {
                     CryptoError::KeyAgreement("X25519 private key must be 32 bytes".into())
                 })?;
-                Ok(PrivateKeyAgreement::X25519(
-                    x25519_dalek::StaticSecret::from(arr),
-                ))
+                Ok(PrivateKeyAgreement::X25519(arr))
             }
             Curve::P256 => {
                 let sk = p256::SecretKey::from_slice(bytes).map_err(|e| {
@@ -323,9 +329,9 @@ impl PrivateKeyAgreement {
     /// Generate a new random private key on the given curve.
     pub fn generate(curve: Curve) -> Self {
         match curve {
-            Curve::X25519 => {
-                PrivateKeyAgreement::X25519(x25519_dalek::StaticSecret::random_from_rng(OsRng))
-            }
+            Curve::X25519 => PrivateKeyAgreement::X25519(
+                x25519_dalek::StaticSecret::random_from_rng(&mut rand_10::rng()).to_bytes(),
+            ),
             Curve::P256 => PrivateKeyAgreement::P256(p256::SecretKey::random(&mut OsRng)),
             Curve::K256 => PrivateKeyAgreement::K256(k256::SecretKey::random(&mut OsRng)),
             Curve::P384 => PrivateKeyAgreement::P384(p384::SecretKey::random(&mut OsRng)),
@@ -336,9 +342,9 @@ impl PrivateKeyAgreement {
     /// Derive the public key.
     pub fn public_key(&self) -> PublicKeyAgreement {
         match self {
-            PrivateKeyAgreement::X25519(sk) => {
-                PublicKeyAgreement::X25519(x25519_dalek::PublicKey::from(sk).to_bytes())
-            }
+            PrivateKeyAgreement::X25519(sk) => PublicKeyAgreement::X25519(
+                x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(*sk)).to_bytes(),
+            ),
             PrivateKeyAgreement::P256(sk) => PublicKeyAgreement::P256(sk.public_key()),
             PrivateKeyAgreement::K256(sk) => PublicKeyAgreement::K256(sk.public_key()),
             PrivateKeyAgreement::P384(sk) => PublicKeyAgreement::P384(sk.public_key()),
@@ -364,6 +370,7 @@ impl PrivateKeyAgreement {
     ) -> Result<Vec<u8>, CryptoError> {
         match (self, their_public) {
             (PrivateKeyAgreement::X25519(sk), PublicKeyAgreement::X25519(pk)) => {
+                let sk = x25519_dalek::StaticSecret::from(*sk);
                 let pk = x25519_dalek::PublicKey::from(*pk);
                 Ok(sk.diffie_hellman(&pk).as_bytes().to_vec())
             }

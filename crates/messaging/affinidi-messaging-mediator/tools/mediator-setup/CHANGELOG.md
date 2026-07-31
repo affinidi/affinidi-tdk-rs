@@ -1,5 +1,11 @@
 # Affinidi Messaging Mediator Setup
 
+## 31st July 2026 (0.1.26)
+
+Requires **`vta-sdk` 0.21.0** (curve25519-dalek 5), matching the mediator.
+
+No behavioural change.
+
 ## Changelog history
 
 ## 29th July 2026

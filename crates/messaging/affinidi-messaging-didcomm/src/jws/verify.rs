@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn sign_verify_roundtrip() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
         let pk = sk.verifying_key().to_bytes();
 
         let payload = b"{\"type\":\"test\",\"body\":{}}";
@@ -149,8 +149,8 @@ mod tests {
 
     #[test]
     fn wrong_key_fails() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
-        let wrong_pk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng)
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
+        let wrong_pk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng())
             .verifying_key()
             .to_bytes();
 
@@ -166,7 +166,7 @@ mod tests {
     /// from the unprotected header.
     #[test]
     fn signer_kid_from_unprotected_header() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
         let pk = sk.verifying_key().to_bytes();
         let payload = b"{\"type\":\"test\",\"body\":{}}";
 
@@ -209,7 +209,7 @@ mod tests {
     /// (it's integrity-protected).
     #[test]
     fn protected_kid_takes_precedence_over_unprotected() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
         let pk = sk.verifying_key().to_bytes();
 
         // sign_ed25519 puts kid in the protected header.
@@ -292,7 +292,7 @@ mod tests {
     /// algorithm-confusion attempt.
     #[test]
     fn es256_rejects_eddsa_alg() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
         let jws_str = sign::sign_ed25519(b"x", "did:example:alice#key-1", &sk.to_bytes()).unwrap();
 
         let dummy_pub = [0x04u8; 65];
@@ -357,7 +357,7 @@ mod tests {
     /// the polymorphic `EdDSA`.
     #[test]
     fn ed25519_alg_accepted_alongside_eddsa() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
         let pk = sk.verifying_key().to_bytes();
         let payload = b"{\"type\":\"test\"}";
 
