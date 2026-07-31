@@ -10,7 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 serde_json = "1"
-ed25519-dalek = "2"
+ed25519-dalek = "3"
 affinidi-crypto = { version = "0.2", features = ["jose"] }
 # `arbitrary` feature provides Arbitrary for the wire types (the message_structured target).
 affinidi-messaging-didcomm = { path = "..", features = ["arbitrary"] }

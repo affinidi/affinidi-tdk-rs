@@ -1,5 +1,27 @@
 # Affinidi Crypto Changelog
 
+## 31st July 2026 (0.2.6)
+
+**`PrivateKeyAgreement::X25519` now holds `[u8; 32]` instead of an
+`x25519_dalek::StaticSecret`.** Holding the dalek type put the x25519-dalek
+major version in this crate's *public API*, so every dalek bump was a breaking
+change for every consumer — the reason this upgrade needed cross-repo
+coordination at all. Raw bytes make the API dalek-agnostic, and unlike the
+`#[zeroize(skip)]` `StaticSecret` it replaces, the scalar is now actually
+zeroized on drop. The `StaticSecret` is rebuilt at the point of use, so ECDH is
+bit-identical — locked by the existing `ecdh_1pu_x25519_kek_golden` KAT.
+
+`PublicKeyAgreement::X25519` already held raw bytes and is unchanged.
+
+Moves to **curve25519-dalek 5** (`ed25519-dalek` 2 -> 3, `x25519-dalek` 2 -> 3),
+which brings rand_core 0.10 and signature 3 with it. rand 0.10 renamed `OsRng`
+to `SysRng` *and* made it fallible (`TryRng<Error = SysError>`), so it no longer
+satisfies dalek's `CryptoRng` bound; key generation moves to `rand::rng()`.
+
+Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) point 3: `vta-sdk` pins this crate through
+`[patch.crates-io]`, and a minor bump would break the redirect and pull a second
+copy from crates.io.
+
 ## 16th July 2026 (0.2.5)
 
 Adds `jose::signing::verify_secp256k1` — ECDSA secp256k1 signature verification

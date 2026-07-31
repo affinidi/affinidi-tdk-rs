@@ -35,8 +35,8 @@ struct Keys {
 }
 
 fn gen_keys() -> Keys {
-    let sign = SigningKey::generate(&mut OsRng);
-    let enc = StaticSecret::random_from_rng(OsRng);
+    let sign = SigningKey::generate(&mut rand_10::rng());
+    let enc = StaticSecret::random_from_rng(&mut rand_10::rng());
     Keys {
         sign_sk: sign.to_bytes(),
         sign_pk: sign.verifying_key().to_bytes(),

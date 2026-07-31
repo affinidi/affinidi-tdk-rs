@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn unpack_signed() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
         let pk = sk.verifying_key().to_bytes();
 
         let msg = Message::new("test", serde_json::json!({}));
@@ -222,7 +222,7 @@ mod tests {
     /// the inner signer kid.
     #[test]
     fn unpack_sign_then_encrypt() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
         let signer_pk = sk.verifying_key().to_bytes();
         let sender = PrivateKeyAgreement::generate(Curve::X25519);
         let recipient = PrivateKeyAgreement::generate(Curve::X25519);
@@ -273,7 +273,7 @@ mod tests {
     /// rather than returning an unverified message.
     #[test]
     fn unpack_sign_then_encrypt_requires_signer_public() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
         let sender = PrivateKeyAgreement::generate(Curve::X25519);
         let recipient = PrivateKeyAgreement::generate(Curve::X25519);
 

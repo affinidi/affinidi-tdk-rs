@@ -1,5 +1,21 @@
 # Affinidi OID4VC Core Changelog
 
+## 31st July 2026 (0.1.6)
+
+`EddsaSigner::generate_with_rng` now bounds `R: rand::CryptoRng` (rand 0.10)
+instead of the rand_core 0.6 traits. Callers passing a rand 0.8-era RNG must
+update. `Es256Signer` is unchanged — p256 is still on elliptic-curve 0.13, so
+this crate carries both rand generations.
+
+Moves to **curve25519-dalek 5** (`ed25519-dalek` 2 -> 3, `x25519-dalek` 2 -> 3),
+which brings rand_core 0.10 and signature 3 with it. rand 0.10 renamed `OsRng`
+to `SysRng` *and* made it fallible (`TryRng<Error = SysError>`), so it no longer
+satisfies dalek's `CryptoRng` bound; key generation moves to `rand::rng()`.
+
+Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) point 3: `vta-sdk` pins this crate through
+`[patch.crates-io]`, and a minor bump would break the redirect and pull a second
+copy from crates.io.
+
 ## 14th June 2026 Release 0.1.5
 
 - `JwtError` and `OAuthError` are now `#[non_exhaustive]` (ADR-0003) so new

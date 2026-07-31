@@ -1,5 +1,13 @@
 # Affinidi Messaging Mediator
 
+## 31st July 2026 (0.18.1)
+
+Requires **`vta-sdk` 0.21.0**, which moved to curve25519-dalek 5. Together with
+the workspace dalek upgrade this removes the last `curve25519-dalek` 4 node from
+the graph — the mediator now links a single curve25519 implementation.
+
+No behavioural change to send/ack/reconnect semantics.
+
 ## Changelog history
 
 ## 29th July 2026

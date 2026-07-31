@@ -517,7 +517,6 @@ pub fn message_digest(packed: &PackedMessage) -> [u8; 32] {
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
-    use rand_core::OsRng;
     use x25519_dalek::{PublicKey, StaticSecret};
 
     struct TestKeys {
@@ -530,9 +529,9 @@ mod tests {
     }
 
     fn gen_keys() -> TestKeys {
-        let sender_sign = SigningKey::generate(&mut OsRng);
-        let sender_enc = StaticSecret::random_from_rng(OsRng);
-        let receiver_enc = StaticSecret::random_from_rng(OsRng);
+        let sender_sign = SigningKey::generate(&mut rand_10::rng());
+        let sender_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
+        let receiver_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
 
         TestKeys {
             sender_sign_sk: sender_sign.to_bytes(),
@@ -609,7 +608,7 @@ mod tests {
     #[test]
     fn wrong_receiver_key_fails() {
         let keys = gen_keys();
-        let wrong_sk = StaticSecret::random_from_rng(OsRng);
+        let wrong_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let packed = pack(
             b"secret",
             MessageType::Direct,

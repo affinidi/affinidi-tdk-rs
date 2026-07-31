@@ -68,13 +68,12 @@ impl PrivateVid {
     /// Create a new PrivateVid with generated keys.
     pub fn generate(id: impl Into<String>) -> Self {
         use ed25519_dalek::SigningKey;
-        use rand_core::OsRng;
         use x25519_dalek::{PublicKey, StaticSecret};
 
-        let ed_sk = SigningKey::generate(&mut OsRng);
+        let ed_sk = SigningKey::generate(&mut rand_10::rng());
         let ed_pk = ed_sk.verifying_key().to_bytes();
 
-        let x_sk = StaticSecret::random_from_rng(OsRng);
+        let x_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let x_pk = PublicKey::from(&x_sk);
 
         PrivateVid {
@@ -180,9 +179,8 @@ mod tests {
     #[test]
     fn from_keys_derives_public_correctly() {
         use ed25519_dalek::SigningKey;
-        use rand_core::OsRng;
 
-        let sk = SigningKey::generate(&mut OsRng);
+        let sk = SigningKey::generate(&mut rand_10::rng());
         let expected_pk = sk.verifying_key().to_bytes();
 
         let vid = PrivateVid::from_keys("test", sk.to_bytes(), [0u8; 32]);

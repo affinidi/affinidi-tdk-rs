@@ -1,5 +1,16 @@
 # Affinidi Secrets Manager
 
+## 31st July 2026 (0.5.9)
+
+Moves to **curve25519-dalek 5** (`ed25519-dalek` 2 -> 3, `x25519-dalek` 2 -> 3),
+which brings rand_core 0.10 and signature 3 with it. rand 0.10 renamed `OsRng`
+to `SysRng` *and* made it fallible (`TryRng<Error = SysError>`), so it no longer
+satisfies dalek's `CryptoRng` bound; key generation moves to `rand::rng()`.
+
+Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) point 3: `vta-sdk` pins this crate through
+`[patch.crates-io]`, and a minor bump would break the redirect and pull a second
+copy from crates.io.
+
 ## 13th June 2026 (0.5.8)
 
 Semver wave (W7 — release W11). `SecretsResolverError` is now `#[non_exhaustive]`

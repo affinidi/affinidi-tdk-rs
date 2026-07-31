@@ -42,7 +42,7 @@ impl EdDsaSigner {
 
     /// Generate a new random Ed25519 key pair using the OS RNG.
     pub fn generate() -> Self {
-        Self::generate_with_rng(&mut rand_core::OsRng)
+        Self::generate_with_rng(&mut rand_10::rng())
     }
 
     /// Generate a new Ed25519 key pair using a caller-supplied RNG.
@@ -50,7 +50,7 @@ impl EdDsaSigner {
     /// Useful for tests that need deterministic keys via a seeded RNG.
     pub fn generate_with_rng<R>(rng: &mut R) -> Self
     where
-        R: rand_core::CryptoRng + rand_core::RngCore,
+        R: rand_10::CryptoRng,
     {
         Self {
             signing_key: SigningKey::generate(rng),
