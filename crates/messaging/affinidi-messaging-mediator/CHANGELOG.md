@@ -1,5 +1,35 @@
 # Affinidi Messaging Mediator
 
+## 1st August 2026 (0.18.2)
+
+Drops the **legacy rustls 0.21 stack** from the AWS SDK dependency path,
+removing three `rustls-webpki` advisories from any build with the AWS
+feature enabled:
+
+- **RUSTSEC-2026-0098** — name constraints for URI names incorrectly accepted
+- **RUSTSEC-2026-0099** — name constraints accepted for certificates asserting
+  a wildcard name
+- **RUSTSEC-2026-0104** — reachable panic in certificate revocation list parsing
+
+The `aws-sdk-*` crates ship **both** TLS stacks in their default feature set:
+
+```
+rustls               -> aws-smithy-runtime/tls-rustls
+                     -> aws-smithy-http-client/legacy-rustls-ring
+                     -> rustls 0.21 + rustls-webpki 0.101.7   (vulnerable)
+default-https-client -> aws-smithy-http-client/rustls-aws-lc
+                     -> rustls 0.23 + rustls-webpki 0.103.13  (patched)
+```
+
+`rustls` is pure back-compat. Selecting the default set minus that one
+feature leaves the aws-lc-rs stack — the provider this workspace prefers
+anyway — and the vulnerable copy disappears entirely. No version bump of
+any AWS crate was needed or available; the fix is feature selection.
+
+These three advisories had been suppressed via `auditIgnore` in
+`checks.yaml`; that suppression is removed in the same change, so a
+regression fails the audit instead of passing quietly.
+
 ## 31st July 2026 (0.18.1)
 
 Requires **`vta-sdk` 0.21.0**, which moved to curve25519-dalek 5. Together with

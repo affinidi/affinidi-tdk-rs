@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-setup"
-version = "0.1.26"
+version = "0.1.27"
 description = "Interactive TUI setup wizard for Affinidi Messaging Mediator"
 edition.workspace = true
 authors.workspace = true
@@ -153,8 +153,32 @@ tracing = "0.1"
 ## uses `aws_parameter_store://`. Pinned to `1` to match the runtime crate's
 ## existing `aws-sdk-ssm` dependency.
 aws-config = { version = "1", optional = true }
-aws-sdk-ssm = { version = "1", optional = true }
-aws-sdk-s3 = { version = "1", optional = true }
+# `default-features = false` + the default set MINUS `rustls`.
+# The aws-sdk crates ship BOTH TLS stacks in their defaults:
+#   rustls               -> aws-smithy-runtime/tls-rustls
+#                        -> aws-smithy-http-client/legacy-rustls-ring
+#                        -> rustls 0.21 + rustls-webpki 0.101.7
+#   default-https-client -> aws-smithy-http-client/rustls-aws-lc
+#                        -> rustls 0.23 + rustls-webpki 0.103.13
+# The legacy stack is pure back-compat and drags three rustls-webpki
+# advisories in with it: RUSTSEC-2026-0098 / -0099 (name-constraint
+# bypasses) and RUSTSEC-2026-0104 (reachable panic in CRL parsing).
+# Dropping `rustls` leaves the aws-lc-rs stack, which is the provider
+# this workspace prefers anyway.
+aws-sdk-ssm = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
+# `default-features = false` + the default set MINUS `rustls`.
+# The aws-sdk crates ship BOTH TLS stacks in their defaults:
+#   rustls               -> aws-smithy-runtime/tls-rustls
+#                        -> aws-smithy-http-client/legacy-rustls-ring
+#                        -> rustls 0.21 + rustls-webpki 0.101.7
+#   default-https-client -> aws-smithy-http-client/rustls-aws-lc
+#                        -> rustls 0.23 + rustls-webpki 0.103.13
+# The legacy stack is pure back-compat and drags three rustls-webpki
+# advisories in with it: RUSTSEC-2026-0098 / -0099 (name-constraint
+# bypasses) and RUSTSEC-2026-0104 (reachable panic in CRL parsing).
+# Dropping `rustls` leaves the aws-lc-rs stack, which is the provider
+# this workspace prefers anyway.
+aws-sdk-s3 = { version = "1", optional = true, default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
 
 [dev-dependencies]
 ## Test fixtures from `provision_client::test_helpers` (e.g.

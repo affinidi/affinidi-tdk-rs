@@ -13,7 +13,11 @@ jobs:
     with:
       toolchain: "1.95.0"
       rustflags: "-D warnings --cfg tracing_unstable"
-      auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373,RUSTSEC-2026-0098,RUSTSEC-2026-0099,RUSTSEC-2026-0104"
+      # RUSTSEC-2026-0098 / -0099 / -0104 (rustls-webpki) were listed here and
+      # are now genuinely fixed — the aws-sdk crates no longer pull the legacy
+      # rustls 0.21 stack. Removed from the ignore list on purpose: if the
+      # legacy stack comes back, audit must fail rather than stay quiet.
+      auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       coverage: 0
       useRedis: true
