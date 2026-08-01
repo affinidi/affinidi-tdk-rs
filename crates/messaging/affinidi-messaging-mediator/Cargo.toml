@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.18.1"
+version = "0.18.2"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -142,8 +142,32 @@ didwebvh-rs = "0.6"
 ## Used for Secrets Manager (aws_secrets://), Parameter Store (aws_parameter_store://)
 ## To build without: --no-default-features --features didcomm
 aws-config = { version = "1", optional = true }
-aws-sdk-ssm = { version = "1", optional = true }
-aws-sdk-s3 = { version = "1", optional = true }
+# `default-features = false` + the default set MINUS `rustls`.
+# The aws-sdk crates ship BOTH TLS stacks in their defaults:
+#   rustls               -> aws-smithy-runtime/tls-rustls
+#                        -> aws-smithy-http-client/legacy-rustls-ring
+#                        -> rustls 0.21 + rustls-webpki 0.101.7
+#   default-https-client -> aws-smithy-http-client/rustls-aws-lc
+#                        -> rustls 0.23 + rustls-webpki 0.103.13
+# The legacy stack is pure back-compat and drags three rustls-webpki
+# advisories in with it: RUSTSEC-2026-0098 / -0099 (name-constraint
+# bypasses) and RUSTSEC-2026-0104 (reachable panic in CRL parsing).
+# Dropping `rustls` leaves the aws-lc-rs stack, which is the provider
+# this workspace prefers anyway.
+aws-sdk-ssm = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
+# `default-features = false` + the default set MINUS `rustls`.
+# The aws-sdk crates ship BOTH TLS stacks in their defaults:
+#   rustls               -> aws-smithy-runtime/tls-rustls
+#                        -> aws-smithy-http-client/legacy-rustls-ring
+#                        -> rustls 0.21 + rustls-webpki 0.101.7
+#   default-https-client -> aws-smithy-http-client/rustls-aws-lc
+#                        -> rustls 0.23 + rustls-webpki 0.103.13
+# The legacy stack is pure back-compat and drags three rustls-webpki
+# advisories in with it: RUSTSEC-2026-0098 / -0099 (name-constraint
+# bypasses) and RUSTSEC-2026-0104 (reachable panic in CRL parsing).
+# Dropping `rustls` leaves the aws-lc-rs stack, which is the provider
+# this workspace prefers anyway.
+aws-sdk-s3 = { version = "1", optional = true, default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
 
 # ── Cryptography & Security ─────────────────────────────────────────────
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
