@@ -815,10 +815,12 @@ impl DIDCacheClient {
             .or_default()
             .push_back(Box::new(affinidi_did_resolver_traits::PeerResolver));
         // Network resolvers
+        #[cfg(feature = "did-ethr")]
         resolvers
             .entry(MethodName::Ethr)
             .or_default()
             .push_back(Box::new(network_resolvers::EthrResolver));
+        #[cfg(feature = "did-pkh")]
         resolvers
             .entry(MethodName::Pkh)
             .or_default()

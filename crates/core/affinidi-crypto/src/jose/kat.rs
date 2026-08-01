@@ -30,6 +30,7 @@ use super::{aes_kw, concat_kdf, content_encryption, signing};
 // ECDSA P-256 signing lives in the `p256` dev-dependency (this crate is
 // verify-only for ES256), used by the P-256 KAT(s) below to produce vectors.
 use p256::ecdsa::{SigningKey as P256SigningKey, signature::Signer as P256Signer};
+use p256::elliptic_curve::Generate;
 // Likewise ECDSA secp256k1 signing (this crate is verify-only for ES256K),
 // used by the secp256k1 KAT(s) below to produce vectors.
 use k256::ecdsa::{SigningKey as K256SigningKey, signature::Signer as K256Signer};
@@ -351,7 +352,7 @@ fn es256_p256_golden() {
     let sk = P256SigningKey::from_slice(&[0x55u8; 32]).expect("valid P-256 scalar");
     let msg = b"DIDComm KAT message";
 
-    let pk = sk.verifying_key().to_encoded_point(false);
+    let pk = sk.verifying_key().to_sec1_point(false);
     assert_eq!(hex(pk.as_bytes()), EXPECTED_PK, "P-256 public key drifted");
 
     // RustCrypto ECDSA `sign` is deterministic (RFC 6979), so these bytes pin.
@@ -369,15 +370,12 @@ fn es256_p256_golden() {
 
 /// A P-256 signing key's public point as uncompressed SEC1 bytes (65 bytes).
 fn p256_sec1_uncompressed(sk: &P256SigningKey) -> Vec<u8> {
-    sk.verifying_key()
-        .to_encoded_point(false)
-        .as_bytes()
-        .to_vec()
+    sk.verifying_key().to_sec1_point(false).as_bytes().to_vec()
 }
 
 #[test]
 fn p256_sign_verify_roundtrip() {
-    let sk = P256SigningKey::random(&mut rand_core::OsRng);
+    let sk = P256SigningKey::generate();
     let msg = b"affinidi es256 roundtrip";
     let sig: p256::ecdsa::Signature = P256Signer::sign(&sk, msg);
     let sig_bytes: [u8; 64] = sig.to_bytes().into();
@@ -386,8 +384,8 @@ fn p256_sign_verify_roundtrip() {
 
 #[test]
 fn p256_wrong_key_fails() {
-    let sk = P256SigningKey::random(&mut rand_core::OsRng);
-    let other = P256SigningKey::random(&mut rand_core::OsRng);
+    let sk = P256SigningKey::generate();
+    let other = P256SigningKey::generate();
     let msg = b"affinidi es256";
     let sig: p256::ecdsa::Signature = P256Signer::sign(&sk, msg);
     let sig_bytes: [u8; 64] = sig.to_bytes().into();
@@ -396,7 +394,7 @@ fn p256_wrong_key_fails() {
 
 #[test]
 fn p256_tampered_message_fails() {
-    let sk = P256SigningKey::random(&mut rand_core::OsRng);
+    let sk = P256SigningKey::generate();
     let sig: p256::ecdsa::Signature = P256Signer::sign(&sk, b"original");
     let sig_bytes: [u8; 64] = sig.to_bytes().into();
     assert!(signing::verify_p256(b"tampered", &sig_bytes, &p256_sec1_uncompressed(&sk)).is_err());
@@ -406,20 +404,12 @@ fn p256_tampered_message_fails() {
 /// (compressed 33-byte and uncompressed 65-byte).
 #[test]
 fn p256_compressed_and_uncompressed_pubkey_agree() {
-    let sk = P256SigningKey::random(&mut rand_core::OsRng);
+    let sk = P256SigningKey::generate();
     let msg = b"sec1 encodings";
     let sig: p256::ecdsa::Signature = P256Signer::sign(&sk, msg);
     let sig_bytes: [u8; 64] = sig.to_bytes().into();
-    let uncompressed = sk
-        .verifying_key()
-        .to_encoded_point(false)
-        .as_bytes()
-        .to_vec();
-    let compressed = sk
-        .verifying_key()
-        .to_encoded_point(true)
-        .as_bytes()
-        .to_vec();
+    let uncompressed = sk.verifying_key().to_sec1_point(false).as_bytes().to_vec();
+    let compressed = sk.verifying_key().to_sec1_point(true).as_bytes().to_vec();
     assert!(signing::verify_p256(msg, &sig_bytes, &uncompressed).is_ok());
     assert!(signing::verify_p256(msg, &sig_bytes, &compressed).is_ok());
 }
@@ -440,7 +430,7 @@ fn secp256k1_es256k_golden() {
     let sk = K256SigningKey::from_slice(&[0x55u8; 32]).expect("valid secp256k1 scalar");
     let msg = b"DIDComm KAT message";
 
-    let pk = sk.verifying_key().to_encoded_point(false);
+    let pk = sk.verifying_key().to_sec1_point(false);
     assert_eq!(
         hex(pk.as_bytes()),
         EXPECTED_PK,
@@ -462,15 +452,12 @@ fn secp256k1_es256k_golden() {
 
 /// A secp256k1 signing key's public point as uncompressed SEC1 bytes (65 bytes).
 fn k256_sec1_uncompressed(sk: &K256SigningKey) -> Vec<u8> {
-    sk.verifying_key()
-        .to_encoded_point(false)
-        .as_bytes()
-        .to_vec()
+    sk.verifying_key().to_sec1_point(false).as_bytes().to_vec()
 }
 
 #[test]
 fn secp256k1_sign_verify_roundtrip() {
-    let sk = K256SigningKey::random(&mut rand_core::OsRng);
+    let sk = K256SigningKey::generate();
     let msg = b"affinidi es256k roundtrip";
     let sig: k256::ecdsa::Signature = K256Signer::sign(&sk, msg);
     let sig_bytes: [u8; 64] = sig.to_bytes().into();
@@ -479,8 +466,8 @@ fn secp256k1_sign_verify_roundtrip() {
 
 #[test]
 fn secp256k1_wrong_key_fails() {
-    let sk = K256SigningKey::random(&mut rand_core::OsRng);
-    let other = K256SigningKey::random(&mut rand_core::OsRng);
+    let sk = K256SigningKey::generate();
+    let other = K256SigningKey::generate();
     let msg = b"affinidi es256k";
     let sig: k256::ecdsa::Signature = K256Signer::sign(&sk, msg);
     let sig_bytes: [u8; 64] = sig.to_bytes().into();
@@ -489,7 +476,7 @@ fn secp256k1_wrong_key_fails() {
 
 #[test]
 fn secp256k1_tampered_message_fails() {
-    let sk = K256SigningKey::random(&mut rand_core::OsRng);
+    let sk = K256SigningKey::generate();
     let sig: k256::ecdsa::Signature = K256Signer::sign(&sk, b"original");
     let sig_bytes: [u8; 64] = sig.to_bytes().into();
     assert!(
@@ -501,20 +488,12 @@ fn secp256k1_tampered_message_fails() {
 /// (compressed 33-byte and uncompressed 65-byte).
 #[test]
 fn secp256k1_compressed_and_uncompressed_pubkey_agree() {
-    let sk = K256SigningKey::random(&mut rand_core::OsRng);
+    let sk = K256SigningKey::generate();
     let msg = b"sec1 encodings";
     let sig: k256::ecdsa::Signature = K256Signer::sign(&sk, msg);
     let sig_bytes: [u8; 64] = sig.to_bytes().into();
-    let uncompressed = sk
-        .verifying_key()
-        .to_encoded_point(false)
-        .as_bytes()
-        .to_vec();
-    let compressed = sk
-        .verifying_key()
-        .to_encoded_point(true)
-        .as_bytes()
-        .to_vec();
+    let uncompressed = sk.verifying_key().to_sec1_point(false).as_bytes().to_vec();
+    let compressed = sk.verifying_key().to_sec1_point(true).as_bytes().to_vec();
     assert!(signing::verify_secp256k1(msg, &sig_bytes, &uncompressed).is_ok());
     assert!(signing::verify_secp256k1(msg, &sig_bytes, &compressed).is_ok());
 }

@@ -7,7 +7,15 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use affinidi_did_common::{DID, DIDMethod, Document};
+use affinidi_did_common::{DID, DIDMethod};
+// `Document` is only named by the ssi-backed helpers below, which are gated.
+#[cfg(any(
+    feature = "did-ethr",
+    feature = "did-pkh",
+    feature = "did-jwk",
+    feature = "did-cheqd"
+))]
+use affinidi_did_common::Document;
 use affinidi_did_resolver_traits::{AsyncResolver, Resolution, ResolverError};
 use tracing::error;
 
@@ -16,6 +24,12 @@ use tracing::error;
 // ---------------------------------------------------------------------------
 
 /// Convert an ssi `DIDMethodResolver` result (raw bytes) into a `Document`.
+#[cfg(any(
+    feature = "did-ethr",
+    feature = "did-pkh",
+    feature = "did-jwk",
+    feature = "did-cheqd"
+))]
 fn document_from_bytes(bytes: Vec<u8>) -> Result<Document, ResolverError> {
     let json = String::from_utf8(bytes)
         .map_err(|e| ResolverError::InvalidDocument(format!("Invalid UTF-8: {e}")))?;
@@ -24,6 +38,12 @@ fn document_from_bytes(bytes: Vec<u8>) -> Result<Document, ResolverError> {
 }
 
 /// Convert an ssi `DIDResolver` result (typed output) into a `Document`.
+#[cfg(any(
+    feature = "did-ethr",
+    feature = "did-pkh",
+    feature = "did-jwk",
+    feature = "did-cheqd"
+))]
 fn document_from_ssi_output(output: impl serde::Serialize) -> Result<Document, ResolverError> {
     let value = serde_json::to_value(output)
         .map_err(|e| ResolverError::InvalidDocument(format!("Serialization failed: {e}")))?;
@@ -36,8 +56,10 @@ fn document_from_ssi_output(output: impl serde::Serialize) -> Result<Document, R
 // ---------------------------------------------------------------------------
 
 /// Resolver for `did:ethr` — Ethereum DID method.
+#[cfg(feature = "did-ethr")]
 pub struct EthrResolver;
 
+#[cfg(feature = "did-ethr")]
 impl AsyncResolver for EthrResolver {
     fn name(&self) -> &str {
         "EthrResolver"
@@ -80,8 +102,10 @@ impl AsyncResolver for EthrResolver {
 // ---------------------------------------------------------------------------
 
 /// Resolver for `did:pkh` — PKH (Public Key Hash) DID method.
+#[cfg(feature = "did-pkh")]
 pub struct PkhResolver;
 
+#[cfg(feature = "did-pkh")]
 impl AsyncResolver for PkhResolver {
     fn name(&self) -> &str {
         "PkhResolver"

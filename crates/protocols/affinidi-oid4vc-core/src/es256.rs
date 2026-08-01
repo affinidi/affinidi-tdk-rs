@@ -10,6 +10,7 @@
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Signer, signature::Verifier};
+use p256::elliptic_curve::Generate;
 
 use crate::jwt::{JwtError, JwtSigner, JwtVerifier};
 
@@ -32,7 +33,7 @@ impl Es256Signer {
 
     /// Generate a new random P-256 key pair using the OS RNG.
     pub fn generate() -> Self {
-        Self::generate_with_rng(&mut p256::elliptic_curve::rand_core::OsRng)
+        Self::generate_with_rng(&mut rand_10::rng())
     }
 
     /// Generate a new P-256 key pair using a caller-supplied RNG.
@@ -40,9 +41,9 @@ impl Es256Signer {
     /// Useful for tests that need deterministic keys via a seeded RNG.
     pub fn generate_with_rng<R>(rng: &mut R) -> Self
     where
-        R: p256::elliptic_curve::rand_core::CryptoRng + p256::elliptic_curve::rand_core::RngCore,
+        R: rand_10::CryptoRng,
     {
-        let signing_key = SigningKey::random(rng);
+        let signing_key = SigningKey::generate_from_rng(rng);
         Self {
             signing_key,
             kid: None,
@@ -58,7 +59,7 @@ impl Es256Signer {
     /// Get the public key as uncompressed SEC1 bytes.
     pub fn public_key_bytes(&self) -> Vec<u8> {
         VerifyingKey::from(&self.signing_key)
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .to_bytes()
             .to_vec()
     }
@@ -66,7 +67,7 @@ impl Es256Signer {
     /// Get the public key as a JWK Value.
     pub fn public_key_jwk(&self) -> serde_json::Value {
         let vk = VerifyingKey::from(&self.signing_key);
-        let point = vk.to_encoded_point(false);
+        let point = vk.to_sec1_point(false);
 
         serde_json::json!({
             "kty": "EC",

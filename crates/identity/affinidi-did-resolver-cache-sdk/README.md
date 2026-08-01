@@ -24,8 +24,8 @@ affinidi-did-resolver-cache-sdk = "0.8"
 | `did:key` | Yes | — |
 | `did:peer` | Yes | — |
 | `did:web` | Yes | — |
-| `did:ethr` | Yes | — |
-| `did:pkh` | Yes | — |
+| `did:ethr` | No | `did-ethr` (opt-in — pulls the `ssi-*` stack, see below) |
+| `did:pkh` | No | `did-pkh` (opt-in — pulls the `ssi-*` stack, see below) |
 | `did:webvh` | Yes | `did-methods` |
 | `did:scid` | Yes | `did-methods` |
 | `did:cheqd` | No | `did-cheqd` (opt-in — pulls a `ring` TLS backend, see below) |
@@ -38,6 +38,8 @@ affinidi-did-resolver-cache-sdk = "0.8"
 |---|---|---|
 | `local` | Yes | Reserved for future local-only features |
 | `did-methods` | Yes | Includes `did-webvh`, `did-scid` |
+| `did-ethr` | No | `did:ethr` resolution. Pulls the `ssi-*` stack, which pins `p256`/`k256` 0.13 — enabling it puts two generations of the elliptic-curve stack in your graph. |
+| `did-pkh` | No | `did:pkh` resolution. Same `ssi-*` cost as `did-ethr`. |
 | `did-ebsi` | No | EBSI DID method (requires network access to EU API) |
 | `network` | No | Enable network mode for remote cache server |
 | `did-webvh` | — | WebVH DID method support |
@@ -161,7 +163,7 @@ The cache uses **per-method TTL** to avoid unnecessary re-resolution:
 
 | Category | Methods | TTL | Rationale |
 |---|---|---|---|
-| **Immutable** | `did:key`, `did:peer`, `did:jwk`, `did:ethr`, `did:pkh` | None (capacity-evicted only) | Document is derived deterministically from the DID string |
+| **Immutable** | `did:key`, `did:peer`, `did:jwk`, `did:ethr`, `did:pkh` (last three feature-gated) | None (capacity-evicted only) | Document is derived deterministically from the DID string |
 | **Mutable** | `did:web`, `did:webvh`, `did:cheqd`, `did:scid` | Configurable (`cache_ttl`, default 300s) | Document is fetched from external infrastructure and can change |
 
 The `cache_ttl` configuration option only applies to mutable DID methods.

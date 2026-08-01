@@ -1,7 +1,7 @@
 
 [package]
 name = "did-scid"
-version = "0.1.12"
+version = "0.1.13"
 description = "Implementation of did:scid in Rust"
 repository.workspace = true
 edition.workspace = true
@@ -23,7 +23,7 @@ rust-version.workspace = true
 # CryptoProvider in your binary's `main`).
 default = ["did-webvh"]
 
-did-cheqd = ["dep:did-resolver-cheqd"]
+did-cheqd = ["dep:did-resolver-cheqd", "dep:ssi-dids-core"]
 did-webvh = ["dep:didwebvh-rs"]
 
 [lib]
@@ -36,7 +36,7 @@ didwebvh-rs = { version = "0.6", optional = true }
 did-resolver-cheqd = { version = "1", optional = true }
 regex = "1"
 serde_json = "1"
-ssi-dids-core = "0.1"
+ssi-dids-core = { version = "0.1", optional = true }
 thiserror = "2"
 tracing = "0.1"
 

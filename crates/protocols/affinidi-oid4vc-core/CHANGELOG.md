@@ -1,5 +1,31 @@
 # Affinidi OID4VC Core Changelog
 
+## 2nd August 2026 (0.1.7)
+
+**`Es256Signer::generate_with_rng` now bounds `R: rand::CryptoRng`** (rand
+0.10) instead of the rand_core 0.6 traits. Callers passing a rand 0.8-era
+RNG must update. This mirrors the same change made to `EddsaSigner` in the
+curve25519-dalek 5 move.
+
+The `es256` feature now also enables `rand_10`, which it needs directly.
+
+Moves this crate to the **elliptic-curve 0.14** family (`p256` / `k256` /
+`p384` / `p521` 0.13 -> 0.14), which brings rand_core 0.10, digest 0.11 and
+signature 3 with it.
+
+API changes handled: the sec1 traits were renamed (`ToEncodedPoint` ->
+`ToSec1Point`, `FromEncodedPoint` -> `FromSec1Point`), `EncodedPoint` became a
+generic alias for `Sec1Point<C>` so it needs a per-module binding, and the
+deprecated `SigningKey::random(rng)` is now `Generate::generate()` (system
+CSPRNG, panics on failure).
+
+Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) point 3: `vta-sdk` and `didwebvh-rs` redirect
+this crate through `[patch.crates-io]`, and a minor bump breaks the redirect.
+
+Crypto behaviour is unchanged — the golden/KAT vectors (`p256_sign_verify_roundtrip`,
+`secp256k1_es256k_golden` RFC 6979, `ecdh_1pu_x25519_kek_golden`,
+`concat_kdf_es_golden`, `a256cbc_hs512_golden`) all still pass.
+
 ## 31st July 2026 (0.1.6)
 
 `EddsaSigner::generate_with_rng` now bounds `R: rand::CryptoRng` (rand 0.10)

@@ -230,6 +230,7 @@ mod tests {
 
     // ─── ES256 / ECDSA P-256 ────────────────────────────────────────────────
     use p256::ecdsa::{SigningKey as P256SigningKey, signature::Signer as _};
+    use p256::elliptic_curve::Generate as _;
 
     /// Build an ES256 JWS (General JSON Serialization) over `payload`, placing
     /// `kid` in the protected header (or omitting it when `None`).
@@ -258,15 +259,12 @@ mod tests {
     }
 
     fn p256_pub_sec1(sk: &P256SigningKey) -> Vec<u8> {
-        sk.verifying_key()
-            .to_encoded_point(false)
-            .as_bytes()
-            .to_vec()
+        sk.verifying_key().to_sec1_point(false).as_bytes().to_vec()
     }
 
     #[test]
     fn es256_sign_verify_roundtrip() {
-        let sk = P256SigningKey::random(&mut rand_core::OsRng);
+        let sk = P256SigningKey::generate();
         let payload = b"{\"type\":\"test\",\"body\":{}}";
         let jws_str = build_es256_jws(payload, Some("did:example:alice#p256-1"), &sk);
 
@@ -280,8 +278,8 @@ mod tests {
 
     #[test]
     fn es256_wrong_key_fails() {
-        let sk = P256SigningKey::random(&mut rand_core::OsRng);
-        let other = P256SigningKey::random(&mut rand_core::OsRng);
+        let sk = P256SigningKey::generate();
+        let other = P256SigningKey::generate();
         let jws_str = build_es256_jws(b"test", Some("did:example:alice#p256-1"), &sk);
 
         assert!(verify_p256(&jws_str, &p256_pub_sec1(&other)).is_err());
@@ -303,7 +301,7 @@ mod tests {
     /// Symmetric guard: the Ed25519 verifier must reject an ES256 JWS.
     #[test]
     fn ed25519_rejects_es256_alg() {
-        let sk = P256SigningKey::random(&mut rand_core::OsRng);
+        let sk = P256SigningKey::generate();
         let jws_str = build_es256_jws(b"x", Some("did:example:alice#p256-1"), &sk);
 
         let dummy_pub = [0u8; 32];
@@ -316,7 +314,7 @@ mod tests {
     /// must still be attributed.
     #[test]
     fn es256_signer_kid_from_unprotected_header() {
-        let sk = P256SigningKey::random(&mut rand_core::OsRng);
+        let sk = P256SigningKey::generate();
         let payload = b"{\"type\":\"test\"}";
 
         let protected = JwsProtectedHeader {
@@ -423,15 +421,12 @@ mod tests {
     }
 
     fn k256_pub_sec1(sk: &K256SigningKey) -> Vec<u8> {
-        sk.verifying_key()
-            .to_encoded_point(false)
-            .as_bytes()
-            .to_vec()
+        sk.verifying_key().to_sec1_point(false).as_bytes().to_vec()
     }
 
     #[test]
     fn es256k_sign_verify_roundtrip() {
-        let sk = K256SigningKey::random(&mut rand_core::OsRng);
+        let sk = K256SigningKey::generate();
         let payload = b"{\"type\":\"test\",\"body\":{}}";
         let jws_str = build_es256k_jws(payload, Some("did:example:alice#k256-1"), &sk);
 
@@ -445,8 +440,8 @@ mod tests {
 
     #[test]
     fn es256k_wrong_key_fails() {
-        let sk = K256SigningKey::random(&mut rand_core::OsRng);
-        let other = K256SigningKey::random(&mut rand_core::OsRng);
+        let sk = K256SigningKey::generate();
+        let other = K256SigningKey::generate();
         let jws_str = build_es256k_jws(b"test", Some("did:example:alice#k256-1"), &sk);
 
         assert!(verify_secp256k1(&jws_str, &k256_pub_sec1(&other)).is_err());
@@ -457,7 +452,7 @@ mod tests {
     /// algorithm-confusion attempt across the two ECDSA curves.
     #[test]
     fn es256k_rejects_es256_alg() {
-        let sk = P256SigningKey::random(&mut rand_core::OsRng);
+        let sk = P256SigningKey::generate();
         let jws_str = build_es256_jws(b"x", Some("did:example:alice#p256-1"), &sk);
 
         let dummy_pub = [0x04u8; 65];
@@ -468,7 +463,7 @@ mod tests {
     /// Symmetric guard: the ES256 verifier must reject an ES256K JWS.
     #[test]
     fn es256_rejects_es256k_alg() {
-        let sk = K256SigningKey::random(&mut rand_core::OsRng);
+        let sk = K256SigningKey::generate();
         let jws_str = build_es256k_jws(b"x", Some("did:example:alice#k256-1"), &sk);
 
         let dummy_pub = [0x04u8; 65];
@@ -481,7 +476,7 @@ mod tests {
     /// must still be attributed.
     #[test]
     fn es256k_signer_kid_from_unprotected_header() {
-        let sk = K256SigningKey::random(&mut rand_core::OsRng);
+        let sk = K256SigningKey::generate();
         let payload = b"{\"type\":\"test\"}";
 
         let protected = JwsProtectedHeader {

@@ -1,5 +1,16 @@
 # Affinidi DID Resolver Cache Server
 
+## 2nd August 2026 (0.9.10)
+
+Opts back in to `did:ethr` and `did:pkh`, which became optional in
+`affinidi-did-resolver-cache-sdk` 0.8.22.
+
+Those methods pull the `ssi-*` stack (and with it a second generation of the
+elliptic-curve crates), which most libraries embedding the SDK do not want — so
+the SDK now gates them off by default. This is a general-purpose resolver
+*service*, not an embedded library, so it keeps full method coverage and accepts
+that cost. **No change in what this server resolves.**
+
 ## Changelog history
 
 ## 20th July 2026

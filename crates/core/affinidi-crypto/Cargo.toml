@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-crypto"
-version = "0.2.6"
+version = "0.2.7"
 description = "Cryptographic primitives and JWK types for Affinidi TDK"
 edition.workspace = true
 authors.workspace = true
@@ -40,27 +40,10 @@ base58 = "0.2"
 base64 = "0.22"
 multibase = "0.9"
 ed25519-dalek = { version = "3", features = ["rand_core"], optional = true }
-k256 = { version = "0.13", features = [
-  "ecdsa-core",
-  "ecdsa",
-  "arithmetic",
-  "ecdh",
-], optional = true }
-p256 = { version = "0.13", features = [
-  "ecdsa-core",
-  "ecdsa",
-  "arithmetic",
-  "ecdh",
-], optional = true }
-p384 = { version = "0.13", features = [
-  "ecdsa-core",
-  "arithmetic",
-  "ecdh",
-], optional = true }
-p521 = { version = "0.13", features = [
-  "arithmetic",
-  "ecdh",
-], optional = true }
+k256 = { version = "0.14", features = ["ecdsa", "arithmetic", "ecdh"], optional = true }
+p256 = { version = "0.14", features = ["ecdsa", "arithmetic", "ecdh"], optional = true }
+p384 = { version = "0.14", features = ["ecdsa", "arithmetic", "ecdh"], optional = true }
+p521 = { version = "0.14", features = ["arithmetic", "ecdh"], optional = true }
 # JOSE content-encryption / key-wrap primitives (`jose` feature).
 aes = { version = "0.8", optional = true }
 cbc = { version = "0.1", features = ["alloc"], optional = true }

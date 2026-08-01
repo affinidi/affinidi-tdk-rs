@@ -5,11 +5,15 @@
 //! `p521` crate (P-521 key agreement, not signing, is what this stack uses).
 
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+use p521::elliptic_curve::Generate;
 use p521::{
-    AffinePoint, EncodedPoint, SecretKey,
-    elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint},
+    AffinePoint, SecretKey,
+    elliptic_curve::sec1::{FromSec1Point, ToSec1Point},
 };
-use rand_core::OsRng;
+
+/// `elliptic-curve` 0.14 made `EncodedPoint` a generic alias for
+/// `Sec1Point<C>`; pin it to this module's curve.
+type EncodedPoint = p521::elliptic_curve::sec1::Sec1Point<p521::NistP521>;
 
 use crate::{CryptoError, ECParams, JWK, KeyType, Params, error::Result};
 
@@ -35,12 +39,12 @@ pub fn generate(secret: Option<&[u8]>) -> Result<KeyPair> {
         Some(secret) => SecretKey::from_slice(secret).map_err(|e| {
             CryptoError::KeyError(format!("P-521 secret material isn't valid: {e}"))
         })?,
-        None => SecretKey::random(&mut OsRng),
+        None => SecretKey::generate(),
     };
 
     let public_key = secret_key.public_key();
     let private_bytes = secret_key.to_bytes().to_vec();
-    let ep = public_key.to_encoded_point(false);
+    let ep = public_key.to_sec1_point(false);
     let public_bytes = ep.as_bytes().to_vec();
 
     Ok(KeyPair {
@@ -73,14 +77,14 @@ pub fn public_jwk(data: &[u8]) -> Result<JWK> {
         .map_err(|e| CryptoError::KeyError(format!("P-521 public key isn't valid: {e}")))?;
 
     // Convert to AffinePoint to validate the point is on the curve
-    let ap: AffinePoint = AffinePoint::from_encoded_point(&ep)
+    let ap: AffinePoint = AffinePoint::from_sec1_point(&ep)
         .into_option()
         .ok_or_else(|| {
             CryptoError::KeyError("Couldn't convert P-521 EncodedPoint to AffinePoint".into())
         })?;
 
     // Decompress to get x and y coordinates
-    let ep = ap.to_encoded_point(false);
+    let ep = ap.to_sec1_point(false);
 
     Ok(JWK {
         key_id: None,

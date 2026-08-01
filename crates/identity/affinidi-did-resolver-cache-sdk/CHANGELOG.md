@@ -1,5 +1,29 @@
 # Affinidi DID Resolver Cache SDK
 
+## 2nd August 2026 (0.8.22)
+
+**BREAKING (behaviour): `did:ethr` and `did:pkh` are now behind features and
+OFF by default.**
+
+These were the only two DID methods in this crate with no feature gate —
+`did-jwk`, `did-webvh`, `did-cheqd`, `did-scid`, `did-ebsi` and `did_example`
+are all already optional. Because they were unconditional, every build of this
+crate pulled the entire `ssi-*` stack, and with it `p256`/`k256` **0.13** —
+which is what kept two generations of the RustCrypto stack in the graph.
+
+Enable `did-ethr` / `did-pkh` explicitly to restore the previous behaviour.
+Resolution of those methods returns "method not supported" when the feature is
+off, exactly as the other gated methods do.
+
+`ssi-dids-core` is likewise optional now, pulled in only by those features.
+With all three off, a default build of this crate resolves the elliptic-curve
+family entirely at **0.14** and links no `ssi-*` crate at all.
+
+Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md)
+point 3: this crate is redirected through `[patch.crates-io]` by external
+consumers, so a minor bump would break the redirect. The behavioural break is
+called out here rather than encoded in the version — see R3.6 in CLAUDE.md.
+
 ## Changelog history
 
 ## 23rd July 2026
