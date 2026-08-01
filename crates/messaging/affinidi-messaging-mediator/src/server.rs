@@ -151,6 +151,8 @@ pub async fn start(config_path: &str) -> Result<(), MediatorError> {
         // Tracing is already installed by `init` above.
         tracing: TracingMode::External,
         install_signal_handlers: true,
+        // The TOML/binary path binds its own listener from config.
+        listener: None,
     };
 
     // Honour the optional `[storage]` section. When the operator
@@ -736,14 +738,22 @@ pub async fn serve_internal(
             format!("Invalid listen_address '{}': {e}", config.listen_address),
         )
     })?;
-    let std_listener = std::net::TcpListener::bind(configured_addr).map_err(|e| {
-        error!("Failed to bind {}: {e}", configured_addr);
-        MediatorError::InternalError(
-            error_codes::INTERNAL_ERROR,
-            "NA".into(),
-            format!("Failed to bind {configured_addr}: {e}"),
-        )
-    })?;
+    // A caller that needed the port before startup (to mint a DID whose
+    // service endpoint embeds the URL, say) can bind it themselves and
+    // hand the listener over. Re-binding an address they had already
+    // bound and released leaves a window for another process to claim
+    // it — taking the listener means the port is never released.
+    let std_listener = match opts.listener {
+        Some(listener) => listener,
+        None => std::net::TcpListener::bind(configured_addr).map_err(|e| {
+            error!("Failed to bind {}: {e}", configured_addr);
+            MediatorError::InternalError(
+                error_codes::INTERNAL_ERROR,
+                "NA".into(),
+                format!("Failed to bind {configured_addr}: {e}"),
+            )
+        })?,
+    };
     std_listener.set_nonblocking(true).map_err(|e| {
         MediatorError::InternalError(
             error_codes::INTERNAL_ERROR,

@@ -714,7 +714,7 @@ impl TestMediatorBuilder {
         // idempotent and removes that boilerplate from consumers.
         install_default_crypto_provider();
 
-        let bound_addr = bind_ephemeral_listener(self.listen_addr)?;
+        let (listener, bound_addr) = bind_ephemeral_listener(self.listen_addr)?;
         let api_prefix = "/mediator/v1/".to_string();
         // When `advertise_host` is set, the mediator's DID service endpoint uses
         // that host (with the bound port) so clients in other network namespaces
@@ -819,7 +819,7 @@ impl TestMediatorBuilder {
             .secrets_backend(secrets_backend)
             .secrets_backend_url("memory://(test-mediator)")
             .store(store)
-            .listen_addr(bound_addr)
+            .listener(listener)
             .api_prefix(api_prefix)
             .security(security)
             .limits(limits)
@@ -1055,18 +1055,21 @@ pub fn install_default_crypto_provider() {
 
 // ─── Internals ───────────────────────────────────────────────────────────────
 
-/// Bind an ephemeral listener, capture the address, then drop it so
-/// the mediator can re-bind to the same port. There is a tiny TOCTOU
-/// window between drop and re-bind during which another process could
-/// claim the port; in practice it's microseconds and harmless for
-/// tests. If this proves flaky in CI, extend `MediatorBuilder` to
-/// accept a pre-bound `TcpListener` and remove the rebind step.
-fn bind_ephemeral_listener(requested: Option<SocketAddr>) -> Result<SocketAddr, TestMediatorError> {
+/// Bind a listener and return it *with* its address.
+///
+/// The listener is handed to `MediatorBuilder::listener` rather than
+/// dropped, so the port is never released between our bind and the
+/// server's. The previous version dropped it and let the mediator
+/// re-bind the same port, which left a window another process could
+/// win — and did win, intermittently, under `cargo llvm-cov` where the
+/// wider timing made it far more likely.
+fn bind_ephemeral_listener(
+    requested: Option<SocketAddr>,
+) -> Result<(TcpListener, SocketAddr), TestMediatorError> {
     let target: SocketAddr = requested.unwrap_or_else(|| "127.0.0.1:0".parse().unwrap());
     let listener = TcpListener::bind(target).map_err(TestMediatorError::Bind)?;
     let addr = listener.local_addr().map_err(TestMediatorError::Bind)?;
-    drop(listener);
-    Ok(addr)
+    Ok((listener, addr))
 }
 
 /// Generate the mediator's `did:peer:2` identity:
@@ -1224,9 +1227,25 @@ mod tests {
 
     #[test]
     fn ephemeral_listener_returns_real_port() {
-        let addr = bind_ephemeral_listener(None).expect("bind");
+        let (_listener, addr) = bind_ephemeral_listener(None).expect("bind");
         assert_eq!(addr.ip().to_string(), "127.0.0.1");
         assert!(addr.port() > 0, "OS-assigned port should be non-zero");
+    }
+
+    /// The returned listener must still hold the port.
+    ///
+    /// This is the whole point of returning it rather than dropping it:
+    /// while we hold it, nobody else can bind that port, so there is no
+    /// window between our bind and the mediator's. If this ever starts
+    /// passing a second bind, the TOCTOU race is back.
+    #[test]
+    fn ephemeral_listener_keeps_the_port_bound() {
+        let (listener, addr) = bind_ephemeral_listener(None).expect("bind");
+        assert!(
+            TcpListener::bind(addr).is_err(),
+            "port {addr} was re-bindable, so the listener is not holding it"
+        );
+        drop(listener);
     }
 
     #[tokio::test]
