@@ -17,6 +17,7 @@
  */
 
 use p384::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Signer, signature::Verifier};
+use p384::elliptic_curve::Generate;
 
 use crate::cose::{CoseSigner, CoseVerifier};
 use crate::error::{MdocError, Result};
@@ -42,7 +43,7 @@ impl Es384CoseSigner {
 
     /// Generate a new random P-384 key pair for signing.
     pub fn generate() -> Self {
-        let signing_key = SigningKey::random(&mut p384::elliptic_curve::rand_core::OsRng);
+        let signing_key = SigningKey::generate();
         Self {
             signing_key,
             x5chain: None,
@@ -65,7 +66,7 @@ impl Es384CoseSigner {
     /// Get the public key as uncompressed SEC1 bytes (97 bytes).
     pub fn public_key_bytes(&self) -> Vec<u8> {
         VerifyingKey::from(&self.signing_key)
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .to_bytes()
             .to_vec()
     }

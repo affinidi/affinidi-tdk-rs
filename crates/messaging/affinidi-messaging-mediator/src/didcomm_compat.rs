@@ -1378,7 +1378,7 @@ mod tests {
         let signer = "did:example:k256jwk";
         let kid = format!("{signer}#key-1");
         let sk = k256::ecdsa::SigningKey::from_slice(&[0x43u8; 32]).unwrap();
-        let point = sk.verifying_key().to_encoded_point(false);
+        let point = sk.verifying_key().to_sec1_point(false);
         let doc = json!({
             "id": signer,
             "verificationMethod": [{

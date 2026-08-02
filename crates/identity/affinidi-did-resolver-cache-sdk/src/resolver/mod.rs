@@ -55,12 +55,14 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
+    #[cfg(feature = "did-ethr")]
     const DID_ETHR: &str = "did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a";
     #[cfg(feature = "did-jwk")]
     const DID_JWK: &str = "did:jwk:eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImFjYklRaXVNczNpOF91c3pFakoydHBUdFJNNEVVM3l6OTFQSDZDZEgyVjAiLCJ5IjoiX0tjeUxqOXZXTXB0bm1LdG00NkdxRHo4d2Y3NEk1TEtncmwyR3pIM25TRSJ9";
     // ED25519
     const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";
     const DID_PEER: &str = "did:peer:2.Vz6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv.EzQ3shQLqRUza6AMJFbPuMdvFRFWm1wKviQRnQSC1fScovJN4s.SeyJ0IjoiRElEQ29tbU1lc3NhZ2luZyIsInMiOnsidXJpIjoiaHR0cHM6Ly8xMjcuMC4wLjE6NzAzNyIsImEiOlsiZGlkY29tbS92MiJdLCJyIjpbXX19";
+    #[cfg(feature = "did-pkh")]
     const DID_PKH: &str = "did:pkh:solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ:CKg5d12Jhpej1JqtmxLJgaFqqeYjxgPqToJ4LBdvG9Ev";
     #[cfg(feature = "did-webvh")]
     const DID_WEBVH: &str = "did:webvh:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai:identity.foundation:didwebvh-implementations:implementations:affinidi-didwebvh-rs";
@@ -69,6 +71,7 @@ mod tests {
     #[cfg(feature = "did-scid")]
     const DID_SCID: &str = "did:scid:vh:1:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai?src=identity.foundation/didwebvh-implementations/implementations/affinidi-didwebvh-rs";
 
+    #[cfg(feature = "did-ethr")]
     #[tokio::test]
     async fn local_resolve_ethr() {
         let config = config::DIDCacheConfigBuilder::default().build();
@@ -173,6 +176,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "did-pkh")]
     #[tokio::test]
     async fn local_resolve_pkh() {
         let config = config::DIDCacheConfigBuilder::default().build();

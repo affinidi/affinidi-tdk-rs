@@ -10,7 +10,7 @@
 //! change. The `Curve` enum doubles as the typed JOSE `crv` wire boundary.
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand_core::OsRng;
+use p256::elliptic_curve::Generate;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -77,8 +77,8 @@ impl PublicKeyAgreement {
                 "x": URL_SAFE_NO_PAD.encode(bytes),
             }),
             PublicKeyAgreement::P256(pk) => {
-                use p256::elliptic_curve::sec1::ToEncodedPoint;
-                let point = pk.to_encoded_point(false);
+                use p256::elliptic_curve::sec1::ToSec1Point;
+                let point = pk.to_sec1_point(false);
                 serde_json::json!({
                     "kty": "EC",
                     "crv": "P-256",
@@ -87,8 +87,8 @@ impl PublicKeyAgreement {
                 })
             }
             PublicKeyAgreement::K256(pk) => {
-                use k256::elliptic_curve::sec1::ToEncodedPoint;
-                let point = pk.to_encoded_point(false);
+                use k256::elliptic_curve::sec1::ToSec1Point;
+                let point = pk.to_sec1_point(false);
                 serde_json::json!({
                     "kty": "EC",
                     "crv": "secp256k1",
@@ -97,8 +97,8 @@ impl PublicKeyAgreement {
                 })
             }
             PublicKeyAgreement::P384(pk) => {
-                use p384::elliptic_curve::sec1::ToEncodedPoint;
-                let point = pk.to_encoded_point(false);
+                use p384::elliptic_curve::sec1::ToSec1Point;
+                let point = pk.to_sec1_point(false);
                 serde_json::json!({
                     "kty": "EC",
                     "crv": "P-384",
@@ -107,8 +107,8 @@ impl PublicKeyAgreement {
                 })
             }
             PublicKeyAgreement::P521(pk) => {
-                use p521::elliptic_curve::sec1::ToEncodedPoint;
-                let point = pk.to_encoded_point(false);
+                use p521::elliptic_curve::sec1::ToSec1Point;
+                let point = pk.to_sec1_point(false);
                 serde_json::json!({
                     "kty": "EC",
                     "crv": "P-521",
@@ -127,20 +127,20 @@ impl PublicKeyAgreement {
         match self {
             PublicKeyAgreement::X25519(bytes) => bytes.to_vec(),
             PublicKeyAgreement::P256(pk) => {
-                use p256::elliptic_curve::sec1::ToEncodedPoint;
-                pk.to_encoded_point(true).as_bytes().to_vec()
+                use p256::elliptic_curve::sec1::ToSec1Point;
+                pk.to_sec1_point(true).as_bytes().to_vec()
             }
             PublicKeyAgreement::K256(pk) => {
-                use k256::elliptic_curve::sec1::ToEncodedPoint;
-                pk.to_encoded_point(true).as_bytes().to_vec()
+                use k256::elliptic_curve::sec1::ToSec1Point;
+                pk.to_sec1_point(true).as_bytes().to_vec()
             }
             PublicKeyAgreement::P384(pk) => {
-                use p384::elliptic_curve::sec1::ToEncodedPoint;
-                pk.to_encoded_point(true).as_bytes().to_vec()
+                use p384::elliptic_curve::sec1::ToSec1Point;
+                pk.to_sec1_point(true).as_bytes().to_vec()
             }
             PublicKeyAgreement::P521(pk) => {
-                use p521::elliptic_curve::sec1::ToEncodedPoint;
-                pk.to_encoded_point(true).as_bytes().to_vec()
+                use p521::elliptic_curve::sec1::ToSec1Point;
+                pk.to_sec1_point(true).as_bytes().to_vec()
             }
         }
     }
@@ -332,10 +332,18 @@ impl PrivateKeyAgreement {
             Curve::X25519 => PrivateKeyAgreement::X25519(
                 x25519_dalek::StaticSecret::random_from_rng(&mut rand_10::rng()).to_bytes(),
             ),
-            Curve::P256 => PrivateKeyAgreement::P256(p256::SecretKey::random(&mut OsRng)),
-            Curve::K256 => PrivateKeyAgreement::K256(k256::SecretKey::random(&mut OsRng)),
-            Curve::P384 => PrivateKeyAgreement::P384(p384::SecretKey::random(&mut OsRng)),
-            Curve::P521 => PrivateKeyAgreement::P521(p521::SecretKey::random(&mut OsRng)),
+            Curve::P256 => {
+                PrivateKeyAgreement::P256(p256::SecretKey::generate_from_rng(&mut rand_10::rng()))
+            }
+            Curve::K256 => {
+                PrivateKeyAgreement::K256(k256::SecretKey::generate_from_rng(&mut rand_10::rng()))
+            }
+            Curve::P384 => {
+                PrivateKeyAgreement::P384(p384::SecretKey::generate_from_rng(&mut rand_10::rng()))
+            }
+            Curve::P521 => {
+                PrivateKeyAgreement::P521(p521::SecretKey::generate_from_rng(&mut rand_10::rng()))
+            }
         }
     }
 

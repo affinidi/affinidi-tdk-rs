@@ -1,12 +1,16 @@
 //! secp256k1 key operations
 
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+use k256::elliptic_curve::Generate;
 use k256::{
-    AffinePoint, EncodedPoint,
+    AffinePoint,
     ecdsa::{SigningKey, VerifyingKey},
-    elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint},
+    elliptic_curve::sec1::{FromSec1Point, ToSec1Point},
 };
-use rand_core::OsRng;
+
+/// `elliptic-curve` 0.14 made `EncodedPoint` a generic alias for
+/// `Sec1Point<C>`; pin it to this module's curve.
+type EncodedPoint = k256::elliptic_curve::sec1::Sec1Point<k256::Secp256k1>;
 
 use crate::{CryptoError, ECParams, JWK, KeyType, Params, error::Result};
 
@@ -32,12 +36,12 @@ pub fn generate(secret: Option<&[u8]>) -> Result<KeyPair> {
         Some(secret) => SigningKey::from_slice(secret).map_err(|e| {
             CryptoError::KeyError(format!("secp256k1 secret material isn't valid: {e}"))
         })?,
-        None => SigningKey::random(&mut OsRng),
+        None => SigningKey::generate(),
     };
 
     let verifying_key = VerifyingKey::from(&signing_key);
     let private_bytes = signing_key.to_bytes().to_vec();
-    let public_bytes = verifying_key.to_encoded_point(false).to_bytes().to_vec();
+    let public_bytes = verifying_key.to_sec1_point(false).to_bytes().to_vec();
 
     Ok(KeyPair {
         key_type: KeyType::Secp256k1,
@@ -47,10 +51,8 @@ pub fn generate(secret: Option<&[u8]>) -> Result<KeyPair> {
             key_id: None,
             params: Params::EC(ECParams {
                 curve: "secp256k1".to_string(),
-                x: BASE64_URL_SAFE_NO_PAD
-                    .encode(verifying_key.to_encoded_point(false).x().unwrap()),
-                y: BASE64_URL_SAFE_NO_PAD
-                    .encode(verifying_key.to_encoded_point(false).y().unwrap()),
+                x: BASE64_URL_SAFE_NO_PAD.encode(verifying_key.to_sec1_point(false).x().unwrap()),
+                y: BASE64_URL_SAFE_NO_PAD.encode(verifying_key.to_sec1_point(false).y().unwrap()),
                 d: Some(BASE64_URL_SAFE_NO_PAD.encode(&private_bytes)),
             }),
         },
@@ -63,14 +65,14 @@ pub fn public_jwk(data: &[u8]) -> Result<JWK> {
         .map_err(|e| CryptoError::KeyError(format!("secp256k1 public key isn't valid: {e}")))?;
 
     // Convert to AffinePoint to validate the point is on the curve
-    let ap: AffinePoint = AffinePoint::from_encoded_point(&ep)
+    let ap: AffinePoint = AffinePoint::from_sec1_point(&ep)
         .into_option()
         .ok_or_else(|| {
             CryptoError::KeyError("Couldn't convert secp256k1 EncodedPoint to AffinePoint".into())
         })?;
 
     // Decompress to get x and y coordinates
-    let ep = ap.to_encoded_point(false);
+    let ep = ap.to_sec1_point(false);
 
     Ok(JWK {
         key_id: None,

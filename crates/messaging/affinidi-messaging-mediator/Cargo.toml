@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.18.3"
+version = "0.18.4"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -254,7 +254,7 @@ affinidi-secrets-resolver = "0.5"
 tokio = { workspace = true, features = ["test-util"] }
 ## ES256K test signing for the `verify_inner_jws` secp256k1 path (the runtime
 ## is verify-only, via affinidi-crypto / affinidi-messaging-didcomm).
-k256 = { version = "0.13", features = ["ecdsa"] }
+k256 = { version = "0.14", features = ["ecdsa"] }
 
 [lints]
 workspace = true

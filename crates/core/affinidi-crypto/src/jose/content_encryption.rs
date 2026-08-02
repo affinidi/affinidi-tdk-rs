@@ -8,7 +8,7 @@
 use aes::Aes256;
 use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use hmac::{Hmac, Mac};
-use rand_core::RngCore;
+use rand_10::Rng;
 use sha2::Sha512;
 use subtle::ConstantTimeEq;
 
@@ -29,14 +29,14 @@ pub const TAG_SIZE: usize = 32;
 /// Generate a random 64-byte CEK.
 pub fn generate_cek() -> [u8; CEK_SIZE] {
     let mut cek = [0u8; CEK_SIZE];
-    rand_core::OsRng.fill_bytes(&mut cek);
+    rand_10::rng().fill_bytes(&mut cek);
     cek
 }
 
 /// Generate a random 16-byte IV.
 pub fn generate_iv() -> [u8; IV_SIZE] {
     let mut iv = [0u8; IV_SIZE];
-    rand_core::OsRng.fill_bytes(&mut iv);
+    rand_10::rng().fill_bytes(&mut iv);
     iv
 }
 

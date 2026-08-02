@@ -1,5 +1,28 @@
 # Changelog
 
+## 2nd August 2026 (0.15.7)
+
+The unused `jwk` feature is dropped from the `p256`/`k256` deps — JWK
+handling goes through `affinidi-crypto`'s own `to_jwk`/`from_jwk`, and the
+feature does not exist in 0.14.
+
+Moves this crate to the **elliptic-curve 0.14** family (`p256` / `k256` /
+`p384` / `p521` 0.13 -> 0.14), which brings rand_core 0.10, digest 0.11 and
+signature 3 with it.
+
+API changes handled: the sec1 traits were renamed (`ToEncodedPoint` ->
+`ToSec1Point`, `FromEncodedPoint` -> `FromSec1Point`), `EncodedPoint` became a
+generic alias for `Sec1Point<C>` so it needs a per-module binding, and the
+deprecated `SigningKey::random(rng)` is now `Generate::generate()` (system
+CSPRNG, panics on failure).
+
+Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) point 3: `vta-sdk` and `didwebvh-rs` redirect
+this crate through `[patch.crates-io]`, and a minor bump breaks the redirect.
+
+Crypto behaviour is unchanged — the golden/KAT vectors (`p256_sign_verify_roundtrip`,
+`secp256k1_es256k_golden` RFC 6979, `ecdh_1pu_x25519_kek_golden`,
+`concat_kdf_es_golden`, `a256cbc_hs512_golden`) all still pass.
+
 ## 31st July 2026 (0.15.6)
 
 Moves to **curve25519-dalek 5** (`ed25519-dalek` 2 -> 3, `x25519-dalek` 2 -> 3),

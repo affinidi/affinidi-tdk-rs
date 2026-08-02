@@ -8,6 +8,7 @@
  */
 
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Signer, signature::Verifier};
+use p256::elliptic_curve::Generate;
 
 use crate::cose::{CoseSigner, CoseVerifier};
 use crate::error::{MdocError, Result};
@@ -36,7 +37,7 @@ impl Es256CoseSigner {
 
     /// Generate a new random P-256 key pair for signing.
     pub fn generate() -> Self {
-        let signing_key = SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        let signing_key = SigningKey::generate();
         Self {
             signing_key,
             x5chain: None,
@@ -59,7 +60,7 @@ impl Es256CoseSigner {
     /// Get the public key as uncompressed SEC1 bytes.
     pub fn public_key_bytes(&self) -> Vec<u8> {
         VerifyingKey::from(&self.signing_key)
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .to_bytes()
             .to_vec()
     }
