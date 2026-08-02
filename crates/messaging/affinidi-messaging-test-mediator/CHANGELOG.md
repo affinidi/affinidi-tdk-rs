@@ -1,5 +1,30 @@
 # Affinidi Messaging Test Mediator
 
+## 2nd August 2026 (0.2.45)
+
+`TestMediator` now hands its listener to the mediator instead of dropping it
+and letting the server re-bind the same port.
+
+**This was a real flake, not a theoretical one.** The helper's own comment
+called out the TOCTOU window and said to fix it this way "if this proves flaky
+in CI" — it did, on affinidi/affinidi-tdk-rs#673:
+
+```
+env spawn: Mediator(InternalError(17, "NA",
+  "Failed to bind 127.0.0.1:38221: Address already in use (os error 98)"))
+```
+
+`add_admin_rejects_mismatched_identity` lost the race to another process. It
+surfaced under `cargo llvm-cov` (the Coverage job) rather than the plain test
+run because the slower, differently-timed execution widens the window.
+
+`bind_ephemeral_listener` now returns `(TcpListener, SocketAddr)` and the
+listener is passed to `MediatorBuilder::listener`, so the port stays bound from
+our bind through to the server's use of it. New test
+`ephemeral_listener_keeps_the_port_bound` asserts the port is *not* re-bindable
+while we hold the listener — if that ever passes a second bind, the race is
+back.
+
 ## Changelog history
 
 ## 29th July 2026

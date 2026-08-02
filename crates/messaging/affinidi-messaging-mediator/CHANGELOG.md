@@ -1,5 +1,20 @@
 # Affinidi Messaging Mediator
 
+## 2nd August 2026 (0.18.3)
+
+Adds **`MediatorBuilder::listener`**, which hands the server a listener the
+caller has already bound instead of making it bind for itself.
+
+A caller that needs the bound port *before* startup — to mint a DID whose
+service endpoint embeds the URL, say — previously had to bind, read the port,
+drop the listener, and pass the address for the server to re-bind. That leaves
+a window between the drop and the re-bind in which another process can take the
+port. Handing the listener across removes the window: the port is never
+released.
+
+Additive. `listen_addr` is unchanged and still the right choice when you do not
+need the port in advance; the TOML/binary path is untouched.
+
 ## 1st August 2026 (0.18.2)
 
 Drops the **legacy rustls 0.21 stack** from the AWS SDK dependency path,

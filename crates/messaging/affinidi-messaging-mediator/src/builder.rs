@@ -68,6 +68,14 @@ pub enum TracingMode {
 #[derive(Debug)]
 pub struct StartOpts {
     pub tls: TlsMode,
+    /// A listener the caller already bound, handed over to the server.
+    ///
+    /// Without this the caller has to bind to learn the ephemeral port,
+    /// drop the listener, and let the server re-bind the same port —
+    /// which leaves a window where another process can claim it. Passing
+    /// the listener across closes that window: the port is never
+    /// unbound. See [`MediatorBuilder::listener`].
+    pub listener: Option<std::net::TcpListener>,
     pub tracing: TracingMode,
     /// Install SIGINT/SIGTERM handlers that cancel the shutdown token
     /// passed to [`MediatorBuilder::start`]. The mediator binary sets
@@ -82,6 +90,7 @@ impl Default for StartOpts {
             tls: TlsMode::Plain,
             tracing: TracingMode::External,
             install_signal_handlers: false,
+            listener: None,
         }
     }
 }
@@ -356,6 +365,26 @@ impl MediatorBuilder {
 
     /// Set the address to bind. Defaults to `127.0.0.1:0` (ephemeral
     /// port chosen by the OS) when not set.
+    /// Hand the server a listener you have already bound.
+    ///
+    /// Use this instead of [`listen_addr`](Self::listen_addr) when you need
+    /// the bound port *before* the server starts — minting a DID whose
+    /// service endpoint embeds the URL, say. Binding, reading the port,
+    /// dropping the listener and letting the server re-bind leaves a
+    /// window in which another process can take the port; handing the
+    /// listener over removes it, because the port is never released.
+    ///
+    /// The address is read back off the listener, so `listen_addr` does
+    /// not need to be set as well (and is ignored if it is).
+    pub fn listener(mut self, listener: std::net::TcpListener) -> Self {
+        if let Ok(addr) = listener.local_addr() {
+            self.listen_addr = Some(addr);
+            self.config.listen_address = addr.to_string();
+        }
+        self.opts.listener = Some(listener);
+        self
+    }
+
     pub fn listen_addr(mut self, addr: SocketAddr) -> Self {
         self.listen_addr = Some(addr);
         self.config.listen_address = addr.to_string();
