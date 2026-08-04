@@ -1,5 +1,20 @@
 # Affinidi Messaging Mediator
 
+## 4th August 2026 (0.18.5)
+
+Dependency bump to `affinidi-messaging-sdk` 0.19.0 (secure-by-default `unpack`).
+Adapts the `didcomm_compat` shim to the now-sealed (`#[non_exhaustive]`)
+`UnpackMetadata` / `PackEncryptedMetadata` by constructing them via `Default` +
+field assignment. No change to mediator behaviour or wire protocol.
+
+Note that the mediator's own `didcomm_compat` unpack path is **not** governed by
+the SDK's new `UnpackPolicy` — see the scope note in the `affinidi-messaging-sdk`
+0.19.0 changelog for why this is not an authentication gap, and for the tracked
+follow-up to converge both unpack paths.
+
+(Renumbered from the `0.18.1` this work originally carried: `0.18.1`–`0.18.4`
+were released from `main` in the meantime.)
+
 ## 2nd August 2026 (0.18.4)
 
 Moves this crate to the **elliptic-curve 0.14** family (`p256` / `k256` /
@@ -73,15 +88,6 @@ the graph — the mediator now links a single curve25519 implementation.
 No behavioural change to send/ack/reconnect semantics.
 
 ## Changelog history
-
-## 30th July 2026
-
-### 0.18.1 — track affinidi-messaging-sdk 0.19.0
-
-Dependency bump to `affinidi-messaging-sdk` 0.19.0 (secure-by-default `unpack`).
-Adapts the `didcomm_compat` shim to the now-sealed (`#[non_exhaustive]`)
-`UnpackMetadata` / `PackEncryptedMetadata` by constructing them via `Default` +
-field assignment. No change to mediator behaviour or wire protocol.
 
 ## 29th July 2026
 

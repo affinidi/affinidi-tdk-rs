@@ -152,10 +152,11 @@ mod tests {
         use crate::jws::verify::{VerifyKey, parse_jws, verify_parsed_signature};
         use k256::ecdsa::SigningKey as K256SigningKey;
         use p256::ecdsa::SigningKey as P256SigningKey;
+        use p256::elliptic_curve::Generate as _;
 
-        let ed = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
-        let p256 = P256SigningKey::random(&mut rand_core::OsRng);
-        let k256 = K256SigningKey::random(&mut rand_core::OsRng);
+        let ed = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
+        let p256 = P256SigningKey::generate();
+        let k256 = K256SigningKey::generate();
 
         let msg =
             Message::new("test-type", serde_json::json!({"data": 7})).from("did:example:alice");
@@ -188,13 +189,13 @@ mod tests {
             VerifyKey::Ed25519(ed.verifying_key().to_bytes()),
             VerifyKey::P256(
                 p256.verifying_key()
-                    .to_encoded_point(false)
+                    .to_sec1_point(false)
                     .as_bytes()
                     .to_vec(),
             ),
             VerifyKey::Secp256k1(
                 k256.verifying_key()
-                    .to_encoded_point(false)
+                    .to_sec1_point(false)
                     .as_bytes()
                     .to_vec(),
             ),

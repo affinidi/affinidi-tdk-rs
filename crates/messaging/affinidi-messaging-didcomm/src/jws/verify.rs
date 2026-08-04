@@ -660,9 +660,9 @@ mod tests {
     fn multi_signature_all_verify() {
         use crate::jws::sign::{JwsSigner, sign_multi};
 
-        let ed = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
-        let p256 = P256SigningKey::random(&mut rand_core::OsRng);
-        let k256 = K256SigningKey::random(&mut rand_core::OsRng);
+        let ed = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
+        let p256 = P256SigningKey::generate();
+        let k256 = K256SigningKey::generate();
 
         let payload = b"{\"type\":\"test\",\"from\":\"did:example:alice\"}";
         let jws_str = sign_multi(
@@ -713,7 +713,7 @@ mod tests {
     fn verify_parsed_rejects_key_type_mismatch() {
         use crate::jws::sign::{JwsSigner, sign_multi};
 
-        let ed = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let ed = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
         let jws_str = sign_multi(
             b"x",
             &[JwsSigner::Ed25519 {
@@ -738,9 +738,9 @@ mod tests {
     fn multi_signature_detects_one_bad() {
         use crate::jws::sign::{JwsSigner, sign_multi};
 
-        let ed = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
-        let p256 = P256SigningKey::random(&mut rand_core::OsRng);
-        let other_p256 = P256SigningKey::random(&mut rand_core::OsRng);
+        let ed = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
+        let p256 = P256SigningKey::generate();
+        let other_p256 = P256SigningKey::generate();
 
         let jws_str = sign_multi(
             b"payload",

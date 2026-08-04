@@ -18,6 +18,48 @@
 > construct it, and use `UnpackMetadata::default()` + field assignment if it
 > ever needs to build one.
 
+### Rollout across the VTI ecosystem (R3.6)
+
+Publishing `0.19.0` does **not** by itself deliver this fix to the services that
+depend on it — a `^0.18` requirement will not resolve to `0.19`. Each consuming
+repo has to move its pin deliberately. Pins as observed at the time of writing:
+
+| Repo / crate | How it depends | Picks up `0.19` automatically? |
+| --- | --- | --- |
+| `verifiable-trust-infrastructure` → `vta-sdk` | `affinidi-messaging-sdk = "0.18"` (direct, optional) | **No** — needs an explicit bump |
+| `affinidi-trust-registry-rs` | `affinidi-messaging-sdk = "0.18"` (workspace) | **No** — needs an explicit bump |
+| `verifiable-trust-infrastructure` (workspace) | `affinidi-tdk = "0.8"` | Yes, via `affinidi-tdk` 0.8.5 |
+| `affinidi-webvh-service` | `affinidi-tdk = "0.8"` | Yes, via `affinidi-tdk` 0.8.5 |
+| `vti-push-gateway` | `affinidi-tdk = "0.7"` | **No** — two minors behind the facade |
+| `cierge` | `vta-sdk = "0.20.25"` (transitive) | Only once `vta-sdk` bumps |
+| `vti-message-bridge` | `vta-sdk = "0.18"` (transitive) | Only once `vta-sdk` bumps |
+
+**Sequencing matters, not just the bumps.** `affinidi-tdk` 0.8.5 pulls
+`affinidi-messaging-sdk` 0.19 while a `^0.18` direct pin resolves to 0.18.x, so
+any graph holding both (e.g. `verifiable-trust-infrastructure`, which depends on
+`affinidi-tdk` *and* on `vta-sdk`) links **two copies of the SDK** and the
+`ATMConfig` / `UnpackMetadata` types stop unifying. Move `vta-sdk` and
+`affinidi-trust-registry-rs` in the same cascade as the facade, and re-resolve
+lockfiles afterwards — publishing an upgrade is not the same as consuming it.
+
+**Do senders pack authcrypt today?** Verified for the main path: `vta-sdk`'s
+session transport packs with `pack_encrypted(&msg, vta_did, Some(client_did), …)`
+(authcrypt), and the VTA has *required* authcrypt on `/auth/` and `/auth/refresh`
+since VTI #771, rejecting anoncrypt outright — so those senders already produce a
+wrapping the new default accepts. One caveat to confirm per deployment:
+`vta-sdk::didcomm_light` is an **anoncrypt** packer whose output is unpacked by
+`ATM::unpack`. It has no remaining in-tree caller (auth moved to `auth_di`), but
+the module is still `pub`, so any external caller still packing through it will
+start seeing `ATMError::UnexpectedEnvelope` after this upgrade. Such callers
+should move to authcrypt, or opt in explicitly with
+`with_unpack_policy(UnpackPolicy { expected: vec![MessageWrappingType::AnoncryptPlaintext, ..], .. })`.
+
+**Upgrade tip.** Pair the first deployment with
+`with_purge_policy_rejected_messages(false)` and
+`with_unprocessable_message_channel(..)` for a bounded window, so anything the
+stricter policy rejects is observable and recoverable rather than deleted from
+the mediator queue.
+
 ### Changed
 
 - **`atm.unpack` is now secure by default (behavioural change).** Unpacking now

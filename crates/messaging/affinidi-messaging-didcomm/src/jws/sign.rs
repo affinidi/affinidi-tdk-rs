@@ -187,12 +187,13 @@ mod tests {
     fn sign_multi_emits_kid_in_both_headers() {
         use k256::ecdsa::SigningKey as K256SigningKey;
         use p256::ecdsa::SigningKey as P256SigningKey;
+        use p256::elliptic_curve::Generate as _;
 
         // Every curve routes through `build_signature`, so EdDSA, ES256 and
         // ES256K signatures must all carry `kid` in both headers.
-        let ed = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
-        let p256 = P256SigningKey::random(&mut rand_core::OsRng);
-        let k256 = K256SigningKey::random(&mut rand_core::OsRng);
+        let ed = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
+        let p256 = P256SigningKey::generate();
+        let k256 = K256SigningKey::generate();
 
         let jws_str = sign_multi(
             b"{\"type\":\"test\"}",
