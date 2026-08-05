@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.22] - 2026-07-30
+
+### Changed
+
+- Track `affinidi-messaging-sdk` 0.19.0 (secure-by-default `unpack`: the
+  configured `UnpackPolicy` is enforced, rejecting non-authenticated wrappings).
+  Dependency bump only; no behavioural change in this crate.
+
 ## [0.3.21] - 2026-07-29
 
 ### Changed

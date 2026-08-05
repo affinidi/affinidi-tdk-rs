@@ -51,6 +51,19 @@ pub fn pack_signed(
     sign::sign_ed25519(&payload, signer_kid, private_key)
 }
 
+/// Pack a message as signed with one or more signers (multi-signature JWS).
+///
+/// Every signer signs the same serialized message; the result is a JWS
+/// General JSON envelope with one signature entry per signer. Signers may mix
+/// curves (Ed25519 / P-256 / secp256k1).
+pub fn pack_signed_multi(
+    msg: &Message,
+    signers: &[sign::JwsSigner],
+) -> Result<String, DIDCommError> {
+    let payload = msg.to_json()?;
+    sign::sign_multi(&payload, signers)
+}
+
 /// Pack a message as plaintext JSON.
 pub fn pack_plaintext(msg: &Message) -> Result<String, DIDCommError> {
     serde_json::to_string(msg).map_err(|e| DIDCommError::Serialization(format!("plaintext: {e}")))
@@ -131,6 +144,78 @@ mod tests {
             crate::jws::verify::verify_ed25519(&packed, &sk.verifying_key().to_bytes()).unwrap();
         let unpacked = Message::from_json(&verified.payload).unwrap();
         assert_eq!(unpacked.body["data"], 42);
+    }
+
+    #[test]
+    fn pack_signed_multi_roundtrip() {
+        use crate::jws::sign::JwsSigner;
+        use crate::jws::verify::{VerifyKey, parse_jws, verify_parsed_signature};
+        use k256::ecdsa::SigningKey as K256SigningKey;
+        use p256::ecdsa::SigningKey as P256SigningKey;
+        use p256::elliptic_curve::Generate as _;
+
+        let ed = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
+        let p256 = P256SigningKey::generate();
+        let k256 = K256SigningKey::generate();
+
+        let msg =
+            Message::new("test-type", serde_json::json!({"data": 7})).from("did:example:alice");
+
+        // One JWS carrying three signatures (mixed curves) over the same payload.
+        let packed = pack_signed_multi(
+            &msg,
+            &[
+                JwsSigner::Ed25519 {
+                    kid: "did:example:alice#ed",
+                    private: &ed.to_bytes(),
+                },
+                JwsSigner::P256 {
+                    kid: "did:example:alice#p256",
+                    private: &p256.to_bytes().into(),
+                },
+                JwsSigner::Secp256k1 {
+                    kid: "did:example:alice#k256",
+                    private: &k256.to_bytes().into(),
+                },
+            ],
+        )
+        .unwrap();
+
+        let parsed = parse_jws(&packed).unwrap();
+        assert_eq!(parsed.signatures.len(), 3);
+
+        // Every signature verifies under its own resolved key, in signer order.
+        let keys = [
+            VerifyKey::Ed25519(ed.verifying_key().to_bytes()),
+            VerifyKey::P256(
+                p256.verifying_key()
+                    .to_sec1_point(false)
+                    .as_bytes()
+                    .to_vec(),
+            ),
+            VerifyKey::Secp256k1(
+                k256.verifying_key()
+                    .to_sec1_point(false)
+                    .as_bytes()
+                    .to_vec(),
+            ),
+        ];
+        let mut kids = Vec::new();
+        for (sig, key) in parsed.signatures.iter().zip(keys.iter()) {
+            verify_parsed_signature(sig, key).expect("each signature verifies");
+            kids.push(
+                sig.kid
+                    .clone()
+                    .expect("each signature is attributed to a kid"),
+            );
+        }
+        assert!(kids.contains(&"did:example:alice#ed".to_string()));
+        assert!(kids.contains(&"did:example:alice#p256".to_string()));
+        assert!(kids.contains(&"did:example:alice#k256".to_string()));
+
+        // The signed payload round-trips to the original message.
+        let unpacked = Message::from_json(&parsed.payload).unwrap();
+        assert_eq!(unpacked.body["data"], 7);
     }
 
     #[test]

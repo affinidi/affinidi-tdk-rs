@@ -33,6 +33,40 @@ use crate::{
 #[derive(Default)]
 pub struct MessagePickup {}
 
+/// An inbound message the drain could not process, surfaced before it is
+/// deleted or dropped. Broadcast on the optional unprocessable-message channel
+/// (enable it with
+/// [`crate::config::ATMConfigBuilder::with_unprocessable_message_channel`],
+/// subscribe with [`crate::ATM::get_unprocessable_message_channel`]) so a
+/// consumer can observe or quarantine it instead of losing it to a log line.
+#[derive(Clone, Debug)]
+pub struct UnprocessableMessage {
+    /// The delivery attachment id (== the mediator message id), if present.
+    pub attachment_id: Option<String>,
+    /// The raw attachment payload as received. Empty when the attachment had no
+    /// base64 body.
+    pub raw: String,
+    /// Human-readable reason the message could not be processed.
+    pub reason: String,
+}
+
+/// Broadcast an [`UnprocessableMessage`] on the configured channel, if any.
+/// A full or closed channel must never block or fail the caller.
+pub(crate) fn emit_unprocessable(
+    atm: &ATM,
+    attachment_id: Option<String>,
+    raw: String,
+    reason: String,
+) {
+    if let Some(ch) = &atm.inner.config.unprocessable_message_channel {
+        let _ = ch.send(UnprocessableMessage {
+            attachment_id,
+            raw,
+            reason,
+        });
+    }
+}
+
 /// A single inbound frame off the live-delivery stream, tagged by transport.
 ///
 /// `live_stream_next` yields only DIDComm and errors on a TSP frame;
@@ -422,6 +456,12 @@ impl MessagePickup {
                         }
                         Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
                             if auto_delete {
+                                // The live path carries no attachment id, so the
+                                // message id is reconstructed as sha256 of the
+                                // received frame. This matches the mediator's id
+                                // derivation (`msg_id = digest(body)`), since it
+                                // streams the exact bytes it stored — locked by
+                                // the mediator's `message_id_is_sha256_of_body`.
                                 let sha256_hash = sha256::digest(packed_msg.as_str());
                                 atm.delete_message_background(profile, &sha256_hash).await?;
                             }
@@ -571,14 +611,14 @@ impl MessagePickup {
         let message = self
             ._request_delivery(atm, profile, limit, wait_for_response)
             .await?;
-        self._handle_delivery(atm, &message).await
+        self._handle_delivery(atm, profile, &message).await
     }
 
     /// TSP-aware sibling of [`send_delivery_request`]: returns each queued
     /// message as an [`InboundFrame`] (DIDComm or TSP) paired with the
     /// attachment id needed to acknowledge/delete it — so an offline-sync
     /// consumer can route TSP frames to a TSP handler instead of DIDComm-
-    /// unpacking (and poison-looping on) them. Undeliverable attachments yield
+    /// unpacking (and looping on) them. Undeliverable attachments yield
     /// `(None, id)` so the caller still acks them. Requires the `tsp` feature.
     #[cfg(feature = "tsp")]
     pub async fn send_delivery_request_frames(
@@ -668,7 +708,7 @@ impl MessagePickup {
     /// with the attachment id needed to ack/delete it. Undeliverable
     /// attachments — bad base64/utf8, or a non-TSP frame that fails DIDComm
     /// unpack — yield `(None, id)` so the caller still acks them and the
-    /// mediator stops redelivering (no poison loop). Unlike [`_handle_delivery`],
+    /// mediator stops redelivering (no redelivery loop). Unlike [`_handle_delivery`],
     /// a TSP frame is surfaced (`InboundFrame::Tsp`) rather than DIDComm-unpacked
     /// and dropped.
     #[cfg(feature = "tsp")]
@@ -692,6 +732,12 @@ impl MessagePickup {
             };
             let Some(b64) = &attachment.data.base64 else {
                 warn!("Attachment type not supported: {:?}", attachment.data);
+                emit_unprocessable(
+                    atm,
+                    Some(id.clone()),
+                    String::new(),
+                    format!("unsupported attachment type: {:?}", attachment.data),
+                );
                 out.push((None, id));
                 continue;
             };
@@ -700,12 +746,24 @@ impl MessagePickup {
                     Ok(s) => s,
                     Err(e) => {
                         warn!("Error decoding attachment to utf8: ({e:?}). id({id})");
+                        emit_unprocessable(
+                            atm,
+                            Some(id.clone()),
+                            b64.clone(),
+                            format!("attachment payload is not valid UTF-8: {e}"),
+                        );
                         out.push((None, id));
                         continue;
                     }
                 },
                 Err(e) => {
                     warn!("Error decoding base64: ({e:?}). id({id})");
+                    emit_unprocessable(
+                        atm,
+                        Some(id.clone()),
+                        b64.clone(),
+                        format!("attachment is not valid base64: {e}"),
+                    );
                     out.push((None, id));
                     continue;
                 }
@@ -714,13 +772,22 @@ impl MessagePickup {
             if atm.tsp().is_tsp(&decoded) {
                 out.push((Some(InboundFrame::Tsp(Box::new(decoded))), id));
             } else {
-                match atm.unpack(&decoded).await {
+                // DIDComm frames pulled via pickup are unpacked under the same
+                // configured secure `unpack_policy` as a direct `atm.unpack`, so
+                // an envelope the policy rejects (e.g. an unauthenticated
+                // wrapping, or a forged `from`) is dropped rather than surfaced.
+                match atm
+                    .inner
+                    .unpack_with(&decoded, atm.inner.config.unpack_policy())
+                    .await
+                {
                     Ok((mut m, u)) => {
                         m.id = id.clone();
                         out.push((Some(InboundFrame::DidComm(Box::new(m), Box::new(u))), id));
                     }
                     Err(e) => {
                         warn!("Error unpacking message: ({e:?}); dropping. id({id})");
+                        emit_unprocessable(atm, Some(id.clone()), decoded.clone(), e.to_string());
                         out.push((None, id));
                     }
                 }
@@ -730,13 +797,88 @@ impl MessagePickup {
         Ok(out)
     }
 
-    /// Iterates through each attachment and unpacks each message into an array to return
+    /// Iterates through each attachment and unpacks each message into an array to return.
+    ///
+    /// Each attachment is unpacked under the **configured
+    /// [`UnpackPolicy`](crate::config::UnpackPolicy)** — the same secure
+    /// authenticated-encryption default that [`crate::ATM::unpack`] applies — so
+    /// messages pulled via pickup get the same guarantees as a direct unpack.
+    ///
+    /// An attachment is handled by *recoverability*:
+    /// - **Non-recoverable** — malformed base64/utf8, an unsupported attachment
+    ///   type, or a cryptographically invalid signature (`VerificationFailed`) —
+    ///   can never become processable, so it is **always deleted from the
+    ///   mediator** (best-effort, by its message id) to stop it being
+    ///   redelivered every pickup (which would stall the queue and, under
+    ///   backpressure, the mediator connection).
+    /// - **Policy-rejected** — a disallowed wrapping (`UnexpectedEnvelope`) or an
+    ///   addressing mismatch (`AddressingMismatch`) — is **deleted by default**,
+    ///   because the mediator's per-recipient queue is bounded (a fixed message
+    ///   limit) and a retained reject is redelivered every pickup, so it would
+    ///   accumulate and fill the queue, blocking new inbound messages. Opt in to
+    ///   *retain* these (e.g. for a bounded window during an `unpack_policy`
+    ///   upgrade) via
+    ///   [`ATMConfigBuilder::with_purge_policy_rejected_messages(false)`](crate::config::ATMConfigBuilder::with_purge_policy_rejected_messages).
+    /// - **Transient** — e.g. a temporarily unresolvable signer DID — is always
+    ///   left queued for retry.
+    ///
+    /// Every rejected attachment is reported on the optional
+    /// unprocessable-message channel *before* any deletion, so a consumer can
+    /// observe or quarantine it.
     pub(crate) async fn _handle_delivery(
         &self,
         atm: &ATM,
+        profile: &Arc<ATMProfile>,
         message: &Message,
     ) -> Result<Vec<(Message, UnpackMetadata)>, ATMError> {
         let mut response: Vec<(Message, UnpackMetadata)> = Vec::new();
+
+        // Report the unprocessable message on the optional channel (so a
+        // consumer can observe/quarantine it), then decide deletion by
+        // recoverability. `delete_if_present` is the shared best-effort delete
+        // by message id (== the delivery attachment id, which is the mediator's
+        // sha256-of-body message id) so it can't be redelivered every pickup.
+        async fn delete_if_present(atm: &ATM, profile: &Arc<ATMProfile>, id: &Option<String>) {
+            if let Some(id) = id
+                && let Err(e) = atm.delete_message_background(profile, id).await
+            {
+                warn!("Couldn't delete unprocessable message id({id}): {e:?}");
+            }
+        }
+
+        // Non-recoverable input (malformed base64/utf8, unsupported type, an
+        // invalid signature): report, then *always* delete — it can never become
+        // processable, so retaining it would only poison-loop the queue.
+        async fn report_and_delete(
+            atm: &ATM,
+            profile: &Arc<ATMProfile>,
+            id: &Option<String>,
+            raw: String,
+            reason: String,
+        ) {
+            emit_unprocessable(atm, id.clone(), raw, reason);
+            delete_if_present(atm, profile, id).await;
+        }
+
+        // Policy rejection (`UnexpectedEnvelope` / `AddressingMismatch`): report,
+        // then delete by default. The mediator's per-recipient queue is bounded
+        // (a fixed message limit), and a retained reject is redelivered every
+        // pickup, so leaving it queued would accumulate and eventually fill the
+        // queue, blocking new inbound messages. An operator can opt to retain it
+        // (e.g. for a bounded upgrade window) via
+        // `with_purge_policy_rejected_messages(false)`.
+        async fn report_policy_rejected(
+            atm: &ATM,
+            profile: &Arc<ATMProfile>,
+            id: &Option<String>,
+            raw: String,
+            reason: String,
+        ) {
+            emit_unprocessable(atm, id.clone(), raw, reason);
+            if atm.inner.config.purge_policy_rejected_messages() {
+                delete_if_present(atm, profile, id).await;
+            }
+        }
 
         if let Some(attachments) = &message.attachments {
             for attachment in attachments {
@@ -746,35 +888,115 @@ impl MessagePickup {
                             Ok(decoded) => decoded,
                             Err(e) => {
                                 warn!(
-                                    "Error encoding vec[u8] to string: ({:?}). Attachment ID ({:?})",
-                                    e, attachment.id
+                                    "Undeliverable attachment (not utf8: {e:?}); purging. id({:?})",
+                                    attachment.id
                                 );
+                                report_and_delete(
+                                    atm,
+                                    profile,
+                                    &attachment.id,
+                                    b64.clone(),
+                                    format!("attachment payload is not valid UTF-8: {e}"),
+                                )
+                                .await;
                                 continue;
                             }
                         },
                         Err(e) => {
                             warn!(
-                                "Error decoding base64: ({:?}). Attachment ID ({:?})",
-                                e, attachment.id
+                                "Undeliverable attachment (bad base64: {e:?}); purging. id({:?})",
+                                attachment.id
                             );
+                            report_and_delete(
+                                atm,
+                                profile,
+                                &attachment.id,
+                                b64.clone(),
+                                format!("attachment is not valid base64: {e}"),
+                            )
+                            .await;
                             continue;
                         }
                     };
 
-                    match atm.unpack(&decoded).await {
+                    match atm
+                        .inner
+                        .unpack_with(&decoded, atm.inner.config.unpack_policy())
+                        .await
+                    {
                         Ok((mut m, u)) => {
                             if let Some(attachment_id) = &attachment.id {
                                 m.id = attachment_id.to_string();
                             }
                             response.push((m, u))
                         }
+                        // A cryptographically invalid signature is deterministic
+                        // garbage — it will never verify on any redelivery — so
+                        // purge it regardless of the policy-retention flag.
+                        Err(e @ ATMError::VerificationFailed(_)) => {
+                            warn!(
+                                "Unprocessable message (invalid signature: {e:?}); purging. id({:?})",
+                                attachment.id
+                            );
+                            report_and_delete(
+                                atm,
+                                profile,
+                                &attachment.id,
+                                decoded.clone(),
+                                e.to_string(),
+                            )
+                            .await;
+                            continue;
+                        }
+                        // A policy rejection — a disallowed wrapping
+                        // (`UnexpectedEnvelope`) or an addressing mismatch
+                        // (`AddressingMismatch`) — is deleted by default: the
+                        // mediator queue is bounded, so a retained reject
+                        // redelivered every pickup would fill it. An operator can
+                        // opt to retain it instead.
+                        Err(
+                            e @ (ATMError::UnexpectedEnvelope(_) | ATMError::AddressingMismatch(_)),
+                        ) => {
+                            warn!(
+                                "Policy-rejected message ({e:?}); {}. id({:?})",
+                                if atm.inner.config.purge_policy_rejected_messages() {
+                                    "purging"
+                                } else {
+                                    "retained"
+                                },
+                                attachment.id
+                            );
+                            report_policy_rejected(
+                                atm,
+                                profile,
+                                &attachment.id,
+                                decoded.clone(),
+                                e.to_string(),
+                            )
+                            .await;
+                            continue;
+                        }
                         Err(e) => {
-                            warn!("Error unpacking message: ({:?})", e);
+                            warn!(
+                                "Error unpacking message ({e:?}); left queued for retry. id({:?})",
+                                attachment.id
+                            );
                             continue;
                         }
                     };
                 } else {
-                    warn!("Attachment type not supported: {:?}", attachment.data);
+                    warn!(
+                        "Undeliverable attachment (unsupported type: {:?}); purging. id({:?})",
+                        attachment.data, attachment.id
+                    );
+                    report_and_delete(
+                        atm,
+                        profile,
+                        &attachment.id,
+                        String::new(),
+                        format!("unsupported attachment type: {:?}", attachment.data),
+                    )
+                    .await;
                     continue;
                 }
             }
@@ -1111,5 +1333,586 @@ impl<'a> MessagePickupOps<'a> {
         MessagePickup::default()
             .send_delivery_request_frames(self.atm, profile, limit, wait_for_response)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unprocessable-message resistance of the delivery drain ([`MessagePickup::_handle_delivery`]).
+    //!
+    //! A pickup delivery batch is attacker-influenced: anyone can forward an
+    //! arbitrary (malformed, or policy-rejected) envelope into a recipient's
+    //! mediator queue. These tests confirm such a message cannot take the drain
+    //! (and therefore the pickup loop / mediator connection) down: every
+    //! unprocessable attachment is skipped (deleted best-effort) while the valid
+    //! messages around it are still surfaced, and the call never panics, errors,
+    //! or hangs.
+    use super::*;
+    use crate::config::ATMConfig;
+    use crate::profiles::{ATMProfile, ATMProfileInner};
+    use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
+    use affinidi_did_common::{DID, PeerCreateKey, PeerKeyPurpose, PeerKeyType};
+    use affinidi_messaging_didcomm::jwe::encrypt::authcrypt;
+    use affinidi_messaging_didcomm::jws::sign::{JwsSigner, sign_multi};
+    use affinidi_messaging_didcomm::message::{Attachment, Message as DcMessage};
+    use affinidi_secrets_resolver::SecretsResolver;
+    use affinidi_secrets_resolver::secrets::Secret;
+    use affinidi_tdk_common::TDKSharedState;
+    use affinidi_tdk_common::config::TDKConfig;
+    use serde_json::json;
+
+    /// A did:peer:2 with Ed25519 (V, #key-1) + X25519 (E, #key-2); returns the
+    /// DID and the X25519 secret keyed at `#key-2`.
+    fn peer_with_x25519() -> (String, Secret) {
+        let x = Secret::generate_x25519(Some("t"), None).unwrap();
+        let x_mb = x.get_public_keymultibase().unwrap();
+        let keys = vec![
+            PeerCreateKey::new(PeerKeyPurpose::Verification, PeerKeyType::Ed25519),
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, x_mb),
+        ];
+        let (did, _) = DID::generate_peer(&keys, None).unwrap();
+        let did = did.to_string();
+        let mut s = x;
+        s.id = format!("{did}#key-2");
+        (did, s)
+    }
+
+    /// An ATM with the **secure default** policy and one recipient secret loaded.
+    async fn atm_with_secret(secret: Secret) -> ATM {
+        let config = ATMConfig::builder().build().unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        tdk.secrets_resolver().insert(secret).await;
+        ATM::new(config, tdk).await.unwrap()
+    }
+
+    /// A profile with no mediator — the drain only uses the profile for the
+    /// (channel-based, fire-and-forget) purge, which needs no live mediator.
+    fn fake_profile() -> Arc<ATMProfile> {
+        Arc::new(ATMProfile {
+            inner: Arc::new(ATMProfileInner {
+                did: "did:peer:fake".to_string(),
+                alias: "test".to_string(),
+                mediator: Arc::new(None),
+            }),
+        })
+    }
+
+    /// `authcrypt(plaintext)` from sender → recipient, base64url-no-pad encoded
+    /// as it would appear inside a pickup delivery attachment.
+    fn authcrypt_b64(
+        sender_did: &str,
+        sender_x: &Secret,
+        recipient_did: &str,
+        recipient_x: &Secret,
+        id: &str,
+    ) -> String {
+        let msg = DcMessage::build(
+            id.to_string(),
+            "example/v1".to_string(),
+            json!({"hello": "world"}),
+        )
+        .from(sender_did.to_string())
+        .to(recipient_did.to_string())
+        .finalize();
+        let plaintext = serde_json::to_string(&msg).unwrap();
+        let sender_priv =
+            PrivateKeyAgreement::from_raw_bytes(Curve::X25519, sender_x.get_private_bytes())
+                .unwrap();
+        let recipient_pub =
+            PublicKeyAgreement::from_raw_bytes(Curve::X25519, recipient_x.get_public_bytes())
+                .unwrap();
+        let jwe = authcrypt(
+            plaintext.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &sender_priv,
+            &[(&format!("{recipient_did}#key-2"), &recipient_pub)],
+        )
+        .unwrap();
+        BASE64_URL_SAFE_NO_PAD.encode(jwe.as_bytes())
+    }
+
+    /// Build a pickup `delivery` message carrying the given attachments.
+    fn delivery_with(attachments: Vec<Attachment>) -> Message {
+        let mut b = Message::build(
+            "delivery-1".to_string(),
+            "https://didcomm.org/messagepickup/3.0/delivery".to_string(),
+            json!({}),
+        );
+        for a in attachments {
+            b = b.attachment(a);
+        }
+        b.finalize()
+    }
+
+    /// A batch interleaving valid messages with four kinds of unprocessable
+    /// input — malformed base64, valid-base64-but-not-utf8, an unsupported
+    /// attachment type, and a policy-rejected plaintext — must not panic, error,
+    /// or abort: the drain skips each unprocessable attachment and still surfaces
+    /// the valid messages that came *before and after* them.
+    #[tokio::test]
+    async fn unprocessable_messages_are_skipped_and_do_not_stall_the_drain() {
+        let (sender_did, sender_x) = peer_with_x25519();
+        let (recipient_did, recipient_x) = peer_with_x25519();
+        let atm = atm_with_secret(recipient_x.clone()).await;
+        let profile = fake_profile();
+
+        // Valid authcrypt messages (must be surfaced), one before and one after
+        // the unprocessable ones, to prove the batch keeps going.
+        let good1 = Attachment::base64(authcrypt_b64(
+            &sender_did,
+            &sender_x,
+            &recipient_did,
+            &recipient_x,
+            "m1",
+        ))
+        .id("good-1".to_string())
+        .finalize();
+        let good2 = Attachment::base64(authcrypt_b64(
+            &sender_did,
+            &sender_x,
+            &recipient_did,
+            &recipient_x,
+            "m2",
+        ))
+        .id("good-2".to_string())
+        .finalize();
+
+        // Unprocessable 1: malformed base64.
+        let bad_b64 = Attachment::base64("!!!not-valid-base64!!!".to_string())
+            .id("bad-base64".to_string())
+            .finalize();
+        // Unprocessable 2: valid base64 but not utf8.
+        let bad_utf8 = Attachment::base64(BASE64_URL_SAFE_NO_PAD.encode([0xFF, 0xFE, 0xFD]))
+            .id("bad-utf8".to_string())
+            .finalize();
+        // Unprocessable 3: a plaintext the secure default policy rejects.
+        let plaintext = DcMessage::build(
+            "evil".to_string(),
+            "example/v1".to_string(),
+            json!({"x": 1}),
+        )
+        .from(sender_did.clone())
+        .to(recipient_did.clone())
+        .finalize();
+        let rejected_plaintext = Attachment::base64(
+            BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_string(&plaintext).unwrap().as_bytes()),
+        )
+        .id("rejected-plaintext".to_string())
+        .finalize();
+        // Unprocessable 4: unsupported attachment type (json, no base64).
+        let unsupported = Attachment::json(json!({"not": "base64"}))
+            .id("unsupported-json".to_string())
+            .finalize();
+
+        let delivery = delivery_with(vec![
+            good1,
+            bad_b64,
+            bad_utf8,
+            rejected_plaintext,
+            unsupported,
+            good2,
+        ]);
+
+        let out = MessagePickup {}
+            ._handle_delivery(&atm, &profile, &delivery)
+            .await
+            .expect("the drain must not error on an unprocessable batch");
+
+        // Only the two valid authcrypt messages surface; every unprocessable one is skipped.
+        let ids: Vec<&str> = out.iter().map(|(m, _)| m.id.as_str()).collect();
+        assert_eq!(
+            out.len(),
+            2,
+            "only the valid messages should surface, got ids: {ids:?}"
+        );
+        assert!(ids.contains(&"good-1"));
+        assert!(ids.contains(&"good-2"));
+        // The secure default held: everything surfaced is authenticated authcrypt.
+        for (_, meta) in &out {
+            assert!(
+                meta.authenticated,
+                "surfaced pickup messages must be authcrypt-authenticated"
+            );
+        }
+    }
+
+    /// An *entirely* unprocessable batch surfaces nothing and still returns `Ok`
+    /// — a fully-hostile delivery cannot take the drain (or the pickup loop) down.
+    #[tokio::test]
+    async fn all_unprocessable_batch_surfaces_nothing_without_error() {
+        let (_recipient_did, recipient_x) = peer_with_x25519();
+        let atm = atm_with_secret(recipient_x).await;
+        let profile = fake_profile();
+
+        let delivery = delivery_with(vec![
+            Attachment::base64("###".to_string())
+                .id("p1".to_string())
+                .finalize(),
+            Attachment::json(json!({"x": 1}))
+                .id("p2".to_string())
+                .finalize(),
+        ]);
+
+        let out = MessagePickup {}
+            ._handle_delivery(&atm, &profile, &delivery)
+            .await
+            .expect("all-unprocessable batch must not error");
+        assert!(out.is_empty(), "no unprocessable message should surface");
+    }
+
+    /// With an unprocessable-message channel configured, an unprocessable
+    /// attachment is broadcast (id + retained raw payload + reason) *before* it
+    /// is deleted or retained, while a valid message is delivered normally and
+    /// never reported.
+    #[tokio::test]
+    async fn unprocessable_messages_are_reported_on_the_channel() {
+        let (sender_did, sender_x) = peer_with_x25519();
+        let (recipient_did, recipient_x) = peer_with_x25519();
+
+        // ATM with the secure default policy *and* an unprocessable-message channel.
+        let config = ATMConfig::builder()
+            .with_unprocessable_message_channel(16)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        tdk.secrets_resolver().insert(recipient_x.clone()).await;
+        let atm = ATM::new(config, tdk).await.unwrap();
+        let mut rx = atm
+            .get_unprocessable_message_channel()
+            .expect("unprocessable channel");
+        let profile = fake_profile();
+
+        // One valid authcrypt (delivered, never reported) + one rejected plaintext
+        // (the secure default rejects the unauthenticated wrapping).
+        let good = Attachment::base64(authcrypt_b64(
+            &sender_did,
+            &sender_x,
+            &recipient_did,
+            &recipient_x,
+            "m1",
+        ))
+        .id("good-1".to_string())
+        .finalize();
+        let plaintext = DcMessage::build(
+            "evil".to_string(),
+            "example/v1".to_string(),
+            json!({"x": 1}),
+        )
+        .from(sender_did.clone())
+        .to(recipient_did.clone())
+        .finalize();
+        let rejected = Attachment::base64(
+            BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_string(&plaintext).unwrap().as_bytes()),
+        )
+        .id("rejected-1".to_string())
+        .finalize();
+
+        let out = MessagePickup {}
+            ._handle_delivery(&atm, &profile, &delivery_with(vec![good, rejected]))
+            .await
+            .expect("drain must not error");
+
+        // The good message is delivered.
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0.id, "good-1");
+
+        // Exactly one unprocessable event — for the plaintext — carrying its id,
+        // the retained raw payload, and a reason. The good message is not reported.
+        let p = rx
+            .try_recv()
+            .expect("the unprocessable message should be reported");
+        assert_eq!(p.attachment_id.as_deref(), Some("rejected-1"));
+        assert!(
+            !p.raw.is_empty(),
+            "the raw payload is retained for quarantine"
+        );
+        assert!(!p.reason.is_empty(), "a rejection reason is included");
+        assert!(
+            rx.try_recv().is_err(),
+            "only the unprocessable message is reported, not the valid one"
+        );
+    }
+
+    /// Malformed / non-recoverable input — invalid base64, valid base64 that
+    /// isn't UTF-8, and an unsupported (non-base64) attachment type — is still
+    /// reported on the unprocessable-message channel (each with its id and a
+    /// reason) *before* it is deleted. This guards the guarantee across the
+    /// delete-by-default path: reporting happens regardless of whether the
+    /// message is subsequently purged, so a consumer observes every one.
+    #[tokio::test]
+    async fn malformed_messages_are_reported_on_the_channel() {
+        let config = ATMConfig::builder()
+            .with_unprocessable_message_channel(16)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        let atm = ATM::new(config, tdk).await.unwrap();
+        let mut rx = atm
+            .get_unprocessable_message_channel()
+            .expect("unprocessable channel");
+        let profile = fake_profile();
+
+        // Invalid base64, valid base64 that isn't UTF-8, and an unsupported
+        // (non-base64) attachment type — three distinct non-recoverable paths.
+        let bad_b64 = Attachment::base64("!!!not-valid-base64!!!".to_string())
+            .id("bad-base64".to_string())
+            .finalize();
+        let bad_utf8 = Attachment::base64(BASE64_URL_SAFE_NO_PAD.encode([0xFF, 0xFE, 0xFD]))
+            .id("bad-utf8".to_string())
+            .finalize();
+        let unsupported = Attachment::json(json!({"not": "base64"}))
+            .id("unsupported-json".to_string())
+            .finalize();
+
+        let out = MessagePickup {}
+            ._handle_delivery(
+                &atm,
+                &profile,
+                &delivery_with(vec![bad_b64, bad_utf8, unsupported]),
+            )
+            .await
+            .expect("drain must not error");
+        assert!(out.is_empty(), "no malformed message surfaces");
+
+        // Every malformed attachment is reported, each with a non-empty reason.
+        let mut reported = std::collections::HashMap::new();
+        while let Ok(p) = rx.try_recv() {
+            assert!(!p.reason.is_empty(), "a reason is included");
+            reported.insert(p.attachment_id.clone().unwrap_or_default(), p.reason);
+        }
+        assert_eq!(
+            reported.len(),
+            3,
+            "all three malformed attachments are reported, got: {reported:?}"
+        );
+        assert!(
+            reported.contains_key("bad-base64"),
+            "invalid base64 reported"
+        );
+        assert!(
+            reported.contains_key("bad-utf8"),
+            "non-UTF-8 payload reported"
+        );
+        assert!(
+            reported.contains_key("unsupported-json"),
+            "unsupported attachment type reported"
+        );
+    }
+
+    /// The unprocessable-message channel is purely opt-in: with none configured
+    /// the drain still skips/deletes unprocessable messages without error.
+    #[tokio::test]
+    async fn unprocessable_channel_is_optional() {
+        let (_recipient_did, recipient_x) = peer_with_x25519();
+        let atm = atm_with_secret(recipient_x).await; // no unprocessable-message channel
+        assert!(atm.get_unprocessable_message_channel().is_none());
+        let profile = fake_profile();
+
+        let delivery = delivery_with(vec![
+            Attachment::base64("###".to_string())
+                .id("p1".to_string())
+                .finalize(),
+        ]);
+        let out = MessagePickup {}
+            ._handle_delivery(&atm, &profile, &delivery)
+            .await
+            .expect("drain must not error without an unprocessable channel");
+        assert!(out.is_empty());
+    }
+
+    /// A did:peer:2 with Ed25519 (V, #key-1) + X25519 (E, #key-2); returns the
+    /// DID and the Ed25519 *signing* secret keyed at `#key-1`.
+    fn peer_with_ed25519() -> (String, Secret) {
+        let ed = Secret::generate_ed25519(Some("t"), None);
+        let ed_mb = ed.get_public_keymultibase().unwrap();
+        let x = Secret::generate_x25519(Some("t"), None).unwrap();
+        let x_mb = x.get_public_keymultibase().unwrap();
+        let keys = vec![
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Verification, ed_mb),
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, x_mb),
+        ];
+        let (did, _) = DID::generate_peer(&keys, None).unwrap();
+        let did = did.to_string();
+        let mut ed = ed;
+        ed.id = format!("{did}#key-1");
+        (did, ed)
+    }
+
+    /// Regression: a message with an **invalid signature** is a *deterministic*
+    /// failure (it fails verification identically on every redelivery), so the
+    /// drain must **delete** it, not leave it queued to loop forever. A
+    /// transiently unresolvable signer DID would instead be left queued — the
+    /// distinction the [`ATMError::VerificationFailed`] variant draws.
+    ///
+    /// The signature is verified during layer unwrapping, *before* the wrapping
+    /// allow-list runs, so the policy here accepts `SignedPlaintext` to prove
+    /// the purge is driven by the bad signature and not a wrapping rejection.
+    /// Observed via the unprocessable-message channel: the "left queued for
+    /// retry" path does **not** report, so a report proves the delete path ran.
+    #[tokio::test]
+    async fn invalid_signature_is_purged_not_left_queued() {
+        use crate::config::{MessageWrappingType, UnpackPolicy};
+
+        let (signer_did, ed) = peer_with_ed25519();
+
+        // Accept signed-only so the only possible failure is the bad signature.
+        let config = ATMConfig::builder()
+            .with_unprocessable_message_channel(16)
+            .with_unpack_policy(UnpackPolicy {
+                expected: vec![MessageWrappingType::SignedPlaintext],
+                validate_addressing_consistency: false,
+                max_signatures: 5,
+                max_recipients: 100,
+            })
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        let atm = ATM::new(config, tdk).await.unwrap();
+        let mut rx = atm
+            .get_unprocessable_message_channel()
+            .expect("unprocessable channel");
+        let profile = fake_profile();
+
+        // Sign a plaintext, then corrupt the signature bytes.
+        let msg = DcMessage::build(
+            "evil-sig".to_string(),
+            "example/v1".to_string(),
+            json!({"x": 1}),
+        )
+        .from(signer_did.clone())
+        .to("did:example:recipient".to_string())
+        .finalize();
+        let plaintext = serde_json::to_string(&msg).unwrap();
+        let ed_priv: [u8; 32] = ed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{signer_did}#key-1"),
+                private: &ed_priv,
+            }],
+        )
+        .unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&signed).unwrap();
+        let sig = v["signatures"][0]["signature"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let first = sig.chars().next().unwrap();
+        let repl = if first == 'A' { 'B' } else { 'A' };
+        let corrupted: String = std::iter::once(repl).chain(sig.chars().skip(1)).collect();
+        v["signatures"][0]["signature"] = serde_json::Value::String(corrupted);
+        let tampered = serde_json::to_string(&v).unwrap();
+
+        let attachment = Attachment::base64(BASE64_URL_SAFE_NO_PAD.encode(tampered.as_bytes()))
+            .id("bad-sig".to_string())
+            .finalize();
+
+        let out = MessagePickup {}
+            ._handle_delivery(&atm, &profile, &delivery_with(vec![attachment]))
+            .await
+            .expect("drain must not error");
+        assert!(
+            out.is_empty(),
+            "an invalid-signature message is not surfaced"
+        );
+
+        // A report proves the deterministic-delete path ran; the
+        // "left queued for retry" path emits nothing.
+        let p = rx
+            .try_recv()
+            .expect("an invalid signature must be purged (reported), not left queued");
+        assert_eq!(p.attachment_id.as_deref(), Some("bad-sig"));
+        assert!(
+            p.reason.contains("Verification failed"),
+            "reason should name the verification failure, got: {}",
+            p.reason
+        );
+        assert!(rx.try_recv().is_err(), "exactly one unprocessable event");
+    }
+
+    /// The TSP-aware frames drain reports unprocessable messages on the channel
+    /// too: an unprocessable attachment is yielded as `(None, id)` for the caller
+    /// to ack *and* broadcast on the channel, while a valid message is delivered
+    /// as a `DidComm` frame and never reported.
+    #[cfg(feature = "tsp")]
+    #[tokio::test]
+    async fn frames_drain_reports_unprocessable_on_the_channel() {
+        let (sender_did, sender_x) = peer_with_x25519();
+        let (recipient_did, recipient_x) = peer_with_x25519();
+
+        let config = ATMConfig::builder()
+            .with_unprocessable_message_channel(16)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        tdk.secrets_resolver().insert(recipient_x.clone()).await;
+        let atm = ATM::new(config, tdk).await.unwrap();
+        let mut rx = atm
+            .get_unprocessable_message_channel()
+            .expect("unprocessable channel");
+
+        let good = Attachment::base64(authcrypt_b64(
+            &sender_did,
+            &sender_x,
+            &recipient_did,
+            &recipient_x,
+            "m1",
+        ))
+        .id("good-1".to_string())
+        .finalize();
+        let plaintext = DcMessage::build(
+            "evil".to_string(),
+            "example/v1".to_string(),
+            json!({"x": 1}),
+        )
+        .from(sender_did.clone())
+        .to(recipient_did.clone())
+        .finalize();
+        let rejected = Attachment::base64(
+            BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_string(&plaintext).unwrap().as_bytes()),
+        )
+        .id("rejected-1".to_string())
+        .finalize();
+
+        let out = MessagePickup {}
+            ._handle_delivery_frames(&atm, &delivery_with(vec![good, rejected]))
+            .await
+            .expect("frames drain must not error");
+
+        // Good delivered as a frame; the unprocessable one yielded as (None, id).
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().any(|(f, id)| id == "good-1" && f.is_some()));
+        assert!(out.iter().any(|(f, id)| id == "rejected-1" && f.is_none()));
+
+        // The unprocessable frame is also reported on the channel.
+        let p = rx
+            .try_recv()
+            .expect("the unprocessable frame should be reported");
+        assert_eq!(p.attachment_id.as_deref(), Some("rejected-1"));
+        assert!(!p.raw.is_empty(), "the raw payload is retained");
+        assert!(
+            rx.try_recv().is_err(),
+            "only the unprocessable frame is reported, not the valid one"
+        );
     }
 }

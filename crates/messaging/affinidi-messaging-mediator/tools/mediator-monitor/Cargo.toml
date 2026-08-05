@@ -32,7 +32,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "j
 # ── DIDComm auth (mediator's /admin/status is gated on admin JWT) ────────
 ## Path-pinned to the workspace copy via [patch.crates-io] in the workspace
 ## root Cargo.toml; the version specs here are upper-bound contracts only.
-affinidi-messaging-sdk = "0.18"
+affinidi-messaging-sdk = "0.19"
 affinidi-tdk-common = "0.6"
 affinidi-secrets-resolver = "0.5"
 

@@ -9,6 +9,79 @@ use std::{fs::File, io::BufReader, sync::Arc, time::Duration};
 use tokio::sync::{RwLock, broadcast::Sender};
 use tracing::error;
 
+pub use crate::messages::wrapping::MessageWrappingType;
+
+/// Policy applied to every received envelope — by both [`crate::ATM::unpack`]
+/// and the message-pickup delivery drain — to enforce which envelope *wrapping
+/// types* are accepted and whether message-layer addressing consistency is
+/// enforced.
+///
+/// The [`Default`] is the DIDComm v2 secure baseline — accept only
+/// authenticated encryption (every accepted wrapping carries an authcrypt layer
+/// that binds the sender): `authcrypt(plaintext)`, `authcrypt(sign(plaintext))`,
+/// and `anoncrypt(authcrypt(plaintext))` (which additionally hides the sender
+/// key id from intermediaries) — and enforce addressing consistency, so an app
+/// that simply calls `atm.unpack` is protected against envelope-downgrade and
+/// forged-sender (`from` ≠ authcrypt `skid`) attacks without any extra code.
+/// Relax it explicitly via [`ATMConfigBuilder::with_unpack_policy`] when a
+/// protocol legitimately expects an unauthenticated wrapping (e.g. anoncrypt
+/// receipts or signed-only notifications).
+#[derive(Debug, Clone)]
+pub struct UnpackPolicy {
+    /// Exactly which wrapping types `unpack` accepts. A message classified
+    /// outside this set is rejected. No presets — list precisely what your
+    /// protocol expects.
+    pub expected: Vec<MessageWrappingType>,
+    /// Enforce message-layer addressing consistency across the unwrapped
+    /// layers: the inner `from` DID must equal the authcrypt `skid` DID (when
+    /// encrypted) and a verified signer's DID (when signed). An **authenticated**
+    /// message (signed or authcrypt) with **no** `from` is therefore rejected —
+    /// it has an authenticated identity but nothing to bind it to, so `msg.from`
+    /// could not be trusted; a pure `anoncrypt` message is anonymous and may
+    /// omit `from`. Disable only for debugging in trusted environments.
+    pub validate_addressing_consistency: bool,
+    /// Maximum number of signatures accepted on a signed message, enforced
+    /// *before* any signer DID is resolved — so it doubles as the guard
+    /// against resolution-amplification DoS. Every signature within the cap is
+    /// verified; a message carrying more is rejected without resolving any key.
+    /// Defaults to `5` (enough for co-signed / multi-signer messages); raise it
+    /// to any value your protocol expects — there is no absolute ceiling above
+    /// your configured policy.
+    pub max_signatures: usize,
+    /// Maximum number of recipients a single JWE (encryption) layer may address
+    /// before it is rejected. Unlike [`Self::max_signatures`], the secure
+    /// default is **permissive** (`100`): a receiver is legitimately only one of
+    /// several recipients, so a restrictive default would reject ordinary
+    /// group/broadcast messages. Like `max_signatures`, this is a default, not
+    /// an absolute ceiling — raise it to any value your protocol expects (or
+    /// lower it for stricter, e.g. one-to-one, deployments). Decrypting runs the
+    /// key agreement once (for the matched recipient), so this bounds parse /
+    /// allocation cost, not asymmetric-crypto work.
+    pub max_recipients: usize,
+}
+
+impl Default for UnpackPolicy {
+    fn default() -> Self {
+        UnpackPolicy {
+            expected: vec![
+                MessageWrappingType::AuthcryptPlaintext,
+                MessageWrappingType::AuthcryptSignPlaintext,
+                MessageWrappingType::AnoncryptAuthcryptPlaintext,
+            ],
+            validate_addressing_consistency: true,
+            max_signatures: crate::messages::unpack::DEFAULT_MAX_SIGNATURES,
+            max_recipients: crate::messages::unpack::DEFAULT_MAX_RECIPIENTS,
+        }
+    }
+}
+
+impl UnpackPolicy {
+    /// True when `wrapping` is accepted by this policy.
+    pub fn accepts(&self, wrapping: MessageWrappingType) -> bool {
+        self.expected.contains(&wrapping)
+    }
+}
+
 /// Configuration for the Affinidi Trusted Messaging (ATM) Service
 /// You need to use the `builder()` method to create a new instance of `ATMConfig`
 /// Example:
@@ -26,8 +99,53 @@ pub struct ATMConfig {
     /// If you want to aggregate inbound messages from the SDK to a channel to be used by the client
     pub(crate) inbound_message_channel: Option<Sender<WebSocketResponses>>,
 
+    /// Optional broadcast channel that receives an
+    /// [`crate::protocols::message_pickup::UnprocessableMessage`] for every
+    /// inbound message the SDK can't process — malformed base64/UTF-8, an
+    /// unpack/verification failure, or a policy rejection — *before* the drain
+    /// deletes/drops it, so a consumer can observe or quarantine it. `None`
+    /// (default) = unprocessable messages are only logged.
+    pub(crate) unprocessable_message_channel:
+        Option<Sender<crate::protocols::message_pickup::UnprocessableMessage>>,
+
+    /// Whether the message-pickup drain deletes a message the *`unpack_policy`*
+    /// rejected — a disallowed wrapping (`UnexpectedEnvelope`) or an addressing
+    /// mismatch (`AddressingMismatch`). `true` (default) **deletes** it: the
+    /// mediator's per-recipient queue is bounded (a fixed message limit), and a
+    /// retained reject is redelivered every pickup, so it would accumulate and
+    /// eventually fill the queue, blocking new inbound messages. Set `false` to
+    /// *retain* such messages instead — e.g. for a bounded window during an
+    /// `unpack_policy` tightening/upgrade, so a message rejected only by the
+    /// stricter policy can be recovered by relaxing the policy — accepting that
+    /// retained rejects count against the queue limit until processed or expired.
+    ///
+    /// This flag does **not** govern non-recoverable input — malformed
+    /// base64/UTF-8, an unsupported attachment type, or a cryptographically
+    /// invalid signature (`VerificationFailed`). Those can never become
+    /// processable regardless of policy and are *always* deleted so they can't
+    /// be redelivered every pickup and fill the bounded queue.
+    pub(crate) purge_policy_rejected_messages: bool,
+
+    /// When a signed message carries multiple signatures, whether to tolerate
+    /// non-authoritative ones that don't verify. `false` (default) fails the
+    /// whole unpack if *any* signature is missing a `kid`, has an unresolvable
+    /// signer DID, uses an unsupported curve, or is invalid. `true` records such
+    /// signatures in [`crate::messages::compat::UnpackMetadata::unverified_signers`]
+    /// and keeps unpacking — the authoritative (`from`-matching) signature must
+    /// still verify under `unpack_policy.validate_addressing_consistency`, so
+    /// this only relaxes *supplementary* co-signatures (e.g. a notary using a
+    /// curve this build can't resolve).
+    pub(crate) allow_invalid_signatures: bool,
+
     /// Should we auto unpack forwarded messages?
     pub(crate) unpack_forwards: bool,
+
+    /// Policy enforced on every received envelope — both [`crate::ATM::unpack`]
+    /// and the message-pickup delivery drain — governing which wrapping types
+    /// are accepted and whether addressing consistency is enforced. Defaults to
+    /// the secure authenticated-encryption baseline, so messages pulled via
+    /// pickup get the same guarantees as a direct `unpack`.
+    pub(crate) unpack_policy: UnpackPolicy,
 
     /// Can configure any protocol discoverable information here
     pub(crate) discover_features: Arc<RwLock<DiscoverFeatures>>,
@@ -85,6 +203,30 @@ impl ATMConfig {
         self.request_timeout
     }
 
+    /// The policy [`crate::ATM::unpack`] enforces on received envelopes.
+    pub fn unpack_policy(&self) -> &UnpackPolicy {
+        &self.unpack_policy
+    }
+
+    /// Whether the message-pickup drain deletes a policy-rejected message
+    /// (`UnexpectedEnvelope` / `AddressingMismatch`) from the mediator queue.
+    /// Default `true` (delete — the mediator queue is bounded, so retained
+    /// rejects redelivered every pickup would accumulate and fill it). Set
+    /// `false` to retain. Non-recoverable input (malformed base64/UTF-8,
+    /// unsupported type, invalid signature) is always deleted regardless of this
+    /// flag.
+    pub fn purge_policy_rejected_messages(&self) -> bool {
+        self.purge_policy_rejected_messages
+    }
+
+    /// Whether unpack tolerates non-authoritative signatures that don't verify
+    /// (recording them in
+    /// [`crate::messages::compat::UnpackMetadata::unverified_signers`]).
+    /// Default `false`.
+    pub fn allow_invalid_signatures(&self) -> bool {
+        self.allow_invalid_signatures
+    }
+
     /// The clock backing the SDK's expiry / TTL decisions.
     pub(crate) fn clock(&self) -> &Arc<dyn Clock> {
         &self.clock
@@ -138,7 +280,12 @@ pub struct ATMConfigBuilder {
     fetch_cache_limit_count: u32,
     fetch_cache_limit_bytes: u64,
     inbound_message_channel: Option<Sender<WebSocketResponses>>,
+    unprocessable_message_channel:
+        Option<Sender<crate::protocols::message_pickup::UnprocessableMessage>>,
+    purge_policy_rejected_messages: bool,
+    allow_invalid_signatures: bool,
     unpack_forwards: bool,
+    unpack_policy: UnpackPolicy,
     discover_features: DiscoverFeatures,
     curve_preference: Option<Vec<Curve>>,
     request_timeout: Duration,
@@ -158,7 +305,11 @@ impl Default for ATMConfigBuilder {
             fetch_cache_limit_count: 100,
             fetch_cache_limit_bytes: 1024 * 1024 * 10, // Defaults to 10MB Cache
             inbound_message_channel: None,
+            unprocessable_message_channel: None,
+            purge_policy_rejected_messages: true,
+            allow_invalid_signatures: false,
             unpack_forwards: true,
+            unpack_policy: UnpackPolicy::default(),
             discover_features: DiscoverFeatures::default(),
             curve_preference: None,
             request_timeout: Duration::from_secs(15),
@@ -210,11 +361,86 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// Enable a broadcast channel that receives an
+    /// [`crate::protocols::message_pickup::UnprocessableMessage`] for every
+    /// inbound message the SDK can't process *before* it is deleted/dropped.
+    /// Subscribe with [`crate::ATM::get_unprocessable_message_channel`] to
+    /// observe or quarantine such messages instead of losing them to a log line.
+    /// `capacity` bounds the broadcast buffer.
+    pub fn with_unprocessable_message_channel(mut self, capacity: usize) -> Self {
+        let (unprocessable_message_channel, _) = tokio::sync::broadcast::channel(capacity);
+        self.unprocessable_message_channel = Some(unprocessable_message_channel);
+        self
+    }
+
+    /// Control whether the message-pickup drain **deletes** a message that the
+    /// configured `unpack_policy` rejected — a disallowed wrapping
+    /// (`UnexpectedEnvelope`) or an addressing mismatch (`AddressingMismatch`).
+    /// Default `true`: such messages are **deleted**, because the mediator's
+    /// per-recipient queue is bounded (a fixed message limit) and a retained
+    /// reject is redelivered every pickup, so it would accumulate and eventually
+    /// fill the queue and block new inbound messages. Set `false` to **retain**
+    /// them instead — e.g. for a bounded window during an `unpack_policy`
+    /// tightening/upgrade, so a message rejected only by the stricter policy can
+    /// be recovered by relaxing the policy — accepting that retained rejects
+    /// count against the queue limit until processed or expired. Pair with
+    /// [`Self::with_unprocessable_message_channel`] to observe what is affected.
+    ///
+    /// Non-recoverable input — malformed base64/UTF-8, an unsupported attachment
+    /// type, or a cryptographically invalid signature (`VerificationFailed`) —
+    /// is **always** deleted (it can never become processable), independent of
+    /// this flag.
+    pub fn with_purge_policy_rejected_messages(mut self, purge: bool) -> Self {
+        self.purge_policy_rejected_messages = purge;
+        self
+    }
+
+    /// Tolerate non-authoritative signatures that fail to verify when a signed
+    /// message carries more than one signature. Default `false` (strict: any
+    /// signature that is missing a `kid`, has an unresolvable/unsupported signer
+    /// key, or is invalid fails the whole unpack). Set `true` to keep unpacking
+    /// and record the offending signatures in
+    /// [`UnpackMetadata::unverified_signers`](crate::messages::compat::UnpackMetadata)
+    /// instead — the authoritative (`from`-matching) signature must still verify
+    /// under `validate_addressing_consistency`, so this relaxes only
+    /// supplementary co-signatures (e.g. a third-party notary using a curve this
+    /// build can't resolve).
+    pub fn with_allow_invalid_signatures(mut self, allow: bool) -> Self {
+        self.allow_invalid_signatures = allow;
+        self
+    }
+
     /// When unpacking a message, if it is of type forward, try and unpack the forwarded message
     /// and return the innermost message instead of the forward message
     /// Default: true (will unpack the forward message)
     pub fn with_unpack_forwards(mut self, unpack_forwards: bool) -> Self {
         self.unpack_forwards = unpack_forwards;
+        self
+    }
+
+    /// Set the policy [`crate::ATM::unpack`] enforces on received envelopes:
+    /// which wrapping types are accepted and whether addressing consistency is
+    /// checked. Defaults to the secure authcrypt-only baseline
+    /// ([`UnpackPolicy::default`]); relax it when a protocol expects other
+    /// wrappings.
+    ///
+    /// ```
+    /// use affinidi_messaging_sdk::config::{ATMConfig, MessageWrappingType, UnpackPolicy};
+    ///
+    /// let config = ATMConfig::builder()
+    ///     .with_unpack_policy(UnpackPolicy {
+    ///         expected: vec![
+    ///             MessageWrappingType::AuthcryptPlaintext,
+    ///             MessageWrappingType::AnoncryptAuthcryptPlaintext,
+    ///         ],
+    ///         validate_addressing_consistency: true,
+    ///         max_signatures: 2,
+    ///         max_recipients: 100,
+    ///     })
+    ///     .build();
+    /// ```
+    pub fn with_unpack_policy(mut self, policy: UnpackPolicy) -> Self {
+        self.unpack_policy = policy;
         self
     }
 
@@ -363,7 +589,11 @@ impl ATMConfigBuilder {
             fetch_cache_limit_count: self.fetch_cache_limit_count,
             fetch_cache_limit_bytes: self.fetch_cache_limit_bytes,
             inbound_message_channel: self.inbound_message_channel,
+            unprocessable_message_channel: self.unprocessable_message_channel,
+            purge_policy_rejected_messages: self.purge_policy_rejected_messages,
+            allow_invalid_signatures: self.allow_invalid_signatures,
             unpack_forwards: self.unpack_forwards,
+            unpack_policy: self.unpack_policy,
             discover_features: Arc::new(RwLock::new(discover_features)),
             curve_preference: self.curve_preference,
             request_timeout: self.request_timeout,
@@ -413,5 +643,26 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(config.clock().unix_secs(), 1_234);
+    }
+
+    /// Policy-rejected pickup messages are **deleted by default** — the
+    /// mediator queue is bounded, so a retained reject redelivered every pickup
+    /// would accumulate and fill it. Operators opt into retention explicitly.
+    #[test]
+    fn policy_rejected_messages_are_deleted_by_default() {
+        let config = ATMConfig::builder().build().unwrap();
+        assert!(
+            config.purge_policy_rejected_messages(),
+            "the default deletes policy-rejected messages (bounded mediator queue)"
+        );
+
+        let retained = ATMConfig::builder()
+            .with_purge_policy_rejected_messages(false)
+            .build()
+            .unwrap();
+        assert!(
+            !retained.purge_policy_rejected_messages(),
+            "opting out retains policy-rejected messages"
+        );
     }
 }

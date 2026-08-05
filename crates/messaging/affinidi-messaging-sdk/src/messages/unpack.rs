@@ -4,6 +4,9 @@ use affinidi_secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE};
 use tracing::{Instrument, Level, debug, span, warn};
 
+use crate::config::UnpackPolicy;
+use crate::messages::wrapping::{CryptoLayer, EncLayerKind, MessageWrappingType};
+
 impl ATM {
     pub async fn unpack(&self, message: &str) -> Result<(Message, UnpackMetadata), ATMError> {
         let _span = span!(Level::DEBUG, "unpack",);
@@ -30,82 +33,257 @@ impl ATM {
 /// Prevents denial-of-service via deeply nested forward envelopes.
 const MAX_FORWARD_DEPTH: usize = 10;
 
+/// Maximum number of cryptographic envelope layers (JWE/JWS) a single message
+/// may nest. Every DIDComm-defined wrapping reaches at most **two** crypto
+/// layers — `anoncrypt(authcrypt(plaintext))`, `authcrypt(sign(plaintext))`,
+/// or `anoncrypt(sign(plaintext))`. The spec forbids deeper nesting (e.g.
+/// `anoncrypt(authcrypt(sign(plaintext)))`), so enforcing the cap *before*
+/// removing a third layer both rejects non-conformant stacks and bounds
+/// decrypt/verify work against a nested-envelope DoS.
+const MAX_CRYPTO_LAYERS: usize = 2;
+
+/// Default signature cap (`5`) for [`crate::config::UnpackPolicy::default`] —
+/// what an application `unpack` (and the message-pickup drain, which shares the
+/// configured policy) gets out of the box. Bounds the signature *count* before
+/// any signer DID is resolved, guarding against a resolution-amplification DoS.
+/// This is a **default, not an absolute ceiling**: applications may raise
+/// `UnpackPolicy::max_signatures` to any value.
+pub(crate) const DEFAULT_MAX_SIGNATURES: usize = 5;
+
+/// Default recipient cap (`100`) for a single JWE layer, used by
+/// [`crate::config::UnpackPolicy::default`]. Bounds the recipient *count*
+/// before the recipient-matching loop, guarding against a parse/allocation DoS.
+/// This is a **default, not an absolute ceiling**: applications may raise
+/// `UnpackPolicy::max_recipients` to any value. Mirrors the mediator's
+/// `to_recipients` default.
+pub(crate) const DEFAULT_MAX_RECIPIENTS: usize = 100;
+
+/// Per-message DID-resolution budget for a single `unpack` call, spanning every
+/// cryptographic layer **and** every forward hop (it is *not* reset per hop).
+///
+/// `enforce_policy`'s wrapping allow-list can only run *after* the layers are
+/// decrypted and their signatures verified — and each signer/sender key is a
+/// DID resolution, which for `did:web` is an outbound HTTPS fetch. Without a
+/// shared ceiling, a frame that is ultimately rejected could still drive
+/// `MAX_CRYPTO_LAYERS × MAX_FORWARD_DEPTH × max_signatures` attacker-chosen
+/// resolutions. This budget scales with the caller's `max_signatures` (so a
+/// legitimately multi-signed message still resolves) plus headroom for one
+/// sender key per crypto layer and one resolution per forward hop — but
+/// crucially does **not** multiply those together. With the defaults the ceiling
+/// is `5 + 2 + 10 = 17` resolutions per inbound frame.
+fn resolution_budget(policy: &UnpackPolicy) -> usize {
+    policy
+        .max_signatures
+        .saturating_add(MAX_CRYPTO_LAYERS)
+        .saturating_add(MAX_FORWARD_DEPTH)
+}
+
+/// Charge one DID resolution against the per-message [`resolution_budget`],
+/// erroring when it is exhausted (so cross-layer / cross-hop resolution
+/// amplification is bounded).
+fn charge_resolution(budget: &mut usize) -> Result<(), ATMError> {
+    *budget = budget.checked_sub(1).ok_or_else(|| {
+        ATMError::UnexpectedEnvelope(
+            "message exceeded its DID-resolution budget: too many signer/sender \
+             keys to resolve across its cryptographic layers and forward hops"
+                .to_string(),
+        )
+    })?;
+    Ok(())
+}
+
+/// One cryptographic layer removed while unwrapping a message, recorded
+/// outermost-first so the stack can be classified into a
+/// [`MessageWrappingType`] and checked for addressing consistency.
+enum EnvLayer {
+    /// An encryption layer (JWE). `skid` is the authcrypt sender key id
+    /// (`None` for anoncrypt).
+    Encrypted {
+        kind: EncLayerKind,
+        skid: Option<String>,
+    },
+    /// A signature layer (JWS). The verified signer `kid`s are recorded in
+    /// [`UnpackMetadata::signers`].
+    Signed,
+}
+
 impl SharedState {
     pub async fn unpack(&self, message: &str) -> Result<(Message, UnpackMetadata), ATMError> {
         let _span = span!(Level::DEBUG, "unpack",);
 
-        async move {
-            let mut msg_string = message.to_string();
-            let mut forward_depth: usize = 0;
+        async move { self.unpack_with(message, self.config.unpack_policy()).await }
+            .instrument(_span)
+            .await
+    }
 
-            loop {
-                // Compute SHA-256 hash of the packed message
-                let sha256_hash = sha256::digest(&msg_string);
+    /// Unpack a message enforcing an explicit [`UnpackPolicy`]. Used internally
+    /// so the message-pickup drain can pass the configured policy explicitly;
+    /// application code goes through [`Self::unpack`], which applies
+    /// `config.unpack_policy`.
+    pub(crate) async fn unpack_with(
+        &self,
+        message: &str,
+        policy: &UnpackPolicy,
+    ) -> Result<(Message, UnpackMetadata), ATMError> {
+        let mut msg_string = message.to_string();
+        let mut forward_depth: usize = 0;
 
-                // Parse as JSON to detect format
-                let value: serde_json::Value = serde_json::from_str(&msg_string).map_err(|e| {
-                    ATMError::DidcommError("Cannot parse message as JSON".into(), e.to_string())
+        // Per-message DID-resolution budget, shared across every crypto layer
+        // *and* every forward hop of this single `unpack` (deliberately not
+        // reset per hop). Bounds attacker-driven outbound resolution — a
+        // `did:web` resolve is an arbitrary HTTPS fetch — so a frame that is
+        // ultimately policy-rejected can't first drive resolution across
+        // `MAX_CRYPTO_LAYERS × MAX_FORWARD_DEPTH × max_signatures` signers.
+        let mut budget = resolution_budget(policy);
+
+        loop {
+            // Compute SHA-256 hash of the packed message
+            let sha256_hash = sha256::digest(&msg_string);
+
+            // Unwrap every cryptographic layer (JWE/JWS), building the layer
+            // stack and metadata.
+            let (msg, mut metadata, layers) = self
+                .unpack_layers(&msg_string, &sha256_hash, policy, &mut budget)
+                .await?;
+
+            if self.config.unpack_forwards && msg.typ == "https://didcomm.org/routing/2.0/forward" {
+                forward_depth += 1;
+                if forward_depth > MAX_FORWARD_DEPTH {
+                    return Err(ATMError::MsgReceiveError(format!(
+                        "Forward message nesting depth exceeded maximum of {MAX_FORWARD_DEPTH}"
+                    )));
+                }
+                // Extract the inner message and loop to unpack it
+                msg_string = Self::extract_forward_payload(&msg, self.config.clock().unix_secs())?;
+                continue;
+            }
+
+            // Classify the wrapping, enforce the policy's allow-list, and
+            // (optionally) enforce message-layer addressing consistency. This
+            // also binds `sign_from` to the verified signer that matches `from`.
+            Self::enforce_policy(&msg, &mut metadata, &layers, policy)?;
+
+            return Ok((msg, metadata));
+        }
+    }
+
+    /// Iteratively remove cryptographic layers (JWE → decrypt, JWS → verify all
+    /// signatures) from `input` until a plaintext DIDComm message remains,
+    /// returning it with populated [`UnpackMetadata`] and the ordered layer
+    /// stack (outermost first).
+    async fn unpack_layers(
+        &self,
+        input: &str,
+        sha256_hash: &str,
+        policy: &UnpackPolicy,
+        budget: &mut usize,
+    ) -> Result<(Message, UnpackMetadata, Vec<EnvLayer>), ATMError> {
+        let mut current = input.to_string();
+        let mut layers: Vec<EnvLayer> = Vec::new();
+
+        let mut encrypted = false;
+        let mut authenticated = false;
+        let mut non_repudiation = false;
+        let mut encrypted_from_kid: Option<String> = None;
+        let mut encrypted_to_kids: Vec<String> = Vec::new();
+        let mut signers: Vec<String> = Vec::new();
+        let mut unverified_signers: Vec<String> = Vec::new();
+
+        loop {
+            let value: serde_json::Value = serde_json::from_str(&current).map_err(|e| {
+                ATMError::DidcommError("Cannot parse message as JSON".into(), e.to_string())
+            })?;
+
+            let is_jwe = value.get("ciphertext").is_some() && value.get("recipients").is_some();
+            let is_jws = value.get("payload").is_some() && value.get("signatures").is_some();
+
+            // Reject a third (or deeper) cryptographic layer *before* removing
+            // it: no DIDComm-defined wrapping nests more than two crypto layers,
+            // so anything deeper is non-conformant — and refusing it here also
+            // bounds decrypt/verify work against a nested-envelope DoS.
+            if (is_jwe || is_jws) && layers.len() >= MAX_CRYPTO_LAYERS {
+                return Err(ATMError::UnexpectedEnvelope(format!(
+                    "message nests more than the maximum of {MAX_CRYPTO_LAYERS} \
+                     cryptographic layers"
+                )));
+            }
+
+            if is_jwe {
+                // JWE — decrypt one encryption layer.
+                let (plaintext, kind, skid, recipient_kid) =
+                    self.decrypt_layer(&current, &value, policy, budget).await?;
+                encrypted = true;
+                if kind == EncLayerKind::Authcrypt {
+                    authenticated = true;
+                    // Innermost authcrypt is the authoritative sender key; only
+                    // set it once (the first authcrypt layer encountered).
+                    if encrypted_from_kid.is_none() {
+                        encrypted_from_kid = skid.clone();
+                    }
+                }
+                encrypted_to_kids.push(recipient_kid);
+                layers.push(EnvLayer::Encrypted { kind, skid });
+                current = plaintext;
+                continue;
+            } else if is_jws {
+                // JWS — verify each signature and attribute the signers.
+                let (payload, verified_kids, unverified_kids) =
+                    self.verify_all_signatures(&current, policy, budget).await?;
+                non_repudiation = true;
+                // Accumulate across layers (outermost first) rather than
+                // overwrite — a second JWS layer must not erase the outer
+                // signer from metadata. (Such a stack is rejected by the
+                // wrapping taxonomy in `enforce_policy`, but the metadata must
+                // still be faithful.) `unverified_kids` is non-empty only when
+                // `allow_invalid_signatures` tolerated a failed co-signature.
+                signers.extend(verified_kids);
+                unverified_signers.extend(unverified_kids);
+                layers.push(EnvLayer::Signed);
+                current = payload;
+                continue;
+            } else if value.get("type").is_some() {
+                // Plaintext DIDComm message — the innermost payload.
+                let msg = Message::from_json(current.as_bytes()).map_err(|e| {
+                    ATMError::DidcommError("Cannot parse plaintext message".into(), e.to_string())
                 })?;
-
-                let (msg, metadata) =
-                    if value.get("ciphertext").is_some() && value.get("recipients").is_some() {
-                        // JWE — encrypted message
-                        self.unpack_jwe(&msg_string, &value, &sha256_hash).await?
-                    } else if value.get("payload").is_some() && value.get("signatures").is_some() {
-                        // JWS — signed message: verify the signature and
-                        // attribute the signer (resolving its key via the
-                        // DID resolver).
-                        self.unpack_jws(&value, &msg_string, &sha256_hash).await?
-                    } else if value.get("type").is_some() {
-                        // Plaintext DIDComm message
-                        let msg = Message::from_json(msg_string.as_bytes()).map_err(|e| {
-                            ATMError::DidcommError(
-                                "Cannot parse plaintext message".into(),
-                                e.to_string(),
-                            )
-                        })?;
-                        let metadata = UnpackMetadata {
-                            sha256_hash,
-                            ..Default::default()
-                        };
-                        (msg, metadata)
-                    } else {
-                        return Err(ATMError::DidcommError(
-                            "Cannot detect message format".into(),
-                            "expected JWE, JWS, or plaintext".into(),
-                        ));
-                    };
-
                 debug!("message unpacked:\n{:#?}", msg);
 
-                if self.config.unpack_forwards
-                    && msg.typ == "https://didcomm.org/routing/2.0/forward"
-                {
-                    forward_depth += 1;
-                    if forward_depth > MAX_FORWARD_DEPTH {
-                        return Err(ATMError::MsgReceiveError(format!(
-                            "Forward message nesting depth exceeded maximum of {MAX_FORWARD_DEPTH}"
-                        )));
-                    }
-                    // Extract the inner message and loop to unpack it
-                    msg_string =
-                        Self::extract_forward_payload(&msg, self.config.clock().unix_secs())?;
-                } else {
-                    return Ok((msg, metadata));
-                }
+                let metadata = UnpackMetadata {
+                    encrypted,
+                    authenticated,
+                    non_repudiation,
+                    // A message is "anonymous" when encrypted without any
+                    // authcrypt layer (anoncrypt-only) and unsigned.
+                    anonymous_sender: encrypted && !authenticated && signers.is_empty(),
+                    encrypted_from_kid,
+                    encrypted_to_kids,
+                    signers,
+                    unverified_signers,
+                    sha256_hash: sha256_hash.to_string(),
+                    ..Default::default()
+                };
+                return Ok((msg, metadata, layers));
+            } else {
+                return Err(ATMError::DidcommError(
+                    "Cannot detect message format".into(),
+                    "expected JWE, JWS, or plaintext".into(),
+                ));
             }
         }
-        .instrument(_span)
-        .await
     }
 
     /// Unpack a JWE (encrypted) message
-    async fn unpack_jwe(
+    /// Decrypt a single JWE encryption layer, returning the decrypted payload
+    /// (as a UTF-8 string, which may itself be another envelope), the layer's
+    /// authentication kind, the authcrypt sender `skid` (`None` for anoncrypt),
+    /// and the recipient `kid` that decrypted it.
+    async fn decrypt_layer(
         &self,
-        msg_string: &str,
+        jwe_str: &str,
         value: &serde_json::Value,
-        sha256_hash: &str,
-    ) -> Result<(Message, UnpackMetadata), ATMError> {
+        policy: &UnpackPolicy,
+        budget: &mut usize,
+    ) -> Result<(String, EncLayerKind, Option<String>, String), ATMError> {
         use affinidi_crypto::jose::key_agreement::PrivateKeyAgreement;
         use affinidi_messaging_didcomm::jwe::decrypt::decrypt;
 
@@ -113,6 +291,17 @@ impl SharedState {
         let recipients = value["recipients"].as_array().ok_or_else(|| {
             ATMError::DidcommError("Invalid JWE".into(), "no recipients array".into())
         })?;
+
+        // Bound the recipient count before the match loop, mirroring how the
+        // signature cap is enforced where signatures are seen: the policy is the
+        // single knob (callers may raise it to any value they expect).
+        if recipients.len() > policy.max_recipients {
+            return Err(ATMError::UnexpectedEnvelope(format!(
+                "JWE addresses {} recipients, exceeding the policy maximum of {}",
+                recipients.len(),
+                policy.max_recipients
+            )));
+        }
 
         // Find a local secret matching one of the recipient KIDs
         let mut recipient_kid_str = String::new();
@@ -145,10 +334,10 @@ impl SharedState {
 
         // Try to detect sender for authcrypt
         // Check if there is a skid (sender key ID) in the protected header
-        let sender_public = self.try_resolve_sender_public(msg_string).await;
+        let sender_public = self.try_resolve_sender_public(jwe_str, budget).await;
 
         let decrypted = decrypt(
-            msg_string,
+            jwe_str,
             &recipient_kid_str,
             &recipient_private,
             sender_public.as_ref(),
@@ -157,55 +346,29 @@ impl SharedState {
             ATMError::DidcommError("Couldn't unpack incoming message".into(), e.to_string())
         })?;
 
-        // DIDComm v2.1 sign-then-encrypt (non-repudiation): the decrypted
-        // payload may itself be a JWS, not a bare Message. Detect that,
-        // verify the inner signature, and surface non-repudiation + the
-        // signer — instead of trying to parse the JWS envelope as a
-        // Message (which would fail). Detection is unambiguous: a
-        // plaintext DIDComm message has `id`/`type`, never
-        // `payload`+`signatures`.
-        if let Ok(inner) = serde_json::from_slice::<serde_json::Value>(&decrypted.plaintext)
-            && inner.get("payload").is_some()
-            && inner.get("signatures").is_some()
-        {
-            let inner_str = std::str::from_utf8(&decrypted.plaintext)
-                .map_err(|e| ATMError::DidcommError("Invalid inner JWS".into(), e.to_string()))?;
-            let (msg, sign_from) = self.verify_inner_jws(inner_str, &inner).await?;
-            let metadata = UnpackMetadata {
-                encrypted: true,
-                authenticated: decrypted.authenticated,
-                anonymous_sender: !decrypted.authenticated,
-                encrypted_from_kid: decrypted.sender_kid,
-                encrypted_to_kids: vec![decrypted.recipient_kid],
-                non_repudiation: true,
-                sign_from: Some(sign_from),
-                sha256_hash: sha256_hash.to_string(),
-                ..Default::default()
-            };
-            return Ok((msg, metadata));
-        }
-
-        let msg = Message::from_json(&decrypted.plaintext).map_err(|e| {
-            ATMError::DidcommError("Cannot parse decrypted message".into(), e.to_string())
+        let plaintext = String::from_utf8(decrypted.plaintext).map_err(|e| {
+            ATMError::DidcommError("Decrypted payload is not valid UTF-8".into(), e.to_string())
         })?;
 
-        let metadata = UnpackMetadata {
-            encrypted: true,
-            authenticated: decrypted.authenticated,
-            anonymous_sender: !decrypted.authenticated,
-            encrypted_from_kid: decrypted.sender_kid,
-            encrypted_to_kids: vec![decrypted.recipient_kid],
-            sha256_hash: sha256_hash.to_string(),
-            ..Default::default()
+        let kind = if decrypted.authenticated {
+            EncLayerKind::Authcrypt
+        } else {
+            EncLayerKind::Anoncrypt
         };
 
-        Ok((msg, metadata))
+        Ok((
+            plaintext,
+            kind,
+            decrypted.sender_kid,
+            decrypted.recipient_kid,
+        ))
     }
 
     /// Try to resolve the sender's public key from the JWE protected header's `skid` field
     async fn try_resolve_sender_public(
         &self,
         jwe_str: &str,
+        budget: &mut usize,
     ) -> Option<affinidi_crypto::jose::key_agreement::PublicKeyAgreement> {
         use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 
@@ -229,6 +392,15 @@ impl SharedState {
         } else {
             skid
         };
+
+        // Charge the per-message resolution budget before the (networked for
+        // `did:web`) sender-DID resolution. On exhaustion, behave as "no sender
+        // key": the authcrypt decrypt below then fails cleanly, without issuing
+        // the outbound fetch.
+        if *budget == 0 {
+            return None;
+        }
+        *budget -= 1;
 
         // Resolve the sender DID document
         let sender_doc = self
@@ -283,93 +455,167 @@ impl SharedState {
         PublicKeyAgreement::from_raw_bytes(curve, &key_bytes).ok()
     }
 
-    /// Unpack a JWS (signed) message: verify the signature against the
-    /// signer's resolved key and attribute the signer. Unlike the prior
-    /// behaviour, this never returns an unverified message marked
-    /// non-repudiable — an unresolvable signer or a bad signature is an
-    /// error.
-    async fn unpack_jws(
-        &self,
-        value: &serde_json::Value,
-        msg_string: &str,
-        sha256_hash: &str,
-    ) -> Result<(Message, UnpackMetadata), ATMError> {
-        let (msg, sign_from) = self.verify_inner_jws(msg_string, value).await?;
-
-        let metadata = UnpackMetadata {
-            non_repudiation: true,
-            sign_from: Some(sign_from),
-            sha256_hash: sha256_hash.to_string(),
-            ..Default::default()
-        };
-
-        Ok((msg, metadata))
-    }
-
-    /// Verify a JWS — resolving the signer's Ed25519 key from its `kid`
-    /// — and return the decoded [`Message`] plus the signer kid. Shared
-    /// by top-level signed messages and the inner JWS of a
-    /// sign-then-encrypt envelope. Errors if the signer key can't be
-    /// resolved or the signature is invalid; we never surface an
-    /// unverified message.
-    async fn verify_inner_jws(
+    /// Verify signatures on a JWS layer, resolving each signer's key (Ed25519 /
+    /// P-256 / secp256k1) from its DID document. Returns the decoded payload
+    /// (which may be a further envelope), the **verified** signer `kid`s, and any
+    /// **unverified** ones.
+    ///
+    /// Strict by default: any signature that lacks a `kid`, whose key cannot be
+    /// resolved (unknown DID or a curve this build doesn't support), or whose
+    /// signature is invalid, fails the whole unpack. When
+    /// [`ATMConfig::allow_invalid_signatures`] is set, such a signature is
+    /// instead recorded in the returned *unverified* list and unpacking
+    /// continues — the authoritative (`from`-matching) signature is still
+    /// required to verify by the addressing-consistency check, so only
+    /// supplementary co-signatures are relaxed.
+    ///
+    /// # Security
+    ///
+    /// The `kid` that selects which DID is resolved is read *before* the
+    /// signature is verified, so on an untrusted JWS it names a DID the sender
+    /// chose — and resolving a `did:web` is an outbound HTTPS fetch. Two
+    /// distinct exposures follow, and they are not equally containable:
+    ///
+    /// - A `kid` in the **protected** header is inside the signing input. It is
+    ///   the *original sender's* choice and cannot be altered in transit. That a
+    ///   claimed sender causes its own DID to be resolved is inherent to DID
+    ///   messaging (authcrypt resolves the `skid` the same way), so this is
+    ///   accepted, bounded only by the per-message [`resolution_budget`].
+    /// - A `kid` in the per-signature **unprotected** header (`parse_jws`'s
+    ///   interop fallback for credo-ts / didcomm-python) is *outside* the
+    ///   signing input, so **any intermediary** — a mediator, a relay — can
+    ///   rewrite it without invalidating the signature and redirect the fetch to
+    ///   a host of its choosing. That is a genuine SSRF primitive available to
+    ///   parties who cannot forge a signature at all.
+    ///
+    /// So an unprotected `kid` is only resolved when its DID matches the signed
+    /// payload's `from`. `from` is inside the signing input, so binding the two
+    /// removes the in-transit rewrite vector: an intermediary editing the
+    /// unprotected `kid` now just makes the signature unattributable, causing a
+    /// rejection *without* any outbound request. A payload with no readable
+    /// `from` (e.g. a nested envelope) provides nothing to bind against, so the
+    /// unprotected `kid` is refused there too.
+    ///
+    /// This does not make `unpack` an SSRF sandbox — a sender naming its own
+    /// `did:web` still causes one fetch — so resolver-side host allow-listing
+    /// remains worthwhile as defence in depth.
+    async fn verify_all_signatures(
         &self,
         jws_str: &str,
-        jws_value: &serde_json::Value,
-    ) -> Result<(Message, String), ATMError> {
-        use affinidi_messaging_didcomm::jws::verify::verify_ed25519;
+        policy: &UnpackPolicy,
+        budget: &mut usize,
+    ) -> Result<(String, Vec<String>, Vec<String>), ATMError> {
+        use affinidi_messaging_didcomm::jws::verify::{parse_jws, verify_parsed_signature};
 
-        let signer_kid = Self::jws_signer_kid(jws_value).ok_or_else(|| {
-            ATMError::DidcommError("Invalid JWS".into(), "no signer kid in JWS headers".into())
-        })?;
-        let signer_pk = self
-            .try_resolve_signer_ed25519(&signer_kid)
-            .await
-            .ok_or_else(|| {
-                ATMError::DidcommError(
-                    "Couldn't verify JWS".into(),
-                    format!("could not resolve an Ed25519 verification key for '{signer_kid}'"),
-                )
-            })?;
-        let verified = verify_ed25519(jws_str, &signer_pk).map_err(|e| {
-            ATMError::DidcommError("JWS signature verification failed".into(), e.to_string())
-        })?;
-        let msg = Message::from_json(&verified.payload).map_err(|e| {
-            ATMError::DidcommError("Cannot parse verified JWS payload".into(), e.to_string())
-        })?;
-        // Prefer the kid the verifier extracted (protected, then
-        // unprotected header); fall back to the one we resolved against.
-        Ok((msg, verified.signer_kid.unwrap_or(signer_kid)))
-    }
+        let parsed = parse_jws(jws_str)
+            .map_err(|e| ATMError::DidcommError("Invalid JWS".into(), e.to_string()))?;
 
-    /// Extract the signer `kid` from a JWS's first signature, preferring
-    /// the protected header and falling back to the per-signature
-    /// unprotected header (RFC 7515 §4.1.4 — where DIDComm / credo-ts /
-    /// didcomm-python place it).
-    fn jws_signer_kid(jws_value: &serde_json::Value) -> Option<String> {
-        use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-        let sig = jws_value.get("signatures")?.as_array()?.first()?;
-        if let Some(protected) = sig.get("protected").and_then(|v| v.as_str())
-            && let Ok(bytes) = BASE64_URL_SAFE_NO_PAD.decode(protected)
-            && let Ok(header) = serde_json::from_slice::<serde_json::Value>(&bytes)
-            && let Some(kid) = header.get("kid").and_then(|v| v.as_str())
-        {
-            return Some(kid.to_string());
+        // Enforce the policy's signature cap *before* resolving any signer key,
+        // so a message stuffed with more signatures than the policy allows is
+        // rejected without amplifying (possibly networked) DID resolution.
+        if parsed.signatures.len() > policy.max_signatures {
+            return Err(ATMError::UnexpectedEnvelope(format!(
+                "JWS carries {} signatures, exceeding the policy maximum of {}",
+                parsed.signatures.len(),
+                policy.max_signatures
+            )));
         }
-        sig.get("header")?.get("kid")?.as_str().map(str::to_string)
+
+        // The signed payload's `from`, if it is a readable DIDComm plaintext.
+        // Used only to bind an *unprotected* signer `kid` (see `# Security`);
+        // parsed here, once, before any resolution happens.
+        let payload_from: Option<String> =
+            serde_json::from_slice::<serde_json::Value>(&parsed.payload)
+                .ok()
+                .and_then(|v| v.get("from").and_then(|f| f.as_str().map(str::to_string)));
+
+        let tolerate = self.config.allow_invalid_signatures();
+        let mut verified: Vec<String> = Vec::with_capacity(parsed.signatures.len());
+        let mut unverified: Vec<String> = Vec::new();
+        for sig in &parsed.signatures {
+            // Missing signer kid: nothing to resolve or attribute.
+            let Some(kid) = sig.kid.clone() else {
+                if tolerate {
+                    unverified.push("<no kid>".to_string());
+                    continue;
+                }
+                return Err(ATMError::DidcommError(
+                    "Invalid JWS".into(),
+                    "a signature is missing its signer kid".into(),
+                ));
+            };
+            // An unprotected `kid` is rewritable in transit by any intermediary,
+            // so it may only steer a (networked) resolution when it names the
+            // same DID as the signed payload's `from`. Checked *before* the
+            // budget is charged and before any fetch — a rewritten kid must cost
+            // zero outbound requests, or the guard would still be an SSRF
+            // trigger. See the `# Security` note above.
+            if !sig.kid_from_protected {
+                let bound = payload_from
+                    .as_deref()
+                    .is_some_and(|from| Self::base_did(&kid) == Self::base_did(from));
+                if !bound {
+                    if tolerate {
+                        unverified.push(kid);
+                        continue;
+                    }
+                    return Err(ATMError::UnexpectedEnvelope(format!(
+                        "signature carries its signer kid only in the unprotected \
+                         header, and '{kid}' does not match the message `from` \
+                         ({}); refusing to resolve it",
+                        payload_from.as_deref().unwrap_or("<absent>")
+                    )));
+                }
+            }
+            // Charge the per-message resolution budget before resolving the
+            // signer DID (a networked fetch for `did:web`).
+            charge_resolution(budget)?;
+            let Some(key) = self.resolve_verify_key(&kid).await else {
+                // Unresolvable DID or a curve this build can't handle.
+                if tolerate {
+                    unverified.push(kid);
+                    continue;
+                }
+                return Err(ATMError::DidcommError(
+                    "Couldn't verify JWS".into(),
+                    format!("could not resolve a verification key for '{kid}'"),
+                ));
+            };
+            match verify_parsed_signature(sig, &key) {
+                Ok(()) => verified.push(kid),
+                Err(e) => {
+                    // A verification failure (bad signature or alg/key mismatch)
+                    // is *deterministic* — the pickup drain purges it (distinct
+                    // `VerificationFailed` variant) rather than re-queuing.
+                    if tolerate {
+                        unverified.push(kid);
+                        continue;
+                    }
+                    return Err(ATMError::VerificationFailed(format!("signer '{kid}': {e}")));
+                }
+            }
+        }
+
+        let payload = String::from_utf8(parsed.payload).map_err(|e| {
+            ATMError::DidcommError("JWS payload is not valid UTF-8".into(), e.to_string())
+        })?;
+
+        Ok((payload, verified, unverified))
     }
 
-    /// Resolve the signer's Ed25519 verification key (32 octets) for a
-    /// `kid` by resolving its DID document. Looks in the `authentication`
-    /// relationship first (where DIDComm signing keys live), then any
-    /// verification method. Returns `None` if unresolvable or not
-    /// Ed25519. Mirrors [`Self::try_resolve_sender_public`] but for the
-    /// signing key, and shares the verification-material decoder
-    /// (`VerificationMethod::decode_public_key`).
-    async fn try_resolve_signer_ed25519(&self, kid: &str) -> Option<[u8; 32]> {
+    /// Resolve a signer's public verification key for a `kid` by resolving its
+    /// DID document, returning it tagged by curve family so the correct
+    /// signature algorithm is used. Looks in the `authentication` relationship
+    /// first (where DIDComm signing keys live), then any verification method.
+    /// Supports Ed25519 (`EdDSA`), P-256 (`ES256`), and secp256k1 (`ES256K`).
+    async fn resolve_verify_key(
+        &self,
+        kid: &str,
+    ) -> Option<affinidi_messaging_didcomm::jws::verify::VerifyKey> {
         use affinidi_did_common::{
             document::DocumentExt, verification_method::VerificationRelationship,
         };
+        use affinidi_messaging_didcomm::jws::verify::VerifyKey;
 
         let did = kid.split('#').next().unwrap_or(kid);
         let doc = self.tdk_common.did_resolver().resolve(did).await.ok()?;
@@ -401,11 +647,133 @@ impl SharedState {
             .or_else(|| doc.doc.get_verification_method(lookup_kid))?;
 
         let (codec, bytes) = vm.decode_public_key().ok()?;
-        if codec == affinidi_encoding::ED25519_PUB {
-            bytes.try_into().ok()
-        } else {
-            None
+        match codec {
+            affinidi_encoding::ED25519_PUB => Some(VerifyKey::Ed25519(bytes.try_into().ok()?)),
+            affinidi_encoding::P256_PUB => Some(VerifyKey::P256(bytes)),
+            affinidi_encoding::SECP256K1_PUB => Some(VerifyKey::Secp256k1(bytes)),
+            _ => None,
         }
+    }
+
+    /// The base DID of a DID URL (everything before the `#fragment`).
+    fn base_did(did_url: &str) -> &str {
+        did_url.split_once('#').map(|(d, _)| d).unwrap_or(did_url)
+    }
+
+    /// Classify the unwrapped layer stack, enforce the policy's accepted
+    /// wrapping types, and (when enabled) enforce message-layer addressing
+    /// consistency:
+    /// - a signed layer requires a verified signer whose DID equals the inner
+    ///   `from` DID (that signer becomes `metadata.sign_from`);
+    /// - an authcrypt layer requires its `skid` DID to equal the inner `from`
+    ///   DID.
+    ///
+    /// Consequently an **authenticated** message (signed or authcrypt) that
+    /// carries **no** `from` is rejected as an [`ATMError::AddressingMismatch`]:
+    /// it has an authenticated identity but no `from` to bind it to, so
+    /// `msg.from` could not be trusted. This is intentional and symmetric across
+    /// the two branches. A pure `anoncrypt` message is *anonymous* and may
+    /// legitimately omit `from` (accepted); only a `from` it cannot back is
+    /// rejected.
+    ///
+    /// Together these bind `from` == signer == authcrypt sender across up to
+    /// three layers.
+    fn enforce_policy(
+        msg: &Message,
+        metadata: &mut UnpackMetadata,
+        layers: &[EnvLayer],
+        policy: &UnpackPolicy,
+    ) -> Result<(), ATMError> {
+        // Rebuild the ordered layer stack (outermost-first), preserving each
+        // signature's position relative to the encryption layers — the wrapping
+        // taxonomy depends on it (`sign(authcrypt(pt))` is not the same as
+        // `authcrypt(sign(pt))`). Also capture the authcrypt sender `skid` for
+        // the addressing-consistency check below.
+        let mut crypto_layers: Vec<CryptoLayer> = Vec::with_capacity(layers.len());
+        let mut authcrypt_skid: Option<String> = None;
+        for layer in layers {
+            match layer {
+                EnvLayer::Encrypted { kind, skid } => {
+                    crypto_layers.push(CryptoLayer::Encrypted(*kind));
+                    if *kind == EncLayerKind::Authcrypt && authcrypt_skid.is_none() {
+                        authcrypt_skid = skid.clone();
+                    }
+                }
+                EnvLayer::Signed => crypto_layers.push(CryptoLayer::Sign),
+            }
+        }
+
+        let wrapping = MessageWrappingType::classify(&crypto_layers).ok_or_else(|| {
+            ATMError::UnexpectedEnvelope(
+                "message envelope layering is outside the DIDComm-defined wrapping taxonomy".into(),
+            )
+        })?;
+        metadata.wrapping = wrapping;
+
+        if !policy.accepts(wrapping) {
+            return Err(ATMError::UnexpectedEnvelope(format!(
+                "envelope wrapping {wrapping:?} is not in the accepted set {:?}",
+                policy.expected
+            )));
+        }
+
+        // (The signature-count cap is enforced earlier, in
+        // `verify_all_signatures`, before any signer key is resolved.)
+
+        let from = msg.from.as_deref().map(Self::base_did);
+
+        // Attribute a signer to `sign_from` (best-effort): prefer the signature
+        // whose DID matches `from`, else the first signer.
+        if wrapping.is_signed() {
+            let matching = from.and_then(|f| {
+                metadata
+                    .signers
+                    .iter()
+                    .find(|kid| Self::base_did(kid) == f)
+                    .cloned()
+            });
+            metadata.sign_from = matching
+                .clone()
+                .or_else(|| metadata.signers.first().cloned());
+
+            if policy.validate_addressing_consistency && matching.is_none() {
+                return Err(ATMError::AddressingMismatch(format!(
+                    "no signature matches the message `from` ({}); signers: {:?}",
+                    from.unwrap_or("<none>"),
+                    metadata.signers
+                )));
+            }
+        }
+
+        if policy.validate_addressing_consistency {
+            // Authcrypt layer → its skid DID must match `from`.
+            if let Some(skid) = &authcrypt_skid {
+                let from_did = from.ok_or_else(|| {
+                    ATMError::AddressingMismatch(
+                        "authcrypt message has no `from` to bind the sender to".into(),
+                    )
+                })?;
+                if Self::base_did(skid) != from_did {
+                    return Err(ATMError::AddressingMismatch(format!(
+                        "authcrypt sender key ({skid}) does not match the message `from` ({from_did})"
+                    )));
+                }
+            }
+
+            // Anoncrypt-only (anonymous, unsigned) → there is no authenticated
+            // sender, so a `from` claim cannot be backed. The spec makes such a
+            // message anonymous; require `from` to be absent.
+            if wrapping == MessageWrappingType::AnoncryptPlaintext
+                && let Some(from_did) = from
+            {
+                return Err(ATMError::AddressingMismatch(format!(
+                    "anoncrypt message declares a `from` ({from_did}) but anonymous \
+                     encryption provides no authenticated sender to back it"
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn unpack_forward(
@@ -529,7 +897,11 @@ mod tests {
         (did_string, secret)
     }
 
-    /// Helper: create an ATM instance with secrets pre-loaded for the given party.
+    /// Helper: create an ATM instance with secrets pre-loaded for the given
+    /// party, using the **secure default** unpack policy (authenticated
+    /// encryption only). Tests
+    /// that exercise other wrappings pass an explicit minimal policy via
+    /// `create_atm_with_policy`.
     async fn create_atm_with_secrets(secrets: Vec<Secret>) -> ATM {
         use affinidi_tdk_common::config::TDKConfig;
         let config = ATMConfig::builder().build().unwrap();
@@ -792,7 +1164,16 @@ mod tests {
         let (recipient_did, recipient_secret) = generate_peer_did_with_x25519();
 
         let sender_atm = create_atm_with_secrets(vec![]).await;
-        let recipient_atm = create_atm_with_secrets(vec![recipient_secret.clone()]).await;
+        let recipient_atm = create_atm_with_policy(
+            vec![recipient_secret.clone()],
+            UnpackPolicy {
+                expected: vec![MessageWrappingType::AnoncryptPlaintext],
+                validate_addressing_consistency: true,
+                max_signatures: 1,
+                max_recipients: 2,
+            },
+        )
+        .await;
 
         let msg = DcMessage::build(
             "test-anon-1".to_string(),
@@ -910,7 +1291,16 @@ mod tests {
         let (recipient_did, recipient_secret) = generate_peer_did_with_p256();
 
         let sender_atm = create_atm_with_secrets(vec![]).await;
-        let recipient_atm = create_atm_with_secrets(vec![recipient_secret.clone()]).await;
+        let recipient_atm = create_atm_with_policy(
+            vec![recipient_secret.clone()],
+            UnpackPolicy {
+                expected: vec![MessageWrappingType::AnoncryptPlaintext],
+                validate_addressing_consistency: true,
+                max_signatures: 1,
+                max_recipients: 2,
+            },
+        )
+        .await;
 
         let msg = DcMessage::build(
             "test-p256-anon-1".to_string(),
@@ -977,7 +1367,16 @@ mod tests {
         let (recipient_did, recipient_secret) = generate_peer_did_with_secp256k1();
 
         let sender_atm = create_atm_with_secrets(vec![]).await;
-        let recipient_atm = create_atm_with_secrets(vec![recipient_secret.clone()]).await;
+        let recipient_atm = create_atm_with_policy(
+            vec![recipient_secret.clone()],
+            UnpackPolicy {
+                expected: vec![MessageWrappingType::AnoncryptPlaintext],
+                validate_addressing_consistency: true,
+                max_signatures: 1,
+                max_recipients: 2,
+            },
+        )
+        .await;
 
         let msg = DcMessage::build(
             "test-k256-anon-1".to_string(),
@@ -1152,13 +1551,27 @@ mod tests {
             "inner JWS verified => non_repudiation"
         );
         assert_eq!(meta.sign_from.as_deref(), Some(signer_kid.as_str()));
+        assert_eq!(meta.wrapping, MessageWrappingType::AuthcryptSignPlaintext);
     }
 
     const FORWARD_TYPE: &str = "https://didcomm.org/routing/2.0/forward";
 
     /// Creates an ATM instance with default config (unpack_forwards=true).
     async fn create_atm() -> ATM {
-        let config = ATMConfig::builder().build().unwrap();
+        // Plaintext + signed only — the wrappings the forward / plaintext /
+        // signed tests below exercise (no accept-all preset).
+        let config = ATMConfig::builder()
+            .with_unpack_policy(UnpackPolicy {
+                expected: vec![
+                    MessageWrappingType::Plaintext,
+                    MessageWrappingType::SignedPlaintext,
+                ],
+                validate_addressing_consistency: false,
+                max_signatures: DEFAULT_MAX_SIGNATURES,
+                max_recipients: DEFAULT_MAX_RECIPIENTS,
+            })
+            .build()
+            .unwrap();
         let tdk_cfg = affinidi_tdk_common::config::TDKConfig::headless().unwrap();
         let tdk = Arc::new(TDKSharedState::new(tdk_cfg).await.unwrap());
         ATM::new(config, tdk).await.unwrap()
@@ -1168,6 +1581,12 @@ mod tests {
     async fn create_atm_no_unpack_forwards() -> ATM {
         let config = ATMConfig::builder()
             .with_unpack_forwards(false)
+            .with_unpack_policy(UnpackPolicy {
+                expected: vec![MessageWrappingType::Plaintext],
+                validate_addressing_consistency: false,
+                max_signatures: DEFAULT_MAX_SIGNATURES,
+                max_recipients: DEFAULT_MAX_RECIPIENTS,
+            })
             .build()
             .unwrap();
         let tdk_cfg = affinidi_tdk_common::config::TDKConfig::headless().unwrap();
@@ -1514,5 +1933,1616 @@ mod tests {
             matches!(&result.unwrap_err(), ATMError::MsgReceiveError(msg) if msg.contains("cannot be converted to a UTF-8 string")),
             "Expected MsgReceiveError mentioning UTF-8 conversion failure"
         );
+    }
+
+    // ─── Secure-default policy, addressing consistency, and layered envelopes ─
+
+    use crate::config::{MessageWrappingType, UnpackPolicy};
+    use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
+    use affinidi_messaging_didcomm::jwe::encrypt::{anoncrypt, authcrypt};
+    use affinidi_messaging_didcomm::jws::sign::{JwsSigner, sign_multi};
+
+    /// A did:peer:2 whose Ed25519 signing key (#key-1) and X25519 key-agreement
+    /// key (#key-2) are both controlled by the test. Returns
+    /// (did, ed_signing_secret, x25519_secret).
+    fn generate_peer_did_full() -> (String, Secret, Secret) {
+        let ed = Secret::generate_ed25519(Some("temp"), None);
+        let ed_mb = ed.get_public_keymultibase().unwrap();
+        let x = Secret::generate_x25519(Some("temp"), None).unwrap();
+        let x_mb = x.get_public_keymultibase().unwrap();
+        let keys = vec![
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Verification, ed_mb),
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, x_mb),
+        ];
+        let (did, _created) = DID::generate_peer(&keys, None).unwrap();
+        let did_string = did.to_string();
+        let mut ed = ed;
+        ed.id = format!("{did_string}#key-1");
+        let mut x = x;
+        x.id = format!("{did_string}#key-2");
+        (did_string, ed, x)
+    }
+
+    async fn create_atm_with_policy(secrets: Vec<Secret>, policy: UnpackPolicy) -> ATM {
+        use affinidi_tdk_common::config::TDKConfig;
+        let config = ATMConfig::builder()
+            .with_unpack_policy(policy)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        for s in &secrets {
+            tdk.secrets_resolver().insert(s.clone()).await;
+        }
+        ATM::new(config, tdk).await.unwrap()
+    }
+
+    fn x25519_priv(s: &Secret) -> PrivateKeyAgreement {
+        PrivateKeyAgreement::from_raw_bytes(Curve::X25519, s.get_private_bytes()).unwrap()
+    }
+    fn x25519_pub(s: &Secret) -> PublicKeyAgreement {
+        PublicKeyAgreement::from_raw_bytes(Curve::X25519, s.get_public_bytes()).unwrap()
+    }
+
+    fn build_plaintext(from: &str, to: &str) -> String {
+        let msg = DcMessage::build(
+            "layered-1".to_string(),
+            "example/v1".to_string(),
+            json!({"hello": "layered"}),
+        )
+        .from(from.to_string())
+        .to(to.to_string())
+        .finalize();
+        serde_json::to_string(&msg).unwrap()
+    }
+
+    /// The secure default policy accepts an authcrypt message whose inner
+    /// `from` matches the authcrypt `skid`, and binds the sender.
+    #[tokio::test]
+    async fn default_policy_accepts_matching_authcrypt() {
+        let (sender_did, _sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+        let recipient = create_atm_with_policy(vec![rx.clone()], UnpackPolicy::default()).await;
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let jwe = authcrypt(
+            plaintext.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &x25519_priv(&sx),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        let (msg, meta) = recipient.unpack(&jwe).await.expect("authcrypt accepted");
+        assert_eq!(meta.wrapping, MessageWrappingType::AuthcryptPlaintext);
+        assert!(meta.authenticated);
+        assert_eq!(msg.from.as_deref(), Some(sender_did.as_str()));
+        assert_eq!(
+            meta.encrypted_from_kid.as_deref(),
+            Some(format!("{sender_did}#key-2").as_str())
+        );
+    }
+
+    /// The secure default also accepts `authcrypt(sign(plaintext))` — the second
+    /// authenticated wrapping — binding both the authcrypt sender (`skid`) and
+    /// the verified signer to the inner `from`.
+    #[tokio::test]
+    async fn default_policy_accepts_authcrypt_sign() {
+        let (sender_did, sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+        let recipient = create_atm_with_policy(vec![rx.clone()], UnpackPolicy::default()).await;
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{sender_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+        let jwe = authcrypt(
+            signed.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &x25519_priv(&sx),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        let (msg, meta) = recipient
+            .unpack(&jwe)
+            .await
+            .expect("authcrypt(sign) accepted by the default policy");
+        assert_eq!(meta.wrapping, MessageWrappingType::AuthcryptSignPlaintext);
+        assert!(meta.authenticated && meta.non_repudiation);
+        assert_eq!(msg.from.as_deref(), Some(sender_did.as_str()));
+        assert_eq!(
+            meta.sign_from.as_deref(),
+            Some(format!("{sender_did}#key-1").as_str())
+        );
+        assert_eq!(
+            meta.encrypted_from_kid.as_deref(),
+            Some(format!("{sender_did}#key-2").as_str())
+        );
+    }
+
+    /// The forged-sender bypass: authcrypted by one key but the inner `from`
+    /// claims a different DID. The secure default must reject it.
+    #[tokio::test]
+    async fn default_policy_rejects_forged_from_authcrypt() {
+        let (sender_did, _sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+        let (victim_did, _ved, _vx) = generate_peer_did_full();
+        let recipient = create_atm_with_policy(vec![rx.clone()], UnpackPolicy::default()).await;
+
+        // Encrypted with the sender's key, but `from` claims the victim.
+        let plaintext = build_plaintext(&victim_did, &recipient_did);
+        let jwe = authcrypt(
+            plaintext.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &x25519_priv(&sx),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        let err = recipient.unpack(&jwe).await.unwrap_err();
+        assert!(
+            matches!(err, ATMError::AddressingMismatch(_)),
+            "forged `from` must be an AddressingMismatch, got: {err:?}"
+        );
+    }
+
+    /// The impostor wrapping `sign(authcrypt(plaintext))` — signature *outside*
+    /// the encryption — must be rejected, even though `authcrypt(sign(pt))`
+    /// (signature inside) is accepted by the same default policy. The two are
+    /// not equivalent: with the signature outside, any intermediary can strip
+    /// the outer JWS and forward the bare authcrypt. Classification is
+    /// layer-order sensitive, so this lands as `UnexpectedEnvelope` (outside the
+    /// taxonomy), not as the `AuthcryptSignPlaintext` it superficially resembles.
+    #[tokio::test]
+    async fn default_policy_rejects_sign_over_authcrypt() {
+        let (sender_did, sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+        let recipient = create_atm_with_policy(vec![rx.clone()], UnpackPolicy::default()).await;
+
+        // authcrypt first, then sign the JWE — i.e. sign(authcrypt(pt)).
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let jwe = authcrypt(
+            plaintext.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &x25519_priv(&sx),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let outer_signed = sign_multi(
+            jwe.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{sender_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+
+        let err = recipient.unpack(&outer_signed).await.unwrap_err();
+        assert!(
+            matches!(err, ATMError::UnexpectedEnvelope(_)),
+            "sign-over-authcrypt must be rejected as outside the taxonomy, got: {err:?}"
+        );
+    }
+
+    /// The secure default rejects anoncrypt, plaintext, and signed-only
+    /// (downgrade guard).
+    #[tokio::test]
+    async fn default_policy_rejects_weaker_wrappings() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+        let recipient = create_atm_with_policy(vec![rx.clone()], UnpackPolicy::default()).await;
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+
+        // anoncrypt
+        let anon = anoncrypt(
+            plaintext.as_bytes(),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+        assert!(matches!(
+            recipient.unpack(&anon).await.unwrap_err(),
+            ATMError::UnexpectedEnvelope(_)
+        ));
+
+        // plaintext
+        assert!(matches!(
+            recipient.unpack(&plaintext).await.unwrap_err(),
+            ATMError::UnexpectedEnvelope(_)
+        ));
+
+        // signed-only
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{sender_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+        assert!(matches!(
+            recipient.unpack(&signed).await.unwrap_err(),
+            ATMError::UnexpectedEnvelope(_)
+        ));
+    }
+
+    /// A policy whose `expected` set lists **more than one** wrapping accepts
+    /// *any* of the listed wrappings and rejects one that is not listed. Here
+    /// the set is `[AnoncryptPlaintext, AuthcryptPlaintext]`: both are accepted
+    /// (and classified correctly), while a `sign(plaintext)` — absent from the
+    /// set — is rejected.
+    #[tokio::test]
+    async fn policy_with_multiple_expected_accepts_any_listed() {
+        let (sender_did, sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+
+        let policy = UnpackPolicy {
+            expected: vec![
+                MessageWrappingType::AnoncryptPlaintext,
+                MessageWrappingType::AuthcryptPlaintext,
+            ],
+            validate_addressing_consistency: false,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![rx.clone()], policy).await;
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let recipient_kid = format!("{recipient_did}#key-2");
+
+        // First listed wrapping: anoncrypt(plaintext) is accepted.
+        let anon = anoncrypt(plaintext.as_bytes(), &[(&recipient_kid, &x25519_pub(&rx))]).unwrap();
+        let (_msg, meta) = recipient
+            .unpack(&anon)
+            .await
+            .expect("anoncrypt is one of the expected wrappings");
+        assert_eq!(meta.wrapping, MessageWrappingType::AnoncryptPlaintext);
+
+        // Second listed wrapping: authcrypt(plaintext) is also accepted.
+        let auth = authcrypt(
+            plaintext.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &x25519_priv(&sx),
+            &[(&recipient_kid, &x25519_pub(&rx))],
+        )
+        .unwrap();
+        let (_msg, meta) = recipient
+            .unpack(&auth)
+            .await
+            .expect("authcrypt is one of the expected wrappings");
+        assert_eq!(meta.wrapping, MessageWrappingType::AuthcryptPlaintext);
+
+        // A wrapping absent from the set (signed-only) is still rejected.
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{sender_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                recipient.unpack(&signed).await.unwrap_err(),
+                ATMError::UnexpectedEnvelope(_)
+            ),
+            "a wrapping not in the expected set must be rejected"
+        );
+    }
+
+    /// Double encryption `anoncrypt(authcrypt(plaintext))` unpacks under a
+    /// policy that accepts it, classifies correctly, and binds the authcrypt
+    /// sender across both layers.
+    #[tokio::test]
+    async fn double_encryption_anoncrypt_authcrypt() {
+        let (sender_did, _sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let inner = authcrypt(
+            plaintext.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &x25519_priv(&sx),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+        let outer = anoncrypt(
+            inner.as_bytes(),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::AnoncryptAuthcryptPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![rx.clone()], policy).await;
+
+        let (_msg, meta) = recipient.unpack(&outer).await.expect("double-enc accepted");
+        assert_eq!(
+            meta.wrapping,
+            MessageWrappingType::AnoncryptAuthcryptPlaintext
+        );
+        assert!(meta.encrypted && meta.authenticated);
+        assert_eq!(
+            meta.encrypted_from_kid.as_deref(),
+            Some(format!("{sender_did}#key-2").as_str())
+        );
+
+        // The secure default also accepts it: it is authenticated encryption
+        // (the inner authcrypt binds the sender) and strictly more private than
+        // bare authcrypt, so it is in the default allow-list.
+        let strict = create_atm_with_policy(vec![rx], UnpackPolicy::default()).await;
+        let (_msg, meta) = strict
+            .unpack(&outer)
+            .await
+            .expect("anoncrypt(authcrypt) is in the secure default set");
+        assert_eq!(
+            meta.wrapping,
+            MessageWrappingType::AnoncryptAuthcryptPlaintext
+        );
+    }
+
+    /// `anoncrypt(sign(plaintext))` (a DIDComm-defined wrapping) with two
+    /// signatures: every signature verifies, the signer matching `from` is
+    /// bound to `sign_from`, and non-repudiation is surfaced. The inner `from`
+    /// remains available (it is authenticated by the signature layer, not the
+    /// anoncrypt), even though anoncrypt is the outermost wrapping. anoncrypt
+    /// has no authenticated sender, so `encrypted_from_kid` is `None`.
+    #[tokio::test]
+    async fn anoncrypt_sign_multi_sig_consistency() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+        let (cosigner_did, ced, _cx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+
+        // Two signatures: the sender (matches `from`) and a co-signer.
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let ced_priv: [u8; 32] = ced.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[
+                JwsSigner::Ed25519 {
+                    kid: &format!("{sender_did}#key-1"),
+                    private: &sed_priv,
+                },
+                JwsSigner::Ed25519 {
+                    kid: &format!("{cosigner_did}#key-1"),
+                    private: &ced_priv,
+                },
+            ],
+        )
+        .unwrap();
+        let outer = anoncrypt(
+            signed.as_bytes(),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::AnoncryptSignPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 2,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![rx], policy).await;
+
+        let (msg, meta) = recipient
+            .unpack(&outer)
+            .await
+            .expect("anoncrypt(sign) accepted");
+        assert_eq!(meta.wrapping, MessageWrappingType::AnoncryptSignPlaintext);
+        // The signature layer authenticates the sender, so the inner `from`
+        // remains available even under the outer anoncrypt wrapping.
+        assert_eq!(
+            msg.from.as_deref(),
+            Some(sender_did.as_str()),
+            "the signed `from` must survive the anoncrypt wrapping"
+        );
+        assert!(meta.encrypted && !meta.authenticated && meta.non_repudiation);
+        assert_eq!(meta.signers.len(), 2, "both signatures verified");
+        assert!(meta.signers.contains(&format!("{sender_did}#key-1")));
+        assert!(meta.signers.contains(&format!("{cosigner_did}#key-1")));
+        // The signer matching `from` is bound; the co-signer is not.
+        assert_eq!(
+            meta.sign_from.as_deref(),
+            Some(format!("{sender_did}#key-1").as_str())
+        );
+        assert!(
+            meta.encrypted_from_kid.is_none(),
+            "anoncrypt => no authenticated sender key"
+        );
+    }
+
+    /// `anoncrypt(authcrypt(sign(plaintext)))` is explicitly a MUST NOT in the
+    /// DIDComm v2 spec (§IANA Media Types). It is not part of the wrapping
+    /// taxonomy, so `unpack` rejects it as an unexpected envelope even under a
+    /// policy that accepts layered wrappings.
+    #[tokio::test]
+    async fn triple_anoncrypt_authcrypt_sign_is_rejected() {
+        let (sender_did, sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{sender_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+        let inner = authcrypt(
+            signed.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &x25519_priv(&sx),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+        let outer = anoncrypt(
+            inner.as_bytes(),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        let recipient = create_atm_with_policy(
+            vec![rx],
+            UnpackPolicy {
+                expected: vec![
+                    MessageWrappingType::AnoncryptAuthcryptPlaintext,
+                    MessageWrappingType::AnoncryptSignPlaintext,
+                ],
+                validate_addressing_consistency: false,
+                max_signatures: 1,
+                max_recipients: 2,
+            },
+        )
+        .await;
+        let err = recipient.unpack(&outer).await.unwrap_err();
+        assert!(
+            matches!(err, ATMError::UnexpectedEnvelope(_)),
+            "the spec-forbidden triple must be rejected, got: {err:?}"
+        );
+    }
+
+    /// More than two cryptographic layers (of any kind) is non-conformant and
+    /// rejected — here three nested anoncrypt layers. The third layer is refused
+    /// *before* it is decrypted (the cap is checked before removal), so only two
+    /// decryptions ever run.
+    #[tokio::test]
+    async fn more_than_two_crypto_layers_is_rejected() {
+        let (sender_did, _sed, _sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let rk = format!("{recipient_did}#key-2");
+        let l1 = anoncrypt(plaintext.as_bytes(), &[(&rk, &x25519_pub(&rx))]).unwrap();
+        let l2 = anoncrypt(l1.as_bytes(), &[(&rk, &x25519_pub(&rx))]).unwrap();
+        let l3 = anoncrypt(l2.as_bytes(), &[(&rk, &x25519_pub(&rx))]).unwrap();
+
+        let recipient = create_atm_with_policy(
+            vec![rx],
+            UnpackPolicy {
+                expected: vec![MessageWrappingType::AnoncryptPlaintext],
+                validate_addressing_consistency: false,
+                max_signatures: 1,
+                max_recipients: 2,
+            },
+        )
+        .await;
+        let err = recipient.unpack(&l3).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::UnexpectedEnvelope(m) if m.contains("cryptographic layers")),
+            "3+ crypto layers must be rejected, got: {err:?}"
+        );
+    }
+
+    /// The `ATMConfigBuilder` default — when `with_unpack_policy` is *omitted* —
+    /// must be the secure authcrypt-only policy: a matching `authcrypt(plaintext)`
+    /// is accepted (and binds the sender), while a downgraded `anoncrypt` is
+    /// rejected. Guards against the builder default drifting from
+    /// `UnpackPolicy::default()`.
+    #[tokio::test]
+    async fn builder_default_policy_is_secure_authcrypt_only() {
+        use affinidi_tdk_common::config::TDKConfig;
+        let (sender_did, _sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+
+        // No `with_unpack_policy` call — exercise the builder default.
+        let config = ATMConfig::builder().build().unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        tdk.secrets_resolver().insert(rx.clone()).await;
+        let recipient = ATM::new(config, tdk).await.unwrap();
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+
+        // authcrypt(plaintext) is accepted by default and binds the sender.
+        let jwe = authcrypt(
+            plaintext.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &x25519_priv(&sx),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+        let (msg, meta) = recipient
+            .unpack(&jwe)
+            .await
+            .expect("builder default must accept authcrypt(plaintext)");
+        assert_eq!(meta.wrapping, MessageWrappingType::AuthcryptPlaintext);
+        assert!(meta.authenticated);
+        assert_eq!(msg.from.as_deref(), Some(sender_did.as_str()));
+        assert_eq!(
+            meta.encrypted_from_kid.as_deref(),
+            Some(format!("{sender_did}#key-2").as_str())
+        );
+
+        // A downgraded anoncrypt(plaintext) is rejected by that same default.
+        let anon = anoncrypt(
+            plaintext.as_bytes(),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+        assert!(matches!(
+            recipient.unpack(&anon).await.unwrap_err(),
+            ATMError::UnexpectedEnvelope(_)
+        ));
+    }
+
+    /// When a signed message's signatures all verify but none matches `from`,
+    /// addressing-consistency rejects it.
+    #[tokio::test]
+    async fn signed_but_no_signer_matches_from_is_rejected() {
+        let (sender_did, _sed, _sx) = generate_peer_did_full();
+        let (cosigner_did, ced, _cx) = generate_peer_did_full();
+        let (recipient_did, _red, _rx) = generate_peer_did_full();
+
+        // `from` is the sender, but only the co-signer signs.
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let ced_priv: [u8; 32] = ced.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{cosigner_did}#key-1"),
+                private: &ced_priv,
+            }],
+        )
+        .unwrap();
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![], policy).await;
+
+        let err = recipient.unpack(&signed).await.unwrap_err();
+        assert!(
+            matches!(err, ATMError::AddressingMismatch(_)),
+            "signer not matching `from` must be an AddressingMismatch, got: {err:?}"
+        );
+    }
+
+    /// Addressing consistency (authcrypt branch): an authcrypt message with no
+    /// inner `from` has nothing to bind the authcrypt sender (`skid`) to, so it
+    /// is rejected as an `AddressingMismatch`.
+    #[tokio::test]
+    async fn authcrypt_without_from_is_rejected() {
+        let (sender_did, _sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+
+        // Plaintext with no `from` — nothing to bind the authcrypt sender to.
+        let msg = DcMessage::build(
+            "no-from-authcrypt".to_string(),
+            "example/v1".to_string(),
+            json!({"hello": "layered"}),
+        )
+        .to(recipient_did.clone())
+        .finalize();
+        let plaintext = serde_json::to_string(&msg).unwrap();
+
+        let jwe = authcrypt(
+            plaintext.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &x25519_priv(&sx),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::AuthcryptPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![rx], policy).await;
+
+        let err = recipient.unpack(&jwe).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::AddressingMismatch(m) if m.contains("no `from`")),
+            "authcrypt with no `from` must be an AddressingMismatch, got: {err:?}"
+        );
+    }
+
+    /// Rewrite a `sign_multi` JWS so the signer `kid` appears **only** in the
+    /// per-signature *unprotected* header, optionally overriding its value —
+    /// i.e. exactly what an intermediary can do in transit, since the
+    /// unprotected header is outside the signing input.
+    fn strip_kid_to_unprotected(jws_str: &str, override_kid: Option<&str>) -> String {
+        use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+
+        let mut v: serde_json::Value = serde_json::from_str(jws_str).unwrap();
+        let sig = &mut v["signatures"][0];
+
+        let protected_b64 = sig["protected"].as_str().unwrap().to_string();
+        let mut protected: serde_json::Value =
+            serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(&protected_b64).unwrap())
+                .unwrap();
+        let original_kid = protected["kid"].as_str().unwrap().to_string();
+        protected.as_object_mut().unwrap().remove("kid");
+        sig["protected"] = serde_json::Value::String(
+            BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_vec(&protected).unwrap()),
+        );
+
+        let kid = override_kid.unwrap_or(&original_kid);
+        sig["header"] = json!({ "kid": kid });
+        serde_json::to_string(&v).unwrap()
+    }
+
+    /// SSRF guard: the per-signature *unprotected* header is outside the signing
+    /// input, so any intermediary can rewrite the signer `kid` in transit
+    /// without invalidating the signature. If `unpack` resolved it, that
+    /// intermediary could aim an outbound `did:web` fetch at a host of its
+    /// choosing — an SSRF primitive available to a party that cannot forge a
+    /// signature at all.
+    ///
+    /// So an unprotected `kid` is only resolved when its DID matches the signed
+    /// payload's `from` (which *is* inside the signing input). Here the rewritten
+    /// kid names an unrelated DID, so it must be refused as `UnexpectedEnvelope`
+    /// — the *pre-resolution* rejection — rather than reaching verification.
+    #[tokio::test]
+    async fn unprotected_kid_not_matching_from_is_refused_before_resolution() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, "did:example:recipient");
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{sender_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+
+        // The intermediary's rewrite: kid only in the unprotected header, and
+        // pointed at an attacker-controlled `did:web` host.
+        let tampered =
+            strip_kid_to_unprotected(&signed, Some("did:web:attacker.example.com#key-1"));
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![], policy).await;
+
+        let err = recipient.unpack(&tampered).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::UnexpectedEnvelope(m)
+                if m.contains("unprotected") && m.contains("refusing to resolve")),
+            "a rewritten unprotected kid must be refused before any resolution, got: {err:?}"
+        );
+    }
+
+    /// The converse of the guard above: an unprotected-only `kid` that *does*
+    /// name the same DID as the signed `from` is still accepted for resolution,
+    /// so the credo-ts / didcomm-python interop the fallback exists for keeps
+    /// working. (The signature itself no longer verifies here because rewriting
+    /// the protected header changes the signing input — the point is that the
+    /// failure is a *verification* failure, i.e. the guard let it through, not
+    /// the pre-resolution `UnexpectedEnvelope` refusal.)
+    #[tokio::test]
+    async fn unprotected_kid_matching_from_is_still_resolved() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, "did:example:recipient");
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{sender_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+
+        // kid moved to the unprotected header but left naming the real sender.
+        let moved = strip_kid_to_unprotected(&signed, None);
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![], policy).await;
+
+        let err = recipient.unpack(&moved).await.unwrap_err();
+        assert!(
+            !matches!(&err, ATMError::UnexpectedEnvelope(m) if m.contains("refusing to resolve")),
+            "a from-matching unprotected kid must not hit the SSRF guard, got: {err:?}"
+        );
+        assert!(
+            matches!(&err, ATMError::VerificationFailed(_)),
+            "it should proceed to verification and fail there instead, got: {err:?}"
+        );
+    }
+
+    /// Addressing consistency (signed branch): a signed message with no inner
+    /// `from` has no address for any signer to match, so it is rejected as an
+    /// `AddressingMismatch`.
+    #[tokio::test]
+    async fn signed_without_from_is_rejected() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+
+        // Signed plaintext with no `from` — no signer can be bound to it.
+        let msg = DcMessage::build(
+            "no-from-signed".to_string(),
+            "example/v1".to_string(),
+            json!({"signed": true}),
+        )
+        .to("did:example:recipient".to_string())
+        .finalize();
+        let plaintext = serde_json::to_string(&msg).unwrap();
+
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{sender_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![], policy).await;
+
+        let err = recipient.unpack(&signed).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::AddressingMismatch(m) if m.contains("no signature matches")),
+            "signed with no `from` must be an AddressingMismatch, got: {err:?}"
+        );
+    }
+
+    /// Addressing consistency (anoncrypt branch, negative): a pure anoncrypt
+    /// message is anonymous — it carries no authenticated sender — so a non-null
+    /// inner `from` cannot be backed and is rejected as an `AddressingMismatch`.
+    #[tokio::test]
+    async fn anoncrypt_with_from_is_rejected() {
+        let (sender_did, _sed, _sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+
+        // Pure anoncrypt, but the inner plaintext declares a `from`.
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let anon = anoncrypt(
+            plaintext.as_bytes(),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::AnoncryptPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![rx], policy).await;
+
+        let err = recipient.unpack(&anon).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::AddressingMismatch(m) if m.contains("anoncrypt")),
+            "anoncrypt declaring a `from` must be an AddressingMismatch, got: {err:?}"
+        );
+    }
+
+    /// Addressing consistency (anoncrypt branch, positive): a pure anoncrypt
+    /// message with no `from` is anonymous and accepted under a
+    /// consistency-enforcing policy.
+    #[tokio::test]
+    async fn anoncrypt_without_from_is_accepted() {
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+
+        // Anonymous plaintext (no `from`).
+        let msg = DcMessage::build(
+            "anon-no-from".to_string(),
+            "example/v1".to_string(),
+            json!({"hello": "anonymous"}),
+        )
+        .to(recipient_did.clone())
+        .finalize();
+        let plaintext = serde_json::to_string(&msg).unwrap();
+        let anon = anoncrypt(
+            plaintext.as_bytes(),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::AnoncryptPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![rx], policy).await;
+
+        let (msg, meta) = recipient
+            .unpack(&anon)
+            .await
+            .expect("anonymous anoncrypt (no `from`) is accepted");
+        assert_eq!(meta.wrapping, MessageWrappingType::AnoncryptPlaintext);
+        assert!(meta.anonymous_sender);
+        assert!(msg.from.is_none());
+    }
+
+    /// A did:peer:2 whose signing key (#key-1) is of the requested type
+    /// (Ed25519 / P-256 / secp256k1). Returns (did, signing_secret).
+    fn generate_peer_did_signing(sign_type: PeerKeyType) -> (String, Secret) {
+        let signing = match sign_type {
+            PeerKeyType::Ed25519 => Secret::generate_ed25519(Some("temp"), None),
+            PeerKeyType::P256 => Secret::generate_p256(Some("temp"), None).unwrap(),
+            PeerKeyType::Secp256k1 => Secret::generate_secp256k1(Some("temp"), None).unwrap(),
+        };
+        let sign_mb = signing.get_public_keymultibase().unwrap();
+        let x = Secret::generate_x25519(Some("temp"), None).unwrap();
+        let x_mb = x.get_public_keymultibase().unwrap();
+        let keys = vec![
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Verification, sign_mb),
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, x_mb),
+        ];
+        let (did, _created) = DID::generate_peer(&keys, None).unwrap();
+        let did_string = did.to_string();
+        let mut signing = signing;
+        signing.id = format!("{did_string}#key-1");
+        (did_string, signing)
+    }
+
+    /// End-to-end signer verification through `atm.unpack` for every supported
+    /// signing curve (Ed25519 / P-256 / secp256k1) — exercises
+    /// `resolve_verify_key`'s per-curve arms and the `ES256`/`ES256K` verify
+    /// paths, not just the didcomm-primitive unit tests.
+    #[tokio::test]
+    async fn signed_verifies_across_all_signer_curves() {
+        for sign_type in [
+            PeerKeyType::Ed25519,
+            PeerKeyType::P256,
+            PeerKeyType::Secp256k1,
+        ] {
+            let (signer_did, signer_secret) = generate_peer_did_signing(sign_type);
+            let signer_kid = format!("{signer_did}#key-1");
+            let priv32: [u8; 32] = signer_secret.get_private_bytes().try_into().unwrap();
+
+            let plaintext = build_plaintext(&signer_did, "did:example:recipient");
+            let jws_signer = match sign_type {
+                PeerKeyType::Ed25519 => JwsSigner::Ed25519 {
+                    kid: &signer_kid,
+                    private: &priv32,
+                },
+                PeerKeyType::P256 => JwsSigner::P256 {
+                    kid: &signer_kid,
+                    private: &priv32,
+                },
+                PeerKeyType::Secp256k1 => JwsSigner::Secp256k1 {
+                    kid: &signer_kid,
+                    private: &priv32,
+                },
+            };
+            let signed = sign_multi(plaintext.as_bytes(), &[jws_signer]).unwrap();
+
+            let policy = UnpackPolicy {
+                expected: vec![MessageWrappingType::SignedPlaintext],
+                validate_addressing_consistency: true,
+                max_signatures: 1,
+                max_recipients: 2,
+            };
+            let recipient = create_atm_with_policy(vec![], policy).await;
+
+            let (_msg, meta) = recipient
+                .unpack(&signed)
+                .await
+                .unwrap_or_else(|e| panic!("{sign_type:?} signer should verify: {e:?}"));
+            assert_eq!(meta.wrapping, MessageWrappingType::SignedPlaintext);
+            assert_eq!(meta.signers, vec![signer_kid.clone()]);
+            assert_eq!(meta.sign_from.as_deref(), Some(signer_kid.as_str()));
+        }
+    }
+
+    /// Strict "verify all": in a multi-signature message where every signer
+    /// resolves but ONE signature is corrupted, the whole unpack must fail
+    /// (no partial trust). Consistency is off to isolate signature validity.
+    #[tokio::test]
+    async fn multi_sig_one_invalid_signature_rejects_whole_unpack() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+        let (cosigner_did, ced, _cx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, "did:example:recipient");
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let ced_priv: [u8; 32] = ced.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[
+                JwsSigner::Ed25519 {
+                    kid: &format!("{sender_did}#key-1"),
+                    private: &sed_priv,
+                },
+                JwsSigner::Ed25519 {
+                    kid: &format!("{cosigner_did}#key-1"),
+                    private: &ced_priv,
+                },
+            ],
+        )
+        .unwrap();
+
+        // Corrupt the SECOND signature's bytes (keep it valid base64url length).
+        let mut v: serde_json::Value = serde_json::from_str(&signed).unwrap();
+        let sig = v["signatures"][1]["signature"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let first = sig.chars().next().unwrap();
+        let replacement = if first == 'A' { 'B' } else { 'A' };
+        let corrupted: String = std::iter::once(replacement)
+            .chain(sig.chars().skip(1))
+            .collect();
+        v["signatures"][1]["signature"] = serde_json::Value::String(corrupted);
+        let tampered = serde_json::to_string(&v).unwrap();
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: false,
+            max_signatures: 2,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![], policy).await;
+
+        let err = recipient.unpack(&tampered).await.unwrap_err();
+        assert!(
+            matches!(err, ATMError::VerificationFailed(_)),
+            "one invalid signature must fail the whole unpack as a \
+             (deterministic) VerificationFailed, got: {err:?}"
+        );
+    }
+
+    /// Build a `sign(sender) + sign(cosigner)` plaintext, then corrupt one of the
+    /// two signatures. `corrupt_index` selects which (0 = the `from` signer).
+    fn signed_with_one_corrupt_signature(
+        sender_did: &str,
+        sed_priv: &[u8; 32],
+        cosigner_did: &str,
+        ced_priv: &[u8; 32],
+        corrupt_index: usize,
+    ) -> String {
+        let plaintext = build_plaintext(sender_did, "did:example:recipient");
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[
+                JwsSigner::Ed25519 {
+                    kid: &format!("{sender_did}#key-1"),
+                    private: sed_priv,
+                },
+                JwsSigner::Ed25519 {
+                    kid: &format!("{cosigner_did}#key-1"),
+                    private: ced_priv,
+                },
+            ],
+        )
+        .unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&signed).unwrap();
+        let sig = v["signatures"][corrupt_index]["signature"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let first = sig.chars().next().unwrap();
+        let repl = if first == 'A' { 'B' } else { 'A' };
+        let corrupted: String = std::iter::once(repl).chain(sig.chars().skip(1)).collect();
+        v["signatures"][corrupt_index]["signature"] = serde_json::Value::String(corrupted);
+        serde_json::to_string(&v).unwrap()
+    }
+
+    /// An ATM built with the given policy and `allow_invalid_signatures`.
+    async fn atm_with_policy_and_tolerance(policy: UnpackPolicy, tolerate: bool) -> ATM {
+        use affinidi_tdk_common::config::TDKConfig;
+        let config = ATMConfig::builder()
+            .with_unpack_policy(policy)
+            .with_allow_invalid_signatures(tolerate)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        ATM::new(config, tdk).await.unwrap()
+    }
+
+    /// `allow_invalid_signatures = true` tolerates a *supplementary* co-signature
+    /// that doesn't verify: the message still unpacks, the valid `from` signer is
+    /// bound to `sign_from`, and the bad co-signer is recorded in
+    /// `metadata.unverified_signers` (not `signers`). The default (strict) mode
+    /// rejects the same message.
+    #[tokio::test]
+    async fn allow_invalid_signatures_tolerates_a_bad_cosignature() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+        let (cosigner_did, ced, _cx) = generate_peer_did_full();
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let ced_priv: [u8; 32] = ced.get_private_bytes().try_into().unwrap();
+
+        // The co-signer (signature #1) is corrupt; the `from` signer (#0) is fine.
+        let tampered =
+            signed_with_one_corrupt_signature(&sender_did, &sed_priv, &cosigner_did, &ced_priv, 1);
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 2,
+            max_recipients: 2,
+        };
+
+        // Strict (default): the bad co-signature fails the whole unpack.
+        let strict = create_atm_with_policy(vec![], policy.clone()).await;
+        assert!(
+            matches!(
+                strict.unpack(&tampered).await.unwrap_err(),
+                ATMError::VerificationFailed(_)
+            ),
+            "strict mode must reject a message with any invalid signature"
+        );
+
+        // Tolerant: unpacks, binds the valid `from` signer, records the co-signer.
+        let lenient = atm_with_policy_and_tolerance(policy, true).await;
+        let (msg, meta) = lenient
+            .unpack(&tampered)
+            .await
+            .expect("a bad co-signature is tolerated when allow_invalid_signatures is set");
+        assert_eq!(msg.from.as_deref(), Some(sender_did.as_str()));
+        assert_eq!(meta.signers, vec![format!("{sender_did}#key-1")]);
+        assert_eq!(
+            meta.unverified_signers,
+            vec![format!("{cosigner_did}#key-1")]
+        );
+        assert_eq!(
+            meta.sign_from.as_deref(),
+            Some(format!("{sender_did}#key-1").as_str()),
+            "sign_from is bound to the verified `from` signer, never an unverified one"
+        );
+    }
+
+    /// Even with `allow_invalid_signatures = true`, the **authoritative**
+    /// (`from`-matching) signature must still verify: if it is the one that's
+    /// bad, addressing consistency has no verified signer matching `from`, so the
+    /// message is rejected. Tolerance only ever relaxes co-signatures.
+    #[tokio::test]
+    async fn allow_invalid_signatures_still_requires_the_authoritative_signature() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+        let (cosigner_did, ced, _cx) = generate_peer_did_full();
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let ced_priv: [u8; 32] = ced.get_private_bytes().try_into().unwrap();
+
+        // This time the `from` signer's own signature (#0) is corrupt.
+        let tampered =
+            signed_with_one_corrupt_signature(&sender_did, &sed_priv, &cosigner_did, &ced_priv, 0);
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 2,
+            max_recipients: 2,
+        };
+        let lenient = atm_with_policy_and_tolerance(policy, true).await;
+
+        let err = lenient.unpack(&tampered).await.unwrap_err();
+        assert!(
+            matches!(err, ATMError::AddressingMismatch(_)),
+            "the authoritative `from` signature must verify even in tolerant mode, got: {err:?}"
+        );
+    }
+
+    /// DoS guard: a JWS carrying more signatures than the policy allows is
+    /// rejected *before* any signer's DID is resolved, so an attacker cannot
+    /// amplify resolution work by stuffing signature entries. The policy cap is
+    /// the single effective bound — there is no separate absolute ceiling.
+    #[tokio::test]
+    async fn too_many_signatures_are_rejected() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, "did:example:recipient");
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{sender_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+
+        // Stuff duplicate signature entries past the policy cap. The bound is
+        // checked on the entry count before verification, so the duplicates
+        // never need to be resolved or re-verified.
+        let cap = 5;
+        let mut v: serde_json::Value = serde_json::from_str(&signed).unwrap();
+        let entry = v["signatures"][0].clone();
+        let sigs = v["signatures"].as_array_mut().unwrap();
+        while sigs.len() <= cap {
+            sigs.push(entry.clone());
+        }
+        let stuffed = serde_json::to_string(&v).unwrap();
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: false,
+            max_signatures: cap,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![], policy).await;
+
+        let err = recipient.unpack(&stuffed).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::UnexpectedEnvelope(m) if m.contains("policy maximum")),
+            "too many signatures must be rejected on count, got: {err:?}"
+        );
+    }
+
+    /// The `max_signatures` policy cap (default 1) rejects a message carrying
+    /// more verified signers than allowed; raising the cap accepts it. Every
+    /// signature is still verified — this only bounds how many are permitted.
+    #[tokio::test]
+    async fn max_signatures_policy_caps_signer_count() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+        let (cosigner_did, ced, _cx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, "did:example:recipient");
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let ced_priv: [u8; 32] = ced.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[
+                JwsSigner::Ed25519 {
+                    kid: &format!("{sender_did}#key-1"),
+                    private: &sed_priv,
+                },
+                JwsSigner::Ed25519 {
+                    kid: &format!("{cosigner_did}#key-1"),
+                    private: &ced_priv,
+                },
+            ],
+        )
+        .unwrap();
+
+        // A cap of 1 (the default) rejects the two-signer message — after both
+        // signatures verified, before it is handed back.
+        let strict = create_atm_with_policy(
+            vec![],
+            UnpackPolicy {
+                expected: vec![MessageWrappingType::SignedPlaintext],
+                validate_addressing_consistency: false,
+                max_signatures: 1,
+                max_recipients: 2,
+            },
+        )
+        .await;
+        let err = strict.unpack(&signed).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::UnexpectedEnvelope(m) if m.contains("policy maximum")),
+            "two signers must exceed a max_signatures=1 policy, got: {err:?}"
+        );
+
+        // Raising the cap to 2 accepts the same message (both verified).
+        let lenient = create_atm_with_policy(
+            vec![],
+            UnpackPolicy {
+                expected: vec![MessageWrappingType::SignedPlaintext],
+                validate_addressing_consistency: false,
+                max_signatures: 2,
+                max_recipients: 2,
+            },
+        )
+        .await;
+        let (_msg, meta) = lenient
+            .unpack(&signed)
+            .await
+            .expect("a cap of 2 accepts two signers");
+        assert_eq!(meta.signers.len(), 2);
+    }
+
+    /// DoS guard: a JWE addressing more recipients than the policy allows is
+    /// rejected before the recipient-matching loop, so an attacker cannot force
+    /// unbounded parsing/allocation. The policy cap is the single effective
+    /// bound — there is no separate absolute ceiling.
+    #[tokio::test]
+    async fn too_many_recipients_are_rejected() {
+        let (sender_did, _sed, _sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let anon = anoncrypt(
+            plaintext.as_bytes(),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        // Stuff duplicate recipient entries past the policy cap. The bound is
+        // checked on the entry count before the match loop, so the duplicates
+        // never need to be usable.
+        let cap = super::DEFAULT_MAX_RECIPIENTS;
+        let mut v: serde_json::Value = serde_json::from_str(&anon).unwrap();
+        let entry = v["recipients"][0].clone();
+        let recips = v["recipients"].as_array_mut().unwrap();
+        while recips.len() <= cap {
+            recips.push(entry.clone());
+        }
+        let stuffed = serde_json::to_string(&v).unwrap();
+
+        let recipient = create_atm_with_policy(
+            vec![rx],
+            UnpackPolicy {
+                expected: vec![MessageWrappingType::AnoncryptPlaintext],
+                validate_addressing_consistency: false,
+                max_signatures: 1,
+                max_recipients: cap,
+            },
+        )
+        .await;
+
+        let err = recipient.unpack(&stuffed).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::UnexpectedEnvelope(m) if m.contains("policy maximum")),
+            "too many recipients must be rejected on count, got: {err:?}"
+        );
+    }
+
+    /// The `max_recipients` policy cap rejects a JWE addressing more recipients
+    /// than allowed; raising the cap accepts and decrypts it.
+    #[tokio::test]
+    async fn max_recipients_policy_caps_count() {
+        let (sender_did, _sed, _sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let anon = anoncrypt(
+            plaintext.as_bytes(),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        // Duplicate the (valid) recipient entry so the JWE lists two recipients.
+        let mut v: serde_json::Value = serde_json::from_str(&anon).unwrap();
+        let entry = v["recipients"][0].clone();
+        v["recipients"].as_array_mut().unwrap().push(entry);
+        let two_recipients = serde_json::to_string(&v).unwrap();
+
+        // A cap of 1 rejects the two-recipient message.
+        let strict = create_atm_with_policy(
+            vec![rx.clone()],
+            UnpackPolicy {
+                expected: vec![MessageWrappingType::AnoncryptPlaintext],
+                validate_addressing_consistency: false,
+                max_signatures: 1,
+                max_recipients: 1,
+            },
+        )
+        .await;
+        let err = strict.unpack(&two_recipients).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::UnexpectedEnvelope(m) if m.contains("policy maximum")),
+            "two recipients must exceed a max_recipients=1 policy, got: {err:?}"
+        );
+
+        // Raising the cap to 2 accepts and decrypts the same message.
+        let lenient = create_atm_with_policy(
+            vec![rx],
+            UnpackPolicy {
+                expected: vec![MessageWrappingType::AnoncryptPlaintext],
+                validate_addressing_consistency: false,
+                max_signatures: 1,
+                max_recipients: 2,
+            },
+        )
+        .await;
+        let (_msg, meta) = lenient
+            .unpack(&two_recipients)
+            .await
+            .expect("a cap of 2 accepts two recipients");
+        assert_eq!(meta.wrapping, MessageWrappingType::AnoncryptPlaintext);
+    }
+
+    /// Per-message DID-resolution budget: a rejected frame cannot drive
+    /// unbounded outbound resolution across forward hops. Each hop here is
+    /// `sign(sign(forward(..)))` — two signer resolutions per hop — so with
+    /// `max_signatures = 1` (budget `1 + MAX_CRYPTO_LAYERS + MAX_FORWARD_DEPTH =
+    /// 13`) the chain is refused on the budget after ~7 hops, well within
+    /// `MAX_FORWARD_DEPTH`, rather than resolving all 16 signer DIDs.
+    #[tokio::test]
+    async fn resolution_budget_caps_cross_hop_amplification() {
+        let (signer_did, sed, _sx) = generate_peer_did_full();
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let sign_kid = format!("{signer_did}#key-1");
+
+        // One hop = sign(sign(forward(inner))): two JWS layers wrapping a
+        // forward envelope, each layer a separate signer resolution.
+        let hop = |inner: String| -> String {
+            let forward = wrap_in_forward_json(&inner, None);
+            let forward_json = serde_json::to_string(&forward).unwrap();
+            let s1 = sign_multi(
+                forward_json.as_bytes(),
+                &[JwsSigner::Ed25519 {
+                    kid: &sign_kid,
+                    private: &sed_priv,
+                }],
+            )
+            .unwrap();
+            sign_multi(
+                s1.as_bytes(),
+                &[JwsSigner::Ed25519 {
+                    kid: &sign_kid,
+                    private: &sed_priv,
+                }],
+            )
+            .unwrap()
+        };
+
+        // Final delivered payload wrapped in 8 double-signed forward hops.
+        let mut current = build_plaintext(&signer_did, "did:example:recipient");
+        for _ in 0..8 {
+            current = hop(current);
+        }
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::Plaintext],
+            validate_addressing_consistency: false,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let atm = create_atm_with_policy(vec![], policy).await;
+
+        let err = atm.unpack(&current).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::UnexpectedEnvelope(m) if m.contains("resolution budget")),
+            "cross-hop resolution amplification must hit the per-message budget, got: {err:?}"
+        );
+    }
+
+    /// EXPERIMENT (not committed): unpack Dart-generated messages for every
+    /// IANA wrapping type. Requires files under /tmp/didcomm-interop produced
+    /// by the Dart `tool/interop_gen.dart`. Run with:
+    ///   cargo test -p affinidi-messaging-sdk dart_interop_unpack_all -- --nocapture --ignored
+    #[tokio::test]
+    #[ignore = "manual cross-impl interop experiment"]
+    async fn dart_interop_unpack_all() {
+        use std::fs;
+        let dir = "/tmp/didcomm-interop";
+        let keys: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(format!("{dir}/keys.json")).unwrap()).unwrap();
+        let kid = keys["recipient_ka_kid"].as_str().unwrap();
+        let jwk = &keys["recipient_private_jwk"];
+        let secret = Secret::from_str(kid, jwk).expect("import recipient JWK");
+        println!("imported recipient secret id={}", secret.id);
+
+        // Cross-impl *crypto* interop: accept every wrapping so this exercises
+        // decrypt/verify for all 7 IANA types (the secure default's wrapping
+        // allow-list is covered by dedicated tests, not this experiment).
+        let atm = create_atm_with_policy(
+            vec![secret],
+            UnpackPolicy {
+                expected: vec![
+                    MessageWrappingType::Plaintext,
+                    MessageWrappingType::SignedPlaintext,
+                    MessageWrappingType::AnoncryptPlaintext,
+                    MessageWrappingType::AuthcryptPlaintext,
+                    MessageWrappingType::AnoncryptSignPlaintext,
+                    MessageWrappingType::AuthcryptSignPlaintext,
+                    MessageWrappingType::AnoncryptAuthcryptPlaintext,
+                ],
+                validate_addressing_consistency: false,
+                max_signatures: 5,
+                max_recipients: 100,
+            },
+        )
+        .await;
+
+        let files = [
+            "1_plaintext",
+            "2_signed",
+            "3_anoncrypt",
+            "4_authcrypt",
+            "5_anoncrypt_sign",
+            "6_authcrypt_sign",
+            "7_anoncrypt_authcrypt",
+        ];
+        let mut ok = 0;
+        for f in files {
+            let msg = fs::read_to_string(format!("{dir}/{f}.json")).unwrap();
+            match atm.unpack(&msg).await {
+                Ok((m, meta)) => {
+                    ok += 1;
+                    println!(
+                        "OK   {f:22} wrapping={:?} enc={} auth={} non_repud={} anon_sender={} signers={:?} body={}",
+                        meta.wrapping,
+                        meta.encrypted,
+                        meta.authenticated,
+                        meta.non_repudiation,
+                        meta.anonymous_sender,
+                        meta.signers,
+                        m.body,
+                    );
+                }
+                Err(e) => println!("FAIL {f:22} {e}"),
+            }
+        }
+        println!("=== {ok}/{} unpacked ===", files.len());
+    }
+
+    /// EXPERIMENT (not committed): Rust generates one DIDComm message per IANA
+    /// wrapping type addressed to a Dart-generated recipient did:peer, for
+    /// cross-validation by the Dart lib. Reads /tmp/didcomm-interop-rev/
+    /// recipient.json (written by the Dart `tool/interop_rev.dart gen`) and
+    /// writes the packed messages + sender_did back to the same directory.
+    /// Run with:
+    ///   cargo test -p affinidi-messaging-sdk rust_interop_generate_all -- --nocapture --ignored
+    #[tokio::test]
+    #[ignore = "manual cross-impl interop experiment"]
+    async fn rust_interop_generate_all() {
+        use affinidi_did_common::DocumentExt;
+        use std::fs;
+
+        let dir = "/tmp/didcomm-interop-rev";
+        let recipient: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(format!("{dir}/recipient.json")).unwrap())
+                .unwrap();
+        let recipient_did = recipient["recipient_did"].as_str().unwrap().to_string();
+
+        // Resolve the recipient's P-256 key-agreement key from its DID document.
+        let recipient_doc = recipient_did.parse::<DID>().unwrap().resolve().unwrap();
+        let recipient_kid = recipient_doc
+            .find_key_agreement(None)
+            .first()
+            .copied()
+            .expect("recipient has a key-agreement key")
+            .to_string();
+        let recipient_vm = recipient_doc
+            .get_verification_method(&recipient_kid)
+            .unwrap();
+        let recipient_mb = recipient_vm
+            .property_set
+            .get("publicKeyMultibase")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        let (codec, recipient_key_bytes) =
+            affinidi_encoding::decode_multikey_with_codec(recipient_mb).unwrap();
+        assert_eq!(
+            codec,
+            affinidi_encoding::P256_PUB,
+            "recipient KA must be P-256"
+        );
+        let recipient_pub =
+            PublicKeyAgreement::from_raw_bytes(Curve::P256, &recipient_key_bytes).unwrap();
+
+        // Generate a P-256 sender did:peer: V (#key-1, ES256 signing) +
+        // E (#key-2, ECDH key agreement).
+        let v = Secret::generate_p256(Some("temp"), None).unwrap();
+        let e = Secret::generate_p256(Some("temp"), None).unwrap();
+        let keys = vec![
+            PeerCreateKey::from_multibase(
+                PeerKeyPurpose::Verification,
+                v.get_public_keymultibase().unwrap(),
+            ),
+            PeerCreateKey::from_multibase(
+                PeerKeyPurpose::Encryption,
+                e.get_public_keymultibase().unwrap(),
+            ),
+        ];
+        let (sender_did_parsed, _) = DID::generate_peer(&keys, None).unwrap();
+        let sender_did = sender_did_parsed.to_string();
+        let sign_kid = format!("{sender_did}#key-1");
+        let skid = format!("{sender_did}#key-2");
+        let sender_ka_priv =
+            PrivateKeyAgreement::from_raw_bytes(Curve::P256, e.get_private_bytes()).unwrap();
+        let sign_priv: [u8; 32] = v.get_private_bytes().try_into().unwrap();
+        let signer = JwsSigner::P256 {
+            kid: &sign_kid,
+            private: &sign_priv,
+        };
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        // Anoncrypt is anonymous: the DIDComm spec (and the Dart lib) require
+        // the inner plaintext `from` to be absent for a pure anoncrypt wrapping.
+        let plaintext_anon = {
+            let msg = DcMessage::build(
+                "layered-1".to_string(),
+                "example/v1".to_string(),
+                json!({"hello": "layered"}),
+            )
+            .to(recipient_did.clone())
+            .finalize();
+            serde_json::to_string(&msg).unwrap()
+        };
+        let recips: &[(&str, &PublicKeyAgreement)] = &[(&recipient_kid, &recipient_pub)];
+
+        let write = |name: &str, contents: &str| {
+            fs::write(format!("{dir}/{name}.json"), contents).unwrap();
+            println!("wrote {name}");
+        };
+
+        // 1. plaintext
+        write("1_plaintext", &plaintext);
+        // 2. signed(plaintext) — `sign_multi` now emits `kid` in both the
+        // protected and the unprotected header, so the Dart lib (which reads
+        // the unprotected `header.kid`) can attribute the signer with no
+        // post-processing.
+        let signed = sign_multi(plaintext.as_bytes(), &[signer]).unwrap();
+        write("2_signed", &signed);
+        // 3. anoncrypt(plaintext) — anonymous, so `from` is omitted.
+        write(
+            "3_anoncrypt",
+            &anoncrypt(plaintext_anon.as_bytes(), recips).unwrap(),
+        );
+        // 4. authcrypt(plaintext)
+        write(
+            "4_authcrypt",
+            &authcrypt(plaintext.as_bytes(), &skid, &sender_ka_priv, recips).unwrap(),
+        );
+        // 5. anoncrypt(sign(plaintext))
+        write(
+            "5_anoncrypt_sign",
+            &anoncrypt(signed.as_bytes(), recips).unwrap(),
+        );
+        // 6. authcrypt(sign(plaintext))
+        write(
+            "6_authcrypt_sign",
+            &authcrypt(signed.as_bytes(), &skid, &sender_ka_priv, recips).unwrap(),
+        );
+        // 7. anoncrypt(authcrypt(plaintext))
+        let inner = authcrypt(plaintext.as_bytes(), &skid, &sender_ka_priv, recips).unwrap();
+        write(
+            "7_anoncrypt_authcrypt",
+            &anoncrypt(inner.as_bytes(), recips).unwrap(),
+        );
+
+        fs::write(
+            format!("{dir}/sender.json"),
+            serde_json::to_string(&json!({"sender_did": sender_did})).unwrap(),
+        )
+        .unwrap();
+        println!("sender_did={sender_did}");
+        println!("recipient_kid={recipient_kid}");
+        println!("GENERATE DONE");
     }
 }

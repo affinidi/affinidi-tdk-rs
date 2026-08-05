@@ -710,6 +710,19 @@ impl WebSocketTransport {
             }
             Err(e) => {
                 error!("Error unpacking message: {:?}", e);
+                // A live frame that fails to unpack (e.g. an unauthenticated
+                // wrapping the secure policy rejects) is dropped here; surface it
+                // on the optional unprocessable-message channel so a consumer can
+                // observe or quarantine it instead of losing it to a log line. The
+                // mediator ids a message by `sha256(packed message)` and
+                // live-delivers those exact bytes, so `sha256(&message)` is the
+                // mediator message id — the same identifier the pickup drain reports.
+                crate::protocols::message_pickup::emit_unprocessable(
+                    atm,
+                    Some(sha256::digest(&message)),
+                    message.clone(),
+                    e.to_string(),
+                );
             }
         }
     }
@@ -1076,5 +1089,104 @@ mod tests {
                 assert!(d > 0.0);
             }
         }
+    }
+
+    /// A minimal, disconnected [`WebSocketTransport`] for unit-testing inbound
+    /// message handling without a real socket. Mirrors the field set built by
+    /// [`WebSocketTransport::start`].
+    fn test_transport(atm: &ATM) -> WebSocketTransport {
+        use crate::profiles::{ATMProfile, ATMProfileInner};
+        let profile = Arc::new(ATMProfile {
+            inner: Arc::new(ATMProfileInner {
+                did: "did:peer:fake".to_string(),
+                alias: "test".to_string(),
+                mediator: Arc::new(None),
+            }),
+        });
+        let (conn_state_tx, _rx) = watch::channel(ConnState::Connecting);
+        WebSocketTransport {
+            profile,
+            shared: atm.inner.clone(),
+            web_socket: None,
+            connect_delay_timer: None,
+            connect_delay: 0,
+            awaiting_pong: false,
+            connected_at: None,
+            access_expires_at: None,
+            inbound_cache: MessageCache {
+                fetch_cache_limit_count: atm.inner.config.fetch_cache_limit_count,
+                fetch_cache_limit_bytes: atm.inner.config.fetch_cache_limit_bytes,
+                ..Default::default()
+            },
+            direct_channel: None,
+            next_requests: HashMap::new(),
+            next_requests_list: VecDeque::new(),
+            packed_cache: VecDeque::new(),
+            packed_cache_bytes: 0,
+            packed_cache_full: false,
+            skip_toggle_live_delivery: false,
+            skip_unpack_messages: false,
+            conn_state_tx,
+        }
+    }
+
+    /// A live-delivery frame that fails to unpack (here a plaintext the secure
+    /// default policy rejects) is dropped by the WebSocket handler *and*
+    /// reported on the unprocessable-message channel, so a consumer can observe /
+    /// quarantine it instead of losing it to a log line.
+    #[tokio::test]
+    async fn live_delivery_reports_unprocessable_on_the_channel() {
+        use crate::config::ATMConfig;
+        use affinidi_messaging_didcomm::message::Message as DcMessage;
+        use affinidi_tdk_common::{TDKSharedState, config::TDKConfig};
+        use serde_json::json;
+
+        let config = ATMConfig::builder()
+            .with_unprocessable_message_channel(16)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        let atm = ATM::new(config, tdk).await.unwrap();
+        let mut rx = atm
+            .get_unprocessable_message_channel()
+            .expect("unprocessable channel");
+
+        let mut ws = test_transport(&atm);
+
+        // A plaintext DIDComm message: unauthenticated, so the secure default
+        // policy rejects it on unpack and the live handler drops it.
+        let plaintext = DcMessage::build(
+            "evil".to_string(),
+            "example/v1".to_string(),
+            json!({"x": 1}),
+        )
+        .from("did:example:sender".to_string())
+        .to("did:example:recipient".to_string())
+        .finalize();
+        let raw = serde_json::to_string(&plaintext).unwrap();
+        // The mediator derives a message's id as `sha256(packed message)` and
+        // live-delivers those exact bytes (see the mediator store's
+        // `store_message` / `store_and_stream`), so hashing the received frame
+        // reproduces the mediator message id — the same identifier the pickup
+        // drain reports and deletes by.
+        let hash = sha256::digest(&raw);
+
+        ws.process_inbound_didcomm_message(&atm, raw.clone()).await;
+
+        let p = rx
+            .try_recv()
+            .expect("a live unprocessable frame must be reported");
+        assert_eq!(p.raw, raw, "the raw frame is retained for quarantine");
+        assert_eq!(
+            p.attachment_id.as_deref(),
+            Some(hash.as_str()),
+            "reported with the mediator message id (sha256 of the delivered frame)"
+        );
+        assert!(!p.reason.is_empty(), "a rejection reason is included");
+        assert!(rx.try_recv().is_err(), "exactly one unprocessable event");
     }
 }

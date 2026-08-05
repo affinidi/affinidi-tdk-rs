@@ -1,5 +1,71 @@
 # Changelog
 
+## [0.15.8] - 2026-08-04
+
+> Renumbered from the `0.15.6`/`0.15.7` this work originally carried: those
+> two numbers were published from `main` in the meantime (curve25519-dalek 5
+> and elliptic-curve 0.14 respectively), so the multi-signature and
+> `kid`-header changes below ship as a single `0.15.8`.
+
+### Security
+
+- **`ParsedSignature::kid_from_protected` — signer-`kid` provenance (SSRF
+  enabler).** `parse_jws` falls back to the per-signature *unprotected* header
+  for the signer `kid` (interop with credo-ts / didcomm-python). That header is
+  outside the signing input, so **any intermediary** — a mediator, a relay — can
+  rewrite it in transit without invalidating the signature. A caller that turns
+  a `kid` into a DID resolution (an outbound HTTPS fetch for `did:web`) was
+  therefore letting such an intermediary choose the host contacted, on a message
+  that had not been verified yet. `ParsedSignature` now reports whether the
+  `kid` came from the integrity-protected header so callers can refuse to act on
+  the rewritable one; `affinidi-messaging-sdk` 0.19.0 uses this to bind an
+  unprotected `kid` to the signed payload's `from`. `ParsedSignature` is also now
+  `#[non_exhaustive]` (ADR 0003 point 1) — both changes are free here, as this
+  type has not previously been published.
+
+### Added
+
+- **Multi-signature JWS verification primitives.** `jws::verify::parse_jws`
+  splits a JWS (General JSON Serialization) into its payload and **every**
+  signature entry (`ParsedSignature { kid, alg, signing_input, signature }`),
+  and `jws::verify::verify_parsed_signature` verifies one entry against
+  resolved key material (`VerifyKey::{Ed25519, P256, Secp256k1}`), enforcing
+  that the key family matches the signature `alg`. This lets a caller resolve
+  each signer's key (e.g. via DID resolution) and verify all signatures on a
+  message, instead of only the first. The existing single-signature
+  `verify_ed25519` / `verify_p256` / `verify_secp256k1` helpers are unchanged.
+- **Multi-signature signing.** `jws::sign::sign_multi` (and the
+  `message::pack::pack_signed_multi` convenience) produce a JWS carrying one
+  signature per `JwsSigner` over the same payload, mixing Ed25519 (`EdDSA`),
+  P-256 (`ES256`), and secp256k1 (`ES256K`). `ecdsa` is enabled on the runtime
+  `p256`/`k256` dependencies to provide ES256/ES256K signing.
+
+### Changed
+
+- **Signed messages now carry the signer `kid` in *both* the protected and the
+  per-signature unprotected header.** Previously `sign_ed25519` and `sign_multi`
+  placed `kid` only in the protected header. This applies to **every** signature
+  algorithm — `sign_multi` routes Ed25519 (`EdDSA`), P-256 (`ES256`) and
+  secp256k1 (`ES256K`) signers through the same builder, so all three now emit
+  `kid` in both headers. The DIDComm v2.1 signed-message
+  test vectors (§Appendix C.2) — and interoperating implementations that follow
+  them (e.g. credo-ts, SICPA `didcomm-python`) — read the signer `kid` from the
+  *unprotected* `header.kid`, so a message signed by this crate could not be
+  attributed by those verifiers (they found no `kid` where they look). Emitting
+  `kid` in both locations keeps it integrity-protected (the JOSE convention that
+  key-selection material be signed over, matching the spec's §5.2.2
+  construction) while also being consumable by test-vector-conformant verifiers.
+  The two copies always carry identical values.
+
+  This is wire-compatible and non-breaking:
+  - the signing input is unchanged (the unprotected header is never signed
+    over), so signatures remain cryptographically valid and byte-identical apart
+    from the added header;
+  - `jws::verify` already **prefers** the protected `kid` and falls back to the
+    unprotected one, so verification of both old (protected-only) and
+    third-party (unprotected-only) messages is unaffected — no verifier change
+    was required.
+
 ## 2nd August 2026 (0.15.7)
 
 The unused `jwk` feature is dropped from the `p256`/`k256` deps — JWK

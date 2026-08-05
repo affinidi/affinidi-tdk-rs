@@ -345,6 +345,23 @@ impl ATM {
             .map(|sender| sender.subscribe())
     }
 
+    /// Subscribe to the unprocessable-message channel, if configured via
+    /// [`crate::config::ATMConfigBuilder::with_unprocessable_message_channel`].
+    /// Each inbound message the SDK can't process — malformed base64/UTF-8, a
+    /// failed signature check, an unexpected/rejected wrapping, or another unpack
+    /// failure — is broadcast here (with its raw payload and failure reason)
+    /// just before the drain deletes/drops it, so you can observe or quarantine
+    /// it. `None` if no channel was configured.
+    pub fn get_unprocessable_message_channel(
+        &self,
+    ) -> Option<broadcast::Receiver<crate::protocols::message_pickup::UnprocessableMessage>> {
+        self.inner
+            .config
+            .unprocessable_message_channel
+            .as_ref()
+            .map(|sender| sender.subscribe())
+    }
+
     /// Get the TDK Shared State
     pub fn get_tdk(&self) -> &TDKSharedState {
         &self.inner.tdk_common

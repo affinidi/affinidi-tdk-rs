@@ -1010,14 +1010,13 @@ mod tests {
         sign_from: Option<&str>,
         encrypted_from_kid: Option<&str>,
     ) -> UnpackMetadata {
-        UnpackMetadata {
-            encrypted: true,
-            authenticated,
-            anonymous_sender: !authenticated,
-            sign_from: sign_from.map(String::from),
-            encrypted_from_kid: encrypted_from_kid.map(String::from),
-            ..Default::default()
-        }
+        let mut metadata = UnpackMetadata::default();
+        metadata.encrypted = true;
+        metadata.authenticated = authenticated;
+        metadata.anonymous_sender = !authenticated;
+        metadata.sign_from = sign_from.map(String::from);
+        metadata.encrypted_from_kid = encrypted_from_kid.map(String::from);
+        metadata
     }
 
     /// Returns true if the metadata would be blocked by block_anonymous_outer_envelope

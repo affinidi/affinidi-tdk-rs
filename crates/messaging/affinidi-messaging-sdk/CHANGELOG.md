@@ -1,5 +1,278 @@
 # Changelog
 
+## [0.19.0] - 2026-07-29
+
+> **BREAKING CHANGE.** `atm.unpack` now rejects non-authenticated envelopes by
+> default — it accepts only the authenticated-encryption wrappings
+> `authcrypt(plaintext)`, `authcrypt(sign(plaintext))` and
+> `anoncrypt(authcrypt(plaintext))`. Because the default
+> behaviour changes for every caller, this is a breaking release: the version
+> bumps `0.18 → 0.19` (a SemVer minor bump is the breaking increment for a `0.x`
+> crate). Restore the previous "accept anything" behaviour explicitly with
+> `ATMConfigBuilder::with_unpack_policy(UnpackPolicy { .. })` — see below.
+>
+> **Also breaking:** `UnpackMetadata` gains two public fields (`wrapping`,
+> `signers`), which breaks any struct-literal construction of it downstream. It
+> is now sealed with `#[non_exhaustive]`, so future field additions will *not*
+> be breaking — external code should read its (public) fields rather than
+> construct it, and use `UnpackMetadata::default()` + field assignment if it
+> ever needs to build one.
+
+### Rollout across the VTI ecosystem (R3.6)
+
+Publishing `0.19.0` does **not** by itself deliver this fix to the services that
+depend on it — a `^0.18` requirement will not resolve to `0.19`. Each consuming
+repo has to move its pin deliberately. Pins as observed at the time of writing:
+
+| Repo / crate | How it depends | Picks up `0.19` automatically? |
+| --- | --- | --- |
+| `verifiable-trust-infrastructure` → `vta-sdk` | `affinidi-messaging-sdk = "0.18"` (direct, optional) | **No** — needs an explicit bump |
+| `affinidi-trust-registry-rs` | `affinidi-messaging-sdk = "0.18"` (workspace) | **No** — needs an explicit bump |
+| `verifiable-trust-infrastructure` (workspace) | `affinidi-tdk = "0.8"` | ⚠️ **Yes, silently** — via `affinidi-tdk` 0.8.5, a *patch* |
+| `affinidi-webvh-service` | `affinidi-tdk = "0.8"` | ⚠️ **Yes, silently** — same |
+| `vti-push-gateway` | `affinidi-tdk = "0.7"` | **No** — two minors behind the facade |
+| `cierge` | `vta-sdk = "0.20.25"` (transitive) | Only once `vta-sdk` bumps |
+| `vti-message-bridge` | `vta-sdk = "0.18"` (transitive) | Only once `vta-sdk` bumps |
+
+**⚠️ The facade delivers this break as a *patch*.** `affinidi-tdk` re-exports
+this crate wholesale (`pub use affinidi_messaging_sdk as messaging;`, default-on
+feature), so the new acceptance policy and the sealed `UnpackMetadata` reach
+every facade consumer — and `affinidi-tdk` can only ship as **0.8.5**, not
+`0.9.0`. `vta-sdk` (external, on crates.io, depended on here via the mediator)
+pins `affinidi-tdk = "0.8"`, so a minor bump breaks our own
+`[patch.crates-io]` redirect and drags duplicate registry copies of
+`affinidi-tdk` *and* this crate into the graph. See ADR 0003 point 3 and the
+`affinidi-tdk` 0.8.5 changelog.
+
+The practical consequence for rollout: `verifiable-trust-infrastructure` and
+`affinidi-webvh-service` will pick up the new `unpack` acceptance policy on a
+routine `cargo update`, with **no version signal that anything breaking
+happened**. Do not rely on the version number to gate this — schedule those
+upgrades deliberately, and pin `affinidi-tdk = "=0.8.4"` in any repo that is not
+ready. Unblocking a real `affinidi-tdk` 0.9.0 means releasing a `vta-sdk` that
+depends on `affinidi-tdk` 0.9 first.
+
+**Sequencing matters, not just the bumps.** Once `affinidi-tdk` pulls
+`affinidi-messaging-sdk` 0.19 while a `^0.18` direct pin resolves to 0.18.x, any
+graph holding both (e.g. `verifiable-trust-infrastructure`, which depends on
+`affinidi-tdk` *and* on `vta-sdk`) links **two copies of the SDK** and the
+`ATMConfig` / `UnpackMetadata` types stop unifying. Move `vta-sdk` and
+`affinidi-trust-registry-rs` in the same cascade as the facade, and re-resolve
+lockfiles afterwards — publishing an upgrade is not the same as consuming it.
+
+**Do senders pack authcrypt today?** Verified for the main path: `vta-sdk`'s
+session transport packs with `pack_encrypted(&msg, vta_did, Some(client_did), …)`
+(authcrypt), and the VTA has *required* authcrypt on `/auth/` and `/auth/refresh`
+since VTI #771, rejecting anoncrypt outright — so those senders already produce a
+wrapping the new default accepts. One caveat to confirm per deployment:
+`vta-sdk::didcomm_light` is an **anoncrypt** packer whose output is unpacked by
+`ATM::unpack`. It has no remaining in-tree caller (auth moved to `auth_di`), but
+the module is still `pub`, so any external caller still packing through it will
+start seeing `ATMError::UnexpectedEnvelope` after this upgrade. Such callers
+should move to authcrypt, or opt in explicitly with
+`with_unpack_policy(UnpackPolicy { expected: vec![MessageWrappingType::AnoncryptPlaintext, ..], .. })`.
+
+**Upgrade tip.** Pair the first deployment with
+`with_purge_policy_rejected_messages(false)` and
+`with_unprocessable_message_channel(..)` for a bounded window, so anything the
+stricter policy rejects is observable and recoverable rather than deleted from
+the mediator queue.
+
+### Changed
+
+- **`atm.unpack` is now secure by default (behavioural change).** Unpacking now
+  enforces an [`UnpackPolicy`](src/config.rs) whose default accepts only
+  authenticated encryption — `authcrypt(plaintext)`, `authcrypt(sign(plaintext))`
+  and `anoncrypt(authcrypt(plaintext))` (which additionally hides the sender key
+  id from intermediaries) — and enforces message-layer addressing
+  consistency: the inner `from` must equal the authcrypt sender key (`skid`)
+  DID (and a verified signer's DID when signed). This closes a forged-sender
+  authentication-bypass class where a message authcrypted by one key claims
+  another party's `from`. Apps that previously reconciled
+  `from`/`encrypted_from_kid` themselves can now trust `msg.from` on a returned
+  `Ok` and drop that logic.
+
+  Configure via `ATMConfigBuilder::with_unpack_policy(...)`. The policy is an
+  explicit allow-list of `MessageWrappingType` values (no `secure`/`permissive`
+  presets), so protocols expecting an unauthenticated wrapping (anoncrypt
+  receipts or signed-only notifications) list exactly what they accept. The
+  same policy governs the message-pickup delivery drain, so messages pulled via
+  pickup get the identical secure-by-default guarantees as a direct `unpack`.
+
+### Added
+
+- **Layered (double) envelope unpacking.** `unpack` now iteratively removes
+  nested cryptographic layers, so the DIDComm-defined two-layer wrappings —
+  `anoncrypt(authcrypt(plaintext))`, `authcrypt(sign(plaintext))` and
+  `anoncrypt(sign(plaintext))` — decrypt/verify end-to-end (previously only a
+  single encryption layer plus an optional inner signature was handled).
+- **Multi-signature verification.** All JWS signatures are now verified (not
+  just the first), across Ed25519 / P-256 / secp256k1 signers. Addressing
+  consistency requires a verified signer whose DID matches the inner `from`, and
+  — for an `authcrypt(sign(plaintext))` message — the authcrypt `skid` must
+  match it too, binding `from == signer == authcrypt sender`.
+- **Tolerate non-authoritative signatures (opt-in).** By default every
+  signature must verify, so a single co-signature you don't control (a missing
+  `kid`, an unresolvable signer DID, a curve this build can't handle — e.g.
+  P-384, or an invalid signature) makes the whole message undeliverable.
+  `ATMConfigBuilder::with_allow_invalid_signatures(true)` keeps unpacking such a
+  message and records the offending signers in the new
+  `UnpackMetadata::unverified_signers` list instead — the authoritative
+  (`from`-matching) signature must still verify under addressing consistency, so
+  only *supplementary* co-signatures are relaxed.
+- **`UnpackMetadata` additive fields + sealing.** New public fields —
+  `wrapping: MessageWrappingType` (the classified envelope combination),
+  `signers: Vec<String>` (every *verified* signer `kid`), and
+  `unverified_signers: Vec<String>` (signers tolerated by
+  `allow_invalid_signatures`; empty in the default strict mode). The struct is
+  now `#[non_exhaustive]`: it is a value the SDK *returns* (downstream reads it),
+  so sealing it makes future field additions non-breaking. Downstream code that
+  built it by struct literal must switch to reading it (or, if it must produce
+  one, `UnpackMetadata::default()` + field assignment).
+- **Opt-in unprocessable-message channel.**
+  `ATMConfigBuilder::with_unprocessable_message_channel(capacity)` enables a
+  broadcast channel (subscribe via `ATM::get_unprocessable_message_channel`)
+  that receives an `UnprocessableMessage { attachment_id, raw, reason }` for
+  every inbound message the SDK can't process. Concretely, a message is sent to
+  this channel when it fails to unpack for any reason — an unexpected/rejected
+  wrapping (`UnexpectedEnvelope`), an invalid signature (`VerificationFailed`),
+  an addressing mismatch (`AddressingMismatch`), too many signatures/recipients,
+  or malformed base64/UTF-8 — carrying the attachment id, the raw payload, and
+  the failure reason. All three inbound paths — the batch drain, the TSP-aware
+  `send_delivery_request_frames` drain, and live WebSocket delivery — report on
+  it *before* the message is deleted/dropped, so a consumer can observe or
+  quarantine it instead of losing it to a log line. Off by default (unchanged
+  behaviour when not configured).
+- **Configurable deletion of policy-rejected pickup messages
+  (`with_purge_policy_rejected_messages`).** The pickup drain decides deletion
+  by *recoverability*. Non-recoverable input — malformed base64/UTF-8, an
+  unsupported attachment type, or a cryptographically invalid signature
+  (`VerificationFailed`) — is **always** deleted so it can't be redelivered every
+  pickup and fill the queue. A message the *policy* rejected — a disallowed
+  wrapping (`UnexpectedEnvelope`) or an addressing mismatch
+  (`AddressingMismatch`) — is also **deleted by default**, because the mediator's
+  per-recipient queue is bounded (a fixed message limit) and a retained reject is
+  redelivered every pickup, so it would accumulate and eventually fill the queue,
+  blocking new inbound messages. Set
+  `ATMConfigBuilder::with_purge_policy_rejected_messages(false)` to *retain*
+  policy-rejected messages instead — e.g. for a bounded window during an
+  `unpack_policy` tightening/upgrade, so a message rejected only by the stricter
+  policy can be recovered by relaxing the policy (accepting that retained rejects
+  count against the queue limit). Pair with the channel above to observe what is
+  affected. (Review note: an opt-in *purge* was suggested, but the mediator's
+  bounded per-recipient queue makes delete-by-default the safe choice — so the
+  deletion stays the default and an opt-in *retain* is provided instead.)
+
+### Security
+
+- **Message pickup is now secure by default (no more `accept_all`).** The
+  delivery drain unpacks every pulled attachment under the *configured*
+  `UnpackPolicy` — the same authenticated-encryption default as `atm.unpack` —
+  instead of a permissive "accept every wrapping" policy. An unauthenticated or
+  forged-`from` message sitting in the mediator queue is no longer surfaced to
+  the application; it is rejected (and purged) exactly as a direct `unpack`
+  would reject it. This closes an authentication-bypass gap where the pickup
+  transport did not honour the app's secure policy.
+- **Unprocessable-message resistance on message pickup.** The delivery drain
+  removes messages it can never process so a crafted "poison" message can't be
+  redelivered every pickup cycle, fill the bounded queue, and stall it (or, under
+  backpressure, the mediator connection). Deletion is split by *recoverability*:
+  non-recoverable input — malformed base64/utf8, an unsupported attachment type,
+  or a cryptographically invalid signature (`VerificationFailed`) — is **always**
+  deleted; a *policy*-rejected message (a disallowed wrapping, too many
+  signatures/recipients, an addressing mismatch, a non-conformant envelope) is
+  also **deleted by default** — the mediator's per-recipient queue is bounded, so
+  a retained reject redelivered every pickup would accumulate and fill it — but
+  can be **retained** with `with_purge_policy_rejected_messages(false)` (see
+  *Added*) for a bounded window during an `unpack_policy` upgrade, so a message
+  rejected only by the stricter policy can be recovered by relaxing the policy.
+  Failures that might be *transient* (e.g. a temporarily unresolvable signer DID)
+  are always left queued for retry. All three inbound paths —
+  `send_delivery_request`, the TSP-aware `send_delivery_request_frames`, and live
+  WebSocket delivery — apply this policy and report to the opt-in
+  unprocessable-message channel before deleting/dropping.
+- **`UnpackPolicy::max_signatures` (default `5`) — bounded signature
+  verification.** The policy's signature cap is enforced *before* any signer
+  DID is resolved, so a crafted message stuffed with signature entries cannot
+  amplify (potentially networked) DID-resolution work: a JWS carrying more than
+  `max_signatures` entries is rejected with `ATMError::UnexpectedEnvelope`
+  without resolving a single key. The default accepts up to **5** signers; raise
+  it to any value your protocol expects (there is no absolute ceiling above your
+  policy) or lower it (e.g. `max_signatures: 1`) for single-signer only. Every
+  signature within the cap is fully verified.
+- **SSRF: an unprotected signer `kid` can no longer steer DID resolution.** The
+  signer `kid` selects which DID `unpack` resolves — an outbound HTTPS fetch for
+  `did:web` — and is read *before* the signature is verified. When that `kid`
+  comes from the per-signature **unprotected** header (`parse_jws`'s interop
+  fallback), it sits outside the signing input, so **any intermediary** — a
+  mediator, a relay — could rewrite it in transit without invalidating the
+  signature and redirect the fetch to a host of its choosing. That is an SSRF
+  primitive available to a party who cannot forge a signature at all, and the
+  per-message resolution budget bounded only the *count* of such fetches, not
+  their *targets*.
+
+  An unprotected `kid` is now resolved only when its DID matches the signed
+  payload's `from` — which *is* inside the signing input, so the binding cannot
+  be forged in transit. A rewritten `kid` now yields
+  `ATMError::UnexpectedEnvelope` **before any outbound request is made** (the
+  check runs ahead of the resolution-budget charge, so a refused `kid` costs zero
+  fetches). A payload with no readable `from` offers nothing to bind against, so
+  an unprotected `kid` is refused there too. A `kid` in the protected header is
+  unaffected: it is the original sender's own, integrity-protected choice, and
+  resolving a claimed sender's DID is inherent to DID messaging (authcrypt
+  resolves the `skid` identically).
+
+  This does not make `unpack` an SSRF sandbox — a sender naming its own
+  `did:web` still causes one fetch — so resolver-side host allow-listing remains
+  worthwhile as defence in depth.
+- **Per-message DID-resolution budget (DoS guard).** The wrapping allow-list is
+  necessarily enforced *after* layers are decrypted and signatures verified, and
+  each signer/sender key is a DID resolution (an outbound HTTPS fetch for
+  `did:web`). A single shared budget now spans every cryptographic layer **and**
+  every forward hop of one `unpack` (it is *not* reset per hop), so a frame that
+  is ultimately rejected can no longer drive
+  `MAX_CRYPTO_LAYERS × MAX_FORWARD_DEPTH × max_signatures` attacker-chosen
+  resolutions. The budget scales with `max_signatures` plus headroom for a
+  sender key per layer and one resolution per forward hop (default ceiling
+  `5 + 2 + 10 = 17` per frame); exceeding it fails with
+  `ATMError::UnexpectedEnvelope`.
+- **Bounded JWE recipients (DoS guard) + `UnpackPolicy::max_recipients`.** A JWE
+  layer addressing more than `max_recipients` (default `100`) recipients is
+  rejected before the recipient-matching loop — the same policy-driven bound as
+  `max_signatures`, with no separate absolute ceiling above your policy. The
+  default is deliberately permissive because a receiver is legitimately one of
+  many recipients; decryption runs the key agreement once (for the matched
+  recipient), so this bounds parse/allocation cost, not asymmetric-crypto work.
+  Lower it (e.g. `max_recipients: 1`) for stricter one-to-one deployments.
+- **Anonymous (`anoncrypt`) messages must not claim a `from`.** With addressing
+  consistency enabled (the default), a pure `anoncrypt(plaintext)` that declares
+  an inner `from` is rejected (`ATMError::AddressingMismatch`): anonymous
+  encryption carries no authenticated sender, so a `from` there is an unbacked,
+  spoofable claim. `anoncrypt(sign(plaintext))` is unaffected — the signature
+  authenticates the `from`, which is preserved under the anoncrypt wrapping.
+- **Removed the non-conformant `anoncrypt(authcrypt(sign(plaintext)))` wrapping.**
+  The DIDComm v2 spec (§IANA Media Types) explicitly states this combination
+  MUST NOT be used (`anoncrypt(sign(plaintext))` covers the same need). The
+  `MessageWrappingType::AnoncryptAuthcryptSignPlaintext` variant is removed, and
+  `unpack` now rejects the triple layering as `ATMError::UnexpectedEnvelope`.
+- **Cryptographic nesting capped at 2 layers.** No DIDComm-defined wrapping
+  nests more than two crypto layers, so `unpack` now rejects a third (or deeper)
+  JWE/JWS layer *before* removing it (`ATMError::UnexpectedEnvelope`), replacing
+  the previous depth-6 guard. This enforces the taxonomy structurally and bounds
+  decrypt/verify work against a nested-envelope DoS.
+- **Scope note — this hardens the SDK `unpack`, not the mediator's own unpack
+  path (follow-up).** The mediator authenticates callers through its separate
+  `didcomm_compat` unpack, which this release does not change, so it does *not*
+  yet enforce the new layer-ordering `UnpackPolicy` (e.g. rejecting
+  sign-outside-encrypt or repeated encryption layers). This is not a mediator
+  admin-auth bypass: mediator identity is anchored on the authcrypt sender key
+  (`skid`) proven by ECDH-1PU decryption and bound to the authenticated session
+  DID (`force_session_did_match`), with the `explicit_allow` gate rejecting
+  unknown DIDs — the plaintext `from` is only ever checked *against* that
+  cryptographic identity, never trusted on its own. Converging the mediator's
+  `didcomm_compat` path onto the same `UnpackPolicy` is a tracked follow-up so
+  both unpack paths enforce identical crypto-layer policy.
+
 ## [0.18.65] - 2026-07-29
 
 ### Changed

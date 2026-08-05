@@ -34,6 +34,12 @@ pub enum ATMError {
     ACLConfigError(String),
     #[error("DIDComm message error: {0}. Reason: {1}")]
     DidcommError(String, String),
+    #[error("Unexpected envelope: {0}")]
+    UnexpectedEnvelope(String),
+    #[error("Addressing consistency error: {0}")]
+    AddressingMismatch(String),
+    #[error("Verification failed: {0}")]
+    VerificationFailed(String),
     #[error("SDK Error: {0}")]
     SDKError(String),
     #[error("TDK Error: {0}")]

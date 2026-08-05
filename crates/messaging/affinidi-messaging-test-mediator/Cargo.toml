@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.2.45"
+version = "0.2.46"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -49,7 +49,7 @@ affinidi-secrets-resolver = { version = "0.5", path = "../../core/affinidi-secre
 affinidi-did-resolver-cache-sdk = { version = "0.8", path = "../../identity/affinidi-did-resolver-cache-sdk" }
 
 # ── SDK client (for the e2e test environment) ───────────────────────────
-affinidi-messaging-sdk = { version = "0.18", path = "../affinidi-messaging-sdk" }
+affinidi-messaging-sdk = { version = "0.19", path = "../affinidi-messaging-sdk" }
 
 # ── JWT signing key generation for the test mediator's session tokens ───
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }

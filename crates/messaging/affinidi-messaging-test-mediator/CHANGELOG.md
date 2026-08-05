@@ -1,5 +1,14 @@
 # Affinidi Messaging Test Mediator
 
+## 4th August 2026 (0.2.46)
+
+Dependency bump for `affinidi-messaging-mediator` 0.18.5 and
+`affinidi-messaging-sdk` 0.19.0 (secure-by-default `unpack`). The fixture's own
+behaviour is unchanged.
+
+(Renumbered from the `0.2.45` this work originally carried: `0.2.45` was
+released from `main` in the meantime.)
+
 ## 2nd August 2026 (0.2.45)
 
 `TestMediator` now hands its listener to the mediator instead of dropping it
