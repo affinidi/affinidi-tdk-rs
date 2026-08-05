@@ -6,9 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
-## [0.9.0] - 2026-08-05
+## [0.8.5] - 2026-08-05
 
-> **BREAKING CHANGE (inherited).** This crate re-exports the messaging SDK
+> **BREAKING CHANGE (inherited), shipped as a patch — read this before
+> upgrading.** This crate re-exports the messaging SDK
 > wholesale — `pub use affinidi_messaging_sdk as messaging;`, under the
 > default-on `messaging` feature — so `affinidi-messaging-sdk` 0.19.0's breaking
 > changes reach every consumer of this facade:
@@ -24,15 +25,30 @@ For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 >   fields and is now `#[non_exhaustive]`, so downstream struct-literal
 >   construction of it stops compiling.
 >
-> This is therefore a **minor (breaking) bump, not a patch**. Shipping it as a
-> patch would have delivered a changed `unpack` acceptance policy to every
-> `affinidi-tdk = "0.8"` consumer on a routine `cargo update`, with no
-> opportunity to opt in — the failure mode ADR 0003 point 3 exists to avoid, and
-> which does not apply here because no external crate redirects `affinidi-tdk`
-> through `[patch.crates-io]`.
+> **Why this is a patch and not `0.9.0`.** On the merits it should be a minor
+> bump: a `^0.8` consumer picks this up on a routine `cargo update` and inherits
+> both breaks with no opportunity to opt in. It ships as a patch anyway, under
+> ADR 0003 point 3, because `vta-sdk` — an external crates.io crate this
+> workspace itself depends on (via the mediator and `mediator-setup`) — pins
+> `affinidi-tdk = "0.8"`. Our root `[patch.crates-io]` redirect only applies
+> while the local version satisfies that pin, so `0.9.0` breaks the redirect and
+> cargo resolves a *second*, registry copy of `affinidi-tdk` (and transitively of
+> `affinidi-messaging-sdk`) into the graph — the duplicate-type failure the
+> workspace-duplicates guard catches. This was tried and rejected on exactly
+> that evidence, not assumed.
 >
-> **Migration:** move your pin to `affinidi-tdk = "0.9"` deliberately, and see
-> the `affinidi-messaging-sdk` 0.19.0 changelog for how to restore the previous
+> A true `0.9.0` therefore requires **first** releasing a `vta-sdk` that depends
+> on `affinidi-tdk` `0.9`, then bumping here — the coordination ADR 0003 point 3
+> calls for. Until then the version number cannot carry the warning, so this note
+> has to: **treat this patch as a breaking upgrade.**
+>
+> (`affinidi-messaging-sdk` is not caught by the same constraint even though
+> `vta-sdk` also pins it at `"0.18"` — that dependency is optional and is not
+> activated in this workspace's feature graph, whereas the `affinidi-tdk` one is.
+> Hence the SDK can take its honest `0.19.0` minor while the facade cannot.)
+>
+> **Migration:** pin `affinidi-tdk = "=0.8.4"` if you are not ready, and see the
+> `affinidi-messaging-sdk` 0.19.0 changelog for how to restore the previous
 > acceptance behaviour via `ATMConfigBuilder::with_unpack_policy(..)` if a
 > protocol legitimately expects an unauthenticated wrapping.
 

@@ -28,21 +28,31 @@ repo has to move its pin deliberately. Pins as observed at the time of writing:
 | --- | --- | --- |
 | `verifiable-trust-infrastructure` → `vta-sdk` | `affinidi-messaging-sdk = "0.18"` (direct, optional) | **No** — needs an explicit bump |
 | `affinidi-trust-registry-rs` | `affinidi-messaging-sdk = "0.18"` (workspace) | **No** — needs an explicit bump |
-| `verifiable-trust-infrastructure` (workspace) | `affinidi-tdk = "0.8"` | **No** — the facade also breaks to `0.9`, so this pin must move too |
-| `affinidi-webvh-service` | `affinidi-tdk = "0.8"` | **No** — same, move the pin to `"0.9"` |
-| `vti-push-gateway` | `affinidi-tdk = "0.7"` | **No** — now two minors behind the facade |
+| `verifiable-trust-infrastructure` (workspace) | `affinidi-tdk = "0.8"` | ⚠️ **Yes, silently** — via `affinidi-tdk` 0.8.5, a *patch* |
+| `affinidi-webvh-service` | `affinidi-tdk = "0.8"` | ⚠️ **Yes, silently** — same |
+| `vti-push-gateway` | `affinidi-tdk = "0.7"` | **No** — two minors behind the facade |
 | `cierge` | `vta-sdk = "0.20.25"` (transitive) | Only once `vta-sdk` bumps |
 | `vti-message-bridge` | `vta-sdk = "0.18"` (transitive) | Only once `vta-sdk` bumps |
 
-**The facade breaks too — `affinidi-tdk` goes to 0.9.0.** `affinidi-tdk`
-re-exports this crate wholesale (`pub use affinidi_messaging_sdk as messaging;`,
-default-on feature), so the new acceptance policy and the sealed
-`UnpackMetadata` reach every facade consumer. Shipping that as a patch would
-have changed `unpack` behaviour under every `affinidi-tdk = "0.8"` consumer on a
-routine `cargo update`, so the facade takes a **minor** bump and those pins must
-move to `"0.9"` deliberately.
+**⚠️ The facade delivers this break as a *patch*.** `affinidi-tdk` re-exports
+this crate wholesale (`pub use affinidi_messaging_sdk as messaging;`, default-on
+feature), so the new acceptance policy and the sealed `UnpackMetadata` reach
+every facade consumer — and `affinidi-tdk` can only ship as **0.8.5**, not
+`0.9.0`. `vta-sdk` (external, on crates.io, depended on here via the mediator)
+pins `affinidi-tdk = "0.8"`, so a minor bump breaks our own
+`[patch.crates-io]` redirect and drags duplicate registry copies of
+`affinidi-tdk` *and* this crate into the graph. See ADR 0003 point 3 and the
+`affinidi-tdk` 0.8.5 changelog.
 
-**Sequencing matters, not just the bumps.** Once `affinidi-tdk` 0.9 pulls
+The practical consequence for rollout: `verifiable-trust-infrastructure` and
+`affinidi-webvh-service` will pick up the new `unpack` acceptance policy on a
+routine `cargo update`, with **no version signal that anything breaking
+happened**. Do not rely on the version number to gate this — schedule those
+upgrades deliberately, and pin `affinidi-tdk = "=0.8.4"` in any repo that is not
+ready. Unblocking a real `affinidi-tdk` 0.9.0 means releasing a `vta-sdk` that
+depends on `affinidi-tdk` 0.9 first.
+
+**Sequencing matters, not just the bumps.** Once `affinidi-tdk` pulls
 `affinidi-messaging-sdk` 0.19 while a `^0.18` direct pin resolves to 0.18.x, any
 graph holding both (e.g. `verifiable-trust-infrastructure`, which depends on
 `affinidi-tdk` *and* on `vta-sdk`) links **two copies of the SDK** and the
