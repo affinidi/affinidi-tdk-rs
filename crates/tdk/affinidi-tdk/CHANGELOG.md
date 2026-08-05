@@ -6,12 +6,41 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
-## [0.8.5] - 2026-07-30
+## [0.9.0] - 2026-08-05
+
+> **BREAKING CHANGE (inherited).** This crate re-exports the messaging SDK
+> wholesale — `pub use affinidi_messaging_sdk as messaging;`, under the
+> default-on `messaging` feature — so `affinidi-messaging-sdk` 0.19.0's breaking
+> changes reach every consumer of this facade:
+>
+> - **Behavioural:** `messaging::ATM::unpack` (and the message-pickup delivery
+>   drain) now reject non-authenticated envelopes by default — only
+>   `authcrypt(plaintext)`, `authcrypt(sign(plaintext))` and
+>   `anoncrypt(authcrypt(plaintext))` are accepted, with message-layer addressing
+>   consistency enforced. Code that previously received anoncrypt, plaintext or
+>   signed-only messages will start seeing `ATMError::UnexpectedEnvelope` /
+>   `AddressingMismatch`.
+> - **Compile:** `messaging::messages::compat::UnpackMetadata` gains two public
+>   fields and is now `#[non_exhaustive]`, so downstream struct-literal
+>   construction of it stops compiling.
+>
+> This is therefore a **minor (breaking) bump, not a patch**. Shipping it as a
+> patch would have delivered a changed `unpack` acceptance policy to every
+> `affinidi-tdk = "0.8"` consumer on a routine `cargo update`, with no
+> opportunity to opt in — the failure mode ADR 0003 point 3 exists to avoid, and
+> which does not apply here because no external crate redirects `affinidi-tdk`
+> through `[patch.crates-io]`.
+>
+> **Migration:** move your pin to `affinidi-tdk = "0.9"` deliberately, and see
+> the `affinidi-messaging-sdk` 0.19.0 changelog for how to restore the previous
+> acceptance behaviour via `ATMConfigBuilder::with_unpack_policy(..)` if a
+> protocol legitimately expects an unauthenticated wrapping.
 
 ### Changed
 
-- Track `affinidi-messaging-sdk` 0.19.0 (secure-by-default `unpack`). Dependency
-  bump only; no API or behavioural change in this crate.
+- Track `affinidi-messaging-sdk` 0.19.0 (secure-by-default `unpack`). No source
+  change in this crate, but the re-export makes the SDK's breaking changes
+  observable through `affinidi_tdk::messaging` — see above.
 
 ## [0.8.4] - 2026-07-19
 

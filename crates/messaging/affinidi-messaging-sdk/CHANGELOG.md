@@ -28,15 +28,23 @@ repo has to move its pin deliberately. Pins as observed at the time of writing:
 | --- | --- | --- |
 | `verifiable-trust-infrastructure` → `vta-sdk` | `affinidi-messaging-sdk = "0.18"` (direct, optional) | **No** — needs an explicit bump |
 | `affinidi-trust-registry-rs` | `affinidi-messaging-sdk = "0.18"` (workspace) | **No** — needs an explicit bump |
-| `verifiable-trust-infrastructure` (workspace) | `affinidi-tdk = "0.8"` | Yes, via `affinidi-tdk` 0.8.5 |
-| `affinidi-webvh-service` | `affinidi-tdk = "0.8"` | Yes, via `affinidi-tdk` 0.8.5 |
-| `vti-push-gateway` | `affinidi-tdk = "0.7"` | **No** — two minors behind the facade |
+| `verifiable-trust-infrastructure` (workspace) | `affinidi-tdk = "0.8"` | **No** — the facade also breaks to `0.9`, so this pin must move too |
+| `affinidi-webvh-service` | `affinidi-tdk = "0.8"` | **No** — same, move the pin to `"0.9"` |
+| `vti-push-gateway` | `affinidi-tdk = "0.7"` | **No** — now two minors behind the facade |
 | `cierge` | `vta-sdk = "0.20.25"` (transitive) | Only once `vta-sdk` bumps |
 | `vti-message-bridge` | `vta-sdk = "0.18"` (transitive) | Only once `vta-sdk` bumps |
 
-**Sequencing matters, not just the bumps.** `affinidi-tdk` 0.8.5 pulls
-`affinidi-messaging-sdk` 0.19 while a `^0.18` direct pin resolves to 0.18.x, so
-any graph holding both (e.g. `verifiable-trust-infrastructure`, which depends on
+**The facade breaks too — `affinidi-tdk` goes to 0.9.0.** `affinidi-tdk`
+re-exports this crate wholesale (`pub use affinidi_messaging_sdk as messaging;`,
+default-on feature), so the new acceptance policy and the sealed
+`UnpackMetadata` reach every facade consumer. Shipping that as a patch would
+have changed `unpack` behaviour under every `affinidi-tdk = "0.8"` consumer on a
+routine `cargo update`, so the facade takes a **minor** bump and those pins must
+move to `"0.9"` deliberately.
+
+**Sequencing matters, not just the bumps.** Once `affinidi-tdk` 0.9 pulls
+`affinidi-messaging-sdk` 0.19 while a `^0.18` direct pin resolves to 0.18.x, any
+graph holding both (e.g. `verifiable-trust-infrastructure`, which depends on
 `affinidi-tdk` *and* on `vta-sdk`) links **two copies of the SDK** and the
 `ATMConfig` / `UnpackMetadata` types stop unifying. Move `vta-sdk` and
 `affinidi-trust-registry-rs` in the same cascade as the facade, and re-resolve
