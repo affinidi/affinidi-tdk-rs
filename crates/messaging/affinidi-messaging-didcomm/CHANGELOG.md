@@ -7,6 +7,22 @@
 > and elliptic-curve 0.14 respectively), so the multi-signature and
 > `kid`-header changes below ship as a single `0.15.8`.
 
+### Security
+
+- **`ParsedSignature::kid_from_protected` — signer-`kid` provenance (SSRF
+  enabler).** `parse_jws` falls back to the per-signature *unprotected* header
+  for the signer `kid` (interop with credo-ts / didcomm-python). That header is
+  outside the signing input, so **any intermediary** — a mediator, a relay — can
+  rewrite it in transit without invalidating the signature. A caller that turns
+  a `kid` into a DID resolution (an outbound HTTPS fetch for `did:web`) was
+  therefore letting such an intermediary choose the host contacted, on a message
+  that had not been verified yet. `ParsedSignature` now reports whether the
+  `kid` came from the integrity-protected header so callers can refuse to act on
+  the rewritable one; `affinidi-messaging-sdk` 0.19.0 uses this to bind an
+  unprotected `kid` to the signed payload's `from`. `ParsedSignature` is also now
+  `#[non_exhaustive]` (ADR 0003 point 1) — both changes are free here, as this
+  type has not previously been published.
+
 ### Added
 
 - **Multi-signature JWS verification primitives.** `jws::verify::parse_jws`

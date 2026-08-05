@@ -138,12 +138,25 @@ pub fn verify_secp256k1(jws_str: &str, public_key: &[u8]) -> Result<VerifiedJws,
 /// each signer's key from its DID document between the two steps. The legacy
 /// single-signature helpers ([`verify_ed25519`] etc.) remain for callers that
 /// already hold the key.
+#[non_exhaustive]
 pub struct ParsedSignature {
     /// Signer KID — protected header preferred, then the per-signature
     /// unprotected header (RFC 7515 §7.2.1, where DIDComm / credo-ts /
     /// didcomm-python place it). Attribution only; verification uses the
     /// caller-resolved key.
     pub kid: Option<String>,
+    /// Whether [`Self::kid`] came from the **protected** (integrity-protected)
+    /// header. `false` means it came from the per-signature *unprotected*
+    /// header, i.e. it is attacker-controllable on an untrusted JWS and is read
+    /// *before* verification.
+    ///
+    /// A caller that turns a `kid` into a **network** operation (resolving a
+    /// `did:web` signer DID is an outbound HTTPS fetch) must branch on this: an
+    /// unprotected `kid` lets an attacker choose the host that gets contacted —
+    /// an SSRF vector — on a message that will ultimately fail verification
+    /// anyway. `true` for a `kid` absent from both headers is meaningless, so
+    /// this is `false` whenever `kid` is `None`.
+    pub kid_from_protected: bool,
     /// JWS `alg` from this signature's protected header (`EdDSA`/`Ed25519`,
     /// `ES256`, or `ES256K`).
     pub alg: String,
@@ -211,19 +224,25 @@ pub fn parse_jws(jws_str: &str) -> Result<ParsedJws, DIDCommError> {
         // SECURITY: a kid taken from the unprotected header is *not* covered by
         // the signature, and this kid is read *before* verification runs, so on
         // an untrusted JWS it names an attacker-chosen DID to resolve — an
-        // outbound `did:web` fetch that an intermediary can even redirect on a
-        // message whose protected header omits `kid`. Verification never trusts
-        // this kid (the caller supplies the verifying key — only attribution
-        // uses it), but a caller that resolves it MUST bound how many such
-        // resolutions one message can drive and constrain which hosts are
-        // reachable. The SDK does exactly this — see the `resolution_budget`
-        // and the `# Security` note in `affinidi-messaging-sdk`'s `unpack` —
-        // and host allow-listing / SSRF protection is the DID resolver's job.
+        // outbound `did:web` fetch. Worse, because the unprotected header is
+        // outside the signing input, *any intermediary* (a mediator, a relay)
+        // can rewrite it in transit without invalidating the signature, so the
+        // host contacted is not even the original sender's choice.
+        //
+        // Verification itself never trusts this kid (the caller supplies the
+        // verifying key — only attribution uses it), but a caller that turns it
+        // into a network operation MUST constrain it. `kid_from_protected`
+        // below reports the provenance so the caller can: the SDK only resolves
+        // an unprotected kid whose DID matches the signed payload's `from`,
+        // which is inside the signing input and therefore not rewritable in
+        // transit. See `verify_all_signatures` in `affinidi-messaging-sdk`.
+        let kid_from_protected = header.kid.is_some();
         let kid = header
             .kid
             .or_else(|| sig_entry.header.as_ref().and_then(|h| h.kid.clone()));
 
         signatures.push(ParsedSignature {
+            kid_from_protected: kid_from_protected && kid.is_some(),
             kid,
             alg: header.alg,
             signing_input,
@@ -652,6 +671,64 @@ mod tests {
     }
 
     // ─── Multi-signature (parse_jws + verify_parsed_signature) ──────────────
+
+    /// `kid_from_protected` reports the *provenance* of the signer kid, which
+    /// callers rely on to decide whether the kid may steer a network operation:
+    /// a protected kid is inside the signing input, an unprotected one can be
+    /// rewritten in transit by any intermediary. `sign_multi` writes both, so
+    /// the flag is `true`; strip the protected copy and it must flip to `false`.
+    #[test]
+    fn parse_jws_reports_kid_provenance() {
+        use crate::jws::sign::{JwsSigner, sign_multi};
+        use base64ct::{Base64UrlUnpadded, Encoding};
+
+        let ed = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
+        let jws_str = sign_multi(
+            b"{\"from\":\"did:example:alice\"}",
+            &[JwsSigner::Ed25519 {
+                kid: "did:example:alice#key-1",
+                private: &ed.to_bytes(),
+            }],
+        )
+        .unwrap();
+
+        let parsed = parse_jws(&jws_str).unwrap();
+        assert_eq!(
+            parsed.signatures[0].kid.as_deref(),
+            Some("did:example:alice#key-1")
+        );
+        assert!(
+            parsed.signatures[0].kid_from_protected,
+            "sign_multi writes kid to the protected header, so provenance is protected"
+        );
+
+        // Remove the protected `kid`, leaving only the unprotected copy — the
+        // in-transit rewrite an intermediary can perform.
+        let mut v: serde_json::Value = serde_json::from_str(&jws_str).unwrap();
+        let protected_b64 = v["signatures"][0]["protected"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut protected: serde_json::Value =
+            serde_json::from_slice(&Base64UrlUnpadded::decode_vec(&protected_b64).unwrap())
+                .unwrap();
+        protected.as_object_mut().unwrap().remove("kid");
+        v["signatures"][0]["protected"] = serde_json::Value::String(
+            Base64UrlUnpadded::encode_string(&serde_json::to_vec(&protected).unwrap()),
+        );
+        let stripped = serde_json::to_string(&v).unwrap();
+
+        let parsed = parse_jws(&stripped).unwrap();
+        assert_eq!(
+            parsed.signatures[0].kid.as_deref(),
+            Some("did:example:alice#key-1"),
+            "the unprotected header still supplies the kid (interop fallback)"
+        );
+        assert!(
+            !parsed.signatures[0].kid_from_protected,
+            "with no protected kid the provenance must be reported as unprotected"
+        );
+    }
 
     /// A JWS carrying three signatures over the same payload (Ed25519, P-256,
     /// secp256k1) parses into three entries, each of which verifies against

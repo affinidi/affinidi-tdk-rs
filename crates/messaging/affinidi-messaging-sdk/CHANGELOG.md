@@ -190,6 +190,31 @@ the mediator queue.
   it to any value your protocol expects (there is no absolute ceiling above your
   policy) or lower it (e.g. `max_signatures: 1`) for single-signer only. Every
   signature within the cap is fully verified.
+- **SSRF: an unprotected signer `kid` can no longer steer DID resolution.** The
+  signer `kid` selects which DID `unpack` resolves — an outbound HTTPS fetch for
+  `did:web` — and is read *before* the signature is verified. When that `kid`
+  comes from the per-signature **unprotected** header (`parse_jws`'s interop
+  fallback), it sits outside the signing input, so **any intermediary** — a
+  mediator, a relay — could rewrite it in transit without invalidating the
+  signature and redirect the fetch to a host of its choosing. That is an SSRF
+  primitive available to a party who cannot forge a signature at all, and the
+  per-message resolution budget bounded only the *count* of such fetches, not
+  their *targets*.
+
+  An unprotected `kid` is now resolved only when its DID matches the signed
+  payload's `from` — which *is* inside the signing input, so the binding cannot
+  be forged in transit. A rewritten `kid` now yields
+  `ATMError::UnexpectedEnvelope` **before any outbound request is made** (the
+  check runs ahead of the resolution-budget charge, so a refused `kid` costs zero
+  fetches). A payload with no readable `from` offers nothing to bind against, so
+  an unprotected `kid` is refused there too. A `kid` in the protected header is
+  unaffected: it is the original sender's own, integrity-protected choice, and
+  resolving a claimed sender's DID is inherent to DID messaging (authcrypt
+  resolves the `skid` identically).
+
+  This does not make `unpack` an SSRF sandbox — a sender naming its own
+  `did:web` still causes one fetch — so resolver-side host allow-listing remains
+  worthwhile as defence in depth.
 - **Per-message DID-resolution budget (DoS guard).** The wrapping allow-list is
   necessarily enforced *after* layers are decrypted and signatures verified, and
   each signer/sender key is a DID resolution (an outbound HTTPS fetch for

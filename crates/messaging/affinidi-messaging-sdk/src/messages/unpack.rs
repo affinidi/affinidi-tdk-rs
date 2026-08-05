@@ -471,19 +471,34 @@ impl SharedState {
     ///
     /// # Security
     ///
-    /// The `kid` that selects which DID is resolved comes from the signature
-    /// header — the protected header if present, otherwise the per-signature
-    /// *unprotected* header (`parse_jws`'s interop fallback) — and is read
-    /// *before* the signature is verified. On an untrusted JWS this DID is
-    /// therefore attacker-chosen: a JWS that will ultimately fail verification
-    /// can still trigger resolution of a `did:web` (an outbound HTTPS fetch) of
-    /// the attacker's choosing, and — because the unprotected header is not
-    /// covered by the signature — an intermediary can even redirect it on a
-    /// message whose protected header omits `kid`. The per-message
-    /// [`resolution_budget`] bounds the *count* of these resolutions but not
-    /// their *targets*; constraining which hosts may be reached (resolver
-    /// allow-list / SSRF protection) is the DID resolver's responsibility, not
-    /// `unpack`'s.
+    /// The `kid` that selects which DID is resolved is read *before* the
+    /// signature is verified, so on an untrusted JWS it names a DID the sender
+    /// chose — and resolving a `did:web` is an outbound HTTPS fetch. Two
+    /// distinct exposures follow, and they are not equally containable:
+    ///
+    /// - A `kid` in the **protected** header is inside the signing input. It is
+    ///   the *original sender's* choice and cannot be altered in transit. That a
+    ///   claimed sender causes its own DID to be resolved is inherent to DID
+    ///   messaging (authcrypt resolves the `skid` the same way), so this is
+    ///   accepted, bounded only by the per-message [`resolution_budget`].
+    /// - A `kid` in the per-signature **unprotected** header (`parse_jws`'s
+    ///   interop fallback for credo-ts / didcomm-python) is *outside* the
+    ///   signing input, so **any intermediary** — a mediator, a relay — can
+    ///   rewrite it without invalidating the signature and redirect the fetch to
+    ///   a host of its choosing. That is a genuine SSRF primitive available to
+    ///   parties who cannot forge a signature at all.
+    ///
+    /// So an unprotected `kid` is only resolved when its DID matches the signed
+    /// payload's `from`. `from` is inside the signing input, so binding the two
+    /// removes the in-transit rewrite vector: an intermediary editing the
+    /// unprotected `kid` now just makes the signature unattributable, causing a
+    /// rejection *without* any outbound request. A payload with no readable
+    /// `from` (e.g. a nested envelope) provides nothing to bind against, so the
+    /// unprotected `kid` is refused there too.
+    ///
+    /// This does not make `unpack` an SSRF sandbox — a sender naming its own
+    /// `did:web` still causes one fetch — so resolver-side host allow-listing
+    /// remains worthwhile as defence in depth.
     async fn verify_all_signatures(
         &self,
         jws_str: &str,
@@ -506,6 +521,14 @@ impl SharedState {
             )));
         }
 
+        // The signed payload's `from`, if it is a readable DIDComm plaintext.
+        // Used only to bind an *unprotected* signer `kid` (see `# Security`);
+        // parsed here, once, before any resolution happens.
+        let payload_from: Option<String> =
+            serde_json::from_slice::<serde_json::Value>(&parsed.payload)
+                .ok()
+                .and_then(|v| v.get("from").and_then(|f| f.as_str().map(str::to_string)));
+
         let tolerate = self.config.allow_invalid_signatures();
         let mut verified: Vec<String> = Vec::with_capacity(parsed.signatures.len());
         let mut unverified: Vec<String> = Vec::new();
@@ -521,6 +544,29 @@ impl SharedState {
                     "a signature is missing its signer kid".into(),
                 ));
             };
+            // An unprotected `kid` is rewritable in transit by any intermediary,
+            // so it may only steer a (networked) resolution when it names the
+            // same DID as the signed payload's `from`. Checked *before* the
+            // budget is charged and before any fetch — a rewritten kid must cost
+            // zero outbound requests, or the guard would still be an SSRF
+            // trigger. See the `# Security` note above.
+            if !sig.kid_from_protected {
+                let bound = payload_from
+                    .as_deref()
+                    .is_some_and(|from| Self::base_did(&kid) == Self::base_did(from));
+                if !bound {
+                    if tolerate {
+                        unverified.push(kid);
+                        continue;
+                    }
+                    return Err(ATMError::UnexpectedEnvelope(format!(
+                        "signature carries its signer kid only in the unprotected \
+                         header, and '{kid}' does not match the message `from` \
+                         ({}); refusing to resolve it",
+                        payload_from.as_deref().unwrap_or("<absent>")
+                    )));
+                }
+            }
             // Charge the per-message resolution budget before resolving the
             // signer DID (a networked fetch for `did:web`).
             charge_resolution(budget)?;
@@ -2535,6 +2581,122 @@ mod tests {
         assert!(
             matches!(&err, ATMError::AddressingMismatch(m) if m.contains("no `from`")),
             "authcrypt with no `from` must be an AddressingMismatch, got: {err:?}"
+        );
+    }
+
+    /// Rewrite a `sign_multi` JWS so the signer `kid` appears **only** in the
+    /// per-signature *unprotected* header, optionally overriding its value —
+    /// i.e. exactly what an intermediary can do in transit, since the
+    /// unprotected header is outside the signing input.
+    fn strip_kid_to_unprotected(jws_str: &str, override_kid: Option<&str>) -> String {
+        use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+
+        let mut v: serde_json::Value = serde_json::from_str(jws_str).unwrap();
+        let sig = &mut v["signatures"][0];
+
+        let protected_b64 = sig["protected"].as_str().unwrap().to_string();
+        let mut protected: serde_json::Value =
+            serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(&protected_b64).unwrap())
+                .unwrap();
+        let original_kid = protected["kid"].as_str().unwrap().to_string();
+        protected.as_object_mut().unwrap().remove("kid");
+        sig["protected"] = serde_json::Value::String(
+            BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_vec(&protected).unwrap()),
+        );
+
+        let kid = override_kid.unwrap_or(&original_kid);
+        sig["header"] = json!({ "kid": kid });
+        serde_json::to_string(&v).unwrap()
+    }
+
+    /// SSRF guard: the per-signature *unprotected* header is outside the signing
+    /// input, so any intermediary can rewrite the signer `kid` in transit
+    /// without invalidating the signature. If `unpack` resolved it, that
+    /// intermediary could aim an outbound `did:web` fetch at a host of its
+    /// choosing — an SSRF primitive available to a party that cannot forge a
+    /// signature at all.
+    ///
+    /// So an unprotected `kid` is only resolved when its DID matches the signed
+    /// payload's `from` (which *is* inside the signing input). Here the rewritten
+    /// kid names an unrelated DID, so it must be refused as `UnexpectedEnvelope`
+    /// — the *pre-resolution* rejection — rather than reaching verification.
+    #[tokio::test]
+    async fn unprotected_kid_not_matching_from_is_refused_before_resolution() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, "did:example:recipient");
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{sender_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+
+        // The intermediary's rewrite: kid only in the unprotected header, and
+        // pointed at an attacker-controlled `did:web` host.
+        let tampered =
+            strip_kid_to_unprotected(&signed, Some("did:web:attacker.example.com#key-1"));
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![], policy).await;
+
+        let err = recipient.unpack(&tampered).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::UnexpectedEnvelope(m)
+                if m.contains("unprotected") && m.contains("refusing to resolve")),
+            "a rewritten unprotected kid must be refused before any resolution, got: {err:?}"
+        );
+    }
+
+    /// The converse of the guard above: an unprotected-only `kid` that *does*
+    /// name the same DID as the signed `from` is still accepted for resolution,
+    /// so the credo-ts / didcomm-python interop the fallback exists for keeps
+    /// working. (The signature itself no longer verifies here because rewriting
+    /// the protected header changes the signing input — the point is that the
+    /// failure is a *verification* failure, i.e. the guard let it through, not
+    /// the pre-resolution `UnexpectedEnvelope` refusal.)
+    #[tokio::test]
+    async fn unprotected_kid_matching_from_is_still_resolved() {
+        let (sender_did, sed, _sx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&sender_did, "did:example:recipient");
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{sender_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+
+        // kid moved to the unprotected header but left naming the real sender.
+        let moved = strip_kid_to_unprotected(&signed, None);
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 1,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![], policy).await;
+
+        let err = recipient.unpack(&moved).await.unwrap_err();
+        assert!(
+            !matches!(&err, ATMError::UnexpectedEnvelope(m) if m.contains("refusing to resolve")),
+            "a from-matching unprotected kid must not hit the SSRF guard, got: {err:?}"
+        );
+        assert!(
+            matches!(&err, ATMError::VerificationFailed(_)),
+            "it should proceed to verification and fail there instead, got: {err:?}"
         );
     }
 
