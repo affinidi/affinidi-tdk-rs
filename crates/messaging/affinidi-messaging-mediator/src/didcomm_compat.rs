@@ -337,8 +337,16 @@ async fn recurse_decrypted_plaintext(
         let jws_str = std::str::from_utf8(plaintext)
             .map_err(|e| format!("Inner JWS is not valid UTF-8: {e}"))?;
 
-        let signer_kid = extract_jws_signer_kid(&value)
+        let (signer_kid, kid_from_protected) = extract_jws_signer_kid_with_provenance(&value)
             .ok_or("Inner JWS has no signer kid to resolve a verification key")?;
+        // Refuse an in-transit-rewritable kid before it can steer an outbound
+        // DID resolution (SSRF) — see `signer_kid_is_resolvable`.
+        if !signer_kid_is_resolvable(&value, &signer_kid, kid_from_protected) {
+            return Err(format!(
+                "Inner JWS carries its signer kid only in the unprotected header, and \
+                 '{signer_kid}' does not match the message `from`; refusing to resolve it"
+            ));
+        }
         let signer_did = did_part(&signer_kid);
         let alg = extract_jws_alg(&value).unwrap_or_default();
         let verified = verify_inner_jws(jws_str, &alg, &signer_did, &signer_kid, did_resolver)
@@ -395,7 +403,20 @@ async fn recurse_decrypted_plaintext(
 /// Extract the signer kid from a parsed JWS (General JSON Serialization).
 /// Prefers the integrity-protected header, falling back to the per-signature
 /// unprotected header (where credo-ts / didcomm-python place the kid).
-fn extract_jws_signer_kid(jws: &serde_json::Value) -> Option<String> {
+/// Extract the signer kid from a parsed JWS (General JSON Serialization),
+/// reporting whether it came from the **integrity-protected** header (`true`) or
+/// the per-signature *unprotected* one (`false`). The protected header takes
+/// precedence.
+///
+/// SECURITY: the unprotected header is outside the JWS signing input, so **any
+/// intermediary** — a relay, a peer mediator — can rewrite it in transit without
+/// invalidating the signature. Since resolving a signer DID is an outbound
+/// network fetch for `did:web`, and it happens *before* the signature is
+/// verified, an unprotected kid is an SSRF primitive: it lets a party who cannot
+/// forge a signature at all choose which host this mediator contacts. Callers
+/// must therefore gate resolution on the provenance — see
+/// [`signer_kid_is_resolvable`].
+fn extract_jws_signer_kid_with_provenance(jws: &serde_json::Value) -> Option<(String, bool)> {
     let sig = jws.get("signatures")?.as_array()?.first()?;
 
     // Protected header (base64url-encoded JSON) takes precedence.
@@ -404,14 +425,47 @@ fn extract_jws_signer_kid(jws: &serde_json::Value) -> Option<String> {
         && let Ok(header) = serde_json::from_slice::<serde_json::Value>(&bytes)
         && let Some(kid) = header.get("kid").and_then(|k| k.as_str())
     {
-        return Some(kid.to_string());
+        return Some((kid.to_string(), true));
     }
 
     // Fall back to the unprotected per-signature header.
     sig.get("header")
         .and_then(|h| h.get("kid"))
         .and_then(|k| k.as_str())
-        .map(|s| s.to_string())
+        .map(|s| (s.to_string(), false))
+}
+
+/// The `from` DID of a JWS payload, if the payload is a readable DIDComm
+/// plaintext. The payload *is* covered by the signature, so unlike the
+/// unprotected header it cannot be rewritten in transit.
+fn jws_payload_from(jws: &serde_json::Value) -> Option<String> {
+    let payload_b64 = jws.get("payload")?.as_str()?;
+    let bytes = BASE64_URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    let msg: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    msg.get("from")?.as_str().map(|s| s.to_string())
+}
+
+/// Whether a signer kid may be turned into a (networked) DID resolution.
+///
+/// A **protected** kid always may: it is inside the signing input, so it is the
+/// original sender's own choice and cannot be altered in transit. That a claimed
+/// sender causes its own DID to be resolved is inherent to DID messaging.
+///
+/// An **unprotected** kid may only when it names the same DID as the signed
+/// payload's `from`. That binding is what removes the SSRF: an intermediary
+/// rewriting the kid no longer redirects the fetch, it merely makes the
+/// signature unattributable and the message is rejected — at zero outbound
+/// requests. A payload with no readable `from` offers nothing to bind against,
+/// so an unprotected kid is refused there too.
+fn signer_kid_is_resolvable(
+    jws: &serde_json::Value,
+    signer_kid: &str,
+    from_protected: bool,
+) -> bool {
+    if from_protected {
+        return true;
+    }
+    jws_payload_from(jws).is_some_and(|from| did_part(&from) == did_part(signer_kid))
 }
 
 /// Extract the JWS signature algorithm (`alg`) from the first signature's
@@ -536,8 +590,19 @@ async fn unpack_jws(
     let value: serde_json::Value =
         serde_json::from_str(msg_string).map_err(|e| format!("Cannot parse JWS: {e}"))?;
 
-    let signer_kid =
-        extract_jws_signer_kid(&value).ok_or("JWS has no signer kid to resolve a key")?;
+    let (signer_kid, kid_from_protected) = extract_jws_signer_kid_with_provenance(&value)
+        .ok_or("JWS has no signer kid to resolve a key")?;
+    // This path is reachable *pre-authentication* (the mediator's
+    // `/authenticate/*` handlers unpack before a session exists), so an
+    // unprotected kid here would let any unauthenticated peer aim the mediator's
+    // outbound DID resolution at a host of its choosing. Gate it on provenance
+    // before resolving anything — see `signer_kid_is_resolvable`.
+    if !signer_kid_is_resolvable(&value, &signer_kid, kid_from_protected) {
+        return Err(format!(
+            "JWS carries its signer kid only in the unprotected header, and \
+             '{signer_kid}' does not match the message `from`; refusing to resolve it"
+        ));
+    }
     let signer_did = did_part(&signer_kid);
     let alg = extract_jws_alg(&value).unwrap_or_default();
     let verified = verify_inner_jws(msg_string, &alg, &signer_did, &signer_kid, did_resolver)
@@ -901,9 +966,10 @@ mod tests {
             }]
         });
         assert_eq!(
-            extract_jws_signer_kid(&jws).as_deref(),
-            Some("did:example:alice#protected"),
-            "integrity-protected kid must win over the unprotected one"
+            extract_jws_signer_kid_with_provenance(&jws),
+            Some(("did:example:alice#protected".to_string(), true)),
+            "integrity-protected kid must win over the unprotected one, and be \
+             reported as protected"
         );
     }
 
@@ -920,9 +986,81 @@ mod tests {
             }]
         });
         assert_eq!(
-            extract_jws_signer_kid(&jws).as_deref(),
-            Some("did:example:alice#unprotected")
+            extract_jws_signer_kid_with_provenance(&jws),
+            Some(("did:example:alice#unprotected".to_string(), false)),
+            "the unprotected fallback must be reported as NOT integrity-protected, \
+             so callers can refuse to resolve it"
         );
+    }
+
+    /// SSRF guard. The per-signature unprotected header is outside the signing
+    /// input, so any intermediary can rewrite the signer kid in transit without
+    /// invalidating the signature. Resolving a signer DID is an outbound
+    /// `did:web` fetch and happens *before* verification — and this path is
+    /// reachable pre-authentication — so an unprotected kid may only be resolved
+    /// when it names the same DID as the signed payload's `from`.
+    #[test]
+    fn unprotected_signer_kid_is_only_resolvable_when_it_matches_from() {
+        // Payload is signed over, so `from` cannot be rewritten in transit.
+        let payload = BASE64_URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({"from": "did:example:alice", "type": "x"})).unwrap(),
+        );
+        let jws = json!({
+            "payload": payload,
+            "signatures": [{
+                "protected": protected_b64(&json!({"alg": "EdDSA"})),
+                "header": {"kid": "did:web:attacker.example.com#key-1"},
+                "signature": "AA"
+            }]
+        });
+
+        assert!(
+            !signer_kid_is_resolvable(&jws, "did:web:attacker.example.com#key-1", false),
+            "a rewritten unprotected kid must not be resolvable — that is the SSRF"
+        );
+        assert!(
+            signer_kid_is_resolvable(&jws, "did:example:alice#key-1", false),
+            "an unprotected kid matching the signed `from` stays resolvable (interop)"
+        );
+        assert!(
+            signer_kid_is_resolvable(&jws, "did:web:attacker.example.com#key-1", true),
+            "a protected kid is inside the signing input and is always resolvable"
+        );
+    }
+
+    /// A payload with no readable `from` gives nothing to bind an unprotected
+    /// kid against, so it must be refused rather than resolved optimistically.
+    #[test]
+    fn unprotected_signer_kid_refused_when_payload_has_no_from() {
+        let payload =
+            BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({"type": "x"})).unwrap());
+        let jws = json!({
+            "payload": payload,
+            "signatures": [{
+                "protected": protected_b64(&json!({"alg": "EdDSA"})),
+                "header": {"kid": "did:web:attacker.example.com#key-1"},
+                "signature": "AA"
+            }]
+        });
+        assert!(!signer_kid_is_resolvable(
+            &jws,
+            "did:web:attacker.example.com#key-1",
+            false
+        ));
+        // A non-JSON / undecodable payload likewise yields no `from`.
+        let opaque = json!({
+            "payload": "!!not-base64!!",
+            "signatures": [{
+                "protected": protected_b64(&json!({"alg": "EdDSA"})),
+                "header": {"kid": "did:web:attacker.example.com#key-1"},
+                "signature": "AA"
+            }]
+        });
+        assert!(!signer_kid_is_resolvable(
+            &opaque,
+            "did:web:attacker.example.com#key-1",
+            false
+        ));
     }
 
     #[test]

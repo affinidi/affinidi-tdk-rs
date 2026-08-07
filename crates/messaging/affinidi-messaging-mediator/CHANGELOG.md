@@ -1,5 +1,39 @@
 # Affinidi Messaging Mediator
 
+## 7th August 2026 (0.18.6)
+
+**Security — pre-authentication server-side SSRF via the JWS signer `kid`.**
+
+`extract_jws_signer_kid` fell back to the per-signature **unprotected** header,
+and `verify_inner_jws` resolved the resulting DID — an outbound HTTPS fetch for
+`did:web` — **before** verifying the signature. The unprotected header is
+outside the JWS signing input, so any intermediary can rewrite it in transit
+without invalidating the signature.
+
+This was reachable **before authentication**: `MetaEnvelope::new` is called from
+`handlers/authenticate/response.rs` and `handlers/authenticate/refresh.rs`, and
+anoncrypt needs no sender key, so any unauthenticated peer could POST an
+envelope whose signer `kid` named `did:web:<host>` and make the mediator issue a
+request to that host — including hosts reachable only from inside the mediator's
+network.
+
+An unprotected `kid` is now resolved only when it names the same DID as the
+signed payload's `from`, which *is* inside the signing input and so cannot be
+rewritten in transit. A rewritten `kid` is refused **before any outbound
+request** — the check runs ahead of resolution, so a refused `kid` costs zero
+fetches. A payload with no readable `from` offers nothing to bind against and is
+refused too. A `kid` in the protected header is unaffected: it is the original
+sender's own choice, and resolving a claimed sender's DID is inherent to DID
+messaging.
+
+Both call sites are covered — the top-level JWS in `unpack_jws` and the nested
+sign-then-encrypt JWS in `recurse_decrypted_plaintext`.
+
+This is the mediator-side counterpart of the SDK fix in
+`affinidi-messaging-sdk` 0.19.0. It is *not* a general SSRF fix: a sender naming
+its own `did:web` still causes one fetch, so resolver-side host allow-listing
+remains worthwhile as defence in depth.
+
 ## 4th August 2026 (0.18.5)
 
 Dependency bump to `affinidi-messaging-sdk` 0.19.0 (secure-by-default `unpack`).
