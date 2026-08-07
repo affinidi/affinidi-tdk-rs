@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.19.1] - 2026-08-07
+
+Follow-ups to the AgenticSec review of #671. No API change.
+
+### Security
+
+- **Unsupported signer curves are no longer retried forever (DoS / liveness).**
+  `resolve_verify_key` returned a bare `Option`, collapsing two failures with
+  opposite retry semantics: *the DID did not resolve* (transient — the network
+  or registry may recover) and *the DID resolved but carries no key this build
+  can verify with* (deterministic — e.g. a P-384 or P-521 signer, which fails
+  identically forever). Both surfaced as the retryable `ATMError::DidcommError`,
+  so the message-pickup drain re-queued the deterministic case on **every**
+  pickup cycle — the same poison-loop the `VerificationFailed` split fixed for
+  bad signatures, still present on this path. The two arms are now distinct: an
+  unusable key yields `ATMError::VerificationFailed` (purged), an unresolvable
+  DID stays `ATMError::DidcommError` (retried).
+
+- **The authoritative signature is resolved first (resolution-amplification
+  reduction).** Under the default policy a signed message is accepted only if a
+  *verified* signer matches the inner `from`, so if that signature fails the
+  message is rejected regardless of the others — and every resolution spent on
+  the others was attacker-directed outbound work for nothing. Signatures whose
+  `kid` matches `from` are now visited first, so a message stuffed with
+  signatures costs **one** DID resolution instead of `max_signatures` before
+  rejection. This reorders *resolution*, not semantics: every signature within
+  the cap is still visited and the same signers are recorded.
+
+  This **reduces** the amplification ceiling, it does not remove it. A single
+  frame can still drive resolutions across its crypto layers and forward hops
+  (`MAX_CRYPTO_LAYERS + MAX_FORWARD_DEPTH`); those are legitimate for a real
+  multi-hop message and cannot be cut without changing routing behaviour. Making
+  the budget operator-configurable would require adding a field to the public
+  `UnpackPolicy`, which is breaking — deliberately deferred rather than bundled
+  into a security patch.
+
+- **Tolerated signatures are no longer silent.** With
+  `allow_invalid_signatures` enabled, a co-signature that cannot be verified was
+  recorded in `UnpackMetadata::unverified_signers` and nothing else — an
+  application that keys authorization off co-signature validity had no signal
+  its check had been skipped. Every tolerated path now emits a `warn!` naming
+  the `kid` and the reason, and says explicitly that the signature must not be
+  treated as valid. The authoritative (`from`-matching) signature must still
+  verify under `validate_addressing_consistency`, so this remains a *visibility*
+  fix, not a policy change.
+
 ## [0.19.0] - 2026-07-29
 
 > **BREAKING CHANGE.** `atm.unpack` now rejects non-authenticated envelopes by
