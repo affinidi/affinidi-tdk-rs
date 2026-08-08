@@ -40,6 +40,7 @@ members = [
   "crates/messaging/affinidi-messaging-core",
   "crates/messaging/affinidi-messaging-delivery",
   "crates/messaging/affinidi-messaging-didcomm",
+  "crates/messaging/affinidi-messaging-didcomm-v1",
   "crates/messaging/affinidi-tsp",
   "crates/messaging/affinidi-messaging-sdk",
   "crates/messaging/affinidi-messaging-helpers",
@@ -98,6 +99,7 @@ affinidi-crypto = { path = "crates/core/affinidi-crypto" }
 affinidi-encoding = { path = "crates/core/affinidi-encoding" }
 affinidi-data-integrity = { path = "crates/credentials/affinidi-data-integrity" }
 affinidi-messaging-didcomm = { path = "crates/messaging/affinidi-messaging-didcomm" }
+affinidi-messaging-didcomm-v1 = { path = "crates/messaging/affinidi-messaging-didcomm-v1" }
 affinidi-messaging-sdk = { path = "crates/messaging/affinidi-messaging-sdk" }
 affinidi-messaging-mediator = { path = "crates/messaging/affinidi-messaging-mediator" }
 affinidi-messaging-mediator-common = { path = "crates/messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common" }

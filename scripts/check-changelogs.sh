@@ -73,8 +73,17 @@ while IFS="$(printf '\t')" read -r name dir; do
   manifest="$dir/Cargo.toml"
 
   # Did this PR change the crate's version?
+  #
+  # The trailing `|| true` is load-bearing. For a crate added by this PR the
+  # manifest does not exist at $BASE, so `git show` exits non-zero — and under
+  # `set -o pipefail` that fails the whole command substitution, which `set -e`
+  # then turns into an abort. The script would exit 128 partway through the
+  # crate list, printing a few `ok` lines and no verdict: a *silent pass* for
+  # every crate after the new one. Sibling check-version-bumps.sh already
+  # guards its equivalent line this way; this one did not, and the gap went
+  # unnoticed because no PR had added a crate since the guard landed.
   old_version=$(git show "$BASE:$manifest" 2>/dev/null \
-    | awk '/^\[/{ in_pkg = ($0 == "[package]") } in_pkg && /^version = / { gsub(/^version = "|"$/, ""); print; exit }')
+    | awk '/^\[/{ in_pkg = ($0 == "[package]") } in_pkg && /^version = / { gsub(/^version = "|"$/, ""); print; exit }' || true)
   new_version=$(awk '/^\[/{ in_pkg = ($0 == "[package]") } in_pkg && /^version = / { gsub(/^version = "|"$/, ""); print; exit }' "$manifest" 2>/dev/null)
 
   # A crate that is new in this PR has no old version; it still needs an entry.

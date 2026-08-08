@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.19.2] - 2026-08-08
+
+Dependency-pin bump only; no API or behaviour change.
+
+- Track `affinidi-messaging-core` 0.1.6, which adds `Protocol::DIDCommV1` for
+  the new `affinidi-messaging-didcomm-v1` crate and makes `Protocol`
+  `#[non_exhaustive]`. This crate's exact-patch pin has to move in lockstep.
+  Nothing here matches on `Protocol`, so no code changed.
+
 ## [0.19.1] - 2026-08-07
 
 Follow-ups to the AgenticSec review of #671. No API change.
