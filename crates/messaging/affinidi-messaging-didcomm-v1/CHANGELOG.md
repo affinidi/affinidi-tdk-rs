@@ -1,5 +1,20 @@
 # affinidi-messaging-didcomm-v1 changelog
 
+## 0.1.1 — 8th August 2026
+
+Manifest fix. No code change.
+
+- **Require `affinidi-messaging-core` 0.1.6, not 0.1.** The optional
+  `messaging-core` feature compiles `adapter.rs`, which names
+  `Protocol::DIDCommV1` — a variant that only exists from 0.1.6. The published
+  0.1.0 asked for `"0.1"`, which resolves to 0.1.6 on a fresh build (so publish
+  verification was green) but lets a consumer with an existing lockfile, or one
+  pinning `--precise 0.1.5`, fail with `no variant named DIDCommV1`.
+
+  The general shape is worth noting: when an optional feature depends on an API
+  added in the *same release train*, a loose minor requirement only looks
+  correct because no stale lockfile exists yet.
+
 ## 0.1.0 — 8th August 2026
 
 Initial release: DIDComm v1 (Aries RFC 0019) transport primitives, alongside the
