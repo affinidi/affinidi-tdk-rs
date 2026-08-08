@@ -1,5 +1,37 @@
 # Affinidi Messaging Mediator
 
+## 8th August 2026 (0.18.7)
+
+**Envelope-wrapping observability — warn on non-conformant layering.**
+
+The mediator's `didcomm_compat` unpack peeled nested envelopes without ever
+classifying the resulting layer stack, so a message whose layering is outside
+the DIDComm v2 wrapping taxonomy — a repeated encryption layer, or nesting the
+spec does not define — was accepted with no record that anything was unusual.
+The SDK's `unpack` has classified and rejected these since
+`affinidi-messaging-sdk` 0.19.0; the mediator boundary had no equivalent signal.
+
+The unpack path now records each crypto layer as it is peeled and classifies the
+stack against `MessageWrappingType`. A stack outside the taxonomy emits a
+**`WARN`** naming:
+
+- the **sender** — preferring the cryptographically-evidenced authcrypt `skid`
+  over the message's self-asserted `from`, and stating which of the two is
+  shown (on a non-conformant envelope that distinction is the point);
+- the **recipient** (`to` DID);
+- the **observed layer stack**, rendered outermost-first as e.g.
+  `authcrypt(authcrypt(plaintext))` rather than a debug dump;
+- the message id, type, and SHA-256 hash, so the message can be located;
+- what the defined wrappings are, and the usual causes — a signature applied
+  outside the encryption instead of inside, a repeated encryption layer, or
+  nesting deeper than two crypto layers.
+
+**This is deliberately observability only — nothing is rejected.** The mediator
+relays for third-party senders whose layering it does not control, so rejecting
+a non-conformant envelope would drop traffic that works today. The intent is to
+see what is actually in flight first; enforcement can follow once the logs are
+quiet.
+
 ## 7th August 2026 (0.18.6)
 
 **Security — pre-authentication server-side SSRF via the JWS signer `kid`.**
