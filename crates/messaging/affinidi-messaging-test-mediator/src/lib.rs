@@ -311,6 +311,10 @@ pub struct TestMediatorBuilder {
     /// Override for `SecurityConfig.mediator_acl_mode`. `None` keeps the
     /// production default (`ExplicitDeny`).
     acl_mode: Option<AccessListModeType>,
+    /// DIDComm v1: `(enabled, allow_unauthenticated_forwards)`. `None` leaves
+    /// it off, matching a production mediator that has not opted in.
+    #[cfg(feature = "didcomm-v1")]
+    didcomm_v1: Option<(bool, bool)>,
     /// Override for `SecurityConfig.global_acl_default`. `None` keeps the
     /// production default (`MediatorACLSet::default()`).
     global_acl_default: Option<MediatorACLSet>,
@@ -362,6 +366,8 @@ impl Default for TestMediatorBuilder {
             local_endpoints: Vec::new(),
             advertise_host: None,
             acl_mode: None,
+            #[cfg(feature = "didcomm-v1")]
+            didcomm_v1: None,
             global_acl_default: None,
             local_direct_delivery_allowed: None,
             local_direct_delivery_allow_anon: None,
@@ -512,6 +518,13 @@ impl TestMediatorBuilder {
     /// `ExplicitDeny` (matching `SecurityConfig::default`). Set to
     /// `ExplicitAllow` to simulate an allowlist deployment, where DIDs
     /// without an explicit `LOCAL` ACL bit are rejected.
+    /// Enable DIDComm v1, optionally accepting unauthenticated forwards.
+    #[cfg(feature = "didcomm-v1")]
+    pub fn didcomm_v1(mut self, enabled: bool, allow_unauthenticated_forwards: bool) -> Self {
+        self.didcomm_v1 = Some((enabled, allow_unauthenticated_forwards));
+        self
+    }
+
     pub fn acl_mode(mut self, mode: AccessListModeType) -> Self {
         self.acl_mode = Some(mode);
         self
@@ -827,6 +840,10 @@ impl TestMediatorBuilder {
             .streaming_enabled(self.enable_streaming)
             .local_endpoints(local_endpoints)
             .tls(TlsMode::Plain);
+        #[cfg(feature = "didcomm-v1")]
+        if let Some((enabled, allow_anon)) = self.didcomm_v1 {
+            builder = builder.didcomm_v1(enabled, allow_anon);
+        }
         if let Some(clock) = self.clock.clone() {
             builder = builder.clock(clock);
         }
@@ -907,6 +924,33 @@ impl TestMediatorHandle {
     /// caller wants to merge them into a different resolver.
     pub fn mediator_secrets(&self) -> &[Secret] {
         &self.mediator_secrets
+    }
+
+    /// The mediator's DIDComm v1 routing verkey.
+    ///
+    /// A real client is told this out of band, or reads it from a
+    /// `mediate-grant`; the mediator logs it at startup because v1 predates
+    /// DID documents as a discovery mechanism. Derived here the same way the
+    /// mediator derives it — from its Ed25519 authentication key — so a test
+    /// can address forwards to it without scraping logs.
+    #[cfg(feature = "didcomm-v1")]
+    pub fn didcomm_v1_routing_verkey(
+        &self,
+    ) -> Option<affinidi_messaging_didcomm_v1::identity::Verkey> {
+        use affinidi_secrets_resolver::secrets::KeyType;
+
+        self.mediator_secrets
+            .iter()
+            .find(|secret| secret.get_key_type() == KeyType::Ed25519)
+            .and_then(|secret| <[u8; 32]>::try_from(secret.get_private_bytes()).ok())
+            .and_then(|seed| {
+                affinidi_messaging_didcomm_v1::PrivateIdentity::from_signing_key(
+                    &self.inner.mediator_did,
+                    &seed,
+                )
+                .ok()
+            })
+            .map(|identity| identity.verkey)
     }
 
     /// Shareable shutdown token. Cancel from anywhere to drain the

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.18.8"
+version = "0.18.9"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -89,7 +89,7 @@ affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.19" 
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", optional = true }
 ## Optional: DIDComm v1 (Aries RFC 0019) implementation (activated by `didcomm-v1`)
-affinidi-messaging-didcomm-v1 = { path = "../affinidi-messaging-didcomm-v1", version = "0.1", optional = true }
+affinidi-messaging-didcomm-v1 = { path = "../affinidi-messaging-didcomm-v1", version = "0.2", optional = true }
 ## Trust Tasks framework core — consumes Trust Task documents (the messaging
 ## ping / account / acl / access-list tasks) carried over the binding envelope.
 trust-tasks-rs = { version = "0.2.46", optional = true }

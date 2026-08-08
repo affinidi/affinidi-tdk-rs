@@ -460,6 +460,20 @@ impl MediatorBuilder {
         self
     }
 
+    /// Enable DIDComm v1 (Aries RFC 0019) support.
+    ///
+    /// `allow_unauthenticated_forwards` opts into accepting an anon-packed
+    /// forward with no authenticated session — see the `[didcomm_v1]` config
+    /// docs for what that widens and what it deliberately does not.
+    #[cfg(feature = "didcomm-v1")]
+    pub fn didcomm_v1(mut self, enabled: bool, allow_unauthenticated_forwards: bool) -> Self {
+        self.config.didcomm_v1 = crate::common::config::DidCommV1Config {
+            enabled,
+            allow_unauthenticated_forwards,
+        };
+        self
+    }
+
     /// Replace the processors config (forwarding, message expiry).
     /// Defaults disable both — embedded tests that don't need these
     /// background tasks save the spawn cost.

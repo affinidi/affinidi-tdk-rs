@@ -39,6 +39,7 @@ use sha256::digest;
 use tracing::{debug, warn};
 
 use crate::SharedData;
+use crate::common::authz::{self, Capability};
 use crate::common::session::Session;
 
 /// Most messages a `delivery-request` may return when it names no `limit`.
@@ -145,6 +146,32 @@ async fn coordinate_mediation(
 ) -> Result<MessageV1, MediatorError> {
     match kind {
         cm::CoordinateMediation::MediateRequest => {
+            // Do not grant mediation the account cannot actually use. Without
+            // RECEIVE_MESSAGES every forward for this client would be refused
+            // *after* it had been told mediation was granted and had published
+            // the routing keys — a silent black hole the client has no way to
+            // detect. `mediate-deny` says so immediately instead.
+            //
+            // Reached when `global_acl_default` does not grant receive; the
+            // operator either intends that (and v1 clients are not welcome) or
+            // has misconfigured it, and both are better surfaced than hidden.
+            let can_receive = state
+                .database
+                .get_did_acl(&account.did_hash)
+                .await?
+                .is_some_and(|acls| {
+                    authz::require_capability(&acls, Capability::ReceiveMessages).is_ok()
+                });
+
+            if !can_receive {
+                warn!(
+                    did = %account.did,
+                    "denying v1 mediation: the account is not permitted to receive messages, so \
+                     granting it would promise routing the mediator would then refuse"
+                );
+                return cm::mediate_deny(&msg.id).map_err(|e| v1_build_error(session, e));
+            }
+
             let identity = state.didcomm_v1_identity().await?;
             let endpoint = mediator_endpoint(state);
 

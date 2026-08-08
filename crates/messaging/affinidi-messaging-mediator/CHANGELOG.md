@@ -1,5 +1,51 @@
 # Affinidi Messaging Mediator
 
+## 8th August 2026 (0.18.9)
+
+**DIDComm v1 mediation: coordinate-mediation 1.0 and message-pickup 2.0.**
+
+Completes what 0.18.8 started. A v1 wallet can now register its routing keys and
+collect what arrives, so the `didcomm-v1` feature is usable end to end rather
+than plumbing.
+
+Replies go back as the **raw HTTP body** rather than the mediator's JSON success
+envelope — Aries' return-route, which is how a one-way transport carries a
+synchronous response. They are **authcrypt**, so a client can tell a real
+`mediate-grant` from a forged one; a forgeable grant would let an attacker
+nominate its own routing keys.
+
+Unlike forwards, these messages are authenticated by construction: opening the
+envelope proves which verkey sent it, and that key is the identity every
+decision is made against. An anonymous mediation request is refused.
+
+### Account identity and admission
+
+A client's account is the `did:key` derived from its authenticated verkey.
+Provisioning mirrors first-authentication rather than adding a second policy:
+unknown accounts are created with `global_acl_default`, unless
+`mediator_acl_mode` is `explicit_allow`, in which case mediation is denied.
+
+**`mediate-request` is denied when the account cannot receive.** Granting
+mediation to an account without `RECEIVE_MESSAGES` would be a silent black
+hole — the client publishes routing keys, senders forward to them, and every
+message is refused after the fact. Operators serving v1 wallets need a
+`global_acl_default` that grants receive; otherwise clients get an immediate,
+truthful `mediate-deny`.
+
+### Handler behaviour
+
+- `keylist-update` reports a result per key rather than failing the batch.
+  Claiming or removing a key bound to another account is refused as
+  `client_error` — the same answer as any other rejected entry, so it cannot be
+  used to probe which keys other accounts hold.
+- `delivery-request` fetches with `DoNotDelete`; `messages-received` deletes
+  under `Owner` authority, so a client cannot delete another's messages by
+  guessing ids. An empty queue answers `status`, not an empty `delivery`.
+- Delivery limits are capped and acknowledgement lists bounded — authenticated,
+  but the numbers are still caller-chosen.
+- `live-delivery-change` answers truthfully with `live_delivery: false` rather
+  than accepting and never pushing.
+
 ## 8th August 2026 (0.18.8)
 
 **DIDComm v1 (Aries RFC 0019) forward ingress — new `didcomm-v1` feature.**
