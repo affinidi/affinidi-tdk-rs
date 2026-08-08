@@ -6,4 +6,5 @@
 //! top-level members.
 
 pub mod basic_message;
+pub mod coordinate_mediation;
 pub mod forward;
