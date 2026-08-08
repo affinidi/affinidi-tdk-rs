@@ -842,6 +842,134 @@ async fn check_oob_discovery_roundtrip(store: Arc<dyn MediatorStore>) {
     );
 }
 
+/// DIDComm v1 routing-key index: the bridge from a v1 forward's base58 verkey
+/// to the DID everything else in the mediator is keyed by.
+///
+/// The exclusivity assertion is the load-bearing one. If a verkey could be
+/// bound by two accounts, any account could claim another's routing key and
+/// capture its inbound v1 traffic — so a backend that lets the second bind
+/// through is not merely lax, it is a delivery-hijack primitive.
+async fn check_v1_routing_keys(store: Arc<dyn MediatorStore>) {
+    assert!(
+        store.supports_v1_routing_keys(),
+        "an in-tree backend must implement the v1 routing-key index"
+    );
+
+    // Bindings carry the DID; the reverse index is keyed by its hash. Both
+    // forms appear here because forward ingress needs the DID while account
+    // removal works from the hash.
+    let alice = "did:example:v1_alice";
+    let bob = "did:example:v1_bob";
+    let alice_hash = sha256::digest(alice.as_bytes());
+    let bob_hash = sha256::digest(bob.as_bytes());
+    let verkey = "3hLMcPh9X6vtEJfuJmCinWRHAYFMjea1cfLA2eCvWA5A";
+    let other = "9tovpLUbsf4mzkP1YVaZK31W7iWvcetc24QrnfhiFkkN";
+
+    store
+        .account_add(&alice_hash, &allow_all(), None)
+        .await
+        .expect("add alice");
+    store
+        .account_add(&bob_hash, &allow_all(), None)
+        .await
+        .expect("add bob");
+
+    assert_eq!(
+        store.v1_routing_key_lookup(verkey).await.expect("lookup"),
+        None,
+        "an unbound verkey must not resolve"
+    );
+
+    store
+        .v1_routing_key_bind(verkey, alice)
+        .await
+        .expect("bind");
+    assert_eq!(
+        store.v1_routing_key_lookup(verkey).await.expect("lookup"),
+        Some(alice.to_string())
+    );
+
+    // Re-binding to the same owner is idempotent.
+    store
+        .v1_routing_key_bind(verkey, alice)
+        .await
+        .expect("re-bind by the same owner is idempotent");
+
+    // ...but another account may not take it.
+    assert!(
+        store.v1_routing_key_bind(verkey, bob).await.is_err(),
+        "a verkey bound to one account must not be claimable by another"
+    );
+    assert_eq!(
+        store.v1_routing_key_lookup(verkey).await.expect("lookup"),
+        Some(alice.to_string()),
+        "the failed claim must not have changed the owner"
+    );
+
+    // Reverse index.
+    store
+        .v1_routing_key_bind(other, alice)
+        .await
+        .expect("bind second");
+    let mut expected = vec![other.to_string(), verkey.to_string()];
+    expected.sort();
+    assert_eq!(
+        store
+            .v1_routing_keys_for(&alice_hash)
+            .await
+            .expect("keys_for"),
+        expected,
+        "both of alice's verkeys must be listed, in a stable order"
+    );
+    assert!(
+        store
+            .v1_routing_keys_for(&bob_hash)
+            .await
+            .expect("keys_for")
+            .is_empty(),
+        "bob owns no routing keys"
+    );
+
+    // Unbind is reported truthfully and frees the verkey for another account.
+    assert!(store.v1_routing_key_unbind(other).await.expect("unbind"));
+    assert!(
+        !store
+            .v1_routing_key_unbind(other)
+            .await
+            .expect("unbind twice"),
+        "unbinding an already-unbound verkey reports false"
+    );
+    store
+        .v1_routing_key_bind(other, bob)
+        .await
+        .expect("a released verkey may be claimed by another account");
+
+    // Removing an account drops its bindings, or its verkeys keep resolving to
+    // a mailbox that no longer exists.
+    store
+        .account_remove(&admin_session("admin_hash"), &alice_hash)
+        .await
+        .expect("account_remove");
+    assert_eq!(
+        store.v1_routing_key_lookup(verkey).await.expect("lookup"),
+        None,
+        "a removed account's routing keys must stop resolving"
+    );
+    assert!(
+        store
+            .v1_routing_keys_for(&alice_hash)
+            .await
+            .expect("keys_for")
+            .is_empty(),
+        "a removed account owns no routing keys"
+    );
+    assert_eq!(
+        store.v1_routing_key_lookup(other).await.expect("lookup"),
+        Some(bob.to_string()),
+        "removing one account must not disturb another's bindings"
+    );
+}
+
 /// Generate one `#[tokio::test]` per check for a backend `$ctor`.
 /// Gated to the in-process backends that use it — a Redis-only build drives the
 /// async `conformance_for_redis!` instead, so an ungated def would warn (unused)
@@ -904,6 +1032,10 @@ macro_rules! conformance_for {
             async fn delivery_decision_matches_access_list() {
                 check_delivery_decision_matches_access_list(ready($ctor).await).await;
             }
+            #[tokio::test]
+            async fn v1_routing_keys() {
+                check_v1_routing_keys(ready($ctor).await).await;
+            }
         }
     };
 }
@@ -950,4 +1082,5 @@ conformance_for_redis!(redis,
     audit_log_lifecycle      => check_audit_log_lifecycle      @ 11,
     oob_discovery_roundtrip  => check_oob_discovery_roundtrip  @ 12,
     delivery_decision_matches_access_list => check_delivery_decision_matches_access_list @ 13,
+    v1_routing_keys          => check_v1_routing_keys          @ 14,
 );

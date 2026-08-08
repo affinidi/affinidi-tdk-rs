@@ -48,6 +48,16 @@ memory-backend = []
 ## together (`--features didcomm,tsp`), which is the dual-protocol deployment.
 didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding", "dep:affinidi-crypto", "dep:trust-tasks-rs"]
 
+## DIDComm v1 (Aries RFC 0019) — additive alongside DIDComm v2.1, and requires
+## it: a v1 sender still reaches the mediator over the v2-authenticated session
+## unless `allow_unauthenticated_forwards` is turned on, and the mediator's v1
+## routing verkey is derived from the same Ed25519 authentication key its v2
+## identity uses. Accepts inbound v1 forwards and stores them for the local
+## recipient; the Aries coordinate-mediation and message-pickup protocols a
+## wallet needs to register keys and collect messages land separately, so this
+## feature alone does not yet make the mediator usable by a stock Credo wallet.
+didcomm-v1 = ["didcomm", "dep:affinidi-messaging-didcomm-v1"]
+
 ## TSP (Trust Spanning Protocol) — supported, additive alongside DIDComm. Carries TSP
 ## Direct / Routed / Nested / Control messages, the TSP↔DIDComm bridge, Trust Tasks over
 ## TSP, and advertises a TSPTransport service for discovery. Run together with `didcomm`:
@@ -78,6 +88,8 @@ aws = ["dep:aws-config", "dep:aws-sdk-ssm", "dep:aws-sdk-s3"]
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.19" }
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", optional = true }
+## Optional: DIDComm v1 (Aries RFC 0019) implementation (activated by `didcomm-v1`)
+affinidi-messaging-didcomm-v1 = { path = "../affinidi-messaging-didcomm-v1", version = "0.1", optional = true }
 ## Trust Tasks framework core — consumes Trust Task documents (the messaging
 ## ping / account / acl / access-list tasks) carried over the binding envelope.
 trust-tasks-rs = { version = "0.2.46", optional = true }

@@ -26,6 +26,8 @@ pub mod commands;
 pub mod common;
 #[cfg(feature = "didcomm")]
 pub mod didcomm_compat;
+#[cfg(feature = "didcomm-v1")]
+pub mod didcomm_v1_identity;
 pub mod handlers;
 pub mod messages;
 pub mod server;
@@ -86,6 +88,13 @@ pub struct SharedData {
     /// delivery is a blind store-and-forward and never touches it.
     #[cfg(feature = "tsp")]
     pub tsp_identity: Arc<tokio::sync::OnceCell<tsp_identity::MediatorTspIdentity>>,
+    /// The mediator's own DIDComm v1 identity, derived lazily on first use from
+    /// the same Ed25519 authentication key its v2 identity uses. Needed to open
+    /// the anoncrypt `routing/1.0/forward` a v1 client addresses to the
+    /// mediator's routing verkey.
+    #[cfg(feature = "didcomm-v1")]
+    pub didcomm_v1_identity:
+        Arc<tokio::sync::OnceCell<didcomm_v1_identity::MediatorDidCommV1Identity>>,
 }
 
 impl SharedData {
@@ -108,6 +117,26 @@ impl SharedData {
             })
             .await
     }
+    /// The mediator's DIDComm v1 identity, derived (and cached) on first use
+    /// from its configured DID document and operating secrets.
+    #[cfg(feature = "didcomm-v1")]
+    pub async fn didcomm_v1_identity(
+        &self,
+    ) -> Result<
+        &didcomm_v1_identity::MediatorDidCommV1Identity,
+        affinidi_messaging_mediator_common::errors::MediatorError,
+    > {
+        self.didcomm_v1_identity
+            .get_or_try_init(|| {
+                didcomm_v1_identity::MediatorDidCommV1Identity::derive(
+                    &self.config.mediator_did,
+                    &self.did_resolver,
+                    &*self.config.security.mediator_secrets,
+                )
+            })
+            .await
+    }
+
     /// Bound for request-path storage calls made during admission/validation
     /// (see [`common::storage_timeout`]). Sourced from the existing
     /// `[database] database_timeout` (the same knob that caps Redis

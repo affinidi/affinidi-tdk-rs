@@ -98,6 +98,37 @@ pub struct ConfigRaw {
     /// → embedded Fjall at `data_dir`, `[database]` is ignored.
     #[serde(default)]
     pub storage: Option<StorageConfig>,
+    /// Optional `[didcomm_v1]` section. Absent → DIDComm v1 is off, which is
+    /// also what a mediator built without the `didcomm-v1` feature does.
+    #[serde(default)]
+    pub didcomm_v1: Option<DidCommV1ConfigRaw>,
+}
+
+/// `[didcomm_v1]` section — Aries RFC 0019 support.
+///
+/// Requires the mediator to be built with the `didcomm-v1` feature; the binary
+/// warns and ignores the section otherwise, rather than pretending v1 traffic
+/// will be handled.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DidCommV1ConfigRaw {
+    /// Accept inbound DIDComm v1 forwards. Default `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Accept a v1 forward that arrives **without** an authenticated session.
+    ///
+    /// Default `false`, which keeps this mediator's existing posture: every
+    /// inbound message rides an authenticated session.
+    ///
+    /// Aries mediators do the opposite — a `routing/1.0/forward` is anoncrypt'd
+    /// to the mediator's routing key by design, so the sender is anonymous and
+    /// the mediator applies the *recipient's* access list instead. A stock
+    /// Credo wallet has no way to complete this mediator's v2 challenge, so
+    /// `true` is required for real Aries interop and is a deliberate,
+    /// per-deployment loosening: it lets an unauthenticated party cause a store
+    /// write, bounded by the recipient's ACL, the message-size limit, and the
+    /// per-IP rate limiter.
+    #[serde(default)]
+    pub allow_unauthenticated_forwards: bool,
 }
 
 /// `[storage]` section — selects the mediator's storage backend.
@@ -125,7 +156,7 @@ pub struct StorageConfig {
 ///
 /// Fjall ships with defaults sized for a general-purpose embedded database
 /// (32 MiB block cache, 64 MiB of memtable *per keyspace*, 512 MiB of journal).
-/// The mediator opens 14 keyspaces, so the stock per-keyspace memtable default
+/// The mediator opens 15 keyspaces, so the stock per-keyspace memtable default
 /// alone allows ~896 MiB of write buffer. These knobs bring that down to a
 /// budget the operator chooses.
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -100,6 +100,24 @@ fn database_config_from_raw(
 /// Default VTA cache TTL when `[secrets].cache_ttl` is not set.
 const DEFAULT_CACHE_TTL_SECS: u64 = 30 * 86_400; // 30 days
 
+/// Typed `[didcomm_v1]` settings. See
+/// [`DidCommV1ConfigRaw`](affinidi_messaging_mediator_config::DidCommV1ConfigRaw)
+/// for what each knob means and why `allow_unauthenticated_forwards` exists.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct DidCommV1Config {
+    pub enabled: bool,
+    pub allow_unauthenticated_forwards: bool,
+}
+
+impl From<affinidi_messaging_mediator_config::DidCommV1ConfigRaw> for DidCommV1Config {
+    fn from(raw: affinidi_messaging_mediator_config::DidCommV1ConfigRaw) -> Self {
+        Self {
+            enabled: raw.enabled,
+            allow_unauthenticated_forwards: raw.allow_unauthenticated_forwards,
+        }
+    }
+}
+
 #[derive(Clone, Serialize)]
 pub struct Config {
     #[serde(skip_serializing)]
@@ -173,6 +191,14 @@ pub struct Config {
     /// `[storage]` section the wizard wrote.
     #[serde(default)]
     pub storage: Option<StorageConfig>,
+    /// DIDComm v1 (Aries RFC 0019) settings, from `[didcomm_v1]`.
+    ///
+    /// Defaults to disabled. A mediator built without the `didcomm-v1` feature
+    /// carries the parsed value but never acts on it — [`validate`] warns so an
+    /// operator who enabled it in TOML is told the binary cannot honour it,
+    /// rather than silently dropping every v1 message.
+    #[serde(default)]
+    pub didcomm_v1: DidCommV1Config,
     /// Inputs for the periodic VTA refresh task. `Some` only in
     /// VTA-linked deployments. The task itself is spawned by
     /// [`crate::server::serve_internal`] alongside the other
@@ -252,6 +278,7 @@ impl Config {
             )),
             operating_keys_loaded: false,
             storage: None,
+            didcomm_v1: DidCommV1Config::default(),
             vta_refresher: None,
             security: SecurityConfig::default(secrets_resolver),
             processors: ProcessorsConfig {
@@ -710,6 +737,11 @@ impl TryFrom<ConfigRaw> for Config {
             // server::serve_internal inspects it to decide between the
             // legacy Redis path and the embedded Fjall path.
             storage: raw.storage.clone(),
+            didcomm_v1: raw
+                .didcomm_v1
+                .clone()
+                .map(DidCommV1Config::from)
+                .unwrap_or_default(),
             // Operating keys come either from the VTA (when integration
             // is active) or from the unified backend's well-known
             // `mediator/operating/secrets` entry (self-hosted). The

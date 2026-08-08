@@ -604,6 +604,28 @@ impl MediatorStore for RedisStore {
         self.account_exists(did_hash).await
     }
 
+    // ─── DIDComm v1 routing keys ─────────────────────────────────────────────
+
+    fn supports_v1_routing_keys(&self) -> bool {
+        true
+    }
+
+    async fn v1_routing_key_bind(&self, verkey: &str, did_hash: &str) -> Result<(), MediatorError> {
+        self.v1_routing_key_bind(verkey, did_hash).await
+    }
+
+    async fn v1_routing_key_lookup(&self, verkey: &str) -> Result<Option<String>, MediatorError> {
+        self.v1_routing_key_lookup(verkey).await
+    }
+
+    async fn v1_routing_key_unbind(&self, verkey: &str) -> Result<bool, MediatorError> {
+        self.v1_routing_key_unbind(verkey).await
+    }
+
+    async fn v1_routing_keys_for(&self, did_hash: &str) -> Result<Vec<String>, MediatorError> {
+        self.v1_routing_keys_for(did_hash).await
+    }
+
     async fn account_get(&self, did_hash: &str) -> Result<Option<Account>, MediatorError> {
         self.account_get(did_hash).await
     }

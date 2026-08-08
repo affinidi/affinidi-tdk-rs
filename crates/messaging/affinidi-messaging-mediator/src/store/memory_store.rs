@@ -206,6 +206,13 @@ struct MemoryState {
     access_lists: HashMap<String, Vec<String>>, // ordered for cursor pagination
     admins: HashSet<String>,
 
+    // ─── DIDComm v1 routing keys ────────────────────────────────────
+    /// base58 routing verkey → `(owning DID, its hash)`. A verkey binds to at
+    /// most one DID; see `MediatorStore::v1_routing_key_bind`. Both forms are
+    /// kept because forward ingress needs the DID while account removal works
+    /// from the hash.
+    v1_routing_keys: HashMap<String, (String, String)>,
+
     // ─── Audit log ──────────────────────────────────────────────────
     /// Privileged-change records, newest-first. Bounded ring capped at
     /// `AUDIT_LOG_MAX_ENTRIES` — the oldest (back) entry is dropped once
@@ -941,7 +948,75 @@ impl MediatorStore for MemoryStore {
         state.access_lists.remove(did_hash);
         state.admins.remove(did_hash);
         state.known_dids.retain(|d| d != did_hash);
+        // Drop the account's v1 routing keys too, or a removed account's
+        // verkeys keep resolving and its inbound v1 traffic keeps being
+        // accepted for a mailbox that no longer exists.
+        state
+            .v1_routing_keys
+            .retain(|_, (_, owner_hash)| owner_hash != did_hash);
         Ok(true)
+    }
+
+    // ─── DIDComm v1 routing keys ─────────────────────────────────────────────
+
+    fn supports_v1_routing_keys(&self) -> bool {
+        true
+    }
+
+    async fn v1_routing_key_bind(&self, verkey: &str, did: &str) -> Result<(), MediatorError> {
+        let mut state = self.state.lock().await;
+        match state.v1_routing_keys.get(verkey) {
+            // Idempotent re-bind by the same owner.
+            Some((owner, _)) if owner == did => Ok(()),
+            // Claiming another account's routing key would capture its inbound
+            // v1 traffic; see the trait's security note.
+            Some(_) => Err(MediatorError::ConfigError(
+                12,
+                "NA".into(),
+                "routing verkey is already bound to a different account".into(),
+            )),
+            None => {
+                state.v1_routing_keys.insert(
+                    verkey.to_string(),
+                    (did.to_string(), sha256::digest(did.as_bytes())),
+                );
+                Ok(())
+            }
+        }
+    }
+
+    async fn v1_routing_key_lookup(&self, verkey: &str) -> Result<Option<String>, MediatorError> {
+        Ok(self
+            .state
+            .lock()
+            .await
+            .v1_routing_keys
+            .get(verkey)
+            .map(|(did, _)| did.clone()))
+    }
+
+    async fn v1_routing_key_unbind(&self, verkey: &str) -> Result<bool, MediatorError> {
+        Ok(self
+            .state
+            .lock()
+            .await
+            .v1_routing_keys
+            .remove(verkey)
+            .is_some())
+    }
+
+    async fn v1_routing_keys_for(&self, did_hash: &str) -> Result<Vec<String>, MediatorError> {
+        let state = self.state.lock().await;
+        let mut keys: Vec<String> = state
+            .v1_routing_keys
+            .iter()
+            .filter(|(_, (_, owner_hash))| owner_hash == did_hash)
+            .map(|(verkey, _)| verkey.clone())
+            .collect();
+        // HashMap order is not stable; sort so callers (and tests) see a
+        // deterministic list.
+        keys.sort();
+        Ok(keys)
     }
 
     async fn account_list(

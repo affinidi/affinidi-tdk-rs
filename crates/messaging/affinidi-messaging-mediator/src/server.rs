@@ -659,6 +659,8 @@ pub async fn serve_internal(
         clock,
         #[cfg(feature = "tsp")]
         tsp_identity: Arc::new(tokio::sync::OnceCell::new()),
+        #[cfg(feature = "didcomm-v1")]
+        didcomm_v1_identity: Arc::new(tokio::sync::OnceCell::new()),
     };
 
     let app: Router = application_routes(&api_prefix, &shared_state);
