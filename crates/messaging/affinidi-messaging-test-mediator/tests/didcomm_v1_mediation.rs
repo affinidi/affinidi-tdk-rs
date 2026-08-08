@@ -60,9 +60,7 @@ impl Client {
 
         // A protocol reply is a bare v1 envelope; anything else is not one.
         let value: Value = serde_json::from_str(&body).ok()?;
-        if value.get("protected").is_none() {
-            return None;
-        }
+        value.get("protected")?;
 
         let x25519 = self.identity.x25519_private();
         let keys = [RecipientKey {

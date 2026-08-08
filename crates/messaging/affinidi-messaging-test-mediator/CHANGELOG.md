@@ -1,5 +1,15 @@
 # Affinidi Messaging Test Mediator
 
+## 0.2.47 — 8th August 2026
+
+Adds a `didcomm-v1` feature that spawns the mediator with DIDComm v1 support, a
+`didcomm_v1(enabled, allow_unauthenticated_forwards)` builder setter, and a
+`didcomm_v1_routing_verkey()` accessor on the handle so a test can address v1
+forwards to the mediator without scraping its startup logs.
+
+Off by default: an existing test build is unaffected.
+
+
 ## 4th August 2026 (0.2.46)
 
 Dependency bump for `affinidi-messaging-mediator` 0.18.5 and

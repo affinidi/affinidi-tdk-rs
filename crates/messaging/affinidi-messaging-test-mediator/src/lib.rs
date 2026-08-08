@@ -514,17 +514,21 @@ impl TestMediatorBuilder {
 
     // ─── ACL / security knobs ────────────────────────────────────────
 
-    /// Override the mediator's access-list mode. Defaults to
-    /// `ExplicitDeny` (matching `SecurityConfig::default`). Set to
-    /// `ExplicitAllow` to simulate an allowlist deployment, where DIDs
-    /// without an explicit `LOCAL` ACL bit are rejected.
     /// Enable DIDComm v1, optionally accepting unauthenticated forwards.
+    ///
+    /// A mediator serving v1 wallets also needs a `global_acl_default` that
+    /// grants `RECEIVE_MESSAGES`, or `mediate-request` is denied — see
+    /// [`Self::global_acl_default`].
     #[cfg(feature = "didcomm-v1")]
     pub fn didcomm_v1(mut self, enabled: bool, allow_unauthenticated_forwards: bool) -> Self {
         self.didcomm_v1 = Some((enabled, allow_unauthenticated_forwards));
         self
     }
 
+    /// Override the mediator's access-list mode. Defaults to
+    /// `ExplicitDeny` (matching `SecurityConfig::default`). Set to
+    /// `ExplicitAllow` to simulate an allowlist deployment, where DIDs
+    /// without an explicit `LOCAL` ACL bit are rejected.
     pub fn acl_mode(mut self, mode: AccessListModeType) -> Self {
         self.acl_mode = Some(mode);
         self
