@@ -27,8 +27,10 @@ use affinidi_messaging_didcomm::{
     },
 };
 use affinidi_messaging_sdk::messages::compat::{PackEncryptedMetadata, UnpackMetadata};
+use affinidi_messaging_sdk::messages::wrapping::{CryptoLayer, EncLayerKind, MessageWrappingType};
 use affinidi_secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+use tracing::warn;
 
 /// Pre-parsed envelope metadata extracted without decryption.
 ///
@@ -279,6 +281,14 @@ impl MetaEnvelope {
         metadata.encrypted_to_kids = vec![decrypted.recipient_kid];
         metadata.sha256_hash = self.sha256_hash.clone();
 
+        // Record the outer encryption layer, then let the recursion append any
+        // nested ones, so the whole stack can be classified once at the end.
+        let mut layers = vec![CryptoLayer::Encrypted(if decrypted.authenticated {
+            EncLayerKind::Authcrypt
+        } else {
+            EncLayerKind::Anoncrypt
+        })];
+
         let msg = recurse_decrypted_plaintext(
             &decrypted.plaintext,
             &recipient_kid_str,
@@ -286,11 +296,78 @@ impl MetaEnvelope {
             did_resolver,
             &mut metadata,
             0,
+            &mut layers,
         )
         .await?;
 
+        self.report_wrapping(&layers, &msg);
+
         Ok((msg, metadata))
     }
+
+    /// Classify the envelope's layer stack and **warn** when it falls outside
+    /// the DIDComm-defined wrapping taxonomy.
+    ///
+    /// Observability only — nothing is rejected here. The mediator relays for
+    /// third-party senders whose layering it does not control, so rejecting a
+    /// non-conformant envelope would drop traffic that works today. Logging it
+    /// first shows what is actually in flight; enforcement can follow once the
+    /// picture is known.
+    ///
+    /// The warning names *what* is wrong (the observed layer stack, outermost
+    /// first) and *who* it is between, so an operator can act on it without
+    /// having to correlate against anything else.
+    fn report_wrapping(&self, layers: &[CryptoLayer], msg: &Message) {
+        if MessageWrappingType::classify(layers).is_some() {
+            return;
+        }
+
+        // Prefer the cryptographically-evidenced sender (the authcrypt `skid`)
+        // over the message's self-asserted `from`, and say which one is shown —
+        // on a non-conformant envelope the difference is exactly what matters.
+        let (sender, sender_source) = match (self.from_did.as_deref(), msg.from.as_deref()) {
+            (Some(skid_did), _) => (skid_did, "authcrypt skid"),
+            (None, Some(from)) => (from, "unauthenticated `from` claim"),
+            (None, None) => ("<anonymous>", "no sender evidence"),
+        };
+
+        warn!(
+            sender = %sender,
+            sender_source = %sender_source,
+            recipient = %self.to_did.as_deref().unwrap_or("<unknown>"),
+            message_id = %msg.id,
+            message_type = %msg.typ,
+            layers = %describe_layers(layers),
+            sha256_hash = %self.sha256_hash,
+            "Non-conformant DIDComm envelope layering accepted (observability only, not \
+             rejected): the layer stack above is outside the DIDComm v2 wrapping taxonomy, \
+             so this message does not correspond to any defined combination of \
+             authcrypt/anoncrypt/sign. Defined forms are authcrypt(plaintext), \
+             anoncrypt(plaintext), sign(plaintext), authcrypt(sign(plaintext)), \
+             anoncrypt(sign(plaintext)) and anoncrypt(authcrypt(plaintext)). Common causes: \
+             a signature applied outside the encryption instead of inside, a repeated \
+             encryption layer, or nesting deeper than two crypto layers"
+        );
+    }
+}
+
+/// Render a layer stack outermost-first as `anoncrypt(authcrypt(sign(...)))`,
+/// so a warning shows the actual shape rather than a debug dump.
+fn describe_layers(layers: &[CryptoLayer]) -> String {
+    if layers.is_empty() {
+        return "plaintext".to_string();
+    }
+    let mut out = String::new();
+    for layer in layers {
+        out.push_str(match layer {
+            CryptoLayer::Sign => "sign(",
+            CryptoLayer::Encrypted(EncLayerKind::Authcrypt) => "authcrypt(",
+            CryptoLayer::Encrypted(EncLayerKind::Anoncrypt) => "anoncrypt(",
+        });
+    }
+    out.push_str("plaintext");
+    out.push_str(&")".repeat(layers.len()));
+    out
 }
 
 /// Maximum nested-envelope depth we will peel, bounding decrypt/verify work
@@ -314,6 +391,7 @@ async fn recurse_decrypted_plaintext(
     did_resolver: &DIDCacheClient,
     metadata: &mut UnpackMetadata,
     depth: u8,
+    layers: &mut Vec<CryptoLayer>,
 ) -> Result<Message, String> {
     if depth >= MAX_NEST_DEPTH {
         return Err(format!(
@@ -336,6 +414,7 @@ async fn recurse_decrypted_plaintext(
         // kid without verifying — a bad signature must error.
         let jws_str = std::str::from_utf8(plaintext)
             .map_err(|e| format!("Inner JWS is not valid UTF-8: {e}"))?;
+        layers.push(CryptoLayer::Sign);
 
         let (signer_kid, kid_from_protected) = extract_jws_signer_kid_with_provenance(&value)
             .ok_or("Inner JWS has no signer kid to resolve a verification key")?;
@@ -378,6 +457,12 @@ async fn recurse_decrypted_plaintext(
         )
         .map_err(|e| format!("Couldn't decrypt nested JWE: {e}"))?;
 
+        layers.push(CryptoLayer::Encrypted(if inner.authenticated {
+            EncLayerKind::Authcrypt
+        } else {
+            EncLayerKind::Anoncrypt
+        }));
+
         if inner.authenticated {
             metadata.authenticated = true;
             metadata.anonymous_sender = false;
@@ -392,6 +477,7 @@ async fn recurse_decrypted_plaintext(
             did_resolver,
             metadata,
             depth + 1,
+            layers,
         ))
         .await;
     }
@@ -1444,6 +1530,126 @@ mod tests {
 
         assert!(unpack_meta.authenticated, "authcrypt must be authenticated");
         assert_eq!(out.from.as_deref(), Some(sender));
+    }
+
+    #[test]
+    fn describe_layers_renders_the_stack_outermost_first() {
+        assert_eq!(describe_layers(&[]), "plaintext");
+        assert_eq!(
+            describe_layers(&[CryptoLayer::Encrypted(EncLayerKind::Authcrypt)]),
+            "authcrypt(plaintext)"
+        );
+        assert_eq!(
+            describe_layers(&[
+                CryptoLayer::Encrypted(EncLayerKind::Anoncrypt),
+                CryptoLayer::Encrypted(EncLayerKind::Authcrypt),
+                CryptoLayer::Sign,
+            ]),
+            "anoncrypt(authcrypt(sign(plaintext)))",
+            "the warning must show the real shape, not a debug dump"
+        );
+    }
+
+    /// The stacks the mediator can actually build, checked against the taxonomy
+    /// so the warning fires on exactly the wrong ones. `authcrypt(authcrypt(..))`
+    /// and `authcrypt(anoncrypt(..))` are undefined; the rest are legitimate and
+    /// must stay silent.
+    #[test]
+    fn classification_flags_only_non_conformant_stacks() {
+        use CryptoLayer::{Encrypted, Sign};
+        use EncLayerKind::{Anoncrypt, Authcrypt};
+
+        for (stack, conformant) in [
+            (vec![Encrypted(Authcrypt)], true),
+            (vec![Encrypted(Anoncrypt)], true),
+            (vec![Encrypted(Authcrypt), Sign], true),
+            (vec![Encrypted(Anoncrypt), Sign], true),
+            (vec![Encrypted(Anoncrypt), Encrypted(Authcrypt)], true),
+            // Undefined combinations the mediator can nonetheless peel.
+            (vec![Encrypted(Authcrypt), Encrypted(Authcrypt)], false),
+            (vec![Encrypted(Authcrypt), Encrypted(Anoncrypt)], false),
+            (vec![Encrypted(Anoncrypt), Encrypted(Anoncrypt)], false),
+            (
+                vec![Encrypted(Anoncrypt), Encrypted(Authcrypt), Sign],
+                false,
+            ),
+        ] {
+            assert_eq!(
+                MessageWrappingType::classify(&stack).is_some(),
+                conformant,
+                "{} classified wrongly",
+                describe_layers(&stack)
+            );
+        }
+    }
+
+    /// End-to-end: `authcrypt(authcrypt(plaintext))` is outside the taxonomy, so
+    /// it is *reported*, but it must still **unpack successfully** — this change
+    /// is observability only. The mediator relays for third-party senders whose
+    /// layering it does not control, so rejecting here would drop traffic that
+    /// works today.
+    #[tokio::test]
+    async fn non_conformant_double_authcrypt_is_reported_but_still_accepted() {
+        use affinidi_messaging_didcomm::jwe::encrypt::authcrypt as authcrypt_bytes;
+
+        let mediator = "did:example:medwrap";
+        let med_kid = format!("{mediator}#key-x25519");
+        let med = Secret::generate_x25519(Some(&med_kid), None).unwrap();
+
+        let sender = "did:example:sndwrap";
+        let snd_kid = format!("{sender}#key-x25519");
+        let snd = Secret::generate_x25519(Some(&snd_kid), None).unwrap();
+
+        let resolver = example_resolver(&[
+            json!({
+                "id": mediator,
+                "verificationMethod": [ka_vm(&med_kid, mediator, &med)],
+                "keyAgreement": [med_kid.clone()],
+            }),
+            json!({
+                "id": sender,
+                "verificationMethod": [ka_vm(&snd_kid, sender, &snd)],
+                "keyAgreement": [snd_kid.clone()],
+            }),
+        ])
+        .await;
+
+        let sender_secrets = SimpleSecretsResolver::new(std::slice::from_ref(&snd)).await;
+        let msg = status_message(sender, mediator, "double-authcrypt");
+
+        // Inner authcrypt, then authcrypt the resulting JWE again — a repeated
+        // encryption kind, which the taxonomy does not define.
+        let (inner, _) = pack_encrypted(&msg, mediator, Some(sender), &resolver, &sender_secrets)
+            .await
+            .expect("inner authcrypt");
+
+        let snd_priv = PrivateKeyAgreement::from_raw_bytes(
+            snd.get_key_type().key_agreement_curve().unwrap(),
+            snd.get_private_bytes(),
+        )
+        .unwrap();
+        let med_pub = resolve_did_key_agreement_by_skid(&med_kid, &resolver)
+            .await
+            .expect("mediator key agreement key");
+        let outer = authcrypt_bytes(
+            inner.as_bytes(),
+            &snd_kid,
+            &snd_priv,
+            &[(&med_kid, &med_pub)],
+        )
+        .expect("outer authcrypt over the inner JWE");
+
+        let mediator_secrets = SimpleSecretsResolver::new(&[med]).await;
+        let envelope = MetaEnvelope::new(&outer, &resolver)
+            .await
+            .expect("parse the outer JWE");
+        let (out, meta) = envelope
+            .unpack(&resolver, &mediator_secrets)
+            .await
+            .expect("a non-conformant envelope must still unpack — reporting only");
+
+        assert_eq!(out.from.as_deref(), Some(sender));
+        assert!(meta.authenticated, "both layers were authcrypt");
     }
 
     // ---------------------------------------------------------------------
