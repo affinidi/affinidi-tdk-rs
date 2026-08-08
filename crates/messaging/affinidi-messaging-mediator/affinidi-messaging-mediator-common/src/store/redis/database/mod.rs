@@ -23,6 +23,7 @@ pub mod session;
 pub mod stats;
 pub mod store;
 pub mod streaming;
+pub(crate) mod v1_routing_keys;
 
 /// Compatibility alias preserved during the Database → RedisStore fold.
 /// External callers that still hold `&Database` references see

@@ -1,5 +1,12 @@
 # Affinidi Messaging Mediator Config
 
+## 8th August 2026 (0.2.1)
+
+Adds the optional `[didcomm_v1]` section (`DidCommV1ConfigRaw`): `enabled` and
+`allow_unauthenticated_forwards`, both defaulting to `false`. Additive and
+`#[serde(default)]`, so an existing `mediator.toml` parses unchanged. See the
+mediator's changelog for what the knobs do and why the second one exists.
+
 ## Changelog history
 
 ## 14th June 2026

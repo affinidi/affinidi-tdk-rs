@@ -100,7 +100,7 @@ const PUBSUB_BROADCAST_CAPACITY: usize = 32;
 /// Memory tuning for the embedded Fjall database.
 ///
 /// Fjall's stock defaults are sized for a general-purpose embedded store, not
-/// for a service that opens 14 keyspaces: 64 MiB of memtable *per keyspace*
+/// for a service that opens 15 keyspaces: 64 MiB of memtable *per keyspace*
 /// would permit ~896 MiB of write buffer on its own. These values come from
 /// `[storage.fjall]`.
 #[derive(Clone, Copy, Debug)]
@@ -152,6 +152,7 @@ const KEYSPACE_WRITE_WEIGHTS: &[(&str, u32)] = &[
     // Cold: written on admin action only.
     (PARTITION_ACCESS_LISTS, 1),
     (PARTITION_ADMINS, 1),
+    (PARTITION_V1_ROUTING_KEYS, 1),
     (PARTITION_OOB_INVITES, 1),
     (PARTITION_GLOBALS, 1),
 ];
@@ -180,6 +181,7 @@ const PARTITION_SESSIONS: &str = "sessions";
 const PARTITION_ACCOUNTS: &str = "accounts";
 const PARTITION_ACCESS_LISTS: &str = "access_lists";
 const PARTITION_ADMINS: &str = "admins";
+const PARTITION_V1_ROUTING_KEYS: &str = "v1_routing_keys";
 const PARTITION_OOB_INVITES: &str = "oob_invites";
 const PARTITION_FORWARD_QUEUE: &str = "forward_queue";
 const PARTITION_FORWARD_PENDING: &str = "forward_pending";
@@ -208,6 +210,9 @@ pub struct FjallStore {
     accounts: Keyspace,
     access_lists: Keyspace,
     admins: Keyspace,
+    /// base58 routing verkey -> owning account's DID hash. See
+    /// `MediatorStore::v1_routing_key_bind`.
+    v1_routing_keys: Keyspace,
     oob_invites: Keyspace,
     forward_queue: Keyspace,
     forward_pending: Keyspace,
@@ -556,6 +561,7 @@ impl FjallStore {
             accounts: open_partition(PARTITION_ACCOUNTS)?,
             access_lists: open_partition(PARTITION_ACCESS_LISTS)?,
             admins: open_partition(PARTITION_ADMINS)?,
+            v1_routing_keys: open_partition(PARTITION_V1_ROUTING_KEYS)?,
             oob_invites: open_partition(PARTITION_OOB_INVITES)?,
             forward_queue,
             forward_pending: open_partition(PARTITION_FORWARD_PENDING)?,
@@ -1699,10 +1705,98 @@ impl MediatorStore for FjallStore {
                 .map_err(|e| Self::db_err("account_remove:al.iter", e))?;
             batch.remove(&self.access_lists, key.as_ref());
         }
+        // Drop the account's v1 routing keys, or its verkeys keep resolving
+        // and inbound v1 traffic keeps being accepted for a mailbox that no
+        // longer exists. The index is keyed by verkey, so this is a scan —
+        // acceptable on a cold keyspace touched only by account removal and
+        // keylist updates.
+        for guard in self.v1_routing_keys.iter() {
+            let (key, value) = guard
+                .into_inner()
+                .map_err(|e| Self::db_err("account_remove:v1keys.iter", e))?;
+            if sha256::digest(value.as_ref()) == did_hash {
+                batch.remove(&self.v1_routing_keys, key.as_ref());
+            }
+        }
         batch
             .commit()
             .map_err(|e| Self::db_err("account_remove:commit", e))?;
         Ok(true)
+    }
+
+    // ─── DIDComm v1 routing keys ─────────────────────────────────────────────
+
+    fn supports_v1_routing_keys(&self) -> bool {
+        true
+    }
+
+    async fn v1_routing_key_bind(&self, verkey: &str, did: &str) -> Result<(), MediatorError> {
+        // Read-modify-write under the write lock: without it two concurrent
+        // binds for the same verkey could both observe "unbound" and the
+        // second would silently steal the first account's routing key.
+        let _guard = self.write_lock.lock().await;
+        if let Some(existing) = self
+            .v1_routing_keys
+            .get(verkey.as_bytes())
+            .map_err(|e| Self::db_err("v1_routing_key_bind:get", e))?
+        {
+            return if existing.as_ref() == did.as_bytes() {
+                Ok(()) // idempotent re-bind by the same owner
+            } else {
+                Err(MediatorError::ConfigError(
+                    12,
+                    "fjall".into(),
+                    "routing verkey is already bound to a different account".into(),
+                ))
+            };
+        }
+        self.v1_routing_keys
+            .insert(verkey.as_bytes(), did.as_bytes())
+            .map_err(|e| Self::db_err("v1_routing_key_bind:insert", e))?;
+        Ok(())
+    }
+
+    async fn v1_routing_key_lookup(&self, verkey: &str) -> Result<Option<String>, MediatorError> {
+        let Some(raw) = self
+            .v1_routing_keys
+            .get(verkey.as_bytes())
+            .map_err(|e| Self::db_err("v1_routing_key_lookup:get", e))?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(String::from_utf8_lossy(raw.as_ref()).into_owned()))
+    }
+
+    async fn v1_routing_key_unbind(&self, verkey: &str) -> Result<bool, MediatorError> {
+        let _guard = self.write_lock.lock().await;
+        let existed = self
+            .v1_routing_keys
+            .get(verkey.as_bytes())
+            .map_err(|e| Self::db_err("v1_routing_key_unbind:get", e))?
+            .is_some();
+        if existed {
+            self.v1_routing_keys
+                .remove(verkey.as_bytes())
+                .map_err(|e| Self::db_err("v1_routing_key_unbind:remove", e))?;
+        }
+        Ok(existed)
+    }
+
+    async fn v1_routing_keys_for(&self, did_hash: &str) -> Result<Vec<String>, MediatorError> {
+        // The index is keyed by verkey and stores the DID, so matching by hash
+        // means hashing each stored DID. Acceptable on a cold keyspace touched
+        // only by keylist updates and account removal.
+        let mut keys = Vec::new();
+        for guard in self.v1_routing_keys.iter() {
+            let (key, value) = guard
+                .into_inner()
+                .map_err(|e| Self::db_err("v1_routing_keys_for:iter", e))?;
+            if sha256::digest(value.as_ref()) == did_hash {
+                keys.push(String::from_utf8_lossy(key.as_ref()).into_owned());
+            }
+        }
+        keys.sort();
+        Ok(keys)
     }
 
     async fn account_list(

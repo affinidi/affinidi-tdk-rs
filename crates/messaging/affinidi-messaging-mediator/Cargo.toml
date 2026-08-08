@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.18.7"
+version = "0.18.8"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -48,6 +48,16 @@ memory-backend = []
 ## together (`--features didcomm,tsp`), which is the dual-protocol deployment.
 didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding", "dep:affinidi-crypto", "dep:trust-tasks-rs"]
 
+## DIDComm v1 (Aries RFC 0019) — additive alongside DIDComm v2.1, and requires
+## it: a v1 sender still reaches the mediator over the v2-authenticated session
+## unless `allow_unauthenticated_forwards` is turned on, and the mediator's v1
+## routing verkey is derived from the same Ed25519 authentication key its v2
+## identity uses. Accepts inbound v1 forwards and stores them for the local
+## recipient; the Aries coordinate-mediation and message-pickup protocols a
+## wallet needs to register keys and collect messages land separately, so this
+## feature alone does not yet make the mediator usable by a stock Credo wallet.
+didcomm-v1 = ["didcomm", "dep:affinidi-messaging-didcomm-v1"]
+
 ## TSP (Trust Spanning Protocol) — supported, additive alongside DIDComm. Carries TSP
 ## Direct / Routed / Nested / Control messages, the TSP↔DIDComm bridge, Trust Tasks over
 ## TSP, and advertises a TSPTransport service for discovery. Run together with `didcomm`:
@@ -78,6 +88,8 @@ aws = ["dep:aws-config", "dep:aws-sdk-ssm", "dep:aws-sdk-s3"]
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.19" }
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", optional = true }
+## Optional: DIDComm v1 (Aries RFC 0019) implementation (activated by `didcomm-v1`)
+affinidi-messaging-didcomm-v1 = { path = "../affinidi-messaging-didcomm-v1", version = "0.1", optional = true }
 ## Trust Tasks framework core — consumes Trust Task documents (the messaging
 ## ping / account / acl / access-list tasks) carried over the binding envelope.
 trust-tasks-rs = { version = "0.2.46", optional = true }
@@ -90,10 +102,10 @@ affinidi-encoding = { version = "0.1", optional = true }
 ## Shared types: DatabaseHandler, errors, config structs, secret storage.
 ## Backend features are enabled below via the mediator's own cargo features
 ## so operators only compile the backends their deployment needs.
-affinidi-messaging-mediator-common = { version = "0.15.32", path = "affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-common = { version = "0.15.34", path = "affinidi-messaging-mediator-common" }
 ## Raw TOML config schema — the `*ConfigRaw` types are defined here and the
 ## mediator re-exports them; the runtime `Config` + conversions stay local.
-affinidi-messaging-mediator-config = { version = "0.2", path = "affinidi-messaging-mediator-config" }
+affinidi-messaging-mediator-config = { version = "0.2.1", path = "affinidi-messaging-mediator-config" }
 ## Humantime for the VTA cache TTL (`[secrets].cache_ttl = "30d"`).
 humantime = "2"
 ## CLI parsing for the mediator binary's subcommands (`mediator`,

@@ -1,5 +1,58 @@
 # Affinidi Messaging Mediator
 
+## 8th August 2026 (0.18.8)
+
+**DIDComm v1 (Aries RFC 0019) forward ingress — new `didcomm-v1` feature.**
+
+Off by default; a mediator built or configured without it behaves exactly as
+before. Enabling it lets the mediator act as an Aries mediator for inbound
+forwards: it opens the outer anoncrypt layer with its own routing key, resolves
+the forward's `to` **verkey** through the new routing-key index, applies the
+recipient's ACLs, and stores the inner envelope verbatim for pickup. The inner
+bytes are never parsed — they are sealed end-to-end to the recipient.
+
+Requires the `didcomm` feature (v1 is additive over v2.1, not a replacement) and
+a storage backend implementing the v1 routing-key index. Startup **refuses to
+run** with `[didcomm_v1] enabled = true` on a backend that does not, rather than
+accepting traffic it could not route.
+
+### New `[didcomm_v1]` configuration
+
+```toml
+[didcomm_v1]
+enabled = true
+# Aries mediators accept anon-packed forwards from anyone; this mediator
+# normally requires an authenticated session. Off by default.
+allow_unauthenticated_forwards = false
+```
+
+`allow_unauthenticated_forwards` is a **deliberate, per-deployment loosening**
+of this mediator's posture, and is required for stock Credo wallets, which
+cannot complete the v2 authentication challenge. An RFC 0019 forward is
+anon-packed by design, so there is no authenticated sender to apply a
+sender-side ACL to and the recipient's access list carries the weight.
+
+Turning it on does **not** open anonymous DIDComm v2 inbound. A session admitted
+only by this flag is v1-scoped: the handler refuses any non-v1 body on it, and
+the session carries `SEND_MESSAGES` without `SEND_FORWARDED`, so it cannot drive
+a v2 relay forward even if that check were bypassed. Inter-mediator relay
+admission keeps precedence and its existing capabilities, and a *presented but
+invalid* credential is still never downgraded to anonymous.
+
+### Routing key
+
+The mediator's v1 routing verkey is derived from the Ed25519 authentication key
+it already holds — no new key material, the same trick `tsp_identity` uses. It
+is logged at startup because v1 predates DID documents as a discovery
+mechanism, so operators must hand it to clients out of band.
+
+### Not yet included
+
+The Aries `coordinate-mediation/1.0` and `messagepickup` protocols. Until those
+land there is no client-facing way to register a routing key, so a stock Credo
+wallet cannot yet use this mediator end-to-end — bindings can only be created
+through the store API.
+
 ## 8th August 2026 (0.18.7)
 
 **Envelope-wrapping observability — warn on non-conformant layering.**

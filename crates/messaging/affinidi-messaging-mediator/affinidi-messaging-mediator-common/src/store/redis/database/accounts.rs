@@ -214,6 +214,11 @@ impl Database {
                     .await?;
             }
 
+            // Drop any DIDComm v1 routing keys the account owns. Left behind,
+            // its verkeys keep resolving and inbound v1 traffic keeps being
+            // accepted for a mailbox that no longer exists.
+            self.v1_routing_keys_purge(did_hash).await?;
+
             // Remove from Known DIDs
             // Remove DID Record
             // Remove ACCESS_LIST Set

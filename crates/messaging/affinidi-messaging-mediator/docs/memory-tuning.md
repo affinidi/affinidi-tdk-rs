@@ -49,7 +49,7 @@ you need to size.
 
 Fjall's own defaults are sized for a general-purpose embedded database, and are a
 poor fit here: it allows **64 MiB of write buffer per keyspace**, and the
-mediator opens 14 keyspaces. Left alone, that permits roughly **900 MiB** of
+mediator opens 15 keyspaces. Left alone, that permits roughly **900 MiB** of
 memtable. The shipped `[storage.fjall]` defaults exist to bring that down.
 
 Two Fjall behaviours are worth knowing, because they are not obvious:
