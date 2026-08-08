@@ -12,3 +12,4 @@ import { askar, registerAskar } from '@openwallet-foundation/askar-nodejs'
 registerAskar({ askar })
 
 await import('./generate.mjs')
+await import('./mediation.mjs')
