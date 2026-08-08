@@ -7,16 +7,26 @@ use crate::{
     messages::inbound::handle_inbound,
 };
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
-use affinidi_messaging_sdk::messages::{
-    problem_report::{ProblemReportScope, ProblemReportSorter},
-    sending::InboundMessageResponse,
+use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
+use axum::{
+    Json,
+    body::Bytes,
+    extract::State,
+    response::{IntoResponse, Response},
 };
-use axum::{Json, body::Bytes, extract::State};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use tracing::{Instrument, Level, span};
 
 use crate::common::metrics::names;
+
+/// Content type for a raw DIDComm v1 envelope returned via Aries return-route.
+///
+/// Credo sniffs the body structure rather than trusting this header, but a
+/// truthful content type keeps proxies and logs from treating the reply as
+/// generic JSON.
+#[cfg(feature = "didcomm-v1")]
+const DIDCOMM_V1_CONTENT_TYPE: &str = "application/ssi-agent-wire";
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RecipientHeader {
@@ -55,7 +65,7 @@ pub async fn message_inbound_handler(
     MaybeSession(session): MaybeSession,
     State(state): State<SharedData>,
     body: Bytes,
-) -> Result<(StatusCode, Json<SuccessResponse<InboundMessageResponse>>), AppError> {
+) -> Result<Response, AppError> {
     let _span = span!(
         Level::DEBUG,
         "message_inbound_handler",
@@ -95,7 +105,8 @@ pub async fn message_inbound_handler(
                     message: "Success".to_string(),
                     data: Some(response),
                 }),
-            ));
+            )
+                .into_response());
         }
 
         // DIDComm v1 (Aries RFC 0019). Sniffed before the v2 parse because a v1
@@ -141,20 +152,35 @@ pub async fn message_inbound_handler(
                 metrics::counter!(names::MESSAGES_INBOUND_TOTAL).increment(1);
                 metrics::counter!(names::MESSAGE_BYTES_INBOUND_TOTAL).increment(raw.len() as u64);
 
-                let response =
+                let outcome =
                     crate::messages::inbound_v1::handle_inbound_didcomm_v1(&state, &session, raw)
                         .await?;
-                return Ok((
-                    StatusCode::OK,
-                    Json(SuccessResponse {
-                        session_id: session.session_id,
-                        http_code: StatusCode::OK.as_u16(),
-                        error_code: 0,
-                        error_code_str: "NA".to_string(),
-                        message: "Success".to_string(),
-                        data: Some(response),
-                    }),
-                ));
+
+                return Ok(match outcome {
+                    // A routed forward answers like any other stored message.
+                    crate::messages::inbound_v1::V1Outcome::Stored(response) => (
+                        StatusCode::OK,
+                        Json(SuccessResponse {
+                            session_id: session.session_id,
+                            http_code: StatusCode::OK.as_u16(),
+                            error_code: 0,
+                            error_code_str: "NA".to_string(),
+                            message: "Success".to_string(),
+                            data: Some(response),
+                        }),
+                    )
+                        .into_response(),
+
+                    // A protocol reply goes back as the raw packed envelope —
+                    // Aries' return-route, which the client parses as an
+                    // inbound message. See `V1Outcome::Reply`.
+                    crate::messages::inbound_v1::V1Outcome::Reply(packed) => (
+                        StatusCode::OK,
+                        [(http::header::CONTENT_TYPE, DIDCOMM_V1_CONTENT_TYPE)],
+                        packed,
+                    )
+                        .into_response(),
+                });
             }
         }
 
@@ -212,7 +238,8 @@ pub async fn message_inbound_handler(
                 message: "Success".to_string(),
                 data: Some(response),
             }),
-        ))
+        )
+            .into_response())
     }
     .instrument(_span)
     .await

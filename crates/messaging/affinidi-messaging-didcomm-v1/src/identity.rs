@@ -146,6 +146,38 @@ impl Verkey {
         Ok(Self(bytes))
     }
 
+    /// Decode a verkey written **either** as bare base58btc **or** as a
+    /// `did:key:z6Mk…`.
+    ///
+    /// Both spellings appear on the wire for the same key, and which one a peer
+    /// sends is its configuration. Aries RFC 0211 specifies `did:key` for
+    /// `recipient_key` and `routing_keys`, but base58 predates it and is still
+    /// widely sent; Credo normalises with `didKeyToVerkey` on receipt and picks
+    /// its own outbound form from `useDidKeyInProtocols`.
+    ///
+    /// Comparing the two spellings with `==` silently drops half the ecosystem,
+    /// in the same way [`crate::message::message_type`] describes for message
+    /// type URIs. Parse with this, then compare [`Verkey`]s.
+    pub fn parse(encoded: &str) -> Result<Self, DIDCommV1Error> {
+        let encoded = encoded.trim();
+        if encoded.starts_with("did:key:") {
+            return Self::from_did_key(encoded);
+        }
+        Self::from_base58(encoded)
+    }
+
+    /// Decode a `did:key:z6Mk…` Ed25519 identifier.
+    pub fn from_did_key(did_key: &str) -> Result<Self, DIDCommV1Error> {
+        Ok(Self(affinidi_crypto::did_key::did_key_to_ed25519_pub(
+            did_key.trim(),
+        )?))
+    }
+
+    /// This verkey as a `did:key:z6Mk…` identifier — the RFC 0211 spelling.
+    pub fn to_did_key(&self) -> String {
+        affinidi_crypto::did_key::ed25519_pub_to_did_key(&self.0)
+    }
+
     /// The raw Ed25519 public key bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
@@ -352,6 +384,52 @@ mod tests {
         let verkey = Verkey::from_bytes([7u8; 32]);
         let encoded = verkey.to_base58();
         assert_eq!(Verkey::from_base58(&encoded).unwrap(), verkey);
+    }
+
+    /// The property that keeps `recipient_key` / `routing_keys` interoperable:
+    /// both spellings of one key must parse to the same [`Verkey`].
+    #[test]
+    fn verkey_parses_both_did_key_and_base58() {
+        let verkey = Verkey::from_bytes([9u8; 32]);
+        let base58 = verkey.to_base58();
+        let did_key = verkey.to_did_key();
+
+        assert!(did_key.starts_with("did:key:z6Mk"));
+        assert_ne!(
+            base58, did_key,
+            "the two spellings are different strings..."
+        );
+        assert_eq!(Verkey::parse(&base58).unwrap(), verkey);
+        assert_eq!(
+            Verkey::parse(&did_key).unwrap(),
+            verkey,
+            "...but must name the same key"
+        );
+        assert_eq!(Verkey::from_did_key(&did_key).unwrap(), verkey);
+    }
+
+    #[test]
+    fn verkey_parse_tolerates_surrounding_whitespace() {
+        let verkey = Verkey::from_bytes([3u8; 32]);
+        assert_eq!(
+            Verkey::parse(&format!("  {}\n", verkey.to_base58())).unwrap(),
+            verkey
+        );
+        assert_eq!(
+            Verkey::parse(&format!(" {} ", verkey.to_did_key())).unwrap(),
+            verkey
+        );
+    }
+
+    #[test]
+    fn verkey_parse_rejects_a_non_ed25519_did_key() {
+        // A `did:key` for some other curve must not be silently accepted as an
+        // Ed25519 verkey.
+        assert!(
+            Verkey::from_did_key("did:key:zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme")
+                .is_err()
+        );
+        assert!(Verkey::parse("did:key:not-a-key").is_err());
     }
 
     #[test]

@@ -1,5 +1,40 @@
 # affinidi-messaging-didcomm-v1 changelog
 
+## 0.2.0 — 8th August 2026
+
+Adds the two Aries protocols a wallet needs to use a mediator.
+
+### Added
+
+- **`protocols::coordinate_mediation`** (RFC 0211) — `mediate-request` /
+  `-grant` / `-deny`, `keylist-update` and its response, `keylist-query` /
+  `keylist`.
+- **`protocols::message_pickup`** (RFC 0685, 2.0) — `status-request` /
+  `status`, `delivery-request` / `delivery`, `messages-received`,
+  `live-delivery-change`, plus `~transport.return_route` helpers.
+- **`Verkey::parse` / `from_did_key` / `to_did_key`** — a key field written as
+  bare base58 or as `did:key` names the same key, and both spellings are on the
+  wire.
+
+### Wire-format notes
+
+- **A third dual-spelling trap.** `recipient_key` and `routing_keys` accept
+  base58 *or* `did:key`: RFC 0211 specifies the latter, base58 predates it and
+  is still widely sent, and Credo normalises on receipt while choosing its
+  outbound form from `useDidKeyInProtocols`. Comparing the strings drops half
+  the ecosystem — the same shape as the two message-type document URIs, one
+  field down. Parse, then compare `Verkey`s. This crate emits base58.
+- **Delivery is not deletion.** A `delivery` removes nothing; only
+  `messages-received` may. A mediator that deletes on delivery loses any
+  message whose delivery was lost in flight.
+- **`~transport: { return_route: "all" }`** is how these requests expect their
+  reply in the HTTP response body. Credo's `isValidJweStructure` requires only
+  `protected` / `iv` / `ciphertext` / `tag`, so a v1 envelope is accepted there
+  unchanged.
+
+Scoped to pickup 2.0: Credo's default strategy is PickUpV2 and 1.0
+(`batch-pickup`) is legacy.
+
 ## 0.1.1 — 8th August 2026
 
 Manifest fix. No code change.

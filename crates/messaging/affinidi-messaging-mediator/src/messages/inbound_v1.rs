@@ -31,7 +31,10 @@
 //!
 //! [`MediatorStore::v1_routing_key_bind`]: affinidi_messaging_mediator_common::store::MediatorStore::v1_routing_key_bind
 
-use affinidi_messaging_didcomm_v1::envelope::{self, ProtectedHeader, RecipientKey};
+use affinidi_messaging_didcomm_v1::envelope::{
+    self, EnvelopeProtection, ProtectedHeader, RecipientKey,
+};
+use affinidi_messaging_didcomm_v1::identity::Verkey;
 use affinidi_messaging_didcomm_v1::protocols::forward;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::{
@@ -87,17 +90,34 @@ pub(crate) fn is_didcomm_v1(body: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
-/// Handle an inbound DIDComm v1 forward.
+/// What an inbound v1 message resulted in.
+pub(crate) enum V1Outcome {
+    /// A forward was routed and stored for its recipient. Answered with the
+    /// mediator's usual JSON success envelope.
+    Stored(InboundMessageResponse),
+    /// A protocol request was answered. The packed v1 envelope must go back as
+    /// the **raw HTTP body**: that is how Aries does synchronous
+    /// request/response over a one-way transport, and Credo's
+    /// `isValidJweStructure` accepts exactly this shape (`protected` / `iv` /
+    /// `ciphertext` / `tag`) as an inbound message. Wrapping it in the JSON
+    /// success envelope would hand the client a reply it cannot parse.
+    Reply(String),
+}
+
+/// Handle an inbound DIDComm v1 message.
 ///
-/// Opens the outer anoncrypt layer with the mediator's routing key, resolves
-/// the forward's `to` verkey to a local account, applies that account's ACLs,
-/// and stores the **inner envelope verbatim** for pickup. The inner bytes are
-/// never parsed: they are sealed to the recipient, who unpacks them natively.
+/// A **forward** is routed: the outer anoncrypt layer is opened with the
+/// mediator's routing key, the `to` verkey resolved to a local account, that
+/// account's ACLs applied, and the inner envelope stored verbatim for pickup.
+/// The inner bytes are never parsed — they are sealed to the recipient.
+///
+/// A **coordinate-mediation or message-pickup request** is answered instead,
+/// and the packed reply comes back as [`V1Outcome::Reply`].
 pub(crate) async fn handle_inbound_didcomm_v1(
     state: &SharedData,
     session: &Session,
     raw: &str,
-) -> Result<InboundMessageResponse, MediatorError> {
+) -> Result<V1Outcome, MediatorError> {
     let _span = span!(Level::DEBUG, "handle_inbound_didcomm_v1");
     async move {
         if !state.config.didcomm_v1.enabled {
@@ -147,6 +167,36 @@ pub(crate) async fn handle_inbound_didcomm_v1(
                 )
             })?;
 
+        // A mediation or pickup request is answered here rather than routed.
+        // These are authcrypt'd, so opening the envelope proved which verkey
+        // sent it — and that authenticated key, not anything the message
+        // claims, is the identity the request is served for.
+        if let Some(request) = crate::messages::v1_mediation::V1Request::classify(&message) {
+            let EnvelopeProtection::Authcrypt { sender_verkey } = opened.protection else {
+                return Err(v1_problem(
+                    session,
+                    37,
+                    "message.didcomm_v1.anonymous_request",
+                    "coordinate-mediation and message-pickup requests must be authcrypt'd: an \
+                     anonymous request names no client to answer for"
+                        .to_string(),
+                    StatusCode::BAD_REQUEST,
+                ));
+            };
+
+            let reply = crate::messages::v1_mediation::handle(
+                state,
+                session,
+                request,
+                &message,
+                &sender_verkey,
+            )
+            .await?;
+
+            let packed = pack_v1_reply(state, session, &reply, &sender_verkey).await?;
+            return Ok(V1Outcome::Reply(packed));
+        }
+
         if !forward::is_forward(&message) {
             return Err(v1_problem(
                 session,
@@ -179,7 +229,9 @@ pub(crate) async fn handle_inbound_didcomm_v1(
             )
         })?;
 
-        deliver_v1_forward(state, session, &to_verkey.to_base58(), &inner).await
+        deliver_v1_forward(state, session, &to_verkey.to_base58(), &inner)
+            .await
+            .map(V1Outcome::Stored)
     }
     .instrument(_span)
     .await
@@ -259,6 +311,35 @@ async fn deliver_v1_forward(
 
     debug!(%to_verkey, %to_did, "DIDComm v1 forward stored for local recipient");
     store_message(state, session, &data, &UnpackMetadata::default()).await
+}
+
+/// Authcrypt a reply from the mediator's routing key back to the client.
+///
+/// Authcrypt rather than anoncrypt: the client has to know the answer really
+/// came from its mediator. A `mediate-grant` an attacker could forge would let
+/// them nominate their own routing keys and capture the client's inbound
+/// traffic.
+async fn pack_v1_reply(
+    state: &SharedData,
+    session: &Session,
+    reply: &affinidi_messaging_didcomm_v1::MessageV1,
+    recipient: &Verkey,
+) -> Result<String, MediatorError> {
+    let identity = state.didcomm_v1_identity().await?;
+    affinidi_messaging_didcomm_v1::message::pack::pack_encrypted_authcrypt(
+        reply,
+        &identity.identity,
+        &[*recipient],
+    )
+    .map_err(|e| {
+        v1_problem(
+            session,
+            37,
+            "message.didcomm_v1.pack",
+            format!("couldn't pack the DIDComm v1 reply: {e}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )
+    })
 }
 
 /// A v1-scoped problem report, mirroring the TSP path's `tsp_problem`.
