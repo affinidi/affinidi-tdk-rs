@@ -1,5 +1,28 @@
 # Affinidi Messaging Core Changelog
 
+## 8th August 2026
+
+### 0.1.6 — `Protocol::DIDCommV1`, and `Protocol` is now `#[non_exhaustive]`
+
+Add `Protocol::DIDCommV1` for the new `affinidi-messaging-didcomm-v1` crate, so
+a consumer holding a `dyn MessagingProtocol` can tell DIDComm v1 apart from
+DIDComm v2.1. The two share no wire format, no algorithms and no identifier
+scheme, so folding v1 into the existing `DIDComm` variant would have made
+inbound routing undecidable.
+
+`Protocol` also gains `#[non_exhaustive]`, so future protocols are additive.
+
+**Semver note (R3.6).** Both changes are, strictly, breaking for any consumer
+that matches `Protocol` exhaustively — yet this ships as a **patch**. That is
+deliberate: `affinidi-messaging-core` is redirected through the workspace
+`[patch.crates-io]`, and the external `vta-sdk` pins `"0.1"`, so a minor bump
+would break the redirect and put two copies of these types in the graph (the
+trap that produced PRs #629/#630). The blast radius was checked rather than
+assumed: no in-tree crate matches `Protocol` at all, and `vta-sdk` 0.21.6 uses
+it only in two equality comparisons against `Protocol::TSP`. Any consumer that
+does match exhaustively needs a `_ =>` arm.
+
+
 ## 16th July 2026
 
 ### 0.1.5 — `MessageTransport::outbox_message_ids` (outbox-drain evidence)

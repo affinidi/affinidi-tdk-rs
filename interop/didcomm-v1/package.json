@@ -1,0 +1,15 @@
+{
+  "name": "affinidi-didcomm-v1-interop",
+  "private": true,
+  "description": "Developer-only Credo interop harness for affinidi-messaging-didcomm-v1",
+  "scripts": {
+    "generate": "node run.mjs"
+  },
+  "dependencies": {
+    "@credo-ts/askar": "^0.6.3",
+    "@credo-ts/core": "^0.6.3",
+    "@credo-ts/didcomm": "^0.6.3",
+    "@credo-ts/node": "^0.6.3",
+    "@openwallet-foundation/askar-nodejs": "^0.4.3"
+  }
+}

@@ -4,10 +4,23 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 /// Which messaging protocol was used.
+///
+/// `#[non_exhaustive]`: match with a `_ =>` arm so that adding a protocol is not
+/// a breaking change. [`DIDCommV1`](Self::DIDCommV1) was the first addition
+/// after this attribute was applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Protocol {
-    /// DIDComm v2.1 messaging.
+    /// DIDComm v2.1 messaging (`affinidi-messaging-didcomm`).
     DIDComm,
+    /// DIDComm v1 messaging, Aries RFC 0019
+    /// (`affinidi-messaging-didcomm-v1`).
+    ///
+    /// Deliberately a separate variant rather than a flavour of
+    /// [`DIDComm`](Self::DIDComm): the two share no wire format, no algorithms,
+    /// and no identifier scheme, and a consumer routing an inbound message
+    /// has to know which one it is holding.
+    DIDCommV1,
     /// Trust Spanning Protocol.
     TSP,
 }
@@ -16,6 +29,7 @@ impl std::fmt::Display for Protocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Protocol::DIDComm => write!(f, "DIDComm"),
+            Protocol::DIDCommV1 => write!(f, "DIDComm v1"),
             Protocol::TSP => write!(f, "TSP"),
         }
     }
