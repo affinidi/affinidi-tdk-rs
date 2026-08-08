@@ -663,6 +663,48 @@ pub async fn serve_internal(
         didcomm_v1_identity: Arc::new(tokio::sync::OnceCell::new()),
     };
 
+    // DIDComm v1 startup checks. Both run before the listener binds, so a
+    // misconfiguration is a refusal to start rather than traffic the mediator
+    // accepts and then silently drops.
+    #[cfg(feature = "didcomm-v1")]
+    if shared_state.config.didcomm_v1.enabled {
+        // The routing-key index is what turns a forward's `to` verkey into an
+        // account. A backend without it would accept v1 forwards and fail every
+        // lookup, so refuse rather than serve a protocol we cannot route.
+        if !shared_state.database.supports_v1_routing_keys() {
+            return Err(MediatorError::ConfigError(
+                12,
+                "NA".into(),
+                "[didcomm_v1] is enabled but the configured storage backend does not implement \
+                 the v1 routing-key index; DIDComm v1 forwards could not be routed"
+                    .into(),
+            ));
+        }
+
+        // Derive eagerly so a missing Ed25519 authentication key fails at
+        // startup rather than on the first inbound forward, and so the routing
+        // verkey can be logged: v1 predates DID documents as a discovery
+        // mechanism, so an operator has to hand this to clients out of band and
+        // has nowhere else to read it from.
+        let identity = shared_state.didcomm_v1_identity().await?;
+        info!(
+            "DIDComm v1 enabled. Routing verkey (give this to v1 clients as their routingKey): {}",
+            identity.verkey().to_base58()
+        );
+        if shared_state
+            .config
+            .didcomm_v1
+            .allow_unauthenticated_forwards
+        {
+            warn!(
+                "DIDComm v1: allow_unauthenticated_forwards is ON. Anonymous callers may submit \
+                 v1 forwards to this mediator (recipient ACLs, message-size limits and per-IP \
+                 rate limiting still apply). This matches Aries mediator behaviour and is \
+                 required for stock Credo wallets; it does NOT open anonymous DIDComm v2 inbound."
+            );
+        }
+    }
+
     let app: Router = application_routes(&api_prefix, &shared_state);
 
     // The `RATE_LIMITED_TOTAL` metric used to be emitted inside the limiter

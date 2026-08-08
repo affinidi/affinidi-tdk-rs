@@ -283,6 +283,29 @@ fn relay_anonymous_acls() -> MediatorACLSet {
     MediatorACLSet::from_string_ruleset("DENY_ALL,SEND_MESSAGES,SEND_FORWARDED").unwrap_or_default()
 }
 
+/// Session id marking an anonymous session admitted **only** because
+/// `[didcomm_v1] allow_unauthenticated_forwards` is on.
+///
+/// The distinction matters, and `message_inbound_handler` enforces it. An Aries
+/// wallet is not an inter-mediator relay: it anoncrypts a
+/// `routing/1.0/forward` to the mediator's routing key and presents no
+/// credential, which is normal for v1 and abnormal for everything else here.
+/// Admitting it must therefore not also open anonymous *v2* inbound — so a
+/// session carrying this id is refused unless the body really is a v1 envelope.
+#[cfg(feature = "didcomm-v1")]
+pub(crate) const ANON_V1_SESSION_ID: &str = "ANON-INBOUND-V1";
+
+/// ACLs for a v1-only anonymous session.
+///
+/// Deliberately **without** `SEND_FORWARDED`, which the v2 anonymous-forward
+/// branch in `routing.rs` consumes: even if the body check were somehow
+/// bypassed, this session could not drive a v2 relay forward. `SEND_MESSAGES`
+/// alone satisfies the handler-level gate.
+#[cfg(feature = "didcomm-v1")]
+fn v1_anonymous_acls() -> MediatorACLSet {
+    MediatorACLSet::from_string_ruleset("DENY_ALL,SEND_MESSAGES").unwrap_or_default()
+}
+
 /// Decide whether an authentication failure should be downgraded to an anonymous
 /// relay session, and if so build that session.
 ///
@@ -302,17 +325,34 @@ fn anonymous_session_for(
     err: &AuthError,
     enable_relay_flag: bool,
     global_acl_default: &MediatorACLSet,
+    #[cfg_attr(not(feature = "didcomm-v1"), allow(unused_variables))] allow_v1_anon: bool,
 ) -> Option<Session> {
-    let relay_enabled = enable_relay_flag || anonymous_inbound_allowed(global_acl_default);
-    if matches!(err, AuthError::MissingCredentials) && relay_enabled {
-        Some(Session {
+    if !matches!(err, AuthError::MissingCredentials) {
+        return None;
+    }
+
+    // Relay admission is unchanged and takes precedence: such a session keeps
+    // its SEND_FORWARDED capability and is not restricted to v1 bodies.
+    if enable_relay_flag || anonymous_inbound_allowed(global_acl_default) {
+        return Some(Session {
             session_id: "ANON-INBOUND".to_string(),
             acls: relay_anonymous_acls(),
             ..Default::default()
-        })
-    } else {
-        None
+        });
     }
+
+    // Otherwise a v1 forward may still be admitted, but only as a v1-scoped
+    // session — see [`ANON_V1_SESSION_ID`].
+    #[cfg(feature = "didcomm-v1")]
+    if allow_v1_anon {
+        return Some(Session {
+            session_id: ANON_V1_SESSION_ID.to_string(),
+            acls: v1_anonymous_acls(),
+            ..Default::default()
+        });
+    }
+
+    None
 }
 
 /// Extractor that wraps `Session`, optionally allowing anonymous relay requests.
@@ -344,6 +384,8 @@ where
                     &e,
                     security.enable_inter_mediator_relay,
                     &security.global_acl_default,
+                    shared.config.didcomm_v1.enabled
+                        && shared.config.didcomm_v1.allow_unauthenticated_forwards,
                 ) {
                     Some(session) => Ok(MaybeSession(session)),
                     None => Err(e),
@@ -429,7 +471,7 @@ mod tests {
     fn missing_credentials_downgrades_to_relay_session_only_when_relay_enabled() {
         let relay = MediatorACLSet::from_string_ruleset("ALLOW_ALL").unwrap();
         // Legacy implicit relay: ACL grants SEND_FORWARDED, flag off.
-        let session = anonymous_session_for(&AuthError::MissingCredentials, false, &relay)
+        let session = anonymous_session_for(&AuthError::MissingCredentials, false, &relay, false)
             .expect("relay-enabled mediator accepts anonymous inbound");
         // Not authenticated, no DID, and scoped to the minimal relay ACL — never
         // the full global default.
@@ -442,7 +484,9 @@ mod tests {
         let secure =
             MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES")
                 .unwrap();
-        assert!(anonymous_session_for(&AuthError::MissingCredentials, false, &secure).is_none());
+        assert!(
+            anonymous_session_for(&AuthError::MissingCredentials, false, &secure, false).is_none()
+        );
     }
 
     #[test]
@@ -453,11 +497,13 @@ mod tests {
             MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES")
                 .unwrap();
         assert!(
-            anonymous_session_for(&AuthError::MissingCredentials, true, &secure).is_some(),
+            anonymous_session_for(&AuthError::MissingCredentials, true, &secure, false).is_some(),
             "explicit enable_inter_mediator_relay must accept anonymous inbound"
         );
         // ...and with neither the flag nor the ACL bit, it stays rejected.
-        assert!(anonymous_session_for(&AuthError::MissingCredentials, false, &secure).is_none());
+        assert!(
+            anonymous_session_for(&AuthError::MissingCredentials, false, &secure, false).is_none()
+        );
     }
 
     #[test]
@@ -474,8 +520,75 @@ mod tests {
             AuthError::InternalServerError("backend down".into()),
         ] {
             assert!(
-                anonymous_session_for(&err, false, &relay).is_none(),
+                anonymous_session_for(&err, false, &relay, false).is_none(),
                 "{err:?} must not be downgraded to an anonymous session"
+            );
+        }
+    }
+
+    /// `allow_unauthenticated_forwards` admits an anonymous session, but a
+    /// **v1-scoped** one: it must not become a general anonymous-inbound
+    /// licence. The handler refuses a non-v1 body on this session; the ACL is
+    /// the second line of defence.
+    #[cfg(feature = "didcomm-v1")]
+    #[test]
+    fn v1_anonymous_session_is_scoped_and_cannot_relay() {
+        let secure =
+            MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES")
+                .unwrap();
+
+        // Off by default: still rejected.
+        assert!(
+            anonymous_session_for(&AuthError::MissingCredentials, false, &secure, false).is_none(),
+            "v1 anonymous inbound must be opt-in"
+        );
+
+        let session = anonymous_session_for(&AuthError::MissingCredentials, false, &secure, true)
+            .expect("allow_unauthenticated_forwards admits an anonymous v1 session");
+
+        assert_eq!(
+            session.session_id, ANON_V1_SESSION_ID,
+            "the session must be identifiable as v1-scoped so the handler can refuse other bodies"
+        );
+        assert!(!session.authenticated);
+        assert!(session.did.is_empty());
+        // Enough to pass the handler gate...
+        assert!(session.acls.get_send_messages().0);
+        // ...but never enough to drive a v2 relay forward.
+        assert!(
+            !session.acls.get_send_forwarded().0,
+            "a v1-scoped anonymous session must not carry SEND_FORWARDED"
+        );
+        assert!(!session.acls.get_local());
+    }
+
+    /// A relay-enabled mediator keeps its existing behaviour: the anonymous
+    /// session is the relay one, not the narrower v1 session, so turning on v1
+    /// does not silently downgrade inter-mediator relay.
+    #[cfg(feature = "didcomm-v1")]
+    #[test]
+    fn relay_admission_takes_precedence_over_v1() {
+        let relay = MediatorACLSet::from_string_ruleset("ALLOW_ALL").unwrap();
+        let session = anonymous_session_for(&AuthError::MissingCredentials, true, &relay, true)
+            .expect("relay session");
+        assert_eq!(session.session_id, "ANON-INBOUND");
+        assert!(session.acls.get_send_forwarded().0);
+    }
+
+    /// The v1 flag must not rescue a *presented* bad credential either.
+    #[cfg(feature = "didcomm-v1")]
+    #[test]
+    fn v1_flag_does_not_downgrade_invalid_credentials() {
+        let secure = MediatorACLSet::from_string_ruleset("DENY_ALL,SEND_MESSAGES").unwrap();
+        for err in [
+            AuthError::InvalidToken,
+            AuthError::ExpiredToken,
+            AuthError::Blocked,
+            AuthError::WrongCredentials,
+        ] {
+            assert!(
+                anonymous_session_for(&err, false, &secure, true).is_none(),
+                "{err:?} must not be downgraded even with v1 anonymous forwards enabled"
             );
         }
     }

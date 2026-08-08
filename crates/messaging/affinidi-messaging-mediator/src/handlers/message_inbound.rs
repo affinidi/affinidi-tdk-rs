@@ -98,6 +98,66 @@ pub async fn message_inbound_handler(
             ));
         }
 
+        // DIDComm v1 (Aries RFC 0019). Sniffed before the v2 parse because a v1
+        // envelope has no top-level `recipients` and would otherwise fail the v2
+        // deserialise with a misleading error. See `is_didcomm_v1`.
+        #[cfg(feature = "didcomm-v1")]
+        {
+            let is_v1 = crate::messages::inbound_v1::is_didcomm_v1(&body);
+
+            // A session admitted *only* by `allow_unauthenticated_forwards` is
+            // scoped to v1: anything else on it is refused here, so opening the
+            // door for Aries wallets does not also open anonymous v2 inbound.
+            if session.session_id == crate::common::jwt_auth::ANON_V1_SESSION_ID && !is_v1 {
+                return Err(MediatorError::problem(
+                    44,
+                    session.session_id,
+                    None,
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.authentication_required",
+                    "Anonymous inbound is accepted only for DIDComm v1 forwards on this mediator",
+                    vec![],
+                    StatusCode::UNAUTHORIZED,
+                )
+                .into());
+            }
+
+            if is_v1 {
+                let raw = std::str::from_utf8(&body).map_err(|e| {
+                    MediatorError::problem(
+                        19,
+                        session.session_id.clone(),
+                        None,
+                        ProblemReportSorter::Warning,
+                        ProblemReportScope::Message,
+                        "message.deserialize",
+                        "DIDComm v1 envelope is not valid UTF-8. Reason: {1}",
+                        vec![e.to_string()],
+                        StatusCode::BAD_REQUEST,
+                    )
+                })?;
+
+                metrics::counter!(names::MESSAGES_INBOUND_TOTAL).increment(1);
+                metrics::counter!(names::MESSAGE_BYTES_INBOUND_TOTAL).increment(raw.len() as u64);
+
+                let response =
+                    crate::messages::inbound_v1::handle_inbound_didcomm_v1(&state, &session, raw)
+                        .await?;
+                return Ok((
+                    StatusCode::OK,
+                    Json(SuccessResponse {
+                        session_id: session.session_id,
+                        http_code: StatusCode::OK.as_u16(),
+                        error_code: 0,
+                        error_code_str: "NA".to_string(),
+                        message: "Success".to_string(),
+                        data: Some(response),
+                    }),
+                ));
+            }
+        }
+
         // DIDComm: parse the JWE envelope, then re-serialise it to the exact
         // canonical string used historically (the `Json<InboundMessage>`
         // extractor parsed then the handler `to_string`'d it). Re-creating that

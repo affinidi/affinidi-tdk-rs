@@ -40,6 +40,8 @@ use serde_json::Value;
 #[cfg(feature = "didcomm")]
 pub mod error_response;
 pub mod inbound;
+#[cfg(feature = "didcomm-v1")]
+pub mod inbound_v1;
 #[cfg(feature = "didcomm")]
 pub mod protocols;
 pub(crate) mod store;
