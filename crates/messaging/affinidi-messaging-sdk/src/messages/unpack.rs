@@ -92,6 +92,25 @@ fn charge_resolution(budget: &mut usize) -> Result<(), ATMError> {
     Ok(())
 }
 
+/// Why a signer's verification key could not be produced.
+///
+/// The distinction is a *retry* decision, not cosmetic. The message-pickup drain
+/// leaves possibly-transient failures queued and purges deterministic ones; a
+/// deterministic failure that is re-queued comes back every pickup cycle
+/// forever. Collapsing both into one "couldn't resolve" is what made an
+/// unsupported-curve co-signer poison-loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyResolutionError {
+    /// The signer's DID did not resolve (network, registry, cache). **May**
+    /// succeed later — safe to retry.
+    Unresolvable,
+    /// The DID resolved, but no verification key usable by this build could be
+    /// derived from it — no matching verification method, undecodable key
+    /// material, or a curve this build cannot verify (e.g. P-384/P-521). Fails
+    /// identically on every retry.
+    Unusable,
+}
+
 /// One cryptographic layer removed while unwrapping a message, recorded
 /// outermost-first so the stack can be classified into a
 /// [`MessageWrappingType`] and checked for addressing consistency.
@@ -532,10 +551,44 @@ impl SharedState {
         let tolerate = self.config.allow_invalid_signatures();
         let mut verified: Vec<String> = Vec::with_capacity(parsed.signatures.len());
         let mut unverified: Vec<String> = Vec::new();
-        for sig in &parsed.signatures {
+
+        // Resolution order is a DoS control, not a style choice.
+        //
+        // Under the default policy (`validate_addressing_consistency`) a signed
+        // message is only accepted if some *verified* signer matches the inner
+        // `from`. So if that authoritative signature fails, the message is
+        // rejected no matter what the other signatures do — and every resolution
+        // spent on them was attacker-directed outbound work for nothing.
+        // Visiting `from`-matching signatures first means the common abuse case
+        // (a stuffed multi-signature message that will be rejected anyway) costs
+        // **one** resolution instead of `max_signatures`.
+        //
+        // This reorders *resolution*, not semantics: every signature within the
+        // cap is still visited, and `verified` / `unverified` end up holding the
+        // same sets. Only the order of the recorded kids changes.
+        let authoritative_first: Vec<&_> = {
+            let mut sigs: Vec<&_> = parsed.signatures.iter().collect();
+            if let Some(from) = payload_from.as_deref() {
+                let from_did = Self::base_did(from);
+                // `false` sorts before `true`, so "matches `from`" first.
+                sigs.sort_by_key(|s| {
+                    s.kid
+                        .as_deref()
+                        .is_none_or(|k| Self::base_did(k) != from_did)
+                });
+            }
+            sigs
+        };
+
+        for sig in authoritative_first {
             // Missing signer kid: nothing to resolve or attribute.
             let Some(kid) = sig.kid.clone() else {
                 if tolerate {
+                    warn!(
+                        "tolerating a signature with no signer kid (allow_invalid_signatures \
+                         is enabled); it is recorded in UnpackMetadata::unverified_signers \
+                         and MUST NOT be treated as a valid co-signature"
+                    );
                     unverified.push("<no kid>".to_string());
                     continue;
                 }
@@ -556,6 +609,14 @@ impl SharedState {
                     .is_some_and(|from| Self::base_did(&kid) == Self::base_did(from));
                 if !bound {
                     if tolerate {
+                        warn!(
+                            kid = %kid,
+                            "tolerating a signature whose kid is only in the unprotected \
+                             header and does not match the message `from` \
+                             (allow_invalid_signatures is enabled); it was NOT resolved or \
+                             verified, is recorded in UnpackMetadata::unverified_signers, \
+                             and MUST NOT be treated as a valid co-signature"
+                        );
                         unverified.push(kid);
                         continue;
                     }
@@ -570,16 +631,38 @@ impl SharedState {
             // Charge the per-message resolution budget before resolving the
             // signer DID (a networked fetch for `did:web`).
             charge_resolution(budget)?;
-            let Some(key) = self.resolve_verify_key(&kid).await else {
-                // Unresolvable DID or a curve this build can't handle.
-                if tolerate {
-                    unverified.push(kid);
-                    continue;
+            let key = match self.resolve_verify_key(&kid).await {
+                Ok(key) => key,
+                Err(why) => {
+                    if tolerate {
+                        warn!(
+                            kid = %kid,
+                            reason = ?why,
+                            "tolerating a signature whose verification key could not be \
+                             produced (allow_invalid_signatures is enabled); it is recorded \
+                             in UnpackMetadata::unverified_signers and MUST NOT be treated \
+                             as a valid co-signature"
+                        );
+                        unverified.push(kid);
+                        continue;
+                    }
+                    return match why {
+                        // The DID may resolve later — keep this retryable.
+                        KeyResolutionError::Unresolvable => Err(ATMError::DidcommError(
+                            "Couldn't verify JWS".into(),
+                            format!("could not resolve the signer DID for '{kid}'"),
+                        )),
+                        // Resolved, but no key this build can verify with. This
+                        // fails identically forever, so classify it as
+                        // deterministic or the pickup drain will re-queue it
+                        // every cycle.
+                        KeyResolutionError::Unusable => Err(ATMError::VerificationFailed(format!(
+                            "signer '{kid}': no verification key usable by this build (missing \
+                             verification method, undecodable key material, or an unsupported \
+                             curve such as P-384/P-521)"
+                        ))),
+                    };
                 }
-                return Err(ATMError::DidcommError(
-                    "Couldn't verify JWS".into(),
-                    format!("could not resolve a verification key for '{kid}'"),
-                ));
             };
             match verify_parsed_signature(sig, &key) {
                 Ok(()) => verified.push(kid),
@@ -588,6 +671,14 @@ impl SharedState {
                     // is *deterministic* — the pickup drain purges it (distinct
                     // `VerificationFailed` variant) rather than re-queuing.
                     if tolerate {
+                        warn!(
+                            kid = %kid,
+                            error = %e,
+                            "tolerating a signature that FAILED cryptographic verification \
+                             (allow_invalid_signatures is enabled); it is recorded in \
+                             UnpackMetadata::unverified_signers and MUST NOT be treated as \
+                             a valid co-signature"
+                        );
                         unverified.push(kid);
                         continue;
                     }
@@ -608,17 +699,31 @@ impl SharedState {
     /// signature algorithm is used. Looks in the `authentication` relationship
     /// first (where DIDComm signing keys live), then any verification method.
     /// Supports Ed25519 (`EdDSA`), P-256 (`ES256`), and secp256k1 (`ES256K`).
+    ///
+    /// Failure is reported as [`KeyResolutionError`] rather than a bare `None`
+    /// so callers can tell a **transient** failure (the DID did not resolve —
+    /// the network or the registry may recover) from a **deterministic** one
+    /// (the key exists but this build cannot handle its curve, e.g. P-384). The
+    /// two need opposite retry behaviour: re-queuing a deterministic failure
+    /// poison-loops the pickup drain forever.
     async fn resolve_verify_key(
         &self,
         kid: &str,
-    ) -> Option<affinidi_messaging_didcomm::jws::verify::VerifyKey> {
+    ) -> Result<affinidi_messaging_didcomm::jws::verify::VerifyKey, KeyResolutionError> {
         use affinidi_did_common::{
             document::DocumentExt, verification_method::VerificationRelationship,
         };
         use affinidi_messaging_didcomm::jws::verify::VerifyKey;
 
         let did = kid.split('#').next().unwrap_or(kid);
-        let doc = self.tdk_common.did_resolver().resolve(did).await.ok()?;
+        // The DID itself did not resolve — network / registry / cache. Retrying
+        // later may succeed, so this is the *transient* arm.
+        let doc = self
+            .tdk_common
+            .did_resolver()
+            .resolve(did)
+            .await
+            .map_err(|_| KeyResolutionError::Unresolvable)?;
 
         // Fragment-qualified kid → that exact key; bare DID → first
         // authentication key.
@@ -627,10 +732,16 @@ impl SharedState {
             kid
         } else {
             let auth = doc.doc.find_authentication(None);
-            lookup_owned = auth.first()?.to_string();
+            lookup_owned = auth
+                .first()
+                .ok_or(KeyResolutionError::Unusable)?
+                .to_string();
             &lookup_owned
         };
 
+        // From here on the document resolved fine; anything that fails is a
+        // property of *this* document and this build, so it fails identically on
+        // every retry — the deterministic arm.
         let vm = doc
             .doc
             .authentication
@@ -644,14 +755,21 @@ impl SharedState {
                 _ => None,
             })
             .next()
-            .or_else(|| doc.doc.get_verification_method(lookup_kid))?;
+            .or_else(|| doc.doc.get_verification_method(lookup_kid))
+            .ok_or(KeyResolutionError::Unusable)?;
 
-        let (codec, bytes) = vm.decode_public_key().ok()?;
+        let (codec, bytes) = vm
+            .decode_public_key()
+            .map_err(|_| KeyResolutionError::Unusable)?;
         match codec {
-            affinidi_encoding::ED25519_PUB => Some(VerifyKey::Ed25519(bytes.try_into().ok()?)),
-            affinidi_encoding::P256_PUB => Some(VerifyKey::P256(bytes)),
-            affinidi_encoding::SECP256K1_PUB => Some(VerifyKey::Secp256k1(bytes)),
-            _ => None,
+            affinidi_encoding::ED25519_PUB => Ok(VerifyKey::Ed25519(
+                bytes.try_into().map_err(|_| KeyResolutionError::Unusable)?,
+            )),
+            affinidi_encoding::P256_PUB => Ok(VerifyKey::P256(bytes)),
+            affinidi_encoding::SECP256K1_PUB => Ok(VerifyKey::Secp256k1(bytes)),
+            // A key this build cannot verify with (e.g. P-384/P-521). Real, but
+            // permanently unusable here — never worth a retry.
+            _ => Err(KeyResolutionError::Unusable),
         }
     }
 
@@ -1963,6 +2081,26 @@ mod tests {
         (did_string, ed, x)
     }
 
+    /// A did:peer:2 whose verification key is **P-384** — a real, well-formed
+    /// key that this build has no JWS verifier for. Used to exercise the
+    /// "resolved fine, but unusable here" arm of key resolution, which must be
+    /// deterministic rather than retryable.
+    fn generate_peer_did_p384() -> (String, Secret) {
+        let p384 = Secret::generate_p384(Some("temp"), None).unwrap();
+        let p384_mb = p384.get_public_keymultibase().unwrap();
+        let x = Secret::generate_x25519(Some("temp"), None).unwrap();
+        let x_mb = x.get_public_keymultibase().unwrap();
+        let keys = vec![
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Verification, p384_mb),
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, x_mb),
+        ];
+        let (did, _created) = DID::generate_peer(&keys, None).unwrap();
+        let did_string = did.to_string();
+        let mut p384 = p384;
+        p384.id = format!("{did_string}#key-1");
+        (did_string, p384)
+    }
+
     async fn create_atm_with_policy(secrets: Vec<Secret>, policy: UnpackPolicy) -> ATM {
         use affinidi_tdk_common::config::TDKConfig;
         let config = ATMConfig::builder()
@@ -2607,6 +2745,101 @@ mod tests {
         let kid = override_kid.unwrap_or(&original_kid);
         sig["header"] = json!({ "kid": kid });
         serde_json::to_string(&v).unwrap()
+    }
+
+    /// A signer whose DID resolves but whose key this build cannot verify with
+    /// (P-384 here) is a **deterministic** failure: it will fail identically on
+    /// every redelivery. It must therefore surface as `VerificationFailed` — the
+    /// variant the pickup drain purges — and not as the retryable
+    /// `DidcommError` used for a DID that merely didn't resolve. Collapsing the
+    /// two is what made an unsupported-curve co-signer poison-loop forever.
+    #[tokio::test]
+    async fn unsupported_signer_curve_is_deterministic_not_retryable() {
+        let (p384_did, _secret) = generate_peer_did_p384();
+
+        // Sign with Ed25519 but *claim* the P-384 DID as the signer, so key
+        // resolution reaches a real DID document whose key this build cannot
+        // use. The signature never gets verified — resolution fails first.
+        let (_sender_did, sed, _sx) = generate_peer_did_full();
+        let plaintext = build_plaintext(&p384_did, "did:example:recipient");
+        let sed_priv: [u8; 32] = sed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[JwsSigner::Ed25519 {
+                kid: &format!("{p384_did}#key-1"),
+                private: &sed_priv,
+            }],
+        )
+        .unwrap();
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 2,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![], policy).await;
+
+        let err = recipient.unpack(&signed).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::VerificationFailed(m) if m.contains("usable by this build")),
+            "an unusable signer key must be deterministic (purgeable), got: {err:?}"
+        );
+    }
+
+    /// DoS control: under the default policy a signed message is only accepted
+    /// if a *verified* signer matches the inner `from`, so when that
+    /// authoritative signature fails the message is rejected regardless of the
+    /// others. Visiting `from`-matching signatures first therefore means a
+    /// stuffed multi-signature message costs one resolution rather than
+    /// `max_signatures`.
+    ///
+    /// The two orderings are distinguished by *which failure surfaces*. The
+    /// co-signer is placed first in wire order and given an unresolvable DID, so
+    /// resolving it yields the retryable `DidcommError`; the `from`-matching
+    /// signature resolves fine but fails verification, yielding
+    /// `VerificationFailed`. Wire order would produce the former, authoritative
+    /// -first produces the latter — so the assertion cannot pass by accident.
+    #[tokio::test]
+    async fn authoritative_signature_is_resolved_before_the_others() {
+        let (from_did, _fed, _fx) = generate_peer_did_full();
+        let (_other_did, oed, _ox) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&from_did, "did:example:recipient");
+        let oed_priv: [u8; 32] = oed.get_private_bytes().try_into().unwrap();
+        let signed = sign_multi(
+            plaintext.as_bytes(),
+            &[
+                // Co-signer, first on the wire, DID cannot be resolved at all.
+                JwsSigner::Ed25519 {
+                    kid: "did:example:unresolvable-cosigner#key-1",
+                    private: &oed_priv,
+                },
+                // Authoritative signer (matches `from`), last on the wire, but
+                // signed with the wrong key so verification fails.
+                JwsSigner::Ed25519 {
+                    kid: &format!("{from_did}#key-1"),
+                    private: &oed_priv,
+                },
+            ],
+        )
+        .unwrap();
+
+        let policy = UnpackPolicy {
+            expected: vec![MessageWrappingType::SignedPlaintext],
+            validate_addressing_consistency: true,
+            max_signatures: 5,
+            max_recipients: 2,
+        };
+        let recipient = create_atm_with_policy(vec![], policy).await;
+
+        let err = recipient.unpack(&signed).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::VerificationFailed(m) if m.contains(&from_did)),
+            "the from-matching signature must be resolved first — wire order would have \
+             hit the unresolvable co-signer and produced a retryable DidcommError \
+             instead, got: {err:?}"
+        );
     }
 
     /// SSRF guard: the per-signature *unprotected* header is outside the signing
