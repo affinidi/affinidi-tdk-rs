@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-didcomm-v1"
 description = "DIDComm v1 (Aries RFC 0019) messaging implementation for the Affinidi TDK"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -59,7 +59,13 @@ subtle = "2"
 rand_10 = { package = "rand", version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 
 # Optional — messaging-core trait integration (see the `messaging-core` feature).
-affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1", optional = true }
+#
+# The patch is load-bearing, not decoration: `adapter.rs` names
+# `Protocol::DIDCommV1`, which was added in 0.1.6. A loose "0.1" resolves to
+# 0.1.6 on a *fresh* build — which is why publish verification passed — but a
+# consumer with an existing lockfile, or one pinning `--precise 0.1.5`, gets
+# `no variant named DIDCommV1` instead.
+affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.6", optional = true }
 async-trait = { version = "0.1", optional = true }
 
 [dev-dependencies]
