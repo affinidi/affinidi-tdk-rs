@@ -45,6 +45,8 @@ pub mod inbound_v1;
 #[cfg(feature = "didcomm")]
 pub mod protocols;
 pub(crate) mod store;
+#[cfg(feature = "didcomm-v1")]
+pub mod v1_mediation;
 
 #[cfg(feature = "didcomm")]
 struct MessageType(SDKMessageType);
