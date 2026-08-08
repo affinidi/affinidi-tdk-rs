@@ -5,6 +5,18 @@ on:
     types:
       - opened
       - synchronize
+  # Nothing else in this repo runs against `main`. Without these triggers every
+  # security job — `audit`, `cargo-deny`, `rust-scan` — only ever sees a PR's
+  # merge preview, so an advisory published *after* a PR merges is never
+  # noticed by anything: the code stops being checked the moment it lands.
+  # A daily run re-checks `main` against the current advisory database.
+  schedule:
+    # 06:17 UTC. Deliberately off the hour — GitHub delays cron runs that land
+    # on popular slots, and a scheduled scan that silently drifts by an hour is
+    # exactly the kind of thing nobody notices.
+    - cron: "17 6 * * *"
+  # On demand, e.g. to confirm a security fix on `main` without waiting a day.
+  workflow_dispatch:
 
 jobs:
   rust-pipeline:
@@ -21,5 +33,11 @@ jobs:
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       coverage: 0
       useRedis: true
-      verifyPublish: true
+      # PR-only. `verify-publish` resolves each crate from the registry in
+      # isolation, which is a useful pre-merge gate but is *expected* to fail on
+      # `main`: the release job publishes after merge, so between a merge and
+      # its release every bumped crate is unpublished and cannot resolve. Left
+      # on, every scheduled run would report a permanent false failure and the
+      # whole scan would be ignored within a week.
+      verifyPublish: ${{ github.event_name == 'pull_request' }}
       deprecationCheck: true
