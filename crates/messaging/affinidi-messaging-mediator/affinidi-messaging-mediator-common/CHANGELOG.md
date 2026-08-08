@@ -1,5 +1,30 @@
 # Affinidi Messaging Mediator Common
 
+## 8th August 2026 (0.15.34)
+
+**`MediatorStore` gains a DIDComm v1 routing-key index.**
+
+DIDComm v1 addresses a forward's destination by base58 Ed25519 **verkey**, while
+every routing, ACL and storage decision in the mediator is keyed by DID. The new
+methods bridge the two: `v1_routing_key_bind` / `_lookup` / `_unbind` /
+`v1_routing_keys_for`, plus a `supports_v1_routing_keys()` capability probe.
+
+All carry default implementations, so a third-party backend written against an
+earlier version of the trait keeps compiling; the probe defaults to `false` and
+the mediator refuses to start with DIDComm v1 enabled on such a backend.
+
+**Security contract:** a verkey binds to at most one DID. An implementation MUST
+reject a bind whose verkey is already bound to a different DID — otherwise any
+account could claim another's routing key and capture its inbound v1 traffic.
+Redis enforces this with `SETNX`; the in-process backends do it under their
+write lock. Account removal purges an account's bindings, or a removed account's
+verkeys keep resolving to a mailbox that no longer exists.
+
+The index stores the **DID**, not its hash: forward ingress hands the looked-up
+value to the message-store path, which addresses a recipient by DID and hashes
+it itself. The reverse index stays hash-keyed, because that is what account
+removal works from.
+
 ## 1st August 2026 (0.15.33)
 
 Drops the **legacy rustls 0.21 stack** from the AWS SDK dependency path,

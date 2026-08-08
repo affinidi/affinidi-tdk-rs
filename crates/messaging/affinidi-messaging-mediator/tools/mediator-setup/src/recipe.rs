@@ -514,11 +514,21 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
     // Protocols
     config.didcomm_enabled = false;
     config.tsp_enabled = false;
+    config.didcomm_v1_enabled = false;
     for proto in &recipe.deployment.protocols {
         match proto.as_str() {
             "didcomm" => config.didcomm_enabled = true,
             "tsp" => config.tsp_enabled = true,
-            other => anyhow::bail!("Invalid protocol '{other}': expected 'didcomm' or 'tsp'"),
+            // Additive over v2.1 and dependent on it: the mediator's
+            // `didcomm-v1` Cargo feature implies `didcomm`, and the v1 routing
+            // identity is derived from the same Ed25519 authentication key.
+            "didcomm-v1" => {
+                config.didcomm_v1_enabled = true;
+                config.didcomm_enabled = true;
+            }
+            other => anyhow::bail!(
+                "Invalid protocol '{other}': expected 'didcomm', 'didcomm-v1' or 'tsp'"
+            ),
         }
     }
     if !config.didcomm_enabled && !config.tsp_enabled {
@@ -716,6 +726,9 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
     }
     if config.tsp_enabled {
         protocols.push("\"tsp\"");
+    }
+    if config.didcomm_v1_enabled {
+        protocols.push("\"didcomm-v1\"");
     }
     out.push_str(&format!("protocols = [{}]\n", protocols.join(", ")));
     out.push_str(&format!("use_vta = {}\n", config.use_vta));
@@ -1402,6 +1415,47 @@ ssl = "none"
         let config = to_wizard_config(&recipe).unwrap();
         assert_eq!(config.ssl_cert_path, "/path/cert.pem");
         assert_eq!(config.ssl_key_path, "/path/key.pem");
+    }
+
+    /// `didcomm-v1` is additive over v2.1 and depends on it, so selecting it
+    /// alone must still turn v2.1 on — a recipe listing only `didcomm-v1`
+    /// otherwise produces a build whose Cargo features imply `didcomm` while
+    /// the wizard believes it is off.
+    #[test]
+    fn didcomm_v1_protocol_implies_didcomm() {
+        let mut recipe = minimal_recipe();
+        recipe.deployment.protocols = vec!["didcomm-v1".into()];
+
+        let config = to_wizard_config(&recipe).unwrap();
+        assert!(config.didcomm_v1_enabled);
+        assert!(
+            config.didcomm_enabled,
+            "didcomm-v1 must imply didcomm, matching the mediator's Cargo feature"
+        );
+        assert!(config.cargo_features().contains(&"didcomm-v1"));
+        assert!(config.cargo_features().contains(&"didcomm"));
+    }
+
+    #[test]
+    fn didcomm_v1_is_off_unless_requested() {
+        let mut recipe = minimal_recipe();
+        recipe.deployment.protocols = vec!["didcomm".into()];
+
+        let config = to_wizard_config(&recipe).unwrap();
+        assert!(!config.didcomm_v1_enabled);
+        assert!(!config.cargo_features().contains(&"didcomm-v1"));
+    }
+
+    #[test]
+    fn unknown_protocol_names_didcomm_v1_in_its_error() {
+        let mut recipe = minimal_recipe();
+        recipe.deployment.protocols = vec!["didcommv1".into()];
+
+        let err = to_wizard_config(&recipe).unwrap_err().to_string();
+        assert!(
+            err.contains("didcomm-v1"),
+            "the error should list the accepted spellings, got: {err}"
+        );
     }
 
     // ── from_wizard_config round-trip ──────────────────────────────────

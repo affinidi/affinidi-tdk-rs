@@ -373,6 +373,13 @@ pub struct WizardConfig {
     pub didcomm_enabled: bool,
     /// TSP protocol enabled (experimental, default: false)
     pub tsp_enabled: bool,
+    /// DIDComm v1 (Aries RFC 0019) enabled (default: false). Additive
+    /// alongside DIDComm v2.1, and dependent on it.
+    pub didcomm_v1_enabled: bool,
+    /// Accept DIDComm v1 forwards without an authenticated session
+    /// (default: false). Required for stock Credo wallets, which cannot
+    /// complete this mediator's v2 challenge; see the `[didcomm_v1]` docs.
+    pub didcomm_v1_allow_unauthenticated_forwards: bool,
     pub did_method: String,
     pub public_url: String,
     /// When `did_method` produces a did:webvh, also export a did:web copy
@@ -533,6 +540,12 @@ impl WizardConfig {
         if self.tsp_enabled {
             features.push("tsp");
         }
+        // `didcomm-v1` implies `didcomm` in the mediator's Cargo features, but
+        // list it explicitly so the rendered build command reads as what the
+        // operator chose rather than relying on the implication.
+        if self.didcomm_v1_enabled {
+            features.push("didcomm-v1");
+        }
 
         features.push(match self.storage_backend.as_str() {
             crate::consts::STORAGE_BACKEND_FJALL => "fjall-backend",
@@ -579,6 +592,8 @@ impl Default for WizardConfig {
             vta_context: DEFAULT_VTA_CONTEXT.into(),
             didcomm_enabled: true,
             tsp_enabled: false,
+            didcomm_v1_enabled: false,
+            didcomm_v1_allow_unauthenticated_forwards: false,
             did_method: String::new(),
             public_url: String::new(),
             save_did_web: false,

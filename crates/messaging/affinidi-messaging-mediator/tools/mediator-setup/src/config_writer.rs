@@ -187,6 +187,24 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
         }
     }
 
+    // ── [didcomm_v1] ───────────────────────────────────────────────────
+    // Aries RFC 0019 support. Written only when the operator enabled it, so a
+    // v2-only mediator.toml stays exactly as it was — and a re-run that turns
+    // v1 off strips the section rather than leaving a stale `enabled = true`.
+    {
+        if config.didcomm_v1_enabled {
+            if doc.get("didcomm_v1").is_none() {
+                doc["didcomm_v1"] = toml_edit::Item::Table(toml_edit::Table::new());
+            }
+            let v1 = doc.get_mut("didcomm_v1").expect("just inserted");
+            v1["enabled"] = toml_edit::value(true);
+            v1["allow_unauthenticated_forwards"] =
+                toml_edit::value(config.didcomm_v1_allow_unauthenticated_forwards);
+        } else {
+            doc.remove("didcomm_v1");
+        }
+    }
+
     // ── [security] ─────────────────────────────────────────────────────
     if let Some(sec) = doc.get_mut("security") {
         // SSL
@@ -878,6 +896,48 @@ mod tests {
                 "cors_allow_origin = \"https://app.affinidi.com,https://*.affinidi.com\""
             )
         );
+    }
+
+    /// The `[didcomm_v1]` section is written only when enabled, and a re-run
+    /// that turns it off strips it — leaving a stale `enabled = true` behind
+    /// would keep the mediator accepting v1 traffic the operator just disabled.
+    #[test]
+    fn didcomm_v1_section_is_written_only_when_enabled() {
+        let base = WizardConfig {
+            config_path: "conf/mediator.toml".into(),
+            deployment_type: "Local development".into(),
+            didcomm_enabled: true,
+            did_method: DID_PEER.into(),
+            secret_storage: STORAGE_STRING.into(),
+            ssl_mode: SSL_NONE.into(),
+            database_url: DEFAULT_REDIS_URL.into(),
+            admin_did_mode: ADMIN_GENERATE.into(),
+            listen_address: DEFAULT_LISTEN_ADDR.into(),
+            ..WizardConfig::default()
+        };
+
+        // Off (the default): no section at all, so a v2-only config is untouched.
+        let toml = generate_toml(&base, &test_generated()).unwrap();
+        assert!(!toml.contains("[didcomm_v1]"));
+
+        // On, forwards still authenticated.
+        let enabled = WizardConfig {
+            didcomm_v1_enabled: true,
+            ..base.clone()
+        };
+        let toml = generate_toml(&enabled, &test_generated()).unwrap();
+        assert!(toml.contains("[didcomm_v1]"));
+        assert!(toml.contains("enabled = true"));
+        assert!(toml.contains("allow_unauthenticated_forwards = false"));
+
+        // On, with the Aries-compatible posture explicitly chosen.
+        let anon = WizardConfig {
+            didcomm_v1_enabled: true,
+            didcomm_v1_allow_unauthenticated_forwards: true,
+            ..base.clone()
+        };
+        let toml = generate_toml(&anon, &test_generated()).unwrap();
+        assert!(toml.contains("allow_unauthenticated_forwards = true"));
     }
 
     #[test]
