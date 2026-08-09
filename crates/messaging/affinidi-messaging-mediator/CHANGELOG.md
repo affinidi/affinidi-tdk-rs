@@ -1,5 +1,29 @@
 # Affinidi Messaging Mediator
 
+## 9th August 2026 (0.18.10)
+
+**Tracks `trust-tasks-rs` 0.4.0 (was 0.2.46).** Dependency bump; no mediator
+code changed.
+
+The one observable difference: a Trust Task request that carries the new
+optional `parentThreadId` envelope member now has it echoed onto the response,
+because `respond_with` propagates it. Nothing sends it yet, and the member is
+omitted from the wire when unset, so a response to a request from an older
+client is byte-identical to 0.18.9's.
+
+The framework's other 0.3/0.4 changes do not reach this crate. Error responses
+moved to `trust-task-error/0.3` with an `inResponseTo` member — the mediator
+emits no Trust Task error documents (its failures travel as
+`affinidi-messaging-mediator-common`'s HTTP `ErrorResponse`), so that is inert
+here. Digest-carrying payload members became the `DigestMultibase` newtype; the
+only one this crate touches is `audit::list::v0_1::AuditEnvelope`'s
+`entryHash`/`prevHash`, which the messaging audit log leaves `None` — the log is
+not hash-chained.
+
+Requires `affinidi-messaging-sdk` 0.19.3. That crate's `trust_tasks()` surface
+is typed in `trust-tasks-rs`, so the two have to cross the version boundary
+together.
+
 ## 8th August 2026 (0.18.9)
 
 **DIDComm v1 mediation: coordinate-mediation 1.0 and message-pickup 2.0.**

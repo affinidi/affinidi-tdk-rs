@@ -1,5 +1,16 @@
 # Affinidi Messaging Test Mediator
 
+## 0.2.48 — 9th August 2026
+
+Tracks `trust-tasks-rs` 0.4.0 (was 0.2.46), alongside mediator 0.18.10 and SDK
+0.19.3. The `trust_tasks` e2e suite builds its request payloads from
+`trust_tasks_rs::specs::messaging::account` types, which are unchanged across
+the bump; no test changed.
+
+A downstream test crate that writes its own Trust Task assertions against this
+fixture has to move its own `trust-tasks-rs` requirement to `0.4` at the same
+time — the types are public across the SDK boundary.
+
 ## 0.2.47 — 8th August 2026
 
 Adds a `didcomm-v1` feature that spawns the mediator with DIDComm v1 support, a
