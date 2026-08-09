@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.19.3] - 2026-08-09
+
+### Changed
+
+- **Tracks `trust-tasks-rs` 0.4.0 (was 0.2.46). Source-breaking for a consumer
+  that also depends on `trust-tasks-rs` 0.2.x, despite the patch version.**
+  `atm.trust_tasks()` returns `trust_tasks_rs` types — `TrustTask<R>`,
+  `account::update::v0_1::MediatorAcl`, `audit::list::v0_1::Response` and the
+  rest — so `trust-tasks-rs` is a *public* dependency of this crate's API.
+  Crossing its leading version component changes those types' identity: a caller
+  still on 0.2.x gets `E0308` at the call site, not a deprecation warning.
+
+  It ships as a patch because it cannot ship as a minor. `vta-sdk` requires
+  `affinidi-messaging-sdk = "0.19"` and resolves it from the registry (it
+  deliberately keeps no `[patch.crates-io]`), and this workspace's own mediator
+  depends on `vta-sdk`. A 0.20 would therefore pull a *second*, registry copy of
+  this crate into the mediator's graph alongside the workspace one — the ADR
+  0003 trap. Update in lockstep instead: a consumer moves its own
+  `trust-tasks-rs` requirement to `0.4` in the same change that takes this
+  version.
+
+- Nothing in this crate is affected by the framework's own breaking changes.
+  `TrustTask` gained `parentThreadId` and `ErrorPayload` gained `inResponseTo`,
+  both of which only break struct-literal construction — this crate builds
+  documents through `TrustTask::for_payload` / `respond_with`. The digest-carrying
+  members that became the `DigestMultibase` newtype (`audit`, `chat`, `consent`,
+  `policy`, `task-consent`) are not constructed here. `decode_body` deserialises
+  whatever the mediator returns without asserting a Type URI, so an older peer's
+  documents still parse.
+
+- No wire-format change from this crate. `parentThreadId` is optional and
+  omitted when unset, so a request this SDK sends is byte-identical to 0.19.2's
+  unless the caller populates it.
+
 ## [0.19.2] - 2026-08-08
 
 Dependency-pin bump only; no API or behaviour change.

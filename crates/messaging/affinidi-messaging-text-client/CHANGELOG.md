@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.5] - 2026-08-09
+
+### Changed
+
+- Track `trust-tasks-rs` 0.4.0 (was 0.2.46) and `affinidi-messaging-sdk` 0.19.3.
+  The `MediatorAclAccessListMode` and `account` types this client reads are
+  unchanged across the bump; no code changed.
+
 ## [0.12.4] - 2026-06-01
 
 ### Changed

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.23] - 2026-08-09
+
+### Changed
+
+- Track `trust-tasks-rs` 0.4.0 (was 0.2.46) and `affinidi-messaging-sdk` 0.19.3.
+  This crate uses `trust_tasks_rs::specs::messaging::account` to register with a
+  mediator; those types are unchanged across the bump, so no code changed.
+
+  `trust-tasks-rs` is a public dependency of the SDK's `trust_tasks()` surface
+  and therefore of this crate's, so a consumer still on `trust-tasks-rs` 0.2.x
+  must move to `0.4` in the same change that takes this version. See the
+  `affinidi-messaging-sdk` 0.19.3 entry for why this is a patch rather than a
+  minor.
+
 ## [0.3.22] - 2026-07-30
 
 ### Changed
