@@ -1,5 +1,22 @@
 # Affinidi Messaging Test Mediator
 
+## 0.2.49 — 9th August 2026
+
+**Requires `affinidi-messaging-sdk` 0.19.3, not "0.19".** 0.2.48 shipped asking
+for `^0.19` while itself requiring `trust-tasks-rs` `^0.4.0` — a pair a resolver
+can satisfy with SDK 0.19.2 and a compiler cannot, because `trust-tasks-rs` is a
+public dependency of the SDK's `trust_tasks()` surface and 0.19.2 exposes it as
+0.2.x.
+
+This fixture's own library never touches `trust_tasks_rs`, so the published lib
+built either way. The break lands on a *consumer*: a downstream crate that
+writes Trust Task assertions against this fixture declares `trust-tasks-rs` 0.4
+itself, and if the graph resolves SDK 0.19.2 its `atm.trust_tasks()` returns
+0.2.x types. Naming the minimum SDK here makes that resolve fail cleanly rather
+than compile-fail in the consumer's test code.
+
+See the `affinidi-messaging-didcomm-service` 0.3.24 entry for the full shape.
+
 ## 0.2.48 — 9th August 2026
 
 Tracks `trust-tasks-rs` 0.4.0 (was 0.2.46), alongside mediator 0.18.10 and SDK
