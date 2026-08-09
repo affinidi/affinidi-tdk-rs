@@ -1,5 +1,20 @@
 # Affinidi Messaging Mediator
 
+## 9th August 2026 (0.18.11)
+
+**Requires `affinidi-messaging-sdk` 0.19.3, not "0.19".** Preventive, not a fix:
+unlike `affinidi-messaging-didcomm-service` 0.3.24, no `trust-tasks-rs` type
+crosses this crate's SDK boundary today — it uses the SDK for `compat`
+metadata, message wrapping and Discover-Features only, and serves Trust Tasks
+through its own handlers. 0.18.10 therefore built correctly against either SDK.
+
+The requirement is tightened anyway so the invariant holds without anyone having
+to remember it: **a crate that declares both `trust-tasks-rs` and
+`affinidi-messaging-sdk` names the SDK version whose public `trust_tasks()`
+types match its own `trust-tasks-rs`.** The moment a trust-tasks type does cross
+that boundary here, the correct requirement is already in place rather than
+discovered by a downstream `E0308`.
+
 ## 9th August 2026 (0.18.10)
 
 **Tracks `trust-tasks-rs` 0.4.0 (was 0.2.46).** Dependency bump; no mediator

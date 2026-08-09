@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.24] - 2026-08-09
+
+### Fixed
+
+- **Require `affinidi-messaging-sdk` 0.19.3, not "0.19".** 0.3.23 shipped asking
+  for `^0.19` while itself requiring `trust-tasks-rs` `^0.4.0`. Those two are
+  mutually satisfiable by a resolver and mutually incompatible at compile time:
+  `trust-tasks-rs` is a public dependency of the SDK's `trust_tasks()` surface,
+  and 0.19.2 exposes it as 0.2.x. This crate hands
+  `trust_tasks_rs::specs::messaging::account` types to `atm.trust_tasks()`, so
+  the pair 0.19.2 + 0.4.0 fails with `E0308`.
+
+  A fresh resolve picks 0.19.3 and compiles — which is why publishing 0.3.23
+  succeeded — but a consumer with an existing lockfile pinning 0.19.2, or one
+  passing `--precise 0.19.2`, gets the mismatch. The packaged manifest now names
+  the minimum SDK carrying the matching `trust-tasks-rs`, so a stale one is
+  rejected at resolve time instead of at compile time.
+
+  Same failure mode as `affinidi-messaging-didcomm-v1` 0.1.0's
+  `affinidi-messaging-core` requirement (#688).
+
 ## [0.3.23] - 2026-08-09
 
 ### Changed
