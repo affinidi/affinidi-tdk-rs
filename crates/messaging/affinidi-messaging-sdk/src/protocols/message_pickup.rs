@@ -304,14 +304,24 @@ impl MessagePickup {
 
             let (tx, rx) = tokio::sync::oneshot::channel();
             // Send the next request to the profile websocket
-            let Some(ws_channel) = &*mediator.ws_channel_tx.read().await else {
-                warn!(
-                    "WebSocket channel not set for profile {}",
-                    profile.inner.alias
-                );
-                return Err(ATMError::ProfileError(
-                    "No WebSocket channel set for profile".into(),
-                ));
+            // Clone the sender, then drop the read guard *before* the wait
+            // below. `stop_websocket` takes the WRITE lock on this same
+            // `ws_channel_tx`, so a guard held across the wait blocks every
+            // shutdown until the poll window elapses — and with `wait: None`
+            // that window is `Duration::MAX`, i.e. forever. The sender is an
+            // `mpsc::Sender`, so a clone is cheap and carries no borrow.
+            let ws_channel = {
+                let guard = mediator.ws_channel_tx.read().await;
+                let Some(ws_channel) = guard.as_ref() else {
+                    warn!(
+                        "WebSocket channel not set for profile {}",
+                        profile.inner.alias
+                    );
+                    return Err(ATMError::ProfileError(
+                        "No WebSocket channel set for profile".into(),
+                    ));
+                };
+                ws_channel.clone()
             };
 
             let tx_uuid = mediator.get_tx_uuid();
@@ -413,14 +423,24 @@ impl MessagePickup {
             };
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let Some(ws_channel) = &*mediator.ws_channel_tx.read().await else {
-                warn!(
-                    "WebSocket channel not set for profile {}",
-                    profile.inner.alias
-                );
-                return Err(ATMError::ProfileError(
-                    "No WebSocket channel set for profile".into(),
-                ));
+            // Clone the sender, then drop the read guard *before* the wait
+            // below. `stop_websocket` takes the WRITE lock on this same
+            // `ws_channel_tx`, so a guard held across the wait blocks every
+            // shutdown until the poll window elapses — and with `wait: None`
+            // that window is `Duration::MAX`, i.e. forever. The sender is an
+            // `mpsc::Sender`, so a clone is cheap and carries no borrow.
+            let ws_channel = {
+                let guard = mediator.ws_channel_tx.read().await;
+                let Some(ws_channel) = guard.as_ref() else {
+                    warn!(
+                        "WebSocket channel not set for profile {}",
+                        profile.inner.alias
+                    );
+                    return Err(ATMError::ProfileError(
+                        "No WebSocket channel set for profile".into(),
+                    ));
+                };
+                ws_channel.clone()
             };
 
             let tx_uuid = mediator.get_tx_uuid();
@@ -514,14 +534,24 @@ impl MessagePickup {
 
             let (tx, rx) = tokio::sync::oneshot::channel();
             // Send the next request to the profile websocket
-            let Some(ws_channel) = &*mediator.ws_channel_tx.read().await else {
-                warn!(
-                    "WebSocket channel not set for profile {}",
-                    profile.inner.alias
-                );
-                return Err(ATMError::ProfileError(
-                    "No WebSocket channel set for profile".into(),
-                ));
+            // Clone the sender, then drop the read guard *before* the wait
+            // below. `stop_websocket` takes the WRITE lock on this same
+            // `ws_channel_tx`, so a guard held across the wait blocks every
+            // shutdown until the poll window elapses — and with `wait: None`
+            // that window is `Duration::MAX`, i.e. forever. The sender is an
+            // `mpsc::Sender`, so a clone is cheap and carries no borrow.
+            let ws_channel = {
+                let guard = mediator.ws_channel_tx.read().await;
+                let Some(ws_channel) = guard.as_ref() else {
+                    warn!(
+                        "WebSocket channel not set for profile {}",
+                        profile.inner.alias
+                    );
+                    return Err(ATMError::ProfileError(
+                        "No WebSocket channel set for profile".into(),
+                    ));
+                };
+                ws_channel.clone()
             };
 
             // Send the get request to the ws_handler
@@ -1122,14 +1152,24 @@ impl MessagePickup {
 
             let (tx, rx) = tokio::sync::oneshot::channel();
             // Send the next request to the profile websocket
-            let Some(ws_channel) = &*mediator.ws_channel_tx.read().await else {
-                warn!(
-                    "WebSocket channel not set for profile {}",
-                    profile.inner.alias
-                );
-                return Err(ATMError::ProfileError(
-                    "No WebSocket channel set for profile".into(),
-                ));
+            // Clone the sender, then drop the read guard *before* the wait
+            // below. `stop_websocket` takes the WRITE lock on this same
+            // `ws_channel_tx`, so a guard held across the wait blocks every
+            // shutdown until the poll window elapses — and with `wait: None`
+            // that window is `Duration::MAX`, i.e. forever. The sender is an
+            // `mpsc::Sender`, so a clone is cheap and carries no borrow.
+            let ws_channel = {
+                let guard = mediator.ws_channel_tx.read().await;
+                let Some(ws_channel) = guard.as_ref() else {
+                    warn!(
+                        "WebSocket channel not set for profile {}",
+                        profile.inner.alias
+                    );
+                    return Err(ATMError::ProfileError(
+                        "No WebSocket channel set for profile".into(),
+                    ));
+                };
+                ws_channel.clone()
             };
 
             let tx_uuid = mediator.get_tx_uuid();

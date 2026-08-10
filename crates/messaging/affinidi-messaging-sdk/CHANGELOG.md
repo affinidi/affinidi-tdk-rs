@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.19.4] - 2026-08-10
+
+### Fixed
+
+- **A poll in flight no longer blocks `stop_websocket`, so shutdown is prompt.**
+  The four `live_stream_next*` entry points in `message_pickup` took a **read**
+  guard on `Mediator::ws_channel_tx` to get the command sender and then held it
+  across the wait for a frame. `stop_websocket` takes the **write** guard on that
+  same lock, so any teardown with a poll parked had to wait the poll out.
+
+  For the delivery layer that is `INBOUND_POLL_WAIT`, 10 seconds — its inbound
+  pump issues a read-ahead after every frame, so a consumer whose work finished
+  mid-window paid the remainder on exit. A CLI felt this as a fixed pause after
+  every command: the result printed, then up to 10s of nothing before the process
+  left. For a `wait: None` caller it was worse — that sleep is `Duration::MAX`,
+  so the read guard was held until a frame arrived, and a shutdown could block
+  indefinitely.
+
+  The sender is now cloned out and the guard dropped before the wait. `mpsc::Sender`
+  is `Clone`, so this costs nothing and the poll behaves identically; only the
+  lock is released earlier. No API change.
+
+  Covered by `profiles::tests::a_poll_in_flight_does_not_block_stop_websocket`,
+  which parks a 120s poll and asserts `stop_websocket` still returns within 2s.
+
 ## [0.19.3] - 2026-08-09
 
 ### Changed

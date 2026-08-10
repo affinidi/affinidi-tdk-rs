@@ -717,6 +717,83 @@ mod tests {
         atm.graceful_shutdown().await;
     }
 
+    /// A poll in flight must not block `stop_websocket`.
+    ///
+    /// `live_stream_next*` takes a **read** guard on `ws_channel_tx` to get the
+    /// command sender, then waits for a frame. `stop_websocket` takes the
+    /// **write** guard on the same lock. If the read guard is held across the
+    /// wait, every shutdown blocks until the poll window elapses — 10s for the
+    /// delivery layer's `INBOUND_POLL_WAIT`, and *forever* for a `wait: None`
+    /// caller, whose sleep is `Duration::MAX`.
+    ///
+    /// This is what made every `pnm` command sit for ~10s after printing its
+    /// result: the command finished mid-window, the inbound pump had just
+    /// issued its next read-ahead, and teardown waited the poll out.
+    ///
+    /// The fix clones the sender and drops the guard before waiting, so this
+    /// test's `stop_websocket` returns promptly while the poll is still parked.
+    #[tokio::test]
+    async fn a_poll_in_flight_does_not_block_stop_websocket() {
+        let tdk_cfg = TDKConfig::headless().expect("headless tdk config");
+        let tdk = Arc::new(
+            TDKSharedState::new(tdk_cfg)
+                .await
+                .expect("tdk shared state"),
+        );
+        let atm_cfg = ATMConfig::builder().build().expect("atm config");
+        let atm = ATM::new(atm_cfg, tdk).await.expect("atm");
+
+        let profile = fake_profile();
+        let mediator = mediator_of(&profile);
+
+        // A stand-in for the websocket task: we keep the receiver so the
+        // channel stays open and the poll parks on its `rx` exactly as it
+        // would against a real socket that has nothing to deliver.
+        let (tx, mut rx) = mpsc::channel::<WebSocketCommands>(8);
+        mediator.ws_channel_tx.write().await.replace(tx);
+
+        // Park a poll with a wait far longer than this test's patience. Without
+        // the fix it holds the read guard for all of it.
+        let poll_profile = profile.clone();
+        let poll_atm = atm.clone();
+        let poll = tokio::spawn(async move {
+            poll_atm
+                .message_pickup()
+                .live_stream_next_frame(&poll_profile, Some(Duration::from_secs(120)), false)
+                .await
+        });
+
+        // Wait until the poll has actually sent its `Next` — only then is it
+        // parked on the wait, which is the state under test. Asserting on the
+        // command also proves we are exercising the real path, not a poll that
+        // bailed out early on a missing channel.
+        let cmd = timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the poll should send its Next command promptly")
+            .expect("channel open");
+        assert!(
+            matches!(cmd, WebSocketCommands::Next(..)),
+            "expected the poll to request the next frame"
+        );
+
+        // The property: shutdown is not held hostage by that parked poll.
+        timeout(Duration::from_secs(2), profile.stop_websocket())
+            .await
+            .expect(
+                "stop_websocket blocked behind an in-flight poll — the read guard \
+                 is being held across the wait again",
+            )
+            .expect("stop_websocket should succeed");
+
+        assert!(
+            mediator.ws_channel_tx.read().await.is_none(),
+            "the sender slot must be cleared by stop_websocket",
+        );
+
+        poll.abort();
+        atm.graceful_shutdown().await;
+    }
+
     /// The connection-state signal is `None` until a transport runs, then is
     /// exposed via `ATMProfile::connection_state()` starting at `Connecting`.
     #[tokio::test]
