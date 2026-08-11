@@ -596,13 +596,24 @@ impl WebSocketTransport {
         // self-describing (CESR qb64), so sniff it and deliver TSP frames packed
         // — the consumer unpacks them via `atm.tsp()`. Without this a TSP frame
         // would fail the DIDComm `unpack` below and be silently dropped.
-        #[cfg(feature = "tsp")]
-        let force_packed = atm.tsp().is_tsp(&message);
-        #[cfg(not(feature = "tsp"))]
-        let force_packed = false;
-
+        //
+        // Classification is **not** gated on the `tsp` feature, and that is
+        // load-bearing. It used to be, which meant a build without the feature
+        // did not merely fail to handle a TSP frame — it failed to *recognise*
+        // one, sent it to the DIDComm unpacker, and surfaced the whole thing as
+        // `Cannot parse message as JSON ... invalid number at line 1 column 2`
+        // (CESR qb64 opens with `-`). That named neither TSP nor the missing
+        // feature, and it short-circuited the two `cfg(not(feature = "tsp"))`
+        // warnings written for this exact case: both sit *downstream* of
+        // classification, so gating classification made them unreachable.
+        //
+        // Recognising a frame needs one byte; only unpacking needs the TSP
+        // stack. Every consumer path already handles a packed frame it did not
+        // ask for — the DIDComm-only streams warn by name and delete it (no
+        // redelivery loop), and `transport_adapter::tsp_to_inbound`'s non-`tsp`
+        // arm now actually runs and says what arrived and why it can't be read.
         // If skip_unpack_messages is true, send the packed message directly
-        if self.skip_unpack_messages || force_packed {
+        if deliver_packed(self.skip_unpack_messages, &message) {
             // A packed frame has exactly three possible homes, tried in order:
             // an outstanding `Next` request, the direct channel, or the packed
             // cache. It must reach one of them — every arm that gives up on the
@@ -993,9 +1004,53 @@ fn refresh_after_secs(ttl_secs: u64) -> u64 {
     (ttl_secs * 4) / 5
 }
 
+/// Should this inbound frame be delivered **packed** rather than DIDComm-
+/// unpacked?
+///
+/// Two reasons to skip the unpacker: the consumer asked for packed frames
+/// (`skip_unpack`), or the frame is TSP and the unpacker would only mangle it.
+///
+/// A free function purely so the decision is testable in *both* feature
+/// configurations — see [`tests::a_tsp_frame_is_delivered_packed_in_every_build`].
+/// The TSP half must never be gated on the `tsp` feature: gating it is precisely
+/// the defect this replaced, where an unrecognised TSP frame reached
+/// `atm.unpack` and surfaced as `Cannot parse message as JSON`.
+fn deliver_packed(skip_unpack: bool, message: &str) -> bool {
+    skip_unpack || crate::tsp_wire::looks_like_tsp(message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The regression guard for the gating defect. This test compiles and runs
+    /// in **every** feature configuration, so re-introducing a
+    /// `#[cfg(feature = "tsp")]` around the TSP classification fails the default
+    /// build rather than silently restoring the silent-drop behaviour.
+    #[test]
+    fn a_tsp_frame_is_delivered_packed_in_every_build() {
+        use base64::prelude::*;
+        let tsp = BASE64_URL_SAFE_NO_PAD.encode([crate::tsp_wire::TSP_MAGIC_BYTE, 0x41, 0x42]);
+
+        assert!(
+            deliver_packed(false, &tsp),
+            "a TSP frame must bypass the DIDComm unpacker even when the consumer did not ask \
+             for packed frames, and even in a build without the `tsp` feature — otherwise it \
+             dies in serde_json as `invalid number at line 1 column 2`"
+        );
+    }
+
+    /// The other direction: DIDComm still goes to the unpacker unless the
+    /// consumer opted out. A classifier that over-claimed would divert real
+    /// DIDComm traffic into the packed path — a worse failure than the one fixed.
+    #[test]
+    fn didcomm_still_goes_to_the_unpacker() {
+        let didcomm =
+            r#"{"protected":"eyJ0eXAiOiJhcHBsaWNhdGlvbi9kaWRjb21tLWVuY3J5cHRlZCtqc29uIn0"}"#;
+        assert!(!deliver_packed(false, didcomm));
+        // ...unless the consumer explicitly wants packed frames.
+        assert!(deliver_packed(true, didcomm));
+    }
 
     #[test]
     fn a_long_lived_connection_earns_an_immediate_retry() {
