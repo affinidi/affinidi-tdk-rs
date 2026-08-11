@@ -949,6 +949,35 @@ impl MessagePickup {
                         }
                     };
 
+                    // Name a TSP frame before it reaches the DIDComm unpacker.
+                    // This is the DIDComm-only pickup path, so a TSP frame here
+                    // cannot be delivered either way — but "this is TSP and this
+                    // stream doesn't carry TSP" is a diagnosis, where the unpack
+                    // failure below is `Cannot parse message as JSON ... invalid
+                    // number at line 1 column 2` (CESR qb64 opens with `-`),
+                    // which names nothing an operator can act on. Purged like
+                    // any other undeliverable attachment so the mediator stops
+                    // redelivering it every pickup cycle.
+                    if crate::tsp_wire::looks_like_tsp(&decoded) {
+                        warn!(
+                            "Undeliverable attachment: a TSP frame arrived on a DIDComm-only \
+                             pickup stream; purging. id({:?}). The frame is not corrupt — either \
+                             this build lacks the `tsp` feature, or this consumer is using the \
+                             DIDComm-only pickup path (use `live_stream_next_frame` to \
+                             multiplex TSP + DIDComm).",
+                            attachment.id
+                        );
+                        report_and_delete(
+                            atm,
+                            profile,
+                            &attachment.id,
+                            decoded.clone(),
+                            "TSP frame received on a DIDComm-only pickup stream".to_string(),
+                        )
+                        .await;
+                        continue;
+                    }
+
                     match atm
                         .inner
                         .unpack_with(&decoded, atm.inner.config.unpack_policy())

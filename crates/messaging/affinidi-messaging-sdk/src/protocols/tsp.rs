@@ -438,11 +438,14 @@ impl TspOps<'_> {
     /// Whether a fetched/stored message is a TSP message (base64url-decode +
     /// magic-byte check). DIDComm JSON / compact JWS is not valid base64url of a
     /// TSP message, so it returns `false`.
+    ///
+    /// Delegates to [`crate::tsp_wire::looks_like_tsp`], which is available in
+    /// every build. Classification deliberately does not live behind the `tsp`
+    /// feature — see that module for why — and having one implementation is
+    /// what keeps the gated and ungated answers from disagreeing about the same
+    /// frame.
     pub fn is_tsp(&self, stored: &str) -> bool {
-        BASE64_URL_SAFE_NO_PAD
-            .decode(stored.as_bytes())
-            .map(|bytes| affinidi_tsp::is_tsp(&bytes))
-            .unwrap_or(false)
+        crate::tsp_wire::looks_like_tsp(stored)
     }
 
     /// Decode a stored TSP message (`base64url(qb2)`) back to its raw qb2 bytes.

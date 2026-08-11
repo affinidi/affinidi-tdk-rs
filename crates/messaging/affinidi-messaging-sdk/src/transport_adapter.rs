@@ -244,11 +244,30 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
 
 /// Fallback when the `tsp` feature is off: an inbound TSP frame can't be
 /// unpacked (no `atm.tsp()`), so it is skipped rather than dropping the whole
-/// stream. A DIDComm-only build never advertises TSP, so this is unreachable in
-/// practice.
+/// stream.
+///
+/// **Reachable, and reached in production.** This used to carry the note "a
+/// DIDComm-only build never advertises TSP, so this is unreachable in
+/// practice" — but a build does not control what its operator's DID document
+/// advertises. One advertised `#tsp` against a binary compiled without the
+/// feature, and because frame *classification* was gated on that same feature,
+/// the frame never got here: it went to the DIDComm unpacker and surfaced as a
+/// JSON parse error naming nothing relevant. Classification is unconditional
+/// now (see [`crate::tsp_wire`]), so this arm runs and can say what happened.
+///
+/// The message names the transport, why this build cannot read it, and both
+/// remedies — a rejection an operator can act on, rather than one that reads
+/// like a corrupt message.
 #[cfg(not(feature = "tsp"))]
-async fn tsp_to_inbound(_atm: &ATM, _profile: &Arc<ATMProfile>, _packed: &str) -> Option<Inbound> {
-    tracing::warn!("received an inbound TSP frame but the `tsp` feature is disabled — skipping it");
+async fn tsp_to_inbound(_atm: &ATM, _profile: &Arc<ATMProfile>, packed: &str) -> Option<Inbound> {
+    tracing::error!(
+        bytes = packed.len(),
+        "received a well-formed inbound TSP frame, but this build of \
+         affinidi-messaging-sdk was compiled without the `tsp` feature and cannot unpack it — \
+         dropping. The frame is not corrupt; this binary simply has no TSP support. Either \
+         rebuild with `--features tsp`, or stop advertising a `TSPTransport` service in this \
+         DID's document so senders fall back to a transport this build serves."
+    );
     None
 }
 

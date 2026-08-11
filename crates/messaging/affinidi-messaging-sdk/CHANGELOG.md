@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.19.5] - 2026-08-11
+
+### Fixed
+
+- **A TSP frame now names itself in a build without the `tsp` feature, instead
+  of surfacing as a JSON parse error.** Recognising a TSP frame and processing
+  one are different jobs, but classification lived behind the `tsp` feature
+  alongside the machinery. A build without it therefore did not merely fail to
+  *handle* a TSP frame — it failed to *recognise* one, handed the CESR bytes to
+  the DIDComm unpacker, and reported
+
+  ```text
+  Error unpacking message: DidcommError("Cannot parse message as JSON",
+  "invalid number at line 1 column 2")
+  ```
+
+  CESR qb64 opens with `-`, which `serde_json` reads as the start of a number,
+  hence the column-2 failure. Nothing in that message names TSP, names the
+  missing feature, or suggests the frame was well-formed and simply unreadable
+  by this build.
+
+  This was found downstream: a VTC advertising `#tsp` in its DID document, built
+  without the feature, accepted every community join and recorded none. Senders
+  saw success — the frames were delivered, just never decoded.
+
+  Two `#[cfg(not(feature = "tsp"))]` warnings written for exactly this case could
+  never fire, because both sit *downstream* of classification —
+  `transport_adapter::tsp_to_inbound`'s fallback is reached only after a frame
+  has been tagged TSP, which was the gated step. Its doc comment read "a
+  DIDComm-only build never advertises TSP, so this is unreachable in practice";
+  a build does not control what its operator's DID document advertises.
+
+  Classification now lives in the new `tsp_wire` module and is compiled into
+  **every** build — it inspects one leading byte and needs no TSP machinery.
+  Unpacking still requires the feature; the difference is that a build lacking
+  it now says so by name. Three paths improve:
+
+  - the live websocket transport tags the frame as packed rather than feeding it
+    to the DIDComm unpacker;
+  - `transport_adapter::tsp_to_inbound`'s non-`tsp` arm is now reachable and
+    logs at ERROR, naming the transport, why this build cannot read it, and both
+    remedies (rebuild with `--features tsp`, or stop advertising `TSPTransport`);
+  - the DIDComm-only pickup path (`_handle_delivery`) identifies a TSP
+    attachment and purges it as undeliverable-by-name, rather than as a failed
+    DIDComm unpack.
+
+  No behaviour change for a build **with** `tsp`: classification is byte-for-byte
+  the same test, and `TspOps::is_tsp` now delegates to the shared implementation
+  so the gated and ungated answers cannot disagree. `tsp_wire::TSP_MAGIC_BYTE`
+  is pinned to `affinidi_tsp::TSP_MAGIC_BYTE` by a test that compiles under the
+  feature, and a second test asserts the two classifiers agree on real frames, so
+  the copy cannot drift.
+
+  The regression guard is
+  `transports::websockets::websocket::tests::a_tsp_frame_is_delivered_packed_in_every_build`,
+  which compiles in **every** feature configuration. Re-introducing a
+  `#[cfg(feature = "tsp")]` around the classification fails the default build —
+  verified by mutation. Notably, that same mutation still *passes* with `tsp`
+  enabled, which is exactly how the original defect survived: every TSP-focused
+  test run has the feature on, so no existing test could have caught it.
+
+### Added
+
+- `tsp_wire::{looks_like_tsp, TSP_MAGIC_BYTE}`, re-exported at the crate root.
+  Lets any consumer — including one built without `tsp` — tell a TSP frame from
+  a DIDComm one without pulling in the TSP stack.
+
 ## [0.19.4] - 2026-08-10
 
 ### Fixed

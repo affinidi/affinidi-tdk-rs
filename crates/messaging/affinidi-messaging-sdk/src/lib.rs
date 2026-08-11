@@ -226,8 +226,10 @@ pub mod protocols;
 pub mod public;
 pub mod transport_adapter;
 pub mod transports;
+pub mod tsp_wire;
 
 pub use transport_adapter::DidCommTransport;
+pub use tsp_wire::{TSP_MAGIC_BYTE, looks_like_tsp};
 
 #[derive(Clone)]
 pub struct ATM {
