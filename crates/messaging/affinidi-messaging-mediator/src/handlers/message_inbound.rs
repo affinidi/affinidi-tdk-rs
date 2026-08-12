@@ -89,6 +89,37 @@ pub async fn message_inbound_handler(
             .into());
         }
 
+        // Recognising a TSP frame and processing one are different jobs (see
+        // `affinidi_messaging_sdk::tsp_wire`): processing needs the whole TSP
+        // stack, recognising needs one byte. So the *classification* below is
+        // unconditional and only the handling is gated — a build without the
+        // feature can still say what it received.
+        //
+        // Without this arm, a CESR frame fell through to the DIDComm JSON parse
+        // and came back as `w.m.message.deserialize` / "expected value at line 1
+        // column 1". That answer names DIDComm, never TSP, and never the missing
+        // feature; it reads as a malformed message from a broken client. It cost
+        // a downstream deployment an hour, chasing a *different* mediator —
+        // because a TSP send posts to the sender's own mediator while the error
+        // the client surfaces names the recipient's advertised one.
+        #[cfg(not(feature = "tsp"))]
+        if affinidi_messaging_sdk::looks_like_tsp_bytes(&body) {
+            return Err(MediatorError::problem(
+                37,
+                session.session_id,
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Message,
+                "message.tsp.unsupported",
+                "This is a well-formed TSP message, but this mediator was built \
+                 without TSP support (cargo feature `tsp`). Rebuild it with \
+                 `--features didcomm,tsp` to accept TSP traffic.",
+                vec![],
+                StatusCode::BAD_REQUEST,
+            )
+            .into());
+        }
+
         // Protocol sniff: a TSP message leads with the CESR `-E` magic byte
         // (0xF8); a DIDComm JWE/JWS is JSON (`{` / `ey…`). Only compiled into a
         // dual didcomm+tsp build. DIDComm bytes fall through to the unchanged path.

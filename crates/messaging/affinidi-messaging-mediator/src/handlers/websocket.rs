@@ -632,6 +632,24 @@ async fn handle_socket(
                                         continue;
                                     }
 
+                                    // Same classification without the feature, for the
+                                    // same reason as `message_inbound`: a TSP frame here
+                                    // would otherwise fail `String::from_utf8` below and
+                                    // be logged as an unprocessable binary frame, which
+                                    // says nothing about TSP and nothing about why. The
+                                    // frame is still dropped — decoding it genuinely
+                                    // needs the feature — but it is now dropped by name.
+                                    #[cfg(not(feature = "tsp"))]
+                                    if affinidi_messaging_sdk::looks_like_tsp_bytes(&msg) {
+                                        warn!(
+                                            "Dropping a TSP frame from {}: this mediator was built without \
+                                             TSP support (cargo feature `tsp`). Rebuild with \
+                                             `--features didcomm,tsp` to accept TSP traffic.",
+                                            session.did_hash
+                                        );
+                                        continue;
+                                    }
+
                                     let msg = match String::from_utf8(msg.into()) {
                                         Ok(msg) => msg,
                                         Err(e) => {
