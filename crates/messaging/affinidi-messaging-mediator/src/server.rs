@@ -503,6 +503,7 @@ pub async fn serve_internal(
     // secret means the mediator silently fails to decrypt its own inbound
     // DIDComm). Only spawned for VTA-linked deployments. `run` honours the
     // shutdown token itself; the supervisor's abort is a backstop.
+    #[cfg(feature = "vta")]
     if let Some(refresher) = config.vta_refresher.clone() {
         let refresh_token = shutdown_token.clone();
         supervisor.spawn("vta_refresh", true, move || {

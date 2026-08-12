@@ -3,7 +3,9 @@ pub mod limits;
 pub mod processors;
 pub mod security;
 pub mod validate;
+#[cfg(feature = "vta")]
 pub(crate) mod vta_bootstrap;
+#[cfg(feature = "vta")]
 pub mod vta_cache;
 
 pub use limits::*;
@@ -37,6 +39,7 @@ use async_convert::{TryFrom, async_trait};
 #[cfg(feature = "aws")]
 use aws_config::{self, BehaviorVersion, Region};
 use didwebvh_rs::log_entry::{LogEntry, LogEntryMethods};
+#[cfg(feature = "vta")]
 use vta_sdk::credentials::CredentialBundle;
 
 /// AWS SDK configuration type — conditionally compiled.
@@ -51,6 +54,7 @@ use sha256::digest;
 use std::{collections::HashMap, env, fmt, sync::Arc};
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
+#[cfg(feature = "vta")]
 use vta_sdk::integration::{
     self, SecretSource, TransportPreference, VtaIntegrationError, VtaServiceConfig,
 };
@@ -98,6 +102,7 @@ fn database_config_from_raw(
 }
 
 /// Default VTA cache TTL when `[secrets].cache_ttl` is not set.
+#[cfg(feature = "vta")]
 const DEFAULT_CACHE_TTL_SECS: u64 = 30 * 86_400; // 30 days
 
 /// Typed `[didcomm_v1]` settings. See
@@ -203,6 +208,7 @@ pub struct Config {
     /// VTA-linked deployments. The task itself is spawned by
     /// [`crate::server::serve_internal`] alongside the other
     /// background workers, gated on this field being `Some`.
+    #[cfg(feature = "vta")]
     #[serde(skip)]
     pub vta_refresher: Option<crate::tasks::vta_refresh::VtaRefresher>,
 }
@@ -279,6 +285,7 @@ impl Config {
             operating_keys_loaded: false,
             storage: None,
             didcomm_v1: DidCommV1Config::default(),
+            #[cfg(feature = "vta")]
             vta_refresher: None,
             security: SecurityConfig::default(secrets_resolver),
             processors: ProcessorsConfig {
@@ -304,6 +311,7 @@ impl Config {
 /// seed the cache (or the cache was wiped). Spell out both remediation
 /// paths so the operator doesn't have to read the SDK source to figure
 /// out which one applies.
+#[cfg(feature = "vta")]
 fn vta_startup_error(context: &str, err: VtaIntegrationError) -> MediatorError {
     let detail = match &err {
         VtaIntegrationError::NoCachedSecrets => format!(
@@ -355,6 +363,7 @@ fn vta_startup_error(context: &str, err: VtaIntegrationError) -> MediatorError {
 /// write to stderr (not via `tracing`) so the message survives any
 /// `RUST_LOG` filter — the operator needs this regardless of log
 /// configuration when the process is about to exit.
+#[cfg(feature = "vta")]
 fn print_vta_recovery_playbook(context: &str) {
     eprintln!(
         "
@@ -512,6 +521,12 @@ impl TryFrom<ConfigRaw> for Config {
         // If the backend has an admin credential, we're in VTA mode:
         // authenticate, fetch fresh operating keys, cache them, fall back
         // to the cached copy if the VTA is unreachable.
+        //
+        // Not read at all without the `vta` feature — and not loaded either,
+        // rather than loaded and discarded: the credential is the input to
+        // the branch below, so a build that cannot take that branch has no
+        // reason to touch the backend for it.
+        #[cfg(feature = "vta")]
         let admin_cred = mediator_secrets
             .load_admin_credential()
             .await
@@ -527,6 +542,7 @@ impl TryFrom<ConfigRaw> for Config {
         // Self-hosted admin credentials (stored so subsequent wizard
         // runs can recover the private key) have `vta_did` / `vta_url`
         // unset; the mediator skips VTA integration for those.
+        #[cfg(feature = "vta")]
         let vta_startup = if let Some(admin) = admin_cred.as_ref().filter(|a| a.is_vta_linked()) {
             let credential = CredentialBundle {
                 did: admin.did.clone(),
@@ -666,10 +682,36 @@ impl TryFrom<ConfigRaw> for Config {
             None
         };
 
+        // ── Project the startup result into mediator-local values ────────
+        //
+        // Everything below this point reads these two rather than the SDK's
+        // `StartupResult`, so it compiles identically with or without the
+        // `vta` feature and needs no `cfg` of its own. Without the feature
+        // there is no key authority, and every consumer takes the
+        // self-hosted branch it already had.
+        #[cfg(feature = "vta")]
+        let authority_did: Option<String> = vta_startup.as_ref().map(|(r, _)| r.did.clone());
+        #[cfg(not(feature = "vta"))]
+        let authority_did: Option<String> = None;
+
+        #[cfg(feature = "vta")]
+        let operating_secrets: Option<Vec<OperatingSecret>> = vta_startup.as_ref().map(|(r, _)| {
+            r.bundle
+                .secrets
+                .iter()
+                .map(|entry| OperatingSecret {
+                    key_id: entry.key_id.clone(),
+                    private_key_multibase: entry.private_key_multibase.clone(),
+                })
+                .collect()
+        });
+        #[cfg(not(feature = "vta"))]
+        let operating_secrets: Option<Vec<OperatingSecret>> = None;
+
         // Resolve mediator DID — from VTA startup result (if VTA mode)
         // or the mediator.toml `mediator_did` field (self-hosted mode).
-        let mediator_did = if let Some((ref result, _)) = vta_startup {
-            result.did.clone()
+        let mediator_did = if let Some(did) = &authority_did {
+            did.clone()
         } else {
             read_did_config(&raw.mediator_did, &aws_config, "mediator_did").await?
         };
@@ -719,7 +761,7 @@ impl TryFrom<ConfigRaw> for Config {
                 .convert(
                     secrets_resolver.clone(),
                     &mediator_secrets,
-                    vta_startup.as_ref().map(|(r, _)| &r.bundle),
+                    operating_secrets.as_deref(),
                 )
                 .await?,
             processors: ProcessorsConfig {
@@ -749,7 +791,7 @@ impl TryFrom<ConfigRaw> for Config {
             // we get here, so we can ask the backend directly: if the
             // entry is present we loaded it; otherwise the VTA bundle
             // (when present) supplied them.
-            operating_keys_loaded: vta_startup.is_some()
+            operating_keys_loaded: authority_did.is_some()
                 || mediator_secrets
                     .load_entry::<Vec<affinidi_secrets_resolver::secrets::Secret>>(
                         affinidi_messaging_mediator_common::OPERATING_SECRETS,
@@ -762,6 +804,7 @@ impl TryFrom<ConfigRaw> for Config {
             // VTA-linked deployments get a periodic refresh task; built
             // alongside the StartupResult above so the service config
             // and TTL parsing aren't re-derived here.
+            #[cfg(feature = "vta")]
             vta_refresher: vta_startup.as_ref().map(|(_, refresher)| refresher.clone()),
             ..Config::default(secrets_resolver)
         };

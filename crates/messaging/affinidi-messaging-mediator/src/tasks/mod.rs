@@ -7,5 +7,7 @@
 pub use affinidi_messaging_mediator_common::tasks::forwarding as forwarding_processor;
 pub mod statistics;
 pub mod supervisor;
+/// Periodic refresh of VTA-supplied operating secrets. Requires `vta`.
+#[cfg(feature = "vta")]
 pub mod vta_refresh;
 pub mod websocket_streaming;
