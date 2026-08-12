@@ -1,5 +1,83 @@
 # Affinidi Messaging Mediator
 
+## 12th August 2026 (0.18.13)
+
+**`vta-sdk` is now optional, behind a default-on `vta` feature.** Nothing
+changes for the mediator binary or for anyone building this crate with default
+features.
+
+A patch bump, following the precedent this repo set in
+affinidi/affinidi-tdk-rs#674 (`feat!: … gate the legacy ssi-backed DID
+methods`), which put `did:ethr` / `did:pkh` behind off-by-default features and
+released `affinidi-did-resolver-cache-sdk` 0.8.21 → 0.8.22. Same shape here:
+the only consumers who lose anything are those already building with
+`default-features = false`, who now add `vta` to get `tasks::vta_refresh` and
+`commands::rotate_admin` back. The `!` on the commit marks that; the version
+follows the repo's convention rather than contradicting it.
+
+Keeping it a patch also means `affinidi-messaging-test-mediator` needs no
+release at all: its existing `affinidi-messaging-mediator = "0.18"` requirement
+resolves straight to this version, so the already-published 0.2.49 drops
+`vta-sdk` the moment a consumer updates.
+
+0.18.12, released hours earlier, widened the `vta-sdk` requirement so VTI's
+`[patch.crates-io]` would keep applying across their 0.22 bump. That fixed the
+instance. This fixes the cause.
+
+The cause is a dependency cycle spanning two repositories:
+
+```
+vta-sdk (VTI) ──published──▶ affinidi-messaging-mediator (this crate)
+    ▲                                       │
+    └───────── vtc-service [dev-deps] ──────┘
+               via affinidi-messaging-test-mediator
+```
+
+VTI papers over it with `[patch.crates-io] vta-sdk = { path = "vta-sdk" }`,
+which holds only while their workspace copy satisfies the requirement declared
+here. Under 0.x semver a minor bump does not, so the patch silently stops
+applying, the registry node it exists to delete returns, and their release is
+blocked until this crate is re-released. That has now happened at 0.20, 0.21
+and 0.22 — three times, each fixed by widening a requirement, which buys one
+version of headroom and leaves the cycle in place.
+
+`affinidi-messaging-test-mediator` — the crate VTI actually depends on —
+already builds this one with `default-features = false, features = ["didcomm",
+"memory-backend"]`. Gating `vta-sdk` therefore drops it from that build with no
+change on their side and no change in this repo either: `cargo tree -p
+affinidi-messaging-test-mediator -i vta-sdk` now reports no such package. The
+cycle stops existing and VTI can delete the patch entry rather than keep
+re-releasing this crate to keep it applying.
+
+Shape of the change: four already-VTA-specific modules are `cfg`-gated whole
+(`tasks/vta_refresh`, `common/config/vta_bootstrap`, `common/config/vta_cache`,
+`commands/rotate_admin`), as are the `rotate-admin` subcommand and the
+`Config::vta_refresher` field. The two places where SDK types had leaked into
+otherwise-generic code are handled by a seam rather than by more `cfg`:
+
+- `common/config/security.rs` took `Option<&DidSecretsBundle>` purely to read
+  `key_id` + `private_key_multibase` off each entry. It now takes
+  `Option<&[OperatingSecret]>`, a mediator-local type, so the conversion to
+  `Secret`, the resolver population and the self-hosted fallback all compile
+  identically either way and need no `cfg` at all.
+- `common/config/mod.rs` projects the SDK's `StartupResult` into two local
+  values (`authority_did`, `operating_secrets`) immediately after the gated
+  startup block. Every consumer downstream reads those, so the DID resolution,
+  the `operating_keys_loaded` flag and the security conversion are unchanged
+  source in both builds.
+
+Self-hosted deployments — operating secrets from the backend's well-known
+`mediator/operating/secrets` entry — never touched `vta-sdk` and are unaffected
+by any of this.
+
+Verified: `cargo clippy --all-targets` clean under both default features and
+`--no-default-features --features didcomm,memory-backend`; the 200-test suite
+passes; the test mediator builds with no `vta-sdk` in its graph.
+
+Follow-up: tighten `vta-sdk` from `">=0.21.0, <0.23.0"` to `"0.22"` once 0.22.0
+is on crates.io. With the dependency optional that requirement no longer gates
+anyone else's release, so it can happen whenever.
+
 ## 12th August 2026 (0.18.12)
 
 **Accepts `vta-sdk` 0.21 *or* 0.22** — `">=0.21.0, <0.23.0"`, was `"0.21.0"`.

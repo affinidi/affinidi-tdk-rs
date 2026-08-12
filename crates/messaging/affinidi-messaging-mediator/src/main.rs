@@ -1,5 +1,9 @@
-use affinidi_messaging_mediator::{commands, server::start};
-use clap::{Parser, Subcommand};
+#[cfg(feature = "vta")]
+use affinidi_messaging_mediator::commands;
+use affinidi_messaging_mediator::server::start;
+use clap::Parser;
+#[cfg(feature = "vta")]
+use clap::Subcommand;
 
 // ─── Allocator ──────────────────────────────────────────────────────────────
 //
@@ -50,10 +54,16 @@ struct Cli {
     #[arg(short = 'c', long, default_value = "conf/mediator.toml", global = true)]
     config: String,
 
+    /// `rotate-admin` is the only subcommand, and it is a conversation
+    /// with a VTA. A build without `vta` has none, so the field goes too:
+    /// clap's `Subcommand` derive has nothing to generate from an empty
+    /// enum.
+    #[cfg(feature = "vta")]
     #[command(subcommand)]
     command: Option<Command>,
 }
 
+#[cfg(feature = "vta")]
 #[derive(Subcommand)]
 enum Command {
     /// Rotate the mediator's admin credential.
@@ -75,24 +85,27 @@ enum Command {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    match cli.command {
-        None => {
-            if let Err(e) = start(&cli.config).await {
-                eprintln!("\x1b[31mMediator failed:\x1b[0m {e}");
-                std::process::exit(1);
-            }
+
+    // Subcommand first, server second: no subcommand means "run the
+    // mediator", which is the historical behaviour and the only one a
+    // build without `vta` has.
+    #[cfg(feature = "vta")]
+    if let Some(Command::RotateAdmin { dry_run }) = cli.command {
+        // Subcommands handle their own tracing init lazily
+        // (rotate_admin uses the global subscriber if one is
+        // already in place; otherwise it falls back to a minimal
+        // env-filter setup so info!/warn! land somewhere visible).
+        init_subcommand_tracing();
+        if let Err(e) = commands::rotate_admin::run(&cli.config, dry_run).await {
+            eprintln!("\x1b[31mError:\x1b[0m {e}");
+            std::process::exit(1);
         }
-        Some(Command::RotateAdmin { dry_run }) => {
-            // Subcommands handle their own tracing init lazily
-            // (rotate_admin uses the global subscriber if one is
-            // already in place; otherwise it falls back to a minimal
-            // env-filter setup so info!/warn! land somewhere visible).
-            init_subcommand_tracing();
-            if let Err(e) = commands::rotate_admin::run(&cli.config, dry_run).await {
-                eprintln!("\x1b[31mError:\x1b[0m {e}");
-                std::process::exit(1);
-            }
-        }
+        return;
+    }
+
+    if let Err(e) = start(&cli.config).await {
+        eprintln!("\x1b[31mMediator failed:\x1b[0m {e}");
+        std::process::exit(1);
     }
 }
 
@@ -101,6 +114,7 @@ async fn main() {
 /// minimal one here so `tracing::info!` calls inside the rotation
 /// flow actually surface to stderr — without this the rotation runs
 /// "silent" except for `println!`s.
+#[cfg(feature = "vta")]
 fn init_subcommand_tracing() {
     use tracing_subscriber::EnvFilter;
     let _ = tracing_subscriber::fmt()

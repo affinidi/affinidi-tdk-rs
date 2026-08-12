@@ -19,7 +19,22 @@ use std::{
     sync::Arc,
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use vta_sdk::did_secrets::DidSecretsBundle;
+
+/// One operating key handed to the mediator by an external key authority.
+///
+/// Deliberately mediator-local rather than `vta_sdk::did_secrets::SecretEntry`,
+/// even though today's only producer is a VTA `DidSecretsBundle`. This type is
+/// the seam that lets `vta-sdk` be an optional dependency: everything below it
+/// — the conversion to `Secret`, the resolver population, the self-hosted
+/// fallback — compiles identically with or without the `vta` feature, so none
+/// of it needs `cfg`. The mapping from the SDK's bundle lives at the single
+/// call site in `config/mod.rs`, which is already `vta`-gated.
+pub(crate) struct OperatingSecret {
+    /// Key id the secret is filed under (becomes the `Secret`'s id).
+    pub key_id: String,
+    /// Multibase-encoded private key material.
+    pub private_key_multibase: String,
+}
 
 /// Resolved cross-origin policy for browser clients.
 ///
@@ -326,7 +341,7 @@ pub(crate) trait SecurityConfigRawExt {
         &self,
         secrets_resolver: Arc<ThreadedSecretsResolver>,
         secrets: &MediatorSecrets,
-        vta_bundle: Option<&DidSecretsBundle>,
+        vta_bundle: Option<&[OperatingSecret]>,
     ) -> Result<SecurityConfig, MediatorError>;
 }
 
@@ -461,7 +476,7 @@ impl SecurityConfigRawExt for SecurityConfigRaw {
         &self,
         secrets_resolver: Arc<ThreadedSecretsResolver>,
         secrets: &MediatorSecrets,
-        vta_bundle: Option<&DidSecretsBundle>,
+        vta_bundle: Option<&[OperatingSecret]>,
     ) -> Result<SecurityConfig, MediatorError> {
         let warn_default = |field: &str, value: &str, default: &str| {
             tracing::warn!(
@@ -592,10 +607,9 @@ impl SecurityConfigRawExt for SecurityConfigRaw {
             // VTA mode: operating keys arrived via integration::startup.
             tracing::info!(
                 "Loading {} operating secret(s) from VTA DidSecretsBundle",
-                bundle.secrets.len()
+                bundle.len()
             );
             let converted = bundle
-                .secrets
                 .iter()
                 .map(|entry| {
                     Secret::from_multibase(&entry.private_key_multibase, Some(&entry.key_id))
