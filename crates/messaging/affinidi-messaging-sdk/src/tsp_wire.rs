@@ -61,25 +61,7 @@ pub const TSP_MAGIC_BYTE: u8 = 0xF8;
 pub fn looks_like_tsp(stored: &str) -> bool {
     BASE64_URL_SAFE_NO_PAD
         .decode(stored.as_bytes())
-        .is_ok_and(|bytes| looks_like_tsp_bytes(&bytes))
-}
-
-/// Does `bytes` look like a TSP frame, in **raw qb2** form?
-///
-/// The same one-byte question as [`looks_like_tsp`], for the places a frame
-/// arrives already decoded rather than as `base64url(qb2)`: the mediator's
-/// `POST /inbound` body and its websocket binary frames.
-///
-/// Mirrors `affinidi_tsp::is_tsp` exactly, and is available in every build —
-/// which is the point. Without it a mediator compiled without the `tsp` feature
-/// cannot recognise a TSP frame either, so it hands the CESR bytes to the
-/// DIDComm JSON parser and answers `w.m.message.deserialize` / "expected value
-/// at line 1 column 1". That error names DIDComm, never TSP, and sends the
-/// operator to inspect the wrong host — the mediator-side twin of the defect
-/// this module was written for.
-#[must_use]
-pub fn looks_like_tsp_bytes(bytes: &[u8]) -> bool {
-    bytes.first() == Some(&TSP_MAGIC_BYTE)
+        .is_ok_and(|bytes| bytes.first() == Some(&TSP_MAGIC_BYTE))
 }
 
 #[cfg(test)]
@@ -126,29 +108,6 @@ mod tests {
         // consumer's receive loop.
         assert!(!looks_like_tsp("!!! not base64 !!!"));
         assert!(!looks_like_tsp(&BASE64_URL_SAFE_NO_PAD.encode([])));
-    }
-
-    /// The raw-bytes form, which the mediator's `/inbound` and websocket paths
-    /// use: same answers as the qb64 form, one decode earlier.
-    #[test]
-    fn classifies_raw_qb2_bytes() {
-        assert!(looks_like_tsp_bytes(&[TSP_MAGIC_BYTE, 0x41, 0x42]));
-        // A DIDComm JWE body — the exact input that used to reach the JSON
-        // parser and produce "expected value at line 1 column 1" when a TSP
-        // frame did the same.
-        assert!(!looks_like_tsp_bytes(br#"{"protected":"ey"}"#));
-        assert!(!looks_like_tsp_bytes(&[]));
-    }
-
-    /// The two entry points must not disagree: the qb64 one is defined as
-    /// "decode, then ask the byte one".
-    #[test]
-    fn the_two_forms_agree() {
-        for leading in [TSP_MAGIC_BYTE, 0x7B, 0x00, 0xFF] {
-            let frame = qb64(leading);
-            let decoded = BASE64_URL_SAFE_NO_PAD.decode(frame.as_bytes()).unwrap();
-            assert_eq!(looks_like_tsp(&frame), looks_like_tsp_bytes(&decoded));
-        }
     }
 
     /// The anti-drift pin. `affinidi_tsp` owns the wire definition; this crate

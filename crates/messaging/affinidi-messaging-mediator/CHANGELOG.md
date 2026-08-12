@@ -26,8 +26,10 @@ names the **recipient's advertised** one. The operator inspects a healthy host
 while the built-without-TSP one goes unexamined.
 
 Both inbound paths now classify unconditionally — recognising a frame needs one
-byte, only processing needs the stack (`affinidi_messaging_sdk::tsp_wire`, the
-0.19.5 SDK fix, now reachable for raw bytes via `looks_like_tsp_bytes`):
+byte, only processing needs the stack. Same split, and same reasoning, that
+`affinidi_messaging_sdk::tsp_wire` applies on the client side in 0.19.5; the
+magic byte is read from that crate's published `TSP_MAGIC_BYTE`, so this adds no
+second definition to drift:
 
 - `POST /inbound` answers `message.tsp.unsupported` (code 37, the existing TSP
   problem code) naming the frame, the feature, and the rebuild flags.

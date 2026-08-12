@@ -1,20 +1,5 @@
 # Changelog
 
-## [0.19.6] - 2026-08-12
-
-### Added
-
-- **`looks_like_tsp_bytes` — the raw-qb2 twin of `looks_like_tsp`.** 0.19.5 made
-  TSP *classification* available in every build, but only for the
-  `base64url(qb2)` transit form the SDK receives. The mediator sees frames one
-  decode earlier: raw bytes, in its `POST /inbound` body and its websocket
-  binary frames. Without a byte-level entry point it could not use the
-  classifier, so a mediator built without the `tsp` feature repeated the same
-  defect on the server side — feeding a CESR frame to the DIDComm JSON parser
-  and answering `w.m.message.deserialize` / "expected value at line 1 column 1".
-
-  Available in every build, like its sibling, and pinned to it by a test.
-
 ## [0.19.5] - 2026-08-11
 
 ### Fixed

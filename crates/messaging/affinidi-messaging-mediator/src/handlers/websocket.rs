@@ -640,7 +640,7 @@ async fn handle_socket(
                                     // frame is still dropped — decoding it genuinely
                                     // needs the feature — but it is now dropped by name.
                                     #[cfg(not(feature = "tsp"))]
-                                    if affinidi_messaging_sdk::looks_like_tsp_bytes(&msg) {
+                                    if crate::handlers::message_inbound::looks_like_tsp_bytes(&msg) {
                                         warn!(
                                             "Dropping a TSP frame from {}: this mediator was built without \
                                              TSP support (cargo feature `tsp`). Rebuild with \

@@ -28,6 +28,25 @@ use crate::common::metrics::names;
 #[cfg(feature = "didcomm-v1")]
 const DIDCOMM_V1_CONTENT_TYPE: &str = "application/ssi-agent-wire";
 
+/// Does `bytes` lead with the TSP magic byte?
+///
+/// Compiled only into a build *without* the `tsp` feature, where
+/// `affinidi_tsp::is_tsp` is unavailable — which is precisely the build that
+/// needs to recognise a frame it cannot process. Recognising takes one byte;
+/// only processing needs the stack. Same split, and same reasoning, as
+/// `affinidi_messaging_sdk::tsp_wire` applies on the client side.
+///
+/// The byte comes from `affinidi_messaging_sdk::TSP_MAGIC_BYTE` rather than a
+/// local copy, so this adds no third definition to drift: the SDK already pins
+/// its copy against `affinidi_tsp` with a test. Reusing the published constant
+/// is also what keeps this change to one crate — a new SDK helper could not be
+/// depended on until it was released, which `cargo publish --dry-run` catches
+/// as an unsatisfiable requirement.
+#[cfg(not(feature = "tsp"))]
+pub(crate) fn looks_like_tsp_bytes(bytes: &[u8]) -> bool {
+    bytes.first() == Some(&affinidi_messaging_sdk::TSP_MAGIC_BYTE)
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RecipientHeader {
     pub kid: String,
@@ -103,7 +122,7 @@ pub async fn message_inbound_handler(
         // because a TSP send posts to the sender's own mediator while the error
         // the client surfaces names the recipient's advertised one.
         #[cfg(not(feature = "tsp"))]
-        if affinidi_messaging_sdk::looks_like_tsp_bytes(&body) {
+        if looks_like_tsp_bytes(&body) {
             return Err(MediatorError::problem(
                 37,
                 session.session_id,
