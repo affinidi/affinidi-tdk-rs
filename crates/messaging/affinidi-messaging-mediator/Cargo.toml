@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.18.11"
+version = "0.18.12"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -118,8 +118,33 @@ affinidi-did-common = "0.4"
 affinidi-secrets-resolver = "0.5"
 ## Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"
-## VTA SDK for centralized DID/key management via Verifiable Trust Agent
-vta-sdk = { version = "0.21.0", features = ["integration"] }
+## VTA SDK for centralized DID/key management via Verifiable Trust Agent.
+##
+## Range, not `"0.21.0"`, and deliberately so. The VTI workspace carries a
+## `[patch.crates-io] vta-sdk = { path = "vta-sdk" }` to keep its own crate out
+## of its lockfile twice — this crate is what pulls the registry copy back in,
+## through `vtc-service [dev-dependencies] -> affinidi-messaging-test-mediator
+## -> affinidi-messaging-mediator -> vta-sdk`. A patch only applies while the
+## workspace copy satisfies every requirement on it, and under 0.x semver
+## `^0.21` excludes 0.22. So the moment VTI bumps vta-sdk to 0.22.0 the patch
+## silently stops applying, the registry node it exists to delete comes back,
+## and VTI's release PR cannot merge. No local change on their side fixes that;
+## the requirement here is the constraint.
+##
+## Hard-bumping to `"0.22"` instead would deadlock: 0.22.0 cannot be published
+## until that release PR merges, and it cannot merge until this requirement
+## admits 0.22. A range breaks the cycle without waiting on a publish.
+##
+## Widening is safe on the facts, not on optimism: `integration` resolves to
+## `["client", "session"]`, and vta-sdk 0.22.0's only breaking change is
+## `ProvisionIntegrationRequest.request` becoming `serde_json::Value`, behind
+## `#[cfg(feature = "provision-integration")]`. That module is not compiled
+## into this crate under either version.
+##
+## Tighten to `"0.22"` once 0.22.0 is published, and see the `vta` feature
+## follow-up — making this dependency optional removes the cycle outright,
+## since the test mediator already builds with `default-features = false`.
+vta-sdk = { version = ">=0.21.0, <0.23.0", features = ["integration"] }
 
 # ── Web Framework ────────────────────────────────────────────────────────
 axum = { version = "0.8", features = ["ws"] }
