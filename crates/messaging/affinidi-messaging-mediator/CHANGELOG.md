@@ -1,5 +1,51 @@
 # Affinidi Messaging Mediator
 
+## 12th August 2026 (0.18.12)
+
+**Accepts `vta-sdk` 0.21 *or* 0.22** — `">=0.21.0, <0.23.0"`, was `"0.21.0"`.
+No mediator code changed.
+
+This crate is the reason the VTI workspace carries a `[patch.crates-io]` entry
+for its own `vta-sdk`. Their lockfile would otherwise hold two `vta-sdk` nodes,
+the workspace path copy and a registry copy reached through
+`vtc-service [dev-dependencies] -> affinidi-messaging-test-mediator ->
+affinidi-messaging-mediator -> vta-sdk`, and `cargo publish --locked` verifies
+their dependents against the stale registry one.
+
+A patch only applies while the workspace copy satisfies every requirement on
+it. Under 0.x semver `^0.21` excludes 0.22, so when VTI bumped `vta-sdk` to
+0.22.0 the patch silently stopped applying and the registry node came back at
+0.21.21 — caught by their lockfile guard, which blocks the release PR that
+would publish 0.22.0. Nothing on their side can resolve it: the requirement
+lives here.
+
+Hard-bumping this to `"0.22"` deadlocks instead of fixing it. 0.22.0 is not on
+crates.io and cannot get there until that release PR merges, which it cannot do
+until this requirement admits 0.22. A range satisfies both ends at once: it
+resolves to 0.21.21 today, so this release builds and publishes against exactly
+what 0.18.11 did, and it re-admits the patch the moment 0.22.0 lands.
+
+Safe on the facts rather than on optimism. `integration` is
+`["client", "session"]`; vta-sdk 0.22.0's sole breaking change is
+`ProvisionIntegrationRequest.request` becoming `serde_json::Value`, gated behind
+`#[cfg(feature = "provision-integration")]`. That module is not compiled into
+this crate under either version, so the surface it links against is identical.
+
+`affinidi-messaging-mediator-setup` keeps `"0.21.0"` on purpose: it enables
+`provision-client`, which *does* pull in the changed module. It is
+`publish = false`, so it never reaches a downstream lockfile, and the workspace
+resolves both requirements to 0.21.21 regardless.
+
+Two follow-ups, neither blocking: tighten to `"0.22"` once 0.22.0 is published,
+and put this dependency behind a default-on `vta` feature. The latter is the
+real fix — `affinidi-messaging-test-mediator` already depends on this crate with
+`default-features = false, features = ["didcomm", "memory-backend"]`, so gating
+`vta-sdk` removes it from that build entirely and the cross-repo cycle stops
+existing. Usage is already quarantined in `tasks/vta_refresh.rs`,
+`common/config/vta_bootstrap.rs`, `common/config/vta_cache.rs` and
+`commands/rotate_admin.rs`, with two call sites leaking into
+`common/config/security.rs` and `common/config/mod.rs`.
+
 ## 9th August 2026 (0.18.11)
 
 **Requires `affinidi-messaging-sdk` 0.19.3, not "0.19".** Preventive, not a fix:
