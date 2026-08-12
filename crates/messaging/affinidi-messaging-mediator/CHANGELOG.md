@@ -1,5 +1,44 @@
 # Affinidi Messaging Mediator
 
+## 12th August 2026 (0.18.14)
+
+**A mediator built without the `tsp` feature now says so, instead of reporting a
+DIDComm parse error.** `tsp` is not a default feature, so this is the stock
+build.
+
+Inbound classification lived entirely behind the feature, so such a build did
+not merely refuse a TSP frame — it never recognised one. The CESR bytes fell
+through to the DIDComm JWE parse and came back as
+
+```json
+{"errorCode":19,"errorCodeStr":"DIDCommProblemReport",
+ "message":"{\"code\":\"w.m.message.deserialize\",
+             \"comment\":\"Couldn't parse DIDComm message envelope. Reason: {1}\",
+             \"args\":[\"expected value at line 1 column 1\"]}"}
+```
+
+which names DIDComm, never TSP, and never the missing feature. It reads as a
+malformed message from a broken client.
+
+That cost a downstream deployment an hour, and the misdirection compounds: a TSP
+send posts to the **sender's own** mediator, while the error the client surfaces
+names the **recipient's advertised** one. The operator inspects a healthy host
+while the built-without-TSP one goes unexamined.
+
+Both inbound paths now classify unconditionally — recognising a frame needs one
+byte, only processing needs the stack. Same split, and same reasoning, that
+`affinidi_messaging_sdk::tsp_wire` applies on the client side in 0.19.5; the
+magic byte is read from that crate's published `TSP_MAGIC_BYTE`, so this adds no
+second definition to drift:
+
+- `POST /inbound` answers `message.tsp.unsupported` (code 37, the existing TSP
+  problem code) naming the frame, the feature, and the rebuild flags.
+- The websocket binary path logs the same by name, rather than failing
+  `String::from_utf8` and logging an unprocessable binary frame.
+
+Neither build gains the ability to *handle* TSP — that genuinely needs
+`--features didcomm,tsp`. They gain the ability to say what they received.
+
 ## 12th August 2026 (0.18.13)
 
 **`vta-sdk` is now optional, behind a default-on `vta` feature.** Nothing
