@@ -468,7 +468,7 @@ async fn deliver_forward(
         let remote_endpoint = if state.config.processors.forwarding.external_forwarding {
             match state.did_resolver.resolve(next).await {
                 Ok(resolve_response) => {
-                    match service_endpoint_for_remote(state, &resolve_response.doc) {
+                    match service_endpoint_for_remote(state, next, &resolve_response.doc).await {
                         Some(endpoint_url) => {
                             debug!("Next hop ({}) is remote, endpoint: {}", next, endpoint_url);
                             Some(endpoint_url)
@@ -1007,62 +1007,163 @@ pub(crate) async fn process(
     .await
 }
 
-/// Checks if the next hop's DID Document contains a DIDCommMessaging service
-/// that points to a different mediator (remote endpoint).
+/// One `DIDCommMessaging` service endpoint, classified without any I/O.
+#[derive(Debug, PartialEq, Eq)]
+enum EndpointHop {
+    /// This mediator delivers for that DID — store the forward locally.
+    Local,
+    /// A remote mediator, reachable at this URL — enqueue to `FORWARD_Q`.
+    Remote(String),
+    /// The endpoint names a mediator by **DID** rather than by URL. That
+    /// mediator's own document carries the transport URL, one resolve away.
+    Indirect(String),
+}
+
+/// Classify a single `DIDCommMessaging` endpoint URI.
 ///
-/// Returns `Some(endpoint_url)` if the next hop should be forwarded to a remote mediator,
-/// or `None` if the next hop is local to this mediator.
-///
-/// A DIDCommMessaging service is treated as local when:
-/// - the `uri` is this mediator's DID, OR
-/// - the `uri` is an HTTP/HTTPS/WS/WSS URL whose `(host, port)` matches
-///   one of the authorities recorded in `state.self_authorities`
-///   (the bind address plus any operator-declared `local_endpoints`).
-///
-/// Anything else with an HTTP-shaped URI is treated as a remote mediator
-/// and forwarded; non-HTTP URIs that don't match a known authority are
-/// treated as local (preserving the original conservative default).
-fn service_endpoint_for_remote(state: &SharedData, next_doc: &Document) -> Option<String> {
-    for service in &next_doc.service {
-        if !service.type_.contains(&"DIDCommMessaging".to_string()) {
-            continue;
+/// `None` for a URI shape this mediator has no rule for — neither a DID nor an
+/// HTTP-family URL.
+fn classify_endpoint(
+    uri: &str,
+    mediator_did: &str,
+    self_authorities: &std::collections::HashSet<(String, u16)>,
+) -> Option<EndpointHop> {
+    // Strip surrounding quotes if present (from JSON serialization)
+    let uri = uri.trim_matches('"');
+
+    // Points at this mediator's own DID — the ordinary local-account case.
+    if uri == mediator_did {
+        return Some(EndpointHop::Local);
+    }
+
+    // An HTTP(S)/WS(S) URL: decide local-vs-remote by comparing its authority
+    // against the mediator's known self-authorities. URLs that point back at
+    // this instance (different hostname, same address; or a public alias
+    // declared via `local_endpoints`) are collapsed to local delivery instead
+    // of being relayed through FORWARD_Q to themselves.
+    if uri.starts_with("http://")
+        || uri.starts_with("https://")
+        || uri.starts_with("ws://")
+        || uri.starts_with("wss://")
+    {
+        if uri_points_at_self(uri, self_authorities) {
+            debug!(
+                "Service endpoint {} resolves to a self-authority — treating as local",
+                uri
+            );
+            return Some(EndpointHop::Local);
         }
+        return Some(EndpointHop::Remote(uri.to_string()));
+    }
 
-        let uris = service.service_endpoint.get_uris();
-        for uri in &uris {
-            // Strip surrounding quotes if present (from JSON serialization)
-            let uri_clean = uri.trim_matches('"');
+    // A DID naming another mediator. This is the shape the VTI stack publishes
+    // — `#didcomm`'s `serviceEndpoint` carries the *mediator's DID*, and the
+    // transport URL lives in that mediator's own document — so it has to be
+    // followed. Before this arm existed it fell through to "no remote endpoint
+    // found", and every cross-mediator forward in that convention was stored
+    // locally under a DID that would never connect here, while the sender's
+    // mediator answered 200.
+    if uri.starts_with("did:") {
+        return Some(EndpointHop::Indirect(uri.to_string()));
+    }
 
-            // If the service endpoint points to this mediator's DID, it's local
-            if uri_clean == state.config.mediator_did {
-                return None;
+    None
+}
+
+/// Every `DIDCommMessaging` endpoint URI in `doc`, in document order.
+fn didcomm_endpoints(doc: &Document) -> Vec<String> {
+    doc.service
+        .iter()
+        .filter(|service| service.type_.contains(&"DIDCommMessaging".to_string()))
+        .flat_map(|service| service.service_endpoint.get_uris())
+        .collect()
+}
+
+/// Decide whether a forward's next hop is served by this mediator or a remote
+/// one, and — when remote — the URL to relay it to.
+///
+/// Returns `Some(endpoint_url)` if the next hop should be forwarded to a remote
+/// mediator, or `None` if the next hop is local to this mediator.
+///
+/// A `DIDCommMessaging` endpoint names its mediator one of two ways:
+///
+/// - **By URL** — relayed there directly, unless the authority is one of ours
+///   (`state.self_authorities`: the bind address plus any operator-declared
+///   `local_endpoints`), which makes it local.
+/// - **By DID** — the shape the VTI stack publishes. Resolved one hop, and the
+///   endpoints of *that* document classified the same way.
+///
+/// Only one hop of indirection is followed: a mediator's own document is
+/// expected to publish a URL, and chasing further would let a chain of
+/// documents steer this mediator's relay.
+///
+/// Anything left over is still treated as local — the original conservative
+/// default — but no longer silently. A next hop that publishes a DIDComm
+/// service we could not turn into a URL is almost certainly not ours, and
+/// storing it locally means it is never delivered to anyone.
+async fn service_endpoint_for_remote(
+    state: &SharedData,
+    next: &str,
+    next_doc: &Document,
+) -> Option<String> {
+    let endpoints = didcomm_endpoints(next_doc);
+    if endpoints.is_empty() {
+        // No DIDComm service published at all — local, and not worth a warning.
+        // A local account is under no obligation to publish one.
+        return None;
+    }
+
+    let mut peer_mediator: Option<String> = None;
+    for uri in &endpoints {
+        match classify_endpoint(uri, &state.config.mediator_did, &state.self_authorities) {
+            Some(EndpointHop::Local) => return None,
+            Some(EndpointHop::Remote(url)) => return Some(url),
+            // Remembered, but the scan continues: a later entry naming this
+            // mediator directly still wins.
+            Some(EndpointHop::Indirect(did)) if peer_mediator.is_none() => {
+                peer_mediator = Some(did);
             }
-
-            // If the service endpoint is an HTTP(S)/WS(S) URL, decide
-            // local-vs-remote by comparing its authority against the
-            // mediator's known self-authorities. URLs that point back
-            // at this instance (different hostname, same address; or a
-            // public alias declared via `local_endpoints`) are
-            // collapsed to local delivery instead of being relayed
-            // through FORWARD_Q to themselves.
-            if uri_clean.starts_with("http://")
-                || uri_clean.starts_with("https://")
-                || uri_clean.starts_with("ws://")
-                || uri_clean.starts_with("wss://")
-            {
-                if uri_points_at_self(uri_clean, &state.self_authorities) {
-                    debug!(
-                        "Service endpoint {} resolves to a self-authority — treating as local",
-                        uri_clean
-                    );
-                    return None;
-                }
-                return Some(uri_clean.to_string());
-            }
+            Some(EndpointHop::Indirect(_)) | None => {}
         }
     }
 
-    // No DIDCommMessaging service found with a remote endpoint — treat as local
+    let Some(peer_mediator) = peer_mediator else {
+        warn!(
+            "Next hop ({}) publishes a DIDCommMessaging service this mediator can't turn into \
+             an endpoint ({:?}). Storing locally — it will not be delivered.",
+            next, endpoints
+        );
+        return None;
+    };
+
+    // One hop: the peer mediator's own document carries the transport URL.
+    let peer_doc = match state.did_resolver.resolve(&peer_mediator).await {
+        Ok(response) => response.doc,
+        Err(e) => {
+            warn!(
+                "Next hop ({}) is mediated by ({}), which couldn't be resolved: {}. Storing \
+                 locally — it will not be delivered.",
+                next, peer_mediator, e
+            );
+            return None;
+        }
+    };
+
+    for uri in didcomm_endpoints(&peer_doc) {
+        match classify_endpoint(&uri, &state.config.mediator_did, &state.self_authorities) {
+            // The peer mediator is this mediator under another name.
+            Some(EndpointHop::Local) => return None,
+            Some(EndpointHop::Remote(url)) => return Some(url),
+            // A second hop of indirection is deliberately not chased.
+            Some(EndpointHop::Indirect(_)) | None => {}
+        }
+    }
+
+    warn!(
+        "Next hop ({}) is mediated by ({}), whose document publishes no DIDComm endpoint URL. \
+         Storing locally — it will not be delivered.",
+        next, peer_mediator
+    );
     None
 }
 
@@ -1092,11 +1193,12 @@ fn uri_points_at_self(
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_next_did, queue_at_capacity, relay_peer_trusted, relay_sender_acls,
-        rewrap_inner_attachment, uri_points_at_self,
+        EndpointHop, classify_endpoint, didcomm_endpoints, parse_next_did, queue_at_capacity,
+        relay_peer_trusted, relay_sender_acls, rewrap_inner_attachment, uri_points_at_self,
     };
     use crate::common::session::Session;
     use crate::server::{compute_self_authorities_from, normalize_host};
+    use affinidi_did_common::Document;
     use affinidi_messaging_didcomm::message::{Attachment, Message};
     use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
     use base64::prelude::*;
@@ -1464,5 +1566,140 @@ mod tests {
     fn compute_self_authorities_with_empty_inputs_is_empty() {
         let auth = compute_self_authorities_from("", &[]);
         assert!(auth.is_empty());
+    }
+
+    const US: &str = "did:web:mediator.example.com";
+    const PEER_MEDIATOR: &str =
+        "did:webvh:QmYBpFiBnQg9ijbktprYwExth6z4UdCQUzQdCBQbwVWauJ:dids.peer.example:mediator";
+
+    fn no_authorities() -> HashSet<(String, u16)> {
+        HashSet::new()
+    }
+
+    /// A document with one `DIDCommMessaging` service pointing at `endpoint`,
+    /// plus the neighbouring service types a real VTI document carries — so the
+    /// type filter is exercised, not assumed.
+    fn doc_with_didcomm_endpoint(endpoint: &str) -> Document {
+        serde_json::from_value(serde_json::json!({
+            "id": "did:web:recipient.example.com",
+            "service": [
+                {
+                    "id": "did:web:recipient.example.com#tsp",
+                    "type": "TSPTransport",
+                    "serviceEndpoint": PEER_MEDIATOR,
+                },
+                {
+                    "id": "did:web:recipient.example.com#didcomm",
+                    "type": "DIDCommMessaging",
+                    "serviceEndpoint": endpoint,
+                },
+                {
+                    "id": "did:web:recipient.example.com#rest",
+                    "type": "VTCRest",
+                    "serviceEndpoint": "https://recipient.example.com",
+                },
+            ],
+        }))
+        .expect("test DID document should deserialize")
+    }
+
+    /// The regression: the VTI stack publishes `#didcomm` with the *mediator's
+    /// DID* as its `serviceEndpoint`. That has to classify as indirection to
+    /// follow, not as an unrecognised URI — which is what silently collapsed
+    /// every cross-mediator forward to local storage.
+    #[test]
+    fn classify_endpoint_treats_a_did_endpoint_as_indirection() {
+        assert_eq!(
+            classify_endpoint(PEER_MEDIATOR, US, &no_authorities()),
+            Some(EndpointHop::Indirect(PEER_MEDIATOR.to_string()))
+        );
+    }
+
+    /// And it must survive the trip through `Endpoint` deserialization —
+    /// a DID parses as a `Url` (scheme `did`, cannot-be-a-base), so the DID
+    /// handed to the follow-up resolve has to come back byte-identical.
+    #[test]
+    fn a_did_endpoint_round_trips_through_the_document() {
+        let doc = doc_with_didcomm_endpoint(PEER_MEDIATOR);
+        let endpoints = didcomm_endpoints(&doc);
+        assert_eq!(endpoints, vec![PEER_MEDIATOR.to_string()]);
+        assert_eq!(
+            classify_endpoint(&endpoints[0], US, &no_authorities()),
+            Some(EndpointHop::Indirect(PEER_MEDIATOR.to_string()))
+        );
+    }
+
+    #[test]
+    fn classify_endpoint_keeps_our_own_did_local() {
+        assert_eq!(
+            classify_endpoint(US, US, &no_authorities()),
+            Some(EndpointHop::Local)
+        );
+    }
+
+    #[test]
+    fn classify_endpoint_relays_a_foreign_url() {
+        assert_eq!(
+            classify_endpoint("https://peer.example.com/inbound", US, &no_authorities()),
+            Some(EndpointHop::Remote(
+                "https://peer.example.com/inbound".to_string()
+            ))
+        );
+    }
+
+    /// A URL that points back at this instance under another name is local, so
+    /// the mediator never relays to itself through FORWARD_Q.
+    #[test]
+    fn classify_endpoint_keeps_a_self_authority_url_local() {
+        let authorities =
+            compute_self_authorities_from("0.0.0.0:7037", &["https://us.example.com".to_string()]);
+        assert_eq!(
+            classify_endpoint("https://us.example.com/inbound", US, &authorities),
+            Some(EndpointHop::Local)
+        );
+    }
+
+    /// Quoted URIs (the `Endpoint::Map` serialization shape) classify the same
+    /// as bare ones.
+    #[test]
+    fn classify_endpoint_strips_json_quoting() {
+        assert_eq!(
+            classify_endpoint("\"https://peer.example.com\"", US, &no_authorities()),
+            Some(EndpointHop::Remote("https://peer.example.com".to_string()))
+        );
+    }
+
+    #[test]
+    fn classify_endpoint_has_no_rule_for_other_shapes() {
+        assert_eq!(classify_endpoint("not-a-url", US, &no_authorities()), None);
+        assert_eq!(
+            classify_endpoint("ftp://files.example.com", US, &no_authorities()),
+            None
+        );
+    }
+
+    /// The type filter keys on `DIDCommMessaging` only — a `TSPTransport`
+    /// entry naming a mediator must not be mistaken for a DIDComm endpoint.
+    #[test]
+    fn didcomm_endpoints_selects_only_didcomm_services() {
+        let doc = doc_with_didcomm_endpoint("https://peer.example.com");
+        assert_eq!(
+            didcomm_endpoints(&doc),
+            vec!["https://peer.example.com/".to_string()]
+        );
+    }
+
+    #[test]
+    fn didcomm_endpoints_is_empty_without_a_didcomm_service() {
+        let doc: Document = serde_json::from_value(serde_json::json!({
+            "id": "did:web:recipient.example.com",
+            "service": [{
+                "id": "did:web:recipient.example.com#rest",
+                "type": "VTCRest",
+                "serviceEndpoint": "https://recipient.example.com",
+            }],
+        }))
+        .expect("test DID document should deserialize");
+        assert!(didcomm_endpoints(&doc).is_empty());
     }
 }

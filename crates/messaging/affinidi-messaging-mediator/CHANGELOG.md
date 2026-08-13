@@ -1,5 +1,37 @@
 # Affinidi Messaging Mediator
 
+## 13th August 2026 (0.18.15)
+
+**Forward a message whose next hop names its mediator by DID.** Cross-mediator
+forwarding worked only when the recipient's `DIDCommMessaging` endpoint was a
+bare URL. The VTI convention is the other shape — `#didcomm`'s `serviceEndpoint`
+carries the *mediator's DID*, and the transport URL lives in that mediator's own
+document — and `service_endpoint_for_remote` had no arm for it.
+
+A `did:` endpoint therefore matched neither "this mediator's own DID" nor an
+HTTP-family URL, fell out of the loop, and reached the closing comment: *"No
+DIDCommMessaging service found with a remote endpoint — treat as local"*. The
+forward was stored in the sending mediator's own queue, under a DID that will
+never connect to it, while `resolve_next_account` helpfully auto-registered the
+account so nothing errored. The sender got its 200 and reported success; the
+recipient's mediator never saw an inbound request; the message was gone.
+
+The endpoint is now classified as indirection and resolved one hop, and the
+endpoints of *that* document are classified the same way (so a peer mediator
+that turns out to be this one under another name is still local). Only one hop
+is followed — a mediator's own document is expected to publish a URL, and
+chasing further would let a chain of documents steer the relay.
+
+Everything that could not be turned into a URL is still treated as local, which
+preserves the conservative default, but is no longer silent: it now warns,
+naming the next hop and stating that the message will not be delivered. Storing
+a forward locally for a DID that publishes someone else's mediator is a message
+lost, and it should not take two mediators' logs and a DID document to find out.
+
+Behaviour change for operators running `external_forwarding = true`: forwards
+that were previously (silently) dropped into local storage now leave for the
+peer mediator. No configuration change is required.
+
 ## 12th August 2026 (0.18.14)
 
 **A mediator built without the `tsp` feature now says so, instead of reporting a
