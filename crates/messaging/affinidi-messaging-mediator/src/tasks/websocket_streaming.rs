@@ -6,15 +6,25 @@
  WebSocket is opened for the same DID the older session is forcibly
  closed so only the most recent one receives messages.
 
- When a duplicate replaces an existing session, the surviving socket is
- sent a redelivery of the recipient's undelivered inbox (see
- [`spawn_inbox_redelivery`]). A live-stream notification published in the
- instant the old socket is torn down would otherwise be stranded: the
- message is durably stored in the inbox (the store both live-pushes *and*
- persists every non-ephemeral message) but the surviving socket is never
- told to re-cover it, so a client that relies on live delivery hangs until
- timeout. Redelivery closes that gap — at-least-once, consistent with the
- message-pickup delete-to-ack contract. See issue #374.
+ The recipient's undelivered inbox is redelivered (see
+ [`spawn_inbox_redelivery`]) at **two** points, for the same underlying
+ reason: the store both live-pushes *and* persists every non-ephemeral
+ message, but nothing ever streams a message that was persisted without
+ being pushed. A client relying on live delivery then hangs until timeout
+ while the message sits in its inbox.
+
+ - **A duplicate replaces an existing session.** A notification published
+   in the instant the old socket is torn down would otherwise be stranded
+   on a socket nobody is reading. See issue #374.
+ - **A socket enables live delivery.** Messages that arrived between
+   registration and activation were stored and not pushed, because the
+   client was not live when they landed. Under load that window is wide
+   enough to strand a message for a full minute — see VTI#918, where the
+   mediator reported `queued=1, live_delivery=true` while the recipient
+   polled the live stream and saw nothing.
+
+ Both are at-least-once, consistent with the message-pickup delete-to-ack
+ contract. Disabling live delivery deliberately does *not* redeliver.
 
  The notification stream comes from `MediatorStore::streaming_subscribe`,
  so the task runs unchanged whether the backend is Redis pub/sub,
@@ -316,10 +326,10 @@ impl StreamingTask {
                                     self._handle_registration(&database, &mut clients, &replay_in_progress, value).await;
                                 },
                                 StreamingUpdateState::Start { session_id } => {
-                                    self._handle_activation(&database, &mut clients, &value.did_hash, session_id, true).await;
+                                    self._handle_activation(&database, &mut clients, &replay_in_progress, &value.did_hash, session_id, true).await;
                                 },
                                 StreamingUpdateState::Stop { session_id } => {
-                                    self._handle_activation(&database, &mut clients, &value.did_hash, session_id, false).await;
+                                    self._handle_activation(&database, &mut clients, &replay_in_progress, &value.did_hash, session_id, false).await;
                                 },
                                 StreamingUpdateState::Deregister { session_id } => {
                                     // Only the session that currently owns the slot may
@@ -461,13 +471,16 @@ impl StreamingTask {
         &self,
         database: &Arc<dyn MediatorStore>,
         clients: &mut HashMap<String, ClientEntry>,
+        replay_in_progress: &Arc<DashSet<String>>,
         did_hash: &str,
         session_id: &str,
         active: bool,
     ) {
-        match clients.get_mut(did_hash) {
+        // The socket to flush to, captured while the entry is borrowed.
+        let client_tx = match clients.get_mut(did_hash) {
             Some(entry) if entry.session_id == session_id => {
                 entry.active = active;
+                entry.tx.clone()
             }
             Some(entry) => {
                 debug!(
@@ -488,7 +501,7 @@ impl StreamingTask {
                 );
                 return;
             }
-        }
+        };
 
         let (state, verb) = if active {
             (StreamingClientState::Live, "Starting")
@@ -501,6 +514,45 @@ impl StreamingTask {
             .await
         {
             error!("Error changing streaming state for client ({did_hash}): {err}");
+        }
+
+        // Turning live delivery *on* must also deliver what is already queued.
+        //
+        // `_store_message` streams a message only if the recipient is live at
+        // the instant it arrives, and always stores it. Nothing streams a
+        // stored message afterwards — so every message that lands in the window
+        // between a socket registering and that socket enabling live delivery
+        // is queued and never pushed. The client sees silence; the mediator
+        // reports `queued=1, live_delivery=true`; only an explicit
+        // delivery-request retrieves it.
+        //
+        // That window is small and widens under load, which is exactly the
+        // profile of the flake this fixes (VTI#918): a credential sat queued
+        // for a full 60s while its recipient polled the live stream, and a
+        // delivery request returned it immediately. Reproduced on demand only
+        // once the test ran 6-way concurrent on a loaded runner.
+        //
+        // Reuses the redelivery already written for socket replacement
+        // (issue #374): fetched `DoNotDelete`, at-least-once, idempotent by
+        // message id, guarded by `replay_in_progress` so concurrent triggers
+        // drain once. A client that already had a message simply sees it
+        // again and deletes it as usual.
+        if active {
+            if replay_in_progress.insert(did_hash.to_string()) {
+                spawn_inbox_redelivery(
+                    Arc::clone(database),
+                    client_tx,
+                    self.send_budget.clone(),
+                    did_hash.to_string(),
+                    session_id.to_string(),
+                    Arc::clone(replay_in_progress),
+                );
+            } else {
+                debug!(
+                    did_hash = %did_hash,
+                    "Inbox redelivery already in progress for DID; skipping the activation drain"
+                );
+            }
         }
     }
 
@@ -876,8 +928,16 @@ mod tests {
             .expect("mark live");
 
         // Session A — long since replaced — disables live delivery on its way out.
-        task._handle_activation(&database, &mut clients, &did_hash, "A", false)
-            .await;
+        let replay_in_progress: Arc<DashSet<String>> = Arc::new(DashSet::new());
+        task._handle_activation(
+            &database,
+            &mut clients,
+            &replay_in_progress,
+            &did_hash,
+            "A",
+            false,
+        )
+        .await;
 
         assert!(
             clients.get(&did_hash).expect("entry still present").active,
@@ -902,8 +962,16 @@ mod tests {
 
         let mut clients = clients_with(&did_hash, "B", false);
 
-        task._handle_activation(&database, &mut clients, &did_hash, "A", true)
-            .await;
+        let replay_in_progress: Arc<DashSet<String>> = Arc::new(DashSet::new());
+        task._handle_activation(
+            &database,
+            &mut clients,
+            &replay_in_progress,
+            &did_hash,
+            "A",
+            true,
+        )
+        .await;
 
         assert!(
             !clients.get(&did_hash).expect("entry still present").active,
@@ -928,8 +996,16 @@ mod tests {
 
         let mut clients = clients_with(&did_hash, "B", false);
 
-        task._handle_activation(&database, &mut clients, &did_hash, "B", true)
-            .await;
+        let replay_in_progress: Arc<DashSet<String>> = Arc::new(DashSet::new());
+        task._handle_activation(
+            &database,
+            &mut clients,
+            &replay_in_progress,
+            &did_hash,
+            "B",
+            true,
+        )
+        .await;
         assert!(
             clients.get(&did_hash).expect("entry").active,
             "the owning session's start must apply"
@@ -942,8 +1018,16 @@ mod tests {
             "and must be reflected in the stored streaming state"
         );
 
-        task._handle_activation(&database, &mut clients, &did_hash, "B", false)
-            .await;
+        let replay_in_progress: Arc<DashSet<String>> = Arc::new(DashSet::new());
+        task._handle_activation(
+            &database,
+            &mut clients,
+            &replay_in_progress,
+            &did_hash,
+            "B",
+            false,
+        )
+        .await;
         assert!(
             !clients.get(&did_hash).expect("entry").active,
             "and its stop must apply too"
@@ -967,8 +1051,16 @@ mod tests {
         let task = streaming_task();
 
         let mut clients: HashMap<String, ClientEntry> = HashMap::new();
-        task._handle_activation(&database, &mut clients, &did_hash, "A", true)
-            .await;
+        let replay_in_progress: Arc<DashSet<String>> = Arc::new(DashSet::new());
+        task._handle_activation(
+            &database,
+            &mut clients,
+            &replay_in_progress,
+            &did_hash,
+            "A",
+            true,
+        )
+        .await;
 
         assert!(
             database
@@ -1055,6 +1147,118 @@ mod tests {
         assert_eq!(
             clients.get(&did_hash).map(|e| e.session_id.as_str()),
             Some("B")
+        );
+    }
+
+    /// Enabling live delivery must deliver what is **already queued**.
+    ///
+    /// The gap this closes: `_store_message` streams a message only if the
+    /// recipient is live at the instant it arrives, and always stores it.
+    /// Nothing streams a stored message afterwards. So a message that lands
+    /// between a socket registering and that socket turning live delivery on
+    /// is queued and never pushed — the client waits on a live stream that
+    /// will never carry it, while the mediator reports `queued=1,
+    /// live_delivery=true` and hands it over instantly to a delivery request.
+    ///
+    /// That window is small, and widens under load: VTI#918 took six-way
+    /// concurrent test streams on a loaded runner to reproduce, where a
+    /// credential sat queued for a full 60s.
+    #[tokio::test]
+    async fn activation_redelivers_messages_queued_before_it() {
+        let database: Arc<dyn MediatorStore> = Arc::new(MemoryStore::new());
+        let did = "did:example:carol";
+        let did_hash = digest(did);
+        let stored = "queued-before-live-delivery";
+
+        // Arrived while the socket was registered but not yet live: stored,
+        // never streamed.
+        database
+            .store_message("sess-store", stored, &did_hash, None, 0, 1000)
+            .await
+            .expect("store message");
+
+        let task = streaming_task();
+        let replay_in_progress: Arc<DashSet<String>> = Arc::new(DashSet::new());
+        let (tx, mut rx) = mpsc::channel(5);
+        let mut clients: HashMap<String, ClientEntry> = HashMap::new();
+        clients.insert(
+            did_hash.clone(),
+            ClientEntry {
+                tx,
+                session_id: "A".to_string(),
+                active: false,
+                registered_at: Instant::now(),
+                churn_streak: 0,
+            },
+        );
+
+        // The client now enables live delivery.
+        task._handle_activation(
+            &database,
+            &mut clients,
+            &replay_in_progress,
+            &did_hash,
+            "A",
+            true,
+        )
+        .await;
+
+        match timeout(StdDuration::from_secs(2), rx.recv())
+            .await
+            .expect("the queued message is pushed on activation")
+        {
+            Some(QueuedCommand {
+                cmd: WebSocketCommands::Message(msg),
+                ..
+            }) => assert_eq!(msg, stored),
+            _ => panic!("expected the queued message to be redelivered on activation"),
+        }
+    }
+
+    /// Turning live delivery *off* must not drain the inbox: the client has
+    /// just said it does not want pushes, and a redelivery would both defeat
+    /// that and race the socket it is about to stop using.
+    #[tokio::test]
+    async fn deactivation_does_not_redeliver() {
+        let database: Arc<dyn MediatorStore> = Arc::new(MemoryStore::new());
+        let did = "did:example:dave";
+        let did_hash = digest(did);
+
+        database
+            .store_message("sess-store", "queued", &did_hash, None, 0, 1000)
+            .await
+            .expect("store message");
+
+        let task = streaming_task();
+        let replay_in_progress: Arc<DashSet<String>> = Arc::new(DashSet::new());
+        let (tx, mut rx) = mpsc::channel(5);
+        let mut clients: HashMap<String, ClientEntry> = HashMap::new();
+        clients.insert(
+            did_hash.clone(),
+            ClientEntry {
+                tx,
+                session_id: "A".to_string(),
+                active: true,
+                registered_at: Instant::now(),
+                churn_streak: 0,
+            },
+        );
+
+        task._handle_activation(
+            &database,
+            &mut clients,
+            &replay_in_progress,
+            &did_hash,
+            "A",
+            false,
+        )
+        .await;
+
+        assert!(
+            timeout(StdDuration::from_millis(500), rx.recv())
+                .await
+                .is_err(),
+            "no redelivery may follow a live-delivery stop"
         );
     }
 
