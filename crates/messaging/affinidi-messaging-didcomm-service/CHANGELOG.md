@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.25] - 2026-08-14
+
+### Changed
+
+- **Track `trust-tasks-rs` 0.6.1** (from 0.4.0), and move the
+  `affinidi-messaging-sdk` requirement to 0.19.7 alongside it. The pairing is
+  the invariant 0.3.24 established: a crate declaring both must name the SDK
+  version whose public `trust_tasks()` types match its own `trust-tasks-rs`, or
+  a resolver can satisfy the manifest with a pair the compiler rejects.
+
+  The two breaking releases in between — an optional `ceremony` member on the
+  `TrustTask<P>` envelope (0.5.0) and `DigestMultibase` narrowing to the `z` and
+  `u` multibase headers (0.6.0) — reach nothing here: this crate hands
+  `trust_tasks_rs::specs::messaging::account` types to `atm.trust_tasks()` and
+  builds no envelopes by struct literal. No source changed.
+
 ## [0.3.24] - 2026-08-09
 
 ### Fixed

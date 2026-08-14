@@ -1,5 +1,21 @@
 # Affinidi Messaging Test Mediator
 
+## 0.2.50 — 14th August 2026
+
+**Tracks `trust-tasks-rs` 0.6.1**, up from 0.4.0, with the
+`affinidi-messaging-sdk` requirement moved to 0.19.7 alongside it — the same
+pairing 0.2.49 introduced, applied to the new version.
+
+The breaking changes in between are an optional `ceremony` member on the
+`TrustTask<P>` envelope (0.5.0), which breaks struct-literal construction and
+exhaustive destructuring only, and `DigestMultibase` narrowing to the `z` and
+`u` multibase headers (0.6.0). Neither reaches this crate. No source changed.
+
+Downstreams that write their own Trust Task assertions against this harness
+need to move to `trust-tasks-rs` 0.6 in the same step: the type is shared
+across the boundary, so a consumer left on 0.4 or 0.5 will fail to compile
+rather than fail to resolve.
+
 ## 0.2.49 — 9th August 2026
 
 **Requires `affinidi-messaging-sdk` 0.19.3, not "0.19".** 0.2.48 shipped asking

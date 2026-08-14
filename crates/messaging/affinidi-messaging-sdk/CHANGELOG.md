@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.19.7] - 2026-08-14
+
+### Changed
+
+- **Track `trust-tasks-rs` 0.6.1**, up from 0.4.0. Two breaking releases sit in
+  between. 0.5.0 added an optional `ceremony` member to the `TrustTask<P>`
+  envelope, which breaks struct-literal construction and exhaustive
+  destructuring but nothing else. 0.6.0 narrowed `DigestMultibase` to the two
+  multibase headers W3C Controlled Identifiers 1.0 §2.4 normatively requires —
+  `z` (base58btc) and `u` (base64url-no-pad) — and enforces each alphabet
+  rather than assuming it, so values previously accepted (base32, base16,
+  base64pad, and strings that were never valid base58) now fail to parse.
+
+  Neither reaches this crate: documents are built through
+  `TrustTask::for_payload` / `respond_with` rather than by struct literal, and
+  no source changed beyond the version requirement.
+
+  It ships as a patch rather than a minor, for the reason 0.19.2 gives: consumers
+  require `affinidi-messaging-sdk` `^0.19` and resolve it from the registry, and
+  a 0.20 would pull a second registry copy of this crate into their graphs. The
+  cost is that `trust-tasks-rs` is a public dependency of the `trust_tasks()`
+  surface, so this is **source-breaking for a consumer still on `trust-tasks-rs`
+  0.4.x or 0.5.x** despite the patch version.
+
 ## [0.19.6] - 2026-08-14
 
 ### Fixed
