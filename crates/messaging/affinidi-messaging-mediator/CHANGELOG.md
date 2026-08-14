@@ -1,5 +1,22 @@
 # Affinidi Messaging Mediator
 
+## 14th August 2026 (0.18.17)
+
+**Tracks `trust-tasks-rs` 0.6.1**, up from 0.4.0, with the
+`affinidi-messaging-sdk` requirement moved to 0.19.7 alongside it — the pairing
+0.18.15 adopted preventively, since `trust-tasks-rs` is a public dependency of
+the SDK's `trust_tasks()` surface and a manifest naming both must name an SDK
+whose types match.
+
+The two breaking releases in between are an optional `ceremony` member on the
+`TrustTask<P>` envelope (0.5.0), which breaks struct-literal construction only,
+and `DigestMultibase` narrowing to the `z` (base58btc) and `u`
+(base64url-no-pad) multibase headers W3C Controlled Identifiers 1.0 §2.4
+requires (0.6.0). Neither reaches this code: no `trust-tasks` type crosses the
+mediator's SDK boundary, it emits no Trust Task error documents, and its
+messaging audit log is not hash-chained so it leaves `entryHash`/`prevHash`
+`None`. No source changed.
+
 ## 14th August 2026 (0.18.16)
 
 **Enabling live delivery now delivers what is already queued.** A message is
