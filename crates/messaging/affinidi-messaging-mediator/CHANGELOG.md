@@ -1,5 +1,33 @@
 # Affinidi Messaging Mediator
 
+## 14th August 2026 (0.18.16)
+
+**Enabling live delivery now delivers what is already queued.** A message is
+live-streamed only if its recipient is live at the instant it arrives, and is
+always stored. Nothing streamed a stored message afterwards — so every message
+that landed in the window between a socket *registering* and that socket
+*enabling live delivery* was queued and never pushed. The client waited on a
+live stream that would never carry it; the mediator reported `queued=1,
+live_delivery=true`; a delivery-request returned the message immediately.
+
+The window is small and widens under load, which is why it presented as an
+intermittent "message never arrived" with clean logs on both sides: the sender's
+outbox reported the frame sent, this mediator reported it queued, and the
+recipient reported silence. It was caught in VTI#918, where a credential sat
+queued for a full 60s while its recipient polled the live stream — reproducible
+only once the test ran six-way concurrent on a loaded runner.
+
+`Start` (live-delivery enable) now triggers the same inbox redelivery that a
+socket replacement already did (issue #374): fetched `DoNotDelete`,
+at-least-once, idempotent by message id, and guarded by the existing
+`replay_in_progress` set so concurrent triggers drain once. `Stop` deliberately
+does not redeliver — the client has just said it does not want pushes.
+
+Note for anyone extending the tests here: `mod tests` in
+`tasks/websocket_streaming.rs` is gated on `feature = "memory-backend"`, so a
+plain `cargo test -p affinidi-messaging-mediator` compiles none of it. Run it
+with `--features memory-backend`.
+
 ## 13th August 2026 (0.18.15)
 
 **Forward a message whose next hop names its mediator by DID.** Cross-mediator
