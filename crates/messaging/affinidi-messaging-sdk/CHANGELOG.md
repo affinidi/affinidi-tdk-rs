@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.19.6] - 2026-08-14
+
+### Fixed
+
+- **A torn-down profile no longer spins the inbound stream forever.** The
+  inbound poll loop treated every error as transient, backed off 500ms and
+  retried — for the life of the process. That is right for a socket
+  reconnecting, but `ATMError::ProfileError` means the profile has no mediator,
+  or its `ws_channel_tx` slot is empty, and that slot is only ever emptied by an
+  explicit teardown (`stop_websocket` / `cleanup_failed_websocket`). A reconnect
+  happens *inside* the transport task and keeps the same command sender, so
+  nothing short of a fresh `profile_enable_websocket` can refill it — and that
+  installs a new transport with a new stream anyway.
+
+  The result was a 2Hz poll against a transport that would never come back, each
+  attempt logging `WebSocket channel not set for profile <did>`: roughly 172,000
+  warnings a day, per leaked profile, drowning every other line in the log.
+  Observed in the trust registry, whose startup fetches its identity from a VTA
+  over an ephemeral `did:key` session; the session is shut down when the fetch
+  completes, and its inbound stream outlived it.
+
+  A terminal error now ends the stream. The delivery layer's forwarder task
+  (`while let Some(item) = stream.next()`) retires cleanly when it does, so the
+  dead transport stops pumping while every other transport is unaffected.
+
+- **An inbound TSP frame that cannot be unpacked is now deleted instead of being
+  redelivered forever.** This stream polls with `auto_delete = false`, so the
+  mediator holds its copy until the consumer acks after a durable handoff. But a
+  frame that fails to unpack never becomes an `Inbound`, so it never reaches the
+  delivery layer that would ack it — and the ack handle was computed and then
+  dropped on the floor. Every reconnect and every restart redelivered it, so one
+  sender whose DID no longer resolves became a permanent boot-time error on the
+  receiving node, indefinitely.
+
+  Unpack failures are now classified the way the trust registry classifies the
+  same failure, so both ends of a TSP hop agree on what "transient" means: a
+  resolution or network fault is retried in-process (3 attempts, 200ms doubling
+  to 800ms) rather than costing a frame we still hold, while bytes that can
+  never decrypt or parse are not retried at all. A frame that exhausts the
+  budget — or that was poison to begin with — is deleted from the mediator and
+  logged at error level with the frame id.
+
+  The retry budget is deliberately tight because the inbound stream is
+  sequential: every retry stalls all other inbound traffic for that profile. The
+  tradeoff is stated plainly at the call site — a resolver outage lasting longer
+  than the budget will discard a frame that would have been valid, which is why
+  the delete is an auditable error line rather than a silent drop.
+
 ## [0.19.5] - 2026-08-11
 
 ### Fixed

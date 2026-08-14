@@ -17,6 +17,7 @@ use futures_util::stream::{self, BoxStream};
 use sha256::digest;
 use tokio::sync::watch;
 
+use crate::errors::ATMError;
 use crate::messages::Folder;
 use crate::messages::compat::UnpackMetadata;
 use crate::protocols::message_pickup::InboundFrame;
@@ -28,6 +29,24 @@ const INBOUND_POLL_WAIT: Duration = Duration::from_secs(10);
 /// Backoff after a transient inbound error (e.g. a websocket reconnect) so the
 /// stream doesn't spin.
 const INBOUND_ERROR_BACKOFF: Duration = Duration::from_millis(500);
+
+/// Attempts (including the first) at unpacking one inbound TSP frame before it
+/// is treated as undeliverable.
+///
+/// Deliberately small: the inbound stream is **sequential**, so every retry here
+/// stalls all other inbound traffic for this profile. Matches the trust
+/// registry's own TSP retry budget (`trust-registry`'s `UNPACK_MAX_ATTEMPTS`),
+/// which faces the identical failure and settled on the same number.
+#[cfg(feature = "tsp")]
+const TSP_UNPACK_MAX_ATTEMPTS: u32 = 3;
+/// Backoff before the second unpack attempt; doubles up to
+/// [`TSP_UNPACK_MAX_BACKOFF`].
+#[cfg(feature = "tsp")]
+const TSP_UNPACK_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
+/// Ceiling on the unpack backoff, bounding the stall a poison frame can impose
+/// on the shared inbound stream.
+#[cfg(feature = "tsp")]
+const TSP_UNPACK_MAX_BACKOFF: Duration = Duration::from_millis(800);
 
 /// A [`MessageTransport`] over the DIDComm ATM wire for one profile.
 ///
@@ -153,6 +172,20 @@ impl MessageTransport for DidCommTransport {
                         }
                         // Poll window elapsed with no message — poll again.
                         Ok(None) => {}
+                        Err(e) if is_terminal_inbound_error(&e) => {
+                            // The profile has no transport and will never grow one
+                            // on its own (see `is_terminal_inbound_error`). End the
+                            // stream so the consumer learns the transport is gone;
+                            // backing off here instead meant an endless 2Hz poll
+                            // against a torn-down profile, one warning per attempt,
+                            // for the life of the process.
+                            tracing::warn!(
+                                profile = %profile.inner.alias,
+                                error = %e,
+                                "inbound stream ending: this profile has no live websocket transport",
+                            );
+                            return None;
+                        }
                         Err(_) => {
                             // Transient (e.g. websocket reconnecting). Back off so we
                             // don't spin; the stream stays alive across reconnects.
@@ -183,6 +216,45 @@ impl MessageTransport for DidCommTransport {
             .map_err(|e| MessagingError::Transport(format!("list outbox failed: {e}")))?;
         Ok(Some(list.into_iter().map(|m| m.msg_id).collect()))
     }
+}
+
+/// Is this inbound-poll error one the stream can never recover from?
+///
+/// [`ATMError::ProfileError`] means the profile has no mediator at all, or its
+/// `ws_channel_tx` slot is empty. That slot is only ever emptied by an explicit
+/// teardown — `stop_websocket` or `cleanup_failed_websocket` — and **never** by
+/// a reconnect, which happens inside the transport task and keeps the same
+/// command sender. So nothing short of a fresh `profile_enable_websocket` can
+/// refill it, and that installs a new transport with a new stream anyway.
+///
+/// Everything else (a socket reconnecting, a transient mediator fault) is
+/// recoverable, and the stream must stay alive across it.
+fn is_terminal_inbound_error(err: &ATMError) -> bool {
+    matches!(err, ATMError::ProfileError(_))
+}
+
+/// Is this TSP unpack failure worth retrying, or is the frame poison?
+///
+/// Mirrors the trust registry's classification of the same failure, so the two
+/// ends of a TSP hop agree on what "transient" means:
+///
+/// - [`ATMError::DIDError`] — resolving the sender's VID (or our own DID)
+///   failed. The overwhelmingly common transient case.
+/// - [`ATMError::TransportError`] / [`ATMError::Disconnected`] /
+///   [`ATMError::TDKError`] — network or resolver-cache trouble underneath.
+/// - Everything else — notably [`ATMError::MsgReceiveError`] (envelope parse,
+///   wrong recipient, decrypt/verify failure) and [`ATMError::SecretsError`]
+///   (our own key material missing) — is a deterministic property of the bytes
+///   or of local configuration. Retrying identical input cannot change it.
+#[cfg(feature = "tsp")]
+fn is_transient_unpack_error(err: &ATMError) -> bool {
+    matches!(
+        err,
+        ATMError::DIDError(_)
+            | ATMError::TransportError(_)
+            | ATMError::Disconnected(_)
+            | ATMError::TDKError(_)
+    )
 }
 
 /// Map an [`InboundFrame`] (DIDComm or TSP, multiplexed on the one socket) to
@@ -217,11 +289,58 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
     // silently skipped and never answered. Mirrors the framework listener's
     // `dispatch_tsp` (the raw-TSP `connect_websocket` path yields already-decoded
     // qb2 and correctly uses `unpack_bytes`; this DIDComm-multiplexed path does not).
-    let (payload, sender) = match atm.tsp().unpack(profile, packed).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to unpack inbound TSP frame — skipping");
-            return None;
+    let mut backoff = TSP_UNPACK_INITIAL_BACKOFF;
+    let mut attempt = 1;
+    let (payload, sender) = loop {
+        match atm.tsp().unpack(profile, packed).await {
+            Ok(v) => break v,
+            Err(e) if is_transient_unpack_error(&e) && attempt < TSP_UNPACK_MAX_ATTEMPTS => {
+                // A resolver hiccup must not cost us the frame. Retry in-process
+                // rather than waiting for the next redelivery — the bytes are
+                // still in hand, and the stream is sequential, so the budget is
+                // deliberately tight.
+                tracing::warn!(
+                    error = %e,
+                    attempt,
+                    "failed to unpack inbound TSP frame — retrying in {backoff:?}",
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(TSP_UNPACK_MAX_BACKOFF);
+                attempt += 1;
+            }
+            Err(e) => {
+                // Out of attempts, or bytes that can never unpack.
+                //
+                // Delete the frame. This stream polls with `auto_delete = false`,
+                // so the mediator still holds it, and a frame that never becomes
+                // an `Inbound` never reaches the delivery layer that would ack it
+                // — the ack handle computed above is the only chance anyone gets
+                // to release it. Left alone it is redelivered on every reconnect
+                // and every restart until the mediator's own expiry, which is how
+                // a single unresolvable sender turns into a permanent boot-time
+                // error on the receiving node.
+                //
+                // The tradeoff is deliberate and it is not free: a resolver
+                // outage lasting longer than the retry budget will discard a
+                // frame that would have been valid. Logged at error level, with
+                // the sender the envelope claims and the frame id, so the loss is
+                // auditable rather than silent.
+                tracing::error!(
+                    error = %e,
+                    attempts = attempt,
+                    frame = %ack,
+                    "cannot unpack an inbound TSP frame — deleting it from the mediator so it \
+                     stops being redelivered",
+                );
+                if let Err(delete_err) = atm.delete_message_background(profile, &ack).await {
+                    tracing::warn!(
+                        error = %delete_err,
+                        frame = %ack,
+                        "could not delete the undeliverable TSP frame — it will be redelivered",
+                    );
+                }
+                return None;
+            }
         }
     };
     let received = ReceivedMessage {
@@ -332,6 +451,55 @@ fn authenticated_sender(message: &Message, meta: &UnpackMetadata) -> Option<Stri
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn only_a_dead_profile_ends_the_inbound_stream() {
+        // The case this exists for: `ProfileError` means the profile's websocket
+        // channel slot is empty, and only an explicit teardown empties it — a
+        // reconnect keeps the same sender. Retrying it is an endless 2Hz poll
+        // against a transport that will never come back, one warning per attempt.
+        assert!(is_terminal_inbound_error(&ATMError::ProfileError(
+            "No WebSocket channel set for profile".into()
+        )));
+
+        // Everything else must keep the stream alive — a socket reconnecting is
+        // precisely what the backoff path is for, and ending the stream there
+        // would drop inbound traffic on every blip.
+        assert!(!is_terminal_inbound_error(&ATMError::TransportError(
+            "websocket reconnecting".into()
+        )));
+        assert!(!is_terminal_inbound_error(&ATMError::Disconnected(
+            "socket closed".into()
+        )));
+        assert!(!is_terminal_inbound_error(&ATMError::MsgReceiveError(
+            "bad frame".into()
+        )));
+    }
+
+    #[cfg(feature = "tsp")]
+    #[test]
+    fn resolver_failures_are_retried_and_bad_bytes_are_not() {
+        // A momentary resolver outage must not cost us a frame we still hold.
+        assert!(is_transient_unpack_error(&ATMError::DIDError(
+            "couldn't resolve TSP VID did:web:peer".into()
+        )));
+        assert!(is_transient_unpack_error(&ATMError::TransportError(
+            "connection reset".into()
+        )));
+        assert!(is_transient_unpack_error(&ATMError::TDKError(
+            "resolver cache miss".into()
+        )));
+
+        // Bytes that cannot decrypt or parse will never succeed however often we
+        // try, and our own key material being absent is local misconfiguration.
+        // Retrying either just delays the delete.
+        assert!(!is_transient_unpack_error(&ATMError::MsgReceiveError(
+            "couldn't unpack TSP message: bad signature".into()
+        )));
+        assert!(!is_transient_unpack_error(&ATMError::SecretsError(
+            "no Ed25519 authentication key".into()
+        )));
+    }
 
     #[test]
     fn to_inbound_maps_didcomm_message_and_meta() {
