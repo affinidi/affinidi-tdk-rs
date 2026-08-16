@@ -1,5 +1,42 @@
 # Affinidi mdoc Changelog
 
+## 16th August 2026 (0.2.7)
+
+Adds the CBOR wire codec for **`DeviceResponse`** — `to_cbor_bytes` /
+`from_cbor_bytes` — completing the pair started in 0.2.6. This is the
+presentation half: the bytes a holder returns to a reader, and
+(base64url-encoded) the content of an OpenID4VP `vp_token` entry for an
+`mso_mdoc` credential.
+
+Unlike `IssuerSigned`, this is not a straight container mapping. `DeviceResponse`
+models a **single** document while the wire form carries a `documents` array of
+`Document` entries, each nesting `issuerSigned` and `deviceSigned`. Encoding
+emits exactly one entry; decoding refuses anything other than one document
+rather than silently dropping what a reader asked for.
+
+The `issuerSigned` encode/decode is now shared with the 0.2.6 `IssuerSigned`
+path (`issuer_signed_to_value` / `issuer_signed_from_value`) — a `Document`
+embeds exactly that structure, and the two must not drift.
+
+**`deviceSigned.nameSpaces` is Tag24-wrapped on the wire** even though
+`DeviceSigned::namespaces_bytes` holds the untagged inner CBOR. The struct keeps
+the inner form because that is what `DeviceAuthentication` embeds before signing;
+the tag belongs to the wire. Getting this backwards yields a response whose
+device signature no verifier can reproduce.
+
+Two tests assert the **encoded byte shape** rather than a round trip
+(`encoded_device_namespaces_are_tag24_wrapped_on_the_wire`,
+`encoded_issuer_auth_is_an_untagged_cose_sign1`). This is deliberate: the decoder
+tolerates a bare `bstr` for `nameSpaces` and a tag-18 `COSE_Sign1`, so an encoder
+that omits the tag — or adds one — still round-trips cleanly through our own
+code. It is self-consistent and wrong, and only a peer implementation would
+notice. Both assertions were mutation-checked: breaking the encoder fails them,
+while the round-trip tests stayed green.
+
+Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md)
+point 3 — purely additive, and a minor bump would break the `[patch.crates-io]`
+redirects.
+
 ## 16th August 2026 (0.2.6)
 
 Adds the CBOR **wire codec** for `IssuerSigned` — `to_cbor_bytes` /
