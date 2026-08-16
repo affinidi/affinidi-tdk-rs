@@ -1,5 +1,35 @@
 # Affinidi Messaging Mediator
 
+## 17th August 2026 (0.18.18)
+
+**Tracks `trust-tasks-rs` 0.9.0**, up from 0.6.1, with the
+`affinidi-messaging-sdk` requirement moved to 0.19.8 alongside it — the same
+pairing 0.18.15 adopted preventively, since `trust-tasks-rs` is a public
+dependency of the SDK's `trust_tasks()` surface and a manifest naming both must
+name an SDK whose types match.
+
+Unlike the last three bumps, this one **does** reach the source. 0.9.0 gives
+`consume_inbound` a required `PayloadPolicy` argument (SPEC.md §7.2 item 2), and
+the `ping` consume path now passes
+`PayloadPolicy::<NoValidator>::AcceptUnvalidated` — the behaviour the call has
+always had, now stated rather than implied. `ping::v0_1::Payload` is a generated
+struct with `deny_unknown_fields` and validating newtypes, so deserializing into
+it already enforced the required members, their types, and the pattern/length
+constraints. What `Validate` would add is the residue a Rust type cannot express
+(`minProperties`, `minItems` on an optional array, conditional subschemas), and
+the `ping` spec declares none of it.
+
+**No document is accepted or refused differently as a result of this release.**
+Moving to `Validate` would be a behaviour change — it can begin refusing
+documents a peer sends today — and belongs in its own release with its own
+rollout, not folded into a dependency bump.
+
+The other two breaking releases in between do not reach this code: 0.7.0 made
+`StandardCode` `#[non_exhaustive]` and nothing here matches on it, and 0.8.0's
+new `cancelled` code and `trust-task-control/0.1` payloads are additive. No
+`trust-tasks` type crosses the mediator's `vta-sdk` boundary, so the second
+`trust-tasks-rs` that boundary still carries stays inert.
+
 ## 14th August 2026 (0.18.17)
 
 **Tracks `trust-tasks-rs` 0.6.1**, up from 0.4.0, with the

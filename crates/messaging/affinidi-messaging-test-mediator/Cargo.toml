@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.2.50"
+version = "0.2.51"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -54,7 +54,7 @@ affinidi-secrets-resolver = { version = "0.5", path = "../../core/affinidi-secre
 affinidi-did-resolver-cache-sdk = { version = "0.8", path = "../../identity/affinidi-did-resolver-cache-sdk" }
 
 # ── SDK client (for the e2e test environment) ───────────────────────────
-affinidi-messaging-sdk = { version = "0.19.7", path = "../affinidi-messaging-sdk" }
+affinidi-messaging-sdk = { version = "0.19.8", path = "../affinidi-messaging-sdk" }
 
 # ── JWT signing key generation for the test mediator's session tokens ───
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
@@ -95,7 +95,7 @@ affinidi-tsp = { version = "0.1", path = "../affinidi-tsp" }
 ## the stored base64url form so the SDK can unpack it (tsp_websocket test).
 base64 = "0.22"
 ## Trust Tasks payload types named by the Trust Tasks integration tests.
-trust-tasks-rs = "0.6.1"
+trust-tasks-rs = "0.9"
 ## Tracing subscriber for test diagnostics.
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ## WebSocket handshake test.

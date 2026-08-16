@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.13.3"
+version = "0.13.4"
 description = "CLI tools for Affinidi Messaging (mediator administration)"
 edition.workspace = true
 authors.workspace = true
@@ -21,9 +21,9 @@ path = "src/mediator_administration/main.rs"
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
 ## SDK for connecting to and communicating with a running mediator
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.19.7" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.19.8" }
 ## Trust Tasks payload types (the atm.trust_tasks() surface returns/accepts these).
-trust-tasks-rs = "0.6.1"
+trust-tasks-rs = "0.9"
 ## TDK for DID resolution and crypto utilities
 affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.8" }
 ## DIDComm message types — used by example binaries

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.26] - 2026-08-17
+
+### Changed
+
+- **Track `trust-tasks-rs` 0.9.0** and `affinidi-messaging-sdk` 0.19.8, up from
+  0.6.1 / 0.19.7. Version requirements only — the single use here is
+  `specs::messaging::account`, whose `v0_1` types are shape-identical across the
+  move. See the SDK's 0.19.8 entry for what the three intervening breaking
+  releases changed and why this ships as a patch.
+
 ## [0.3.25] - 2026-08-14
 
 ### Changed

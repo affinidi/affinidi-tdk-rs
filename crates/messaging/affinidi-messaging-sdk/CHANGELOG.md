@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.19.8] - 2026-08-17
+
+### Changed
+
+- **Track `trust-tasks-rs` 0.9.0**, up from 0.6.1. Three breaking releases sit
+  in between, none of which reaches this crate's source:
+
+  - **0.7.0** made `StandardCode` `#[non_exhaustive]`. Nothing here matches on
+    it, so no arm had to be added — and this is the last time a new framework
+    error code will break a downstream `match`.
+  - **0.8.0** added `StandardCode::Cancelled` and the `trust-task-control/0.1`
+    payloads, and moved emitted error documents to `trust-task-error/0.5`.
+    Additive on the Rust side because of the attribute above.
+  - **0.9.0** gave `consume_inbound` a required `PayloadPolicy` argument
+    (SPEC.md §7.2 item 2) and replaced `ValidatedPayload::SCHEMA_JSON` with
+    `Payload::PAYLOAD_SCHEMA`. This crate calls neither: it builds documents
+    through `TrustTask::for_payload` / `respond_with` and decodes replies
+    directly, so only the version requirement moved.
+
+  The `v0_1` payload types the `trust_tasks()` surface returns — `ping`,
+  `account`, `acl`, `access_list`, `audit`, `config` — are shape-identical
+  across the move. What changes is which crate version provides them.
+
+  It ships as a patch rather than a minor, for the reason 0.19.2 and 0.19.7
+  both give: consumers require `affinidi-messaging-sdk` `^0.19` and resolve it
+  from the registry, so a 0.20 would pull a second registry copy of this crate
+  into their graphs — the exact defect this bump exists to remove, relocated one
+  crate over. The cost is unchanged and still worth stating: `trust-tasks-rs` is
+  a public dependency of the `trust_tasks()` surface, so this is
+  **source-breaking for a consumer still on `trust-tasks-rs` 0.6.x** despite the
+  patch version. Move that pin in the same change.
+
 ## [0.19.7] - 2026-08-14
 
 ### Changed
