@@ -127,6 +127,47 @@ impl CryptoSuiteOps for EddsaRdfc2022 {
 }
 
 // ---------------------------------------------------------------------
+// ECDSA / P-256 — ecdsa-jcs-2019
+// ---------------------------------------------------------------------
+
+/// `ecdsa-jcs-2019` — ES256 signatures over JCS-canonicalized documents.
+///
+/// P-256 only; see [`CryptoSuite::EcdsaJcs2019`] for why P-384 is excluded
+/// rather than merely unimplemented.
+pub struct EcdsaJcs2019;
+
+impl CryptoSuiteOps for EcdsaJcs2019 {
+    fn name(&self) -> &'static str {
+        "ecdsa-jcs-2019"
+    }
+    fn canonicalization(&self) -> Canonicalization {
+        Canonicalization::Jcs
+    }
+    fn compatible_key_types(&self) -> &'static [KeyType] {
+        &[KeyType::P256]
+    }
+    fn verify(&self, key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrityError> {
+        use crate::SignatureFailure;
+
+        // `data` is the pipeline's `proof_hash || doc_hash`. ECDSA hashes its
+        // input as part of signing, so ES256 applies SHA-256 over those 64
+        // bytes — unlike Ed25519, which signs them directly. Both match their
+        // respective specs; the difference is not a bug to be normalised away.
+        match affinidi_crypto::p256::verify(key, data, sig) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(DataIntegrityError::InvalidSignature {
+                suite: CryptoSuite::EcdsaJcs2019,
+                reason: SignatureFailure::Invalid,
+            }),
+            Err(_) => Err(DataIntegrityError::InvalidSignature {
+                suite: CryptoSuite::EcdsaJcs2019,
+                reason: SignatureFailure::Malformed,
+            }),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
 // BBS-2023 (selective disclosure)
 // ---------------------------------------------------------------------
 

@@ -611,6 +611,61 @@ mod tests {
             .expect("verify via resolver");
     }
 
+    /// The end-to-end property that matters: a P-256 key signs a document and
+    /// the proof verifies through the ordinary `did:key` resolver path, with no
+    /// suite named by hand at either end.
+    #[tokio::test]
+    async fn sign_and_verify_via_did_key_resolver_p256() {
+        use crate::{DidKeyResolver, VerifyOptions};
+
+        let secret = Secret::generate_p256(None, None).expect("generate P-256");
+        let pk_mb = secret.get_public_keymultibase().unwrap();
+        let mut signer_secret = secret.clone();
+        signer_secret.id = format!("did:key:{pk_mb}#{pk_mb}");
+
+        let doc = json!({ "ecdsa": "did:key" });
+        let proof = DataIntegrityProof::sign(&doc, &signer_secret, SignOptions::new())
+            .await
+            .expect("sign");
+        assert_eq!(
+            proof.cryptosuite,
+            crate::crypto_suites::CryptoSuite::EcdsaJcs2019,
+            "a P-256 signer must default to ecdsa-jcs-2019 without being told"
+        );
+
+        proof
+            .verify(&doc, &DidKeyResolver, VerifyOptions::new())
+            .await
+            .expect("verify via resolver");
+    }
+
+    /// A proof must not survive its document changing — ECDSA is randomised, so
+    /// a round-trip test alone would still pass against a verify that ignored
+    /// the payload.
+    #[tokio::test]
+    async fn a_p256_proof_does_not_verify_against_a_tampered_document() {
+        use crate::{DidKeyResolver, VerifyOptions};
+
+        let secret = Secret::generate_p256(None, None).expect("generate P-256");
+        let pk_mb = secret.get_public_keymultibase().unwrap();
+        let mut signer_secret = secret.clone();
+        signer_secret.id = format!("did:key:{pk_mb}#{pk_mb}");
+
+        let doc = json!({ "amount": 10 });
+        let proof = DataIntegrityProof::sign(&doc, &signer_secret, SignOptions::new())
+            .await
+            .expect("sign");
+
+        let tampered = json!({ "amount": 1000 });
+        assert!(
+            proof
+                .verify(&tampered, &DidKeyResolver, VerifyOptions::new())
+                .await
+                .is_err(),
+            "a P-256 proof must not verify against a document it did not sign"
+        );
+    }
+
     #[cfg(feature = "ml-dsa")]
     #[tokio::test]
     async fn sign_and_verify_via_did_key_resolver_ml_dsa() {
@@ -815,17 +870,45 @@ mod tests {
         assert_eq!(a.proof_value, b.proof_value, "ML-DSA must be deterministic");
     }
 
+    /// This key used to be the crate's "bad key" fixture, on the strength of
+    /// signing failing for it. It is a **P-256** key, and the failure was only
+    /// ever "no suite compiled in for this key type" — so `ecdsa-jcs-2019`
+    /// turns it into a supported key, and the old assertion asserted the
+    /// absence of a feature rather than any property of the key.
     #[tokio::test]
-    async fn test_sign_bad_key() {
+    async fn test_sign_p256_key_now_produces_an_ecdsa_jcs_2019_proof() {
         let generic_doc = json!({"test": "test_data"});
         let pub_key = "zruqgFba156mDWfMUjJUSAKUvgCgF5NfgSYwSuEZuXpixts8tw3ot5BasjeyM65f8dzk5k6zgXf7pkbaaBnPrjCUmcJ";
         let pri_key = "z42tmXtqqQBLmEEwn8tfi1bA2ghBx9cBo6wo8a44kVJEiqyA";
         let secret = Secret::from_multibase(pri_key, Some(&format!("did:key:{pub_key}#{pub_key}")))
             .expect("Couldn't create test key data");
+        assert_eq!(
+            secret.get_key_type(),
+            affinidi_secrets_resolver::secrets::KeyType::P256
+        );
+
+        let proof = DataIntegrityProof::sign(&generic_doc, &secret, SignOptions::new())
+            .await
+            .expect("a P-256 key signs under ecdsa-jcs-2019");
+        assert_eq!(
+            proof.cryptosuite,
+            crate::crypto_suites::CryptoSuite::EcdsaJcs2019
+        );
+    }
+
+    /// The genuine "unsupported key type" case the previous test was standing
+    /// in for. secp256k1 has no Data Integrity suite here, so it must still
+    /// fail — otherwise a key type nothing can verify would sign silently.
+    #[tokio::test]
+    async fn test_sign_rejects_a_key_type_with_no_suite() {
+        let generic_doc = json!({"test": "test_data"});
+        let secret =
+            Secret::generate_secp256k1(Some("did:key:k#k"), None).expect("generate secp256k1");
         assert!(
             DataIntegrityProof::sign(&generic_doc, &secret, SignOptions::new())
                 .await
-                .is_err()
+                .is_err(),
+            "a key type with no compiled-in suite must not sign"
         );
     }
 

@@ -109,6 +109,8 @@ impl Signer for Secret {
                 let signing_key = SigningKey::from_bytes(&private_bytes);
                 Ok(signing_key.sign(data).to_bytes().to_vec())
             }
+            KeyType::P256 => affinidi_crypto::p256::sign(self.get_private_bytes(), data)
+                .map_err(DataIntegrityError::signing),
             #[cfg(feature = "ml-dsa")]
             KeyType::MlDsa44 => {
                 affinidi_crypto::ml_dsa::sign_ml_dsa_44(self.get_private_bytes(), data)

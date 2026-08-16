@@ -26,6 +26,17 @@ pub enum CryptoSuite {
     /// <https://www.w3.org/TR/vc-di-eddsa/>
     #[serde(rename = "eddsa-rdfc-2022")]
     EddsaRdfc2022,
+    /// ECDSA JCS 2019 spec — ES256 over JCS-canonicalized documents.
+    ///
+    /// **P-256 only.** The spec also defines P-384, but pairs it with
+    /// SHA-384, and this pipeline hashes with SHA-256 unconditionally
+    /// (`prepare_sign_input`). Accepting a P-384 key here would emit
+    /// proofs that no conformant verifier reproduces, so the key-type
+    /// list is deliberately narrower than the spec's.
+    ///
+    /// <https://www.w3.org/TR/vc-di-ecdsa/>
+    #[serde(rename = "ecdsa-jcs-2019")]
+    EcdsaJcs2019,
     /// BBS 2023 spec — BBS signatures with zero-knowledge selective disclosure.
     ///
     /// <https://www.w3.org/TR/vc-di-bbs/>
@@ -57,6 +68,7 @@ impl TryFrom<&str> for CryptoSuite {
         match value {
             "eddsa-jcs-2022" => Ok(CryptoSuite::EddsaJcs2022),
             "eddsa-rdfc-2022" => Ok(CryptoSuite::EddsaRdfc2022),
+            "ecdsa-jcs-2019" => Ok(CryptoSuite::EcdsaJcs2019),
             #[cfg(feature = "bbs-2023")]
             "bbs-2023" => Ok(CryptoSuite::Bbs2023),
             #[cfg(feature = "ml-dsa")]
@@ -104,6 +116,7 @@ impl CryptoSuite {
         match self {
             CryptoSuite::EddsaJcs2022 => &suite_ops::EddsaJcs2022,
             CryptoSuite::EddsaRdfc2022 => &suite_ops::EddsaRdfc2022,
+            CryptoSuite::EcdsaJcs2019 => &suite_ops::EcdsaJcs2019,
             #[cfg(feature = "bbs-2023")]
             CryptoSuite::Bbs2023 => &suite_ops::Bbs2023,
             #[cfg(feature = "ml-dsa")]
@@ -152,6 +165,7 @@ impl CryptoSuite {
     pub fn default_for_key_type(key_type: KeyType) -> Option<Self> {
         match key_type {
             KeyType::Ed25519 => Some(CryptoSuite::EddsaJcs2022),
+            KeyType::P256 => Some(CryptoSuite::EcdsaJcs2019),
             #[cfg(feature = "ml-dsa")]
             KeyType::MlDsa44 => Some(CryptoSuite::MlDsa44Jcs2024),
             #[cfg(feature = "slh-dsa")]
@@ -256,5 +270,63 @@ mod tests {
                 .validate_key_type(KeyType::P521)
                 .is_err()
         );
+    }
+    // ── ecdsa-jcs-2019 ────────────────────────────────────────────────
+
+    #[test]
+    fn ecdsa_jcs_2019_round_trips_through_its_wire_name() {
+        let suite = CryptoSuite::try_from("ecdsa-jcs-2019").expect("known suite");
+        assert_eq!(suite, CryptoSuite::EcdsaJcs2019);
+        assert_eq!(suite.ops().name(), "ecdsa-jcs-2019");
+        // The serde rename is what lands in a proof; pin the exact bytes,
+        // because a proof naming an unknown suite fails verification with a
+        // message that points nowhere near the typo.
+        assert_eq!(
+            serde_json::to_string(&CryptoSuite::EcdsaJcs2019).unwrap(),
+            "\"ecdsa-jcs-2019\""
+        );
+    }
+
+    #[test]
+    fn p256_defaults_to_ecdsa_jcs_2019() {
+        assert_eq!(
+            CryptoSuite::default_for_key_type(KeyType::P256),
+            Some(CryptoSuite::EcdsaJcs2019)
+        );
+    }
+
+    /// The spec defines P-384 for this suite, but pairs it with SHA-384 while
+    /// this pipeline hashes with SHA-256 unconditionally. Accepting a P-384 key
+    /// would emit proofs no conformant verifier reproduces, so the narrowing is
+    /// deliberate — assert it rather than let a later "completeness" patch
+    /// widen it back.
+    #[test]
+    fn p384_is_refused_because_the_pipeline_hashes_sha256() {
+        assert!(
+            CryptoSuite::EcdsaJcs2019
+                .validate_key_type(KeyType::P384)
+                .is_err()
+        );
+        assert!(CryptoSuite::default_for_key_type(KeyType::P384).is_none());
+    }
+
+    #[test]
+    fn ecdsa_jcs_2019_rejects_an_ed25519_key() {
+        assert!(
+            CryptoSuite::EcdsaJcs2019
+                .validate_key_type(KeyType::Ed25519)
+                .is_err()
+        );
+        // ...and the converse, so the two suites cannot be silently swapped.
+        assert!(
+            CryptoSuite::EddsaJcs2022
+                .validate_key_type(KeyType::P256)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn ecdsa_jcs_2019_uses_jcs_not_rdfc() {
+        assert!(!CryptoSuite::EcdsaJcs2019.is_rdfc());
     }
 }
