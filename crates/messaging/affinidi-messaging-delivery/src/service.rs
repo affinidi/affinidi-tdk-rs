@@ -82,7 +82,17 @@ pub type TransportId = String;
 type WaiterMap = Arc<Mutex<HashMap<String, oneshot::Sender<ReceivedMessage>>>>;
 
 /// Buffered unsolicited inbound messages per subscriber before a slow consumer
-/// starts lagging (and losing the oldest — at-least-once, dedup on the key).
+/// starts lagging.
+///
+/// A lagging consumer loses the **oldest** buffered messages, and loses them for
+/// good: the dispatcher acks each message once it has been handed to this
+/// buffer, and an ack is a delete at the mediator, so an overwritten entry
+/// exists nowhere else. The old note here claimed "at-least-once, dedup on the
+/// key" — that is true of redelivery *before* an ack, and this is after one.
+///
+/// So this is the one lossy step left in the inbound path, and the only defence
+/// is a consumer that drains promptly. `subscribe()` logs at `error!` when it
+/// happens rather than skipping the gap in silence.
 const SUBSCRIBE_BUFFER: usize = 256;
 
 static KEY_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -582,8 +592,28 @@ impl MessagingService {
             loop {
                 match rx.recv().await {
                     Ok(item) => return Some((item, rx)),
-                    // A slow subscriber that fell behind: skip the gap, keep going.
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    // A slow subscriber that fell behind. The gap is skipped —
+                    // `broadcast` has already overwritten those messages and
+                    // there is no way to get them back from here.
+                    //
+                    // Reported, not swallowed. This used to `continue` in
+                    // silence, which made the one unrecoverable loss in the
+                    // inbound path also the only one with no trace: the
+                    // dispatcher had already acked (deleted) each of those
+                    // messages at the mediator, so `skipped` is a count of
+                    // application messages that no longer exist anywhere. An
+                    // operator seeing this should make the consumer drain
+                    // faster or raise `SUBSCRIBE_BUFFER`.
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::error!(
+                            skipped,
+                            buffer = SUBSCRIBE_BUFFER,
+                            "subscriber fell behind: {skipped} inbound message(s) were \
+                             overwritten and are unrecoverable — this consumer is not \
+                             draining fast enough"
+                        );
+                        continue;
+                    }
                     Err(broadcast::error::RecvError::Closed) => return None,
                 }
             }
@@ -726,6 +756,10 @@ async fn run_dispatcher(
 ) {
     while let Some((src_id, item)) = rx.recv().await {
         let ack = item.ack.clone();
+        // Kept for the no-consumer diagnostic below: `item` is moved into the
+        // routing arms, and a warning that cannot name the message is one an
+        // operator cannot act on.
+        let item_thread_id = item.thread_id.clone();
 
         // 1. A layer receipt is consumed by the layer, not the application: it
         //    confirms the matching outbox entry Sent → Delivered. A receipt for
@@ -772,36 +806,71 @@ async fn run_dispatcher(
             .clone()
             .and_then(|thid| inner.waiters.lock().expect("waiters mutex").remove(&thid));
 
-        match waiter {
+        let handed_off = match waiter {
             // A reply for an in-flight request → its waiter. A reply is its own
             // evidence (the protocol-reply source); we do NOT also receipt it.
-            Some(tx) => {
-                let _ = tx.send(item.message);
-            }
-            // Unsolicited → subscribers (dropped if none are listening). If we
-            // run the layer (a packer is configured) AND this is a fresh inbound
-            // rather than a reply to our own Guaranteed send, emit a fire-and-
-            // forget receipt echoing the correlation so *that* sender's outbox
-            // entry settles Delivered. A message that just confirmed one of our
-            // sends is a reply, not a fresh Guaranteed push, so it needs no
-            // receipt from us (its thread id is the original thread, not the
-            // reply's own key — a receipt would be a no-op on the peer anyway).
-            None => {
-                if !confirmed_our_send
-                    && let Some(packer) = inner.receipt_packer.as_ref()
-                    && let (Some(to), Some(confirms)) =
-                        (item.message.sender.clone(), item.thread_id.clone())
-                {
-                    spawn_receipt(&inner, packer.clone(), to, confirms);
-                }
-                let _ = inner.subscribers.send(item);
-            }
-        }
+            //
+            // The send is on a clone so a *dead* waiter — the caller timed out
+            // and dropped its receiver between our `remove` above and here — does
+            // not consume the message. It is still application traffic, and a
+            // reply that arrived a moment after its caller gave up is worth
+            // delivering to whoever else is listening rather than discarding.
+            Some(tx) => match tx.send(item.message.clone()) {
+                Ok(()) => true,
+                Err(_) => deliver_unsolicited(&inner, confirmed_our_send, item),
+            },
+            None => deliver_unsolicited(&inner, confirmed_our_send, item),
+        };
 
         // Ack once, HERE, after handoff — over the transport the message arrived
         // on, never in a per-caller loop and never before handoff.
-        ack_via_source(&inner, &src_id, ack).await;
+        //
+        // **Only when the handoff actually happened.** This used to ack
+        // unconditionally, which broke the contract `Inbound` states and the
+        // transport adapter sets `auto_delete = false` to honour: an ack is a
+        // delete at the mediator, so acking a message nobody received destroys
+        // it. The `send` above returns `Err` precisely when there was no
+        // consumer — no subscriber installed yet at startup, or the host on its
+        // way down — and those are the moments a client is most likely to be
+        // handed a membership credential it will never see again.
+        //
+        // Leaving it unacked is the whole point of the contract: the mediator
+        // keeps its copy and offers it again on the next pickup, where a
+        // subscriber that has since appeared collects it.
+        if handed_off {
+            ack_via_source(&inner, &src_id, ack).await;
+        } else {
+            tracing::warn!(
+                transport = %src_id,
+                thread_id = ?item_thread_id,
+                "inbound message had no consumer — leaving it unacked so the mediator \
+                 redelivers it, rather than acking (deleting) a message nobody received"
+            );
+        }
     }
+}
+
+/// Offer an unsolicited inbound to `subscribe()` consumers, emitting a delivery
+/// receipt first when this layer runs one.
+///
+/// Returns whether anyone actually received it — `broadcast::send` reports `Err`
+/// when there are no subscribers, and that is the signal
+/// [`run_dispatcher`] needs to decide whether acking would be honest.
+///
+/// If we run the layer (a packer is configured) AND this is a fresh inbound
+/// rather than a reply to our own Guaranteed send, emit a fire-and-forget receipt
+/// echoing the correlation so *that* sender's outbox entry settles Delivered. A
+/// message that just confirmed one of our sends is a reply, not a fresh
+/// Guaranteed push, so it needs no receipt from us (its thread id is the original
+/// thread, not the reply's own key — a receipt would be a no-op on the peer).
+fn deliver_unsolicited(inner: &Arc<ServiceInner>, confirmed_our_send: bool, item: Inbound) -> bool {
+    if !confirmed_our_send
+        && let Some(packer) = inner.receipt_packer.as_ref()
+        && let (Some(to), Some(confirms)) = (item.message.sender.clone(), item.thread_id.clone())
+    {
+        spawn_receipt(inner, packer.clone(), to, confirms);
+    }
+    inner.subscribers.send(item).is_ok()
 }
 
 /// Ack `ack` over the transport it arrived on (`src_id`). If that transport was
@@ -1075,6 +1144,98 @@ mod tests {
         assert_eq!(got.message.id, "push-1");
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(h.transport.acked.lock().unwrap().as_slice(), &["q-push"]);
+    }
+
+    /// The bug this pair of tests exists for: an ack is a delete at the
+    /// mediator, so acking a message no consumer received destroys it. The
+    /// transport sets `auto_delete = false` and `Inbound` documents
+    /// "never ack-before-handoff" precisely so the layer can decline to ack —
+    /// and the layer was acking unconditionally.
+    ///
+    /// With no subscriber installed, the message must be left **unacked** so the
+    /// mediator keeps it and offers it again.
+    #[tokio::test]
+    async fn a_message_with_no_consumer_is_not_acked() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+
+        // Deliberately no `subscribe()` — the startup window, and the shape of
+        // every "the client never got its credential" report.
+        h.inbound_tx
+            .send(inbound("orphan-1", None, "q-orphan"))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(
+            h.transport.acked.lock().unwrap().is_empty(),
+            "acking here deletes a message nobody received; it must stay at the \
+             mediator for redelivery"
+        );
+        // Keep the service alive to the end of the test so the assertion is
+        // about routing, not about a dropped dispatcher.
+        drop(svc);
+    }
+
+    /// The complement: once a consumer exists the message is delivered *and*
+    /// acked, so declining to ack above cannot become a mediator that never
+    /// drains.
+    #[tokio::test]
+    async fn a_message_with_a_consumer_is_still_acked() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let mut sub = svc.subscribe();
+
+        h.inbound_tx
+            .send(inbound("push-2", None, "q-push-2"))
+            .unwrap();
+
+        let got = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("subscribe yields the push")
+            .expect("stream item");
+        assert_eq!(got.message.id, "push-2");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            h.transport.acked.lock().unwrap().as_slice(),
+            &["q-push-2"],
+            "a delivered message must still be acked, or the mailbox never drains"
+        );
+    }
+
+    /// A reply whose caller timed out used to be swallowed by the dead oneshot
+    /// and acked anyway — deleted, unseen, with the caller's own timeout as the
+    /// only clue. It is still application traffic: offer it to subscribers.
+    #[tokio::test]
+    async fn a_reply_whose_waiter_died_falls_through_to_subscribers() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let mut sub = svc.subscribe();
+
+        // Register a waiter for the thread, then drop its receiver — exactly what
+        // a timed-out `request` leaves behind.
+        let (tx, rx) = oneshot::channel();
+        svc.inner
+            .waiters
+            .lock()
+            .expect("waiters mutex")
+            .insert("thread-late".to_string(), tx);
+        drop(rx);
+
+        h.inbound_tx
+            .send(inbound("late-reply", Some("thread-late"), "q-late"))
+            .unwrap();
+
+        let got = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("a late reply must reach subscribers, not vanish")
+            .expect("stream item");
+        assert_eq!(got.message.id, "late-reply");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            h.transport.acked.lock().unwrap().as_slice(),
+            &["q-late"],
+            "it was delivered, so it is acked"
+        );
     }
 
     #[tokio::test]

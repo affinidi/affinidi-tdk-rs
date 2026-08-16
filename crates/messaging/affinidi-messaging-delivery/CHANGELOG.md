@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.1.14] - 2026-08-16
+
+**A message no consumer received is no longer acked.** An ack is a delete at the
+mediator, so acking an undelivered message destroys it — and the dispatcher was
+acking unconditionally, including when `subscribers.send` had just reported that
+nobody was listening. This is the contract `Inbound` documents ("only **after**
+the message is durably handed off … never ack-before-handoff") and the one the
+SDK's transport adapter sets `auto_delete = false` to honour; the layer was the
+piece not keeping it.
+
+The window is small and its consequences are not: no subscriber is installed for
+a moment at startup and again on the way down, and what arrives in that window is
+whatever the peer happened to send — a membership credential, a join verdict.
+Downstream this surfaced as OpenVTC joins stuck `Pending` forever with clean logs
+on both sides (OpenVTC/openvtc#221), because the only record was that nothing
+happened.
+
+- **Ack is now conditional on handoff.** `broadcast::send` returns `Err` when
+  there are no subscribers; that is the signal. An unacked message stays at the
+  mediator and is offered again on the next pickup, which is exactly what the
+  contract is for.
+- **A reply whose waiter died falls through to subscribers.** A caller that timed
+  out leaves a dead `oneshot`; the reply used to be swallowed by it and acked
+  anyway. It is still application traffic, so it now goes to `subscribe()` and is
+  acked only if someone takes it.
+- **A lagging subscriber is reported at `error!` instead of skipped in silence.**
+  Overwritten messages are unrecoverable — the dispatcher acked them on the way
+  in — so this is the one lossy step left in the inbound path, and it was also
+  the only one with no trace. The count of lost messages is now named.
+- `SUBSCRIBE_BUFFER`'s note claimed "at-least-once, dedup on the key". That holds
+  for redelivery *before* an ack; this buffer sits after one. Corrected.
+
+3 new tests (61 total).
+
 ## [0.1.13] - 2026-08-08
 
 Dependency-pin bump only; no API or behaviour change.
