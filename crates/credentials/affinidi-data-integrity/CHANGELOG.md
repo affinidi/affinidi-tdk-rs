@@ -1,5 +1,46 @@
 # Affinidi Data Integrity Changelog
 
+## 16th August 2026 (0.7.10)
+
+Adds the **`ecdsa-jcs-2019`** cryptosuite — ES256 (P-256) signatures over
+JCS-canonicalized documents, per [W3C vc-di-ecdsa](https://www.w3.org/TR/vc-di-ecdsa/).
+
+Until now every Data Integrity suite here was EdDSA, BBS or post-quantum, so a
+P-256 key could not sign a proof at all. That blocks any holder binding that is
+key-shaped rather than DID-shaped — an ISO 18013-5 mdoc binds to a P-256 device
+key, so a consent receipt naming that key as its data subject was unsignable.
+
+`KeyType::P256` now has a default suite, and the local `Signer for Secret` impl
+gained a P-256 arm routing through `affinidi_crypto::p256::sign` — the same way
+the ML-DSA and SLH-DSA suites route, so no new dependency.
+
+**P-256 only, deliberately.** The spec also defines P-384, paired with SHA-384,
+while this pipeline hashes with SHA-256 unconditionally (`prepare_sign_input`
+concatenates two SHA-256 digests). Accepting a P-384 key would emit proofs no
+conformant verifier reproduces, so `compatible_key_types` is narrower than the
+spec's and a test pins that, to stop a later "completeness" patch widening it
+back without moving the pipeline first.
+
+Note that ECDSA hashes its input as part of signing, so ES256 applies SHA-256
+over the pipeline's 64-byte `proof_hash || doc_hash` — where Ed25519 signs those
+bytes directly. Both match their respective specs; the asymmetry is not a bug.
+
+One existing test changed meaning rather than breaking: `test_sign_bad_key`
+asserted that a particular key could not sign, but that key is **P-256** and the
+failure was only ever "no suite compiled in for this key type". It is now
+`test_sign_p256_key_now_produces_an_ecdsa_jcs_2019_proof`, and a new
+`test_sign_rejects_a_key_type_with_no_suite` (secp256k1) covers the case the old
+name was really standing in for.
+
+Both negative behaviours were mutation-checked: making `verify` accept any
+signature fails the tampered-document test, and widening the key list to P-384
+fails the exclusion test.
+
+Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md)
+point 3 — additive (a new enum variant on a `#[non_exhaustive]` enum, a new ZST
+impl, one signer arm), and a minor bump would break the `[patch.crates-io]`
+redirects.
+
 ## 31st July 2026 (0.7.9)
 
 The Ed25519 signing path takes the signature through the inherent
