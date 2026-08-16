@@ -57,6 +57,7 @@
  *
  * # Modules
  *
+ * - [`codec`] — CBOR wire codec for `IssuerSigned` (ISO 18013-5 §8.3.2.1.2.2)
  * - [`tag24`] — CBOR Tag 24 wrapper with byte preservation
  * - [`issuer_signed_item`] — IssuerSignedItem structure and digest computation
  * - [`mso`] — Mobile Security Object
@@ -72,6 +73,7 @@
  * - [`mdl`] — mDL driving privileges and schema validation (feature: `mdl`)
  */
 
+pub mod codec;
 pub mod cose;
 pub mod cose_key;
 pub mod device_auth;

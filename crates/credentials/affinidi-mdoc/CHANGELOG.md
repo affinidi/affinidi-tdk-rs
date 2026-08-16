@@ -1,5 +1,49 @@
 # Affinidi mdoc Changelog
 
+## 16th August 2026 (0.2.6)
+
+Adds the CBOR **wire codec** for `IssuerSigned` — `to_cbor_bytes` /
+`from_cbor_bytes` (ISO/IEC 18013-5 §8.3.2.1.2.2).
+
+Until now this crate could build, sign and verify an mdoc entirely in memory,
+but could not turn one into the bytes an issuer hands out, or read those bytes
+back: `IssuerSigned` derived only `Debug, Clone`. Any consumer storing a
+credential as opaque bytes — a wallet, a credential vault — therefore had no
+supported way to decode what it held. Every constituent type already
+serialised (`MobileSecurityObject`, `Tag24<T>`, `coset::CoseSign1`); only the
+container was missing.
+
+Deliberately **not** a `derive`. `mso` and `doc_type` are struct fields for
+ergonomics but are not wire members — the MSO lives inside the `issuerAuth`
+payload, and `docType` inside the MSO. A derive would emit both a second time
+and let a decoder trust a `docType` the issuer never signed, so decoding reads
+them out of the signed payload and the outer map is never consulted for them.
+A test asserts an injected outer `docType` is ignored.
+
+Other decisions:
+- **Parsing is not verifying.** `from_cbor_bytes` checks structure only;
+  callers must still run `verify_issuer_auth` and `verify_digests`. They stay
+  separate because the issuer key is normally resolved *from* the decoded
+  credential's `x5chain`.
+- **Digest fidelity holds across a round trip**, because `Tag24`'s
+  `Deserialize` preserves `inner_bytes` — digests are checked against the
+  bytes as received, never a re-encode. Pinned by a test.
+- A **tag-18 wrapped** `COSE_Sign1` is accepted on decode even though ISO
+  specifies untagged, since generic COSE encoders emit it and the tag carries
+  no meaning at that position. Encoding stays untagged, per spec.
+- Absent `nameSpaces` decodes to an empty map rather than erroring — it is
+  optional in the CDDL.
+
+`DeviceResponse` encoding (the presentation path) is intentionally **not** in
+this change: its in-memory shape is a flattened single-document convenience
+model, while the wire form nests `Document` entries with `deviceSigned`, and
+that conversion deserves its own review alongside the `DeviceAuth` /
+`SessionTranscript` semantics.
+
+Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md)
+point 3: the change is purely additive (a new module plus two inherent
+methods), and a minor bump would break the `[patch.crates-io]` redirects.
+
 ## 2nd August 2026 (0.2.5)
 
 Moves this crate to the **elliptic-curve 0.14** family (`p256` / `k256` /
