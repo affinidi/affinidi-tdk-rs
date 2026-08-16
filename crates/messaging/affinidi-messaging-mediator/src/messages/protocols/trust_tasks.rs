@@ -39,8 +39,8 @@ use subtle::ConstantTimeEq;
 use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping};
 use trust_tasks_rs::specs::{audit, config};
 use trust_tasks_rs::{
-    ConsumeOutcome, Payload, ProofPolicy, ProofVerifier, TransportContext, TransportHandler,
-    TrustTask, TypeUri, VerificationError, consume_inbound,
+    ConsumeOutcome, NoValidator, Payload, PayloadPolicy, ProofPolicy, ProofVerifier,
+    TransportContext, TransportHandler, TrustTask, TypeUri, VerificationError, consume_inbound,
 };
 use uuid::Uuid;
 
@@ -1624,6 +1624,19 @@ async fn consume_ping(
     let outcome = consume_inbound(
         &transport,
         ProofPolicy::<NoProof>::AcceptUnverified,
+        // SPEC §7.2 item 2. `AcceptUnvalidated` keeps the behaviour this call
+        // has always had, now stated rather than implied: `ping::v0_1::Payload`
+        // is a codegen struct with `deny_unknown_fields` and validating
+        // newtypes, so deserializing into it already enforced the required
+        // members, their types, and the pattern/length constraints. What
+        // `Validate` would add is the residue a Rust type cannot express
+        // (`minProperties`, `minItems` on an optional array, conditional
+        // subschemas), and `ping` declares none of it.
+        //
+        // Turning this to `Validate` is a behaviour change, not a tidy-up: it
+        // can start refusing documents a peer sends today. Do it as its own
+        // change, with its own rollout, never folded into a version bump.
+        PayloadPolicy::<NoValidator>::AcceptUnvalidated,
         doc,
         mediator_did,
         now,

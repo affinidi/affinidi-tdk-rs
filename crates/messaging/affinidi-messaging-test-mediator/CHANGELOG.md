@@ -1,5 +1,18 @@
 # Affinidi Messaging Test Mediator
 
+## 0.2.51 — 17th August 2026
+
+**Tracks `trust-tasks-rs` 0.9.0**, up from 0.6.1, with the
+`affinidi-messaging-sdk` requirement moved to 0.19.8 and
+`affinidi-messaging-mediator` to 0.18.18 alongside it — the same pairing 0.2.49
+introduced, applied to the new versions.
+
+The breaking changes in between are `StandardCode` becoming `#[non_exhaustive]`
+(0.7.0), the additive `cancelled` code and `trust-task-control/0.1` payloads
+(0.8.0), and a required `PayloadPolicy` argument on `consume_inbound` (0.9.0).
+None reaches this crate — it calls `consume_inbound` nowhere and matches on no
+standard code. No source changed.
+
 ## 0.2.50 — 14th August 2026
 
 **Tracks `trust-tasks-rs` 0.6.1**, up from 0.4.0, with the

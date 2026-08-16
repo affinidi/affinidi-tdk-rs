@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.6] - 2026-08-17
+
+### Changed
+
+- Track `trust-tasks-rs` 0.9.0 (was 0.6.1) and `affinidi-messaging-sdk` 0.19.8.
+  The `account` and ACL types this client reads are unchanged across the bump;
+  no code changed.
+
 ## [0.12.5] - 2026-08-09
 
 ### Changed
