@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.18.18"
+version = "0.18.19"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -150,9 +150,14 @@ affinidi-task-utils = "0.1"
 ## Optional, behind the default-on `vta` feature — see that feature's comment
 ## for why the optionality matters more than the version range does.
 ##
-## Range rather than `"0.22"` only because 0.22.0 is not on crates.io yet; it
-## is published by the very VTI release that needed this. Tighten once it is.
-vta-sdk = { version = ">=0.21.0, <0.23.0", features = [
+## Tightened back to a plain caret now that the release it was waiting on has
+## shipped. The `>=0.21.0, <0.23.0` range was a stopgap for a version that was
+## not yet on crates.io, and it outlived its reason: VTI went on to 0.23, 0.24
+## and 0.25 while the ceiling held this crate on 0.21.6, and *that* is what kept
+## a second `trust-tasks-rs` (0.2.57, from vta-sdk 0.21.6) in this workspace's
+## lockfile long after everything else had moved to 0.9. A bounded range is a
+## tax that comes due silently; prefer a caret and move it deliberately.
+vta-sdk = { version = "0.25", features = [
   "integration",
 ], optional = true }
 
