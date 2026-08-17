@@ -1,5 +1,33 @@
 # Affinidi Messaging Mediator
 
+## 17th August 2026 (0.18.19)
+
+**Tightens `vta-sdk` from `>=0.21.0, <0.23.0` back to a plain `"0.25"`,** and
+moves `mediator-setup`'s two `"0.21.0"` pins with it.
+
+The range was a stopgap, and its own comment said so: *"Range rather than
+`"0.22"` only because 0.22.0 is not on crates.io yet ... Tighten once it is."*
+It was never tightened, and it outlived its reason. VTI went on to publish 0.23,
+0.24 and 0.25 while the `<0.23.0` ceiling held this workspace on `vta-sdk`
+0.21.6 — and *that* is what kept a second `trust-tasks-rs` (0.2.57, reached
+through 0.21.6) in the lockfile after 0.18.18 moved everything else to 0.9. The
+`mediator-setup` pins were doing the same thing one crate over, holding a third
+`vta-sdk` (0.21.21) and a `trust-tasks-rs` 0.4.1 behind it.
+
+With both moved, `cargo tree -d -e normal,build` and `-e normal,build,dev` are
+each clean: one `vta-sdk`, one `trust-tasks-rs`, one `vti-common`, one
+`affinidi-tdk`. No source changed — four `vta-sdk` minors, and nothing this
+crate uses moved with them.
+
+The lesson is worth keeping: **a bounded upper range is a tax that comes due
+silently.** Nothing fails when the ceiling goes stale; the graph just quietly
+carries an extra copy of everything behind it, and the cost surfaces somewhere
+else entirely. Prefer a caret and move it deliberately.
+
+Note that the `vta` feature — not the version range — is what actually breaks
+the cross-repository dependency cycle described in this crate's `Cargo.toml`.
+That reasoning is unchanged.
+
 ## 17th August 2026 (0.18.18)
 
 **Tracks `trust-tasks-rs` 0.9.0**, up from 0.6.1, with the
