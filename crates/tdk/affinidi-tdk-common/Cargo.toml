@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-tdk-common"
 description = "Common utilities for Affinidi Trust Development Kit."
-version = "0.6.7"
+version = "0.6.8"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -14,7 +14,12 @@ rust-version.workspace = true
 
 [dependencies]
 affinidi-did-resolver-cache-sdk = "0.8"
-affinidi-did-authentication = "0.3"
+# Pinned to the exact sibling version this crate now needs: `refresh_tokens`
+# lands in 0.3.11, so the caret "0.3" would resolve the published 0.3.10 and
+# fail to compile. Naming the local version is also what lets the publish
+# dry-run guard report `wait` (sibling not on crates.io yet) rather than a
+# registry-drift failure — see scripts/check-publish-dry-run.sh.
+affinidi-did-authentication = "0.3.11"
 affinidi-did-common = "0.4"
 affinidi-secrets-resolver = "0.5"
 affinidi-data-integrity = "0.7"

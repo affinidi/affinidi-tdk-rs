@@ -1,5 +1,34 @@
 # Affinidi DID Authentication
 
+## 0.3.11 — 2026-08-18
+
+### Fixed
+
+- **A forced refresh of a still-valid access token now actually refreshes.**
+  `_refresh_authentication` re-derived the decision from `refresh_check`, which
+  only reports `Refresh` inside the last five seconds of the token's life — so a
+  caller that had explicitly asked for a refresh was answered with "still valid,
+  nothing to do" and got its old token back. The intent was accepted at the
+  task boundary (`Refresh needed` was even logged) and then discarded here,
+  because there was no way to express it beyond that point.
+
+  Downstream this produced a reconnect storm. `affinidi-messaging-sdk`'s
+  websocket transport refreshes proactively at 80% of the token's life and
+  rebuilds the socket to carry the new token; because the refresh did nothing,
+  each rebuild re-armed the deadline at 80% of what *remained*. For a 900 s
+  token that is teardowns at T-180 s, T-36 s, T-7 s and finally T+expired —
+  where the refresh at last ran for real — so **four reconnects per token per
+  profile instead of one**, the last two close enough together to look like
+  flapping.
+
+### Added
+
+- `DIDAuthentication::refresh_tokens`, which mints a new access token while the
+  current one is still valid. Purely additive — `authenticate` is unchanged, so
+  an ordinary call on a healthy token still costs nothing. Force promotes only
+  "still valid": an expired *refresh* token still falls through to a full
+  handshake, because there is nothing left to refresh with.
+
 ## 0.3.10 — 2026-07-19
 
 ### Changed
