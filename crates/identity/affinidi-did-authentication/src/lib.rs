@@ -361,6 +361,7 @@ impl DIDAuthentication {
                         did_resolver,
                         secrets_resolver,
                         client,
+                        false,
                     )
                     .await
                 {
@@ -522,8 +523,23 @@ impl DIDAuthentication {
         })
     }
 
-    /// Refresh the access tokens as required
-    async fn _refresh_authentication<S>(
+    /// Mint a new access token now, even though the current one is still
+    /// valid — a **proactive** refresh.
+    ///
+    /// [`Self::authenticate`] deliberately does not do this: it refreshes only
+    /// when [`refresh_check`] says it must, which is inside the last five
+    /// seconds of the token's life, so an ordinary call on a healthy token
+    /// costs nothing. A caller that wants to get ahead of expiry — a transport
+    /// rebuilding its connection so the new socket carries a fresh token, say —
+    /// wants the opposite, and had no way to ask for it.
+    ///
+    /// If the *refresh* token has itself expired there is nothing to refresh
+    /// with; this returns an error and the caller should run a full
+    /// [`Self::authenticate`].
+    ///
+    /// # Returns
+    /// Ok if a new token was obtained; the tokens are in `self`.
+    pub async fn refresh_tokens<S>(
         &mut self,
         profile_did: &str,
         endpoint_did: &str,
@@ -534,13 +550,46 @@ impl DIDAuthentication {
     where
         S: SecretsResolver,
     {
+        self._refresh_authentication(
+            profile_did,
+            endpoint_did,
+            did_resolver,
+            secrets_resolver,
+            client,
+            true,
+        )
+        .await
+    }
+
+    /// Refresh the access tokens as required.
+    ///
+    /// `force_refresh` promotes a "still valid, nothing to do" answer into a
+    /// real refresh; it cannot rescue an expired *refresh* token, which still
+    /// falls through to a full handshake.
+    async fn _refresh_authentication<S>(
+        &mut self,
+        profile_did: &str,
+        endpoint_did: &str,
+        did_resolver: &DIDCacheClient,
+        secrets_resolver: &S,
+        client: &Client,
+        force_refresh: bool,
+    ) -> Result<()>
+    where
+        S: SecretsResolver,
+    {
         let Some(tokens) = &self.tokens else {
             return Err(DIDAuthError::Authentication(
                 "No tokens found to refresh".to_owned(),
             ));
         };
 
-        match refresh_check(tokens) {
+        let check = refresh_decision(refresh_check(tokens), force_refresh);
+        if check == RefreshCheck::Refresh && force_refresh {
+            debug!("Access token still valid, but a refresh was requested");
+        }
+
+        match check {
             RefreshCheck::Ok => {
                 // Tokens are valid, do not need to refresh
                 Ok(())
@@ -780,6 +829,25 @@ where
     .map_err(|e| DIDAuthError::DIDComm(format!("pack failed: {e}")))
 }
 
+/// Apply a caller's `force_refresh` to what [`refresh_check`] concluded.
+///
+/// `refresh_check` answers "must this be refreshed?", which is only true inside
+/// the last five seconds of the access token's life. A caller doing a
+/// **proactive** refresh is asking a different question — it wants a new token
+/// precisely while the old one is still good — and had no way to say so: the
+/// intent was accepted at the task boundary and then discarded here, so the
+/// refresh silently did nothing and the caller acted on a token that had not
+/// changed. See [`DIDAuthentication::refresh_tokens`].
+///
+/// Force overrides only `Ok`. `Expired` means the *refresh* token is gone too,
+/// which no amount of forcing can mend — that still needs a full handshake.
+fn refresh_decision(check: RefreshCheck, force_refresh: bool) -> RefreshCheck {
+    match (check, force_refresh) {
+        (RefreshCheck::Ok, true) => RefreshCheck::Refresh,
+        (check, _) => check,
+    }
+}
+
 /// Possible responses from checking authentication JWT tokens
 #[derive(PartialEq, Debug)]
 pub enum RefreshCheck {
@@ -825,7 +893,7 @@ pub fn refresh_check(tokens: &AuthorizationTokens) -> RefreshCheck {
 
 #[cfg(test)]
 mod tests {
-    use crate::{AuthorizationTokens, RefreshCheck, refresh_check};
+    use crate::{AuthorizationTokens, RefreshCheck, refresh_check, refresh_decision};
     use std::time::SystemTime;
 
     /// Sensitive auth artifacts must be logged via `trace_sensitive` (TRACE),
@@ -920,6 +988,53 @@ mod tests {
         };
 
         assert_eq!(refresh_check(&tokens), RefreshCheck::Expired);
+    }
+
+    /// A forced refresh of a still-valid token actually refreshes.
+    ///
+    /// This is the regression that produced a reconnect storm. The websocket
+    /// transport refreshes proactively at 80% of the token's life and then
+    /// rebuilds the socket on the new token. `refresh_check` said `Ok` (the
+    /// token had ~180 s left), the force was dropped, and the socket was
+    /// rebuilt on the *same* token — so the next deadline was 80% of what
+    /// remained, and again, and again: teardowns at T-180 s, T-36 s, T-7 s and
+    /// finally T+expired, where the refresh at last ran for real. Four
+    /// reconnects per token instead of one, per profile.
+    #[test]
+    fn a_forced_refresh_of_a_valid_token_refreshes() {
+        assert_eq!(
+            refresh_decision(RefreshCheck::Ok, true),
+            RefreshCheck::Refresh
+        );
+    }
+
+    /// Without a force, a valid token is left alone — every ordinary
+    /// `authenticate` call takes this path, and refreshing on each one would
+    /// trade a reconnect storm for a request storm.
+    #[test]
+    fn an_unforced_valid_token_is_left_alone() {
+        assert_eq!(refresh_decision(RefreshCheck::Ok, false), RefreshCheck::Ok);
+    }
+
+    /// Force cannot rescue an expired refresh token: there is nothing left to
+    /// refresh *with*, so this still has to fall through to a full handshake.
+    #[test]
+    fn force_does_not_override_an_expired_refresh_token() {
+        assert_eq!(
+            refresh_decision(RefreshCheck::Expired, true),
+            RefreshCheck::Expired
+        );
+    }
+
+    /// A token already due a refresh is unaffected by the flag either way.
+    #[test]
+    fn a_due_refresh_is_unchanged_by_the_flag() {
+        for force in [true, false] {
+            assert_eq!(
+                refresh_decision(RefreshCheck::Refresh, force),
+                RefreshCheck::Refresh
+            );
+        }
     }
 
     // Boundary smoke test: this crate now delegates curve negotiation to

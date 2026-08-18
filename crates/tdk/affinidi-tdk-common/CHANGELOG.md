@@ -1,5 +1,20 @@
 # Changelog — `affinidi-tdk-common`
 
+## 0.6.8 — 2026-08-18
+
+### Fixed
+
+- **`force_refresh` now reaches the code that acts on it.** The authentication
+  task honoured the flag when deciding *that* a refresh was needed, then asked
+  for it through `authenticate` — which re-derives the decision from the token's
+  expiry and concluded the token was still valid, so nothing was refreshed and
+  the caller got its old token back. A forced refresh now goes through
+  `DIDAuthentication::refresh_tokens`, falling back to the full handshake if
+  that fails (which is what an expired refresh token needs anyway). See
+  `affinidi-did-authentication` for the reconnect storm this caused
+  downstream.
+
+
 All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).

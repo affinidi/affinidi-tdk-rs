@@ -546,6 +546,33 @@ impl AuthenticationCacheInner {
         let service_copy = service_endpoint_did.clone();
 
         let handle = tokio::spawn(async move {
+            // A forced refresh has to say so. `authenticate` re-derives the
+            // decision from the token's expiry and refreshes only inside the
+            // last five seconds of its life — which is never true of a
+            // *proactive* refresh, whose whole point is to run while the token
+            // is still good. Asking through `authenticate` therefore returned
+            // the same token, and the caller acted on a refresh that had not
+            // happened; a transport that rebuilds its connection to carry the
+            // new token then rebuilt it onto the old one, over and over, until
+            // the token actually expired.
+            //
+            // A failure here is not fatal: fall through to the full handshake
+            // below, which is what an expired refresh token needs anyway.
+            if force_refresh
+                && auth
+                    .refresh_tokens(
+                        &profile_copy,
+                        &service_copy,
+                        &did_resolver,
+                        &secrets_resolver,
+                        &client,
+                    )
+                    .await
+                    .is_ok()
+            {
+                return Ok(auth);
+            }
+
             match auth
                 .authenticate(
                     &profile_copy,

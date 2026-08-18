@@ -29,7 +29,14 @@ jobs:
       # are now genuinely fixed — the aws-sdk crates no longer pull the legacy
       # rustls 0.21 stack. Removed from the ignore list on purpose: if the
       # legacy stack comes back, audit must fail rather than stay quiet.
-      auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373"
+      # RUSTSEC-2026-0258 (h2, unbounded empty DATA frames). The fixable half is
+      # fixed: the lockfile takes h2 0.4.16. What remains is h2 **0.3.27**,
+      # which has no patched release — it is the newest 0.3 and the advisory
+      # names >=0.4.16 as the only fix. It arrives through reqwest 0.11 <-
+      # ssi-dids-core <- did-ethr / did-pkh, as an HTTP *client*.
+      # Drop when those crates move to reqwest 0.12 (hyper 1.x), or if h2
+      # backports the fix to 0.3.
+      auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373,RUSTSEC-2026-0258"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       coverage: 0
       useRedis: true

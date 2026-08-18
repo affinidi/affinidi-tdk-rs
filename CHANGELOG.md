@@ -94,6 +94,23 @@ Per-crate version history is summarised here; for the full code history see
 
 ### Fixed
 
+- **Websocket reconnect storm: one socket teardown per access token, not four**
+  (`affinidi-did-authentication`, `affinidi-tdk-common`). A proactive token
+  refresh silently did nothing, because the `force_refresh` intent was dropped
+  before the code that acts on it and the decision was re-derived from the
+  token's expiry — which said the token was still valid, since that is exactly
+  when a proactive refresh runs.
+
+  The websocket transport refreshes at 80% of the token's life and rebuilds the
+  socket to carry the new token, so each no-op refresh re-armed the deadline at
+  80% of the time *remaining*. On a 900 s token that meant teardowns at T-180 s,
+  T-36 s, T-7 s and T+expired — where the refresh finally ran for real — per
+  profile. Consumers saw bursts of connect/disconnect every token lifetime,
+  close enough together at the end to trip duplicate-connection heuristics.
+
+  **Reconnect-semantics change (R3.6):** consumers that count, log or alert on
+  reconnect frequency will see roughly a quarter as many.
+
 - **Two unbounded-growth paths in the mediator's in-memory state.**
   **`affinidi-messaging-mediator` 0.16.46**, **`affinidi-messaging-mediator-common`
   0.15.28**.
