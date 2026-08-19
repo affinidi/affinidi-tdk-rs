@@ -24,7 +24,7 @@ affinidi-tdk-common = "0.6"
 affinidi-messaging-sdk = "0.19.8"
 affinidi-messaging-didcomm = "0.15"
 ## Trust Tasks payload types (the atm.trust_tasks() surface accepts these).
-trust-tasks-rs = "0.9"
+trust-tasks-rs = "0.11"
 affinidi-secrets-resolver = "0.5"
 
 async-trait = "0.1"
