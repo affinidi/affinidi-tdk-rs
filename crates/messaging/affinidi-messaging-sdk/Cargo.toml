@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.19.10"
+version = "0.19.11"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -68,7 +68,10 @@ rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "tls12",
 ] }
-rustls-pemfile = "2"
+# PEM parsing comes from rustls-pki-types (already re-exported by rustls as
+# `rustls::pki_types`) rather than rustls-pemfile: that crate is archived and
+# unmaintained (RUSTSEC-2025-0134), and its final release is a thin wrapper
+# over exactly this code. No replacement dependency is needed.
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 sha256 = "1"

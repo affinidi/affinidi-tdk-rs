@@ -9,7 +9,6 @@ use affinidi_did_resolver_cache_sdk::{
 use clap::Parser;
 use futures_util::future::join_all;
 use num_format::{Locale, ToFormattedString};
-use number_prefix::NumberPrefix;
 use rand::RngExt;
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -121,15 +120,27 @@ fn pretty_print_float(f: f64) -> String {
 }
 
 /// Pretty print a binary size (1.2 KiB)
+///
+/// Inlined rather than pulled from `number_prefix`, which is unmaintained
+/// (RUSTSEC-2025-0119). One helper in one example does not justify a
+/// dependency.
 fn pretty_print_binary_size(n: f64) -> String {
-    match NumberPrefix::binary(n) {
-        NumberPrefix::Standalone(bytes) => {
-            format!("{bytes} bytes",)
-        }
-        NumberPrefix::Prefixed(prefix, n) => {
-            format!("{n:.1} {prefix}B",)
+    const PREFIXES: [&str; 8] = ["Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi", "Yi"];
+
+    if n.abs() < 1024.0 {
+        return format!("{n} bytes");
+    }
+
+    let mut value = n;
+    for prefix in PREFIXES {
+        value /= 1024.0;
+        // Stop at the first prefix that brings the value under the next step,
+        // or at the largest prefix we have.
+        if value.abs() < 1024.0 || prefix == "Yi" {
+            return format!("{value:.1} {prefix}B");
         }
     }
+    unreachable!("the loop returns on its final iteration")
 }
 
 /// Generates a set of keys for testing purposes, can do in parallel

@@ -4,7 +4,7 @@ use crate::{
 };
 use affinidi_crypto::jose::key_agreement::Curve;
 use affinidi_messaging_mediator_common::types::clock::{Clock, SystemClock};
-use rustls::pki_types::CertificateDer;
+use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::{fs::File, io::BufReader, sync::Arc, time::Duration};
 use tokio::sync::{RwLock, broadcast::Sender};
 use tracing::error;
@@ -548,9 +548,9 @@ impl ATMConfigBuilder {
             })?;
             let mut reader = BufReader::new(file);
 
-            for cert in rustls_pemfile::certs(&mut reader) {
+            for cert in CertificateDer::pem_reader_iter(&mut reader) {
                 match cert {
-                    Ok(cert) => certs.push(cert.into_owned()),
+                    Ok(cert) => certs.push(cert),
                     Err(e) => {
                         failed_certs = true;
                         error!("Couldn't parse SSL certificate! Reason: {}", e)

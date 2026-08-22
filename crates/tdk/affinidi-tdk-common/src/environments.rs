@@ -20,7 +20,7 @@ use crate::{
     errors::{Result, TDKError},
     profiles::TDKProfile,
 };
-use rustls::pki_types::CertificateDer;
+use rustls::pki_types::{CertificateDer, pem::PemObject};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -158,7 +158,7 @@ impl TDKEnvironment {
                 TDKError::Config(format!("Couldn't open SSL certificate file ({path}): {e}"))
             })?;
             let mut reader = BufReader::new(file);
-            for cert in rustls_pemfile::certs(&mut reader) {
+            for cert in CertificateDer::pem_reader_iter(&mut reader) {
                 let cert = cert.map_err(|e| {
                     TDKError::Config(format!("Couldn't parse SSL certificate from ({path}): {e}"))
                 })?;
