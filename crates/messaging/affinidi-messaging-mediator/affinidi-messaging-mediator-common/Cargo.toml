@@ -178,7 +178,14 @@ reqwest = { version = "0.13", default-features = false, features = [
   "rustls",
   "json",
 ], optional = true }
+# `connect` is explicit because this is the one declaration in the workspace
+# with `default-features = false`. In 0.29 `rustls-tls-native-roots` reached
+# `connect_async` transitively; in 0.30 it maps to `__rustls-tls`, which brings
+# `stream` and `handshake` but NOT `connect`. Without it the forwarding
+# processor's tests fail to compile — and only when this crate is built alone,
+# because a workspace build has the feature unified in from the mediator.
 tokio-tungstenite = { version = "0.30", default-features = false, features = [
+  "connect",
   "rustls-tls-native-roots",
 ], optional = true }
 futures-util = { version = "0.3", default-features = false, features = [
