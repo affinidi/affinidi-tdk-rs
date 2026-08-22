@@ -525,8 +525,28 @@ impl WebSocketTransport {
                     debug!("Received pong message");
                     self.awaiting_pong = false;
                 }
-                Message::Close(_) => {
-                    debug!("WebSocket connection closed by server");
+                Message::Close(frame) => {
+                    // The close frame is the mediator's only chance to say WHY,
+                    // and discarding it (this arm was `Close(_)`) is what made a
+                    // refused duplicate connection indistinguishable from a
+                    // network fault: the socket simply vanished, the loop
+                    // reconnected, and the pair looped. The mediator now states
+                    // a distinct reason per cause, so surface it.
+                    //
+                    // WARN, not DEBUG: a server that closed us deliberately is
+                    // the one disconnect an operator needs to see, and the
+                    // reason text is the difference between "check your network"
+                    // and "you have this open twice".
+                    match &frame {
+                        Some(frame) => warn!(
+                            code = u16::from(frame.code),
+                            reason = %frame.reason,
+                            "WebSocket closed by the mediator"
+                        ),
+                        None => {
+                            warn!("WebSocket closed by the mediator with no reason given")
+                        }
+                    }
                     self.web_socket = None;
                     self.fail_pending_requests();
                     self.on_disconnected();

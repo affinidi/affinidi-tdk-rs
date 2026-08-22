@@ -127,8 +127,46 @@ pub enum StreamingUpdateState {
 
 /// Used to send commands from the streaming task to the websocket handler
 pub enum WebSocketCommands {
-    Message(String), // Send a message to the client
-    Close,           // Close the websocket connection
+    /// Send a message to the client.
+    Message(String),
+    /// Close this socket for the stated reason.
+    ///
+    /// The reason is carried rather than assumed. It used to be a bare `Close`,
+    /// and the handler answered every one of them with the same problem report
+    /// and the same close reason — "replaced by a newer connection" — across
+    /// three situations that are not the same thing. A client that was *refused*
+    /// was told it had been *replaced*, which is not merely unhelpful but
+    /// backwards, and left it with nothing better to show a user than a
+    /// transport error.
+    Close(CloseReason),
+}
+
+/// Why the streaming task is closing a socket.
+///
+/// Each variant maps to its own problem-report code and close reason, so a
+/// client can tell "you have this open twice" from "your session lost its slot"
+/// from "you are not authenticated" — and say so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseReason {
+    /// This socket held the DID's slot and a newer connection took it.
+    ///
+    /// Newest-wins is deliberate for an isolated duplicate: a client whose
+    /// previous socket half-opened must be able to reclaim its slot. The
+    /// recipient of this is the *incumbent*.
+    Replaced,
+    /// This socket asked for a slot that a live incumbent holds, and the duel
+    /// damper refused it.
+    ///
+    /// The recipient is the *newcomer*, and nothing of its own was displaced —
+    /// which is exactly what the old shared wording got wrong. Refusal is not a
+    /// fault: something is running a second live session for this DID, and only
+    /// the client can say what.
+    Refused,
+    /// The session reached registration with no authenticated DID.
+    ///
+    /// An upstream auth bug rather than anything the client did with its
+    /// connection; kept distinct so it cannot be mistaken for a duplicate.
+    Unauthenticated,
 }
 
 /// A command sitting in a connection's send queue, together with the byte
@@ -592,7 +630,9 @@ impl StreamingTask {
                  Closing the channel."
             );
             let _ = client_tx
-                .send(QueuedCommand::control(WebSocketCommands::Close))
+                .send(QueuedCommand::control(WebSocketCommands::Close(
+                    CloseReason::Unauthenticated,
+                )))
                 .await;
             return;
         }
@@ -647,7 +687,9 @@ impl StreamingTask {
                     );
                 }
                 let _ = client_tx
-                    .send(QueuedCommand::control(WebSocketCommands::Close))
+                    .send(QueuedCommand::control(WebSocketCommands::Close(
+                        CloseReason::Refused,
+                    )))
                     .await;
                 return;
             }
@@ -690,7 +732,9 @@ impl StreamingTask {
             // Channel already exists, close the old one.
             let _ = old
                 .tx
-                .send(QueuedCommand::control(WebSocketCommands::Close))
+                .send(QueuedCommand::control(WebSocketCommands::Close(
+                    CloseReason::Replaced,
+                )))
                 .await;
             true
         } else {
@@ -1119,16 +1163,20 @@ mod tests {
         task._handle_registration(&database, &mut clients, &replay_in_progress, &update)
             .await;
 
-        // The old socket is told to close.
+        // The old socket is told to close, and told that it was *replaced* —
+        // the one situation where that wording is true.
         match timeout(StdDuration::from_secs(1), a_rx.recv())
             .await
             .expect("A receives a command")
         {
             Some(QueuedCommand {
-                cmd: WebSocketCommands::Close,
+                cmd: WebSocketCommands::Close(CloseReason::Replaced),
                 ..
             }) => {}
-            other => panic!("expected Close on old socket, got {:?}", other.is_some()),
+            other => panic!(
+                "expected Close(Replaced) on the displaced socket, got {:?}",
+                other.is_some()
+            ),
         }
 
         // The surviving socket receives the stranded message via redelivery.
@@ -1378,16 +1426,20 @@ mod tests {
             Some(incumbent.as_str()),
             "the incumbent must keep the slot once the duel is detected"
         );
+        // …and is told it was REFUSED, not replaced. Nothing of the contender's
+        // was displaced — the incumbent kept the slot — so the wording it
+        // receives is the difference between a client rendering "you already
+        // have this open" and a client rendering a transport error.
         match timeout(StdDuration::from_secs(1), late_rx.recv())
             .await
             .expect("the refused contender is answered")
         {
             Some(QueuedCommand {
-                cmd: WebSocketCommands::Close,
+                cmd: WebSocketCommands::Close(CloseReason::Refused),
                 ..
             }) => {}
             other => panic!(
-                "expected Close on the refused socket, got {:?}",
+                "expected Close(Refused) on the refused socket, got {:?}",
                 other.is_some()
             ),
         }

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.19.10] - 2026-08-22
+
+### Fixed
+
+- **The websocket close frame is no longer discarded.** It was matched as
+  `Message::Close(_)` and answered with
+  `debug!("WebSocket connection closed by server")`, so the mediator's only
+  chance to say *why* it closed a socket was dropped on the floor.
+
+  That is the client half of the mediator's 0.18.21 fix, and without it that fix
+  would be inert: a deliberately refused connection was indistinguishable from a
+  dropped one, so the reconnect loop simply ran again. Two app instances sharing
+  a DID duelled indefinitely and the user was shown a network error.
+
+  The close code and reason are now logged at **WARN**. A server that closed us
+  on purpose is the one disconnect an operator needs to see, and the text is the
+  difference between "check your network" and "you have this open twice".
+
+  Reconnect behaviour is unchanged.
+
 ## [0.19.9] - 2026-08-19
 
 ### Changed

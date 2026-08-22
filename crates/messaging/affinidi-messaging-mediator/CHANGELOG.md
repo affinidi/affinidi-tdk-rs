@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.18.21] - 2026-08-22
+
+### Fixed
+
+- **A websocket close now states why**, so a refused duplicate connection stops
+  reading as a network fault.
+
+  `WebSocketCommands::Close` carried no reason, so the handler answered all three
+  of its senders identically — the `duplicate-channel` problem report and the
+  close reason `"replaced by a newer connection"`:
+
+  - the incumbent, displaced by a newer connection — true;
+  - a newcomer **refused** by the duel damper, whose own connection was never
+    displaced and whose peer kept the slot — the inverse of true;
+  - a session that reached registration with no authenticated DID — not a
+    duplicate at all.
+
+  A refused client was told it had been replaced, so the most it could honestly
+  render was "the connection dropped". Two app instances presenting one DID
+  therefore looked like a transport problem.
+
+  `Close` now carries a `CloseReason`, and each maps to its own problem-report
+  code and close reason:
+
+  | Reason | Problem-report code | Close reason |
+  |---|---|---|
+  | `Replaced` | `w.websocket.duplicate-channel` | `replaced by a newer connection` |
+  | `Refused` | `w.websocket.duplicate-channel-refused` | `this DID already has a live connection` |
+  | `Unauthenticated` | `w.websocket.unauthenticated-session` | `session has no authenticated DID` |
+
+  **`duplicate-channel` is preserved verbatim** for `Replaced`: it is the code
+  existing clients already match on, and that socket is the one whose meaning
+  never changed. Clients keying on it need no change.
+
+  The eviction *policy* is deliberately untouched — newest-wins on an isolated
+  duplicate still lets a client reclaim a half-open slot, the duel damper still
+  holds the slot for a live incumbent, and displacement still triggers the
+  stored-mail re-cover. The defect was never the policy; it was that the
+  policy's outcome was unsayable.
+
 ## [0.18.20] - 2026-08-19
 
 ### Changed
