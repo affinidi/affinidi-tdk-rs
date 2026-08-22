@@ -6,6 +6,9 @@
   instead of `number_prefix`, which is unmaintained (RUSTSEC-2025-0119). One
   helper in one example did not justify a dependency, so no replacement crate
   was added.
+- Bumps `sha1` 0.10 → 0.11 (the WebSocket handshake accept-key, `network`
+  feature only). This crate is its sole declarer in the workspace, so the bump
+  does not split the dependency.
 - No library change.
 
 ## Unreleased (0.8.23) — did:ethr, did:pkh and did:jwk resolve in-tree

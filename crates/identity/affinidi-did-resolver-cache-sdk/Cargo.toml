@@ -87,7 +87,7 @@ rustls-platform-verifier = { version = "0.7", optional = true }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 serde-wasm-bindgen = "0.6"
-sha1 = { version = "0.10", optional = true }
+sha1 = { version = "0.11", optional = true }
 affinidi-did-web = { version = "0.1", path = "../did-methods/did-web" }
 affinidi-did-ethr = { version = "0.1", optional = true, path = "../did-methods/did-ethr" }
 affinidi-did-jwk = { version = "0.1", optional = true, path = "../did-methods/did-jwk" }
