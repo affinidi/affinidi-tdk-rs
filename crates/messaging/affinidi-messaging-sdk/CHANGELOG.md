@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (0.19.11) — drop the unmaintained `rustls-pemfile`
+
+- SSL certificate loading in `config.rs` now parses PEM with
+  `CertificateDer::pem_reader_iter` from `rustls-pki-types`, which `rustls`
+  already re-exports as `rustls::pki_types`. The `rustls-pemfile` dependency is
+  removed; it is archived and unmaintained (RUSTSEC-2025-0134), and its final
+  release is a thin wrapper over exactly this code.
+- No new dependency and no behaviour change: the same certificates parse into
+  the same `CertificateDer` values.
+
 ## [0.19.10] - 2026-08-22
 
 ### Fixed

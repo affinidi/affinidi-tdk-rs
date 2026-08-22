@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.23"
+version = "0.8.24"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -126,7 +126,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 clap = { version = "4", features = ["derive"] }
 num-format = "0.4"
-number_prefix = "0.4"
 rayon = "1"
 
 # Exercises `resolve_any` and `with_resolve_shortcuts`, so it only builds with
