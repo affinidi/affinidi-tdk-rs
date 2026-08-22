@@ -1,5 +1,12 @@
 # affinidi-messaging-didcomm-v1 changelog
 
+## Unreleased (0.2.1) — dependency refresh
+
+- Bumps `base64` 0.22 → 0.23.
+- No source or API change; the bumps are declaration-only and the crate
+  compiles unmodified against them. Bumped workspace-wide in the same
+  change so no two versions of these crates are compiled side by side.
+
 ## 0.2.0 — 8th August 2026
 
 Adds the two Aries protocols a wallet needs to use a mediator.

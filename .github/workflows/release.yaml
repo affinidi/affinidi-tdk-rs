@@ -16,9 +16,17 @@ jobs:
       # fixed: the lockfile takes h2 0.4.16. What remains is h2 **0.3.27**,
       # which has no patched release — it is the newest 0.3 and the advisory
       # names >=0.4.16 as the only fix. It arrives through reqwest 0.11 <-
-      # ssi-dids-core <- did-ethr / did-pkh, as an HTTP *client*.
-      # Drop when those crates move to reqwest 0.12 (hyper 1.x), or if h2
-      # backports the fix to 0.3.
+      # ssi-dids-core, as an HTTP *client*.
+      #
+      # Since #719 the ONLY path to it is the optional `did-cheqd` feature
+      # (did-resolver-cheqd 1.0.1 pins ssi-dids-core ^0.1). No crate in this
+      # workspace enables that feature, so h2 0.3.27 is never compiled — it is
+      # in Cargo.lock only, and cargo-audit reads the lockfile rather than the
+      # build graph. did:ethr / did:pkh / did:jwk no longer touch ssi at all.
+      #
+      # Drop this entry when did-resolver-cheqd moves off ssi-dids-core 0.1
+      # (see cheqd/did-resolver-rs#3), NOT when "those crates move to reqwest
+      # 0.12" as this comment previously said — the crates it named are gone.
       auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373,RUSTSEC-2026-0258"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       release_debug: true

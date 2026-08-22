@@ -45,7 +45,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 ahash = { version = "0.8", features = ["serde"] }
 ## Base64 encoding/decoding — used by example binaries
-base64 = "0.22"
+base64 = "0.23"
 
 # ── Utilities ────────────────────────────────────────────────────────────
 regex = "1"

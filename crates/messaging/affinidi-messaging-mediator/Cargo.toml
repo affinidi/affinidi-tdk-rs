@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.18.21"
+version = "0.18.22"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -168,7 +168,7 @@ axum-extra = { version = "0.12", features = ["typed-header"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 http = "1"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
+tower-http = { version = "0.7", features = ["cors", "trace", "limit"] }
 
 # ── Database (Redis) ─────────────────────────────────────────────────────
 ## Redis 7.1+ required. Uses multiplexed connection (not pool).
@@ -231,7 +231,7 @@ subtle = "2"
 # ── Serialization & Encoding ────────────────────────────────────────────
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
-base64 = "0.22"
+base64 = "0.23"
 toml = "1"
 sha256 = "1"
 url = "2"
@@ -258,7 +258,7 @@ governor = "0.10"
 
 # ── HTTP Client (for forwarding to remote mediators) ─────────────────────
 reqwest = { version = "0.13", features = ["rustls", "json"] }
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 
 # ── Utilities ────────────────────────────────────────────────────────────
 ahash = { version = "0.8", features = ["serde"] }

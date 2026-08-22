@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-trust-lists"
 description = "EU Trusted Lists (ETSI TS 119 612) for eIDAS 2.0 trust infrastructure."
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -21,7 +21,7 @@ name = "browse_trust_list"
 path = "examples/browse_trust_list.rs"
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", features = ["serde"] }
 quick-xml = { version = "0.41", features = ["serialize"] }
 serde = { version = "1", features = ["derive"] }

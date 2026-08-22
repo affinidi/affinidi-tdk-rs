@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-crypto"
-version = "0.2.7"
+version = "0.2.8"
 description = "Cryptographic primitives and JWK types for Affinidi TDK"
 edition.workspace = true
 authors.workspace = true
@@ -37,7 +37,7 @@ jose = ["dep:aes", "dep:cbc", "dep:hmac", "dep:subtle", "ed25519", "p256", "k256
 affinidi-encoding = "0.1.4"
 
 base58 = "0.2"
-base64 = "0.22"
+base64 = "0.23"
 multibase = "0.9"
 ed25519-dalek = { version = "3", features = ["rand_core"], optional = true }
 k256 = { version = "0.14", features = ["ecdsa", "arithmetic", "ecdh"], optional = true }

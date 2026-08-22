@@ -1,5 +1,19 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.35) — dependency refresh
+
+- Bumps `base64` 0.22 → 0.23.
+- Bumps `tokio-tungstenite` 0.29 → 0.30.
+- **Adds the `connect` feature to `tokio-tungstenite`.** This crate is the only
+  one in the workspace declaring it with `default-features = false`. In 0.29
+  `rustls-tls-native-roots` reached `connect_async` transitively; in 0.30 it
+  maps to `__rustls-tls`, which brings `stream` and `handshake` but not
+  `connect`. Without it the forwarding processor's tests do not compile — and
+  only when this crate is built alone, since a workspace build unifies the
+  feature in from the mediator.
+- No API change. Bumped workspace-wide in the same change so no two versions of
+  these crates are compiled side by side.
+
 ## 8th August 2026 (0.15.34)
 
 **`MediatorStore` gains a DIDComm v1 routing-key index.**
