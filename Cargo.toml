@@ -17,6 +17,9 @@ members = [
   "crates/identity/did-methods/did-scid",
   "crates/identity/did-methods/did-ebsi",
   "crates/identity/did-methods/did-web",
+  "crates/identity/did-methods/did-ethr",
+  "crates/identity/did-methods/did-jwk",
+  "crates/identity/did-methods/did-pkh",
   "crates/identity/affinidi-did-resolver-traits",
   "crates/identity/affinidi-did-authentication",
   "crates/identity/shortcuts/agent-names",
@@ -110,6 +113,9 @@ affinidi-tdk = { path = "crates/tdk/affinidi-tdk" }
 affinidi-meeting-place = { path = "crates/applications/affinidi-meeting-place" }
 affinidi-tsp = { path = "crates/messaging/affinidi-tsp" }
 affinidi-did-web = { path = "crates/identity/did-methods/did-web" }
+affinidi-did-ethr = { path = "crates/identity/did-methods/did-ethr" }
+affinidi-did-jwk = { path = "crates/identity/did-methods/did-jwk" }
+affinidi-did-pkh = { path = "crates/identity/did-methods/did-pkh" }
 did-scid = { path = "crates/identity/did-methods/did-scid" }
 did-example = { path = "crates/identity/did-methods/did-example" }
 affinidi-messaging-core = { path = "crates/messaging/affinidi-messaging-core" }

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-server"
-version = "0.9.10"
+version = "0.9.11"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
@@ -23,11 +23,12 @@ network = ["affinidi-did-resolver-cache-sdk/network"]
 [dependencies]
 # Affinidi Crates
 # Requires 0.8.19 for WSRequest::agent_name / WSResponse::with_agent_name.
-# `did-ethr` / `did-pkh` are opt-in in the SDK as of 0.8.22 — they pull the
-# `ssi-*` stack, which most embedding libraries do not want. This is a
-# general-purpose resolver *service* though, so it keeps full method
-# coverage and accepts that cost.
-affinidi-did-resolver-cache-sdk = { version = "0.8.22", default-features = true, features = ["did-ethr", "did-pkh"], path = "../affinidi-did-resolver-cache-sdk/" }
+# `did-ethr` / `did-pkh` / `did-jwk` are opt-in in the SDK: most embedding
+# libraries do not want them. This is a general-purpose resolver *service*, so
+# it keeps full method coverage. `did-jwk` was advertised in the README but not
+# actually enabled here between 0.8.22 and now — the SDK gating in #674 moved
+# it behind a feature and only `did-ethr` / `did-pkh` were opted back in.
+affinidi-did-resolver-cache-sdk = { version = "0.8.23", default-features = true, features = ["did-ethr", "did-pkh", "did-jwk"], path = "../affinidi-did-resolver-cache-sdk/" }
 affinidi-did-common = "0.4"
 # Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"

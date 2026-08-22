@@ -1,0 +1,28 @@
+[package]
+name = "affinidi-did-pkh"
+version = "0.1.0"
+description = "Minimal did:pkh DID method resolver for the Affinidi TDK"
+repository.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+publish.workspace = true
+license.workspace = true
+readme = "README.md"
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+affinidi-did-common = "0.4"
+base64 = "0.22"
+bech32 = "0.11"
+bs58 = "0.5"
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+
+[lints]
+workspace = true
