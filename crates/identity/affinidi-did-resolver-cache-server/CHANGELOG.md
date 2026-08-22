@@ -1,5 +1,12 @@
 # Affinidi DID Resolver Cache Server
 
+## Unreleased (0.9.12) — dependency refresh
+
+- Bumps `tower-http` 0.6 → 0.7.
+- No source or API change; the bumps are declaration-only and the crate
+  compiles unmodified against them. Bumped workspace-wide in the same
+  change so no two versions of these crates are compiled side by side.
+
 ## Unreleased (0.9.11) — `did:jwk` is actually served
 
 - **Enables the SDK's `did-jwk` feature.** The README has listed `did:jwk`

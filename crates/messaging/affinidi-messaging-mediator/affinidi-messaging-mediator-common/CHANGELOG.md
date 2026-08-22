@@ -1,5 +1,13 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.35) — dependency refresh
+
+- Bumps `base64` 0.22 → 0.23.
+- Bumps `tokio-tungstenite` 0.29 → 0.30.
+- No source or API change; the bumps are declaration-only and the crate
+  compiles unmodified against them. Bumped workspace-wide in the same
+  change so no two versions of these crates are compiled side by side.
+
 ## 8th August 2026 (0.15.34)
 
 **`MediatorStore` gains a DIDComm v1 routing-key index.**

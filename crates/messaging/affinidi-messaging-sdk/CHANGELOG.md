@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased (0.19.12) — dependency refresh
+
+- Bumps `base64` 0.22 → 0.23.
+- Bumps `tokio-tungstenite` 0.29 → 0.30.
+- No source or API change; the bumps are declaration-only and the crate
+  compiles unmodified against them. Bumped workspace-wide in the same
+  change so no two versions of these crates are compiled side by side.
+
 ## Unreleased (0.19.11) — drop the unmaintained `rustls-pemfile`
 
 - SSL certificate loading in `config.rs` now parses PEM with

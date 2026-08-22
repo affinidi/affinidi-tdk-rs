@@ -1,5 +1,12 @@
 # Affinidi Crypto Changelog
 
+## Unreleased (0.2.8) — dependency refresh
+
+- Bumps `base64` 0.22 → 0.23.
+- No source or API change; the bumps are declaration-only and the crate
+  compiles unmodified against them. Bumped workspace-wide in the same
+  change so no two versions of these crates are compiled side by side.
+
 ## 2nd August 2026 (0.2.7)
 
 Moves this crate to the **elliptic-curve 0.14** family (`p256` / `k256` /

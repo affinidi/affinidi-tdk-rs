@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-ethr"
-version = "0.1.0"
+version = "0.1.1"
 description = "Minimal did:ethr DID method resolver for the Affinidi TDK"
 repository.workspace = true
 edition.workspace = true
@@ -17,7 +17,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 affinidi-did-common = "0.4"
-base64 = "0.22"
+base64 = "0.23"
 hex = "0.4"
 k256 = { version = "0.14", default-features = false, features = ["arithmetic"] }
 serde_json = "1"
