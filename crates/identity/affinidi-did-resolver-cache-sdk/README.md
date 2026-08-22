@@ -47,6 +47,13 @@ affinidi-did-resolver-cache-sdk = "0.8"
 | `did-scid` | — | Self-Certifying Identifier DID method |
 | `did_example` | — | Example DID method for testing |
 
+### `did:ethr`, `did:pkh` and `did:jwk` are resolved in-tree
+
+These three methods are implemented by `affinidi-did-ethr`, `affinidi-did-pkh`
+and `affinidi-did-jwk` in this workspace, not by the spruceid crates of the
+same names. Enabling them costs three small dependencies rather than the whole
+`ssi-*` stack. See each crate's README for scope and conformance.
+
 ### `did-cheqd` and the rustls `ring` backend
 
 `did-cheqd` is **not** enabled by default. It pulls `did-resolver-cheqd`, whose

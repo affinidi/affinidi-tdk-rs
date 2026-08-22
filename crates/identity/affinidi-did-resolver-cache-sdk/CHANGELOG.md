@@ -1,5 +1,40 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.23) — did:ethr, did:pkh and did:jwk resolve in-tree
+
+- **`did:ethr`, `did:pkh` and `did:jwk` are now resolved by in-tree crates**
+  (`affinidi-did-ethr`, `affinidi-did-pkh`, `affinidi-did-jwk`) instead of the
+  spruceid `did-ethr` / `did-pkh` / `did-jwk` crates. Those reached the whole
+  `ssi-*` stack, which pulls `im`, `sized-chunks`, `bitmaps`, `smallstr`,
+  `proc-macro-error` and `derivative` — all unmaintained and archived upstream
+  with no fixed release — plus `reqwest 0.11` and the vulnerable `h2 0.3.x`.
+
+  With this change **none of those crates are compiled by anything in the
+  workspace**. `did-cheqd` still resolves them into `Cargo.lock` as an optional
+  dependency, but it is not enabled by any crate here.
+
+- **`did:ethr` and `did:pkh` documents are unchanged.** Every resolution vector
+  from the replaced crates' own test suites — 2 for `did:ethr`, all 19
+  `did-*.jsonld` fixtures for `did:pkh` — is asserted byte-for-byte.
+
+- **`did:jwk` documents changed shape.** The replaced crate emitted `Multikey` /
+  `publicKeyMultibase` and ignored the key's `use`; both diverge from the
+  specification, which mandates `JsonWebKey2020` / `publicKeyJwk` and honours
+  `use`. The in-tree crate follows the specification. No production caller is
+  affected — the `did-jwk` feature was not enabled by any crate in the
+  workspace — but this crate's own `local_resolve_jwk` test asserted the old
+  shape and has been updated.
+
+- **Malformed identifiers are now rejected rather than resolved.** Previously a
+  `did:ethr` or `did:pkh` `eip155` identifier only had to *look* right (correct
+  length, or a `0x` prefix) to produce a document naming an account that cannot
+  exist; Tezos addresses were checked only by their three-character prefix.
+  These are now validated — hex, base58check, and the CAIP-2/CAIP-10 grammar —
+  and a bad identifier resolves to an error.
+
+- `did:pkh` refuses an unknown chain namespace instead of resolving it
+  generically.
+
 ## 2nd August 2026 (0.8.22)
 
 **BREAKING (behaviour): `did:ethr` and `did:pkh` are now behind features and

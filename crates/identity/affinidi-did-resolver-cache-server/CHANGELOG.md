@@ -1,5 +1,21 @@
 # Affinidi DID Resolver Cache Server
 
+## Unreleased (0.9.11) — `did:jwk` is actually served
+
+- **Enables the SDK's `did-jwk` feature.** The README has listed `did:jwk`
+  among the methods this server resolves, and the dependency comment claimed
+  full method coverage, but SDK 0.8.22 moved the method behind a feature and
+  only `did-ethr` and `did-pkh` were opted back in — so `did:jwk` has not been
+  compiled into the server since. It now is.
+
+- Picks up SDK 0.8.23, in which `did:ethr`, `did:pkh` and `did:jwk` resolve via
+  in-tree crates rather than the `ssi-*` stack. `did:ethr` and `did:pkh`
+  documents are byte-for-byte unchanged; `did:jwk` now follows the method
+  specification (`JsonWebKey2020` / `publicKeyJwk`) instead of the `Multikey` /
+  `publicKeyMultibase` shape the replaced crate emitted. Malformed `did:ethr`
+  and `did:pkh` identifiers are now rejected rather than resolved into a
+  document naming an account that cannot exist.
+
 ## 2nd August 2026 (0.9.10)
 
 Opts back in to `did:ethr` and `did:pkh`, which became optional in

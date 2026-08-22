@@ -106,13 +106,20 @@ mod tests {
         assert_eq!(did_document.capability_delegation.len(), 1);
 
         assert_eq!(did_document.verification_method.len(), 1);
+        // The in-tree `did:jwk` resolver follows the method specification:
+        // `JsonWebKey2020` carrying the key verbatim as `publicKeyJwk`. The
+        // spruceid crate this replaced emitted `Multikey` /
+        // `publicKeyMultibase`, which the specification does not define.
+        let vm = did_document.verification_method.first().unwrap();
+        assert_eq!(vm.type_, "JsonWebKey2020");
         assert_eq!(
-            did_document
-                .verification_method
-                .first()
-                .unwrap()
-                .property_set["publicKeyMultibase"],
-            "zDnaepnC2eBkx4oZkNLGDnVK8ofKzoGk1Yui8fzC6FLoV1F1e"
+            vm.property_set["publicKeyJwk"],
+            serde_json::json!({
+                "crv": "P-256",
+                "kty": "EC",
+                "x": "acbIQiuMs3i8_uszEjJ2tpTtRM4EU3yz91PH6CdH2V0",
+                "y": "_KcyLj9vWMptnmKtm46GqDz8wf74I5LKgrl2GzH3nSE"
+            })
         );
     }
 

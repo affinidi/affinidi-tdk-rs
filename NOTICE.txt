@@ -1,1 +1,17 @@
 This License does not grant permission to use the trade names, trademarks, service marks, or product names of the Licensor, except as required for reasonable and customary use in describing the origin of the Work and reproducing the content of the this notice when  they are further distributing this code.
+
+---
+
+## Third-party material reproduced in this repository
+
+`crates/identity/did-methods/did-pkh/tests/did-*.jsonld` — 19 DID Document
+fixtures reproduced verbatim from the `did-pkh` crate (v0.3.2) of the
+spruceid/ssi project, licensed Apache-2.0. They are used unmodified as
+conformance vectors for the in-tree `affinidi-did-pkh` resolver. See
+`crates/identity/did-methods/did-pkh/tests/ATTRIBUTION.md`.
+
+The `affinidi-did-ethr`, `affinidi-did-jwk` and `affinidi-did-pkh` crates are
+independent implementations, written against the published DID method
+specifications. They reproduce no upstream source code; the test vectors
+embedded in `affinidi-did-ethr` are derived from the same Apache-2.0 spruceid
+test suite and from the did:ethr method specification.

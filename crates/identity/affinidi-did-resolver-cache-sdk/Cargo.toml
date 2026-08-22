@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.22"
+version = "0.8.23"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -40,12 +40,12 @@ network = [
 # `ring` backend and install a CryptoProvider in your binary's `main`.
 did-methods = ["did-webvh", "did-scid"]
 did_example = ["dep:did-example"]
-did-jwk = ["dep:did-jwk", "dep:ssi-dids-core"]
-# Legacy blockchain DID methods. Ungated until now, which meant every
-# build pulled the whole ssi-* stack (and with it p256/k256 0.13).
-did-ethr = ["dep:did-ethr", "dep:ssi-dids-core"]
-did-pkh = ["dep:did-pkh", "dep:ssi-dids-core"]
-did-cheqd = ["dep:did-resolver-cheqd"]
+did-jwk = ["dep:affinidi-did-jwk"]
+# Legacy blockchain DID methods, resolved by in-tree crates. These were the
+# last consumers of the ssi-* stack outside `did-cheqd`.
+did-ethr = ["dep:affinidi-did-ethr"]
+did-pkh = ["dep:affinidi-did-pkh"]
+did-cheqd = ["dep:did-resolver-cheqd", "dep:ssi-dids-core"]
 did-webvh = ["dep:didwebvh-rs"]
 # Agent names: human-memorable "/@" shortcuts resolvable via `resolve_any()`.
 agent-names = ["dep:agent-names"]
@@ -89,11 +89,25 @@ serde_json = "1"
 serde-wasm-bindgen = "0.6"
 sha1 = { version = "0.10", optional = true }
 affinidi-did-web = { version = "0.1", path = "../did-methods/did-web" }
-did-ethr = { version = "0.3", optional = true }
-did-jwk = { version = "0.2", optional = true }
-did-pkh = { version = "0.3", optional = true }
-ssi-dids-core = { version = "0.1", optional = true }
+affinidi-did-ethr = { version = "0.1", optional = true, path = "../did-methods/did-ethr" }
+affinidi-did-jwk = { version = "0.1", optional = true, path = "../did-methods/did-jwk" }
+affinidi-did-pkh = { version = "0.1", optional = true, path = "../did-methods/did-pkh" }
 did-resolver-cheqd = { version = "1", optional = true }
+# `did-cheqd` is the ONLY remaining consumer of the ssi stack — did:ethr,
+# did:pkh and did:jwk moved to in-tree crates that do not depend on it. Because
+# `did-resolver-cheqd 1.0.1` pins `ssi-dids-core ^0.1`, this optional dep is
+# what still resolves `reqwest 0.11` (and with it the vulnerable `h2 0.3.x`),
+# `rustls-pemfile 1.0.4`, `im`, `sized-chunks`, `bitmaps`, `smallstr` and
+# `proc-macro-error` into Cargo.lock — even though none of them compile,
+# because `did-cheqd` is not enabled by any crate in this workspace.
+#
+# A patched fork of `did-resolver-cheqd` is in progress. Note that moving it to
+# `ssi-dids-core 0.3` clears `h2` and `rustls-pemfile 1.0.4` (that line uses
+# reqwest 0.13) but NOT the archived `im`/`sized-chunks`/`bitmaps`/`smallstr`/
+# `proc-macro-error` cluster: ssi 0.3 still reaches `json-ld 0.21` and
+# `linked-data 0.1.2`, which are themselves unmaintained. Clearing those needs
+# the fork to drop `ssi-dids-core` outright, as the in-tree method crates did.
+ssi-dids-core = { version = "0.1", optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 tokio-rustls = { version = "0.26", optional = true }

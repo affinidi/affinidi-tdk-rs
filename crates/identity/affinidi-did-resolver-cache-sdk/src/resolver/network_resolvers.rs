@@ -8,13 +8,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use affinidi_did_common::{DID, DIDMethod};
-// `Document` is only named by the ssi-backed helpers below, which are gated.
-#[cfg(any(
-    feature = "did-ethr",
-    feature = "did-pkh",
-    feature = "did-jwk",
-    feature = "did-cheqd"
-))]
+// `Document` is only named by the ssi-backed helper below, which is gated.
+#[cfg(feature = "did-cheqd")]
 use affinidi_did_common::Document;
 use affinidi_did_resolver_traits::{AsyncResolver, Resolution, ResolverError};
 use tracing::error;
@@ -23,27 +18,8 @@ use tracing::error;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Convert an ssi `DIDMethodResolver` result (raw bytes) into a `Document`.
-#[cfg(any(
-    feature = "did-ethr",
-    feature = "did-pkh",
-    feature = "did-jwk",
-    feature = "did-cheqd"
-))]
-fn document_from_bytes(bytes: Vec<u8>) -> Result<Document, ResolverError> {
-    let json = String::from_utf8(bytes)
-        .map_err(|e| ResolverError::InvalidDocument(format!("Invalid UTF-8: {e}")))?;
-    serde_json::from_str(&json)
-        .map_err(|e| ResolverError::InvalidDocument(format!("Invalid JSON document: {e}")))
-}
-
 /// Convert an ssi `DIDResolver` result (typed output) into a `Document`.
-#[cfg(any(
-    feature = "did-ethr",
-    feature = "did-pkh",
-    feature = "did-jwk",
-    feature = "did-cheqd"
-))]
+#[cfg(feature = "did-cheqd")]
 fn document_from_ssi_output(output: impl serde::Serialize) -> Result<Document, ResolverError> {
     let value = serde_json::to_value(output)
         .map_err(|e| ResolverError::InvalidDocument(format!("Serialization failed: {e}")))?;
@@ -56,6 +32,9 @@ fn document_from_ssi_output(output: impl serde::Serialize) -> Result<Document, R
 // ---------------------------------------------------------------------------
 
 /// Resolver for `did:ethr` — Ethereum DID method.
+///
+/// Resolution is an offline derivation from the identifier: this does not
+/// replay ERC-1056 registry events, so the document is the DID's genesis state.
 #[cfg(feature = "did-ethr")]
 pub struct EthrResolver;
 
@@ -75,23 +54,11 @@ impl AsyncResolver for EthrResolver {
                 _ => return None,
             };
 
-            let method = did_ethr::DIDEthr;
-            use ssi_dids_core::DIDMethodResolver;
-
             Some(
-                match method
-                    .resolve_method_representation(
-                        &identifier,
-                        ssi_dids_core::resolution::Options::default(),
-                    )
-                    .await
-                {
-                    Ok(res) => document_from_bytes(res.document),
-                    Err(e) => {
-                        error!("did:ethr resolution error: {e:?}");
-                        Err(ResolverError::ResolutionFailed(e.to_string()))
-                    }
-                },
+                affinidi_did_ethr::resolve_identifier(&identifier).map_err(|e| {
+                    error!("did:ethr resolution error: {e:?}");
+                    ResolverError::ResolutionFailed(e.to_string())
+                }),
             )
         })
     }
@@ -116,29 +83,17 @@ impl AsyncResolver for PkhResolver {
         did: &'a DID,
     ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
         Box::pin(async move {
-            if !matches!(did.method(), DIDMethod::Pkh { .. }) {
-                return None;
-            }
-
-            let method = did_pkh::DIDPKH;
-            let did_str = did.to_string();
-            use ssi_dids_core::DIDResolver;
-            let ssi_did = match ssi_dids_core::DID::new(&did_str) {
-                Ok(d) => d,
-                Err(e) => {
-                    return Some(Err(ResolverError::InvalidDocument(format!(
-                        "Invalid DID: {e}"
-                    ))));
-                }
+            let identifier = match did.method() {
+                DIDMethod::Pkh { identifier, .. } => identifier,
+                _ => return None,
             };
 
-            Some(match method.resolve(ssi_did).await {
-                Ok(res) => document_from_ssi_output(res.document.into_document()),
-                Err(e) => {
+            Some(
+                affinidi_did_pkh::resolve_identifier(&identifier).map_err(|e| {
                     error!("did:pkh resolution error: {e:?}");
-                    Err(ResolverError::ResolutionFailed(e.to_string()))
-                }
-            })
+                    ResolverError::ResolutionFailed(e.to_string())
+                }),
+            )
         })
     }
 }
@@ -217,27 +172,16 @@ impl AsyncResolver for JwkResolver {
         did: &'a DID,
     ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
         Box::pin(async move {
-            if !matches!(did.method(), DIDMethod::Jwk { .. }) {
-                return None;
-            }
-
-            let method = did_jwk::DIDJWK;
-            use ssi_dids_core::DIDMethodResolver;
+            let identifier = match did.method() {
+                DIDMethod::Jwk { identifier, .. } => identifier,
+                _ => return None,
+            };
 
             Some(
-                match method
-                    .resolve_method_representation(
-                        &did.method_specific_id(),
-                        ssi_dids_core::resolution::Options::default(),
-                    )
-                    .await
-                {
-                    Ok(res) => document_from_bytes(res.document),
-                    Err(e) => {
-                        error!("did:jwk resolution error: {e:?}");
-                        Err(ResolverError::ResolutionFailed(e.to_string()))
-                    }
-                },
+                affinidi_did_jwk::resolve_identifier(&identifier).map_err(|e| {
+                    error!("did:jwk resolution error: {e:?}");
+                    ResolverError::ResolutionFailed(e.to_string())
+                }),
             )
         })
     }
