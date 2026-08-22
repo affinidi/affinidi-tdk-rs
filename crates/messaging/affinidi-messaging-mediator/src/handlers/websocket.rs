@@ -11,7 +11,8 @@ use crate::{
     common::session::Session,
     messages::inbound::handle_inbound,
     tasks::websocket_streaming::{
-        QueuedCommand, StreamingUpdate, StreamingUpdateState, WS_CHANNEL_SLOTS, WebSocketCommands,
+        CloseReason, QueuedCommand, StreamingUpdate, StreamingUpdateState, WS_CHANNEL_SLOTS,
+        WebSocketCommands,
     },
 };
 #[cfg(feature = "didcomm")]
@@ -712,16 +713,16 @@ async fn handle_socket(
                                     warn!("Failed to send message to WebSocket client: {e}");
                                 }
                             },
-                            WebSocketCommands::Close => {
+                            WebSocketCommands::Close(why) => {
                                 #[cfg(feature = "didcomm")]
-                                if let Ok(msg) =  _package_problem_report(&state, &session, None, _generate_duplicate_connection_problem_report()).await
+                                if let Ok(msg) =  _package_problem_report(&state, &session, None, _close_problem_report(why)).await
                                     && let Err(e) = socket.send(Message::Text(msg.into())).await
                                 {
                                     warn!("Failed to send message to WebSocket client: {e}");
                                 }
-                                debug!("Streaming task requested close (duplicate connection)");
+                                debug!(reason = ?why, "Streaming task requested close");
                                 already_deregistered_flag = true;
-                                close_reason = (close_code::POLICY, "replaced by a newer connection");
+                                close_reason = _close_frame_reason(why);
                                 break;
                             }
                         }
@@ -962,18 +963,61 @@ async fn drain_tsp_inbox(
     ControlFlow::Continue(())
 }
 
-/// Generates a problem report for a duplicate websocket connection
+/// The problem report for a socket the streaming task is closing.
+///
+/// One report per [`CloseReason`], because the three are not the same event and
+/// a client can only act on the difference. Until #1028 every one of them sent
+/// `duplicate-channel` / "a new duplicate connection has caused this websocket
+/// to terminate" — true of [`CloseReason::Replaced`], and the exact inverse of
+/// what happened on the other two.
+///
+/// `duplicate-channel` is preserved verbatim for `Replaced`: it is the code
+/// existing clients already match on, and the socket it goes to is the one whose
+/// meaning never changed.
 #[cfg(feature = "didcomm")]
-fn _generate_duplicate_connection_problem_report() -> ProblemReport {
+fn _close_problem_report(why: CloseReason) -> ProblemReport {
+    let (code, message) = match why {
+        CloseReason::Replaced => (
+            "duplicate-channel",
+            "A new duplicate websocket connection for this DID has caused this websocket to \
+             terminate"
+                .to_string(),
+        ),
+        CloseReason::Refused => (
+            "duplicate-channel-refused",
+            "This DID already has a live websocket connection, which has been kept. This \
+             connection was refused and nothing was displaced — something is running a second \
+             live session for this DID."
+                .to_string(),
+        ),
+        CloseReason::Unauthenticated => (
+            "unauthenticated-session",
+            "This session reached streaming registration without an authenticated DID, so it \
+             cannot be routed to."
+                .to_string(),
+        ),
+    };
     ProblemReport::new(
         ProblemReportSorter::Warning,
         ProblemReportScope::Other("websocket".to_string()),
-        "duplicate-channel".to_string(),
-        "A new duplicate websocket connection for this DID has caused this websocket to terminate"
-            .to_string(),
+        code.to_string(),
+        message,
         vec![],
         None,
     )
+}
+
+/// The websocket close frame for a [`CloseReason`].
+///
+/// A client that never unpacks the problem report — one on the TSP-only build,
+/// where the report is `didcomm`-gated and never sent at all — still has this to
+/// go on, so the two must not disagree.
+fn _close_frame_reason(why: CloseReason) -> (u16, &'static str) {
+    match why {
+        CloseReason::Replaced => (close_code::POLICY, "replaced by a newer connection"),
+        CloseReason::Refused => (close_code::POLICY, "this DID already has a live connection"),
+        CloseReason::Unauthenticated => (close_code::POLICY, "session has no authenticated DID"),
+    }
 }
 
 /// Takes a problem report and packages it for sending to the recipient
@@ -1014,6 +1058,133 @@ async fn _package_problem_report(
     })?;
 
     Ok(packed)
+}
+
+#[cfg(test)]
+mod close_reason_tests {
+    use super::_close_frame_reason;
+    use crate::tasks::websocket_streaming::CloseReason;
+
+    /// A refused newcomer must not be told it was replaced.
+    ///
+    /// This is the whole defect. Before #1028 the refusal path reused the
+    /// eviction path's close frame, so a client that had been kept *out* was
+    /// told its connection had been taken *over* — and, having nothing truthful
+    /// to render, showed a transport error. OpenVTC reported it as a network
+    /// fault; it was two instances of the app.
+    #[test]
+    fn refusal_does_not_claim_the_socket_was_replaced() {
+        let (_, refused) = _close_frame_reason(CloseReason::Refused);
+        assert!(
+            !refused.contains("replaced"),
+            "the refused socket was not replaced — nothing of its own was \
+             displaced — but it is told: {refused:?}"
+        );
+        assert!(
+            refused.contains("already has a live connection"),
+            "a refused client can only say \"you have this open twice\" if it is \
+             told that; got: {refused:?}"
+        );
+    }
+
+    /// Each reason is distinguishable, which is the property a client keys on.
+    ///
+    /// Asserted as a set rather than three equality checks: the failure being
+    /// guarded against is two reasons collapsing onto one string, and equality
+    /// checks pass happily while that happens elsewhere in the match.
+    #[test]
+    fn every_close_reason_is_distinct() {
+        let all = [
+            CloseReason::Replaced,
+            CloseReason::Refused,
+            CloseReason::Unauthenticated,
+        ];
+        let mut seen: Vec<&str> = all.iter().map(|r| _close_frame_reason(*r).1).collect();
+        seen.sort_unstable();
+        let before = seen.len();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            before,
+            "two close reasons render the same text, so a client cannot tell them \
+             apart: {seen:?}"
+        );
+    }
+
+    /// The wording that existing clients already match on is unchanged.
+    ///
+    /// `Replaced` is the one situation the old shared message described
+    /// correctly, so it keeps its exact text: this change is meant to give the
+    /// other two a truthful signal, not to move the ground under anything
+    /// already parsing this one.
+    #[test]
+    fn the_replaced_wording_is_preserved_verbatim() {
+        assert_eq!(
+            _close_frame_reason(CloseReason::Replaced).1,
+            "replaced by a newer connection"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "didcomm"))]
+mod close_report_tests {
+    use super::_close_problem_report;
+    use crate::tasks::websocket_streaming::CloseReason;
+
+    /// `duplicate-channel` is a wire code clients match on; only the socket
+    /// whose meaning did not change may keep it.
+    ///
+    /// Asserted in the qualified form `ProblemReport::new` actually emits
+    /// (`<sorter>.<scope>.<code>`) rather than the bare code passed in — that
+    /// string is what reaches a client, and it is the thing a client matches.
+    #[test]
+    fn only_replacement_keeps_the_duplicate_channel_code() {
+        assert_eq!(
+            _close_problem_report(CloseReason::Replaced).code,
+            "w.websocket.duplicate-channel",
+            "existing clients match this; the replaced socket is the one case \
+             the old wording described correctly, so it must not move"
+        );
+        assert_eq!(
+            _close_problem_report(CloseReason::Refused).code,
+            "w.websocket.duplicate-channel-refused",
+            "a refused connection reported as `duplicate-channel` is \
+             indistinguishable from having been evicted — which is what sent a \
+             real investigation to the network layer"
+        );
+        assert_eq!(
+            _close_problem_report(CloseReason::Unauthenticated).code,
+            "w.websocket.unauthenticated-session",
+            "an unauthenticated session is not a duplicate at all"
+        );
+    }
+
+    /// The close frame and the problem report must agree.
+    ///
+    /// They travel independently — the report is `didcomm`-gated and the frame
+    /// is not — so a client may see either one. Two sources of truth that can
+    /// disagree is how the original bug read as a network fault in the first
+    /// place.
+    #[test]
+    fn the_report_and_the_frame_tell_the_same_story() {
+        for why in [
+            CloseReason::Replaced,
+            CloseReason::Refused,
+            CloseReason::Unauthenticated,
+        ] {
+            let report = _close_problem_report(why);
+            let (_, frame) = super::_close_frame_reason(why);
+            let describes_replacement = |s: &str| {
+                s.contains("replaced") || s.contains("caused this websocket to terminate")
+            };
+            assert_eq!(
+                describes_replacement(&report.comment),
+                describes_replacement(frame),
+                "report and close frame disagree for {why:?}: {:?} vs {frame:?}",
+                report.comment
+            );
+        }
+    }
 }
 
 #[cfg(test)]
