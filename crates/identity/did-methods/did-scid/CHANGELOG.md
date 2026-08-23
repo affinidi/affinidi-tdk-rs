@@ -1,5 +1,37 @@
 # did:scid
 
+## 0.2.0
+
+### Added
+
+- **`did:scid:ke:1` — KERI AIDs via `did:webs`**, behind a new `did-webs`
+  feature so the KERI stack stays out of builds that never resolve it.
+
+  ⚠️ The method type registry (Appendix A of the specification) is still marked
+  TODO and lists `ke` as a **proposed** entry, not a registered one. It is
+  implemented because did:webs is named explicitly as a supported verification
+  metadata format, but the code could change before the registry settles.
+
+  Note the SCID's position differs by format: `did:webvh` puts it first,
+  `did:webs` puts the AID **last**, because the AID is the final path element of
+  the URL its artifacts are served from. Reusing the webvh formatting would
+  produce a well-formed DID pointing at the wrong location, so the two are
+  derived separately and a test pins both.
+
+- `DIDSCIDError::UnknownFormat` and `DIDSCIDError::UnsupportedVersion`.
+
+### Changed
+
+- **Breaking:** the DID pattern now captures the format and version instead of
+  hard-coding `vh:1`, so a well-formed `did:scid` naming an unresolvable format
+  reports `UnknownFormat("...")` by name. It previously returned
+  `UnsupportedFormat`, indistinguishable from a string that is not a `did:scid`
+  at all.
+- **Breaking:** `ScidMethod` gains a `Webs` variant and is now
+  `#[non_exhaustive]`, since the registry is still open.
+- A peer source for one format is no longer accepted for another. They place the
+  SCID differently, so crossing them resolved to the wrong location.
+
 ## 2nd August 2026 (0.1.13)
 
 `ssi-dids-core` becomes an optional dependency, enabled by `did-cheqd` —

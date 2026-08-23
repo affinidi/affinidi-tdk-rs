@@ -1,4 +1,10 @@
 # Affinidi DID Resolver Cache SDK
+## 0.8.29
+
+### Changed
+
+- `did-scid` feature now requires `did-scid` 0.2, which adds `did:scid:ke:1`
+  (KERI AIDs via `did:webs`) and reports an unresolvable format by name.
 
 ## 0.8.28
 

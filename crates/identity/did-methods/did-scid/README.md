@@ -23,14 +23,32 @@ did-scid = "0.1"
 | Feature | Default | Description |
 |---|---|---|
 | `did-webvh` | Yes | Verifiable History via WebVH |
+| `did-webs` | No | KERI AIDs via did:webs (`did:scid:ke:1`) |
 | `did-cheqd` | Yes | Verifiable History via Cheqd |
 
 ## Capabilities
 
-- `did:scid:vh` — Verifiable History support
+- `did:scid:vh:1` — Verifiable History
   - WebVH backend
   - Cheqd backend
+- `did:scid:ke:1` — a KERI AID via did:webs (requires the `did-webs` feature)
 - Peer-level `did:scid` implementations
+
+> ⚠️ The did:scid method type registry (Appendix A of the specification) is
+> still marked TODO, and `ke` is listed there as a **proposed** entry rather
+> than a registered one. It is implemented because did:webs is named explicitly
+> as a supported verification metadata format, but the code could change before
+> the registry is settled.
+
+### The SCID sits in a different place per format
+
+`did:webvh` puts the SCID **first**; `did:webs` puts the AID **last**, because
+the AID is the final path element of the URL its artifacts are served from:
+
+```text
+did:scid:vh:1:<scid>?src=example.com/dids  ->  did:webvh:<scid>:example.com:dids
+did:scid:ke:1:<aid>?src=example.com/dids   ->  did:webs:example.com:dids:<aid>
+```
 
 ## Specification
 
