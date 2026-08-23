@@ -9,6 +9,11 @@ For the full code history see `git log` on `crates/tdk/affinidi-tdk`.## 0.8.7
 ### Changed
 
 - `did-webs` feature now re-exports `affinidi-did-webs` 0.2.
+## 0.8.8
+
+### Changed
+
+- `did-webs` feature now re-exports `affinidi-did-webs` 0.3.
 
 ## 0.8.6
 

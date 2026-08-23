@@ -60,14 +60,16 @@ let doc = resolve_from_artifacts(&did, keri_cesr, Some(did_json))?;
   anchored, issuance anchored, attestation signed by the AID's key state, and
   not revoked. A break anywhere yields no aliases rather than a
   partially-trusted list.
+- **Witness receipts**, when the key event log declares witnesses. An event
+  whose own key state names backers and a threshold is only accepted once that
+  many designated witnesses have receipted it — from the event's attachments or
+  from separate `rct` messages. A KEL with `bt: 0` is unaffected.
 - The published `did.json`, against the derived key state: it must name this
   identifier (or its `did:web` twin) and publish exactly the keys the KEL
   authorised — no more and no fewer.
 
 ## What is not verified yet
 
-- **Witness receipts** are parsed but not required; a KEL is accepted on
-  controller signatures alone.
 - **Credential schema validation.** A designated-aliases attestation is matched
   by its schema SAID and its issuance chain is verified, but the credential body
   is not validated against the schema itself.
