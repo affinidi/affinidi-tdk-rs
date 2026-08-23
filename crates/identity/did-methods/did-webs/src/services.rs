@@ -191,7 +191,10 @@ fn signed_by(kels: &Kels, msg: &ParsedMessage, signer: &str) -> bool {
         .trans_idx_sig_groups()
         .iter()
         .find(|g| g.prefix == signer)
-        && let Ok(state) = kels.key_state(signer)
+        // The group names the establishment event whose keys signed. Using the
+        // *current* state instead would make every rotation invalidate every
+        // authorisation the identifier had ever given.
+        && let Ok(state) = kels.key_state_at(signer, &group.said)
     {
         for sig in &group.sigs {
             let Some(key) = state.keys.get(sig.index()) else {

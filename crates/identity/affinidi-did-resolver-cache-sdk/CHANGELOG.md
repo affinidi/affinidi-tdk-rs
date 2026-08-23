@@ -1,5 +1,12 @@
 # Affinidi DID Resolver Cache SDK
 
+## 0.8.33
+
+### Changed
+
+- `did-webs` feature now requires `affinidi-did-webs` 0.6, which fixes key
+  rotation silently withdrawing service endpoints and designated aliases.
+
 ## 0.8.32
 
 ### Changed

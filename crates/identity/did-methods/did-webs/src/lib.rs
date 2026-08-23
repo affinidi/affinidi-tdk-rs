@@ -15,6 +15,17 @@
  * error rather than a preference for one or the other.
  */
 
+#[cfg(feature = "create")]
+pub mod artifacts;
+#[cfg(feature = "create")]
+pub mod create;
+#[cfg(feature = "create")]
+pub mod custody;
+#[cfg(feature = "create")]
+pub mod endpoints;
+#[cfg(feature = "create")]
+pub mod update;
+
 pub mod aliases;
 pub mod document;
 pub mod errors;
@@ -25,9 +36,17 @@ pub mod resolver;
 pub mod services;
 
 pub use aliases::{DesignatedAliases, designated_aliases};
+#[cfg(feature = "create")]
+pub use artifacts::Artifacts;
+#[cfg(feature = "create")]
+pub use create::{CreateConfig, CreateResult, SelfEndpoint, create};
+#[cfg(feature = "create")]
+pub use custody::KeyCustody;
 pub use errors::DidWebsError;
 pub use fetch::{WebsResolver, resolve};
 pub use identifier::{DID_JSON, DidWebs, KERI_CESR};
 pub use kel::Kels;
 pub use resolver::resolve_from_artifacts;
 pub use services::{ServiceEndpoint, service_endpoints};
+#[cfg(feature = "create")]
+pub use update::{Change, UpdateConfig, UpdateResult, update};

@@ -197,8 +197,34 @@ impl Kels {
             .filter(move |m| m.serder.ilk().ok().as_deref() == Some(ilk))
     }
 
+    /// The key state as it stood at a named establishment event.
+    ///
+    /// Signatures on messages outside a key event log — the replies that
+    /// authorise a service endpoint, the signature on a designated-aliases
+    /// attestation — are authorised by the key state at the establishment event
+    /// the signature group names, **not** the state the log has since reached.
+    ///
+    /// Checking them against the current state instead makes every rotation
+    /// silently invalidate everything the identifier ever signed: the keys that
+    /// signed are no longer the current ones, so the signature stops verifying
+    /// and whatever it authorised quietly disappears from the document.
+    ///
+    /// # Errors
+    /// Returns [`DidWebsError::Kel`] if the log does not verify, or contains no
+    /// establishment event with that SAID.
+    pub fn key_state_at(&self, aid: &str, said: &str) -> Result<KeyState, DidWebsError> {
+        // The log must verify in full before any point in it is trusted.
+        self.key_state(aid)?;
+        self.replay(aid, Some(said))
+    }
+
     /// Replay one identifier's KEL from its inception.
     fn verify_kel(&self, prefix: &str) -> Result<KeyState, DidWebsError> {
+        self.replay(prefix, None)
+    }
+
+    /// Replay a KEL, optionally stopping once a given event has been applied.
+    fn replay(&self, prefix: &str, stop_after: Option<&str>) -> Result<KeyState, DidWebsError> {
         let indices = self.by_prefix.get(prefix).ok_or_else(|| {
             DidWebsError::Kel(format!("keri.cesr carries no key events for {prefix}"))
         })?;
@@ -210,6 +236,11 @@ impl Kels {
 
         let mut kever = self.incept(prefix, first)?;
         self.require_witness_receipts(prefix, first, kever.state())?;
+
+        if stop_after.is_some_and(|said| first.serder.said().ok().as_deref() == Some(said)) {
+            return Ok(kever.state().clone());
+        }
+        let mut reached = false;
 
         for (n, msg) in events.enumerate() {
             let ilk = msg
@@ -232,6 +263,19 @@ impl Kels {
             };
             self.require_witness_receipts(prefix, msg, &state)?;
             kever.apply_verified_update(state);
+
+            if stop_after.is_some_and(|said| msg.serder.said().ok().as_deref() == Some(said)) {
+                reached = true;
+                break;
+            }
+        }
+
+        if let Some(said) = stop_after
+            && !reached
+        {
+            return Err(DidWebsError::Kel(format!(
+                "{prefix} has no event with SAID {said} to verify a signature against"
+            )));
         }
 
         Ok(kever.state().clone())

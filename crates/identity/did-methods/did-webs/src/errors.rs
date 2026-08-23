@@ -33,6 +33,10 @@ pub enum DidWebsError {
     #[error("did.json does not match the verified key state: {0}")]
     DocumentMismatch(String),
 
+    /// An identifier could not be created or continued.
+    #[error("could not create: {0}")]
+    Create(String),
+
     /// JSON deserialization failed.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),

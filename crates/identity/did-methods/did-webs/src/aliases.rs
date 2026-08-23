@@ -146,8 +146,11 @@ fn verify_signed_by(
         .find(|g| g.prefix == aid)
         .ok_or_else(|| format!("attestation carries no signature group from {aid}"))?;
 
+    // Verified against the key state at the establishment event the signature
+    // group names, not the current one — otherwise a rotation would silently
+    // withdraw an attestation the identifier never revoked.
     let state = kels
-        .key_state(aid)
+        .key_state_at(aid, &group.said)
         .map_err(|e| format!("cannot check the attestation signature: {e}"))?;
 
     let verfers: Vec<affinidi_keri_crypto::Verfer> = state
