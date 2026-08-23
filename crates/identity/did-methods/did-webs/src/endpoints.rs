@@ -50,14 +50,14 @@ pub(crate) fn self_designated_replies(
             "/end/role/add",
             json!({ "cid": aid, "role": service.role, "eid": aid }),
         )?;
-        out.extend_from_slice(&sign_reply(hab, establishment_said, &authorise)?);
+        out.extend_from_slice(&sign_with_group(hab, establishment_said, &authorise)?);
 
         for (scheme, url) in &service.urls {
             let location = reply(
                 "/loc/scheme",
                 json!({ "eid": aid, "scheme": scheme, "url": url }),
             )?;
-            out.extend_from_slice(&sign_reply(hab, establishment_said, &location)?);
+            out.extend_from_slice(&sign_with_group(hab, establishment_said, &location)?);
         }
     }
 
@@ -84,7 +84,9 @@ fn reply(route: &str, attrs: Value) -> Result<Serder, DidWebsError> {
 
 /// Attach a transferable indexed signature group, which is how a transferable
 /// identifier signs something that is not part of its own key event log.
-fn sign_reply(
+/// Attach a transferable indexed signature group — how a transferable
+/// identifier signs anything that is not part of its own key event log.
+pub(crate) fn sign_with_group(
     hab: &Hab,
     establishment_said: &str,
     serder: &Serder,
@@ -128,7 +130,7 @@ fn sequence_number_qb64(sn: u64) -> String {
 
 /// Fix the `v` size before computing the SAID, so the SAID covers the bytes the
 /// message is actually serialized as.
-fn fix_version(sad: &mut Value) -> Result<(), DidWebsError> {
+pub(crate) fn fix_version(sad: &mut Value) -> Result<(), DidWebsError> {
     let placeholder = "#".repeat(44);
     let original = sad["d"].clone();
     sad["d"] = json!(placeholder);
@@ -142,7 +144,7 @@ fn fix_version(sad: &mut Value) -> Result<(), DidWebsError> {
 ///
 /// Replies supersede one another by `dt`, so this has to move forward between
 /// events that address the same subject.
-fn timestamp() -> String {
+pub(crate) fn timestamp() -> String {
     chrono::Utc::now()
         .format("%Y-%m-%dT%H:%M:%S%.6f+00:00")
         .to_string()

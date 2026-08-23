@@ -19,28 +19,20 @@
 //! adds. Fields that are not backed by KERI artifacts would be silently dropped
 //! on the way back, so this module refuses to write them.
 //!
-//! Service endpoints *are* supported, because they can be backed: each one is
-//! emitted as signed `rpy` messages in the stream, which the resolver verifies
-//! and derives the services from. Designated aliases are not yet, because they
-//! need a credential registry and an issuance that `affinidi-keri` cannot build.
+//! Service endpoints and `alsoKnownAs` are both supported, because both can be
+//! backed: services by signed `rpy` messages, aliases by a designated-aliases
+//! attestation the identifier issues to itself. The resolver verifies each and
+//! derives the document from what it verified.
 //!
-//! # No `alsoKnownAs` knobs, unlike `didwebvh-rs`
+//! # One knob from `didwebvh-rs`, and one that cannot exist
 //!
-//! `didwebvh-rs` offers `also_known_as_web` and `also_known_as_scid` because it
-//! *writes* `alsoKnownAs` into its log, where whatever it puts is what comes
-//! back. `did:webs` derives that field instead, so neither switch could tell
-//! the truth here:
+//! `also_known_as_scid` is offered, and is real: the `did:scid:ke` form is
+//! designated in the attestation like any other alias.
 //!
-//! * the `did:web` twin is added by the resolver unconditionally — it shares
-//!   the same location and the same document — so it cannot be turned off;
-//! * a `did:scid:ke` entry is not derivable from the key event log, so a
-//!   resolver drops it — it cannot be turned on.
-//!
-//! Offering them anyway would mean publishing a document this crate's own
-//! resolver does not reproduce. Making `did:scid:ke` real needs either a
-//! designated-aliases attestation (a credential registry, see above) or a
-//! resolver that derives it, which would assert that identity for every
-//! `did:webs` whether its controller wanted it or not.
+//! There is no `also_known_as_web`. The `did:web` twin shares this identifier's
+//! location and document, and the resolver adds it unconditionally — so the
+//! switch could only ever be on, and a switch that cannot be turned off is a
+//! lie about what the caller controls.
 //!
 //! [`KeriStore`]: affinidi_keri_db::KeriStore
 
@@ -80,6 +72,16 @@ pub struct CreateConfig {
     pub inception: InceptionConfig,
     /// Endpoints this identifier designates for itself.
     pub services: Vec<SelfEndpoint>,
+    /// Identifiers to designate as `alsoKnownAs`.
+    ///
+    /// Published as a signed attestation the identifier issues to itself, not
+    /// written into the document — see [`crate::attestation`].
+    pub also_known_as: Vec<String>,
+    /// Also designate this identifier's `did:scid:ke:1` form.
+    ///
+    /// The AID is not known until the inception event exists, so this is a
+    /// switch rather than something the caller can pass in `also_known_as`.
+    pub also_known_as_scid: bool,
 }
 
 impl CreateConfig {
@@ -90,6 +92,8 @@ impl CreateConfig {
                 host: host.into(),
                 inception: InceptionConfig::default(),
                 services: Vec::new(),
+                also_known_as: Vec::new(),
+                also_known_as_scid: false,
             },
         }
     }
@@ -110,6 +114,21 @@ impl CreateConfigBuilder {
     /// Designate an endpoint for this identifier.
     pub fn service(mut self, service: SelfEndpoint) -> Self {
         self.config.services.push(service);
+        self
+    }
+
+    /// Designate another identifier as `alsoKnownAs`.
+    pub fn also_known_as(mut self, did: impl Into<String>) -> Self {
+        self.config.also_known_as.push(did.into());
+        self
+    }
+
+    /// Designate this identifier's own `did:scid:ke:1` form.
+    ///
+    /// ⚠️ The `ke` format code is *proposed* in the did:scid registry rather
+    /// than registered, so this asserts an identity whose spelling may change.
+    pub fn also_known_as_scid(mut self, enabled: bool) -> Self {
+        self.config.also_known_as_scid = enabled;
         self
     }
 
@@ -161,7 +180,7 @@ impl CreateResult {
 /// do not resolve back — which would mean this crate had emitted something its
 /// own resolver rejects.
 pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
-    let (hab, inception) = Hab::incept_event("did:webs", &config.inception)
+    let (mut hab, inception) = Hab::incept_event("did:webs", &config.inception)
         .map_err(|e| DidWebsError::Create(format!("inception failed: {e}")))?;
 
     let aid = hab.prefix().to_string();
@@ -170,6 +189,22 @@ pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
 
     let establishment_said = inception.said.clone();
     let mut keri_cesr = inception.composed;
+
+    // Aliases are published as a signed attestation the identifier issues to
+    // itself. The document is not allowed to simply claim them.
+    let mut aliases = config.also_known_as.clone();
+    if config.also_known_as_scid {
+        aliases.push(format!("did:scid:ke:1:{aid}?src={}", config.host));
+    }
+    if !aliases.is_empty() {
+        let attestation = crate::attestation::issue_designated_aliases(
+            &mut hab,
+            &aid,
+            &establishment_said,
+            &aliases,
+        )?;
+        keri_cesr.extend_from_slice(&attestation);
+    }
 
     // Endpoints are published as signed replies rather than written into the
     // document, so that a resolver can verify them instead of taking the
