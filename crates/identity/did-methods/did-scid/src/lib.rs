@@ -78,57 +78,55 @@ pub async fn resolve(
     peer_src: Option<ScidMethod>,
     timeout: Option<Duration>,
 ) -> Result<Document, DIDSCIDError> {
-    if did.starts_with("did:scid:vh:1") {
-        // Implement the resolution logic here
-        match convert_scid_to_method(did, peer_src)? {
-            ScidMethod::WebVH(webvh_did) => {
-                debug!("Resolving WebVH DID: {}", webvh_did);
-                let mut method = DIDWebVHState::default();
-                match method
-                    .resolve(
-                        &webvh_did,
-                        didwebvh_rs::resolve::ResolveOptions {
-                            timeout,
-                            ..Default::default()
-                        },
-                    )
-                    .await
-                {
-                    Ok((log_entry, _)) => {
-                        Ok(serde_json::from_value(log_entry.get_did_document()?)?)
-                    }
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDSCIDError::WebVHError(e))
-                    }
-                }
-            }
-            ScidMethod::Webs(webs_did) => resolve_webs(&webs_did).await,
-            #[cfg(feature = "did-cheqd")]
-            ScidMethod::Cheqd(cheqd_did) => {
-                use did_resolver_cheqd::DIDCheqd;
-                use ssi_dids_core::{DID, DIDResolver};
-
-                debug!("Resolving Cheqd DID: {}", cheqd_did);
-                let parsed = DID::new::<str>(&cheqd_did).map_err(|e| {
-                    DIDSCIDError::DidUrlError(format!(
-                        "derived cheqd DID is not a valid DID ({cheqd_did}): {e}"
-                    ))
-                })?;
-                match DIDCheqd::default().resolve(parsed).await {
-                    Ok(res) => {
-                        let doc_value = serde_json::to_value(res.document.into_document())?;
-                        Ok(serde_json::from_value(doc_value)?)
-                    }
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDSCIDError::CheqdError(e.to_string()))
-                    }
+    // No prefix test here: `convert_scid_to_method` matches the whole
+    // `did:scid:<format>:<version>:<scid>` shape and reports an unknown format
+    // or version by name. A `starts_with("did:scid:vh:1")` gate used to sit in
+    // front of it, which made every format other than `vh` unreachable through
+    // this function no matter what the conversion supported.
+    match convert_scid_to_method(did, peer_src)? {
+        ScidMethod::WebVH(webvh_did) => {
+            debug!("Resolving WebVH DID: {webvh_did}");
+            let mut method = DIDWebVHState::default();
+            match method
+                .resolve(
+                    &webvh_did,
+                    didwebvh_rs::resolve::ResolveOptions {
+                        timeout,
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
+                Ok((log_entry, _)) => Ok(serde_json::from_value(log_entry.get_did_document()?)?),
+                Err(e) => {
+                    error!("Error: {e:?}");
+                    Err(DIDSCIDError::WebVHError(e))
                 }
             }
         }
-    } else {
-        Err(DIDSCIDError::UnsupportedFormat)
+        ScidMethod::Webs(webs_did) => resolve_webs(&webs_did).await,
+        #[cfg(feature = "did-cheqd")]
+        ScidMethod::Cheqd(cheqd_did) => {
+            use did_resolver_cheqd::DIDCheqd;
+            use ssi_dids_core::{DID, DIDResolver};
+
+            debug!("Resolving Cheqd DID: {cheqd_did}");
+            let parsed = DID::new::<str>(&cheqd_did).map_err(|e| {
+                DIDSCIDError::DidUrlError(format!(
+                    "derived cheqd DID is not a valid DID ({cheqd_did}): {e}"
+                ))
+            })?;
+            match DIDCheqd::default().resolve(parsed).await {
+                Ok(res) => {
+                    let doc_value = serde_json::to_value(res.document.into_document())?;
+                    Ok(serde_json::from_value(doc_value)?)
+                }
+                Err(e) => {
+                    error!("Error: {e:?}");
+                    Err(DIDSCIDError::CheqdError(e.to_string()))
+                }
+            }
+        }
     }
 }
 
@@ -575,6 +573,55 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    // -- the PUBLIC entry point --------------------------------------------
+    //
+    // Everything above tests `convert_scid_to_method`, which is private. These
+    // go through `resolve` itself, because a gate in front of the conversion
+    // once made every format except `vh` unreachable while all the conversion
+    // tests still passed.
+
+    #[tokio::test]
+    async fn resolve_reaches_the_webs_path() {
+        // Without the `did-webs` feature this stops at "the feature is
+        // missing", and with it, it would try to fetch. Either way it must get
+        // *past* the format dispatch — an `UnsupportedFormat` here means `ke`
+        // is unreachable through the public API.
+        let err = resolve(&format!("did:scid:ke:1:{AID}?src=example.com"), None, None)
+            .await
+            .expect_err("no network in tests");
+        assert!(
+            !matches!(err, DIDSCIDError::UnsupportedFormat),
+            "did:scid:ke must reach the did:webs path, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_reports_an_unknown_format_by_name() {
+        let err = resolve(&format!("did:scid:jl:1:{AID}?src=example.com"), None, None)
+            .await
+            .expect_err("jl is not implemented");
+        match err {
+            DIDSCIDError::UnknownFormat(f) => assert_eq!(f, "jl"),
+            other => panic!("expected UnknownFormat, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_rejects_a_non_scid_did() {
+        assert!(matches!(
+            resolve("did:web:example.com", None, None).await,
+            Err(DIDSCIDError::UnsupportedFormat),
+        ));
+    }
+
+    #[tokio::test]
+    async fn resolve_rejects_an_unsupported_version() {
+        assert!(matches!(
+            resolve(&format!("did:scid:vh:2:{AID}?src=example.com"), None, None).await,
+            Err(DIDSCIDError::UnsupportedVersion(_)),
+        ));
     }
 
     // -- format and version handling ---------------------------------------
