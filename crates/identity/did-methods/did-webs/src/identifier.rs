@@ -111,7 +111,27 @@ impl DidWebs {
     /// The AID is always the final path element, so `did.json` for
     /// `did:webs:example.com:EAid` is at `https://example.com/EAid/did.json`.
     pub fn artifact_url(&self, artifact: &str) -> String {
-        let mut url = format!("https://{}", self.host);
+        self.artifact_url_with_scheme("https", artifact)
+    }
+
+    /// Whether this DID's host is a loopback address.
+    ///
+    /// `did:webs` artifacts are fetched over HTTPS, but a host that can only
+    /// be reached from this machine cannot be intercepted, and local tooling
+    /// rarely has a certificate for it — the reference implementation serves
+    /// its own examples over plain HTTP. Resolvers therefore permit `http` for
+    /// loopback, the same accommodation `did:web` implementations make.
+    pub fn is_loopback(&self) -> bool {
+        let host = self.host.split(':').next().unwrap_or(&self.host);
+        host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+    }
+
+    /// The URL an artifact is published at, over an explicit scheme.
+    ///
+    /// Prefer [`artifact_url`](Self::artifact_url). This exists for resolvers
+    /// that permit plain HTTP for loopback or in a controlled environment.
+    pub fn artifact_url_with_scheme(&self, scheme: &str, artifact: &str) -> String {
+        let mut url = format!("{scheme}://{}", self.host);
         for segment in &self.path {
             url.push('/');
             url.push_str(segment);
@@ -267,6 +287,38 @@ mod tests {
         assert_eq!(d.aid(), AID);
         let d = DidWebs::parse(&format!("did:webs:example.com:{AID}?versionId=1")).expect("valid");
         assert_eq!(d.aid(), AID);
+    }
+
+    #[test]
+    fn loopback_hosts_are_recognised() {
+        for host in [
+            "localhost",
+            "127.0.0.1",
+            "localhost%3A7676",
+            "127.0.0.1%3A8080",
+        ] {
+            let d = DidWebs::parse(&format!("did:webs:{host}:{AID}")).expect("valid");
+            assert!(d.is_loopback(), "{host} should be loopback");
+        }
+        for host in [
+            "example.com",
+            "did-webs-service%3a7676",
+            "127.0.0.1.example.com",
+        ] {
+            let d = DidWebs::parse(&format!("did:webs:{host}:{AID}")).expect("valid");
+            assert!(!d.is_loopback(), "{host} should not be loopback");
+        }
+    }
+
+    #[test]
+    fn a_scheme_can_be_supplied_explicitly() {
+        let d = DidWebs::parse(&format!("did:webs:localhost%3A7676:{AID}")).expect("valid");
+        assert_eq!(
+            d.artifact_url_with_scheme("http", DID_JSON),
+            format!("http://localhost:7676/{AID}/did.json"),
+        );
+        // The default stays HTTPS.
+        assert!(d.artifact_url(DID_JSON).starts_with("https://"));
     }
 
     #[test]

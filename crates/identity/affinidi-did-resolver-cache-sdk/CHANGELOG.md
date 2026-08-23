@@ -1,4 +1,12 @@
 # Affinidi DID Resolver Cache SDK
+
+## 0.8.31
+
+### Changed
+
+- `did-webs` feature now requires `affinidi-did-webs` 0.5, which fetches over
+  plain HTTP for loopback hosts and adds `WebsResolver::allow_http`.
+
 ## 0.8.30
 
 ### Changed

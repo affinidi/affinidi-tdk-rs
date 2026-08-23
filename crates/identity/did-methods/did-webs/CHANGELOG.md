@@ -2,6 +2,30 @@
 
 All notable changes to this crate are documented here.
 
+## [0.5.0] - 2026-08-23
+
+### Added
+
+- **Plain HTTP for loopback hosts**, and `WebsResolver::allow_http` to permit it
+  anywhere. Artifacts are still fetched over HTTPS by default.
+
+  The reference implementation fetches over plain HTTP — `resolving.py` builds
+  `http://{domain}{port}{path}/{aid}` with no HTTPS path at all — so a
+  strict-HTTPS resolver cannot read the artifacts the ecosystem's own tooling
+  serves. Loopback is safe by construction; anything else is opt-in and
+  documented as such, because a plain-HTTP fetch lets an attacker serve a
+  *stale* key event log and hide a rotation that has already happened.
+
+- `DidWebs::is_loopback` and `DidWebs::artifact_url_with_scheme`.
+
+- **Network tests.** `WebsResolver::resolve` was previously never executed: the
+  conformance tests verify artifacts already in hand, and the one HTTP test
+  fetched with `reqwest` directly and verified offline. `fetch.rs` had no tests
+  at all. Seven tests now drive the real entry point against a live server —
+  the URLs requested, a missing `did.json` (not fatal), a missing `keri.cesr`
+  (fatal), a 5xx, the size cap, a `did.json` that disagrees, and that the
+  loopback accommodation does not leak into ordinary hosts.
+
 ## [0.4.0] - 2026-08-23
 
 ### Added
