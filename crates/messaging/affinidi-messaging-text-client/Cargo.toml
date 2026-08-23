@@ -24,7 +24,7 @@ affinidi-did-resolver-cache-sdk = "0.8"
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }
 anyhow = '1.0'
-base64 = "0.22"
+base64 = "0.23"
 chrono = "0.4"
 circular-queue = { version = "0.2", features = ["serde_support"] }
 # Crossterm must match the version used in ratatui

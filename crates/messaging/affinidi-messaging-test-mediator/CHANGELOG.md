@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased (0.2.53) — dependency refresh
+
+- Bumps `base64` 0.22 → 0.23.
+- Bumps `tokio-tungstenite` 0.29 → 0.30.
+- No source or API change; the bumps are declaration-only and the crate
+  compiles unmodified against them. Bumped workspace-wide in the same
+  change so no two versions of these crates are compiled side by side.
+
 ## [0.2.52] - 2026-08-19
 
 ### Changed

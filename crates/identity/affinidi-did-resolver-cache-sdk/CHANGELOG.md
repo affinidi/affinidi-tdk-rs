@@ -1,5 +1,12 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.25) — dependency refresh
+
+- Bumps `base64` 0.22 → 0.23.
+- No source or API change; the bumps are declaration-only and the crate
+  compiles unmodified against them. Bumped workspace-wide in the same
+  change so no two versions of these crates are compiled side by side.
+
 ## Unreleased (0.8.24) — drop the unmaintained `number_prefix`
 
 - The `benchmark` example formats binary sizes with a small inlined helper

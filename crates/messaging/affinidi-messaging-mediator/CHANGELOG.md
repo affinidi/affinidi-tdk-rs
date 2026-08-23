@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.18.22) — dependency refresh
+
+- Bumps `base64` 0.22 → 0.23.
+- Bumps `tokio-tungstenite` 0.29 → 0.30.
+- Bumps `tower-http` 0.6 → 0.7.
+- No source or API change; the bumps are declaration-only and the crate
+  compiles unmodified against them. Bumped workspace-wide in the same
+  change so no two versions of these crates are compiled side by side.
+
 ## [0.18.21] - 2026-08-22
 
 ### Fixed

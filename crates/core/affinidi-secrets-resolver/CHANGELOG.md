@@ -1,5 +1,12 @@
 # Affinidi Secrets Manager
 
+## Unreleased (0.5.10) — dependency refresh
+
+- Bumps `base64` 0.22 → 0.23.
+- No source or API change; the bumps are declaration-only and the crate
+  compiles unmodified against them. Bumped workspace-wide in the same
+  change so no two versions of these crates are compiled side by side.
+
 ## 31st July 2026 (0.5.9)
 
 Moves to **curve25519-dalek 5** (`ed25519-dalek` 2 -> 3, `x25519-dalek` 2 -> 3),
