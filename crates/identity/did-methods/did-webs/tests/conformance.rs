@@ -192,3 +192,176 @@ fn a_did_json_cannot_be_reused_at_another_host() {
 fn did_from_host(host: &str) -> DidWebs {
     DidWebs::parse(&format!("did:webs:{host}:{AID}")).expect("valid did")
 }
+
+// -- designated aliases --------------------------------------------------
+
+use affinidi_did_webs::{Kels, designated_aliases};
+
+const REGISTRY: &str = "EHfE7gojVcX5Ldu8zzBr9WZhVz2ZP7XoYDaVEtqcyDRP";
+const ATTESTATION: &str = "EIEXitNCXQ_Y7HC6I7oiY7fPrRJyJzwvn_YIjvSHPzav";
+
+#[test]
+fn verifies_the_designated_aliases_chain() {
+    let kels = Kels::parse(KERI_CESR).expect("stream parses");
+    let found = designated_aliases(&kels, AID).expect("KEL verifies");
+
+    assert!(found.rejected.is_none(), "{:?}", found.rejected);
+    // The published attestation designates five aliases.
+    assert_eq!(found.aliases.len(), 5, "got {:?}", found.aliases);
+    assert!(
+        found
+            .aliases
+            .contains(&format!("did:webs:did-webs-service%3a7676:{AID}")),
+        "got {:?}",
+        found.aliases,
+    );
+}
+
+#[test]
+fn resolved_document_carries_the_verified_aliases() {
+    let doc = resolve_from_artifacts(&did(), KERI_CESR, None).expect("resolves");
+
+    // The did:web twin holds without attestation; the rest are designated.
+    assert!(
+        doc.also_known_as.len() > 1,
+        "expected designated aliases beyond the twin, got {:?}",
+        doc.also_known_as,
+    );
+    assert!(
+        doc.also_known_as
+            .iter()
+            .any(|a| a == &format!("did:webs:foo.com:{AID}")),
+        "got {:?}",
+        doc.also_known_as,
+    );
+}
+
+/// Cut one message (and its attachments) out of the stream, by its own SAID.
+///
+/// Matching on the first `"d":"<said>"` anywhere in the stream is wrong: a
+/// SAID appears in the seals that anchor it as well as in the message itself,
+/// and the first hit for a registry id is the KEL event anchoring it. Removing
+/// that instead breaks the key event log. So each message range is examined,
+/// and only its *own* `d` — the first one inside that range, since `d` comes
+/// third in a KERI event and second in an ACDC — is compared.
+fn without_message(stream: &[u8], said: &str) -> Vec<u8> {
+    let text = std::str::from_utf8(stream).expect("ascii stream");
+
+    let mut starts: Vec<usize> = text.match_indices("{\"v\":\"").map(|(i, _)| i).collect();
+    starts.push(text.len());
+
+    for window in starts.windows(2) {
+        let (start, end) = (window[0], window[1]);
+        let range = &text[start..end];
+        let Some(d_at) = range.find("\"d\":\"") else {
+            continue;
+        };
+        let value_at = d_at + 5;
+        if range[value_at..].starts_with(said) {
+            let mut out = text.as_bytes()[..start].to_vec();
+            out.extend_from_slice(&text.as_bytes()[end..]);
+            return out;
+        }
+    }
+
+    panic!("no message in the stream has SAID {said}");
+}
+
+/// Build a KERI event with the byte-accurate size in its version string.
+///
+/// The version string declares the message length and the parser slices the
+/// stream by it, so an event with a stale size derails everything after it.
+/// The size is measured from the serialized form rather than assumed.
+fn keri_event(mut sad: serde_json::Value) -> Vec<u8> {
+    let len = serde_json::to_vec(&sad).expect("serializes").len();
+    sad["v"] = serde_json::json!(format!("KERI10JSON{len:06x}_"));
+    serde_json::to_vec(&sad).expect("serializes")
+}
+
+#[test]
+fn an_attestation_without_its_registry_designates_nothing() {
+    // Remove the registry inception. The attestation is untouched and still
+    // signed by the AID — but nothing establishes the registry it claims to
+    // have been issued in, so its aliases must not be repeated.
+    //
+    // This cannot be tested by *tampering*: every KERI event is bound to its
+    // own SAID, so altering an anchor breaks the event carrying it and the
+    // whole key event log fails first. Removing a message is the only way to
+    // isolate this one link in the chain.
+    let stream = without_message(KERI_CESR, REGISTRY);
+
+    let kels = Kels::parse(&stream).expect("still parses");
+    let found = designated_aliases(&kels, AID).expect("KEL still verifies");
+    assert!(
+        found.aliases.is_empty(),
+        "a registry with no inception must yield no aliases, got {:?}",
+        found.aliases,
+    );
+    assert!(
+        found
+            .rejected
+            .as_deref()
+            .is_some_and(|r| r.contains("no inception event")),
+        "{:?}",
+        found.rejected,
+    );
+}
+
+#[test]
+fn an_attestation_without_its_issuance_designates_nothing() {
+    // The registry is real and anchored, but nothing says this credential was
+    // ever issued in it.
+    let stream = without_message(KERI_CESR, "EBK4vxXrJS0V42rbuX4Sgx2pYXV_WRKuH5dkqGepKPQ4");
+
+    let kels = Kels::parse(&stream).expect("still parses");
+    let found = designated_aliases(&kels, AID).expect("KEL still verifies");
+    assert!(found.aliases.is_empty(), "got {:?}", found.aliases);
+    assert!(
+        found
+            .rejected
+            .as_deref()
+            .is_some_and(|r| r.contains("no issuance event")),
+        "{:?}",
+        found.rejected,
+    );
+}
+
+#[test]
+fn a_revoked_attestation_designates_nothing() {
+    // A claimed revocation is enough to stop repeating the aliases.
+    let mut stream = KERI_CESR.to_vec();
+    stream.extend_from_slice(&keri_event(serde_json::json!({
+        "v": "KERI10JSON000000_",
+        "t": "rev",
+        "d": "ERevocation000000000000000000000000000000000",
+        "i": ATTESTATION,
+        "s": "1",
+        "ri": REGISTRY,
+        "dt": "2024-01-01T00:00:00.000000+00:00",
+    })));
+
+    let kels = Kels::parse(&stream).expect("parses");
+    let found = designated_aliases(&kels, AID).expect("KEL verifies");
+    assert!(
+        found.aliases.is_empty(),
+        "a revoked attestation must designate nothing, got {:?}",
+        found.aliases,
+    );
+    assert!(
+        found
+            .rejected
+            .as_deref()
+            .is_some_and(|r| r.contains("revoked")),
+        "{:?}",
+        found.rejected,
+    );
+}
+
+#[test]
+fn another_aid_cannot_claim_this_attestation() {
+    // The attestation is issued by ENro7uf0…; asking for a different AID's
+    // aliases must not return it. That AID has no KEL here, so this also
+    // pins that a missing KEL is an error rather than an empty answer.
+    let kels = Kels::parse(KERI_CESR).expect("parses");
+    assert!(designated_aliases(&kels, REGISTRY).is_err());
+}

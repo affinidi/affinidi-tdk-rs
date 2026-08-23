@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-webs"
-version = "0.1.0"
+version = "0.2.0"
 description = "Implementation of the did:webs DID method: did:web discovery with KERI-verified key state"
 repository.workspace = true
 edition.workspace = true
@@ -18,8 +18,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 affinidi-cesr = "0.1.3"
 affinidi-crypto = "0.2"
-affinidi-keri-core = "0.3"
-affinidi-keri-crypto = "0.3"
+affinidi-keri-core = "0.3.2"
+affinidi-keri-crypto = "0.3.2"
 affinidi-did-common = "0.4"
 reqwest = { version = "0.13", default-features = false, features = [
   "rustls",

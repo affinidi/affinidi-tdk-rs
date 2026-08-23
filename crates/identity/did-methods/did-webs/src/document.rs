@@ -22,7 +22,11 @@ use crate::identifier::DidWebs;
 /// # Errors
 /// Returns [`DidWebsError::Kel`] if a key is not a CESR primitive this
 /// implementation can express as a JWK.
-pub fn document_from_keys(did: &DidWebs, keys: &[String]) -> Result<Document, DidWebsError> {
+pub fn document_from_keys(
+    did: &DidWebs,
+    keys: &[String],
+    aliases: &[String],
+) -> Result<Document, DidWebsError> {
     if keys.is_empty() {
         return Err(DidWebsError::Kel(
             "verified key state has no signing keys".into(),
@@ -35,9 +39,19 @@ pub fn document_from_keys(did: &DidWebs, keys: &[String]) -> Result<Document, Di
         .context_did_v1();
 
     // The did:web twin shares this document at the same location. Recording it
-    // as `equivalentId` is what lets a consumer that only speaks did:web be
-    // pointed at the same identifier.
-    builder = builder.also_known_as(did.did_web_twin());
+    // is what lets a consumer that only speaks did:web be pointed at the same
+    // identifier, and it holds without anything having to attest it.
+    let twin = did.did_web_twin();
+    builder = builder.also_known_as(twin.clone());
+
+    // Everything else comes from a designated-aliases attestation whose whole
+    // chain verified — never from the published did.json, which asserts its
+    // own aliases and so proves nothing.
+    for alias in aliases {
+        if *alias != twin && alias != did.did() {
+            builder = builder.also_known_as(alias.clone());
+        }
+    }
 
     for key in keys {
         let jwk = jwk_from_cesr_key(key)?;
@@ -112,7 +126,7 @@ mod tests {
 
     #[test]
     fn builds_a_document_for_an_ed25519_key() {
-        let doc = document_from_keys(&did(), &[ED25519_KEY.to_string()]).expect("builds");
+        let doc = document_from_keys(&did(), &[ED25519_KEY.to_string()], &[]).expect("builds");
 
         assert_eq!(doc.id.as_str(), format!("did:webs:example.com:{AID}"));
         assert_eq!(doc.verification_method.len(), 1);
@@ -132,7 +146,7 @@ mod tests {
 
     #[test]
     fn records_the_did_web_twin() {
-        let doc = document_from_keys(&did(), &[ED25519_KEY.to_string()]).expect("builds");
+        let doc = document_from_keys(&did(), &[ED25519_KEY.to_string()], &[]).expect("builds");
         let aka: Vec<&str> = doc.also_known_as.iter().map(String::as_str).collect();
         assert!(
             aka.contains(&format!("did:web:example.com:{AID}").as_str()),
@@ -142,25 +156,25 @@ mod tests {
 
     #[test]
     fn every_key_is_an_authentication_and_assertion_method() {
-        let doc = document_from_keys(&did(), &[ED25519_KEY.to_string()]).expect("builds");
+        let doc = document_from_keys(&did(), &[ED25519_KEY.to_string()], &[]).expect("builds");
         assert_eq!(doc.authentication.len(), 1);
         assert_eq!(doc.assertion_method.len(), 1);
     }
 
     #[test]
     fn rejects_an_empty_key_state() {
-        assert!(document_from_keys(&did(), &[]).is_err());
+        assert!(document_from_keys(&did(), &[], &[]).is_err());
     }
 
     #[test]
     fn rejects_a_key_that_is_not_a_cesr_primitive() {
-        assert!(document_from_keys(&did(), &["not-a-key".to_string()]).is_err());
+        assert!(document_from_keys(&did(), &["not-a-key".to_string()], &[]).is_err());
     }
 
     #[test]
     fn rejects_a_non_key_cesr_primitive() {
         // A digest is a valid CESR primitive but not a public key: it must not
         // silently become a verification method.
-        assert!(document_from_keys(&did(), &[AID.to_string()]).is_err());
+        assert!(document_from_keys(&did(), &[AID.to_string()], &[]).is_err());
     }
 }

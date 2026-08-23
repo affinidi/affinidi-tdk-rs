@@ -1,4 +1,10 @@
 # Affinidi DID Resolver Cache SDK
+## 0.8.27
+
+### Changed
+
+- `did-webs` feature now requires `affinidi-did-webs` 0.2, which derives
+  `alsoKnownAs` from a verified designated-aliases attestation.
 
 ## 0.8.26
 

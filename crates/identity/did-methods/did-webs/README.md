@@ -53,19 +53,24 @@ let doc = resolve_from_artifacts(&did, keri_cesr, Some(did_json))?;
 - **Delegation**: a delegated event is accepted only if the delegator's own
   verified KEL, present in the same stream, anchors a seal naming that exact
   event. Delegation chains are followed, bounded, and cycle-checked.
+- **Designated aliases**, which is where `alsoKnownAs` comes from. A DID
+  document does not get to assert its own aliases: an alias counts only if the
+  AID issued a credential saying so, and that credential is anchored in the
+  AID's own key event log. The whole chain is checked — registry inception
+  anchored, issuance anchored, attestation signed by the AID's key state, and
+  not revoked. A break anywhere yields no aliases rather than a
+  partially-trusted list.
 - The published `did.json`, against the derived key state: it must name this
   identifier (or its `did:web` twin) and publish exactly the keys the KEL
   authorised — no more and no fewer.
 
 ## What is not verified yet
 
-- **TEL and ACDC state.** The designated-aliases attestation parses and its
-  signing group is exposed, but nothing checks the registry behind it, so
-  `alsoKnownAs` beyond the `did:web` twin is not asserted. A document from this
-  crate therefore carries fewer `alsoKnownAs` entries than the published
-  `did.json` may.
 - **Witness receipts** are parsed but not required; a KEL is accepted on
   controller signatures alone.
+- **Credential schema validation.** A designated-aliases attestation is matched
+  by its schema SAID and its issuance chain is verified, but the credential body
+  is not validated against the schema itself.
 - **Service endpoints**, which come from KERI endpoint role authorisations
   rather than the KEL.
 
