@@ -1,5 +1,12 @@
 # Affinidi DID Resolver Cache SDK
 
+## 0.8.32
+
+### Changed
+
+- `did-scid` feature now requires `did-scid` 0.2.3, which fixes `did:scid:ke`
+  being unreachable through `resolve`.
+
 ## 0.8.31
 
 ### Changed

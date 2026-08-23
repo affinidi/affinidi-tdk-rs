@@ -1,5 +1,21 @@
 # did:scid
 
+## 0.2.3
+
+### Fixed
+
+- **`did:scid:ke` was unreachable through `resolve`.** The public entry point
+  still opened with `if did.starts_with("did:scid:vh:1")`, so a `ke` DID
+  returned `UnsupportedFormat` and never reached the conversion added in 0.2.0.
+  The format dispatch was correct; nothing could get to it.
+
+  Every test for `ke` called the private `convert_scid_to_method` directly, so
+  the whole suite passed while the feature did not work. `resolve` is now tested
+  at the public boundary — including that a `ke` DID gets *past* format dispatch
+  — and those tests fail if the gate is put back.
+
+  `did:scid:ke` did not work in 0.2.0, 0.2.1 or 0.2.2.
+
 ## 0.2.2
 
 ### Changed
