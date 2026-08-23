@@ -67,6 +67,8 @@ pub use affinidi_siopv2 as siopv2;
 // ── DID methods ──────────────────────────────────────────────────────────
 #[cfg(feature = "did-web")]
 pub use affinidi_did_web as did_web;
+#[cfg(feature = "did-webs")]
+pub use affinidi_did_webs as did_webs;
 #[cfg(feature = "did-ebsi")]
 pub use did_ebsi;
 #[cfg(feature = "did-scid")]

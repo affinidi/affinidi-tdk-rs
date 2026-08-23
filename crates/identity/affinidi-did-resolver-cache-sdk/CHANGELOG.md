@@ -1,5 +1,26 @@
 # Affinidi DID Resolver Cache SDK
 
+## 0.8.26
+
+### Added
+
+- `did-webs` feature: resolves `did:webs` through
+  [`affinidi-did-webs`](../did-methods/did-webs/). `did:webs` is not modelled by
+  `MethodName`, so the resolver registers under `MethodName::Other("webs")` —
+  adding a typed variant would be a source-breaking change to an enum that is
+  not `#[non_exhaustive]`, and dispatch is by name either way.
+
+### Fixed
+
+- A DID method that `DIDMethod` does not model was cached **forever**. The
+  cache decides expiry with `DIDMethod::try_from(method)`, which returns `Err`
+  for an unmodelled method rather than `OTHER`, so the `OTHER`-is-mutable branch
+  was unreachable from that path and such documents were given no TTL at all.
+  They now take the mutable TTL, which is the conservative direction: a document
+  fetched from infrastructure that can change must be re-fetched, or a key
+  rotation is never picked up. This affected every custom-registered resolver,
+  not only `did:webs`.
+
 ## Unreleased (0.8.25) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

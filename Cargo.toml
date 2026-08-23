@@ -17,6 +17,7 @@ members = [
   "crates/identity/did-methods/did-scid",
   "crates/identity/did-methods/did-ebsi",
   "crates/identity/did-methods/did-web",
+  "crates/identity/did-methods/did-webs",
   "crates/identity/did-methods/did-ethr",
   "crates/identity/did-methods/did-jwk",
   "crates/identity/did-methods/did-pkh",
@@ -113,6 +114,12 @@ affinidi-tdk = { path = "crates/tdk/affinidi-tdk" }
 affinidi-meeting-place = { path = "crates/applications/affinidi-meeting-place" }
 affinidi-tsp = { path = "crates/messaging/affinidi-tsp" }
 affinidi-did-web = { path = "crates/identity/did-methods/did-web" }
+# `affinidi-did-webs` depends on `affinidi-cesr` by version, and so does
+# `affinidi-keri-core` from the registry. Without this redirect the workspace
+# builds both the local copy and a crates.io copy, and a `Matter` crossing
+# between them is a mismatched type that points anywhere but here.
+affinidi-cesr = { path = "crates/core/affinidi-cesr" }
+affinidi-did-webs = { path = "crates/identity/did-methods/did-webs" }
 affinidi-did-ethr = { path = "crates/identity/did-methods/did-ethr" }
 affinidi-did-jwk = { path = "crates/identity/did-methods/did-jwk" }
 affinidi-did-pkh = { path = "crates/identity/did-methods/did-pkh" }

@@ -30,6 +30,7 @@ affinidi-did-resolver-cache-sdk = "0.8"
 | `did:scid` | Yes | `did-methods` |
 | `did:cheqd` | No | `did-cheqd` (opt-in — pulls a `ring` TLS backend, see below) |
 | `did:ebsi` | No | `did-ebsi` (EBSI DID Registry API) |
+| `did:webs` | No | `affinidi-did-webs` (KERI-verified key state) |
 | `did:example` | No | `did_example` (must be manually loaded) |
 
 ## Feature Flags
@@ -41,6 +42,7 @@ affinidi-did-resolver-cache-sdk = "0.8"
 | `did-ethr` | No | `did:ethr` resolution. Pulls the `ssi-*` stack, which pins `p256`/`k256` 0.13 — enabling it puts two generations of the elliptic-curve stack in your graph. |
 | `did-pkh` | No | `did:pkh` resolution. Same `ssi-*` cost as `did-ethr`. |
 | `did-ebsi` | No | EBSI DID method (requires network access to EU API) |
+| `did-webs` | No | did:webs — did:web discovery with a KERI-verified key event log |
 | `network` | No | Enable network mode for remote cache server |
 | `did-webvh` | — | WebVH DID method support |
 | `did-cheqd` | No | Cheqd blockchain DID method support (opt-in, see TLS note) |
