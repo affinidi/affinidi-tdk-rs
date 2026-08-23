@@ -2,6 +2,37 @@
 
 All notable changes to this crate are documented here.
 
+## [0.4.0] - 2026-08-23
+
+### Added
+
+- **Service endpoints**, derived from signed KERI endpoint authorisations.
+  A `did:webs` document does not get to list whatever endpoints it likes, any
+  more than it gets to assert its own aliases. An endpoint is published only
+  when two signed `rpy` messages agree: `/end/role/add` from this AID
+  authorising an identifier in a role, and `/loc/scheme` from **that**
+  identifier saying where it is reachable.
+
+  Both halves are required. The first without the second is an authorisation
+  pointing nowhere; the second without the first is a stranger volunteering to
+  act on someone's behalf. `/end/role/cut` withdraws an authorisation, and
+  where the same subject is addressed more than once the latest `dt` wins — so
+  a stale `cut` replayed after an `add` does not take effect.
+
+  Signatures are checked both ways KERI identifiers come: a transferable
+  identifier signs with an indexed signature group verified against the key
+  state its own KEL establishes, while a non-transferable one — a witness,
+  typically — has its public key as its prefix, so a receipt couple is checked
+  directly.
+
+  Roles are not enumerated. KERI does not fix the set, and rejecting an unknown
+  role would drop endpoints we simply have not heard of.
+
+### Changed
+
+- **Breaking:** `document_from_keys` takes the derived services as a fourth
+  argument.
+
 ## [0.3.0] - 2026-08-23
 
 ### Security

@@ -5,10 +5,11 @@ All notable changes to this crate are documented here. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
-## 0.8.9
+## 0.8.10
 
 ### Changed
 
+- `did-webs` feature now re-exports `affinidi-did-webs` 0.4.
 - `did-scid` feature now re-exports `did-scid` 0.2.
 
 ## 0.8.7

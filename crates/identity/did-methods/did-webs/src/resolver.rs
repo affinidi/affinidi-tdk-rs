@@ -15,6 +15,7 @@ use crate::document::document_from_keys;
 use crate::errors::DidWebsError;
 use crate::identifier::DidWebs;
 use crate::kel::Kels;
+use crate::services::service_endpoints;
 
 /// Resolve a `did:webs` identifier from artifacts already fetched.
 ///
@@ -54,7 +55,10 @@ pub fn resolve_from_artifacts(
         warn!("{}: designated aliases not used: {reason}", did.did());
     }
 
-    let document = document_from_keys(did, &state.keys, &designated.aliases)?;
+    // Endpoints, like aliases, are only what the AID itself signed for.
+    let services = service_endpoints(&kels, did.aid())?;
+
+    let document = document_from_keys(did, &state.keys, &designated.aliases, &services)?;
 
     if let Some(published) = did_json {
         let published: Value = serde_json::from_slice(published)?;

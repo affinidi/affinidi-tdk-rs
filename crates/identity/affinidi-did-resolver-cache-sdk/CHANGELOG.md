@@ -1,8 +1,10 @@
 # Affinidi DID Resolver Cache SDK
-## 0.8.29
+## 0.8.30
 
 ### Changed
 
+- `did-webs` feature now requires `affinidi-did-webs` 0.4, which derives service
+  endpoints from signed KERI endpoint authorisations.
 - `did-scid` feature now requires `did-scid` 0.2, which adds `did:scid:ke:1`
   (KERI AIDs via `did:webs`) and reports an unresolvable format by name.
 
@@ -122,7 +124,9 @@ called out here rather than encoded in the version — see R3.6 in CLAUDE.md.
 
 ## 23rd July 2026
 
-### 0.8.21 — `resolve_any` accepts a community name
+#
+
+## 0.8.21 — `resolve_any` accepts a community name
 
 `resolve_any("example.com/@")` now classifies as an agent name and resolves,
 where it previously failed as malformed. The agent name FAQ gives a name with
