@@ -2,6 +2,21 @@
 
 All notable changes to this crate are documented here.
 
+## [0.3.0] - 2026-08-23
+
+### Security
+
+- **Witness receipts are now required when a key event log declares them.** An
+  event naming backers and a threshold was accepted on controller signatures
+  alone, which discards exactly what witnessing exists to provide: a controller
+  that later equivocates cannot be caught if nobody had to witness the original.
+  `affinidi-keri-core` has verified receipts all along and direct mode used it —
+  this resolver simply never called it.
+
+  Receipts are collected both from the event's own attachments and from separate
+  `rct` messages naming it, since witnesses commonly receipt out of band. A KEL
+  with `bt: 0`, which is the common `did:webs` case, is unaffected.
+
 ## [0.2.0] - 2026-08-23
 
 ### Added

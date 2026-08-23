@@ -18,7 +18,7 @@ use affinidi_keri_core::delegation::{DelegationProof, DelegatorAnchors};
 use affinidi_keri_core::error::CoreError;
 use affinidi_keri_core::kever::Kever;
 use affinidi_keri_core::key_state::KeyState;
-use affinidi_keri_core::parser::{self, ParsedMessage};
+use affinidi_keri_core::parser::{self, Attachment, ParsedMessage};
 use affinidi_keri_crypto::Verfer;
 
 use crate::errors::DidWebsError;
@@ -209,6 +209,7 @@ impl Kels {
         })?;
 
         let mut kever = self.incept(prefix, first)?;
+        self.require_witness_receipts(prefix, first, kever.state())?;
 
         for (n, msg) in events.enumerate() {
             let ilk = msg
@@ -229,10 +230,90 @@ impl Kels {
                     .verify_update(&msg.serder, sigs)
                     .map_err(|e| DidWebsError::Kel(format!("{prefix} event {}: {e}", n + 1)))?
             };
+            self.require_witness_receipts(prefix, msg, &state)?;
             kever.apply_verified_update(state);
         }
 
         Ok(kever.state().clone())
+    }
+
+    /// Enforce the witness threshold an event's own key state declares.
+    ///
+    /// A KEL that names witnesses and a threshold is saying it is only valid
+    /// when that many of them have receipted it. Accepting it on controller
+    /// signatures alone discards exactly the protection witnessing exists to
+    /// provide — a controller that later rotates cannot be caught equivocating
+    /// if nobody had to witness the original.
+    ///
+    /// Events with `bt: 0` (no witnesses) are unaffected, which is the common
+    /// case for `did:webs`.
+    fn require_witness_receipts(
+        &self,
+        prefix: &str,
+        msg: &ParsedMessage,
+        state: &KeyState,
+    ) -> Result<(), DidWebsError> {
+        if state.backer_threshold == 0 {
+            return Ok(());
+        }
+
+        let couples = self.receipt_couples_for(msg);
+
+        Kever::verify_witness_receipts_static(
+            msg.serder.raw(),
+            &couples,
+            &state.backers,
+            state.backer_threshold,
+        )
+        .map_err(|e| {
+            DidWebsError::Kel(format!(
+                "{prefix} event at sn {} declares {} of {} witnesses but {e}",
+                state.sn,
+                state.backer_threshold,
+                state.backers.len(),
+            ))
+        })
+    }
+
+    /// Every witness receipt couple that applies to `msg`.
+    ///
+    /// Receipts reach a stream two ways: attached to the event itself, or as
+    /// separate `rct` messages naming it. Both count, so both are collected —
+    /// looking only at the attachments would reject a KEL whose witnesses
+    /// receipted it out of band, which is the usual arrangement.
+    fn receipt_couples_for(&self, msg: &ParsedMessage) -> Vec<(String, Vec<u8>)> {
+        let mut couples: Vec<(String, Vec<u8>)> = msg
+            .attachments
+            .iter()
+            .filter_map(|a| match a {
+                Attachment::ReceiptCouples(c) => Some(c.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+
+        let (Ok(said), Ok(prefix), Ok(sn)) =
+            (msg.serder.said(), msg.serder.prefix(), msg.serder.sn())
+        else {
+            return couples;
+        };
+
+        for rct in self.messages_with_ilk("rct") {
+            let sad = rct.serder.sad();
+            let names_event = sad.get("d").and_then(|v| v.as_str()) == Some(said.as_str())
+                && sad.get("i").and_then(|v| v.as_str()) == Some(prefix.as_str())
+                && sad.get("s").and_then(|v| v.as_str()) == Some(format!("{sn:x}").as_str());
+            if !names_event {
+                continue;
+            }
+            for att in &rct.attachments {
+                if let Attachment::ReceiptCouples(c) = att {
+                    couples.extend(c.iter().cloned());
+                }
+            }
+        }
+
+        couples
     }
 
     /// Build the initial key state from an inception or delegated inception.

@@ -1,4 +1,12 @@
 # Affinidi DID Resolver Cache SDK
+
+## 0.8.28
+
+### Changed
+
+- `did-webs` feature now requires `affinidi-did-webs` 0.3, which enforces
+  witness receipts when a key event log declares witnesses.
+
 ## 0.8.27
 
 ### Changed
