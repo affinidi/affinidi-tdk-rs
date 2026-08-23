@@ -17,6 +17,7 @@ members = [
   "crates/identity/did-methods/did-scid",
   "crates/identity/did-methods/did-ebsi",
   "crates/identity/did-methods/did-web",
+  "crates/identity/did-methods/did-webs",
   "crates/identity/did-methods/did-ethr",
   "crates/identity/did-methods/did-jwk",
   "crates/identity/did-methods/did-pkh",
