@@ -1,4 +1,6 @@
-# Affinidi DID Resolver Cache SDK## 0.8.28
+# Affinidi DID Resolver Cache SDK
+
+## 0.8.28
 
 ### Changed
 

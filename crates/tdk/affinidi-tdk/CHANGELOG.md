@@ -4,7 +4,9 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-For the full code history see `git log` on `crates/tdk/affinidi-tdk`.## 0.8.7
+For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
+
+## 0.8.7
 
 ### Changed
 
