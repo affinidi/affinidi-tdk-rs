@@ -304,11 +304,16 @@ impl Expiry<[u64; 2], Document> for DIDExpiry {
         let did_str = value.id.as_str();
 
         // Extract the method name from "did:<method>:..."
+        // A method this enum does not model is treated as mutable. Its
+        // resolver may fetch from external infrastructure that changes, and
+        // caching such a document forever is the worse failure: it would never
+        // pick up a key rotation. `try_from` returns `Err` rather than `OTHER`
+        // for an unknown method, so without this an unmodelled method — every
+        // custom-registered resolver, and did:webs — got no expiry at all.
         let is_mutable = did_str
             .split(':')
             .nth(1)
-            .and_then(|m| DIDMethod::try_from(m).ok())
-            .is_some_and(|m| m.is_mutable());
+            .is_none_or(|m| DIDMethod::try_from(m).map_or(true, |m| m.is_mutable()));
 
         if is_mutable {
             Some(self.mutable_ttl)
@@ -854,6 +859,15 @@ impl DIDCacheClient {
             .entry(MethodName::Ebsi)
             .or_default()
             .push_back(Box::new(network_resolvers::EbsiResolver));
+        // did:webs is not modelled by `MethodName`, so it registers under the
+        // catch-all. Adding a typed variant would be a source-breaking change
+        // to `MethodName`, which is not `#[non_exhaustive]`, and buys nothing
+        // here — dispatch is by name either way.
+        #[cfg(feature = "did-webs")]
+        resolvers
+            .entry(MethodName::Other("webs".to_string()))
+            .or_default()
+            .push_back(Box::new(network_resolvers::WebsResolver::new()));
 
         let resolvers = Arc::new(resolvers);
 
@@ -1009,6 +1023,60 @@ impl DIDCacheClient {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(feature = "did-webs")]
+    #[test]
+    fn did_webs_dispatches_to_the_catch_all_method_name() {
+        // did:webs is registered under `MethodName::Other("webs")` rather than
+        // a typed variant. This pins the key the registration and the lookup
+        // must agree on — if they ever drift, resolution silently returns
+        // "unsupported method" instead of using the resolver.
+        let did: DID = "did:webs:example.com:ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe"
+            .parse()
+            .expect("valid did");
+        assert_eq!(
+            MethodName::from(&did.method()),
+            MethodName::Other("webs".to_string()),
+        );
+    }
+
+    #[test]
+    fn unmodelled_methods_get_the_mutable_ttl() {
+        // `DIDMethod::try_from` returns Err for a method it does not model, so
+        // an unmodelled method must still be treated as mutable. Getting this
+        // wrong caches such a document forever, and it would never pick up a
+        // key rotation — which for did:webs is the whole point of the method.
+        assert!(DIDMethod::try_from("webs").is_err());
+
+        let expiry = DIDExpiry {
+            mutable_ttl: Duration::from_secs(60),
+        };
+
+        for did in [
+            "did:webs:example.com:ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe",
+            "did:something-nobody-modelled:abc",
+        ] {
+            let doc = Document::new(did).expect("valid did");
+            assert_eq!(
+                expiry.expire_after_create(&[0, 0], &doc, std::time::Instant::now()),
+                Some(Duration::from_secs(60)),
+                "{did} should carry the mutable TTL",
+            );
+        }
+    }
+
+    #[test]
+    fn deterministic_methods_still_have_no_expiry() {
+        let expiry = DIDExpiry {
+            mutable_ttl: Duration::from_secs(60),
+        };
+        let doc = Document::new(DID_KEY).expect("valid did");
+        assert_eq!(
+            expiry.expire_after_create(&[0, 0], &doc, std::time::Instant::now()),
+            None,
+            "did:key is derived from the DID itself and never changes",
+        );
+    }
     use super::*;
 
     const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";

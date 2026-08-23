@@ -130,6 +130,7 @@ DID Document types and high-performance resolution with local and network cachin
 | [`affinidi-did-web`](./crates/identity/did-methods/did-web/) | `did:web` DID method resolver |
 | [`did-scid`](./crates/identity/did-methods/did-scid/) | `did:scid` Self-Certifying Identifier method |
 | [`did-ebsi`](./crates/identity/did-methods/did-ebsi/) | `did:ebsi` method for legal entities |
+| [`affinidi-did-webs`](./crates/identity/did-methods/did-webs/) | `did:webs` — did:web discovery with KERI-verified key state |
 | [`did-example`](./crates/identity/did-methods/did-example/) | `did:example` method for testing |
 
 ### [Credentials](./crates/credentials/)

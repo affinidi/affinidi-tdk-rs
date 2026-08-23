@@ -45,6 +45,7 @@ name the crate is re-exported as (e.g. `affinidi_tdk::vc`).
 | **`did-methods`** | No | group ↓ | — | Standalone DID method crates |
 | `did-web` | No | `affinidi-did-web` | `did_web` | did:web |
 | `did-ebsi` | No | `did-ebsi` | `did_ebsi` | did:ebsi |
+| `did-webs` | No | `affinidi-did-webs` | `did_webs` | did:webs |
 | `did-scid` | No | `did-scid` | `did_scid` | did:scid |
 | `trust` | No | `affinidi-trust-lists` | `trust_lists` | Trust lists |
 | `tsp` | No | `affinidi-tsp` | `tsp` | Trust Spanning Protocol |

@@ -358,3 +358,64 @@ impl AsyncResolver for EbsiResolver {
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// did:webs (feature-gated)
+// ---------------------------------------------------------------------------
+
+/// Resolver for `did:webs` — `did:web` discovery with KERI-verified key state.
+///
+/// Fetches `keri.cesr` and `did.json` from the DID's location, verifies the key
+/// event log, and returns the document that key state implies. The published
+/// `did.json` is cross-checked rather than trusted; a disagreement fails the
+/// resolution.
+///
+/// `did:webs` is not modelled by [`DIDMethod`], so it arrives here as
+/// `DIDMethod::Other { method: "webs", .. }` and is registered under
+/// `MethodName::Other("webs")`.
+#[cfg(feature = "did-webs")]
+pub struct WebsResolver {
+    inner: affinidi_did_webs::WebsResolver,
+}
+
+#[cfg(feature = "did-webs")]
+impl WebsResolver {
+    /// A resolver with its own HTTP client and connection pool.
+    pub fn new() -> Self {
+        Self {
+            inner: affinidi_did_webs::WebsResolver::new(),
+        }
+    }
+}
+
+#[cfg(feature = "did-webs")]
+impl Default for WebsResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "did-webs")]
+impl AsyncResolver for WebsResolver {
+    fn name(&self) -> &str {
+        "WebsResolver"
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        did: &'a DID,
+    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+        Box::pin(async move {
+            match did.method() {
+                DIDMethod::Other { method, .. } if method == "webs" => {}
+                _ => return None,
+            }
+
+            let did_str = did.to_string();
+            Some(self.inner.resolve(&did_str).await.map_err(|e| {
+                error!("did:webs resolution error: {e:?}");
+                ResolverError::ResolutionFailed(e.to_string())
+            }))
+        })
+    }
+}
