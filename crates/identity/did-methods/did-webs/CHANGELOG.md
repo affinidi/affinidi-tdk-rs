@@ -2,6 +2,34 @@
 
 All notable changes to this crate are documented here.
 
+## [0.7.0] - 2026-08-23
+
+### Added
+
+- **Designating `alsoKnownAs`.** `create` takes `also_known_as`, and `update`
+  takes `Change::AlsoKnownAs`.
+
+  An alias is not something a document may assert about itself, so this issues
+  the credential the resolver already required: a registry (`vcp`), an issuance
+  (`iss`), and the attestation itself — each anchored in the identifier's own key
+  event log by an interaction event, and the credential signed under the key
+  state at a named establishment event. The resolver verifies every link before
+  carrying an alias back, so every link is built.
+
+  The attribute and rules blocks carry their own SAIDs, computed before the
+  credential's, because they are part of the bytes the outer SAID covers. The
+  rules block is reproduced verbatim from the designated-aliases schema so the
+  credential this issues is the one the rest of the ecosystem reads.
+
+- **`also_known_as_scid`**, designating this identifier's own `did:scid:ke:1`
+  form. It is a switch rather than an entry in `also_known_as` because the AID
+  does not exist until the inception event does. ⚠️ The `ke` format code is
+  *proposed* in the did:scid registry rather than registered.
+
+  There is still no `also_known_as_web`: the `did:web` twin shares this
+  identifier's location and document and the resolver adds it unconditionally, so
+  the switch could only ever be on.
+
 ## [0.6.0] - 2026-08-23
 
 ### Added

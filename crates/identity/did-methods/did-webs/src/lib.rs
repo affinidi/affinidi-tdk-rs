@@ -18,6 +18,8 @@
 #[cfg(feature = "create")]
 pub mod artifacts;
 #[cfg(feature = "create")]
+pub(crate) mod attestation;
+#[cfg(feature = "create")]
 pub mod create;
 #[cfg(feature = "create")]
 pub mod custody;

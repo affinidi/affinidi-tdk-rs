@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-webs"
-version = "0.6.0"
+version = "0.7.0"
 description = "Implementation of the did:webs DID method: did:web discovery with KERI-verified key state"
 repository.workspace = true
 edition.workspace = true

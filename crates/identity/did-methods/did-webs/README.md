@@ -141,11 +141,21 @@ published file adds, so anything not backed by KERI artifacts would be silently
 dropped on the way back. Service endpoints are supported because they *can* be
 backed — each is emitted as signed `rpy` messages the resolver verifies.
 
-Unlike `didwebvh-rs` there are no `also_known_as_web` / `also_known_as_scid`
-switches: webvh writes `alsoKnownAs` into its log, while `did:webs` derives it.
-The `did:web` twin is added by the resolver unconditionally so it cannot be
-turned off, and a `did:scid:ke` entry is not derivable from the log so it cannot
-be turned on.
+### Designating `alsoKnownAs`
+
+An alias is not something a document may assert about itself. Designating one
+issues a credential — a registry, an issuance, and the attestation, each anchored
+in the identifier's own key event log — which the resolver verifies before
+carrying any alias back. `create` takes `also_known_as`, and `update` takes
+`Change::AlsoKnownAs`.
+
+`also_known_as_scid` designates this identifier's own `did:scid:ke:1` form. ⚠️
+That format code is *proposed* in the did:scid registry rather than registered,
+so its spelling may change.
+
+There is no `also_known_as_web` switch: the `did:web` twin shares this
+identifier's location and document, and the resolver adds it unconditionally, so
+the switch could only ever be on.
 
 ## What is not verified yet
 

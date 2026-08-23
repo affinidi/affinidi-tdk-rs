@@ -333,3 +333,176 @@ fn a_custody_record_for_another_identifier_is_refused() {
         .is_err(),
     );
 }
+
+// -- designated aliases --------------------------------------------------
+
+const OTHER: &str = "did:web:elsewhere.example:alice";
+
+#[test]
+fn a_designated_alias_survives_resolution() {
+    // The whole point: the alias is carried back because the chain verifies,
+    // not because did.json said so.
+    let config = CreateConfig::builder(HOST)
+        .inception(inception())
+        .also_known_as(OTHER)
+        .build();
+
+    let result = create(config).expect("create");
+    let doc = resolve(result.did(), result.artifacts());
+
+    assert!(
+        doc.also_known_as.iter().any(|a| a == OTHER),
+        "got {:?}",
+        doc.also_known_as,
+    );
+}
+
+#[test]
+fn the_did_scid_form_can_be_designated() {
+    let config = CreateConfig::builder(HOST)
+        .inception(inception())
+        .also_known_as_scid(true)
+        .build();
+
+    let result = create(config).expect("create");
+    let aid = DidWebs::parse(result.did())
+        .expect("parse")
+        .aid()
+        .to_string();
+    let doc = resolve(result.did(), result.artifacts());
+
+    assert!(
+        doc.also_known_as
+            .iter()
+            .any(|a| a == &format!("did:scid:ke:1:{aid}?src={HOST}")),
+        "got {:?}",
+        doc.also_known_as,
+    );
+}
+
+#[test]
+fn aliases_can_be_designated_after_creation() {
+    let created = create(config()).expect("create");
+    assert_eq!(
+        resolve(created.did(), created.artifacts())
+            .also_known_as
+            .len(),
+        1,
+        "only the did:web twin to begin with",
+    );
+
+    let updated = update(
+        UpdateConfig {
+            did: created.did().to_string(),
+            prior: created.artifacts().clone(),
+            custody: created.custody().clone(),
+            change: Change::AlsoKnownAs(vec![OTHER.to_string()]),
+        },
+        SALT,
+    )
+    .expect("designate");
+
+    let doc = resolve(updated.did(), updated.artifacts());
+    assert!(
+        doc.also_known_as.iter().any(|a| a == OTHER),
+        "got {:?}",
+        doc.also_known_as
+    );
+}
+
+#[test]
+fn an_alias_survives_a_later_rotation() {
+    // The attestation is signed under one key state and read after another.
+    let config = CreateConfig::builder(HOST)
+        .inception(inception())
+        .also_known_as(OTHER)
+        .build();
+    let created = create(config).expect("create");
+
+    let updated = update(
+        UpdateConfig {
+            did: created.did().to_string(),
+            prior: created.artifacts().clone(),
+            custody: created.custody().clone(),
+            change: Change::Rotate(RotationConfig::default()),
+        },
+        SALT,
+    )
+    .expect("rotate");
+
+    let doc = resolve(updated.did(), updated.artifacts());
+    assert!(
+        doc.also_known_as.iter().any(|a| a == OTHER),
+        "a rotation must not withdraw a designation, got {:?}",
+        doc.also_known_as,
+    );
+}
+
+#[test]
+fn designating_nothing_is_refused() {
+    let config = CreateConfig::builder(HOST).inception(inception()).build();
+    let created = create(config).expect("create");
+
+    assert!(
+        update(
+            UpdateConfig {
+                did: created.did().to_string(),
+                prior: created.artifacts().clone(),
+                custody: created.custody().clone(),
+                change: Change::AlsoKnownAs(vec![]),
+            },
+            SALT,
+        )
+        .is_err(),
+        "an attestation with no aliases designates nothing",
+    );
+}
+
+#[test]
+fn an_unanchored_attestation_is_not_carried_back() {
+    // Strip the interaction events that anchor the registry and the issuance,
+    // leaving the credential itself intact and correctly signed. Its aliases
+    // must not survive: an attestation that nothing in the key event log
+    // authorises is only a document the identifier wrote about itself.
+    //
+    // The key event log still verifies after the strip — the inception stands
+    // alone — so this exercises the anchor check rather than merely breaking
+    // the log, which would prove nothing.
+    let config = CreateConfig::builder(HOST)
+        .inception(inception())
+        .also_known_as(OTHER)
+        .build();
+    let created = create(config).expect("create");
+
+    let text = String::from_utf8(created.artifacts().keri_cesr.clone()).expect("ascii");
+    let stripped = strip_interactions(&text);
+    assert!(
+        stripped.contains(OTHER),
+        "the credential itself must still be present",
+    );
+
+    let did = DidWebs::parse(created.did()).expect("parse");
+    let doc = resolve_from_artifacts(&did, stripped.as_bytes(), None)
+        .expect("the key event log still verifies without its interactions");
+
+    assert!(
+        !doc.also_known_as.iter().any(|a| a == OTHER),
+        "an unanchored attestation must not be carried back, got {:?}",
+        doc.also_known_as,
+    );
+}
+
+/// Remove every `ixn` message from a CESR stream, leaving the rest.
+fn strip_interactions(stream: &str) -> String {
+    let mut out = String::new();
+    let mut starts: Vec<usize> = stream.match_indices("{\"v\":\"").map(|(i, _)| i).collect();
+    starts.push(stream.len());
+
+    for window in starts.windows(2) {
+        let segment = &stream[window[0]..window[1]];
+        if !segment.contains("\"t\":\"ixn\"") {
+            out.push_str(segment);
+        }
+    }
+    out
+}

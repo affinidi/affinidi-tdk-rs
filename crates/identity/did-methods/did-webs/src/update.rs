@@ -35,6 +35,16 @@ pub enum Change {
     /// resolver can verify them. Existing designations are superseded by
     /// timestamp, so re-designating a role replaces where it points.
     Services(Vec<SelfEndpoint>),
+    /// Designate `alsoKnownAs` identifiers.
+    ///
+    /// Issues a fresh attestation in a new registry, listing exactly these
+    /// aliases. It does not add to an earlier one — an attestation names *the*
+    /// designated aliases, so a caller wanting to keep existing entries passes
+    /// them again.
+    ///
+    /// Appends two interaction events to the key event log, since both the
+    /// registry and the issuance must be anchored in it.
+    AlsoKnownAs(Vec<String>),
 }
 
 /// How to continue an identifier.
@@ -132,6 +142,16 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
                 .interact_event(anchors)
                 .map_err(|e| DidWebsError::Create(format!("interaction failed: {e}")))?;
             keri_cesr.extend_from_slice(&event.composed);
+        }
+        Change::AlsoKnownAs(aliases) => {
+            let establishment = last_establishment_said(&kels, did.aid())?;
+            let attestation = crate::attestation::issue_designated_aliases(
+                &mut hab,
+                did.aid(),
+                &establishment,
+                aliases,
+            )?;
+            keri_cesr.extend_from_slice(&attestation);
         }
         Change::Services(services) => {
             // Replies are not key events, so nothing is appended to the log

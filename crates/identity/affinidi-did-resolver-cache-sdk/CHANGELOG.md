@@ -1,5 +1,12 @@
 # Affinidi DID Resolver Cache SDK
 
+## 0.8.34
+
+### Changed
+
+- `did-webs` feature now requires `affinidi-did-webs` 0.7, which can designate
+  `alsoKnownAs` identifiers.
+
 ## 0.8.33
 
 ### Changed

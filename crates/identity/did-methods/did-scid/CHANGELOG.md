@@ -1,5 +1,11 @@
 # did:scid
 
+## 0.2.5
+
+### Changed
+
+- `did-webs` feature now requires `affinidi-did-webs` 0.7.
+
 ## 0.2.4
 
 ### Changed
