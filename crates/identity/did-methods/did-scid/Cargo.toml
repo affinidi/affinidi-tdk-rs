@@ -1,7 +1,7 @@
 
 [package]
 name = "did-scid"
-version = "0.1.13"
+version = "0.2.0"
 description = "Implementation of did:scid in Rust"
 repository.workspace = true
 edition.workspace = true
@@ -25,6 +25,9 @@ default = ["did-webvh"]
 
 did-cheqd = ["dep:did-resolver-cheqd", "dep:ssi-dids-core"]
 did-webvh = ["dep:didwebvh-rs"]
+# did:scid:ke — a KERI AID via did:webs. Optional so did-scid does not pull the
+# KERI stack into builds that never resolve it.
+did-webs = ["dep:affinidi-did-webs"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -32,6 +35,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 affinidi-did-common = "0.4"
 
+affinidi-did-webs = { version = "0.3", optional = true }
 didwebvh-rs = { version = "0.6", optional = true }
 did-resolver-cheqd = { version = "1", optional = true }
 regex = "1"
