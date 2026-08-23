@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
+## 0.8.13
+
+### Changed
+
+- `did-webs` feature now re-exports `affinidi-did-webs` 0.6.
+
 ## 0.8.12
 
 ### Changed

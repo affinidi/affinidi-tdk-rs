@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.8.12"
+version = "0.8.13"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -85,7 +85,7 @@ affinidi-openid4vp = { version = "0.1", path = "../../protocols/affinidi-openid4
 # DID methods
 affinidi-did-web = { version = "0.1", path = "../../identity/did-methods/did-web", optional = true }
 did-ebsi = { version = "0.1", path = "../../identity/did-methods/did-ebsi", optional = true }
-affinidi-did-webs = { version = "0.5", path = "../../identity/did-methods/did-webs", optional = true }
+affinidi-did-webs = { version = "0.6", path = "../../identity/did-methods/did-webs", optional = true }
 did-scid = { version = "0.2.3", path = "../../identity/did-methods/did-scid", optional = true }
 
 # Trust + TSP
