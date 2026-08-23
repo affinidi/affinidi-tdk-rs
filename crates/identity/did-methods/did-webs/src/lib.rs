@@ -15,6 +15,7 @@
  * error rather than a preference for one or the other.
  */
 
+pub mod aliases;
 pub mod document;
 pub mod errors;
 pub mod fetch;
@@ -22,6 +23,7 @@ pub mod identifier;
 pub mod kel;
 pub mod resolver;
 
+pub use aliases::{DesignatedAliases, designated_aliases};
 pub use errors::DidWebsError;
 pub use fetch::{WebsResolver, resolve};
 pub use identifier::{DID_JSON, DidWebs, KERI_CESR};

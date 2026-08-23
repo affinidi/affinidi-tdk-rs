@@ -8,6 +8,9 @@
 use affinidi_did_common::Document;
 use serde_json::Value;
 
+use tracing::warn;
+
+use crate::aliases::designated_aliases;
 use crate::document::document_from_keys;
 use crate::errors::DidWebsError;
 use crate::identifier::DidWebs;
@@ -41,7 +44,17 @@ pub fn resolve_from_artifacts(
         )));
     }
 
-    let document = document_from_keys(did, &state.keys)?;
+    // Aliases are only ever taken from a verified designated-aliases
+    // attestation. A stream carrying one that does not verify yields no
+    // aliases and a logged reason, rather than failing the whole resolution:
+    // the key material is still sound, and refusing to resolve would make a
+    // broken attestation a denial of service on the identifier.
+    let designated = designated_aliases(&kels, did.aid())?;
+    if let Some(reason) = &designated.rejected {
+        warn!("{}: designated aliases not used: {reason}", did.did());
+    }
+
+    let document = document_from_keys(did, &state.keys, &designated.aliases)?;
 
     if let Some(published) = did_json {
         let published: Value = serde_json::from_slice(published)?;

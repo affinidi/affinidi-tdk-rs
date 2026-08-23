@@ -122,6 +122,81 @@ impl Kels {
         Ok(state)
     }
 
+    /// Whether `aid`'s verified key event log anchors a seal naming
+    /// (`prefix`, `sn`, `said`).
+    ///
+    /// Anchoring is how a KEL authorises something outside itself — a
+    /// delegation, or an entry in a transaction event log. Unlike
+    /// [`DelegatorAnchors::anchors_at`] the caller does not know *which* event
+    /// carries the seal, so the whole verified log is searched.
+    ///
+    /// # Errors
+    /// Returns [`DidWebsError::Kel`] if `aid`'s key event log does not verify.
+    pub fn anchors_seal(
+        &self,
+        aid: &str,
+        prefix: &str,
+        sn: u64,
+        said: &str,
+    ) -> Result<bool, DidWebsError> {
+        // Verify first: a seal in an unverified event authorises nothing.
+        self.key_state(aid)?;
+
+        let Some(indices) = self.by_prefix.get(aid) else {
+            return Ok(false);
+        };
+
+        let expected_sn = format!("{sn:x}");
+        for i in indices {
+            let anchors = self.messages[*i]
+                .serder
+                .sad()
+                .get("a")
+                .and_then(|a| a.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            for anchor in anchors {
+                let matches = anchor.get("i").and_then(|v| v.as_str()) == Some(prefix)
+                    && anchor.get("d").and_then(|v| v.as_str()) == Some(said)
+                    && anchor.get("s").and_then(|v| v.as_str()) == Some(expected_sn.as_str());
+                if matches {
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// The first message in the stream whose `d` field is `said`.
+    ///
+    /// Transaction events and credentials are addressed by SAID rather than by
+    /// position, and are not part of any KEL.
+    pub fn message_by_said(&self, said: &str) -> Option<&ParsedMessage> {
+        self.messages
+            .iter()
+            .find(|m| m.serder.said().ok().as_deref() == Some(said))
+    }
+
+    /// Every message in the stream with no `t` field at all.
+    ///
+    /// ACDCs are not events and carry no ilk, which is what distinguishes a
+    /// credential from a key or transaction event in the same stream.
+    pub fn messages_with_ilk_none(&self) -> impl Iterator<Item = &ParsedMessage> {
+        self.messages.iter().filter(|m| m.serder.ilk().is_err())
+    }
+
+    /// Every message in the stream whose `t` field is `ilk`.
+    pub fn messages_with_ilk<'a>(
+        &'a self,
+        ilk: &'a str,
+    ) -> impl Iterator<Item = &'a ParsedMessage> + 'a {
+        self.messages
+            .iter()
+            .filter(move |m| m.serder.ilk().ok().as_deref() == Some(ilk))
+    }
+
     /// Replay one identifier's KEL from its inception.
     fn verify_kel(&self, prefix: &str) -> Result<KeyState, DidWebsError> {
         let indices = self.by_prefix.get(prefix).ok_or_else(|| {
