@@ -7,7 +7,9 @@
 //! is not asserted here, because nothing in the KEL alone establishes it.
 
 use affinidi_cesr::Matter;
-use affinidi_did_common::{Document, DocumentBuilder, VerificationMethodBuilder};
+use affinidi_did_common::{
+    Document, DocumentBuilder, ServiceBuilder, VerificationMethodBuilder, service::Endpoint,
+};
 use serde_json::json;
 
 use crate::errors::DidWebsError;
@@ -26,6 +28,7 @@ pub fn document_from_keys(
     did: &DidWebs,
     keys: &[String],
     aliases: &[String],
+    services: &[crate::services::ServiceEndpoint],
 ) -> Result<Document, DidWebsError> {
     if keys.is_empty() {
         return Err(DidWebsError::Kel(
@@ -68,6 +71,18 @@ pub fn document_from_keys(
         builder = builder
             .assertion_method_reference(&vm_id)
             .map_err(|e| DidWebsError::Kel(format!("could not reference {vm_id}: {e}")))?;
+    }
+
+    // Services come from signed KERI endpoint authorisations, never from the
+    // published did.json — see `crate::services`.
+    for service in services {
+        let endpoint = Endpoint::Map(json!(service.urls));
+        let mut sb = ServiceBuilder::new(service.role.clone(), endpoint);
+        let id = format!("{controller}{}", service.id());
+        sb = sb
+            .id(&id)
+            .map_err(|e| DidWebsError::Kel(format!("could not build service {id}: {e}")))?;
+        builder = builder.service(sb.build());
     }
 
     Ok(builder.build())
@@ -126,7 +141,7 @@ mod tests {
 
     #[test]
     fn builds_a_document_for_an_ed25519_key() {
-        let doc = document_from_keys(&did(), &[ED25519_KEY.to_string()], &[]).expect("builds");
+        let doc = document_from_keys(&did(), &[ED25519_KEY.to_string()], &[], &[]).expect("builds");
 
         assert_eq!(doc.id.as_str(), format!("did:webs:example.com:{AID}"));
         assert_eq!(doc.verification_method.len(), 1);
@@ -146,7 +161,7 @@ mod tests {
 
     #[test]
     fn records_the_did_web_twin() {
-        let doc = document_from_keys(&did(), &[ED25519_KEY.to_string()], &[]).expect("builds");
+        let doc = document_from_keys(&did(), &[ED25519_KEY.to_string()], &[], &[]).expect("builds");
         let aka: Vec<&str> = doc.also_known_as.iter().map(String::as_str).collect();
         assert!(
             aka.contains(&format!("did:web:example.com:{AID}").as_str()),
@@ -156,25 +171,25 @@ mod tests {
 
     #[test]
     fn every_key_is_an_authentication_and_assertion_method() {
-        let doc = document_from_keys(&did(), &[ED25519_KEY.to_string()], &[]).expect("builds");
+        let doc = document_from_keys(&did(), &[ED25519_KEY.to_string()], &[], &[]).expect("builds");
         assert_eq!(doc.authentication.len(), 1);
         assert_eq!(doc.assertion_method.len(), 1);
     }
 
     #[test]
     fn rejects_an_empty_key_state() {
-        assert!(document_from_keys(&did(), &[], &[]).is_err());
+        assert!(document_from_keys(&did(), &[], &[], &[]).is_err());
     }
 
     #[test]
     fn rejects_a_key_that_is_not_a_cesr_primitive() {
-        assert!(document_from_keys(&did(), &["not-a-key".to_string()], &[]).is_err());
+        assert!(document_from_keys(&did(), &["not-a-key".to_string()], &[], &[]).is_err());
     }
 
     #[test]
     fn rejects_a_non_key_cesr_primitive() {
         // A digest is a valid CESR primitive but not a public key: it must not
         // silently become a verification method.
-        assert!(document_from_keys(&did(), &[AID.to_string()], &[]).is_err());
+        assert!(document_from_keys(&did(), &[AID.to_string()], &[], &[]).is_err());
     }
 }

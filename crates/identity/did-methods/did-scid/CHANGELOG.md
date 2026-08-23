@@ -1,5 +1,12 @@
 # did:scid
 
+## 0.2.1
+
+### Changed
+
+- `did-webs` feature now requires `affinidi-did-webs` 0.4, which derives service
+  endpoints from signed KERI endpoint authorisations.
+
 ## 0.2.0
 
 ### Added
@@ -60,7 +67,9 @@ Crypto behaviour is unchanged — the golden/KAT vectors (`p256_sign_verify_roun
 
 ## 19th July 2026
 
-### 0.1.12 — didwebvh-rs 0.6
+#
+
+## 0.1.12 — didwebvh-rs 0.6
 
 - Bumped the `didwebvh-rs` requirement from `"0.5"` to `"0.6"`.
 

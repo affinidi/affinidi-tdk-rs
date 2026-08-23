@@ -22,6 +22,7 @@ pub mod fetch;
 pub mod identifier;
 pub mod kel;
 pub mod resolver;
+pub mod services;
 
 pub use aliases::{DesignatedAliases, designated_aliases};
 pub use errors::DidWebsError;
@@ -29,3 +30,4 @@ pub use fetch::{WebsResolver, resolve};
 pub use identifier::{DID_JSON, DidWebs, KERI_CESR};
 pub use kel::Kels;
 pub use resolver::resolve_from_artifacts;
+pub use services::{ServiceEndpoint, service_endpoints};

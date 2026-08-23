@@ -64,6 +64,10 @@ let doc = resolve_from_artifacts(&did, keri_cesr, Some(did_json))?;
   whose own key state names backers and a threshold is only accepted once that
   many designated witnesses have receipted it — from the event's attachments or
   from separate `rct` messages. A KEL with `bt: 0` is unaffected.
+- **Service endpoints**, from signed KERI endpoint authorisations. An endpoint
+  appears only when two signed replies agree: `/end/role/add` from this AID
+  authorising an identifier in a role, and `/loc/scheme` from *that* identifier
+  saying where it is. `/end/role/cut` withdraws it, and the latest `dt` wins.
 - The published `did.json`, against the derived key state: it must name this
   identifier (or its `did:web` twin) and publish exactly the keys the KEL
   authorised — no more and no fewer.
@@ -73,8 +77,6 @@ let doc = resolve_from_artifacts(&did, keri_cesr, Some(did_json))?;
 - **Credential schema validation.** A designated-aliases attestation is matched
   by its schema SAID and its issuance chain is verified, but the credential body
   is not validated against the schema itself.
-- **Service endpoints**, which come from KERI endpoint role authorisations
-  rather than the KEL.
 
 ## Related crates
 
