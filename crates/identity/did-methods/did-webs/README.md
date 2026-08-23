@@ -72,6 +72,22 @@ let doc = resolve_from_artifacts(&did, keri_cesr, Some(did_json))?;
   identifier (or its `did:web` twin) and publish exactly the keys the KEL
   authorised — no more and no fewer.
 
+## HTTPS, and the loopback exception
+
+Artifacts are fetched over **HTTPS**. Two exceptions use plain HTTP:
+
+- a **loopback** host (`localhost`, `127.0.0.1`, `::1`), which cannot be
+  intercepted from elsewhere and rarely has a certificate;
+- any host, if you opt in with `WebsResolver::allow_http(true)`.
+
+The opt-in exists because the reference implementation
+(`hyperledger-labs/did-webs-resolver`) fetches over plain HTTP, so
+interoperating with it — or with KERI tooling on a private network without TLS
+— is otherwise impossible. Leave it off in production: a `did:webs` document is
+derived from a self-verifying key event log, so an attacker cannot *forge* one,
+but they can serve a **stale** log and hide a key rotation that has already
+happened, which is the attack pre-rotation exists to defeat.
+
 ## What is not verified yet
 
 - **Credential schema validation.** A designated-aliases attestation is matched

@@ -32,6 +32,7 @@ pub const MAX_ARTIFACT_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Debug, Clone)]
 pub struct WebsResolver {
     client: reqwest::Client,
+    allow_http: bool,
 }
 
 impl WebsResolver {
@@ -46,13 +47,45 @@ impl WebsResolver {
             .timeout(DEFAULT_TIMEOUT)
             .build()
             .unwrap_or_default();
-        Self { client }
+        Self {
+            client,
+            allow_http: false,
+        }
     }
 
     /// A resolver over a caller-supplied client, for custom timeouts, proxies,
     /// or a client shared with the rest of an application.
     pub fn with_client(client: reqwest::Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            allow_http: false,
+        }
+    }
+
+    /// Permit plain HTTP for **any** host, not just loopback.
+    ///
+    /// Off by default, and it should stay off in production. A `did:webs`
+    /// document is derived from a self-verifying key event log, so an attacker
+    /// on the network cannot forge one — but they can serve a *stale* log,
+    /// hiding a key rotation that has already happened, which is exactly the
+    /// attack pre-rotation exists to defeat.
+    ///
+    /// It exists because the reference implementation
+    /// (`hyperledger-labs/did-webs-resolver`) fetches over plain HTTP, so
+    /// interoperating with it — or with any KERI tooling on a private network
+    /// without TLS — otherwise cannot work at all.
+    pub fn allow_http(mut self, allow: bool) -> Self {
+        self.allow_http = allow;
+        self
+    }
+
+    /// The scheme to fetch this DID's artifacts over.
+    fn scheme(&self, did: &DidWebs) -> &'static str {
+        if self.allow_http || did.is_loopback() {
+            "http"
+        } else {
+            "https"
+        }
     }
 
     /// Resolve a `did:webs` identifier.
@@ -64,14 +97,15 @@ impl WebsResolver {
     pub async fn resolve(&self, did: &str) -> Result<Document, DidWebsError> {
         let parsed = DidWebs::parse(did)?;
 
-        let cesr_url = parsed.artifact_url(KERI_CESR);
+        let scheme = self.scheme(&parsed);
+        let cesr_url = parsed.artifact_url_with_scheme(scheme, KERI_CESR);
         let keri_cesr = self.fetch(&cesr_url).await?;
 
         // A missing or unreadable did.json does not change the answer, because
         // the answer comes from the KEL. It is only ever a cross-check, so a
         // fetch failure is logged rather than propagated — while a document
         // that *disagrees* is refused inside `resolve_from_artifacts`.
-        let did_json_url = parsed.artifact_url(DID_JSON);
+        let did_json_url = parsed.artifact_url_with_scheme(scheme, DID_JSON);
         let did_json = match self.fetch(&did_json_url).await {
             Ok(bytes) => Some(bytes),
             Err(e) => {
