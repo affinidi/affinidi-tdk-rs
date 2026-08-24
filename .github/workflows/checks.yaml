@@ -44,7 +44,17 @@ jobs:
       # Drop this entry when did-resolver-cheqd moves off ssi-dids-core 0.1
       # (see cheqd/did-resolver-rs#3), NOT when "those crates move to reqwest
       # 0.12" as this comment previously said — the crates it named are gone.
-      auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373,RUSTSEC-2026-0258"
+      #
+      # RUSTSEC-2023-0126 (im, OrdSet insertion unsoundness). Same story as the h2
+      # entry above: since #719 `im` reaches the lockfile ONLY via the optional
+      # `did-cheqd` feature (did-resolver-cheqd -> ssi-dids-core 0.1 -> linked-data
+      # -> im), which no crate in this workspace enables, so it is never compiled
+      # (`cargo tree -i im --workspace` is empty; cargo-deny, which reads the build
+      # graph rather than the lockfile, does not report it). No fix exists: the crate
+      # is unmaintained and its repo was archived 2026-05-03. Clears together with
+      # RUSTSEC-2026-0258 when did-resolver-cheqd moves off ssi-dids-core 0.1
+      # (cheqd/did-resolver-rs#3).
+      auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373,RUSTSEC-2026-0258,RUSTSEC-2023-0126"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       coverage: 0
       useRedis: true
