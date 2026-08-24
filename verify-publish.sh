@@ -12,8 +12,20 @@ NC='\033[0m' # No Color
 # Cache metadata once
 METADATA=$(cargo metadata --format-version 1 --no-deps 2>/dev/null)
 
-# Get all publishable crates in workspace order
-CRATES=$(echo "$METADATA" | jq -r '.packages[] | select(.publish == null or .publish == [] or .publish == ["crates.io"]) | .name')
+# Get all publishable crates in workspace order.
+#
+# `cargo metadata` reports the `publish` field as:
+#   null              -> publishable anywhere (no `publish` key, or `publish = true`)
+#   []                -> `publish = false`, i.e. MUST NEVER be published
+#   ["crates.io", ..] -> restricted to those registries
+#
+# The `[]` case previously matched here, so crates marked `publish = false`
+# were checked as if they were publishable. That is not a harmless extra check:
+# such a crate is allowed to depend on a workspace sibling by path with no
+# version requirement, which `cargo package` rejects — so it fails this script
+# for a reason that is correct behaviour. `affinidi-messaging-helpers` fails
+# exactly that way on a clean tree.
+CRATES=$(echo "$METADATA" | jq -r '.packages[] | select(.publish == null or ((.publish | length) > 0 and (.publish | index("crates.io")))) | .name')
 
 get_local_version() {
   echo "$METADATA" | jq -r ".packages[] | select(.name == \"$1\") | .version"
