@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (0.20.0) — `trust-tasks-rs` 0.12
+
+- Bumps `trust-tasks-rs` 0.11 → 0.12.
+- **Breaking for consumers, despite no source change here.** This crate's
+  public API carries `trust-tasks-rs` types — `TrustTasks::account_update`
+  takes an `account::update::v0_1::MediatorAcl` — so a consumer must move to
+  0.12 in the same change. Two `trust-tasks-rs` versions in one graph do not
+  merely warn; they fail to compile with `expected MediatorAcl, found a
+  different MediatorAcl`.
+- No behaviour change in this crate.
 ## Unreleased (0.19.12) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

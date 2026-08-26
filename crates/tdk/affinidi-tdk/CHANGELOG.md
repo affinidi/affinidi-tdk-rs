@@ -6,6 +6,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
+## 0.9.0
+
+### Changed
+
+- `messaging` feature now re-exports `affinidi-messaging-sdk` 0.20, which moves
+  to `trust-tasks-rs` 0.12.
+- **Breaking for consumers of the `messaging` feature.** The re-exported SDK
+  carries `trust-tasks-rs` types in its public API, so a consumer must move to
+  0.12 in the same change; two versions in one graph fail to compile rather
+  than warn. Minor rather than patch for that reason.
+- The dependency is now declared with a `path` alongside its version. It was a
+  bare registry requirement, so this facade re-exported the *published* SDK
+  rather than the one beside it in this workspace — which is how a stale
+  `trust-tasks-rs` node survived the 0.12 move.
+
 ## 0.8.14
 
 ### Changed

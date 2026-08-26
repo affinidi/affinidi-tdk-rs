@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (0.4.0) — `trust-tasks-rs` 0.12
+
+- Bumps `trust-tasks-rs` 0.11 → 0.12. No source change; the crate compiles
+  unmodified against it.
+- Released as a minor bump rather than a patch because `trust-tasks-rs` types
+  reach this crate's API surface, so a consumer must move in lockstep — two
+  versions in one graph fail to compile rather than warn.
 ## [0.3.27] - 2026-08-19
 
 ### Changed

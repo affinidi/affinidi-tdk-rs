@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.3.0) — `trust-tasks-rs` 0.12
+
+- Bumps `trust-tasks-rs` 0.11 → 0.12, and `affinidi-messaging-sdk` to 0.20.
+- Minor rather than patch for the same reason as the rest of the family: a
+  harness a downstream workspace builds against must resolve one
+  `trust-tasks-rs`, so consumers move in lockstep.
+- Carries the mediator's new `ping` freshness bounds — a test that mints a
+  document with a badly skewed `issuedAt`, or an `expiresAt` at or before it,
+  will now see `malformedRequest`.
 ## Unreleased (0.2.53) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

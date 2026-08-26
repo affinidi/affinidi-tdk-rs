@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.8.14"
+version = "0.9.0"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -56,7 +56,7 @@ tsp = ["dep:affinidi-tsp"]
 [dependencies]
 affinidi-did-resolver-cache-sdk = "0.8"
 affinidi-did-common = "0.4"
-affinidi-messaging-sdk = { version = "0.19", optional = true }
+affinidi-messaging-sdk = { version = "0.20", path = "../../messaging/affinidi-messaging-sdk", optional = true }
 affinidi-messaging-didcomm = { path = "../../messaging/affinidi-messaging-didcomm", version = "0.15" }
 affinidi-did-authentication = "0.3"
 # Foundations are re-exported by the facade. Kept at major.minor (caret), NOT
