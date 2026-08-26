@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased (0.19.0) — `trust-tasks-rs` 0.12, and `ping` gains freshness bounds
+
+- Bumps `trust-tasks-rs` 0.11 → 0.12, and adapts the one `consume_inbound`
+  call site: 0.12 requires a `ConsumeChecks` argument and `ConsumeOutcome`
+  gains a `Duplicate` variant.
+- **Behaviour change.** `ping` now refuses two document shapes it previously
+  accepted, both as `malformedRequest`: an `issuedAt` beyond the 60s clock-skew
+  tolerance, and an `expiresAt` at or before its own `issuedAt`. Before 0.12
+  the only temporal check was `expiresAt` and `issuedAt` was parsed and never
+  looked at, so a document stamped a year ahead was accepted — and accepted
+  again for the whole of that year. A peer with a badly skewed clock will start
+  seeing refusals.
+- `ping` is declared `ConsumeChecks::not_consequential()`. Answering it grants
+  no access, moves no value, discloses nothing beyond a nonce echo and the
+  protocol list, and executing it twice leaves the mediator exactly as
+  executing it once did — so SPEC §7.2 item 11 is knowingly disapplied and no
+  duplicate-execution record is kept. On the hottest path in this module, a
+  per-document record would be pure cost.
+- The `Duplicate` arm is matched rather than `unreachable!()`, so that making
+  this call consequential later is a compile-time prompt to decide what to
+  return, not a panic on the first retried ping.
+- `PayloadPolicy::AcceptUnvalidated` is unchanged, for the reason already
+  recorded at that call site: moving it to `Validate` can start refusing
+  documents a peer sends today, and belongs in its own change with its own
+  rollout.
 ## Unreleased (0.18.22) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

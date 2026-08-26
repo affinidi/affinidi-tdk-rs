@@ -10,7 +10,30 @@
 #
 # ---------------------------------------------------------------------------
 #
-# (empty)
+affinidi-messaging-sdk
+affinidi-tdk
+#
+# Both entered the graph when this workspace moved to `trust-tasks-rs` 0.12 and
+# bumped `affinidi-messaging-sdk` 0.19.12 -> 0.20.0 / `affinidi-tdk` 0.8.14 ->
+# 0.9.0. Before that the workspace version and the published version were the
+# same string, so no split existed to detect.
+#
+# Both are pulled by `vta-sdk 0.25.1`, the mediator's optional `vta`
+# dev-dependency, which requires `affinidi-messaging-sdk ^0.19` and
+# `affinidi-tdk ^0.8`. A `[patch.crates-io]` entry cannot fix it: the workspace
+# copies no longer satisfy those requirements, so the patch would simply not
+# apply. Bumping the mediator's `vta-sdk = "0.25"` does not help either — every
+# published `vta-sdk`, including 0.29.0, is still built against
+# `affinidi-messaging-sdk` 0.19.
+#
+# **What clears it:** VTI publishing a `vta-sdk` built on
+# `affinidi-messaging-sdk` 0.20, which is blocked on *this* release — VTI
+# cannot move to `trust-tasks-rs` 0.12 until these crates are on crates.io.
+# The two repositories have to cross in this order; the duplicate is the cost
+# of the crossing, and it is confined to a dev-dependency subtree that no
+# type crosses (the workspace builds and tests clean).
+#
+# Remove both entries once that `vta-sdk` release lands.
 #
 # The affinidi-did-common entry that lived here was cleared on 2026-07-20:
 # vta-sdk 0.19.14 shipped on didwebvh-rs 0.6, which requires

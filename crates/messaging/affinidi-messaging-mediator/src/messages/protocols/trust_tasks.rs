@@ -39,7 +39,7 @@ use subtle::ConstantTimeEq;
 use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping};
 use trust_tasks_rs::specs::{audit, config};
 use trust_tasks_rs::{
-    ConsumeOutcome, NoValidator, Payload, PayloadPolicy, ProofPolicy, ProofVerifier,
+    ConsumeChecks, ConsumeOutcome, NoValidator, Payload, PayloadPolicy, ProofPolicy, ProofVerifier,
     TransportContext, TransportHandler, TrustTask, TypeUri, VerificationError, consume_inbound,
 };
 use uuid::Uuid;
@@ -1637,6 +1637,26 @@ async fn consume_ping(
         // can start refusing documents a peer sends today. Do it as its own
         // change, with its own rollout, never folded into a version bump.
         PayloadPolicy::<NoValidator>::AcceptUnvalidated,
+        // SPEC §7.2 items 4 and 11, required as one argument since
+        // `trust-tasks-rs` 0.12 so a deployment cannot configure a replay
+        // record and an unbounded acceptance window and believe it has a
+        // replay defence.
+        //
+        // `ping` is not a *consequential Trust Task* (§2): answering it grants
+        // no access, moves no value, discloses nothing beyond a nonce echo and
+        // the protocol list, and executing it twice leaves the mediator
+        // exactly as executing it once did. So item 11 is knowingly
+        // disapplied and no record is kept — for a liveness probe, a
+        // per-document record would be pure cost on the hottest path this
+        // module has.
+        //
+        // `not_consequential` still applies `FreshnessPolicy::default`, which
+        // is the part that matters here: a future-dated document and one whose
+        // validity interval never contained an instant are malformed whatever
+        // the task does. That is new behaviour for this call — before 0.12 the
+        // only temporal check was `expiresAt`, and `issuedAt` was parsed and
+        // never looked at.
+        ConsumeChecks::not_consequential(),
         doc,
         mediator_did,
         now,
@@ -1658,6 +1678,14 @@ async fn consume_ping(
         ConsumeOutcome::Handled(resp) => Some(serde_json::to_value(&resp).map_err(serialize_err)?),
         ConsumeOutcome::Rejected(err) => Some(serde_json::to_value(&err).map_err(serialize_err)?),
         ConsumeOutcome::Suppressed => None,
+        // Unreachable under `ReplayPolicy::NotConsequential` — no record is
+        // kept, so nothing can be recognised as a duplicate. Matched rather
+        // than `unreachable!()` so that turning this call consequential later
+        // is a compile-time prompt to decide what to return, not a panic in
+        // production on the first retried ping.
+        ConsumeOutcome::Duplicate { prior_response, .. } => prior_response
+            .map(|r| serde_json::to_value(&r).map_err(serialize_err))
+            .transpose()?,
     })
 }
 

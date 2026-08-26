@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.18.22"
+version = "0.19.0"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -113,14 +113,14 @@ aws = ["dep:aws-config", "dep:aws-sdk-ssm", "dep:aws-sdk-s3"]
 # 0.18.61+: reconnect backoff no longer resets on a socket that is immediately
 # closed. Pinned tighter than the usual "0.18" because a mediator built against
 # an older SDK still amplifies duplicate-socket duels client-side.
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.19.9" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.20.0" }
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", optional = true }
 ## Optional: DIDComm v1 (Aries RFC 0019) implementation (activated by `didcomm-v1`)
 affinidi-messaging-didcomm-v1 = { path = "../affinidi-messaging-didcomm-v1", version = "0.2", optional = true }
 ## Trust Tasks framework core — consumes Trust Task documents (the messaging
 ## ping / account / acl / access-list tasks) carried over the binding envelope.
-trust-tasks-rs = { version = "0.11", optional = true }
+trust-tasks-rs = { version = "0.12", optional = true }
 ## Optional: JOSE key-agreement types for the didcomm compat layer (#327)
 affinidi-crypto = { version = "0.2", features = ["jose"], optional = true }
 ## Optional: Trust Spanning Protocol (activated by `tsp` feature)
