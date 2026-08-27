@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased (0.21.0) — `trust-tasks-rs` 0.17
+
+- Bumps `trust-tasks-rs` 0.12 → 0.17.
+- **Breaking for consumers.** 0.17 marks the generated payload, response and
+  component types `#[non_exhaustive]`. This crate's public API carries them —
+  `TrustTasks::account_update` takes an `account::update::v0_1::MediatorAcl` —
+  so a consumer that builds one with a struct literal, with or without
+  `..Default::default()`, no longer compiles and must use the generated
+  builder. A consumer must also move to 0.17 in the same change: two
+  `trust-tasks-rs` versions in one graph do not merely warn, they fail with
+  `expected MediatorAcl, found a different MediatorAcl`.
+- The twelve payload constructions in `protocols/trust_tasks.rs` moved to
+  builders behind one `payload()` helper. No wire change and no behaviour
+  change: the same members are set, and the only new failure mode is a
+  builder left missing a required member, which every call site sets.
+
 ## Unreleased (0.20.0) — `trust-tasks-rs` 0.12
 
 - Bumps `trust-tasks-rs` 0.11 → 0.12.

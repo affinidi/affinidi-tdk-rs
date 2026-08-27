@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-didcomm-service"
-version = "0.4.0"
+version = "0.5.0"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
 authors.workspace = true
@@ -26,7 +26,7 @@ affinidi-tdk-common = "0.6"
 # rather than the workspace one — which is how a third `trust-tasks-rs` node
 # survived the 0.12 move and produced `expected MediatorAcl, found a different
 # MediatorAcl` from inside this workspace.
-affinidi-messaging-sdk = { version = "0.20.0", path = "../affinidi-messaging-sdk" }
+affinidi-messaging-sdk = { version = "0.21.0", path = "../affinidi-messaging-sdk" }
 affinidi-messaging-didcomm = "0.15"
 ## Trust Tasks payload types (the atm.trust_tasks() surface accepts these).
 trust-tasks-rs = "0.17"
@@ -49,8 +49,8 @@ affinidi-did-common = "0.4"
 # Embedded mediator fixture + DID generation for the soft-restart websocket
 # regression test. Sister-crate path deps carry an explicit `version =` so the
 # package stays publishable while using the in-tree path for dev-builds.
-affinidi-messaging-test-mediator = { version = "0.3", path = "../affinidi-messaging-test-mediator", features = ["tsp"] }
-affinidi-tdk = { version = "0.9", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
+affinidi-messaging-test-mediator = { version = "0.4", path = "../affinidi-messaging-test-mediator", features = ["tsp"] }
+affinidi-tdk = { version = "0.10", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
 affinidi-messaging-core = { version = "0.1", path = "../affinidi-messaging-core" }
 futures-util = "0.3"
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.5.0) — `trust-tasks-rs` 0.17
+
+- Bumps `trust-tasks-rs` 0.12 → 0.17.
+- The one `MediatorAcl` construction in `service/mediator.rs` moved to the
+  generated builder — `#[non_exhaustive]` in 0.17, so the
+  `..Default::default()` literal no longer compiles.
+- **Breaking for consumers** only in that this crate now requires
+  `trust-tasks-rs` 0.17; no API or behaviour change here.
+
 ## Unreleased (0.4.0) — `trust-tasks-rs` 0.12
 
 - Bumps `trust-tasks-rs` 0.11 → 0.12. No source change; the crate compiles
