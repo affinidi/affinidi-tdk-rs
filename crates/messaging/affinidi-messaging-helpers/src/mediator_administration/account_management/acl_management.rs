@@ -179,25 +179,25 @@ async fn _modify_acl_flags(
     }
 
     // Build a full ACL set from the chosen flags.
-    let new_acl = account::update::v0_1::MediatorAcl {
-        access_list_mode: Some(if flags[0] {
+    let new_acl: account::update::v0_1::MediatorAcl = account::update::v0_1::MediatorAcl::builder()
+        .access_list_mode(Some(if flags[0] {
             account::update::v0_1::MediatorAclAccessListMode::ExplicitDeny
         } else {
             account::update::v0_1::MediatorAclAccessListMode::ExplicitAllow
-        }),
-        blocked: Some(flags[1]),
-        local: Some(flags[2]),
-        send_messages: Some(flags[3]),
-        receive_messages: Some(flags[4]),
-        send_forwarded: Some(flags[5]),
-        receive_forwarded: Some(flags[6]),
-        create_invites: Some(flags[7]),
-        anon_receive: Some(flags[8]),
-        self_manage_list: Some(flags[9]),
-        self_manage_send_queue_limit: Some(flags[10]),
-        self_manage_receive_queue_limit: Some(flags[11]),
-        ..Default::default()
-    };
+        }))
+        .blocked(Some(flags[1]))
+        .local(Some(flags[2]))
+        .send_messages(Some(flags[3]))
+        .receive_messages(Some(flags[4]))
+        .send_forwarded(Some(flags[5]))
+        .receive_forwarded(Some(flags[6]))
+        .create_invites(Some(flags[7]))
+        .anon_receive(Some(flags[8]))
+        .self_manage_list(Some(flags[9]))
+        .self_manage_send_queue_limit(Some(flags[10]))
+        .self_manage_receive_queue_limit(Some(flags[11]))
+        .try_into()
+        .expect("MediatorAcl has no required member");
 
     // Compare against the current ACL (both normalised to JSON; MediatorAcl
     // does not derive PartialEq).

@@ -408,10 +408,13 @@ async fn _change_account_queue_limit(
             Some(account.did.as_str().to_string()),
             None,
             None,
-            Some(account::update::v0_1::QueueLimits {
-                send_queue_limit,
-                receive_queue_limit,
-            }),
+            Some(
+                account::update::v0_1::QueueLimits::builder()
+                    .send_queue_limit(send_queue_limit)
+                    .receive_queue_limit(receive_queue_limit)
+                    .try_into()
+                    .expect("QueueLimits has no required member"),
+            ),
         )
         .await
         .map_err(|e| e.to_string())?;

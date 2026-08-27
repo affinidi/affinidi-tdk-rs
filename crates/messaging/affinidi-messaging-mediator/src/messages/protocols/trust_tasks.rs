@@ -309,10 +309,8 @@ async fn consume_account_get(
             )
         })?;
 
-    let response = account::get::v0_1::Response {
-        account: map_account_get(&account),
-        ext: None,
-    };
+    let response: account::get::v0_1::Response =
+        build(account::get::v0_1::Response::builder().account(map_account_get(&account)))?;
     let response_doc = typed.respond_with(Uuid::new_v4().to_string(), response);
     serde_json::to_value(&response_doc).map_err(serialize_err)
 }
@@ -369,11 +367,18 @@ async fn consume_account_list(
             WireType::Admin => AccountType::Admin,
             WireType::RootAdmin => AccountType::RootAdmin,
             WireType::Mediator => AccountType::Mediator,
+            // The wire enum is `#[non_exhaustive]`: a peer on a newer registry
+            // can name a role added after this binary was built. As a *filter*
+            // that selects nothing, which is the honest answer — widening it to
+            // `Standard` would return a confident list of the wrong accounts.
+            _ => AccountType::Unknown,
         }
     });
 
     let page = state.database.account_list(cursor, limit).await?;
-    let accounts = page
+    // Annotated: the element type used to be pinned by the response struct
+    // literal below, and the builder's `TryInto` setter no longer pins it.
+    let accounts: Vec<account::list::v0_1::Account> = page
         .accounts
         .iter()
         .filter(|a| type_filter.as_ref().is_none_or(|t| a._type == *t))
@@ -392,11 +397,11 @@ async fn consume_account_list(
             )
         })?;
 
-    let response = account::list::v0_1::Response {
-        accounts,
-        next_cursor,
-        ext: None,
-    };
+    let response: account::list::v0_1::Response = build(
+        account::list::v0_1::Response::builder()
+            .accounts(accounts)
+            .next_cursor(next_cursor),
+    )?;
     let response_doc = typed.respond_with(Uuid::new_v4().to_string(), response);
     serde_json::to_value(&response_doc).map_err(serialize_err)
 }
@@ -463,12 +468,28 @@ async fn consume_account_update(
         ));
     }
 
-    let new_type = typed.payload.account_type.as_ref().map(|t| match t {
-        WireType::Standard => AccountType::Standard,
-        WireType::Admin => AccountType::Admin,
-        WireType::RootAdmin => AccountType::RootAdmin,
-        WireType::Mediator => AccountType::Mediator,
-    });
+    // Fallible, unlike the read-side filter: this one *writes* the role, and
+    // silently storing something the caller did not ask for is worse than
+    // telling them this mediator cannot set it.
+    let new_type = typed
+        .payload
+        .account_type
+        .as_ref()
+        .map(|t| match t {
+            WireType::Standard => Ok(AccountType::Standard),
+            WireType::Admin => Ok(AccountType::Admin),
+            WireType::RootAdmin => Ok(AccountType::RootAdmin),
+            WireType::Mediator => Ok(AccountType::Mediator),
+            _ => Err(tt_problem(
+                session,
+                "message.trust_task.rejected",
+                "unrecognised accountType: this mediator cannot set a role added \
+                 to the registry after it was built"
+                    .to_string(),
+                StatusCode::BAD_REQUEST,
+            )),
+        })
+        .transpose()?;
     if let Some(new_type) = &new_type {
         // Must be an admin to change roles at all.
         if !state
@@ -629,10 +650,10 @@ async fn consume_account_update(
                 StatusCode::NOT_FOUND,
             )
         })?;
-    let response = account::update::v0_1::Response {
-        account: to_wire_account(&account),
-        ext: None,
-    };
+    let response: account::update::v0_1::Response = build(
+        account::update::v0_1::Response::builder()
+            .account(to_wire_account::<account::update::v0_1::Account>(&account)),
+    )?;
     let response_doc = typed.respond_with(Uuid::new_v4().to_string(), response);
     serde_json::to_value(&response_doc).map_err(serialize_err)
 }
@@ -721,11 +742,11 @@ async fn consume_account_remove(
     )
     .await;
 
-    let response = account::remove::v0_1::Response {
-        did: typed.payload.did.clone(),
-        ext: None,
-        removed,
-    };
+    let response: account::remove::v0_1::Response = build(
+        account::remove::v0_1::Response::builder()
+            .did(typed.payload.did.clone())
+            .removed(removed),
+    )?;
     let response_doc = typed.respond_with(Uuid::new_v4().to_string(), response);
     serde_json::to_value(&response_doc).map_err(serialize_err)
 }
@@ -759,6 +780,18 @@ async fn consume_account_add(
         WireType::Admin => AccountType::Admin,
         WireType::RootAdmin => AccountType::RootAdmin,
         WireType::Mediator => AccountType::Mediator,
+        // Creating an account with a role this mediator does not know would
+        // store a privilege level it cannot reason about. Refuse.
+        _ => {
+            return Err(tt_problem(
+                session,
+                "message.trust_task.rejected",
+                "unrecognised accountType: this mediator cannot create an account \
+                 with a role added to the registry after it was built"
+                    .to_string(),
+                StatusCode::BAD_REQUEST,
+            ));
+        }
     };
     let is_admin = matches!(
         session.account_type,
@@ -828,10 +861,10 @@ async fn consume_account_add(
     )
     .await;
 
-    let response = account::add::v0_1::Response {
-        account: to_wire_account(&account),
-        ext: None,
-    };
+    let response: account::add::v0_1::Response = build(
+        account::add::v0_1::Response::builder()
+            .account(to_wire_account::<account::add::v0_1::Account>(&account)),
+    )?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
 }
@@ -877,19 +910,16 @@ async fn consume_acl_get(
     for did in &dids {
         let vid = Vid::from_str(did).expect("a requested DID is a valid Vid");
         match state.database.get_did_acl(did).await? {
-            Some(aclset) => entries.push(Entry {
-                acl: to_wire_acl(&aclset),
-                did: vid,
-            }),
+            Some(aclset) => entries.push(build(
+                Entry::builder()
+                    .acl(to_wire_acl::<acl::get::v0_1::MediatorAcl>(&aclset))
+                    .did(vid),
+            )?),
             None => unknown.push(vid),
         }
     }
 
-    let response = Response {
-        entries,
-        ext: None,
-        unknown,
-    };
+    let response: Response = build(Response::builder().entries(entries).unknown(unknown))?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
 }
@@ -1114,13 +1144,13 @@ async fn consume_access_list_update(
             .collect();
     }
 
-    let response = Response {
-        access_list_count: access_list_count(state, &target_hash).await,
-        added,
-        did: typed.payload.did.clone(),
-        ext: None,
-        removed,
-    };
+    let response: Response = build(
+        Response::builder()
+            .access_list_count(access_list_count(state, &target_hash).await)
+            .added(added)
+            .did(typed.payload.did.clone())
+            .removed(removed),
+    )?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
 }
@@ -1160,7 +1190,7 @@ async fn consume_access_list_list(
             .did_hashes
             .into_iter()
             .collect();
-        let entries = typed
+        let entries: Vec<Vid> = typed
             .payload
             .entries
             .iter()
@@ -1168,13 +1198,13 @@ async fn consume_access_list_list(
             .cloned()
             .collect();
 
-        let response = Response {
-            access_list_count: access_list_count(state, &target_hash).await,
-            did: typed.payload.did.clone(),
-            entries,
-            ext: None,
-            next_cursor: None,
-        };
+        // `next_cursor` stays unset: a membership check answers in one page.
+        let response: Response = build(
+            Response::builder()
+                .access_list_count(access_list_count(state, &target_hash).await)
+                .did(typed.payload.did.clone())
+                .entries(entries),
+        )?;
         return serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
             .map_err(serialize_err);
     }
@@ -1189,7 +1219,7 @@ async fn consume_access_list_list(
         .database
         .access_list_list(&target_hash, cursor)
         .await?;
-    let entries = page
+    let entries: Vec<Vid> = page
         .did_hashes
         .iter()
         .map(|h| Vid::from_str(h).expect("a stored hash is a valid Vid"))
@@ -1203,13 +1233,13 @@ async fn consume_access_list_list(
         ),
     };
 
-    let response = Response {
-        access_list_count: access_list_count(state, &target_hash).await,
-        did: typed.payload.did.clone(),
-        entries,
-        ext: None,
-        next_cursor,
-    };
+    let response: Response = build(
+        Response::builder()
+            .access_list_count(access_list_count(state, &target_hash).await)
+            .did(typed.payload.did.clone())
+            .entries(entries)
+            .next_cursor(next_cursor),
+    )?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
 }
@@ -1273,12 +1303,12 @@ async fn consume_audit_list(
         .collect::<Result<Vec<_>, _>>()?;
     let truncated = page.cursor != 0;
 
-    let response = Response {
-        cursor: truncated.then(|| page.cursor.to_string()),
-        entries,
-        ext: None,
-        truncated,
-    };
+    let response: Response = build(
+        Response::builder()
+            .cursor(truncated.then(|| page.cursor.to_string()))
+            .entries(entries)
+            .truncated(truncated),
+    )?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
 }
@@ -1332,23 +1362,26 @@ fn map_audit_envelope(
     let mut detail = serde_json::Map::new();
     detail.insert("detail".to_string(), Value::String(e.detail.clone()));
 
-    Ok(AuditEnvelope {
-        action: AuditEnvelopeAction::from_str(action)
-            .map_err(|err| serialize_err_msg(format!("audit action: {err}")))?,
-        actor: Some(e.actor_did_hash.clone()),
-        context_id: None,
-        detail,
-        entry_hash: None,
-        event_id: AuditEnvelopeEventId::from_str(&event_id)
-            .map_err(|err| serialize_err_msg(format!("audit event id: {err}")))?,
-        ext: None,
-        outcome: None,
-        prev_hash: None,
-        recorded_at: chrono::DateTime::from_timestamp(e.timestamp as i64, 0)
-            .unwrap_or_else(chrono::Utc::now),
-        schema_version: None,
-        target: Some(e.target_did_hash.clone()),
-    })
+    // `contextId`, `entryHash`, `outcome`, `prevHash` and `schemaVersion` are
+    // left unset: this mediator's audit rows carry no equivalent.
+    build(
+        AuditEnvelope::builder()
+            .action(
+                AuditEnvelopeAction::from_str(action)
+                    .map_err(|err| serialize_err_msg(format!("audit action: {err}")))?,
+            )
+            .actor(Some(e.actor_did_hash.clone()))
+            .detail(detail)
+            .event_id(
+                AuditEnvelopeEventId::from_str(&event_id)
+                    .map_err(|err| serialize_err_msg(format!("audit event id: {err}")))?,
+            )
+            .recorded_at(
+                chrono::DateTime::from_timestamp(e.timestamp as i64, 0)
+                    .unwrap_or_else(chrono::Utc::now),
+            )
+            .target(Some(e.target_did_hash.clone())),
+    )
 }
 
 /// The shared-schema (`messaging.schema.json#/$defs/AuditAction`) name of an
@@ -1403,14 +1436,19 @@ async fn consume_config_show(
     let mut fields = Vec::new();
     let mut push_field = |key: String, value: Value| -> Result<(), MediatorError> {
         if wanted.as_ref().is_none_or(|w| w.contains(&key)) {
-            fields.push(ConfigField {
-                key: ConfigFieldKey::from_str(&key)
-                    .map_err(|e| serialize_err_msg(format!("config key: {e}")))?,
-                requires_restart: true,
-                source: ConfigFieldSource::from_str("mediator")
-                    .map_err(|e| serialize_err_msg(format!("config source: {e}")))?,
-                value,
-            });
+            fields.push(build(
+                ConfigField::builder()
+                    .key(
+                        ConfigFieldKey::from_str(&key)
+                            .map_err(|e| serialize_err_msg(format!("config key: {e}")))?,
+                    )
+                    .requires_restart(true)
+                    .source(
+                        ConfigFieldSource::from_str("mediator")
+                            .map_err(|e| serialize_err_msg(format!("config source: {e}")))?,
+                    )
+                    .value(value),
+            )?);
         }
         Ok(())
     };
@@ -1422,7 +1460,7 @@ async fn consume_config_show(
         push_field(key, value)?;
     }
 
-    let response = Response { ext: None, fields };
+    let response: Response = build(Response::builder().fields(fields))?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
 }
@@ -1436,26 +1474,30 @@ async fn consume_config_show(
 fn map_account_get(acc: &Account) -> account::get::v0_1::Account {
     use account::get::v0_1::{Account as WireAccount, AccountType as WireType, QueueLimits, Vid};
 
-    WireAccount {
-        did: Vid::from_str(&acc.did_hash).expect("an account hash is a non-empty Vid string"),
-        account_type: match acc._type {
+    let queue_limits: QueueLimits = QueueLimits::builder()
+        .send_queue_limit(acc.queue_send_limit.map(|v| v as i64))
+        .receive_queue_limit(acc.queue_receive_limit.map(|v| v as i64))
+        .try_into()
+        .expect("QueueLimits has no required member");
+
+    WireAccount::builder()
+        .did(Vid::from_str(&acc.did_hash).expect("an account hash is a non-empty Vid string"))
+        .account_type(match acc._type {
             AccountType::Standard => WireType::Standard,
             AccountType::Admin => WireType::Admin,
             AccountType::RootAdmin => WireType::RootAdmin,
             AccountType::Mediator => WireType::Mediator,
             AccountType::Unknown => WireType::Standard,
-        },
-        acl: decode_acl_canonical(&MediatorACLSet::from_u64(acc.acls)),
-        access_list_count: Some(acc.access_list_count as u64),
-        queue_limits: Some(QueueLimits {
-            send_queue_limit: acc.queue_send_limit.map(|v| v as i64),
-            receive_queue_limit: acc.queue_receive_limit.map(|v| v as i64),
-        }),
-        send_queue_count: Some(acc.send_queue_count as u64),
-        send_queue_bytes: Some(acc.send_queue_bytes),
-        receive_queue_count: Some(acc.receive_queue_count as u64),
-        receive_queue_bytes: Some(acc.receive_queue_bytes),
-    }
+        })
+        .acl(decode_acl_canonical(&MediatorACLSet::from_u64(acc.acls)))
+        .access_list_count(Some(acc.access_list_count as u64))
+        .queue_limits(Some(queue_limits))
+        .send_queue_count(Some(acc.send_queue_count as u64))
+        .send_queue_bytes(Some(acc.send_queue_bytes))
+        .receive_queue_count(Some(acc.receive_queue_count as u64))
+        .receive_queue_bytes(Some(acc.receive_queue_bytes))
+        .try_into()
+        .expect("every required member of the wire Account is set above")
 }
 
 /// Re-shape [`map_account_get`]'s output into another `messaging/*` module's copy of
@@ -1464,25 +1506,26 @@ fn map_account_get(acc: &Account) -> account::get::v0_1::Account {
 /// converts between them without re-implementing the bitfield decode.
 fn decode_acl_canonical(acl: &MediatorACLSet) -> account::get::v0_1::MediatorAcl {
     use account::get::v0_1::{MediatorAcl, MediatorAclAccessListMode};
-    MediatorAcl {
-        access_list_mode: Some(match acl.get_access_list_mode().0 {
+    // `didcommEnabled` / `tspEnabled` are left unset: they have no bitfield
+    // slot, so there is nothing to decode into them.
+    MediatorAcl::builder()
+        .access_list_mode(Some(match acl.get_access_list_mode().0 {
             AccessListModeType::ExplicitAllow => MediatorAclAccessListMode::ExplicitAllow,
             AccessListModeType::ExplicitDeny => MediatorAclAccessListMode::ExplicitDeny,
-        }),
-        blocked: Some(acl.get_blocked()),
-        local: Some(acl.get_local()),
-        send_messages: Some(acl.get_send_messages().0),
-        receive_messages: Some(acl.get_receive_messages().0),
-        send_forwarded: Some(acl.get_send_forwarded().0),
-        receive_forwarded: Some(acl.get_receive_forwarded().0),
-        create_invites: Some(acl.get_create_invites().0),
-        anon_receive: Some(acl.get_anon_receive().0),
-        self_manage_list: Some(acl.get_self_manage_list()),
-        self_manage_send_queue_limit: Some(acl.get_self_manage_send_queue_limit()),
-        self_manage_receive_queue_limit: Some(acl.get_self_manage_receive_queue_limit()),
-        didcomm_enabled: None,
-        tsp_enabled: None,
-    }
+        }))
+        .blocked(Some(acl.get_blocked()))
+        .local(Some(acl.get_local()))
+        .send_messages(Some(acl.get_send_messages().0))
+        .receive_messages(Some(acl.get_receive_messages().0))
+        .send_forwarded(Some(acl.get_send_forwarded().0))
+        .receive_forwarded(Some(acl.get_receive_forwarded().0))
+        .create_invites(Some(acl.get_create_invites().0))
+        .anon_receive(Some(acl.get_anon_receive().0))
+        .self_manage_list(Some(acl.get_self_manage_list()))
+        .self_manage_send_queue_limit(Some(acl.get_self_manage_send_queue_limit()))
+        .self_manage_receive_queue_limit(Some(acl.get_self_manage_receive_queue_limit()))
+        .try_into()
+        .expect("MediatorAcl has no required member")
 }
 
 /// Decode an ACL set into any `messaging/*` module's copy of `MediatorAcl`.
@@ -1512,6 +1555,18 @@ fn merge_wire_acl(
         let mode = match mode {
             MediatorAclAccessListMode::ExplicitAllow => AccessListModeType::ExplicitAllow,
             MediatorAclAccessListMode::ExplicitDeny => AccessListModeType::ExplicitDeny,
+            // The access-list mode decides whether the list is an allow-list or
+            // a deny-list. Guessing it inverts the ACL, so a mode this build
+            // does not know refuses the whole update.
+            _ => {
+                return Err(MediatorError::InternalError(
+                    14,
+                    "NA".to_string(),
+                    "unrecognised accessListMode: refusing rather than guessing \
+                     whether the access list allows or denies"
+                        .to_string(),
+                ));
+            }
         };
         let self_change = base.get_access_list_mode().1;
         base.set_access_list_mode(mode, self_change, true)
@@ -1597,6 +1652,27 @@ fn validate_tt_basic<P>(
     })
 }
 
+/// Finish a generated document builder.
+///
+/// trust-tasks-rs 0.17 made the generated payload and response structs
+/// `#[non_exhaustive]`, so this crate can no longer name every member in a
+/// struct literal. That is deliberate: the registry can add an OPTIONAL member
+/// without breaking every consumer that had spelled out the old member list.
+///
+/// The trade is that "is every required member set?" moves from compile time to
+/// this conversion — the builder starts each required member as
+/// `Err("no value supplied for …")`. Every call below therefore sets its
+/// required members explicitly and lets only optional ones default.
+fn build<T, B>(builder: B) -> Result<T, MediatorError>
+where
+    B: TryInto<T>,
+    B::Error: std::fmt::Display,
+{
+    builder
+        .try_into()
+        .map_err(|e| serialize_err_msg(format!("couldn't build Trust Task document: {e}")))
+}
+
 fn serialize_err_msg(msg: String) -> MediatorError {
     MediatorError::InternalError(14, "NA".to_string(), msg)
 }
@@ -1662,13 +1738,17 @@ async fn consume_ping(
         now,
         || Uuid::new_v4().to_string(),
         |req, _parties| async move {
-            let response = ping::v0_1::Response {
-                ext: None,
-                nonce: req.payload.nonce.clone(),
-                protocols: vec!["didcomm".to_string(), "tsp".to_string()],
-                server_time: now,
-                status: ping::v0_1::ResponseStatus::Ok,
-            };
+            // `expect`, not `?`: this closure answers with a
+            // `TrustTask<ErrorPayload>`, and there is no error to report. The
+            // builder's only failure mode is an unset required member, and all
+            // four are set on the next four lines.
+            let response: ping::v0_1::Response = ping::v0_1::Response::builder()
+                .nonce(req.payload.nonce.clone())
+                .protocols(vec!["didcomm".to_string(), "tsp".to_string()])
+                .server_time(now)
+                .status(ping::v0_1::ResponseStatus::Ok)
+                .try_into()
+                .expect("every required member of the ping response is set above");
             Ok(req.respond_with(Uuid::new_v4().to_string(), response))
         },
     )
@@ -1727,13 +1807,11 @@ mod tests {
 
     #[tokio::test]
     async fn ping_consume_returns_ok_and_echoes_nonce() {
-        let mut doc = TrustTask::for_payload(
-            "urn:uuid:ping-1",
-            ping::v0_1::Payload {
-                nonce: Some("nonce-xyz".to_string()),
-                ext: None,
-            },
-        );
+        let payload: ping::v0_1::Payload = ping::v0_1::Payload::builder()
+            .nonce(Some("nonce-xyz".to_string()))
+            .try_into()
+            .expect("the ping payload has no required member");
+        let mut doc = TrustTask::for_payload("urn:uuid:ping-1", payload);
         doc.issuer = Some("did:example:alice".to_string());
         doc.recipient = Some("did:example:mediator".to_string());
 

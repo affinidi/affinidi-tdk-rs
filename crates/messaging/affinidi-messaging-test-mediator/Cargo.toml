@@ -95,7 +95,7 @@ affinidi-tsp = { version = "0.1", path = "../affinidi-tsp" }
 ## the stored base64url form so the SDK can unpack it (tsp_websocket test).
 base64 = "0.23"
 ## Trust Tasks payload types named by the Trust Tasks integration tests.
-trust-tasks-rs = "0.12"
+trust-tasks-rs = "0.17"
 ## Tracing subscriber for test diagnostics.
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ## WebSocket handshake test.

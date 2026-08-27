@@ -126,10 +126,13 @@ async fn account_update_queue_limits_self_applies_caps_and_persists() {
             None,
             None,
             None,
-            Some(QueueLimits {
-                send_queue_limit: Some(42),
-                receive_queue_limit: Some(-1),
-            }),
+            Some(
+                QueueLimits::builder()
+                    .send_queue_limit(Some(42))
+                    .receive_queue_limit(Some(-1))
+                    .try_into()
+                    .expect("QueueLimits has no required member"),
+            ),
         )
         .await
         .expect("alice changes her own queue limits");
@@ -158,10 +161,12 @@ async fn account_update_queue_limits_self_applies_caps_and_persists() {
             None,
             None,
             None,
-            Some(QueueLimits {
-                send_queue_limit: Some(5000),
-                receive_queue_limit: None,
-            }),
+            Some(
+                QueueLimits::builder()
+                    .send_queue_limit(Some(5000))
+                    .try_into()
+                    .expect("QueueLimits has no required member"),
+            ),
         )
         .await
         .expect("over-limit request is accepted but capped");
@@ -284,10 +289,10 @@ async fn account_update_acl_denies_a_non_admin() {
         .expect("enable websocket for alice");
     let bob = env.add_user("bob").await.expect("add bob");
 
-    let acl = MediatorAcl {
-        blocked: Some(true),
-        ..Default::default()
-    };
+    let acl: MediatorAcl = MediatorAcl::builder()
+        .blocked(Some(true))
+        .try_into()
+        .expect("MediatorAcl has no required member");
     let denied = env
         .atm
         .trust_tasks()
@@ -488,10 +493,10 @@ async fn account_update_acl_self_service_changes_a_self_manageable_flag() {
 
     // allow_all grants alice the self-change bits, so she may change her own
     // `anonReceive` (a self-manageable capability) from true to false.
-    let acl = MediatorAcl {
-        anon_receive: Some(false),
-        ..Default::default()
-    };
+    let acl: MediatorAcl = MediatorAcl::builder()
+        .anon_receive(Some(false))
+        .try_into()
+        .expect("MediatorAcl has no required member");
     let updated = env
         .atm
         .trust_tasks()
@@ -525,10 +530,10 @@ async fn account_update_acl_self_service_refuses_an_admin_only_flag() {
         .expect("enable websocket for alice");
 
     // `blocked` is admin-only — alice may not set it even on her own account.
-    let acl = MediatorAcl {
-        blocked: Some(true),
-        ..Default::default()
-    };
+    let acl: MediatorAcl = MediatorAcl::builder()
+        .blocked(Some(true))
+        .try_into()
+        .expect("MediatorAcl has no required member");
     let denied = env
         .atm
         .trust_tasks()

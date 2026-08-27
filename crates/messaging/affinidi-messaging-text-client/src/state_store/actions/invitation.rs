@@ -502,12 +502,13 @@ pub async fn create_invitation(
                             // Flip the access-list mode to explicit_deny. This is a
                             // self-service change; the mediator refuses it if this account
                             // may not self-manage its access-list mode.
-                            let new_acl = account::update::v0_1::MediatorAcl {
-                                access_list_mode: Some(
-                                    account::update::v0_1::MediatorAclAccessListMode::ExplicitDeny,
-                                ),
-                                ..Default::default()
-                            };
+                            let new_acl: account::update::v0_1::MediatorAcl =
+                                account::update::v0_1::MediatorAcl::builder()
+                                    .access_list_mode(Some(
+                                        account::update::v0_1::MediatorAclAccessListMode::ExplicitDeny,
+                                    ))
+                                    .try_into()
+                                    .expect("MediatorAcl has no required member");
                             if let Err(e) = atm
                                 .trust_tasks()
                                 .account_update(
