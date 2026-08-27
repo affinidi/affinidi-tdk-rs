@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased (0.4.0) — `trust-tasks-rs` 0.17
+
+- Bumps `trust-tasks-rs` 0.12 → 0.17.
+- **Breaking for consumers** for the same reason as `affinidi-messaging-sdk`
+  0.21.0: the harness hands back generated types that are now
+  `#[non_exhaustive]`, and two `trust-tasks-rs` versions in one graph fail to
+  compile.
+- The five `QueueLimits` / `MediatorAcl` constructions in
+  `tests/trust_tasks.rs` moved to the generated builders. All 14 integration
+  tests pass unchanged against the migrated mediator.
+
 ## Unreleased (0.3.0) — `trust-tasks-rs` 0.12
 
 - Bumps `trust-tasks-rs` 0.11 → 0.12, and `affinidi-messaging-sdk` to 0.20.

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.20.0"
+version = "0.21.0"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -34,7 +34,7 @@ affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version =
 affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.6" }
 ## Trust Tasks framework — typed request/response documents for the messaging
 ## tasks (ping / account / acl / access-list), carried over the binding envelope.
-trust-tasks-rs = "0.12"
+trust-tasks-rs = "0.17"
 ## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
 affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
 ## Async trait support for the pluggable TSP `RelationshipStore` (tsp feature only).

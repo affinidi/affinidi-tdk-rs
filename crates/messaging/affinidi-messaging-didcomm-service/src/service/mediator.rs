@@ -39,10 +39,10 @@ impl Listener {
                 account::update::v0_1::MediatorAclAccessListMode::ExplicitDeny
             }
         };
-        let acl = account::update::v0_1::MediatorAcl {
-            access_list_mode: Some(mode),
-            ..Default::default()
-        };
+        let acl: account::update::v0_1::MediatorAcl = account::update::v0_1::MediatorAcl::builder()
+            .access_list_mode(Some(mode))
+            .try_into()
+            .expect("MediatorAcl has no required member");
         atm.trust_tasks()
             .account_update(
                 profile,

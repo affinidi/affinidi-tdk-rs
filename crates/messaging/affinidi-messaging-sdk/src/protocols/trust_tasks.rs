@@ -42,6 +42,30 @@ pub struct TrustTasksOps<'a> {
     pub(crate) atm: &'a ATM,
 }
 
+/// Finish a generated payload builder.
+///
+/// trust-tasks-rs 0.17 made the generated payload structs `#[non_exhaustive]`,
+/// so a downstream crate can no longer name every member in a struct literal.
+/// That is the point of the change: the registry can add an OPTIONAL member to
+/// a payload without it being a breaking change for every consumer that had
+/// spelled out the old member list.
+///
+/// The cost is that "is every required member set?" moves from compile time to
+/// this conversion. The builder starts each required member as
+/// `Err("no value supplied for …")`, so a member this crate forgets to set
+/// becomes an `ATMError` at send time rather than a compile error — which is
+/// why every call below sets its required members explicitly and lets only the
+/// optional ones default.
+fn payload<P, B>(builder: B) -> Result<P, ATMError>
+where
+    B: TryInto<P>,
+    B::Error: std::fmt::Display,
+{
+    builder
+        .try_into()
+        .map_err(|e| ATMError::MsgSendError(format!("invalid trust-task payload: {e}")))
+}
+
 impl TrustTasksOps<'_> {
     /// Send a `messaging/ping` Trust Task to the mediator and return its response
     /// (server time, status, and the protocols the mediator supports). An optional
@@ -52,7 +76,8 @@ impl TrustTasksOps<'_> {
         nonce: Option<String>,
     ) -> Result<ping::v0_1::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
-        let mut task = TrustTask::for_payload(new_id(), ping::v0_1::Payload { ext: None, nonce });
+        let p: ping::v0_1::Payload = payload(ping::v0_1::Payload::builder().nonce(nonce))?;
+        let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
@@ -74,8 +99,9 @@ impl TrustTasksOps<'_> {
 
         let did = account::get::v0_1::Vid::from_str(&target)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task =
-            TrustTask::for_payload(new_id(), account::get::v0_1::Payload { did, ext: None });
+        let p: account::get::v0_1::Payload =
+            payload(account::get::v0_1::Payload::builder().did(did))?;
+        let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
@@ -105,15 +131,13 @@ impl TrustTasksOps<'_> {
             .map_err(|e| ATMError::MsgSendError(format!("invalid cursor: {e}")))?;
         let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
 
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            account::list::v0_1::Payload {
-                account_type,
-                cursor,
-                ext: None,
-                limit,
-            },
-        );
+        let p: account::list::v0_1::Payload = payload(
+            account::list::v0_1::Payload::builder()
+                .account_type(account_type)
+                .cursor(cursor)
+                .limit(limit),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
@@ -149,16 +173,14 @@ impl TrustTasksOps<'_> {
 
         let did = account::update::v0_1::Vid::from_str(&target)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            account::update::v0_1::Payload {
-                account_type,
-                acl,
-                did,
-                ext: None,
-                queue_limits,
-            },
-        );
+        let p: account::update::v0_1::Payload = payload(
+            account::update::v0_1::Payload::builder()
+                .account_type(account_type)
+                .acl(acl)
+                .did(did)
+                .queue_limits(queue_limits),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
@@ -180,8 +202,9 @@ impl TrustTasksOps<'_> {
 
         let did = account::remove::v0_1::Vid::from_str(&target)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task =
-            TrustTask::for_payload(new_id(), account::remove::v0_1::Payload { did, ext: None });
+        let p: account::remove::v0_1::Payload =
+            payload(account::remove::v0_1::Payload::builder().did(did))?;
+        let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
@@ -204,8 +227,8 @@ impl TrustTasksOps<'_> {
             .map(|d| acl::get::v0_1::Vid::from_str(d))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task =
-            TrustTask::for_payload(new_id(), acl::get::v0_1::Payload { dids, ext: None });
+        let p: acl::get::v0_1::Payload = payload(acl::get::v0_1::Payload::builder().dids(dids))?;
+        let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
@@ -229,18 +252,15 @@ impl TrustTasksOps<'_> {
 
         let did = account::add::v0_1::Vid::from_str(&did_hash)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            account::add::v0_1::Payload {
-                account_type,
-                acl,
-                did,
-                ext: None,
-                // Initial queue limits use the mediator default; adjust with
-                // `account_update` after creation.
-                queue_limits: None,
-            },
-        );
+        // Initial queue limits are left unset so the mediator default applies;
+        // adjust with `account_update` after creation.
+        let p: account::add::v0_1::Payload = payload(
+            account::add::v0_1::Payload::builder()
+                .account_type(account_type)
+                .acl(acl)
+                .did(did),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
@@ -273,16 +293,14 @@ impl TrustTasksOps<'_> {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| ATMError::MsgSendError(format!("invalid access-list entry: {e}")))
         };
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            access_list::update::v0_1::Payload {
-                add: to_vids(add)?,
-                clear: clear.then_some(true),
-                did,
-                ext: None,
-                remove: to_vids(remove)?,
-            },
-        );
+        let p: access_list::update::v0_1::Payload = payload(
+            access_list::update::v0_1::Payload::builder()
+                .add(to_vids(add)?)
+                .clear(clear.then_some(true))
+                .did(did)
+                .remove(to_vids(remove)?),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
         let response: TrustTask<access_list::update::v0_1::Response> =
@@ -318,16 +336,14 @@ impl TrustTasksOps<'_> {
             .map(|e| access_list::list::v0_1::Vid::from_str(e))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| ATMError::MsgSendError(format!("invalid access-list entry: {e}")))?;
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            access_list::list::v0_1::Payload {
-                cursor,
-                did,
-                entries,
-                ext: None,
-                limit,
-            },
-        );
+        let p: access_list::list::v0_1::Payload = payload(
+            access_list::list::v0_1::Payload::builder()
+                .cursor(cursor)
+                .did(did)
+                .entries(entries)
+                .limit(limit),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
         let response: TrustTask<access_list::list::v0_1::Response> =
@@ -344,20 +360,15 @@ impl TrustTasksOps<'_> {
         page_size: Option<u32>,
     ) -> Result<audit::list::v0_1::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
-        let mut task = TrustTask::for_payload(
-            new_id(),
-            audit::list::v0_1::Payload {
-                action: None,
-                actor: None,
-                context_id: None,
-                cursor,
-                ext: None,
-                from: None,
-                outcome: None,
-                page_size: page_size.and_then(|l| std::num::NonZeroU64::new(l as u64)),
-                to: None,
-            },
-        );
+        // Only the two members this method exposes are set; `action`, `actor`,
+        // `contextId`, `from`, `outcome` and `to` are filters the builder leaves
+        // unset, which is an unfiltered listing.
+        let p: audit::list::v0_1::Payload = payload(
+            audit::list::v0_1::Payload::builder()
+                .cursor(cursor)
+                .page_size(page_size.and_then(|l| std::num::NonZeroU64::new(l as u64))),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
         let response: TrustTask<audit::list::v0_1::Response> =
@@ -383,8 +394,9 @@ impl TrustTasksOps<'_> {
             })
             .transpose()
             .map_err(|e| ATMError::MsgSendError(format!("invalid configuration key: {e}")))?;
-        let mut task =
-            TrustTask::for_payload(new_id(), config::show::v0_1::Payload { ext: None, keys });
+        let p: config::show::v0_1::Payload =
+            payload(config::show::v0_1::Payload::builder().keys(keys))?;
+        let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
         let response: TrustTask<config::show::v0_1::Response> =

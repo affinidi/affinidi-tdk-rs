@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased (0.20.0) — `trust-tasks-rs` 0.17
+
+- Bumps `trust-tasks-rs` 0.12 → 0.17; sixteen response and component
+  constructions moved to the generated builders behind one `build()` helper.
+- **Behaviour change: three refusals that did not exist before.** 0.17 marks
+  the generated *enums* `#[non_exhaustive]`, so a match on one needs a wildcard
+  — and a wire enum can now carry a variant added to the registry after this
+  binary was built. What the mediator does with one is a decision per site:
+  - `account/list`'s role **filter** treats an unknown role as
+    `AccountType::Unknown`, which selects nothing. Widening it to `Standard`
+    would answer the request with a confident list of the wrong accounts.
+  - `account/update` and `account/add` **refuse** an unknown role
+    (`message.trust_task.rejected`, 400). They write it, and storing a
+    privilege level this mediator cannot reason about — while telling the
+    caller it set the role they asked for — is worse than a refusal.
+  - `merge_wire_acl` **refuses** an unknown `accessListMode`. That member
+    decides whether the access list allows or denies; guessing it inverts the
+    ACL.
+- No wire change for any known variant.
+
 ## Unreleased (0.19.0) — `trust-tasks-rs` 0.12, and `ping` gains freshness bounds
 
 - Bumps `trust-tasks-rs` 0.11 → 0.12, and adapts the one `consume_inbound`

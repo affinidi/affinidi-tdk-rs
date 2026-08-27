@@ -6,6 +6,23 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
+## 0.10.0
+
+### Changed
+
+- `messaging` feature now re-exports `affinidi-messaging-sdk` 0.21, which moves
+  to `trust-tasks-rs` 0.17.
+- **Breaking for consumers of the `messaging` feature.** 0.17 marks the
+  generated payload, response and component types `#[non_exhaustive]`, so a
+  consumer that builds one with a struct literal — with or without
+  `..Default::default()` — must move to the generated builder. As before, a
+  consumer must move to 0.17 in the same change; two `trust-tasks-rs` versions
+  in one graph fail to compile rather than warn. Minor rather than patch for
+  that reason.
+- No source change in this crate. Bumped because the published manifest's
+  requirement is itself what changed: a consumer resolving `affinidi-tdk` 0.9.0
+  from crates.io stays pinned to the SDK's 0.20 line and can never reach 0.17.
+
 ## 0.9.0
 
 ### Changed
