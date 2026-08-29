@@ -49,6 +49,17 @@ use vta_sdk::credentials::CredentialBundle;
 use vta_sdk::integration::{TransportPreference, VtaServiceConfig, authenticate};
 
 /// Top-level entry called from the CLI dispatcher in `main.rs`.
+/// Pick the transport preference from whether the credential carries a
+/// usable REST URL. Pure so the choice is testable without a VTA — the
+/// rationale lives at the call site.
+fn transport_preference_for(vta_url: Option<&str>) -> TransportPreference {
+    if vta_url.is_some_and(|u| !u.is_empty()) {
+        TransportPreference::PreferRest
+    } else {
+        TransportPreference::Auto
+    }
+}
+
 pub async fn run(config_path: &str, dry_run: bool) -> Result<(), Box<dyn std::error::Error>> {
     let raw = std::fs::read_to_string(config_path)
         .map_err(|e| format!("Failed to read config '{config_path}': {e}"))?;
@@ -120,12 +131,36 @@ pub async fn run(config_path: &str, dry_run: bool) -> Result<(), Box<dyn std::er
         vta_url: vta_url.clone(),
     };
     // vta-sdk 0.6.x split `VtaServiceConfig` into `auth` + `context`.
-    // Admin rotation is a one-shot operator command, not a hot path —
-    // REST is the right fit. Explicit `PreferRest` on the context
-    // keeps the ACL create/rotate calls off the DIDComm channel
-    // (where they'd need to negotiate an async reply envelope) and
-    // lands on the synchronous REST API that `get_acl` / `create_acl`
-    // are built for.
+    //
+    // Transport preference is chosen from whether we have a REST URL,
+    // because `PreferRest` unconditionally is a dead end for a VTA that
+    // has no REST endpoint: the SDK maps it to `TransportPlan::RestOnly`
+    // with no DIDComm fallback, so rotation against a DIDComm-only VTA
+    // could not authenticate at all.
+    //
+    // The original reason for pinning REST here — that `get_acl` /
+    // `create_acl` needed the synchronous REST API — no longer holds.
+    // Both go through `rpc_tt` -> `dispatch_trust_task`, which is
+    // identical for the REST, DIDComm and TSP transports; REST's bespoke
+    // per-operation routes were removed upstream. The operation is a
+    // Trust Task on every transport, so the wire document is the same.
+    //
+    // - `vta_url` present: keep `PreferRest`. It is known-good for
+    //   existing deployments, and it avoids dialling DIDComm in the
+    //   self-mediated topology, where the VTA's DIDComm mediator is this
+    //   very process — which may not be running when an operator invokes
+    //   `rotate-admin` from the CLI.
+    // - `vta_url` absent: `Auto`. With `mediator_did: None` the SDK
+    //   resolves the VTA's DIDComm mediator from its DID document and
+    //   tries DIDComm with a REST fallback; if the DID document
+    //   advertises no `DIDCommMessaging` service it degrades to
+    //   `RestOnly`, exactly the behaviour this branch had before.
+    //
+    // NOTE: `Auto` cannot select TSP — `decide_transport` has no TSP arm,
+    // and `Transport::Tsp` is only reachable through the explicit
+    // `VtaClient::connect_tsp`. A TSP-only VTA still cannot be rotated
+    // against; that gap has to close in vta-sdk, not here.
+    let transport_preference = transport_preference_for(vta_url.as_deref());
     let svc = VtaServiceConfig {
         auth: vta_sdk::integration::VtaAuthConfig {
             credential: bundle,
@@ -135,7 +170,7 @@ pub async fn run(config_path: &str, dry_run: bool) -> Result<(), Box<dyn std::er
         context: vta_sdk::integration::VtaContextConfig {
             id: context.clone(),
             mediator_did: None,
-            transport_preference: TransportPreference::PreferRest,
+            transport_preference,
             did_resolver: None,
         },
     };
@@ -267,4 +302,40 @@ fn mint_did_key() -> Result<(String, String), Box<dyn std::error::Error>> {
         return Err(format!("expected did:key, generator produced '{did}'").into());
     }
     Ok((did, private_key_multibase))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_credential_with_a_rest_url_prefers_rest() {
+        // Known-good for existing deployments, and it avoids dialling
+        // DIDComm in the self-mediated topology where the VTA's mediator
+        // is this very process.
+        assert!(matches!(
+            transport_preference_for(Some("https://vta.example.com")),
+            TransportPreference::PreferRest
+        ));
+    }
+
+    #[test]
+    fn a_credential_without_a_rest_url_uses_auto() {
+        // `PreferRest` here maps to `RestOnly` with no DIDComm fallback,
+        // which cannot authenticate against a DIDComm-only VTA at all.
+        assert!(matches!(
+            transport_preference_for(None),
+            TransportPreference::Auto
+        ));
+    }
+
+    #[test]
+    fn an_empty_rest_url_is_treated_as_absent() {
+        // `url_override` filters empties, so an empty string would
+        // otherwise select RestOnly with no URL to resolve against.
+        assert!(matches!(
+            transport_preference_for(Some("")),
+            TransportPreference::Auto
+        ));
+    }
 }
