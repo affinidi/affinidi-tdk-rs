@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (0.20.1) — `vta-sdk` 0.32.1
+
+- Bumps `vta-sdk` 0.25 → 0.32.1. No source changes were required across the
+  seven intervening minor releases, and `ContextProvisionBundle` is unchanged.
+- Realigns this crate with the VTI workspace copy. Per the `vta` feature's
+  comment, VTI's `[patch.crates-io] vta-sdk = { path = "vta-sdk" }` only
+  deletes the registry node while our requirement admits their workspace
+  version; holding at 0.25 while they shipped 0.32 is what re-opens the
+  cross-repo dependency cycle.
+- **`vta-sdk` is a public dependency of this crate's API** — `tasks::VtaRefresher`
+  exposes a `VtaServiceConfig` field — so this is source-breaking for a consumer
+  that builds with `--features vta` against `vta-sdk` 0.25. Shipped as a patch
+  deliberately: `affinidi-messaging-test-mediator` pins `"0.20"`, and a minor
+  would drop out of that range and duplicate this crate in the graph. Consumers
+  that do not enable `vta` (including `test-mediator`, which builds
+  `default-features = false`) never compile `vta-sdk` and are unaffected.
+
 ## Unreleased (0.20.0) — `trust-tasks-rs` 0.17
 
 - Bumps `trust-tasks-rs` 0.12 → 0.17; sixteen response and component

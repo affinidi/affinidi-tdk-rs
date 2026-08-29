@@ -88,10 +88,13 @@ const KIND_ADMIN_CREDENTIAL: &str = "admin-credential";
 /// (and tooling like `mediator rotate-admin`) always load from one
 /// well-known key:
 ///
-/// - **VTA-linked** (`vta_did.is_some() && vta_url.is_some()`): the
-///   mediator uses the credential to authenticate to its VTA at
-///   startup. Produced by the online-VTA or sealed-handoff flows.
-/// - **Self-hosted** (`vta_did.is_none() && vta_url.is_none()`): the
+/// - **VTA-linked** (`vta_did.is_some()`): the mediator uses the
+///   credential to authenticate to its VTA at startup. Produced by
+///   the online-VTA or sealed-handoff flows. `vta_url` is optional —
+///   a DIDComm-only VTA, or a sealed context export from a VTA with
+///   no public REST URL, ships a DID and no URL, and the runtime
+///   discovers the endpoint from the VTA's DID document.
+/// - **Self-hosted** (`vta_did.is_none()`): the
 ///   mediator does not talk to a VTA; the credential is just a
 ///   persistent record of the admin DID + private key so a later
 ///   wizard run can reuse it without prompting the operator. The
@@ -110,6 +113,12 @@ pub struct AdminCredential {
     /// deserialize; new self-hosted records omit it entirely.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vta_did: Option<String>,
+    /// REST URL override for the VTA. Optional even when `vta_did` is
+    /// set: both `config::load` and `rotate-admin` pass this straight
+    /// into `VtaAuthConfig::url_override`, which is itself an
+    /// `Option` — `None` means "resolve the endpoint from the VTA DID
+    /// document". Meaningless without `vta_did` (there is nothing to
+    /// authenticate against), which `validate` rejects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vta_url: Option<String>,
     #[serde(default = "default_context")]
@@ -142,16 +151,22 @@ impl AdminCredential {
                 reason: format!("admin credential VTA DID '{vta}' is not a DID URI"),
             });
         }
-        // Soft invariant: a VTA-linked credential should have both
-        // fields populated. Reject the half-set case where only one
-        // of vta_did / vta_url is present — that's almost certainly
-        // a caller bug, and the mediator runtime would later fail in
-        // an unhelpful way.
-        if self.vta_did.is_some() != self.vta_url.is_some() {
+        // `vta_url` without `vta_did` is unusable: the DID is what the
+        // credential authenticates against, and a bare URL leaves the
+        // runtime treating the credential as self-hosted while the
+        // operator believes it is VTA-linked. Reject at write time
+        // rather than fail silently at boot.
+        //
+        // The converse — `vta_did` with no `vta_url` — is legitimate:
+        // a DIDComm-only VTA, or a sealed context export from a VTA
+        // that advertises no public REST URL. The runtime passes the
+        // URL through as `url_override: Option<_>` and falls back to
+        // the VTA's DID document when it is absent.
+        if self.vta_did.is_none() && self.vta_url.is_some() {
             return Err(SecretStoreError::InvalidShape {
                 key: key.to_string(),
-                reason: "admin credential must set vta_did and vta_url together, or neither \
-                         (self-hosted)"
+                reason: "admin credential sets vta_url without vta_did — a VTA-linked \
+                         credential must name the VTA DID it authenticates against"
                     .into(),
             });
         }
@@ -160,10 +175,12 @@ impl AdminCredential {
 
     /// True when this credential represents a VTA-linked admin
     /// identity — the mediator's runtime VTA-startup branch is
-    /// gated on this. A `None` means "self-hosted admin, no VTA
-    /// integration".
+    /// gated on this. A `None` `vta_did` means "self-hosted admin,
+    /// no VTA integration". `vta_url` is deliberately *not* part of
+    /// the test: it is only a URL override, and its absence means
+    /// "discover the endpoint from the VTA DID document".
     pub fn is_vta_linked(&self) -> bool {
-        self.vta_did.is_some() && self.vta_url.is_some()
+        self.vta_did.is_some()
     }
 
     /// Derive the 32-byte HMAC key used to sign the VTA cache. Derivation
@@ -725,12 +742,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_credential_rejects_half_set_vta_fields() {
+    async fn admin_credential_rejects_vta_url_without_vta_did() {
         let secrets = helper();
-        // Populating vta_url alone without vta_did (or vice versa) is
-        // almost certainly a caller bug — the mediator runtime would
-        // later fail the VTA startup in an unhelpful way. Reject at
-        // write time instead.
+        // A bare URL with no VTA DID is unusable — there is nothing to
+        // authenticate against, and the runtime would silently treat
+        // the credential as self-hosted. Reject at write time instead.
         let half_set = AdminCredential {
             did: "did:key:z6MkSAMPLE".into(),
             private_key_multibase: "z3u2SAMPLE".into(),
@@ -742,6 +758,34 @@ mod tests {
             secrets.store_admin_credential(&half_set).await,
             Err(SecretStoreError::InvalidShape { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn admin_credential_accepts_vta_did_without_vta_url() {
+        let secrets = helper();
+        // A DIDComm-only VTA, and a sealed context export from a VTA
+        // with no public REST URL, both produce this shape. The URL is
+        // only an override; the runtime resolves the endpoint from the
+        // VTA DID document when it is absent.
+        let no_url = AdminCredential {
+            did: "did:key:z6MkSAMPLE".into(),
+            private_key_multibase: "z3u2SAMPLE".into(),
+            vta_did: Some("did:webvh:vta.example.com".into()),
+            vta_url: None,
+            context: "mediator".into(),
+        };
+        secrets.store_admin_credential(&no_url).await.unwrap();
+        let got = secrets
+            .load_admin_credential()
+            .await
+            .unwrap()
+            .expect("credential must be present");
+        assert_eq!(got.vta_did.as_deref(), Some("did:webvh:vta.example.com"));
+        assert!(got.vta_url.is_none());
+        assert!(
+            got.is_vta_linked(),
+            "a credential naming a VTA DID is VTA-linked even without a URL override"
+        );
     }
 
     #[tokio::test]
