@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased (0.20.2) — `rotate-admin` works against a VTA with no REST URL
+
+**Bug fix: `mediator rotate-admin` could not authenticate to a VTA that
+exposes no REST endpoint.**
+
+The command pinned `TransportPreference::PreferRest`, which vta-sdk maps to
+`TransportPlan::RestOnly` with **no DIDComm fallback**. Against a DIDComm-only
+VTA there is no REST endpoint to resolve, so rotation failed before it began.
+Newly reachable: until 0.20.1 an admin credential naming a VTA with no URL
+could not be stored at all, so the command had no way to load one.
+
+- The transport preference is now chosen from whether the credential carries a
+  usable REST URL. With a URL, `PreferRest` is kept — it is known-good, and it
+  avoids dialling DIDComm in the self-mediated topology, where the VTA's
+  DIDComm mediator is the very process the operator is running the CLI against.
+  Without one, `Auto` lets the SDK resolve the VTA's mediator from its DID
+  document and try DIDComm with a REST fallback; a VTA advertising no
+  `DIDCommMessaging` service degrades to `RestOnly`, exactly as before.
+- The original rationale for pinning REST — that `get_acl` / `create_acl`
+  needed the synchronous REST API — no longer holds. Both go through
+  `rpc_tt` -> `dispatch_trust_task`, which is identical across the REST,
+  DIDComm and TSP transports; the operation is a Trust Task on every transport
+  and REST's bespoke per-operation routes were removed upstream.
+- No behaviour change for any deployment whose admin credential has a REST URL.
+
+**Known gap: TSP-only VTAs still cannot be rotated against.** `Auto` cannot
+select TSP — `decide_transport` has no TSP arm, and `Transport::Tsp` is only
+reachable through the explicit `VtaClient::connect_tsp`. Closing that belongs
+in vta-sdk's preference matrix, not here.
+
 ## Unreleased (0.20.1) — `vta-sdk` 0.32.1
 
 - Bumps `vta-sdk` 0.25 → 0.32.1. No source changes were required across the
