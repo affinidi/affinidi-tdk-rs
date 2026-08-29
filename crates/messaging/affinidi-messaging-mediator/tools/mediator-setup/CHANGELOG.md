@@ -1,5 +1,28 @@
 # Affinidi Messaging Mediator Setup
 
+## Unreleased (0.1.29) — setup completes against a DIDComm/TSP-only VTA
+
+**Bug fix: provisioning no longer aborts when the VTA advertises no REST URL.**
+
+`provision_secret_backend` stored `vta_did: Some(...)` unconditionally alongside
+`vta_url: session.rest_url.clone()`. `VtaSession::rest_url` is documented as
+`None` for a DIDComm-only VTA or a sealed-handoff session, so both of those
+produced a half-set admin credential that `AdminCredential::validate` rejected —
+failing setup at its final step, after the JWT and operating secrets had already
+been written to the secret backend.
+
+- Both VTA fields are now normalised before the write. `vta_url: None` alongside
+  a `vta_did` is a supported shape (see mediator-common 0.15.36); the mediator
+  resolves the VTA endpoint from its DID document.
+- Also closes a second failure on the same path: `VtaSession::context_export`
+  uses `unwrap_or_default()`, so a sealed bundle that omits `vta_did` arrived as
+  an empty string and failed the *DID-URI* check instead — the same fatal-at-the
+  -last-step abort with a different message. An empty `vta_did` now stores a
+  self-hosted credential, and the summary line says so.
+- A `vta_url` with no `vta_did` is dropped rather than stored: it is not a VTA
+  linkage, since there is nothing to authenticate against.
+- Bumps `vta-sdk` 0.25 → 0.32.1 (no source changes required).
+
 ## 1st August 2026 (0.1.27)
 
 Drops the **legacy rustls 0.21 stack** from the AWS SDK dependency path,

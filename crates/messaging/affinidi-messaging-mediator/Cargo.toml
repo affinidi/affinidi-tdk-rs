@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.20.0"
+version = "0.20.1"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -157,7 +157,7 @@ affinidi-task-utils = "0.1"
 ## a second `trust-tasks-rs` (0.2.57, from vta-sdk 0.21.6) in this workspace's
 ## lockfile long after everything else had moved to 0.9. A bounded range is a
 ## tax that comes due silently; prefer a caret and move it deliberately.
-vta-sdk = { version = "0.25", features = [
+vta-sdk = { version = "0.32.1", features = [
   "integration",
 ], optional = true }
 

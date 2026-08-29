@@ -1509,12 +1509,30 @@ async fn provision_secret_backend(
 
     // Admin credential — VTA-linked path. The session captures the
     // rotated admin did:key + the VTA DID/URL that minted it.
+    //
+    // Both VTA fields are normalised through `non_empty`. A sealed
+    // context export whose bundle omitted `vta_did` reaches us as an
+    // empty string (`VtaSession::context_export` uses
+    // `unwrap_or_default`), and an empty `vta_url` is equally
+    // meaningless — storing either verbatim fails the credential's
+    // shape validation at the last step of setup, after the JWT and
+    // operating secrets have already been written to the backend.
+    // `vta_url: None` is a supported shape: the mediator resolves the
+    // VTA endpoint from its DID document.
     if let Some(session) = vta_session {
+        let non_empty = |s: Option<String>| s.filter(|v| !v.trim().is_empty());
+        let vta_did = non_empty(Some(session.vta_did.clone()));
+        // A URL with no DID is not a VTA linkage — there is nothing to
+        // authenticate against — so it is dropped rather than stored.
+        let vta_url = vta_did
+            .as_ref()
+            .and_then(|_| non_empty(session.rest_url.clone()));
+        let vta_linked = vta_did.is_some();
         let cred = affinidi_messaging_mediator_common::AdminCredential {
             did: session.admin_did().to_string(),
             private_key_multibase: session.admin_private_key_mb().to_string(),
-            vta_did: Some(session.vta_did.clone()),
-            vta_url: session.rest_url.clone(),
+            vta_did,
+            vta_url,
             context: session.context_id.clone(),
         };
         mediator_secrets_store
@@ -1522,8 +1540,13 @@ async fn provision_secret_backend(
             .await
             .map_err(|e| anyhow::anyhow!("Failed to store admin credential: {e}"))?;
         println!(
-            "    \x1b[32m\u{2714}\x1b[0m {}",
-            affinidi_messaging_mediator_common::ADMIN_CREDENTIAL
+            "    \x1b[32m\u{2714}\x1b[0m {}{}",
+            affinidi_messaging_mediator_common::ADMIN_CREDENTIAL,
+            if vta_linked {
+                ""
+            } else {
+                " (self-hosted — session carried no VTA DID)"
+            }
         );
 
         // Seed the VTA fallback cache with the bundle we just

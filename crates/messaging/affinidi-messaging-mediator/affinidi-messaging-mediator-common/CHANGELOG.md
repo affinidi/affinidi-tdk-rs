@@ -1,5 +1,32 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.36) — an admin credential may name a VTA with no REST URL
+
+**Bug fix: `AdminCredential` no longer rejects a VTA-linked credential that
+carries no `vta_url`.**
+
+The shape validation required `vta_did` and `vta_url` to be set together or not
+at all. That is wrong for a VTA reached only over DIDComm/TSP, which advertises
+no REST endpoint: `mediator-setup` produced `vta_did` with no URL and the write
+failed with `admin credential must set vta_did and vta_url together, or neither
+(self-hosted)` — aborting setup at its last step, after the JWT and operating
+secrets had already been written to the backend.
+
+Nothing downstream ever needed the URL. Both consumers pass it straight into
+`VtaAuthConfig::url_override`, which is itself an `Option`, and `config::load`
+logs `"(from DID doc)"` when it is absent — the endpoint is discovered from the
+VTA's DID document.
+
+- `validate` now rejects only the unusable direction, `vta_url` **without**
+  `vta_did`: a bare URL names no VTA DID to authenticate against, and storing
+  it leaves the runtime treating the credential as self-hosted while the
+  operator believes it is VTA-linked.
+- **Behaviour change (R3.6): `is_vta_linked()` now tests `vta_did` alone.**
+  Previously it required both fields, so a credential with a DID and no URL
+  read as self-hosted and the mediator silently skipped VTA startup. Any
+  consumer using it to mean "has a REST URL" should test `vta_url` directly.
+- No signature change; the struct and its serialised form are untouched.
+
 ## Unreleased (0.15.35) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
