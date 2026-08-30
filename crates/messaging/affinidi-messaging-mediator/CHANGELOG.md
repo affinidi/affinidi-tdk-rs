@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased (0.20.3) — say which origin CORS refused, and whether CORS is on
+
+**Observability fix: a CORS refusal was invisible from both ends.**
+
+The browser gets an opaque `TypeError: Failed to fetch` with the reason
+confined to its devtools console, and the mediator logs a clean `200` — the
+`CorsLayer` does not reject anything, it simply omits the header. Operator and
+user are left with no shared evidence. `curl` cannot reproduce the fault
+either, because a terminal sends no `Origin` header, so the endpoint answers
+perfectly and the refusal looks like it never happened.
+
+- The `List` predicate now logs a refused origin at `warn`, naming it and
+  pointing at `security.cors_allow_origin`. Logged **once per distinct
+  origin** and capped at 32: the origin is attacker-controlled, so an
+  unbounded record of it is a log-flooding and memory-growth primitive for
+  anyone who can reach the port. A misconfigured deployment has one or two
+  distinct origins to report, so the cap loses nothing real.
+- The effective policy is now stated at boot. This is the half that matters
+  most: `CorsOriginPolicy::None` (the default) installs **no predicate** — it
+  never emits the header at all — so there is no per-request hook to log from,
+  and a mediator refusing every browser client otherwise says so nowhere.
+- The WebSocket path already logged its equivalent refusal and returns a
+  readable `403`; only the REST path was silent, which is the one a browser
+  client reaches first.
+
+No behaviour change: the layer, the matchers and the policy are untouched, and
+refusals are still refusals.
+
 ## Unreleased (0.20.2) — `rotate-admin` works against a VTA with no REST URL
 
 **Bug fix: `mediator rotate-admin` could not authenticate to a VTA that
