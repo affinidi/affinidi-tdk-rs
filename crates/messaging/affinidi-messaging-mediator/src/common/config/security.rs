@@ -15,8 +15,9 @@ use jsonwebtoken::{DecodingKey, EncodingKey};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde::Serialize;
 use std::{
+    collections::HashSet,
     fmt::{self, Debug},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
@@ -189,6 +190,41 @@ pub fn origin_matches(matchers: &[OriginMatcher], origin: &HeaderValue) -> bool 
     matchers.iter().any(|m| m.matches(origin))
 }
 
+/// How many distinct refused origins to name in the log before going quiet.
+///
+/// Refusals are logged so an operator can see *which* origin they are missing
+/// from the allowlist, but the origin is attacker-controlled: an unbounded
+/// record of it is a log-flooding and memory-growth primitive for anyone who
+/// can reach the port. A misconfigured deployment has one or two distinct
+/// origins to report, so a small cap loses nothing real.
+const MAX_LOGGED_REFUSED_ORIGINS: usize = 32;
+
+/// Log a refused origin once, then never again for that origin.
+///
+/// Why this exists: a CORS refusal is invisible from both ends. The browser
+/// gets an opaque `TypeError` with the reason confined to its devtools
+/// console, and the mediator's own logs show a clean `200` — the `CorsLayer`
+/// simply omits a header. Operator and user are left staring at each other,
+/// which is exactly how one deployment spent a day on this. The WebSocket path
+/// has always logged its equivalent refusal; the REST path did not.
+fn note_refused_origin(seen: &Mutex<HashSet<String>>, origin: &HeaderValue) {
+    let Ok(origin) = origin.to_str() else { return };
+    let Ok(mut seen) = seen.lock() else { return };
+    if seen.contains(origin) {
+        return;
+    }
+    if seen.len() >= MAX_LOGGED_REFUSED_ORIGINS {
+        return;
+    }
+    seen.insert(origin.to_string());
+    tracing::warn!(
+        "CORS: refused origin '{origin}' — it is not in security.cors_allow_origin. \
+         Browser clients from this origin (including browser extensions) cannot use \
+         the REST API or open a WebSocket. Add it to the allowlist and restart if \
+         this origin is expected."
+    );
+}
+
 /// Build the mediator's [`CorsLayer`] for the given origin policy. The
 /// allowed methods/headers are fixed; only the origin matching varies.
 fn build_cors_layer(policy: &CorsOriginPolicy) -> CorsLayer {
@@ -212,8 +248,14 @@ fn build_cors_layer(policy: &CorsOriginPolicy) -> CorsLayer {
         // exact request origin on a match and sets `Vary: Origin`.
         CorsOriginPolicy::List(matchers) => {
             let matchers = matchers.clone();
+            // Bounded, de-duplicated: see `note_refused_origin`.
+            let refused: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
             base.allow_origin(AllowOrigin::predicate(move |origin, _parts| {
-                origin_matches(&matchers, origin)
+                let allowed = origin_matches(&matchers, origin);
+                if !allowed {
+                    note_refused_origin(&refused, origin);
+                }
+                allowed
             }))
         }
     }
@@ -601,6 +643,26 @@ impl SecurityConfigRawExt for SecurityConfigRaw {
             config.cors_allow_origin = build_cors_layer(&policy);
             config.cors_origins = policy;
         }
+        // State the effective policy at boot. The default-closed case has no
+        // per-request hook to log from — `CorsOriginPolicy::None` installs no
+        // predicate, it simply never emits the header — so without this line a
+        // mediator that refuses every browser client says so nowhere at all,
+        // and the operator's first sight of it is a user reporting an error
+        // the server logs as a clean 200.
+        match &config.cors_origins {
+            CorsOriginPolicy::None => tracing::info!(
+                "CORS: disabled (security.cors_allow_origin unset). Browser clients \
+                 carrying an Origin header are refused on both the REST API and the \
+                 WebSocket upgrade; native clients are unaffected."
+            ),
+            CorsOriginPolicy::Any => {
+                tracing::info!("CORS: any origin allowed (security.cors_allow_origin = \"*\")")
+            }
+            CorsOriginPolicy::List(matchers) => tracing::info!(
+                "CORS: {} allowed origin(s) configured; all others refused",
+                matchers.len()
+            ),
+        }
 
         // ── Populate the DIDComm secrets resolver ────────────────────────
         if let Some(bundle) = vta_bundle {
@@ -704,9 +766,12 @@ impl SecurityConfigRawExt for SecurityConfigRaw {
 #[cfg(test)]
 mod tests {
     use super::{
-        CorsOriginPolicy, OriginMatcher, SecurityConfigRaw, SecurityConfigRawExt, origin_matches,
+        CorsOriginPolicy, MAX_LOGGED_REFUSED_ORIGINS, OriginMatcher, SecurityConfigRaw,
+        SecurityConfigRawExt, note_refused_origin, origin_matches,
     };
     use http::HeaderValue;
+    use std::collections::HashSet;
+    use std::sync::Mutex;
 
     /// Parse `spec` into a `List` policy and return its matchers, or panic
     /// with the actual variant for a clearer failure than `unwrap`.
@@ -874,5 +939,53 @@ mod tests {
         assert!(SecurityConfigRaw::parse_cors_origins("https://*.affinidi.com:notaport").is_err());
         // Empty suffix.
         assert!(SecurityConfigRaw::parse_cors_origins("https://*.").is_err());
+    }
+
+    // ─── Refused-origin logging ───
+    //
+    // The record is bounded because the origin is attacker-controlled: an
+    // unbounded set of it is a memory-growth and log-flooding primitive for
+    // anyone who can reach the port.
+
+    #[test]
+    fn refused_origin_is_recorded_once() {
+        let seen = Mutex::new(HashSet::new());
+        let origin = HeaderValue::from_static("https://app.example.com");
+        note_refused_origin(&seen, &origin);
+        note_refused_origin(&seen, &origin);
+        note_refused_origin(&seen, &origin);
+        assert_eq!(seen.lock().unwrap().len(), 1, "a repeated origin logs once");
+    }
+
+    #[test]
+    fn distinct_refused_origins_are_each_recorded() {
+        let seen = Mutex::new(HashSet::new());
+        note_refused_origin(&seen, &HeaderValue::from_static("https://a.example"));
+        note_refused_origin(&seen, &HeaderValue::from_static("https://b.example"));
+        assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn refused_origin_record_is_bounded() {
+        let seen = Mutex::new(HashSet::new());
+        for i in 0..(MAX_LOGGED_REFUSED_ORIGINS * 4) {
+            let origin = HeaderValue::from_str(&format!("https://host{i}.example")).unwrap();
+            note_refused_origin(&seen, &origin);
+        }
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            MAX_LOGGED_REFUSED_ORIGINS,
+            "an unbounded caller must not be able to grow the record without limit"
+        );
+    }
+
+    #[test]
+    fn a_non_utf8_origin_is_ignored_rather_than_panicking() {
+        // `HeaderValue` admits bytes that are not valid UTF-8; the logger must
+        // decline them, not unwrap.
+        let seen = Mutex::new(HashSet::new());
+        let origin = HeaderValue::from_bytes(&[0xff, 0xfe]).unwrap();
+        note_refused_origin(&seen, &origin);
+        assert!(seen.lock().unwrap().is_empty());
     }
 }
