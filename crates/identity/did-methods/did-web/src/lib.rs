@@ -47,6 +47,7 @@
  * ```
  */
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 use affinidi_did_common::{DID, DIDMethod, Document};
@@ -78,10 +79,27 @@ pub enum DidWebError {
     /// The response body was not a valid DID Document.
     #[error("did:web response was not a valid DID Document: {0}")]
     InvalidDocument(String),
+
+    /// The DID named a non-routable host (loopback / private / link-local /
+    /// cloud-metadata). Refused before any request to prevent SSRF into
+    /// internal services.
+    #[error("did:web refused SSRF-prone host: {0}")]
+    BlockedHost(String),
+
+    /// The response body exceeded the size cap (memory-DoS guard).
+    #[error("did:web response exceeded the {limit}-byte cap")]
+    ResponseTooLarge {
+        /// The byte cap that was exceeded.
+        limit: usize,
+    },
 }
 
 /// Default request timeout. Aligns with the historic spruceid `did-web` default.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Cap on a fetched DID Document body. A conformant did:web document is a few
+/// KB; a larger response is hostile — refuse rather than buffer it (memory-DoS).
+pub const MAX_DOCUMENT_BYTES: usize = 1 << 20; // 1 MiB
 
 /// Default `Accept` header. did:web servers typically serve either
 /// `application/did+ld+json` or `application/json`.
@@ -140,9 +158,23 @@ impl DIDWeb {
         };
 
         let url = build_url(&domain, &path_segments)?;
+
+        // SSRF guard: the DID names the host, so an attacker-supplied
+        // did:web:169.254.169.254 / did:web:localhost would make the resolver
+        // fetch an internal or cloud-metadata endpoint. Refuse a non-routable
+        // host before issuing any request. (Redirects are already disabled, so a
+        // 3xx cannot pivot to one after the fact either.)
+        if let Ok(parsed_url) = reqwest::Url::parse(&url) {
+            if let Some(host) = parsed_url.host_str() {
+                if host_is_blocked(host) {
+                    return Err(DidWebError::BlockedHost(host.to_owned()));
+                }
+            }
+        }
+
         debug!(target: "affinidi_did_web", did, %url, "resolving did:web");
 
-        let response = self
+        let mut response = self
             .client
             .get(&url)
             .header(reqwest::header::ACCEPT, DEFAULT_ACCEPT)
@@ -158,10 +190,22 @@ impl DIDWeb {
             });
         }
 
-        let body = response
-            .bytes()
+        // Read the body under a hard cap so a hostile server (or one lying about
+        // Content-Length) cannot stream an unbounded body into memory. `chunk()`
+        // yields the response incrementally without buffering it all first.
+        let mut body: Vec<u8> = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|e| DidWebError::Http(format!("reading body from {url}: {e}")))?;
+            .map_err(|e| DidWebError::Http(format!("reading body from {url}: {e}")))?
+        {
+            if body.len() + chunk.len() > MAX_DOCUMENT_BYTES {
+                return Err(DidWebError::ResponseTooLarge {
+                    limit: MAX_DOCUMENT_BYTES,
+                });
+            }
+            body.extend_from_slice(&chunk);
+        }
 
         serde_json::from_slice::<Document>(&body)
             .map_err(|e| DidWebError::InvalidDocument(format!("parsing {url}: {e}")))
@@ -180,6 +224,47 @@ impl Default for DIDWeb {
 /// [`DIDWeb::new`] so the connection pool is reused.
 pub async fn resolve(did: &str) -> Result<Document, DidWebError> {
     DIDWeb::new().resolve(did).await
+}
+
+/// Reject a host that must never be the target of a `did:web` fetch: loopback,
+/// RFC-1918 / unique-local, link-local (which includes the cloud-metadata
+/// address `169.254.169.254`), unspecified, or broadcast. Bare `localhost` and
+/// `*.localhost` / `*.local` are refused by name. A name we cannot classify here
+/// is allowed through — DNS rebinding is a connect-time concern handled elsewhere.
+fn host_is_blocked(host: &str) -> bool {
+    let h = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    if h == "localhost" || h.ends_with(".localhost") || h.ends_with(".local") {
+        return true;
+    }
+    match h.parse::<IpAddr>() {
+        Ok(IpAddr::V4(a)) => ipv4_is_blocked(a),
+        Ok(IpAddr::V6(a)) => ipv6_is_blocked(a),
+        Err(_) => false,
+    }
+}
+
+fn ipv4_is_blocked(a: Ipv4Addr) -> bool {
+    a.is_loopback()
+        || a.is_private()
+        || a.is_link_local() // 169.254.0.0/16 — covers cloud metadata 169.254.169.254
+        || a.is_unspecified()
+        || a.is_broadcast()
+}
+
+fn ipv6_is_blocked(a: Ipv6Addr) -> bool {
+    if a.is_loopback() || a.is_unspecified() {
+        return true;
+    }
+    // An IPv4-mapped address (::ffff:a.b.c.d) reaches the same v4 target.
+    if let Some(v4) = a.to_ipv4_mapped() {
+        return ipv4_is_blocked(v4);
+    }
+    let s = a.segments();
+    (s[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
+        || (s[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
 }
 
 /// Build the HTTPS URL for a `did:web` document from its parsed components.
@@ -327,5 +412,56 @@ mod tests {
         let url = format!("{}/.well-known/did.json", server.uri());
         let response = reqwest::get(&url).await.unwrap();
         assert_eq!(response.status().as_u16(), 404);
+    }
+
+    #[test]
+    fn host_guard_blocks_internal_and_metadata() {
+        for h in [
+            "127.0.0.1",
+            "0.0.0.0",
+            "10.0.0.5",
+            "172.16.9.9",
+            "192.168.1.1",
+            "169.254.169.254", // cloud metadata
+            "localhost",
+            "svc.localhost",
+            "printer.local",
+            "::1",
+            "[::1]",
+            "::ffff:127.0.0.1", // IPv4-mapped loopback
+            "fc00::1",          // unique-local
+            "fe80::1",          // link-local
+        ] {
+            assert!(host_is_blocked(h), "{h} should be blocked");
+        }
+    }
+
+    #[test]
+    fn host_guard_allows_public_hosts() {
+        for h in [
+            "example.com",
+            "did.example.org",
+            "8.8.8.8",
+            "2606:4700:4700::1111",
+        ] {
+            assert!(!host_is_blocked(h), "{h} should be allowed");
+        }
+    }
+
+    /// The SSRF guard must fire inside `resolve()` before any network I/O.
+    #[tokio::test]
+    async fn resolve_refuses_ssrf_prone_hosts() {
+        for did in [
+            "did:web:localhost",
+            "did:web:127.0.0.1",
+            "did:web:169.254.169.254",
+            "did:web:10.0.0.1",
+        ] {
+            let err = resolve(did).await.unwrap_err();
+            assert!(
+                matches!(err, DidWebError::BlockedHost(_)),
+                "{did} should be refused as BlockedHost, got {err:?}"
+            );
+        }
     }
 }
