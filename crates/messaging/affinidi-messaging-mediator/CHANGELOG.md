@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased (0.20.4) — blind cross-mediator relay is no longer refused as a session mismatch
+
+**Bug fix: with the default `RelayMode::Blind`, a mediator refused every
+message relayed to it by a peer mediator.**
+
+Observed in production: mediator M2 relays to M1, and M1 answers
+`HTTP 400 / errorCode 52` —
+`e.p.authorization.did.session_mismatch`, "Sender DID (…) doesn't match
+session DID", on session `ANON-INBOUND`. No cross-mediator DIDComm delivery
+completed.
+
+`inbound.rs` enforces `security.force_session_did_match` in two places, and
+only one of them was guarded. The **forward** branch (the message is addressed
+to the mediator) already skipped the check for an unauthenticated session,
+because an inter-mediator relay hop arrives anonymously and has no session DID
+to match against. The **direct-delivery** branch (the message is addressed to
+a local account) did not, so it compared the claimed sender against the
+anonymous session's empty DID and could only ever fail.
+
+Which branch a relayed message lands on is decided by the relay mode.
+`RelayMode::Blind` — the default — relays the peer's inner envelope
+byte-for-byte, and that envelope is addressed to the *recipient*, not to the
+receiving mediator: a direct delivery. So the unguarded branch is exactly the
+one every blind relay hop takes. `RelayMode::Rewrap` re-wraps the envelope as
+a forward addressed to the next mediator and therefore took the already-guarded
+branch, which is why rewrap deployments were unaffected.
+
+The direct-delivery check now carries the same `session.authenticated` guard as
+its sibling.
+
+**The security tradeoff, stated plainly.** A directly-delivered envelope cannot
+be decrypted by the mediator, so its sender is only a *claim* (the JWE `skid`),
+and that claim is what feeds `from_hash` in the recipient's access-list
+verdict. Exempting the anonymous relay session means a blind-relayed message's
+sender is not verified against anything: a relaying peer can present any sender
+DID. This is inherent to blind relay rather than introduced here — by
+construction the receiving mediator cannot see which peer relayed — and the
+alternative is the bug being fixed, refusing the hop outright.
+`RelayMode::Rewrap` together with
+`processors.forwarding.relay_trusted_mediators` exists precisely so a
+deployment can authenticate and allowlist the relaying peer; deployments that
+need the peer authenticated should run it.
+
+Unchanged: an **authenticated** session's direct delivery is still bound to its
+session DID, so a client cannot claim someone else's sender DID.
+
 ## Unreleased (0.20.3) — say which origin CORS refused, and whether CORS is on
 
 **Observability fix: a CORS refusal was invisible from both ends.**

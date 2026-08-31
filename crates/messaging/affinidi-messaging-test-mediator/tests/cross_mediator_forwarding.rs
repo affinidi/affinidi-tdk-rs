@@ -510,3 +510,207 @@ fn unix_secs() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+
+// ─── Blind relay into DIRECT DELIVERY ───────────────────────────────────────
+//
+// Every test above builds the routing-2.0 *double* forward, so the envelope
+// mediator B receives is itself a `forward` addressed to B — B unpacks it and
+// takes inbound.rs's `to_did == mediator_did` branch, where the session/sender
+// match has always been skipped for unauthenticated sessions. That is why they
+// pass on both sides of this fix and never caught the defect.
+//
+// A client that sends a *single* forward (`next` = the remote recipient, not
+// the remote mediator) is the shape production actually uses, and it lands on
+// the other branch: in `RelayMode::Blind` mediator A relays the inner envelope
+// verbatim, so what arrives at B is addressed to Bob, not to B — a direct
+// delivery, on the anonymous `ANON-INBOUND` relay session. Before the guard was
+// added there, B answered every such hop with HTTP 400
+// `e.p.authorization.did.session_mismatch`.
+
+/// Blind relay mediator that also accepts direct delivery.
+///
+/// A relayed inner envelope addressed to a local account *is* a direct
+/// delivery as far as the receiving mediator is concerned, so a mediator that
+/// terminates single-forward relays has to have the path enabled; the fixture
+/// ships it off. Anonymous direct delivery stays off — the relayed envelope
+/// carries an authcrypt sender, so this test must not depend on the
+/// `allow_anon` escape hatch.
+async fn spawn_direct_delivery_relay_environment() -> TestEnvironment {
+    let mediator = TestMediator::builder()
+        .enable_forwarding(true)
+        .enable_external_forwarding(true)
+        .global_acl_default(acl::allow_all())
+        .local_direct_delivery(true, false)
+        .spawn()
+        .await
+        .expect("spawn blind relay mediator with direct delivery enabled");
+    TestEnvironment::new(mediator)
+        .await
+        .expect("wire SDK environment to direct-delivery relay mediator")
+}
+
+/// Drive one cross-mediator delivery using a SINGLE forward: Alice wraps the
+/// authcrypt for Bob in one `forward` addressed to her own mediator with
+/// `next = Bob`. Mediator A resolves Bob's DID document, finds it mediated by
+/// B, and relays the inner envelope there.
+async fn single_forward_and_receive(
+    sender_env: &TestEnvironment,
+    sender: &TestUser,
+    sender_mediator_did: &str,
+    recipient_env: &TestEnvironment,
+    recipient: &TestUser,
+    text: &str,
+    wait: Duration,
+) -> Option<String> {
+    let now = unix_secs();
+
+    let msg = Message::build(
+        Uuid::new_v4().to_string(),
+        "https://didcomm.org/basicmessage/2.0/message".to_string(),
+        json!({ "content": text }),
+    )
+    .to(recipient.did.clone())
+    .from(sender.did.clone())
+    .created_time(now)
+    .expires_time(now + 60)
+    .finalize();
+    let msg_id = msg.id.clone();
+
+    let (packed, _) = sender_env
+        .atm
+        .pack_encrypted(&msg, &recipient.did, Some(&sender.did), Some(&sender.did))
+        .await
+        .expect("authcrypt for recipient");
+
+    // The single forward: addressed to Alice's own mediator, `next` = Bob
+    // himself. There is no second forward layer for mediator B to unwrap, so
+    // the envelope B receives is the authcrypt addressed to Bob.
+    let (_fwd_id, forward) = sender_env
+        .atm
+        .routing()
+        .forward_message(
+            &sender.profile,
+            false,
+            &packed,
+            sender_mediator_did,
+            &recipient.did,
+            None,
+            None,
+        )
+        .await
+        .expect("wrap single forward");
+
+    sender_env
+        .atm
+        .send_message(&sender.profile, &forward, &msg_id, false, false)
+        .await
+        .expect("send forward to own mediator");
+
+    match recipient_env
+        .atm
+        .message_pickup()
+        .live_stream_get(&recipient.profile, &msg_id, wait, true)
+        .await
+    {
+        Ok(Some((received, _meta))) => received
+            .body
+            .get("content")
+            .and_then(|c| c.as_str())
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
+/// The regression for the production `session_mismatch` refusal: a blind relay
+/// whose inner envelope is addressed to a local account must be delivered, not
+/// refused for failing to match the anonymous relay session's (empty) DID.
+#[tokio::test]
+async fn blind_relay_direct_delivery_reaches_recipient() {
+    init_tracing();
+
+    let env_a = spawn_direct_delivery_relay_environment().await;
+    let env_b = spawn_direct_delivery_relay_environment().await;
+
+    let mediator_a_did = env_a.mediator.did().to_string();
+    assert_ne!(
+        mediator_a_did,
+        env_b.mediator.did(),
+        "the two mediators must have distinct DIDs for a real cross-mediator hop"
+    );
+
+    let alice = add_live_user(&env_a, "Alice").await;
+    let bob = add_live_user(&env_b, "Bob").await;
+
+    let text = "Single-forward hello, relayed blind and delivered directly.";
+    let received = single_forward_and_receive(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &env_b,
+        &bob,
+        text,
+        Duration::from_secs(15),
+    )
+    .await;
+
+    assert_eq!(
+        received.as_deref(),
+        Some(text),
+        "Bob should receive Alice's single-forward message; a session_mismatch \
+         refusal on mediator B's direct-delivery path shows up as no delivery"
+    );
+
+    env_a.shutdown().await.expect("shutdown mediator A");
+    env_b.shutdown().await.expect("shutdown mediator B");
+}
+
+/// The guard is scoped to *unauthenticated* sessions only: an authenticated
+/// client that hands its own mediator a direct delivery claiming somebody
+/// else's sender DID is still refused. Without this, "relax the check for
+/// anonymous relay" could silently become "stop checking".
+#[tokio::test]
+async fn authenticated_direct_delivery_still_enforces_session_match() {
+    init_tracing();
+
+    let env = spawn_direct_delivery_relay_environment().await;
+    // Plain HTTP users: the refusal has to come back as the POST /inbound
+    // response, not be swallowed by a live-stream socket.
+    let alice = env.add_user("Alice").await.expect("add Alice");
+    let bob = env.add_user("Bob").await.expect("add Bob");
+    let mallory = env.add_user("Mallory").await.expect("add Mallory");
+
+    let now = unix_secs();
+    let msg = Message::build(
+        Uuid::new_v4().to_string(),
+        "https://didcomm.org/basicmessage/2.0/message".to_string(),
+        json!({ "content": "Spoofed sender." }),
+    )
+    .to(bob.did.clone())
+    .from(alice.did.clone())
+    .created_time(now)
+    .expires_time(now + 60)
+    .finalize();
+    let msg_id = msg.id.clone();
+
+    // Authcrypted as Alice, but handed to the mediator over Mallory's
+    // authenticated session — the envelope's claimed sender and the session
+    // DID disagree.
+    let (packed, _) = env
+        .atm
+        .pack_encrypted(&msg, &bob.did, Some(&alice.did), Some(&alice.did))
+        .await
+        .expect("authcrypt as Alice");
+
+    let result = env
+        .atm
+        .send_message(&mallory.profile, &packed, &msg_id, false, false)
+        .await;
+
+    let error = result.expect_err("mediator must refuse a spoofed direct delivery");
+    assert!(
+        format!("{error:?}").contains("session_mismatch"),
+        "expected a session_mismatch problem report, got: {error:?}"
+    );
+
+    env.shutdown().await.expect("shutdown mediator");
+}
