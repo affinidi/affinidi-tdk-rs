@@ -10,6 +10,11 @@
 pub mod config;
 pub use config::{ForwardingConfig, RelayMode};
 
+// The mediator's own outbound packing, injected rather than implemented
+// here — see the module docs for why this crate can't pack for itself.
+pub mod packer;
+pub use packer::SystemMessagePacker;
+
 // `ForwardingProcessor` is backend-agnostic: it consumes the
 // `forward_queue_*` methods on `Arc<dyn MediatorStore>`, which every
 // backend implements (Redis via Streams consumer groups; Fjall and

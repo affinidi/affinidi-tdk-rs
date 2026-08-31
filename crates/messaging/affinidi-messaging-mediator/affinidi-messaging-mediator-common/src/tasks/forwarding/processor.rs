@@ -17,8 +17,10 @@
 
 use crate::store::{MediatorStore, types::ForwardQueueEntry};
 use crate::tasks::forwarding::config::ForwardingConfig;
+use crate::tasks::forwarding::packer::SystemMessagePacker;
 use crate::time::{unix_timestamp_millis, unix_timestamp_secs};
 use futures_util::{SinkExt, StreamExt};
+use sha256::digest;
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -188,6 +190,10 @@ pub struct ForwardingProcessor {
     http_pool: Arc<HttpClientPool>,
     /// WebSocket connection pool keyed by endpoint URL
     ws_pool: Arc<Mutex<HashMap<String, PooledWebSocket>>>,
+    /// How mediator-authored messages (the forwarding-failure problem report)
+    /// are encrypted for their recipient. `None` when the host has no mediator
+    /// identity to pack with — see [`SystemMessagePacker`].
+    packer: Option<Arc<dyn SystemMessagePacker>>,
 }
 
 impl ForwardingProcessor {
@@ -216,7 +222,19 @@ impl ForwardingProcessor {
             endpoints: Arc::new(RwLock::new(HashMap::new())),
             http_pool,
             ws_pool: Arc::new(Mutex::new(HashMap::new())),
+            packer: None,
         })
+    }
+
+    /// Supply the mediator identity that mediator-authored messages are packed
+    /// under. Without it the processor can still forward — only the
+    /// forwarding-failure problem report needs to be encrypted — so this is a
+    /// post-construction opt-in rather than a `new` argument, keeping the
+    /// standalone `forwarding_processor` binary (which has no mediator DID or
+    /// secrets in its config) compiling and running unchanged.
+    pub fn with_system_packer(mut self, packer: Arc<dyn SystemMessagePacker>) -> Self {
+        self.packer = Some(packer);
+        self
     }
 
     /// Start the forwarding processor. This runs indefinitely.
@@ -231,6 +249,17 @@ impl ForwardingProcessor {
             self.config.ws_threshold_msgs_per_10s,
             self.config.ws_idle_timeout_seconds
         );
+
+        // `report_errors` promises the sender an explanation when we give up on
+        // their forward, and we can only keep that promise if we can encrypt it
+        // as ourselves. Say so at startup rather than at the first abandonment,
+        // which may be weeks later and buried in a batch of delivery failures.
+        if self.config.report_errors && self.packer.is_none() {
+            warn!(
+                "report_errors is enabled but no system message packer is configured — \
+                 abandoned forwards will be logged here and NOT reported to their senders"
+            );
+        }
 
         // Spawn a background task to periodically reclaim stale messages
         let db_clone = self.database.clone();
@@ -603,10 +632,23 @@ impl ForwardingProcessor {
         }
     }
 
-    /// Send a problem report to the original sender when forwarding has been abandoned
-    async fn send_forwarding_failure_report(&self, msg: &ForwardQueueEntry, endpoint_url: &str) {
-        let now = unix_timestamp_secs();
+    /// How long a forwarding-failure problem report stays in the sender's
+    /// inbox before the expiry sweep reclaims it.
+    const PROBLEM_REPORT_TTL_SECS: u64 = 300;
 
+    /// Build the DIDComm **plaintext** of the abandonment problem report.
+    ///
+    /// `from` is the mediator's own DID and is not optional: the report is
+    /// packed authcrypt, and the recipient's addressing-consistency check binds
+    /// the authcrypt sender to this field. A report with no `from` decrypts and
+    /// is then rejected — which is indistinguishable, from the sender's side,
+    /// from the bug this replaces.
+    fn build_problem_report(
+        msg: &ForwardQueueEntry,
+        endpoint_url: &str,
+        from: &str,
+        now: u64,
+    ) -> serde_json::Value {
         let problem_body = serde_json::json!({
             "code": "e.p.me.res.forwarding.abandoned",
             "comment": format!(
@@ -616,25 +658,72 @@ impl ForwardingProcessor {
             "args": [msg.to_did, msg.retry_count.to_string(), endpoint_url],
         });
 
-        let report_msg = serde_json::json!({
+        serde_json::json!({
             "type": "https://didcomm.org/report-problem/2.0/problem-report",
             "id": Uuid::new_v4().to_string(),
             "body": problem_body,
+            "from": from,
             "to": [msg.from_did],
             "created_time": now,
-            "expires_time": now + 300,
-        });
+            "expires_time": now + Self::PROBLEM_REPORT_TTL_SECS,
+        })
+    }
 
-        let report_str = report_msg.to_string();
+    /// Send a problem report to the original sender when forwarding has been
+    /// abandoned.
+    ///
+    /// The report is authcrypted from the mediator to the sender, like every
+    /// other message the mediator puts in an inbox. It used to be stored as the
+    /// raw plaintext JSON, which every SDK client on the default receive policy
+    /// discards with `envelope wrapping Plaintext is not in the accepted set` —
+    /// so from the sender's point of view a forward that the mediator gave up on
+    /// simply vanished.
+    ///
+    /// When the report cannot be packed it is **not** stored. An envelope the
+    /// recipient's policy refuses is the defect being fixed, and storing one
+    /// merely moves the failure to their client (where it re-fails on every
+    /// fetch until it expires) instead of putting it where an operator can act
+    /// on it. Anoncrypt is no fallback either — bare anoncrypt is outside the
+    /// default accepted set too. So the abandonment surfaces as an operator-side
+    /// `ERROR` naming the sender, the destination and the reason.
+    async fn send_forwarding_failure_report(&self, msg: &ForwardQueueEntry, endpoint_url: &str) {
+        let now = unix_timestamp_secs();
+
+        let Some(packer) = self.packer.as_ref() else {
+            error!(
+                "FORWARD_PROBLEM_REPORT_UNSENT: no system message packer configured, so the \
+                 abandoned forward to {} (sender {}, endpoint {}) cannot be reported to its sender",
+                msg.to_did, msg.from_did_hash, endpoint_url
+            );
+            return;
+        };
+
+        let report = Self::build_problem_report(msg, endpoint_url, packer.mediator_did(), now);
+
+        let packed = match packer.pack(&report, &msg.from_did).await {
+            Ok(packed) => packed,
+            Err(e) => {
+                error!(
+                    "FORWARD_PROBLEM_REPORT_UNSENT: couldn't pack the abandonment report for \
+                     sender {} (abandoned forward to {}, endpoint {}): {}",
+                    msg.from_did_hash, msg.to_did, endpoint_url, e
+                );
+                return;
+            }
+        };
 
         match self
             .database
             .store_message(
                 "forwarding-processor",
-                &report_str,
+                &packed,
                 &msg.from_did_hash,
-                Some("SYSTEM"),
-                now + 300,
+                // The mediator authored this one, so it is the sender of
+                // record — the same `from` hash its protocol replies carry.
+                // (This slot used to hold the literal string "SYSTEM", which
+                // is not a DID hash and gave the report an outbox of its own.)
+                Some(&digest(packer.mediator_did())),
+                now + Self::PROBLEM_REPORT_TTL_SECS,
                 0, // No MAXLEN for system-generated problem reports
             )
             .await
@@ -822,6 +911,75 @@ impl ForwardingProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- build_problem_report tests ---
+
+    fn abandoned_entry() -> ForwardQueueEntry {
+        ForwardQueueEntry {
+            stream_id: "1-0".into(),
+            message: "encrypted-forward".into(),
+            to_did_hash: "to-hash".into(),
+            from_did_hash: "from-hash".into(),
+            from_did: "did:example:sender".into(),
+            to_did: "did:example:recipient".into(),
+            endpoint_url: "https://remote.example.com".into(),
+            received_at_ms: 0,
+            delay_milli: 0,
+            expires_at: 0,
+            retry_count: 5,
+            hop_count: 1,
+        }
+    }
+
+    /// The report is addressed *from* the mediator. This is the field the
+    /// recipient's addressing-consistency check binds the authcrypt sender to;
+    /// without it the report decrypts and is then thrown away, which is the
+    /// same silent outcome as never sending one.
+    #[test]
+    fn problem_report_names_the_mediator_as_sender() {
+        let report = ForwardingProcessor::build_problem_report(
+            &abandoned_entry(),
+            "https://remote.example.com",
+            "did:example:mediator",
+            1_000,
+        );
+
+        assert_eq!(report["from"], "did:example:mediator");
+        assert_eq!(report["to"], serde_json::json!(["did:example:sender"]));
+    }
+
+    /// The wire contract clients match on: the report-problem 2.0 type, the
+    /// `e.p.me.res.forwarding.abandoned` code, and the `[to_did, retries,
+    /// endpoint]` args a client needs to identify which forward was dropped.
+    #[test]
+    fn problem_report_carries_the_abandonment_code_and_args() {
+        let entry = abandoned_entry();
+        let report = ForwardingProcessor::build_problem_report(
+            &entry,
+            "https://remote.example.com",
+            "did:example:mediator",
+            1_000,
+        );
+
+        assert_eq!(
+            report["type"],
+            "https://didcomm.org/report-problem/2.0/problem-report"
+        );
+        assert_eq!(report["body"]["code"], "e.p.me.res.forwarding.abandoned");
+        assert_eq!(
+            report["body"]["args"],
+            serde_json::json!(["did:example:recipient", "5", "https://remote.example.com"])
+        );
+        assert_eq!(report["created_time"], 1_000);
+        assert_eq!(
+            report["expires_time"],
+            1_000 + ForwardingProcessor::PROBLEM_REPORT_TTL_SECS
+        );
+        assert!(
+            report["id"].as_str().is_some_and(|id| !id.is_empty()),
+            "every report needs its own message id"
+        );
+    }
 
     // --- decode_tsp_forward tests ---
 

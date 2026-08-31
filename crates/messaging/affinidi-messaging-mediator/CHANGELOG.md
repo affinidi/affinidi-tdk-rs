@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (0.20.5) — pack the forwarding-abandonment problem report
+
+**Bug fix (host side of mediator-common 0.15.37): the mediator now packs the
+problem report it sends when it gives up on a forward.**
+
+The report went out as bare DIDComm plaintext, which every SDK client on the
+default (authcrypt-only) receive policy discards — the mediator logged
+`FORWARD_PROBLEM_REPORT: stored problem report … for sender …` while the sender
+logged `UnexpectedEnvelope("envelope wrapping Plaintext is not in the accepted
+set …")`. Every forwarding abandonment was silent to the sender.
+
+- New `tasks::system_packer::MediatorSystemPacker` implements
+  `mediator-common`'s `SystemMessagePacker` over the same
+  `didcomm_compat::pack_encrypted` every protocol reply already goes through.
+  Only compiled with the `didcomm` feature; a TSP-only build has no DIDComm
+  packer to offer and the processor logs the abandonment instead.
+- The forwarding processor is now spawned *after* the DID resolver is built and
+  the mediator's own document preloaded — authcrypt resolves both ends, and a
+  `did:web`/`did:webvh` mediator may not reach its own document over the
+  network from inside its deployment. No other ordering depends on it.
+
 ## Unreleased (0.20.4) — blind cross-mediator relay is no longer refused as a session mismatch
 
 **Bug fix: with the default `RelayMode::Blind`, a mediator refused every

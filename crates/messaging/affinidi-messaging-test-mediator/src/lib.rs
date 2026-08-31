@@ -94,6 +94,7 @@ pub use affinidi_messaging_mediator_common::tasks::forwarding::RelayMode;
 use std::{
     net::{SocketAddr, TcpListener},
     sync::Arc,
+    time::Duration,
 };
 
 use affinidi_messaging_mediator::{
@@ -292,6 +293,10 @@ pub struct TestMediatorBuilder {
     /// Trusted peer-mediator DID allowlist for [`RelayMode::Rewrap`]. Empty
     /// accepts any relaying peer; non-empty admits only listed DIDs.
     relay_trusted_mediators: Vec<String>,
+    /// `(max_retries, initial_backoff_ms, max_backoff_ms)` override for the
+    /// forwarding processor. `None` keeps `ForwardingConfig::default`, whose
+    /// production values take ~31s to abandon an undeliverable forward.
+    forwarding_retry_policy: Option<(u32, u64, u64)>,
     enable_message_expiry: bool,
     enable_streaming: bool,
     /// Additional DIDs to register as LOCAL accounts at startup. Tests
@@ -360,6 +365,7 @@ impl Default for TestMediatorBuilder {
             enable_external_forwarding: true,
             relay_mode: RelayMode::Blind,
             relay_trusted_mediators: Vec::new(),
+            forwarding_retry_policy: None,
             enable_message_expiry: false,
             enable_streaming: true,
             local_dids: Vec::new(),
@@ -463,6 +469,31 @@ impl TestMediatorBuilder {
     {
         self.relay_trusted_mediators
             .extend(dids.into_iter().map(Into::into));
+        self
+    }
+
+    /// Override the forwarding processor's retry budget and backoff.
+    ///
+    /// The production defaults (5 retries, 1s doubling to 60s) put ~31s of
+    /// sleeping between the first delivery failure and the abandonment, which
+    /// is the moment tests of the abandonment path are actually interested in.
+    /// Backoff is real `tokio::time::sleep` inside the processor task, so it
+    /// cannot be skipped with a paused clock from the test.
+    ///
+    /// Has no effect unless [`enable_forwarding`] is `true`.
+    ///
+    /// [`enable_forwarding`]: Self::enable_forwarding
+    pub fn forwarding_retry_policy(
+        mut self,
+        max_retries: u32,
+        initial_backoff: Duration,
+        max_backoff: Duration,
+    ) -> Self {
+        self.forwarding_retry_policy = Some((
+            max_retries,
+            initial_backoff.as_millis() as u64,
+            max_backoff.as_millis() as u64,
+        ));
         self
     }
 
@@ -819,6 +850,13 @@ impl TestMediatorBuilder {
         processors.forwarding.relay_mode = self.relay_mode;
         processors.forwarding.relay_trusted_mediators =
             self.relay_trusted_mediators.into_iter().collect();
+        if let Some((max_retries, initial_backoff_ms, max_backoff_ms)) =
+            self.forwarding_retry_policy
+        {
+            processors.forwarding.max_retries = max_retries;
+            processors.forwarding.initial_backoff_ms = initial_backoff_ms;
+            processors.forwarding.max_backoff_ms = max_backoff_ms;
+        }
         processors.message_expiry_cleanup.enabled = self.enable_message_expiry;
 
         // Default to a fresh in-memory store. Tests that want a
