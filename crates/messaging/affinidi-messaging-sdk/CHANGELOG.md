@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased (0.21.1) — a mediated peer is TSP-capable
+
+- `TspOps::select_protocol` decided "does this peer speak TSP" with
+  `!ResolvedVid::endpoints.is_empty()`. With `affinidi-tsp` 0.1.15 that list
+  holds only direct transport URLs, and a *mediated* peer — whose `TSPTransport`
+  service names its mediator's DID — publishes none, so it would have read as
+  "no TSP" for exactly the peers TSP reaches through a mediator. Now uses
+  `ResolvedVid::advertises_tsp()`, which covers both shapes.
+- No behaviour change for an unmediated peer, and none under a fresh cached
+  capability or a completed relationship (both settle before the resolve).
+
 ## Unreleased (0.21.0) — `trust-tasks-rs` 0.17
 
 - Bumps `trust-tasks-rs` 0.12 → 0.17.

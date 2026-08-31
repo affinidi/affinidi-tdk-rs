@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased (0.20.6) — TSP forwarding follows a next hop that names its mediator by DID
+
+**Bug fix: TSP remote forwarding could not deliver to a mediated peer.** Observed
+on a live mediator:
+
+```text
+WARN forwarding::processor: FORWARD_FAILED
+  endpoint=did:webvh:Qmb…:dids.firstperson.dev:firstperson-mediator
+  error=Connection error to did:webvh:…/inbound:
+        builder error for url (did:webvh:…/inbound)
+  retry_count=5  → FORWARD_ABANDONED
+```
+
+The `endpoint` is a DID, not a URL. Two documents are involved, and the mediator
+was only reading the first:
+
+```text
+persona     #tsp  TSPTransport  serviceEndpoint: did:webvh:…firstperson-mediator
+that mediator #tsp TSPTransport  serviceEndpoint: https://mediator.firstperson.dev/mediator/v1
+```
+
+- `forward_tsp_remote` no longer takes `endpoints.first()` as a URL. A new
+  `classify_tsp_relay` decides — without I/O — between a direct transport URL, a
+  mediator DID to follow, a hop that comes back to us, and nothing usable. A
+  mediator DID is resolved **one hop**, and that document's own `TSPTransport`
+  URL is what the forward is enqueued against.
+- **One hop only**, mirroring `protocols::routing::service_endpoint_for_remote`
+  on the DIDComm side (added in #705 for exactly this shape): a mediator's own
+  document is expected to publish a URL, and chasing further would let a chain of
+  documents steer this mediator's relay.
+- The loop guard is extended, not weakened: a transport URL on one of our own
+  authorities still fails as a loop, and so does a next hop that names *this*
+  mediator as its mediator while holding no account here.
+- Failure now names the next hop and distinguishes its causes —
+  `message.tsp.no_endpoint`, `message.tsp.mediator.unresolvable` (the named
+  mediator did not resolve) and `protocol.forwarding.loop_detected` — at the
+  point the forward is accepted, rather than five retries later inside an HTTP
+  client that has no idea whose message it is.
+- `tsp_endpoint_is_self` is gone; the TSP path now shares
+  `server::uri_points_at_self` with the DIDComm relay. That also fixes an IPv6
+  mismatch in the TSP copy, which compared `Url::host_str()` (`"[::1]"`)
+  against the bare form the authority set stores (`"::1"`) and so never matched.
+
 ## Unreleased (0.20.5) — pack the forwarding-abandonment problem report
 
 **Bug fix (host side of mediator-common 0.15.37): the mediator now packs the

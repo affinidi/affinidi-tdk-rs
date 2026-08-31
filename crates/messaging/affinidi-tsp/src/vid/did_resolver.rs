@@ -3,8 +3,14 @@
 //! [`DidVidResolver`] resolves a DID (`did:web`, `did:webvh`, `did:peer`, …) to a
 //! [`ResolvedVid`] by reading its DID document: the Ed25519 signing key from the
 //! `authentication` relationship, the X25519 encryption key from `keyAgreement`,
-//! and the TSP transport endpoint(s) from a service entry of type
+//! and the TSP transport advertisement from a service entry of type
 //! [`TSP_SERVICE_TYPE`].
+//!
+//! That last one has two shapes, and they are kept apart. A `TSPTransport`
+//! `serviceEndpoint` either names a transport URL (`endpoints`) or names the DID
+//! of the mediator that carries this VID's traffic (`mediators`), whose own
+//! document holds the URL. Both are legitimate; only the first is something a
+//! transport can connect to.
 //!
 //! DID resolution is asynchronous (it may hit the network for `did:web` /
 //! `did:webvh`), but the [`VidResolver`] trait is synchronous. The resolver
@@ -52,8 +58,8 @@ impl DidVidResolver {
     ///
     /// Returns [`TspError::DidResolution`] if the DID cannot be resolved or its
     /// document lacks an Ed25519 authentication key or an X25519 keyAgreement
-    /// key. A missing TSP service entry is not an error — `endpoints` is then
-    /// empty (the caller may deliver out of band).
+    /// key. A missing TSP service entry is not an error — `endpoints` and
+    /// `mediators` are then both empty (the caller may deliver out of band).
     pub async fn resolve_did(&self, did: &str) -> Result<ResolvedVid, TspError> {
         if let Some(cached) = self.cache.read().unwrap().get(did).cloned() {
             return Ok(cached);
@@ -96,8 +102,9 @@ impl VidResolver for DidVidResolver {
 ///
 /// Signing key = first `authentication` verification method decoding to an
 /// Ed25519 public key; encryption key = first `keyAgreement` method decoding to
-/// an X25519 public key. Endpoints = the `serviceEndpoint` URIs of every
-/// [`TSP_SERVICE_TYPE`] service. Decoding is delegated to
+/// an X25519 public key. The `serviceEndpoint` of every [`TSP_SERVICE_TYPE`]
+/// service is split by [`tsp_endpoints`] into transport URLs (`endpoints`) and
+/// mediator DIDs (`mediators`). Decoding is delegated to
 /// `VerificationMethod::decode_public_key`, which handles both
 /// `publicKeyMultibase` and `publicKeyJwk` uniformly across DID methods.
 fn extract_vid(did: &str, doc: &Document) -> Result<ResolvedVid, TspError> {
@@ -112,11 +119,13 @@ fn extract_vid(did: &str, doc: &Document) -> Result<ResolvedVid, TspError> {
             TspError::DidResolution(format!("{did}: no X25519 keyAgreement key in DID document"))
         })?;
 
+    let services = tsp_endpoints(doc);
     Ok(ResolvedVid {
         id: did.to_string(),
         signing_key,
         encryption_key,
-        endpoints: tsp_endpoints(doc),
+        endpoints: services.urls,
+        mediators: services.mediators,
     })
 }
 
@@ -144,15 +153,50 @@ fn verification_key(doc: &Document, rel: &VerificationRelationship) -> Option<(u
     vm.decode_public_key().ok()
 }
 
-/// The endpoint URLs of every `TSPTransport` service in the document.
-fn tsp_endpoints(doc: &Document) -> Vec<Url> {
-    doc.service
+/// Every `TSPTransport` `serviceEndpoint` in the document, split by what it
+/// actually names: a transport URL, or the DID of the mediator that carries this
+/// VID's traffic.
+#[derive(Debug, Default)]
+struct TspServices {
+    /// HTTP-family URLs a sender can connect to directly.
+    urls: Vec<Url>,
+    /// DIDs naming a mediator; the transport URL is in *that* document.
+    mediators: Vec<String>,
+}
+
+/// Split the `TSPTransport` service endpoints of `doc` into transport URLs and
+/// mediator DIDs.
+///
+/// The scheme test is the point of this function. `did:` is a perfectly valid
+/// URL scheme, so `Url::parse("did:webvh:…")` succeeds and a DID-valued endpoint
+/// used to arrive in `endpoints` indistinguishable from a real transport URL —
+/// and then travelled all the way to the HTTP client, which failed to build a
+/// request from it. A DID here is legitimate data (it says "I am mediated"), so
+/// it is kept, just not as something to connect to.
+///
+/// Only the HTTP family is admitted as a URL: `/inbound` is appended to these,
+/// and any other scheme is something this library has no delivery rule for.
+fn tsp_endpoints(doc: &Document) -> TspServices {
+    let mut out = TspServices::default();
+    for uri in doc
+        .service
         .iter()
         .filter(|service| service.type_.iter().any(|t| t == TSP_SERVICE_TYPE))
         .flat_map(|service| service.service_endpoint.get_uris())
+    {
         // `Endpoint::Map` yields JSON-serialized strings (quoted); strip quotes.
-        .filter_map(|uri| Url::parse(uri.trim_matches('"')).ok())
-        .collect()
+        let uri = uri.trim_matches('"');
+        if uri.starts_with("did:") {
+            out.mediators.push(uri.to_string());
+            continue;
+        }
+        if let Ok(url) = Url::parse(uri)
+            && matches!(url.scheme(), "http" | "https" | "ws" | "wss")
+        {
+            out.urls.push(url);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -164,13 +208,28 @@ mod tests {
     /// Build a DID document JSON for `did` advertising `vid`'s public keys
     /// (as Multikey verification methods) and an optional TSP endpoint.
     fn did_doc_json(did: &str, vid: &PrivateVid, tsp_endpoint: Option<&str>) -> String {
+        did_doc_json_multi(did, vid, tsp_endpoint.as_slice())
+    }
+
+    /// As [`did_doc_json`], but with any number of `TSPTransport` services — the
+    /// document order of `tsp_endpoints` is what the splitting tests assert on.
+    fn did_doc_json_multi(did: &str, vid: &PrivateVid, tsp_endpoints: &[&str]) -> String {
         let ed = encode_multikey(ED25519_PUB, &vid.verifying_key);
         let x = encode_multikey(X25519_PUB, &vid.encryption_key);
-        let service = match tsp_endpoint {
-            Some(url) => format!(
-                r#","service":[{{"id":"{did}#tsp","type":"TSPTransport","serviceEndpoint":"{url}"}}]"#
-            ),
-            None => String::new(),
+        let service = if tsp_endpoints.is_empty() {
+            String::new()
+        } else {
+            let entries = tsp_endpoints
+                .iter()
+                .enumerate()
+                .map(|(i, url)| {
+                    format!(
+                        r#"{{"id":"{did}#tsp-{i}","type":"TSPTransport","serviceEndpoint":"{url}"}}"#
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(r#","service":[{entries}]"#)
         };
         format!(
             r#"{{
@@ -213,6 +272,96 @@ mod tests {
         let resolved = extract_vid(did, &doc).expect("extracts");
         assert!(resolved.endpoints.is_empty());
         assert_eq!(resolved.signing_key, vid.verifying_key);
+    }
+
+    /// The production shape this split exists for: a persona document whose
+    /// `#tsp` service names its **mediator by DID**, not a URL. `did:` parses as
+    /// a URL (scheme `did`, cannot-be-a-base), so before the scheme test this
+    /// landed in `endpoints` and was handed to the HTTP client verbatim.
+    #[test]
+    fn a_did_valued_tsp_endpoint_is_a_mediator_not_an_endpoint() {
+        let did = "did:web:persona.example";
+        let mediator = "did:webvh:QmbHZC8JUpUD1XrdEcNiAPTxke4WpDyBPjjigPpEwYZiq5:dids.firstperson.dev:firstperson-mediator";
+        let vid = PrivateVid::generate(did);
+        let doc: Document =
+            serde_json::from_str(&did_doc_json(did, &vid, Some(mediator))).expect("doc parses");
+
+        let resolved = extract_vid(did, &doc).expect("extracts");
+
+        assert!(
+            resolved.endpoints.is_empty(),
+            "a DID is not a transport URL and must not appear as one"
+        );
+        assert_eq!(resolved.mediators, vec![mediator.to_string()]);
+        assert!(
+            resolved.advertises_tsp(),
+            "a mediated VID still advertises TSP — dropping the DID silently would read as 'no TSP'"
+        );
+    }
+
+    /// A document may publish both; each lands in its own bucket, in document
+    /// order.
+    #[test]
+    fn urls_and_mediator_dids_are_split_not_merged() {
+        let did = "did:web:both.example";
+        let vid = PrivateVid::generate(did);
+        let doc: Document = serde_json::from_str(&did_doc_json_multi(
+            did,
+            &vid,
+            &["did:web:mediator.example", "https://direct.example/v1"],
+        ))
+        .expect("doc parses");
+
+        let resolved = extract_vid(did, &doc).expect("extracts");
+
+        assert_eq!(
+            resolved
+                .endpoints
+                .iter()
+                .map(Url::as_str)
+                .collect::<Vec<_>>(),
+            vec!["https://direct.example/v1"]
+        );
+        assert_eq!(
+            resolved.mediators,
+            vec!["did:web:mediator.example".to_string()]
+        );
+    }
+
+    /// Neither a DID nor an HTTP-family URL: no delivery rule, so it is dropped
+    /// rather than passed on as an endpoint the transport would choke on.
+    #[test]
+    fn a_non_http_non_did_endpoint_is_dropped() {
+        let did = "did:web:odd.example";
+        let vid = PrivateVid::generate(did);
+        let doc: Document =
+            serde_json::from_str(&did_doc_json(did, &vid, Some("mailto:ops@odd.example")))
+                .expect("doc parses");
+
+        let resolved = extract_vid(did, &doc).expect("extracts");
+
+        assert!(resolved.endpoints.is_empty());
+        assert!(resolved.mediators.is_empty());
+        assert!(!resolved.advertises_tsp());
+    }
+
+    /// `ws://` is admitted alongside `http(s)://` — the mediator's own DID
+    /// document advertises a WebSocket transport next to its HTTP one.
+    #[test]
+    fn websocket_endpoints_are_transport_urls() {
+        let did = "did:web:ws.example";
+        let vid = PrivateVid::generate(did);
+        let doc: Document = serde_json::from_str(&did_doc_json(
+            did,
+            &vid,
+            Some("wss://ws.example/mediator/v1/ws"),
+        ))
+        .expect("doc parses");
+
+        let resolved = extract_vid(did, &doc).expect("extracts");
+
+        assert_eq!(resolved.endpoints.len(), 1);
+        assert!(resolved.mediators.is_empty());
     }
 
     #[test]

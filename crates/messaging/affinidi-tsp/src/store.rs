@@ -212,6 +212,7 @@ mod tests {
             signing_key: [1u8; 32],
             encryption_key: [2u8; 32],
             endpoints: vec![],
+            mediators: vec![],
         });
 
         let resolved = store.get_remote_vid("did:example:bob").unwrap();

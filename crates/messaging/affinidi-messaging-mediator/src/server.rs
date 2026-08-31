@@ -1092,6 +1092,33 @@ pub(crate) fn compute_self_authorities_from(
     out
 }
 
+/// Parse `uri` and return `true` when its `(host, port)` matches any entry in
+/// `self_authorities` — i.e. the URI points back at this mediator instance.
+///
+/// Hostnames are normalized via [`normalize_host`] (strips outer `[ ]` from IPv6
+/// literals, lowercases) so the lookup matches the form inserted by
+/// [`compute_self_authorities`], and the port falls back to the scheme default
+/// via [`default_port_for`]. Returns `false` for unparseable URIs and for
+/// schemes without a default port — including `did:`, which parses as a URL but
+/// names an identity, not an authority.
+///
+/// Lives here, next to the authority set it consults, because both forwarding
+/// paths need it: the DIDComm relay (`protocols::routing`) and the TSP relay
+/// (`messages::inbound`), and the latter compiles in builds where the DIDComm
+/// module does not exist.
+pub(crate) fn uri_points_at_self(uri: &str, self_authorities: &HashSet<(String, u16)>) -> bool {
+    let Ok(url) = Url::parse(uri) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let Some(port) = default_port_for(&url) else {
+        return false;
+    };
+    self_authorities.contains(&(normalize_host(host), port))
+}
+
 /// Normalize a host string for self-authority comparison.
 ///
 /// `Url::host_str()` returns IPv6 literals wrapped in `[ ]` (e.g. `"[::1]"`)

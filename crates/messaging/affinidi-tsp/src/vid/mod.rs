@@ -25,9 +25,38 @@ pub struct ResolvedVid {
     pub signing_key: [u8; 32],
     /// X25519 public encryption key (32 bytes).
     pub encryption_key: [u8; 32],
-    /// Service endpoints for message delivery.
+    /// Transport URLs this VID can be reached at directly — the `serviceEndpoint`
+    /// of every `TSPTransport` service that names an HTTP-family URL.
+    ///
+    /// Only URLs a sender can actually POST to land here. A `TSPTransport`
+    /// endpoint that names a DID is *not* a transport URL and is kept in
+    /// [`mediators`](Self::mediators) instead.
     #[serde(default)]
     pub endpoints: Vec<Url>,
+    /// DIDs this VID delegates its transport to — the `serviceEndpoint` of every
+    /// `TSPTransport` service that names a DID rather than a URL.
+    ///
+    /// This is the "I am mediated" advertisement: the VID publishes *who* carries
+    /// its traffic, and the transport URL lives in that DID's own document, one
+    /// resolve away. A sender resolves the named DID and uses the URL it
+    /// publishes. Kept apart from [`endpoints`](Self::endpoints) because a DID is
+    /// not something a transport can connect to — `did:` is a valid URL scheme,
+    /// so a DID that is allowed to pass as an endpoint reaches the HTTP client
+    /// intact and fails there, at the far end of the delivery path.
+    #[serde(default)]
+    pub mediators: Vec<String>,
+}
+
+impl ResolvedVid {
+    /// Whether the document advertises TSP transport at all — a direct URL or a
+    /// mediator DID.
+    ///
+    /// This is the "does this peer speak TSP" signal; a mediated VID advertises
+    /// no URL of its own, so testing [`endpoints`](Self::endpoints) alone reads
+    /// as "no TSP" for exactly the peers that are reachable over it.
+    pub fn advertises_tsp(&self) -> bool {
+        !self.endpoints.is_empty() || !self.mediators.is_empty()
+    }
 }
 
 /// A private VID with signing and decryption keys.
@@ -115,12 +144,17 @@ impl PrivateVid {
     }
 
     /// Get the public resolved VID for sharing with others.
+    ///
+    /// `mediators` is empty: a `PrivateVid` is local key material plus the
+    /// transport URLs it was handed, and whether the identity is mediated is a
+    /// property of its published document, not of the keys.
     pub fn to_resolved(&self) -> ResolvedVid {
         ResolvedVid {
             id: self.id.clone(),
             signing_key: self.verifying_key,
             encryption_key: self.encryption_key,
             endpoints: self.endpoints.clone(),
+            mediators: Vec::new(),
         }
     }
 }
