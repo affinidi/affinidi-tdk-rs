@@ -1,5 +1,54 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.37) — every forwarding abandonment was silent to the sender
+
+**Bug fix: the forwarding-failure problem report is now authcrypted, so a
+client on the default receive policy can actually read it.**
+
+When the forwarding processor exhausts a forward's retry budget it stores a
+`report-problem/2.0` in the original sender's inbox. That report was built as
+raw JSON and handed straight to `store_message` — no `pack_encrypted`, no
+signing, DIDComm plaintext on the wire. Since the SDK's
+`BREAKING CHANGE: enforce authcrypt messages by default` (2bec127, #671) the
+default receive policy refuses exactly that, so on a live deployment the two
+halves logged past each other:
+
+```text
+INFO ...forwarding::processor: FORWARD_PROBLEM_REPORT: stored problem report
+  1a23bf7e95a854e5d8eaad598a0f9fd8af7f2a1ab8aa282e6ce697423b8eeafa
+  for sender b9b77027...
+
+ERROR affinidi_messaging_sdk::transports::websockets::websocket:
+  Error unpacking message: UnexpectedEnvelope("envelope wrapping Plaintext is
+  not in the accepted set [AuthcryptPlaintext, AuthcryptSignPlaintext,
+  AnoncryptAuthcryptPlaintext]")
+```
+
+This was not deployment-specific: **every** forwarding abandonment was silent
+to the sender, on every mediator pair, for every current SDK client.
+
+- New `tasks::forwarding::SystemMessagePacker` trait, supplied through
+  `ForwardingProcessor::with_system_packer`. This crate deliberately carries no
+  DIDComm, resolver, or secrets dependency and is itself a dependency of the
+  crate that owns `pack_encrypted`, so the packing is injected rather than
+  implemented here. `ForwardingProcessor::new` is unchanged — the standalone
+  `forwarding_processor` binary, whose config is a database plus a forwarding
+  block, compiles and runs as before.
+- The report now carries `from` (the mediator's DID). The recipient's
+  addressing-consistency check binds the authcrypt sender to that field; a
+  report without it decrypts and is *then* rejected, which is the same silent
+  outcome.
+- **A report that cannot be packed is no longer stored.** Storing an envelope
+  the recipient's policy refuses is the defect being fixed, and it re-fails on
+  every fetch until it expires; anoncrypt is no fallback either, being outside
+  the default accepted set. The abandonment instead surfaces as an
+  operator-side `FORWARD_PROBLEM_REPORT_UNSENT` error naming the sender, the
+  destination and the reason, and `start()` warns at boot when `report_errors`
+  is on with no packer configured.
+- The stored report's sender is now the mediator's DID hash. It used to be the
+  literal string `"SYSTEM"`, which is not a DID hash and gave the report an
+  outbox of its own.
+
 ## Unreleased (0.15.36) — an admin credential may name a VTA with no REST URL
 
 **Bug fix: `AdminCredential` no longer rejects a VTA-linked credential that

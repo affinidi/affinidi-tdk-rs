@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased (0.4.1) — `forwarding_retry_policy` builder knob
+
+- `TestMediatorBuilder::forwarding_retry_policy(max_retries, initial_backoff,
+  max_backoff)` overrides the forwarding processor's retry budget. The
+  production defaults (5 retries doubling from 1s) put ~31s of real
+  `tokio::time::sleep` — inside the processor task, so a paused test clock
+  cannot skip it — in front of the abandonment, which is the event an
+  abandonment test is waiting for.
+- Used by the new `tests/forwarding_abandonment_report.rs`: two real mediators,
+  the second taken down before the forward is sent, asserting that the sender
+  can `unpack` the resulting problem report under the **default** receive
+  policy. A test that only asserted a report was stored would have passed on
+  the bug.
+
 ## Unreleased (0.4.0) — `trust-tasks-rs` 0.17
 
 - Bumps `trust-tasks-rs` 0.12 → 0.17.

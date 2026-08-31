@@ -396,27 +396,6 @@ pub async fn serve_internal(
         });
     }
 
-    // Forwarding processor — load-bearing (the cross-mediator delivery
-    // path). Runs against any backend via the `forward_queue_*` trait
-    // methods (Redis: Streams consumer groups; Fjall/Memory: in-process
-    // pending-claim emulation). Fjall queues survive a restart (pending
-    // claims recovered via autoclaim), Memory queues are lost with the
-    // process. Multi-process forwarding (the standalone
-    // `forwarding_processor` binary) remains Redis-only.
-    if config.processors.forwarding.enabled && config.processors.forwarding.external_forwarding {
-        let store = store.clone();
-        let fwd_config = config.processors.forwarding.clone();
-        supervisor.spawn("forwarding_processor", true, move || {
-            let store = store.clone();
-            let fwd_config = fwd_config.clone();
-            async move {
-                let processor =
-                    ForwardingProcessor::new(fwd_config, store).map_err(|e| e.to_string())?;
-                processor.start().await.map_err(|e| e.to_string())
-            }
-        });
-    }
-
     // Message expiry sweep — non-load-bearing housekeeping. Runs against
     // any backend via `MediatorStore::sweep_expired_messages`. The
     // standalone `message_expiry_cleanup` binary in mediator-processors
@@ -580,6 +559,45 @@ pub async fn serve_internal(
                  self-resolution will fall back to the network: {e}"
             ),
         }
+    }
+
+    // Forwarding processor — load-bearing (the cross-mediator delivery
+    // path). Runs against any backend via the `forward_queue_*` trait
+    // methods (Redis: Streams consumer groups; Fjall/Memory: in-process
+    // pending-claim emulation). Fjall queues survive a restart (pending
+    // claims recovered via autoclaim), Memory queues are lost with the
+    // process. Multi-process forwarding (the standalone
+    // `forwarding_processor` binary) remains Redis-only.
+    //
+    // Spawned here, after the DID resolver is built and the mediator's own
+    // document is preloaded, because the processor now packs its abandonment
+    // problem reports as the mediator — which resolves both ends.
+    if config.processors.forwarding.enabled && config.processors.forwarding.external_forwarding {
+        let store = store.clone();
+        let fwd_config = config.processors.forwarding.clone();
+        // A DIDComm-less build has no `pack_encrypted` to offer; the processor
+        // logs the abandonment instead of storing a report nobody can read.
+        #[cfg(feature = "didcomm")]
+        let packer: Arc<
+            dyn affinidi_messaging_mediator_common::tasks::forwarding::SystemMessagePacker,
+        > = Arc::new(crate::tasks::system_packer::MediatorSystemPacker::new(
+            config.mediator_did.clone(),
+            did_resolver.clone(),
+            config.security.mediator_secrets.clone(),
+        ));
+        supervisor.spawn("forwarding_processor", true, move || {
+            let store = store.clone();
+            let fwd_config = fwd_config.clone();
+            #[cfg(feature = "didcomm")]
+            let packer = packer.clone();
+            async move {
+                let processor =
+                    ForwardingProcessor::new(fwd_config, store).map_err(|e| e.to_string())?;
+                #[cfg(feature = "didcomm")]
+                let processor = processor.with_system_packer(packer);
+                processor.start().await.map_err(|e| e.to_string())
+            }
+        });
     }
 
     #[cfg(feature = "didcomm")]
