@@ -127,6 +127,7 @@ mod tests {
             signing_key: [1u8; 32],
             encryption_key: [2u8; 32],
             endpoints: vec![],
+            mediators: vec![],
         }
     }
 
@@ -173,6 +174,7 @@ mod tests {
             signing_key: [3u8; 32],
             encryption_key: [4u8; 32],
             endpoints: vec![],
+            mediators: vec![],
         });
 
         let resolved = resolver.resolve("keri:EDP12345").unwrap();
@@ -191,6 +193,7 @@ mod tests {
                         signing_key: [5u8; 32],
                         encryption_key: [6u8; 32],
                         endpoints: vec![],
+                        mediators: vec![],
                     })
                 } else {
                     Err(TspError::VidNotFound(vid.to_string()))

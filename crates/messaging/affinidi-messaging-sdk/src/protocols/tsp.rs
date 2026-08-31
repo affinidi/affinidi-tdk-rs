@@ -1102,10 +1102,14 @@ impl TspOps<'_> {
             fresh_cap,
             Some(TspSupport::Supported | TspSupport::Unsupported)
         ) && !bidirectional;
+        // `advertises_tsp`, not `!endpoints.is_empty()`: a *mediated* peer
+        // publishes no transport URL of its own — its `TSPTransport` service
+        // names its mediator's DID — so testing the URL list alone reads as "no
+        // TSP" for exactly the peers TSP reaches through a mediator.
         let has_tsp_service = if needs_resolve {
             self.resolve_vid(their_did)
                 .await
-                .map(|vid| !vid.endpoints.is_empty())
+                .map(|vid| vid.advertises_tsp())
                 .unwrap_or(false)
         } else {
             false

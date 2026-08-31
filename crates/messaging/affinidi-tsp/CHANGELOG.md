@@ -1,5 +1,38 @@
 # Affinidi TSP Changelog
 
+## 31st August 2026 (0.1.15)
+
+**Bug fix: a DID-valued `TSPTransport` endpoint was returned as a transport URL.**
+
+`did:` is a valid URL scheme, so `Url::parse("did:webvh:…")` succeeds. The
+`TSPTransport` service endpoints were collected with a bare `Url::parse(..).ok()`
+and no scheme test, and a `serviceEndpoint` naming a *mediator's DID* — the
+"I am mediated" shape a persona document publishes — arrived in
+`ResolvedVid::endpoints` indistinguishable from a real endpoint. On a live
+mediator it travelled all the way to the HTTP client, which could not build a
+request from it (`builder error for url (did:webvh:…/inbound)`) and abandoned
+the message after five retries.
+
+- `ResolvedVid::endpoints` now holds **only HTTP-family transport URLs**
+  (`http`/`https`/`ws`/`wss`). Anything else with no delivery rule is dropped.
+- New `ResolvedVid::mediators: Vec<String>` holds the DID-valued endpoints. The
+  advertisement is kept, not discarded: it says who carries this VID's traffic,
+  and the transport URL is one resolve away in *that* DID's document. Dropping
+  it silently would be its own bug — a mediated peer would read as "does not
+  speak TSP".
+- New `ResolvedVid::advertises_tsp()` — "advertises TSP transport at all, by URL
+  or by mediator DID". Callers testing `!endpoints.is_empty()` as a TSP-capable
+  signal want this instead.
+
+**Semver.** `ResolvedVid` is a public struct with public fields and is not
+`#[non_exhaustive]`, so adding `mediators` is technically breaking for an
+external consumer that builds one with a struct literal (in-workspace, all four
+such sites are updated). Released as a **patch** per
+[ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) point 3: `vta-sdk`
+pins this crate through `[patch.crates-io]`, and a minor bump would break the
+redirect and pull a second copy from crates.io. Deserialization is unaffected —
+the new field is `#[serde(default)]`.
+
 ## 31st July 2026 (0.1.14)
 
 Moves to **curve25519-dalek 5** (`ed25519-dalek` 2 -> 3, `x25519-dalek` 2 -> 3),

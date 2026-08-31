@@ -1,5 +1,8 @@
 use crate::common::authz::{self, Capability};
 use crate::common::storage_timeout::with_storage_timeout;
+// Shared with the TSP relay path in `messages::inbound`, which cannot reach into
+// this module: `protocols` only exists in a `didcomm` build.
+use crate::server::uri_points_at_self;
 
 use crate::didcomm_compat::MetaEnvelope;
 use crate::{
@@ -26,7 +29,6 @@ use http::StatusCode;
 use serde::Deserialize;
 use sha256::digest;
 use tracing::{Instrument, debug, info, span, warn};
-use url::Url;
 use uuid::Uuid;
 
 // Reads the body of an incoming forward message
@@ -1165,29 +1167,6 @@ async fn service_endpoint_for_remote(
         next, peer_mediator
     );
     None
-}
-
-/// Parse `uri` and return `true` when its `(host, port)` matches any
-/// entry in `self_authorities`. Hostnames are normalized via
-/// [`crate::server::normalize_host`] (strips outer `[ ]` from IPv6
-/// literals, lowercases) so the lookup matches the form inserted by
-/// [`crate::server::compute_self_authorities`]. Port falls back to the
-/// scheme default via [`crate::server::default_port_for`].
-/// Returns `false` for unparseable URLs or schemes without a default port.
-fn uri_points_at_self(
-    uri: &str,
-    self_authorities: &std::collections::HashSet<(String, u16)>,
-) -> bool {
-    let Ok(url) = Url::parse(uri) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let Some(port) = crate::server::default_port_for(&url) else {
-        return false;
-    };
-    self_authorities.contains(&(crate::server::normalize_host(host), port))
 }
 
 #[cfg(test)]

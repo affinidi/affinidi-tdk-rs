@@ -243,6 +243,29 @@ impl TestTopology {
         Ok(user)
     }
 
+    /// Add a user homed on node `index` whose DID advertises a `TSPTransport`
+    /// service **naming its mediator by DID** — see
+    /// [`TestEnvironment::add_tsp_mediated_user`]. Live stream brought up as for
+    /// [`add_user`](Self::add_user).
+    ///
+    /// Use this to drive a cross-mediator TSP forward the way production does:
+    /// the sender's mediator is handed the recipient's DID and has to discover
+    /// the transport URL through the recipient's mediator's document, rather than
+    /// being told the peer mediator's DID outright in the route.
+    pub async fn add_tsp_mediated_user(
+        &self,
+        index: usize,
+        alias: &str,
+    ) -> Result<TestUser, TestTopologyError> {
+        let env = self.node(index)?;
+        let user = env.add_tsp_mediated_user(alias).await?;
+        env.atm
+            .profile_enable_websocket(&user.profile)
+            .await
+            .map_err(|e| TestTopologyError::Sdk(e.to_string()))?;
+        Ok(user)
+    }
+
     /// Route a basic message from `sender` (on `from_node`) to `recipient` (on
     /// `to_node`) as the routing-2.0 double forward, then wait up to `wait` for
     /// the recipient's live stream to surface the decrypted body.

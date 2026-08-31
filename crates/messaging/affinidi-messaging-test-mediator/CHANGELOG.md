@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (0.4.2) — a test user that is mediated the way production is
+
+- New `TestEnvironment::add_tsp_mediated_user` / `TestTopology::add_tsp_mediated_user`:
+  a user whose DID advertises a `TSPTransport` service **naming its mediator by
+  DID**, which is what a real persona/agent document publishes. `add_user` is
+  unchanged and still advertises no TSP service.
+- New `tests/tsp_mediated_recipient.rs`: a TSP message crosses two mediators
+  where the route names only the recipient, so the sending mediator has to
+  discover the transport URL through the recipient's mediator's document. This is
+  the gap `tsp_federation.rs` left — that test names the peer mediator's DID *in
+  the route*, so the mediator reads a URL straight out of the mediator's own
+  document and the indirection is never exercised. Reverting the mediator fix
+  reproduces the production `builder error for url (did:…/inbound)` verbatim.
+- The mediated user advertises **only** the TSP service: a `did:peer:2` inlines
+  each service into the identifier and the mediator's own DID is itself a
+  `did:peer:2` carrying three services, so embedding it twice pushes the user's
+  DID past the resolver's 1000-byte ceiling — an artefact of `did:peer` that a
+  real `did:webvh` persona never approaches.
+
 ## Unreleased (0.4.1) — `forwarding_retry_policy` builder knob
 
 - `TestMediatorBuilder::forwarding_retry_policy(max_retries, initial_backoff,

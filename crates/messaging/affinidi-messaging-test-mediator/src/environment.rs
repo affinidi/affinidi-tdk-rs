@@ -33,7 +33,7 @@ use affinidi_messaging_sdk::{ATM, config::ATMConfig, profiles::ATMProfile};
 use affinidi_secrets_resolver::{SecretsResolver, secrets::Secret};
 use affinidi_tdk::common::TDKSharedState;
 use affinidi_tdk::common::config::TDKConfig;
-use affinidi_tdk::dids::{DID, KeyType, PeerKeyRole};
+use affinidi_tdk::dids::{DID, KeyType, PeerKeyRole, PeerService, PeerServiceEndpoint};
 
 use crate::{AdminIdentity, TestMediator, TestMediatorHandle};
 
@@ -266,15 +266,59 @@ impl TestEnvironment {
     /// without needing a separate `local_did` declaration at builder
     /// time.
     pub async fn add_user(&self, alias: &str) -> Result<TestUser, TestEnvironmentError> {
+        self.add_user_with_services(alias, None).await
+    }
+
+    /// Add a user whose DID advertises a **`TSPTransport` service naming this
+    /// mediator by DID** — the shape a real persona/agent document publishes.
+    ///
+    /// This is what a mediated TSP identity actually looks like on the wire: the
+    /// user's own document says "my traffic goes through this mediator" and the
+    /// transport URL lives one resolve away, in the mediator's document. It is
+    /// deliberately *not* what [`add_user`](Self::add_user) produces — a plain
+    /// test user advertises no TSP service at all, and every TSP test that
+    /// federates does so by naming the peer mediator's DID explicitly in the
+    /// route, which never exercises the indirection.
+    ///
+    /// Otherwise identical to [`add_user`](Self::add_user): same `dm` service
+    /// (the mediator's DID), same LOCAL/ALLOW_ALL registration, same profile.
+    pub async fn add_tsp_mediated_user(
+        &self,
+        alias: &str,
+    ) -> Result<TestUser, TestEnvironmentError> {
         let mediator_did = self.mediator.did().to_string();
-        let (did, secrets) = DID::generate_did_peer(
-            vec![
-                (PeerKeyRole::Verification, KeyType::Ed25519),
-                (PeerKeyRole::Encryption, KeyType::X25519),
-            ],
-            Some(mediator_did.clone()),
-        )
-        .map_err(|e| TestEnvironmentError::UserDid {
+        // TSP only, no `dm` entry. A `did:peer:2` inlines each service into the
+        // identifier, and the mediator's own DID is itself a `did:peer:2`
+        // carrying three services — so embedding it twice pushes the user's DID
+        // past the resolver's 1000-byte ceiling, which a real (`did:webvh`)
+        // persona never approaches. The DIDComm side is not what is under test
+        // here, and the SDK profile is told its mediator directly.
+        let services = vec![PeerService {
+            type_: "TSPTransport".into(),
+            endpoint: PeerServiceEndpoint::Uri(mediator_did),
+            id: Some("#tsp".into()),
+        }];
+        self.add_user_with_services(alias, Some(services)).await
+    }
+
+    /// Shared body of [`add_user`](Self::add_user) and
+    /// [`add_tsp_mediated_user`](Self::add_tsp_mediated_user). `services: None`
+    /// takes the TDK default (a single `dm` service at the mediator's DID).
+    async fn add_user_with_services(
+        &self,
+        alias: &str,
+        services: Option<Vec<PeerService>>,
+    ) -> Result<TestUser, TestEnvironmentError> {
+        let mediator_did = self.mediator.did().to_string();
+        let keys = vec![
+            (PeerKeyRole::Verification, KeyType::Ed25519),
+            (PeerKeyRole::Encryption, KeyType::X25519),
+        ];
+        let generated = match services {
+            Some(services) => DID::generate_did_peer_with_services(keys, Some(services)),
+            None => DID::generate_did_peer(keys, Some(mediator_did.clone())),
+        };
+        let (did, secrets) = generated.map_err(|e| TestEnvironmentError::UserDid {
             alias: alias.to_string(),
             source: Box::new(std::io::Error::other(e.to_string())),
         })?;
