@@ -699,22 +699,28 @@ async fn handle_inbound_didcomm(
                     // claimed sender (JWE `skid` header) is unverified. When
                     // session/sender matching is enforced, bind it to the
                     // authenticated session DID before it is trusted for ACL checks.
-                    if state.config.security.force_session_did_match
-                        && envelope.from_did.as_deref() != Some(session.did.as_str())
-                    {
-                        let claimed = envelope.from_did.as_deref().unwrap_or("anonymous");
-                        return Err(MediatorError::problem_with_log(
-                            52,
-                            &session.session_id,
-                            None,
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.did.session_mismatch",
-                            "Sender DID ({1}) doesn't match session DID",
-                            vec![claimed.to_string()],
-                            StatusCode::BAD_REQUEST,
-                            format!("Direct-delivery envelope sender ({claimed}) doesn't match session DID"),
-                        ));
+                    //
+                    // Skipped for unauthenticated sessions, exactly as the forward
+                    // branch above skips it: an inter-mediator relay hop arrives on
+                    // the anonymous `ANON-INBOUND` session, whose DID is empty, so the
+                    // comparison could only ever fail. It reaches *this* branch rather
+                    // than the forward branch because [`RelayMode::Blind`] — the
+                    // default — relays the peer's inner envelope verbatim, and that
+                    // envelope is addressed to the local recipient, not to this
+                    // mediator. Without the guard, blind relay cannot deliver at all.
+                    //
+                    // The cost is real and worth naming: on a blind relay hop the
+                    // claimed sender stays unverified, and it is that claimed sender
+                    // which `delivery_decision` above hashed into `from_hash` for the
+                    // recipient's access-list verdict. A relaying peer can therefore
+                    // present any sender DID it likes. This is inherent to blind
+                    // relay — by construction the receiving mediator cannot see who
+                    // relayed — not something this guard gives away: the alternative
+                    // is refusing the hop, which is the bug being fixed.
+                    // [`RelayMode::Rewrap`] plus `relay_trusted_mediators` is the
+                    // posture for deployments that need the peer authenticated.
+                    if state.config.security.force_session_did_match && session.authenticated {
+                        check_direct_delivery_session_match(session, envelope.from_did.as_deref())?;
                     }
 
                     // Check if the message will pass ACL Checks
@@ -935,6 +941,40 @@ fn check_session_sender_match(
     ))
 }
 
+/// Ensure a direct-delivery envelope's claimed sender matches the session DID.
+///
+/// The mediator holds no key for a directly-delivered envelope, so `from_did`
+/// here is whatever the JWE `skid` header claims — unverified. It is also the
+/// value that feeds the recipient's access-list lookup, so on an authenticated
+/// session it has to be pinned to the DID that authenticated.
+///
+/// Only the caller can decide whether the session is one that can be matched
+/// against: an anonymous inter-mediator relay hop has no session DID, and is
+/// exempted at the call site rather than here.
+#[cfg(feature = "didcomm")]
+fn check_direct_delivery_session_match(
+    session: &Session,
+    claimed_sender: Option<&str>,
+) -> Result<(), MediatorError> {
+    if claimed_sender == Some(session.did.as_str()) {
+        return Ok(());
+    }
+
+    let claimed = claimed_sender.unwrap_or("anonymous");
+    Err(MediatorError::problem_with_log(
+        52,
+        &session.session_id,
+        None,
+        ProblemReportSorter::Error,
+        ProblemReportScope::Protocol,
+        "authorization.did.session_mismatch",
+        "Sender DID ({1}) doesn't match session DID",
+        vec![claimed.to_string()],
+        StatusCode::BAD_REQUEST,
+        format!("Direct-delivery envelope sender ({claimed}) doesn't match session DID"),
+    ))
+}
+
 #[cfg(test)]
 #[cfg(feature = "didcomm")]
 mod tests {
@@ -998,6 +1038,51 @@ mod tests {
         assert!(check_session_sender_match(&session, "msg-1", &Some(&key0)).is_ok());
         assert!(check_session_sender_match(&session, "msg-1", &Some(&key1)).is_ok());
         assert!(check_session_sender_match(&session, "msg-1", &Some(&signing)).is_ok());
+    }
+
+    // --- check_direct_delivery_session_match tests ---
+    // The direct-delivery sibling of the above: it compares the whole claimed
+    // sender DID (from the JWE `skid`) against the session DID, with no key
+    // fragment involved.
+
+    #[test]
+    fn direct_delivery_sender_matching_session_ok() {
+        let session = make_session("did:example:alice");
+        assert!(check_direct_delivery_session_match(&session, Some("did:example:alice")).is_ok());
+    }
+
+    #[test]
+    fn direct_delivery_wrong_sender_rejected() {
+        let session = make_session("did:example:alice");
+        assert!(
+            check_direct_delivery_session_match(&session, Some("did:example:mallory")).is_err()
+        );
+    }
+
+    #[test]
+    fn direct_delivery_anonymous_sender_rejected() {
+        let session = make_session("did:example:alice");
+        assert!(check_direct_delivery_session_match(&session, None).is_err());
+    }
+
+    /// The bug this guard fixes: an inter-mediator relay hop arrives on the
+    /// anonymous session, whose DID is empty, so *every* claimed sender
+    /// mismatches. The call site must not run the check for such a session —
+    /// this asserts the check really does fail there, which is why the
+    /// `session.authenticated` guard is load-bearing rather than cosmetic.
+    #[test]
+    fn anonymous_relay_session_would_reject_every_sender() {
+        let relay_session = Session {
+            session_id: "ANON-INBOUND".to_string(),
+            ..Default::default()
+        };
+        assert!(!relay_session.authenticated);
+        assert!(
+            check_direct_delivery_session_match(&relay_session, Some("did:example:alice")).is_err()
+        );
+        assert!(
+            check_direct_delivery_session_match(&relay_session, Some("did:example:bob")).is_err()
+        );
     }
 
     // --- anonymous message detection tests ---
