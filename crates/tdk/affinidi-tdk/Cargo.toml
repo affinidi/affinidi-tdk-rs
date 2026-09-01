@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.10.0"
+version = "0.11.0"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -73,7 +73,7 @@ affinidi-data-integrity = { version = "0.7", optional = true }
 # Credentials
 affinidi-vc = { version = "0.2", path = "../../credentials/affinidi-vc", optional = true }
 affinidi-sd-jwt = { version = "0.1", path = "../../credentials/affinidi-sd-jwt", optional = true }
-affinidi-mdoc = { version = "0.2", path = "../../credentials/affinidi-mdoc", optional = true }
+affinidi-mdoc = { version = "0.3", path = "../../credentials/affinidi-mdoc", optional = true }
 affinidi-status-list = { version = "0.1", path = "../../credentials/affinidi-status-list", optional = true }
 
 # Protocols

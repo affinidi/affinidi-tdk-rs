@@ -154,10 +154,32 @@ crate_versions=$(cargo metadata --format-version 1 --no-deps 2>/dev/null \
       | select(.publish == null or .publish == ["crates.io"])
       | "\(.name)\t\(.version)"')
 
+# Does the local version satisfy the requirement the dry-run could not resolve?
+#
+# String equality is wrong here, and wrong in the direction that makes the
+# `wait` path unreachable for the only shape it exists to recognise. Internal
+# requirements in this workspace are written `major.minor` by convention
+# (`affinidi-tdk = { version = "0.11", path = ... }`), while a crate version is
+# always `major.minor.patch` — so `req_ver` is `0.11` and `local_ver` is
+# `0.11.0`, and `[ "0.11.0" = "0.11" ]` is false. Every coordinated breaking
+# release therefore reported FAIL, which is precisely what the header's "ONE
+# FAILURE IS NOT A FAILURE" note says must not happen.
+#
+# Prefix-with-boundary rather than a semver library: the requirement is either
+# the local version exactly, or a `major.minor` prefix of it. The `.` in the
+# second pattern is load-bearing — without it `0.3` would also match a local
+# `0.30.0`, which is a different, incompatible release.
+version_satisfies() { # $1 = local version, $2 = required version
+  case "$1" in
+    "$2" | "$2".*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Is this failure solely "requires a sibling version this release publishes"?
 # See the header note. Returns 0 only when at least one unmet requirement was
-# found AND every one of them names a workspace crate whose local version is
-# exactly what was required.
+# found AND every one of them names a workspace crate whose local version
+# satisfies what was required.
 awaits_sibling_release() { # $1 = captured dry-run output
   local out="$1" line req_name req_ver local_ver found=0
   while IFS= read -r line; do
@@ -167,8 +189,8 @@ awaits_sibling_release() { # $1 = captured dry-run output
     [ -z "$req_name" ] && continue
     found=1
     local_ver=$(printf '%s\n' "$crate_versions" | awk -F'\t' -v n="$req_name" '$1 == n { print $2 }')
-    # Not ours, or not the version we are about to publish -> a real failure.
-    [ -n "$local_ver" ] && [ "$local_ver" = "$req_ver" ] || return 1
+    # Not ours, or not a version this release is about to publish -> real failure.
+    [ -n "$local_ver" ] && version_satisfies "$local_ver" "$req_ver" || return 1
   done <<AWAIT_EOF
 $(printf '%s\n' "$out" | grep 'failed to select a version for the requirement' || true)
 AWAIT_EOF

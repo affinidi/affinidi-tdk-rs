@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-didcomm-service"
-version = "0.5.0"
+version = "0.5.1"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
 authors.workspace = true
@@ -50,7 +50,7 @@ affinidi-did-common = "0.4"
 # regression test. Sister-crate path deps carry an explicit `version =` so the
 # package stays publishable while using the in-tree path for dev-builds.
 affinidi-messaging-test-mediator = { version = "0.4", path = "../affinidi-messaging-test-mediator", features = ["tsp"] }
-affinidi-tdk = { version = "0.10", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
+affinidi-tdk = { version = "0.11", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
 affinidi-messaging-core = { version = "0.1", path = "../affinidi-messaging-core" }
 futures-util = "0.3"
 

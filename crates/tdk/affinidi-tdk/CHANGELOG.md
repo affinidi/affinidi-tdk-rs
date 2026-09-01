@@ -6,6 +6,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
+## 0.11.0
+
+### Changed
+
+- `mdoc` feature now re-exports `affinidi-mdoc` 0.3, which moves to `coset` 0.4.
+- **Breaking for consumers of the `mdoc` feature.** `coset` sits in
+  `affinidi-mdoc`'s public API (`IssuerSigned::issuer_auth` is a
+  `coset::CoseSign1`), so a consumer that names those types moves in the same
+  change; two `coset` versions in one graph fail to compile rather than warn.
+  Minor rather than patch for that reason.
+- No source change in this crate. Bumped because the published manifest's
+  requirement is itself what changed: a consumer resolving `affinidi-tdk` 0.10.0
+  from crates.io stays pinned to `affinidi-mdoc` 0.2 and can never reach 0.3.
+
 ## 0.10.0
 
 ### Changed

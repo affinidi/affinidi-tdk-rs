@@ -1,5 +1,36 @@
 # Affinidi mdoc Changelog
 
+## 1st September 2026 (0.3.0)
+
+Moves to **coset 0.4**.
+
+No source change — the API this crate uses is identical across the bump, and
+0.4.0's one breaking change (the `crit` field on `Header` gains support for
+private-use labels, per [RFC 9052
+§3.1](https://datatracker.ietf.org/doc/html/rfc9052#name-common-cose-header-paramete))
+touches nothing here. All 126 tests pass unmodified.
+
+**Minor rather than patch, because `coset` is in this crate's public API.**
+`IssuerSigned::issuer_auth` and `Document::issuer_auth` are `pub` fields of type
+`coset::CoseSign1`; `sign_mso` returns one; `extract_kid` takes one; and
+`CoseKey::default_algorithm` returns `Option<coset::iana::Algorithm>`. A
+consumer that names those types has to move in the same step, so the version
+has to say so — a patch bump would let cargo resolve a consumer on `coset 0.3`
+beside this crate on 0.4 and fail with duplicate-type errors rather than a
+version conflict.
+
+That is not hypothetical. It is what blocked
+[OpenVTC/verifiable-trust-infrastructure#1225](https://github.com/OpenVTC/verifiable-trust-infrastructure/pull/1225):
+`vta-vault` compares an `alg` taken from `IssuerSigned` against one it builds
+from its own `coset`, and moving only its side produced
+
+```
+error[E0308]: mismatched types
+note: there are multiple different versions of crate `coset` in the dependency graph
+```
+
+This release is what lets that side move.
+
 ## 16th August 2026 (0.2.7)
 
 Adds the CBOR wire codec for **`DeviceResponse`** — `to_cbor_bytes` /

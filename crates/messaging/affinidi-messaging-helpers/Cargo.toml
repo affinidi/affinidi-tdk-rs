@@ -25,7 +25,7 @@ affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.21.0
 ## Trust Tasks payload types (the atm.trust_tasks() surface returns/accepts these).
 trust-tasks-rs = "0.17"
 ## TDK for DID resolution and crypto utilities
-affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.10" }
+affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.11" }
 ## DIDComm message types — used by example binaries
 affinidi-crypto = { version = "0.2", features = ["jose"] }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", features = ["messaging-core"] }
