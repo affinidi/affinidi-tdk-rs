@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased (0.4.2) — a test user that is mediated the way production is
+## Unreleased (0.4.3) — a test user that is mediated the way production is
 
+- Requires `affinidi-tdk` 0.11 (was 0.10), which re-exports `affinidi-mdoc`
+  0.3 / `coset` 0.4. Declaration-only; no source change here.
 - New `TestEnvironment::add_tsp_mediated_user` / `TestTopology::add_tsp_mediated_user`:
   a user whose DID advertises a `TSPTransport` service **naming its mediator by
   DID**, which is what a real persona/agent document publishes. `add_user` is

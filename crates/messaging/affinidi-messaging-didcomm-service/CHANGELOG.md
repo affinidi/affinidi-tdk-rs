@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased (0.5.0) — `trust-tasks-rs` 0.17
+## Unreleased (0.5.1) — `trust-tasks-rs` 0.17
 
+- Requires `affinidi-tdk` 0.11 (was 0.10), which re-exports `affinidi-mdoc`
+  0.3 / `coset` 0.4. Declaration-only; no source change here.
 - Bumps `trust-tasks-rs` 0.12 → 0.17.
 - The one `MediatorAcl` construction in `service/mediator.rs` moved to the
   generated builder — `#[non_exhaustive]` in 0.17, so the

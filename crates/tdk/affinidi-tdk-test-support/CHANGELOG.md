@@ -1,6 +1,6 @@
 # Affinidi TDK Test Support
 
-## Unreleased (0.8.3) — dependency refresh
+## Unreleased (0.8.4) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - Bumps `coset` 0.3 → 0.4, alongside `affinidi-mdoc` 0.3. `coset` is internal
