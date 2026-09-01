@@ -3,6 +3,10 @@
 ## Unreleased (0.8.3) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
+- Bumps `coset` 0.3 → 0.4, alongside `affinidi-mdoc` 0.3. `coset` is internal
+  here (no public API names it), but this crate and `affinidi-mdoc` exchange
+  COSE values, so they have to compile against one `coset` or the types do not
+  match.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.

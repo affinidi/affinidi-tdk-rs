@@ -62,7 +62,7 @@ base64 = "0.23"
 # ── TI5b: mdoc (COSE sign_mso/verify_issuer_auth) + OID4VP present/verify ──
 ## mdoc issue/present/verify on the EdDSA COSE path; default-features off drops
 ## the ES256/P-256 path the scenario's Ed25519 identities don't use.
-affinidi-mdoc = { version = "0.2", path = "../../credentials/affinidi-mdoc", default-features = false, features = [
+affinidi-mdoc = { version = "0.3", path = "../../credentials/affinidi-mdoc", default-features = false, features = [
   "eddsa",
 ] }
 ## OID4VP authorization request/response + presentation-submission envelope.
@@ -70,7 +70,7 @@ affinidi-openid4vp = { version = "0.1", path = "../../protocols/affinidi-openid4
 ## CBOR for mdoc attribute values + the fixture's DeviceResponse transport;
 ## coset for the COSE_Sign1 (de)serialisation that transport round-trips.
 ciborium = "0.2"
-coset = "0.3"
+coset = "0.4"
 ## `derive` backs the DeviceResponseTransport (de)serialisation.
 serde = { version = "1", features = ["derive"] }
 
