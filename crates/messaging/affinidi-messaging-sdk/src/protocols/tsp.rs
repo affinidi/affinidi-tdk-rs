@@ -148,6 +148,39 @@ pub struct PeerCapability {
 /// implementations so existing stores keep compiling, and durable stores can
 /// override them to persist capability alongside relationship state.
 ///
+/// The two digests that identify a relationship, one per uni-directional half
+/// (spec Rev 3 §7.2.1).
+///
+/// "Conceptually, this exchange creates two uni-directional relationships, one
+/// (from the requester) can be identified by the Digest, and the other (from
+/// the replier) can be identified by the Reply_Digest."
+///
+/// An endpoint needs both: a cancellation may name either half, and the invite
+/// race is broken by comparing our own outstanding invite's digest against the
+/// one that arrived.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ThreadDigests {
+    /// The digest of the invite this endpoint sent or received — the thread id
+    /// of the exchange that opened the relationship.
+    pub invite: Option<[u8; 32]>,
+    /// The digest of the accept that answered it, identifying the other half.
+    pub accept: Option<[u8; 32]>,
+}
+
+impl ThreadDigests {
+    /// Does `digest` name either half of this relationship?
+    ///
+    /// True when nothing is recorded: an endpoint that has not kept the digests
+    /// cannot contradict one, and refusing every cancellation would be worse
+    /// than accepting one it cannot check.
+    pub fn recognizes(&self, digest: &[u8; 32]) -> bool {
+        match (self.invite, self.accept) {
+            (None, None) => true,
+            (a, b) => [a, b].into_iter().flatten().any(|d| &d == digest),
+        }
+    }
+}
+
 /// The default implementation is [`InMemoryRelationshipStore`]; supply a
 /// durable one via
 /// [`crate::config::ATMConfigBuilder::with_relationship_store`].
@@ -186,6 +219,31 @@ pub trait RelationshipStore: Send + Sync {
     ) -> Result<(), ATMError> {
         Ok(())
     }
+
+    /// The thread digests recorded for the `(our_vid, their_vid)` pair.
+    ///
+    /// A store that does not keep them returns the default, which recognises
+    /// any digest and loses the Rev 3 §7.2.3 invite-race tiebreak — an endpoint
+    /// cannot decide which of two invites to keep without its own digest to
+    /// compare. Implement this to get the rule.
+    async fn thread_digests(
+        &self,
+        _our_vid: &str,
+        _their_vid: &str,
+    ) -> Result<ThreadDigests, ATMError> {
+        Ok(ThreadDigests::default())
+    }
+
+    /// Persist the thread digests for the `(our_vid, their_vid)` pair.
+    /// Default impl is a no-op.
+    async fn set_thread_digests(
+        &self,
+        _our_vid: &str,
+        _their_vid: &str,
+        _digests: ThreadDigests,
+    ) -> Result<(), ATMError> {
+        Ok(())
+    }
 }
 
 /// Default, ephemeral [`RelationshipStore`] backed by an in-memory map.
@@ -200,6 +258,7 @@ pub trait RelationshipStore: Send + Sync {
 pub struct InMemoryRelationshipStore {
     inner: RwLock<HashMap<(String, String), RelationshipState>>,
     capabilities: RwLock<HashMap<(String, String), PeerCapability>>,
+    digests: RwLock<HashMap<(String, String), ThreadDigests>>,
 }
 
 #[async_trait::async_trait]
@@ -223,6 +282,26 @@ impl RelationshipStore for InMemoryRelationshipStore {
     ) -> Result<(), ATMError> {
         let key = (our_vid.to_string(), their_vid.to_string());
         self.inner.write().await.insert(key, state);
+        Ok(())
+    }
+
+    async fn thread_digests(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+    ) -> Result<ThreadDigests, ATMError> {
+        let key = (our_vid.to_string(), their_vid.to_string());
+        Ok(self.digests.read().await.get(&key).copied().unwrap_or_default())
+    }
+
+    async fn set_thread_digests(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        digests: ThreadDigests,
+    ) -> Result<(), ATMError> {
+        let key = (our_vid.to_string(), their_vid.to_string());
+        self.digests.write().await.insert(key, digests);
         Ok(())
     }
 
@@ -714,7 +793,7 @@ impl TspOps<'_> {
         profile: &Arc<ATMProfile>,
         to_did: &str,
         control: &affinidi_tsp::message::control::ControlMessage,
-    ) -> Result<(), ATMError> {
+    ) -> Result<[u8; 32], ATMError> {
         let (from_did, _) = profile.dids()?;
         let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
         let to_vid = self.resolve_vid(to_did).await?;
@@ -728,7 +807,11 @@ impl TspOps<'_> {
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack control TSP message: {e}")))?;
 
-        self.send_raw(profile, &packed.bytes).await
+        self.send_raw(profile, &packed.bytes).await?;
+        // The digest is the thread id of the exchange this message opens, and
+        // the caller records it: an invite's is what the Rev 3 §7.2.3 race
+        // tiebreak compares against, and what a cancellation later names.
+        Ok(packed.thread_digest)
     }
 
     // ── Relationship management ───────────────────────────────────────────────
@@ -754,9 +837,20 @@ impl TspOps<'_> {
         let (our_did, _) = profile.dids()?;
         let store = self.relationship_store();
         let next = next_state(store, our_did, their_did, RelationshipEvent::SendInvite).await?;
-        self.send_control(profile, their_did, &ControlMessage::invite())
+        let digest = self
+            .send_control(profile, their_did, &ControlMessage::invite())
             .await?;
         store.set(our_did, their_did, next).await?;
+        store
+            .set_thread_digests(
+                our_did,
+                their_did,
+                ThreadDigests {
+                    invite: Some(digest),
+                    accept: None,
+                },
+            )
+            .await?;
         Ok(next)
     }
 
@@ -888,21 +982,84 @@ impl TspOps<'_> {
             ControlType::RelationshipCancel => RelationshipEvent::ReceiveCancel,
         };
 
+        let store = self.relationship_store();
+        let prior = store.get(our_did, peer_did).await?;
+        let mut digests = store.thread_digests(our_did, peer_did).await?;
+
+        // Rev 3 §7.2.3, the invite race. Both endpoints may invite each other
+        // for the same VID pair at once. Both keep the invite whose digest is
+        // lexicographically lower and discard the other, so the two sides
+        // converge on one exchange and one thread id instead of each believing
+        // it opened the relationship.
+        if control.control_type == ControlType::RelationshipFormingInvite
+            && prior == RelationshipState::Pending
+            && let (Some(ours), Some(theirs)) = (digests.invite, control.digest)
+        {
+            if ours.as_slice() < theirs.as_slice() {
+                return Err(ATMError::MsgReceiveError(format!(
+                    "TSP invite from {peer_did} discarded: our own invite has the lower digest"
+                )));
+            }
+            // Theirs wins: adopt it in place of the invite we sent.
+            store
+                .set(our_did, peer_did, RelationshipState::InviteReceived)
+                .await?;
+            store
+                .set_thread_digests(
+                    our_did,
+                    peer_did,
+                    ThreadDigests {
+                        invite: Some(theirs),
+                        accept: None,
+                    },
+                )
+                .await?;
+            return Ok(IncomingControl {
+                state: RelationshipState::InviteReceived,
+                reply_expected: false,
+            });
+        }
+
         // Rev 3 §7.3 gives a cancellation three cases, distinguished by what we
-        // hold. One naming a relationship we do not hold at all is ignored
+        // hold. One naming a relationship we do not hold at all — or naming a
+        // digest that is not either half of the one we do hold — is ignored
         // rather than answered, so it cannot be used to probe which
         // relationships exist. The other two are handled by the caller, which
         // reads `IncomingControl::reply_expected`.
-        let prior = self.relationship_store().get(our_did, peer_did).await?;
-        if control.control_type == ControlType::RelationshipCancel
-            && prior == RelationshipState::None
-        {
-            return Err(ATMError::MsgReceiveError(format!(
-                "TSP cancellation from {peer_did} discarded: no relationship with {our_did}"
-            )));
+        if control.control_type == ControlType::RelationshipCancel {
+            if prior == RelationshipState::None {
+                return Err(ATMError::MsgReceiveError(format!(
+                    "TSP cancellation from {peer_did} discarded: no relationship with {our_did}"
+                )));
+            }
+            if let Some(named) = control.reply.as_ref()
+                && !digests.recognizes(named)
+            {
+                return Err(ATMError::MsgReceiveError(format!(
+                    "TSP cancellation from {peer_did} discarded: names an unrecognised relationship"
+                )));
+            }
         }
 
-        let new_state = advance_state(self.relationship_store(), our_did, peer_did, event).await?;
+        let new_state = advance_state(store, our_did, peer_did, event).await?;
+
+        // Record the digests as the handshake produces them: the invite's
+        // identifies this direction, the accept's the other (§7.2.1).
+        match control.control_type {
+            ControlType::RelationshipFormingInvite => {
+                digests.invite = control.digest;
+                store.set_thread_digests(our_did, peer_did, digests).await?;
+            }
+            ControlType::RelationshipFormingAccept => {
+                digests.accept = control.digest;
+                store.set_thread_digests(our_did, peer_did, digests).await?;
+            }
+            ControlType::RelationshipCancel => {
+                store
+                    .set_thread_digests(our_did, peer_did, ThreadDigests::default())
+                    .await?;
+            }
+        }
         // If the peer advertised its mediator in the control's route (a routed
         // invite/accept), cache it so `send_to` can route to this peer on a
         // different mediator. Learned once during the handshake; no-op under
@@ -1851,6 +2008,7 @@ impl TspWebSocket {
 
 #[cfg(test)]
 mod tests {
+    use super::ThreadDigests;
     use affinidi_tsp::message::direct;
     use affinidi_tsp::{MessageType, PrivateVid};
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
@@ -2331,6 +2489,87 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(store.get(BOB, ALICE).await.unwrap(), RelationshipState::None);
+        }
+    }
+
+    // ---- Rev 3 §7.2.1 / §7.2.3: thread digests and the invite race ----
+
+    /// §7.2.1: a relationship has two digests, one per uni-directional half,
+    /// and a cancellation may name either. A store that keeps neither cannot
+    /// contradict a digest, so it recognises any — refusing every cancellation
+    /// would be worse than accepting one it cannot check.
+    #[test]
+    fn thread_digests_recognize_either_half() {
+        let invite = [0x11u8; 32];
+        let accept = [0x22u8; 32];
+        let other = [0x33u8; 32];
+
+        let both = ThreadDigests {
+            invite: Some(invite),
+            accept: Some(accept),
+        };
+        assert!(both.recognizes(&invite));
+        assert!(both.recognizes(&accept));
+        assert!(!both.recognizes(&other));
+
+        let one = ThreadDigests {
+            invite: Some(invite),
+            accept: None,
+        };
+        assert!(one.recognizes(&invite));
+        assert!(!one.recognizes(&other));
+
+        // Nothing recorded: anything is recognised.
+        assert!(ThreadDigests::default().recognizes(&other));
+    }
+
+    #[tokio::test]
+    async fn the_store_round_trips_thread_digests() {
+        let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+        assert_eq!(
+            store.thread_digests(ALICE, BOB).await.unwrap(),
+            ThreadDigests::default()
+        );
+
+        let digests = ThreadDigests {
+            invite: Some([7u8; 32]),
+            accept: Some([9u8; 32]),
+        };
+        store.set_thread_digests(ALICE, BOB, digests).await.unwrap();
+        assert_eq!(store.thread_digests(ALICE, BOB).await.unwrap(), digests);
+
+        // Per pair, so the reverse direction is its own record.
+        assert_eq!(
+            store.thread_digests(BOB, ALICE).await.unwrap(),
+            ThreadDigests::default()
+        );
+    }
+
+    /// §7.2.3: both endpoints keep the invite whose digest is lexicographically
+    /// lower. The rule has to be symmetric — run from each side of the same
+    /// pair, the two must agree on which invite survives, or they end up with
+    /// two half-relationships and two thread ids.
+    #[test]
+    fn the_race_tiebreak_is_symmetric() {
+        let lower = [0x01u8; 32];
+        let higher = [0x02u8; 32];
+
+        // The endpoint holding the lower digest keeps its own.
+        let keeps_own = lower.as_slice() < higher.as_slice();
+        assert!(keeps_own);
+
+        // The endpoint holding the higher digest adopts the one that arrived.
+        let adopts_theirs = higher.as_slice() >= lower.as_slice();
+        assert!(adopts_theirs);
+
+        // Exactly one of the two keeps its own, whichever way round they are.
+        for (ours, theirs) in [(lower, higher), (higher, lower)] {
+            let we_keep_ours = ours.as_slice() < theirs.as_slice();
+            let they_keep_theirs = theirs.as_slice() < ours.as_slice();
+            assert_ne!(
+                we_keep_ours, they_keep_theirs,
+                "exactly one side keeps its own invite"
+            );
         }
     }
 }
