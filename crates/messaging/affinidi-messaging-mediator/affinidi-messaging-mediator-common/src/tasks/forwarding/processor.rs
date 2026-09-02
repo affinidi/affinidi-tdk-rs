@@ -115,19 +115,25 @@ fn now_epoch_secs() -> u64 {
 /// A forward whose `message` is a TSP message decodes back to raw qb2 bytes for
 /// the wire; a DIDComm message does not (and is sent as text, unchanged).
 ///
-/// TSP forwards are queued as `base64url(qb2)` — the CESR qb64 text form, which
-/// begins `-E` (the TSP envelope's `-E` count code) and decodes to bytes leading
-/// with the `0xF8` magic byte. A DIDComm JWE/JWS is not valid base64url of such
+/// TSP forwards are queued as `base64url(qb2)` — the CESR qb64 text form of the
+/// envelope's count code. A DIDComm JWE/JWS is not valid base64url of such
 /// bytes, so this returns `None` and the message is sent verbatim.
+///
+/// Both framings are accepted. A short `-E##` frame reads `-E` in text and
+/// leads with `0xF8`; a long `--E#####` frame reads `--E` and leads with
+/// `0xFB`. Spec Rev 3 widened the `-E` count to cover the ciphertext, which
+/// makes the long form reachable for any message over roughly 12 KB — and a
+/// forwarding path that recognises only the short one drops exactly the large
+/// messages it exists to carry.
 fn decode_tsp_forward(message: &str) -> Option<Vec<u8>> {
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-    if !message.starts_with("-E") {
+    if !(message.starts_with("-E") || message.starts_with("--E")) {
         return None;
     }
     BASE64_URL_SAFE_NO_PAD
         .decode(message)
         .ok()
-        .filter(|bytes| bytes.first() == Some(&0xF8))
+        .filter(|bytes| matches!(bytes.first(), Some(0xF8) | Some(0xFB)))
 }
 
 /// How long an endpoint may sit idle before its cached state is reaped.

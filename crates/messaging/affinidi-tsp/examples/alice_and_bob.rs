@@ -49,7 +49,7 @@ fn main() {
     // Each party creates a TspAgent (their local state) and generates a VID
     // (Verifiable Identifier). A VID bundles:
     //   - An Ed25519 signing key pair (for message authentication)
-    //   - An X25519 encryption key pair (for HPKE-Auth encryption)
+    //   - An X25519 encryption key pair (for HPKE-Base encryption)
     //   - An identifier string (here we use DIDs, but any string works)
 
     let alice_agent = TspAgent::new();
@@ -182,7 +182,7 @@ fn main() {
     //
     // With a bidirectional relationship, either party can send messages.
     // Every message is:
-    //   - Encrypted with HPKE-Auth (X25519 + AES-128-GCM) — only the
+    //   - Encrypted with HPKE-Base (X25519 + ChaCha20Poly1305) — only the
     //     intended recipient can decrypt it
     //   - Authenticated — the sender's identity is cryptographically bound
     //     to the ciphertext (not just signed, but part of the HPKE auth mode)
@@ -365,7 +365,7 @@ fn main() {
     println!("\n=== Summary ===\n");
     println!("TSP provides:");
     println!("  - Explicit relationship consent before any data exchange");
-    println!("  - End-to-end encryption (HPKE-Auth: X25519 + AES-128-GCM)");
+    println!("  - End-to-end encryption (HPKE-Base: X25519 + ChaCha20Poly1305)");
     println!("  - Sender authentication bound to the ciphertext");
     println!("  - Ed25519 signatures for integrity protection");
     println!("  - Arbitrary binary payloads (not limited to text/JSON)");

@@ -255,7 +255,7 @@ fn main() {
     println!("║  Payload sizes: 1KB, 100KB, 1MB, 10MB                    ║");
     println!("╠═══════════════════════════════════════════════════════════╣");
     println!("║                                                           ║");
-    println!("║  TSP:     HPKE-Auth (X25519 + AES-128-GCM) + Ed25519     ║");
+    println!("║  TSP:     HPKE-Base (X25519 + ChaCha20Poly1305) + Ed25519 ║");
     println!("║           Binary CESR envelope, ~160B overhead             ║");
     println!("║                                                           ║");
     println!("║  DIDComm: ECDH-1PU (X25519) + A256CBC-HS512              ║");

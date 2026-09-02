@@ -182,15 +182,33 @@ None ──(peer invites)─────► InviteReceived ──accept_relation
 atm.tsp().form_relationship(&alice.profile, &bob_did).await?;   // → Pending (sends an invite)
 
 // Responder, after receiving an invite control message:
-let control = ControlMessage::decode(&payload)?;               // payload from unpack
-atm.tsp().record_incoming_control(&bob.profile, &alice_did, &control).await?; // → InviteReceived
-atm.tsp().accept_relationship(&bob.profile, &alice_did, &invite_wire).await?; // → Bidirectional
+let (control, sender, digest) = atm.tsp().unpack_control(&bob.profile, &qb2).await?;
+let incoming = atm.tsp().record_incoming_control(&bob.profile, &sender, &control).await?;
+// incoming.state == InviteReceived
+atm.tsp().accept_relationship(&bob.profile, &sender, digest).await?; // → Bidirectional
 
 let state = atm.tsp().relationship_state(&alice.profile, &bob_did).await?;
 ```
 
 Outbound calls **persist only after the control message is sent**.
-`record_incoming_control` advances the FSM for a received invite/accept/cancel.
+`record_incoming_control` advances the FSM for a received invite/accept/cancel
+and returns an `IncomingControl`: its `state` is the new relationship state, and
+`reply_expected` is set when a cancellation ended a relationship held in both
+directions, which spec Rev 3 §7.3 asks you to answer with a cancellation of your
+own.
+
+**This is required before application traffic.** Rev 3 §7.2.2: "It is not
+permissible that one endpoint which has learned a VID of the other simply starts
+with an application level message without first having an exchange of TSP
+control messages." An application message from a VID you hold no relationship
+with is discarded on receipt. A node that is not an endpoint in that sense — an
+intermediary relaying for others — turns the check off:
+
+```rust,ignore
+let config = ATMConfig::builder()
+    .with_tsp_relationship_gating(false)   // default: true
+    .build()?;
+```
 
 **Choosing a store** — the default is ephemeral (in-memory, wiped on restart).
 Implement `RelationshipStore` against durable storage and inject it:
@@ -200,6 +218,41 @@ let config = ATMConfig::builder()
     .with_relationship_store(Arc::new(MyDurableStore::new(/* ... */)))
     .build()?;
 ```
+
+A store also keeps the two thread digests that identify a relationship, one per
+uni-directional half (Rev 3 §7.2.1). Those methods have defaults, so an existing
+store keeps working — but without them the §7.2.3 invite-race tiebreak cannot
+run, since an endpoint needs its own outstanding invite's digest to compare
+against one that arrives. Implement `thread_digests` / `set_thread_digests` to
+get the rule.
+
+---
+
+## Key-state freshness
+
+A peer's keys change. Where your VID implementation maintains key state itself
+and delivers changes without being asked, you need do nothing. Where you resolve
+key state yourself, Rev 3 §7.4.2 gives two occasions to return to the VID's
+provenance chain, and the SDK takes both: a verification failure inside an
+established relationship is retried once after a refresh, and a message arriving
+after a long silence prompts a refresh before it is acted on. Resolution of any
+one peer is rate limited, because either occasion can be provoked by a message
+that has not been authenticated.
+
+```rust,ignore
+let config = ATMConfig::builder()
+    .with_tsp_key_state_policy(KeyStatePolicy {
+        self_resolving: true,                                  // §7.4.2, the default
+        reverification_threshold: Duration::from_secs(3600),   // default: a day
+        resolution_rate_limit: Duration::from_secs(60),        // default: a minute
+    })
+    .build()?;
+```
+
+The threshold is local policy — endpoints need not agree on it and it is not
+communicated. Choose it against the consequence of acting on a message rather
+than the cost of resolving: the check falls once when a dormant relationship
+resumes, not periodically.
 
 ---
 

@@ -31,11 +31,17 @@ pub enum MessageProtocol {
 
 impl MessageProtocol {
     /// Detect the protocol of a stored message from its on-the-wire form. TSP is
-    /// stored as CESR qb64 text (begins `-E`, the TSP envelope's `-E` count code);
-    /// a DIDComm JWE/JWS is JSON (`{`) or compact (`ey`). Anything else is
+    /// stored as CESR qb64 text, beginning with the envelope's count code; a
+    /// DIDComm JWE/JWS is JSON (`{`) or compact (`ey`). Anything else is
     /// [`MessageProtocol::Other`].
+    ///
+    /// Both TSP framings count: `-E` for a short `-E##` frame, `--E` for a long
+    /// `--E#####` one. Rev 3 widened the count to cover the ciphertext, so any
+    /// message over roughly 12 KB takes the long form — which would otherwise be
+    /// reported as `Other` and, on pickup, hand a client a message tagged as the
+    /// wrong protocol.
     pub fn detect(message: &str) -> Self {
-        if message.starts_with("-E") {
+        if message.starts_with("-E") || message.starts_with("--E") {
             MessageProtocol::Tsp
         } else if message.starts_with('{') || message.starts_with("ey") {
             MessageProtocol::DidComm
