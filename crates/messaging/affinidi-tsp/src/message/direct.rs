@@ -1185,4 +1185,99 @@ mod tests {
             );
         }
     }
+
+    // ---- The Rev 2 / Rev 3 boundary ----
+    //
+    // These pin what a Rev 2 message does when it meets this build. They exist
+    // because Rev 3 is wire-breaking but did *not* change the version the
+    // envelope advertises — both revisions say `YTSP-AAB` — so the two can only
+    // be told apart structurally. If dual-revision support is ever built, this
+    // is the discriminator it has to rest on.
+
+    /// Build the Rev 2 wire shape by hand. The envelope prefix is byte-identical
+    /// to Rev 3's; Rev 2 then diverges with the `XAAA` marker and a `G`
+    /// ciphertext where Rev 3 has an `F` one.
+    fn rev2_shaped_message(sender: &str, receiver: &str) -> Vec<u8> {
+        let mut header = Vec::new();
+        wire::encode_version(&mut header);
+        wire::encode_variable_data(wire::TSP_VID, sender.as_bytes(), &mut header);
+        wire::encode_variable_data(wire::TSP_VID, receiver.as_bytes(), &mut header);
+        wire::encode_fixed_data(wire::cesr_int("X") as u32, &[0, 0], &mut header);
+
+        // Rev 2's -E count covered the header only, not the ciphertext.
+        let mut out = Vec::new();
+        wire::encode_count(wire::TSP_ETS_WRAPPER, (header.len() / 3) as u32, &mut out);
+        out.extend_from_slice(&header);
+
+        wire::encode_variable_data(wire::cesr_int("G") as u32, &[0xAAu8; 96], &mut out);
+
+        wire::encode_count(wire::TSP_ATTACH_GRP, 22, &mut out);
+        wire::encode_count(wire::TSP_INDEX_SIG_GRP, 22, &mut out);
+        wire::encode_fixed_data(wire::ED25519_SIGNATURE, &[0x11u8; 64], &mut out);
+        out
+    }
+
+    /// The version field does not separate the revisions — both encode
+    /// `YTSP-AAB` — so the first difference is the byte after the two VIDs:
+    /// Rev 2's `XAAA` marker, or Rev 3's `F` ciphertext field.
+    #[test]
+    fn rev2_and_rev3_differ_only_after_the_vids() {
+        let keys = gen_keys();
+        let rev2 = rev2_shaped_message("did:web:alice", "did:web:bob");
+        let rev3 = pack(
+            b"x",
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap()
+        .bytes;
+
+        let d2 = Envelope::decode_full(&rev2).unwrap();
+        let d3 = Envelope::decode_full(&rev3).unwrap();
+
+        // The version marker and both VIDs are byte-identical: everything from
+        // just past the `-E` count code to the end of the receiver VID.
+        assert_eq!(d2.header_len, d3.header_len);
+        assert_eq!(rev2[3..d2.header_len], rev3[3..d3.header_len]);
+
+        // Two things do differ. The `-E` count, because Rev 3 covers the
+        // ciphertext with it and Rev 2 covered only the header...
+        assert_ne!(rev2[..3], rev3[..3]);
+        assert!(d3.content_end > d2.content_end);
+
+        // ...and, unambiguously, the byte after the VIDs.
+        assert_eq!(rev2[d2.header_len], 0x5c, "Rev 2 continues with XAAA");
+        assert_ne!(rev3[d3.header_len], 0x5c, "Rev 3 continues with the F field");
+    }
+
+    /// A Rev 2 message is refused with a clear error rather than misread. It
+    /// gets as far as the ciphertext field, where `G` is no longer a code this
+    /// build knows.
+    #[test]
+    fn a_rev2_message_is_rejected_not_misread() {
+        let keys = gen_keys();
+        let rev2 = rev2_shaped_message("did:web:alice", "did:web:bob");
+        let err = unpack(&rev2, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap_err();
+        assert!(
+            matches!(err, TspError::InvalidMessage(_)),
+            "expected a clean rejection, got {err:?}"
+        );
+    }
+
+    /// Keys-free addressing reads both revisions. The envelope prefix a relay
+    /// needs — the `-E` frame, the version and both VIDs — did not change, so a
+    /// mediator can route, apply ACLs and store a message of either revision
+    /// without knowing which it is holding.
+    #[test]
+    fn keys_free_addressing_reads_both_revisions() {
+        let rev2 = rev2_shaped_message("did:web:alice", "did:web:bob");
+        assert!(crate::message::meta::is_tsp(&rev2));
+
+        let meta = crate::message::meta::MetaEnvelope::parse(&rev2).unwrap();
+        assert_eq!(meta.sender, "did:web:alice");
+        assert_eq!(meta.receiver, "did:web:bob");
+    }
 }
