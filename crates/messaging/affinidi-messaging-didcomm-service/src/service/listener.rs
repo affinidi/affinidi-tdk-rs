@@ -9,6 +9,8 @@ use tokio::sync::{broadcast, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+#[cfg(feature = "tsp")]
+use tracing::debug;
 
 use crate::config::ListenerConfig;
 use crate::error::{DIDCommServiceError, StartupError};
@@ -140,27 +142,14 @@ impl Listener {
             .insert_vec(self.config.profile.secrets())
             .await;
 
-        // TSP relationship gating is off here, and that is a gap rather than a
-        // decision.
-        //
-        // Spec Rev 3 §7.2.2 has an endpoint drop an application message from a
-        // VID it holds no relationship with, and a service built on this
-        // framework is an endpoint in that sense. But the framework has no
-        // relationship lifecycle: it unpacks TSP frames and dispatches them,
-        // and never records an invite, sends an accept, or holds any
-        // relationship state. Gating a node that cannot form a relationship
-        // makes it inert — it would discard every application message forever,
-        // silently, because a discard looks exactly like nothing arriving.
-        //
-        // So it stays off until the framework handles TSP control messages.
-        // That is the actual fix; this keeps the framework working in the
-        // meantime rather than shipping something that cannot receive.
-        let atm_config = {
-            let builder = ATMConfigBuilder::default();
-            #[cfg(feature = "tsp")]
-            let builder = builder.with_tsp_relationship_gating(false);
-            builder.build().map_err(StartupError::Config)?
-        };
+        // Relationship gating is left at its default (on). A service built on
+        // this framework is an endpoint in the sense of spec Rev 3 §7.2.2, and
+        // the framework now records inbound control messages — see
+        // `dispatch_tsp_frame` — so it can hold the relationships the gate
+        // checks for.
+        let atm_config = ATMConfigBuilder::default()
+            .build()
+            .map_err(StartupError::Config)?;
 
         let atm = ATM::new(atm_config, shared_state)
             .await
@@ -416,10 +405,87 @@ impl Listener {
         // fail with "missing -E envelope wrapper". (The raw-TSP `connect_websocket`
         // path yields already-decoded qb2 and correctly uses `unpack_bytes`; this
         // DIDComm-multiplexed path does not.)
-        let (payload, sender_vid) = match atm.tsp().unpack(profile, &packed).await {
+        // A control message and an application message are indistinguishable
+        // until opened — the kind lives in the encrypted payload, not the
+        // envelope — so unpack once and branch on what comes back.
+        let qb2 = match atm.tsp().decode(&packed) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                warn!(profile = %profile.inner.alias, error = %e, "Failed to decode TSP frame");
+                return;
+            }
+        };
+        let inbound = match atm.tsp().unpack_message(profile, &qb2).await {
             Ok(v) => v,
             Err(e) => {
                 warn!(profile = %profile.inner.alias, error = %e, "Failed to unpack TSP frame");
+                return;
+            }
+        };
+
+        let (payload, sender_vid) = match inbound {
+            affinidi_messaging_sdk::protocols::tsp::InboundTsp::Application {
+                payload,
+                sender,
+            } => (payload, sender),
+            affinidi_messaging_sdk::protocols::tsp::InboundTsp::Control {
+                control,
+                sender,
+                thread_digest,
+            } => {
+                // Record it, and stop. Recording an invite is what admits the
+                // application messages that follow it (§7.2.2 with §3.6), so a
+                // service that did not would gate itself into silence.
+                //
+                // It is recorded but not answered. Whether to accept a
+                // relationship an invite proposes is the application's
+                // decision, not the framework's — so the invite is surfaced to
+                // the handler, which may call `accept_relationship` with the
+                // digest carried here.
+                match atm
+                    .tsp()
+                    .record_incoming_control(profile, &sender, &control)
+                    .await
+                {
+                    Ok(incoming) => {
+                        debug!(
+                            profile = %profile.inner.alias,
+                            sender = %sender,
+                            state = ?incoming.state,
+                            reply_expected = incoming.reply_expected,
+                            "Recorded inbound TSP control message"
+                        );
+                        handler
+                            .handle_control(
+                                HandlerContext {
+                                    listener_id: listener_id.to_string(),
+                                    atm: atm.clone(),
+                                    profile: profile.clone(),
+                                    sender_did: Some(sender.clone()),
+                                    // A TSP control message carries no DIDComm
+                                    // ids; its thread digest is the stable one.
+                                    message_id: control_message_id(&thread_digest),
+                                    thread_id: control_message_id(&thread_digest),
+                                    parent_thread_id: None,
+                                },
+                                control,
+                                sender,
+                                thread_digest,
+                            )
+                            .await;
+                    }
+                    Err(e) => {
+                        // Discarded by a protocol rule — a cancellation for a
+                        // relationship we do not hold, or the losing side of an
+                        // invite race. Not an error to answer.
+                        debug!(
+                            profile = %profile.inner.alias,
+                            sender = %sender,
+                            error = %e,
+                            "Inbound TSP control message not recorded"
+                        );
+                    }
+                }
                 return;
             }
         };
@@ -485,6 +551,7 @@ impl Listener {
         Ok(())
     }
 
+
     pub(crate) async fn dispatch_message(
         listener_id: &str,
         atm: &ATM,
@@ -543,4 +610,17 @@ impl Listener {
         let message = response.into_message(ctx)?;
         transport::send_response(ctx, message).await
     }
+}
+
+/// A stable id for a TSP control message, derived from its thread digest.
+///
+/// A control message carries no DIDComm message or thread id, so handlers and
+/// logs get one built from the digest that identifies the exchange.
+#[cfg(feature = "tsp")]
+fn control_message_id(digest: &[u8; 32]) -> String {
+    use std::fmt::Write as _;
+    digest.iter().fold(String::from("tsp-control-"), |mut acc, b| {
+        let _ = write!(acc, "{b:02x}");
+        acc
+    })
 }

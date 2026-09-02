@@ -26,7 +26,10 @@ use std::sync::Arc;
 use affinidi_did_common::DocumentExt;
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_secrets_resolver::secrets::KeyType;
-use affinidi_tsp::message::control::{ControlMessage, ControlType};
+use affinidi_tsp::message::control::ControlType;
+/// Re-exported so a caller can name a control message without depending on
+/// `affinidi-tsp` directly.
+pub use affinidi_tsp::message::control::ControlMessage;
 use affinidi_tsp::message::direct;
 use affinidi_tsp::relationship::{InvalidTransition, RelationshipEvent};
 /// Re-exported so callers can name the states a [`RelationshipStore`] holds
@@ -575,6 +578,32 @@ pub struct IncomingControl {
     /// being asked; it is reported here so a caller can see the route rather
     /// than having to infer it.
     pub reply_path: Vec<String>,
+}
+
+/// What an inbound TSP frame turned out to be.
+///
+/// A receiver cannot tell a control message from an application one without
+/// opening it — the kind lives in the encrypted payload, not the envelope — so
+/// anything that must treat them differently needs to unpack once and be told,
+/// rather than guess and unpack twice.
+#[derive(Debug, Clone)]
+pub enum InboundTsp {
+    /// An application message for the upper layer.
+    Application {
+        /// The decrypted payload.
+        payload: Vec<u8>,
+        /// The sender's VID.
+        sender: String,
+    },
+    /// A relationship control message: an invite, an accept or a cancellation.
+    Control {
+        /// The decoded control payload.
+        control: ControlMessage,
+        /// The sender's VID.
+        sender: String,
+        /// This message's `TSP_Digest` — the value an accept must echo back.
+        thread_digest: [u8; 32],
+    },
 }
 
 /// TSP protocol operations, obtained from [`crate::ATM::tsp`].
@@ -1575,6 +1604,67 @@ impl TspOps<'_> {
             .await?;
 
         Ok((unpacked.payload, unpacked.sender))
+    }
+
+    /// Unpack a fetched TSP message and report which kind it is.
+    ///
+    /// For a caller that handles both — a service listener taking whatever
+    /// arrives on one socket — where [`unpack`](Self::unpack) and
+    /// [`unpack_control`](Self::unpack_control) each assume the kind in advance.
+    ///
+    /// An application message is subject to the Rev 3 §7.2.2 relationship gate;
+    /// a control message is not, since the exchange that forms a relationship
+    /// cannot itself require one.
+    pub async fn unpack_message(
+        &self,
+        profile: &Arc<ATMProfile>,
+        qb2: &[u8],
+    ) -> Result<InboundTsp, ATMError> {
+        let meta = MetaEnvelope::parse(qb2)
+            .map_err(|e| ATMError::MsgReceiveError(format!("couldn't parse TSP envelope: {e}")))?;
+
+        let (profile_did, _) = profile.dids()?;
+        if meta.receiver != profile_did {
+            return Err(ATMError::MsgReceiveError(format!(
+                "TSP message addressed to {}, not this profile ({profile_did})",
+                meta.receiver
+            )));
+        }
+
+        let unpacked = self
+            .unpack_with_fresh_key_state(profile_did, &meta.sender, qb2)
+            .await?;
+
+        self.learn_tsp_supported(profile_did, &unpacked.sender, CapabilitySource::Observed)
+            .await?;
+
+        if let Some(control) = unpacked.control {
+            return Ok(InboundTsp::Control {
+                control,
+                sender: unpacked.sender,
+                thread_digest: unpacked.thread_digest,
+            });
+        }
+
+        // §7.2.2, as in `unpack_bytes`: an application message from a VID we
+        // hold no relationship with is discarded.
+        if self.atm.inner.config.tsp_relationship_gating() {
+            let state = self
+                .relationship_store()
+                .get(profile_did, &unpacked.sender)
+                .await?;
+            if !state.admits_application_message() {
+                return Err(ATMError::MsgReceiveError(format!(
+                    "TSP message from {} discarded: no relationship with {profile_did}",
+                    unpacked.sender
+                )));
+            }
+        }
+
+        Ok(InboundTsp::Application {
+            payload: unpacked.payload,
+            sender: unpacked.sender,
+        })
     }
 
     /// Unpack a fetched TSP **control** message (raw qb2 bytes), returning the

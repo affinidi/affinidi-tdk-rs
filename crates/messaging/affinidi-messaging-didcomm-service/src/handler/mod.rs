@@ -82,6 +82,30 @@ pub trait TspHandler: Send + Sync + 'static {
         payload: Vec<u8>,
         sender_vid: String,
     ) -> Result<Option<TspResponse>, DIDCommServiceError>;
+
+    /// Called for an inbound TSP **control** message — an invite, an accept or
+    /// a cancellation — after the framework has recorded it.
+    ///
+    /// The framework records the relationship but does not answer it. Whether
+    /// to accept a relationship an invite proposes is the application's
+    /// decision, so an implementation that wants the relationship completed
+    /// calls [`TspOps::accept_relationship`] with the `thread_digest` given
+    /// here. A cancellation of a relationship held in both directions asks for
+    /// one in return (spec Rev 3 §7.3); the framework does not send it, for the
+    /// same reason.
+    ///
+    /// The default does nothing, so a handler that only cares about
+    /// application messages is unaffected.
+    ///
+    /// [`TspOps::accept_relationship`]: affinidi_messaging_sdk::protocols::tsp::TspOps::accept_relationship
+    async fn handle_control(
+        &self,
+        _ctx: HandlerContext,
+        _control: affinidi_messaging_sdk::protocols::tsp::ControlMessage,
+        _sender_vid: String,
+        _thread_digest: [u8; 32],
+    ) {
+    }
 }
 
 /// No-op [`TspHandler`] that silently drops TSP messages — the TSP analogue of

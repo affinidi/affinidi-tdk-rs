@@ -63,10 +63,11 @@ async fn didcomm_transport_surfaces_inbound_tsp_frame() {
     for secret in service.secrets.clone() {
         service_tdk.secrets_resolver().insert(secret).await;
     }
-    // Gating off, matching what the framework listener does and for the same
-    // reason: this test drives the transport adapter directly and never runs a
-    // relationship handshake, and the framework has no lifecycle to run one
-    // with. See the note in `service/listener.rs`.
+    // Gating off. The service listener records inbound control messages and so
+    // gates normally, but this test bypasses it: `DidCommTransport` surfaces
+    // raw frames and has no relationship lifecycle of its own. Gating here
+    // would test the adapter's ability to run a handshake it does not have,
+    // rather than its ability to surface a frame, which is the subject.
     let service_atm = ATM::new(
         ATMConfig::builder()
             .with_tsp_relationship_gating(false)
