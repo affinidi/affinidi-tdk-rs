@@ -255,7 +255,15 @@ pub(crate) async fn handle_inbound_tsp(
         // mediator's own pickup (the mediator is the addressed recipient). Direct
         // and Control messages destined for *local accounts* never reach here —
         // they took the `receiver != mediator` opaque pass-through above.
-        TspMessageType::Direct | TspMessageType::Control => {
+        // End-to-end message types the mediator only carries: it stores them
+        // for the recipient and never opens them. `GenericControl` is control
+        // for the layer above TSP and `PaddingOnly` carries nothing at all, but
+        // both are addressed to the recipient rather than to us, so they take
+        // the same path as a Direct message.
+        TspMessageType::Direct
+        | TspMessageType::Control
+        | TspMessageType::GenericControl
+        | TspMessageType::PaddingOnly => {
             deliver_tsp_local(state, session, raw).await
         }
     }

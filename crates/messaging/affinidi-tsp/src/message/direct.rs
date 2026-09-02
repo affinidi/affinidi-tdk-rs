@@ -139,6 +139,10 @@ mod payload_marker {
     pub const ACCEPT: [u8; 3] = crate::message::wire::XRFA;
     /// Relationship cancel.
     pub const CANCEL: [u8; 3] = crate::message::wire::XRFD;
+    /// Generic control payload for the layer above TSP.
+    pub const GENERIC_CONTROL: [u8; 3] = crate::message::wire::XCTL;
+    /// Padding-only message.
+    pub const PADDING_ONLY: [u8; 3] = crate::message::wire::XPAD;
 }
 
 /// Encode a SHA-256 digest as a CESR fixed-data field under the `I` code.
@@ -413,6 +417,43 @@ fn encode_payload_frame(
             );
             frame_body.extend_from_slice(&stream);
         }
+        MessageType::GenericControl => {
+            // Same shape as `XSCS`: the difference is what the type code tells
+            // the upper layer, not how the bytes are carried.
+            frame_body.extend_from_slice(&payload_marker::GENERIC_CONTROL);
+            frame_body.extend_from_slice(&sender_field);
+            padding_at = Some(frame_body.len());
+            encode_padding(&[], &mut frame_body);
+            let mut stream = Vec::new();
+            wire::encode_variable_data(wire::TSP_PLAINTEXT, body, &mut stream);
+            wire::encode_count(
+                wire::TSP_GENERIC_STREAM,
+                (stream.len() / 3) as u32,
+                &mut frame_body,
+            );
+            frame_body.extend_from_slice(&stream);
+        }
+        MessageType::PaddingOnly => {
+            // Carries no payload at all, so anything the caller passed is a
+            // mistake worth naming rather than silently dropping.
+            if !body.is_empty() {
+                return Err(TspError::InvalidMessage(
+                    "a padding message carries no payload".into(),
+                ));
+            }
+            frame_body.extend_from_slice(&payload_marker::PADDING_ONLY);
+            frame_body.extend_from_slice(&sender_field);
+            // A fresh nonce per message. Without it two padding messages
+            // between the same pair would be identical on the wire, which would
+            // make them recognisable as padding — the opposite of the point.
+            wire::encode_fixed_data(
+                wire::TSP_NONCE,
+                &crate::message::control::generate_nonce(),
+                &mut frame_body,
+            );
+            padding_at = Some(frame_body.len());
+            encode_padding(&[], &mut frame_body);
+        }
         MessageType::Nested | MessageType::Routed => {
             frame_body.extend_from_slice(&payload_marker::HOP);
             frame_body.extend_from_slice(&sender_field);
@@ -645,6 +686,44 @@ fn decode_payload_frame(
             kind: MessageType::Direct,
             hops: Vec::new(),
             body,
+            control: None,
+            thread_digest: sha256(&frame[..frame_end]),
+        })
+    } else if type_code == payload_marker::GENERIC_CONTROL {
+        let _pad = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing padding field".into()))?;
+        let stream_quadlets = wire::decode_count(wire::TSP_GENERIC_STREAM, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing -A payload stream".into()))?;
+        let stream_end = (stream_quadlets as usize)
+            .checked_mul(3)
+            .and_then(|len| pos.checked_add(len))
+            .filter(|end| *end <= frame_end)
+            .ok_or_else(|| {
+                TspError::InvalidMessage("-A stream overruns the payload frame".into())
+            })?;
+        let body = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing payload body".into()))?;
+        if pos > stream_end {
+            return Err(TspError::InvalidMessage(
+                "payload body overruns the -A stream".into(),
+            ));
+        }
+        Ok(DecodedFrame {
+            kind: MessageType::GenericControl,
+            hops: Vec::new(),
+            body,
+            control: None,
+            thread_digest: sha256(&frame[..frame_end]),
+        })
+    } else if type_code == payload_marker::PADDING_ONLY {
+        let _nonce = wire::decode_fixed_data::<NONCE_LEN>(wire::TSP_NONCE, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing or malformed nonce".into()))?;
+        let _pad = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing padding field".into()))?;
+        Ok(DecodedFrame {
+            kind: MessageType::PaddingOnly,
+            hops: Vec::new(),
+            body: Vec::new(),
             control: None,
             thread_digest: sha256(&frame[..frame_end]),
         })
@@ -900,6 +979,47 @@ pub fn pack_with_hops(
         receiver_encryption_key,
         None,
         &Padding::None,
+        true,
+    )
+}
+
+/// Pack a padding message (`XPAD`) — one that carries nothing but its own
+/// metadata (Rev 3 §9.3).
+///
+/// Two uses, both from the specification.
+///
+/// Traffic shaping: §11 observes that "timing, size, and frequency survive
+/// encryption, nesting, and routing alike", so an observer of a hop learns when
+/// a relationship is busy even when it learns nothing else. A message with no
+/// content still occupies all three, so padding messages let an endpoint spend
+/// them deliberately. Combine with a [`Padding`] to choose the size.
+///
+/// Prompting a peer to notice a rotation: §7.4.3 has an endpoint that rotated
+/// because its keys may have been compromised send one to each peer, since "a
+/// peer holding stale key state will fail to verify it and will therefore
+/// obtain the new key state, whereas a peer that receives nothing has no
+/// occasion to". Because it is signed with the new keys, an adversary holding
+/// the old ones cannot produce it.
+///
+/// Each message carries a fresh nonce, so two between the same pair do not look
+/// alike on the wire.
+pub fn pack_padding_message(
+    sender_vid: &str,
+    receiver_vid: &str,
+    sender_signing_key: &[u8; 32],
+    receiver_encryption_key: &[u8; 32],
+    padding: &Padding,
+) -> Result<PackedMessage, TspError> {
+    pack_inner(
+        &[],
+        MessageType::PaddingOnly,
+        &[],
+        sender_vid,
+        receiver_vid,
+        sender_signing_key,
+        receiver_encryption_key,
+        None,
+        padding,
         true,
     )
 }
@@ -2304,5 +2424,143 @@ mod tests {
         assert!(!unpacked.confidential);
         assert_eq!(unpacked.thread_digest, packed.thread_digest);
         assert!(unpacked.control.is_some());
+    }
+
+    // ---- Rev 3 §9.3: XCTL and XPAD ----
+
+    /// A generic control message carries an opaque stream for the layer above
+    /// TSP and arrives tagged as such — distinct from TSP's own relationship
+    /// control, which has a defined structure.
+    #[test]
+    fn a_generic_control_message_round_trips_and_is_not_relationship_control() {
+        let keys = gen_keys();
+        let body = br#"{"upper":"layer","content":"anything"}"#;
+
+        let packed = pack(
+            body,
+            MessageType::GenericControl,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        assert_eq!(unpacked.message_type, MessageType::GenericControl);
+        assert_eq!(unpacked.payload, body);
+        assert!(
+            unpacked.control.is_none(),
+            "XCTL is not TSP's relationship control and must not decode as one"
+        );
+    }
+
+    /// A padding message carries nothing. What arrives is metadata and an empty
+    /// payload — that is the whole content.
+    #[test]
+    fn a_padding_message_carries_nothing() {
+        let keys = gen_keys();
+        let packed = pack_padding_message(
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            &Padding::None,
+        )
+        .unwrap();
+
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        assert_eq!(unpacked.message_type, MessageType::PaddingOnly);
+        assert!(unpacked.payload.is_empty());
+        assert_eq!(unpacked.sender, "did:example:alice");
+    }
+
+    /// Each padding message carries a fresh nonce, so two between the same pair
+    /// are not identical on the wire. Without that they would be recognisable
+    /// as padding by repetition alone, which defeats the purpose.
+    #[test]
+    fn padding_messages_do_not_repeat_themselves() {
+        let keys = gen_keys();
+        let one = pack_padding_message(
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            &Padding::None,
+        )
+        .unwrap();
+        let two = pack_padding_message(
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            &Padding::None,
+        )
+        .unwrap();
+
+        assert_ne!(one.bytes, two.bytes);
+        assert_eq!(
+            one.bytes.len(),
+            two.bytes.len(),
+            "and they stay the same size, so length does not distinguish them"
+        );
+    }
+
+    /// Padding sizes a padding message, which is what makes it useful for
+    /// traffic shaping — an empty message that is always the same small size
+    /// announces itself.
+    #[test]
+    fn a_padding_message_can_be_sized() {
+        let keys = gen_keys();
+        let bare = pack_padding_message(
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            &Padding::None,
+        )
+        .unwrap();
+        let sized = pack_padding_message(
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            &Padding::ToMultipleOf(512),
+        )
+        .unwrap();
+
+        assert!(sized.bytes.len() > bare.bytes.len());
+
+        // And a real message padded to the same bucket is indistinguishable by
+        // size — which is the property that makes padding messages worth
+        // sending at all.
+        let real = pack_padded(
+            b"an actual message",
+            MessageType::Direct,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            &Padding::ToMultipleOf(512),
+        )
+        .unwrap();
+        assert_eq!(sized.bytes.len(), real.bytes.len());
+    }
+
+    /// A padding message has no payload slot, so passing one is refused rather
+    /// than silently dropped.
+    #[test]
+    fn a_padding_message_refuses_a_payload() {
+        let keys = gen_keys();
+        let err = pack(
+            b"not allowed here",
+            MessageType::PaddingOnly,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap_err();
+        assert!(matches!(err, TspError::InvalidMessage(_)), "got {err:?}");
     }
 }
