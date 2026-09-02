@@ -83,6 +83,29 @@ Bug fixes found on the way, both latent on `main`:
   recognised as TSP at all. The *constants* had never drifted; the predicates
   had.
 
+Conformance:
+
+- **The specification's own test vectors now run as a test suite**
+  (`tests/spec_vectors.rs`, fixture lifted from spec commit `c80b0e4`). Seven of
+  the nine Appendix A vectors cover what this crate implements, and all seven
+  pass: HPKE-Base direct, signed-only, invite, accept, cancel-by-reference,
+  nested and routed. The two Sealed Box vectors are carried in the fixture
+  unexercised.
+
+  These check something interop cannot. The harness packs with one
+  implementation and unpacks with the other, so a *shared* misreading passes it.
+  The vectors are fixed and external, and because `unpack` recomputes an invite's
+  or accept's SAID and refuses the message on a mismatch, every control vector
+  validates the whole §7.2.1 derivation — version, both VIDs, payload fields,
+  digest slot dummied — against a value this crate had no part in producing.
+
+- **Found a defect in a published vector.** `control-rfd`'s message is 393
+  characters, a length base64 cannot produce. Every TSP message is
+  `3 + count*3 + 72` bytes and every other vector in the appendix satisfies that
+  identity exactly; this one is 3 characters short of its own declared length.
+  Reported upstream; asserted as a defect in the test suite so that it starts
+  failing when the vector is republished.
+
 Interop: 14/14 against the ToIP reference implementation's `rev3` branch, both
 directions, across direct, routed, nested, 2 MiB, invite, accept and cancel.
 
