@@ -307,7 +307,12 @@ pub fn decode_count(identifier: u16, stream: &[u8], pos: &mut usize) -> Option<u
         let s2 = stream.get(*pos + 3..*pos + 6)?;
         let next = extract_triplet(s2.try_into().unwrap());
         *pos += 6;
-        Some(index << 24 | next)
+        // The long count is 30 bits: the high 6 live in the low 6 bits of this
+        // word (alongside the identifier), the low 24 in the next. `index` here
+        // still carries the identifier in its upper bits, so it must be masked
+        // before being shifted in — without the mask the count comes back
+        // enormous.
+        Some(((index & mask(6)) << 24) | next)
     } else {
         None
     }

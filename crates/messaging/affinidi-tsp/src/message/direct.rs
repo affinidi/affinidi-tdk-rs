@@ -1280,4 +1280,72 @@ mod tests {
         assert_eq!(meta.sender, "did:web:alice");
         assert_eq!(meta.receiver, "did:web:bob");
     }
+
+    /// Rev 3 widened the `-E` count to cover the ciphertext, which makes the
+    /// long count code `--E#####` reachable for the first time — Rev 2's count
+    /// covered only the header and so was always short. Messages either side of
+    /// the 4095-quadlet boundary must round-trip and must classify as TSP.
+    ///
+    /// Two real bugs hid behind that boundary until Rev 3 crossed it: a long
+    /// count decoded with the identifier bits still in it, and an ingress
+    /// classifier that knew only the short framing's leading byte.
+    #[test]
+    fn messages_either_side_of_the_long_count_boundary_round_trip() {
+        let keys = gen_keys();
+        // ~12 KB of content is where the `-E` count stops fitting in 12 bits.
+        for size in [100usize, 12_000, 20_000, 60_000] {
+            let payload = vec![0x41u8; size];
+            let packed = pack(
+                &payload,
+                MessageType::Direct,
+                "did:web:alice",
+                "did:web:bob",
+                &keys.sender_sign_sk,
+                &keys.receiver_enc_pk,
+            )
+            .unwrap();
+
+            assert!(
+                crate::message::meta::is_tsp(&packed.bytes),
+                "a {size}-byte message must classify as TSP at ingress"
+            );
+            assert!(
+                crate::message::meta::MetaEnvelope::parse(&packed.bytes).is_ok(),
+                "a {size}-byte message must expose keys-free addressing"
+            );
+
+            let unpacked =
+                unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+            assert_eq!(unpacked.payload, payload, "{size}-byte round trip");
+        }
+    }
+
+    /// A long-form message is framed `--E#####` and so leads with `0xFB`, not
+    /// the `0xF8` of the short form. Pinned because an ingress classifier that
+    /// knows only one of them silently misroutes the other.
+    #[test]
+    fn long_framing_uses_its_own_leading_byte() {
+        let keys = gen_keys();
+        let small = pack(
+            b"x",
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+        let large = pack(
+            &vec![0x41u8; 20_000],
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        assert_eq!(small.bytes[0], crate::message::meta::TSP_MAGIC_BYTE);
+        assert_eq!(large.bytes[0], crate::message::meta::TSP_MAGIC_BYTE_LONG);
+    }
 }
