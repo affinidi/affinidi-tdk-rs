@@ -1442,4 +1442,62 @@ mod tests {
 
         assert_eq!(resolver.refreshes(), 0);
     }
+
+    /// §5.3.3: "The final entry in the hop list is the destination's own VID
+    /// with its intermediary, rather than the intermediary's VID in that
+    /// relationship." Rev 2 put the intermediary's there.
+    ///
+    /// The identifier exposed to the source and to every intermediary along the
+    /// route is therefore one the destination chose, and an intermediary can
+    /// change the VIDs it uses without invalidating routing information its
+    /// clients have already shared.
+    #[test]
+    fn a_route_ends_in_the_destinations_vid_not_the_exits() {
+        let alice = TspAgent::new();
+        let m1 = TspAgent::new();
+        let m2 = TspAgent::new();
+
+        let a = PrivateVid::generate("did:example:alice");
+        let m1v = PrivateVid::generate("did:example:m1");
+        let m2v = PrivateVid::generate("did:example:m2");
+        let bv = PrivateVid::generate("did:example:bob");
+
+        alice.add_private_vid(a);
+        alice.add_verified_vid(m1v.to_resolved());
+        alice.add_verified_vid(bv.to_resolved());
+        m1.add_private_vid(m1v.clone());
+        m1.add_verified_vid(alice.resolver.resolve("did:example:alice").unwrap());
+        m1.add_verified_vid(m2v.to_resolved());
+        m2.add_private_vid(m2v.clone());
+        m2.add_verified_vid(m1v.to_resolved());
+        m2.add_verified_vid(bv.to_resolved());
+
+        let layer1 = alice
+            .send_routed(
+                "did:example:alice",
+                "did:example:bob",
+                &["did:example:m1", "did:example:m2"],
+                b"hi bob",
+            )
+            .unwrap();
+
+        // The route carried to the first hop ends in Bob's VID, not m2's.
+        let at_m1 = m1
+            .forward_routed("did:example:m1", &layer1.bytes)
+            .unwrap();
+        let layer2 = match at_m1 {
+            ForwardOutcome::Relay { to, message } => {
+                assert_eq!(to, "did:example:m2");
+                message
+            }
+            other => panic!("expected Relay, got {other:?}"),
+        };
+
+        // m2 is the exit, and what it delivers to is the destination's VID —
+        // the last hop-list entry — rather than a VID of its own.
+        match m2.forward_routed("did:example:m2", &layer2.bytes).unwrap() {
+            ForwardOutcome::Deliver { to, .. } => assert_eq!(to, "did:example:bob"),
+            other => panic!("expected Deliver, got {other:?}"),
+        }
+    }
 }
