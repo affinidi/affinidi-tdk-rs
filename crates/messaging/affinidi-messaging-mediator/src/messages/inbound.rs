@@ -150,7 +150,6 @@ pub(crate) async fn handle_inbound_tsp(
     let unpacked = affinidi_tsp::message::direct::unpack(
         raw,
         &identity.decryption_key,
-        &sender.encryption_key,
         &sender.signing_key,
     )
     .map_err(|e| {
@@ -206,7 +205,6 @@ pub(crate) async fn handle_inbound_tsp(
                         &identity.vid,
                         &next,
                         &identity.signing_key,
-                        &identity.decryption_key,
                         &next_vid.encryption_key,
                     )
                     .map_err(|e| {
@@ -1307,7 +1305,6 @@ mod tsp_tests {
             "did:example:alice",
             "did:example:bob",
             &alice.signing_key,
-            &alice.decryption_key,
             &bob.encryption_key,
         )
         .unwrap();

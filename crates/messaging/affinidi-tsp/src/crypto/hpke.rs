@@ -1,7 +1,21 @@
-//! HPKE-Auth (RFC 9180) implementation using primitives.
+//! HPKE-Base implementation using primitives.
 //!
-//! Suite: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20Poly1305, Auth mode —
-//! the cipher suite the TSP spec (v1.0 Implementor's Draft Rev 2) mandates.
+//! Suite: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20Poly1305, **Base**
+//! mode — the only PKAE configuration TSP spec Rev 3 §8 mandates.
+//!
+//! Rev 2 required HPKE-Auth, and this module implemented it. Rev 3 removes that
+//! mode outright, and with it the receiver's ability to check at the HPKE layer
+//! that the sender held a given KEM private key. That check is not lost, it
+//! moves: sender authenticity now rests on the TSP signature over the envelope
+//! and payload, and the ESSR binding of the ciphertext to the sender's identity
+//! is carried by the associated data, which names `VID_sndr`. A ciphertext that
+//! does not open under the receiver-computed `aad` MUST be rejected — which is
+//! what makes passing the AAD correctly a security-relevant detail here rather
+//! than a formality.
+//!
+//! Two inputs therefore changed meaning as well as value. `aad` was empty and is
+//! now `CONCAT(TSP_Version, VID_sndr, VID_rcvr)`; `info` was the envelope frame
+//! and is now the fixed protocol code `YTSP-`.
 //!
 //! This implements only the specific HPKE suite required by TSP, built from
 //! standard cryptographic primitives rather than a generic HPKE library.
@@ -15,14 +29,14 @@ use zeroize::Zeroize;
 use crate::error::TspError;
 
 // HPKE constants for our suite
-const MODE_AUTH: u8 = 0x02;
+const MODE_BASE: u8 = 0x00;
 
 const N_SECRET: usize = 32; // KEM shared secret size
 const N_K: usize = 32; // ChaCha20Poly1305 key size
 const N_N: usize = 12; // ChaCha20Poly1305 nonce size
 const N_H: usize = 32; // HKDF-SHA256 hash output size
 
-/// Result of HPKE-Auth sealing (encryption + sender authentication).
+/// Result of HPKE-Base sealing.
 pub struct SealResult {
     /// The encapsulated key (32 bytes, X25519 ephemeral public key).
     pub enc: [u8; 32],
@@ -30,37 +44,35 @@ pub struct SealResult {
     pub ciphertext: Vec<u8>,
 }
 
-/// Seal (encrypt + authenticate) a plaintext for a recipient.
+/// Seal (encrypt) a plaintext for a recipient — `SealBase` in RFC 9180 terms.
 ///
-/// Uses HPKE Auth mode: the sender's identity is cryptographically bound
-/// to the ciphertext, providing both confidentiality and sender authentication.
+/// Base mode does not authenticate the sender at the HPKE layer. In TSP that
+/// role is filled by the signature over the message plus the `aad`, which binds
+/// the ciphertext to `VID_sndr`; see the module docs.
 ///
 /// # Nonce safety
 ///
 /// Each call to `seal()` generates a fresh ephemeral X25519 keypair inside
-/// [`auth_encap`]. Because the ephemeral secret key is unique per call, the
-/// ECDH shared secret is unique, and therefore [`key_schedule`] derives a
-/// unique `(key, base_nonce)` pair for every message. The `base_nonce` is
-/// used exactly once (sequence number 0) and then discarded, so there is no
-/// nonce reuse even though we do not maintain an explicit counter.
+/// [`encap`]. Because the ephemeral secret key is unique per call, the ECDH
+/// shared secret is unique, and therefore [`key_schedule`] derives a unique
+/// `(key, base_nonce)` pair for every message. The `base_nonce` is used exactly
+/// once (sequence number 0) and then discarded, so there is no nonce reuse even
+/// though we do not maintain an explicit counter.
 ///
 /// # Arguments
 /// * `plaintext` - The data to encrypt
-/// * `aad` - Additional authenticated data (e.g., TSP envelope)
-/// * `sender_sk` - Sender's X25519 private key (32 bytes)
+/// * `aad` - Associated data; for TSP, `TSP_Version ‖ VID_sndr ‖ VID_rcvr`
 /// * `recipient_pk` - Recipient's X25519 public key (32 bytes)
-/// * `info` - Context info for key derivation (can be empty)
+/// * `info` - Context info; for TSP, the protocol code `YTSP-`
 pub fn seal(
     plaintext: &[u8],
     aad: &[u8],
-    sender_sk: &[u8; 32],
     recipient_pk: &[u8; 32],
     info: &[u8],
 ) -> Result<SealResult, TspError> {
-    let sk_s = StaticSecret::from(*sender_sk);
     let pk_r = PublicKey::from(*recipient_pk);
 
-    let (shared_secret, enc) = auth_encap(&pk_r, &sk_s)?;
+    let (shared_secret, enc) = encap(&pk_r)?;
     let (key, base_nonce) = key_schedule(&shared_secret, info)?;
 
     let mut ciphertext = plaintext.to_vec();
@@ -74,34 +86,36 @@ pub fn seal(
     Ok(SealResult { enc, ciphertext })
 }
 
-/// Open (decrypt + verify sender) a ciphertext.
+/// Open (decrypt) a ciphertext — `OpenBase` in RFC 9180 terms.
+///
+/// The caller must compute `aad` from the receiver's own view of the envelope,
+/// per Rev 3 §8: `VID_rcvr` is taken from local state (or checked for equality
+/// against the message), and a ciphertext that does not open under that `aad`
+/// is rejected. That check is what carries the ESSR sender binding in Base mode.
 ///
 /// # Nonce safety
 ///
 /// The `enc` field carries the sender's ephemeral public key, which is unique
-/// per message. [`auth_decap`] uses it to recover the same unique shared secret
-/// that was produced by `seal`, so the derived `(key, base_nonce)` pair is
-/// equally unique and used only once.
+/// per message. [`decap`] uses it to recover the same unique shared secret that
+/// was produced by `seal`, so the derived `(key, base_nonce)` pair is equally
+/// unique and used only once.
 ///
 /// # Arguments
 /// * `ciphertext` - The encrypted data (including 16-byte Poly1305 tag)
-/// * `aad` - Additional authenticated data (must match what was used in seal)
+/// * `aad` - Associated data; must match what the sender used
 /// * `enc` - The encapsulated key from the sender
 /// * `recipient_sk` - Recipient's X25519 private key (32 bytes)
-/// * `sender_pk` - Sender's X25519 public key (32 bytes)
-/// * `info` - Context info (must match what was used in seal)
+/// * `info` - Context info; must match what the sender used
 pub fn open(
     ciphertext: &[u8],
     aad: &[u8],
     enc: &[u8; 32],
     recipient_sk: &[u8; 32],
-    sender_pk: &[u8; 32],
     info: &[u8],
 ) -> Result<Vec<u8>, TspError> {
     let sk_r = StaticSecret::from(*recipient_sk);
-    let pk_s = PublicKey::from(*sender_pk);
 
-    let shared_secret = auth_decap(enc, &sk_r, &pk_s)?;
+    let shared_secret = decap(enc, &sk_r)?;
     let (key, base_nonce) = key_schedule(&shared_secret, info)?;
 
     let mut plaintext = ciphertext.to_vec();
@@ -117,36 +131,25 @@ pub fn open(
     Ok(plaintext)
 }
 
-/// AuthEncap: generate shared secret with sender authentication.
+/// Encap: generate a shared secret for the recipient (RFC 9180 §4.1, Base).
 ///
-/// RFC 9180 §4.1 (Auth mode):
-/// 1. Generate ephemeral X25519 keypair
-/// 2. DH with ephemeral→recipient and sender→recipient
-/// 3. Derive shared secret from both DH results
-fn auth_encap(
-    pk_r: &PublicKey,
-    sk_s: &StaticSecret,
-) -> Result<([u8; N_SECRET], [u8; 32]), TspError> {
-    // Generate ephemeral keypair
+/// 1. Generate an ephemeral X25519 keypair
+/// 2. One DH, ephemeral→recipient
+/// 3. Derive the shared secret over `enc ‖ pkRm`
+///
+/// Base mode differs from Auth in both halves: one DH instead of two, and a
+/// KEM context of `enc ‖ pkRm` rather than `enc ‖ pkRm ‖ pkSm`. The sender's
+/// static key does not participate at all.
+fn encap(pk_r: &PublicKey) -> Result<([u8; N_SECRET], [u8; 32]), TspError> {
     let sk_e = StaticSecret::random_from_rng(&mut rand_10::rng());
     let pk_e = PublicKey::from(&sk_e);
 
-    // Two DH operations
-    let dh_eph = sk_e.diffie_hellman(pk_r);
-    let dh_sender = sk_s.diffie_hellman(pk_r);
+    let mut dh = *sk_e.diffie_hellman(pk_r).as_bytes();
 
-    // Concatenate DH results: dh = dh_eph || dh_sender
-    let mut dh = [0u8; 64];
-    dh[..32].copy_from_slice(dh_eph.as_bytes());
-    dh[32..].copy_from_slice(dh_sender.as_bytes());
-
-    // Build KEM context: enc || pkRm || pkSm (RFC 9180 §4.1 — recipient then sender)
     let enc = pk_e.to_bytes();
-    let pk_s = PublicKey::from(sk_s);
-    let mut kem_context = [0u8; 96]; // 32 + 32 + 32
+    let mut kem_context = [0u8; 64]; // enc || pkRm
     kem_context[..32].copy_from_slice(&enc);
-    kem_context[32..64].copy_from_slice(pk_r.as_bytes());
-    kem_context[64..].copy_from_slice(pk_s.as_bytes());
+    kem_context[32..].copy_from_slice(pk_r.as_bytes());
 
     let shared_secret = extract_and_expand(&dh, &kem_context)?;
     dh.zeroize();
@@ -154,28 +157,16 @@ fn auth_encap(
     Ok((shared_secret, enc))
 }
 
-/// AuthDecap: recover shared secret using recipient's key and sender's public key.
-fn auth_decap(
-    enc: &[u8; 32],
-    sk_r: &StaticSecret,
-    pk_s: &PublicKey,
-) -> Result<[u8; N_SECRET], TspError> {
+/// Decap: recover the shared secret using the recipient's private key.
+fn decap(enc: &[u8; 32], sk_r: &StaticSecret) -> Result<[u8; N_SECRET], TspError> {
     let pk_e = PublicKey::from(*enc);
     let pk_r = PublicKey::from(sk_r);
 
-    // Two DH operations (mirror of AuthEncap)
-    let dh_eph = sk_r.diffie_hellman(&pk_e);
-    let dh_sender = sk_r.diffie_hellman(pk_s);
+    let mut dh = *sk_r.diffie_hellman(&pk_e).as_bytes();
 
-    let mut dh = [0u8; 64];
-    dh[..32].copy_from_slice(dh_eph.as_bytes());
-    dh[32..].copy_from_slice(dh_sender.as_bytes());
-
-    // Build KEM context: enc || pkRm || pkSm (RFC 9180 §4.1 — recipient then sender)
-    let mut kem_context = [0u8; 96];
+    let mut kem_context = [0u8; 64]; // enc || pkRm
     kem_context[..32].copy_from_slice(enc);
-    kem_context[32..64].copy_from_slice(pk_r.as_bytes());
-    kem_context[64..].copy_from_slice(pk_s.as_bytes());
+    kem_context[32..].copy_from_slice(pk_r.as_bytes());
 
     let shared_secret = extract_and_expand(&dh, &kem_context)?;
     dh.zeroize();
@@ -210,7 +201,7 @@ fn key_schedule(
 ) -> Result<([u8; N_K], [u8; N_N]), TspError> {
     let suite_id = HPKE_SUITE_ID;
 
-    // For Auth mode without PSK: psk = "" and psk_id = ""
+    // For Base mode without PSK: psk = "" and psk_id = ""
     let psk = b"";
     let psk_id = b"";
 
@@ -222,7 +213,7 @@ fn key_schedule(
 
     // ks_context = mode || psk_id_hash || info_hash (1 + 32 + 32 = 65 bytes, fixed size)
     let mut ks_context = [0u8; 1 + N_H + N_H];
-    ks_context[0] = MODE_AUTH;
+    ks_context[0] = MODE_BASE;
     ks_context[1..1 + N_H].copy_from_slice(&psk_id_hash);
     ks_context[1 + N_H..].copy_from_slice(&info_hash);
 
@@ -305,31 +296,74 @@ const KEM_SUITE_ID: &[u8] = b"KEM\x00\x20";
 /// = HPKE || 0x0020 (DHKEM X25519) || 0x0001 (HKDF-SHA256) || 0x0003 (ChaCha20Poly1305).
 const HPKE_SUITE_ID: &[u8] = b"HPKE\x00\x20\x00\x01\x00\x03";
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn hex32(s: &str) -> [u8; 32] {
+        hex::decode(s).unwrap().try_into().unwrap()
+    }
+
+    /// RFC 9180 Appendix A.2 — mode_base, DHKEM(X25519, HKDF-SHA256),
+    /// HKDF-SHA256, ChaCha20Poly1305. This is exactly the suite TSP Rev 3 §8
+    /// mandates, so the official vector pins our whole Base-mode path: decap,
+    /// the key schedule, and the AEAD.
+    ///
+    /// A round-trip test cannot do this job. `seal` and `open` share every
+    /// derivation, so they agree with each other under a wrong mode byte, a
+    /// wrong KEM context, or a wrong label just as readily as under a right
+    /// one — which is precisely how a Rev 2 implementation could look healthy
+    /// while speaking a protocol no one else speaks.
+    #[test]
+    fn rfc9180_a2_base_mode_known_answer() {
+        let sk_rm = hex32("8057991eef8f1f1af18f4a9491d16a1ce333f695d4db8e38da75975c4478e0fb");
+        let enc = hex32("1afa08d3dec047a643885163f1180476fa7ddb54c6a8029ea33f95796bf2ac4a");
+        let info = hex::decode("4f6465206f6e2061204772656369616e2055726e").unwrap();
+        let aad = hex::decode("436f756e742d30").unwrap();
+        let ct = hex::decode(
+            "1c5250d8034ec2b784ba2cfd69dbdb8af406cfe3ff938e131f0def8c8b60b4db21993c62ce81883d2dd1b51a28",
+        )
+        .unwrap();
+        let expected_pt =
+            hex::decode("4265617574792069732074727574682c20747275746820626561757479").unwrap();
+
+        let pt = open(&ct, &aad, &enc, &sk_rm, &info).unwrap();
+        assert_eq!(pt, expected_pt);
+    }
+
+    /// The same vector's intermediate values, checked individually so a failure
+    /// says *which* stage drifted rather than only that decryption failed.
+    #[test]
+    fn rfc9180_a2_shared_secret_and_key_schedule() {
+        let sk_rm = hex32("8057991eef8f1f1af18f4a9491d16a1ce333f695d4db8e38da75975c4478e0fb");
+        let enc = hex32("1afa08d3dec047a643885163f1180476fa7ddb54c6a8029ea33f95796bf2ac4a");
+        let info = hex::decode("4f6465206f6e2061204772656369616e2055726e").unwrap();
+
+        let shared_secret = decap(&enc, &StaticSecret::from(sk_rm)).unwrap();
+        assert_eq!(
+            hex::encode(shared_secret),
+            "0bbe78490412b4bbea4812666f7916932b828bba79942424abb65244930d69a7",
+        );
+
+        let (key, base_nonce) = key_schedule(&shared_secret, &info).unwrap();
+        assert_eq!(
+            hex::encode(key),
+            "ad2744de8e17f4ebba575b3f5f5a8fa1f69c2a07f6e7500bc60ca6e3e3ec1c91",
+        );
+        assert_eq!(hex::encode(base_nonce), "5c4d98150661b848853b547f");
+    }
+
     #[test]
     fn seal_open_roundtrip() {
-        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
-        let sender_pk = PublicKey::from(&sender_sk);
         let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
 
         let plaintext = b"Hello, TSP!";
-        let aad = b"envelope-data";
-        let info = b"TSP-v1";
+        let aad = b"version|sender|receiver";
+        let info = crate::message::wire::TSP_INFO;
 
-        let sealed = seal(
-            plaintext,
-            aad,
-            &sender_sk.to_bytes(),
-            recipient_pk.as_bytes(),
-            info,
-        )
-        .unwrap();
-
-        // Ciphertext should be plaintext + 16-byte Poly1305 tag
+        let sealed = seal(plaintext, aad, recipient_pk.as_bytes(), info).unwrap();
         assert_eq!(sealed.ciphertext.len(), plaintext.len() + 16);
 
         let opened = open(
@@ -337,147 +371,101 @@ mod tests {
             aad,
             &sealed.enc,
             &recipient_sk.to_bytes(),
-            sender_pk.as_bytes(),
             info,
         )
         .unwrap();
-
         assert_eq!(opened, plaintext);
     }
 
     #[test]
     fn wrong_recipient_key_fails() {
-        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
         let wrong_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
 
-        let sealed = seal(
-            b"secret",
-            b"aad",
-            &sender_sk.to_bytes(),
-            recipient_pk.as_bytes(),
-            b"",
-        )
-        .unwrap();
+        let sealed = seal(b"secret", b"aad", recipient_pk.as_bytes(), b"").unwrap();
 
-        let sender_pk = PublicKey::from(&sender_sk);
-        let result = open(
-            &sealed.ciphertext,
-            b"aad",
-            &sealed.enc,
-            &wrong_sk.to_bytes(),
-            sender_pk.as_bytes(),
-            b"",
+        assert!(
+            open(
+                &sealed.ciphertext,
+                b"aad",
+                &sealed.enc,
+                &wrong_sk.to_bytes(),
+                b"",
+            )
+            .is_err()
         );
-
-        assert!(result.is_err());
     }
 
-    #[test]
-    fn wrong_sender_key_fails() {
-        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
-        let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
-        let recipient_pk = PublicKey::from(&recipient_sk);
-
-        let sealed = seal(
-            b"secret",
-            b"aad",
-            &sender_sk.to_bytes(),
-            recipient_pk.as_bytes(),
-            b"",
-        )
-        .unwrap();
-
-        // Try to open with wrong sender public key
-        let wrong_pk = PublicKey::from(&StaticSecret::random_from_rng(&mut rand_10::rng()));
-        let result = open(
-            &sealed.ciphertext,
-            b"aad",
-            &sealed.enc,
-            &recipient_sk.to_bytes(),
-            wrong_pk.as_bytes(),
-            b"",
-        );
-
-        assert!(result.is_err());
-    }
-
+    /// The AAD is where the ESSR sender binding lives in Base mode: it names
+    /// `VID_sndr`, so a receiver that computes it from its own view of the
+    /// envelope cannot open a ciphertext sealed for a different sender.
     #[test]
     fn tampered_aad_fails() {
-        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
-        let sender_pk = PublicKey::from(&sender_sk);
         let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
 
-        let sealed = seal(
-            b"secret",
-            b"original-aad",
-            &sender_sk.to_bytes(),
-            recipient_pk.as_bytes(),
-            b"",
-        )
-        .unwrap();
+        let sealed = seal(b"secret", b"original-aad", recipient_pk.as_bytes(), b"").unwrap();
 
-        let result = open(
-            &sealed.ciphertext,
-            b"tampered-aad",
-            &sealed.enc,
-            &recipient_sk.to_bytes(),
-            sender_pk.as_bytes(),
-            b"",
+        assert!(
+            open(
+                &sealed.ciphertext,
+                b"tampered-aad",
+                &sealed.enc,
+                &recipient_sk.to_bytes(),
+                b"",
+            )
+            .is_err()
         );
+    }
 
-        assert!(result.is_err());
+    #[test]
+    fn mismatched_info_fails() {
+        let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
+        let recipient_pk = PublicKey::from(&recipient_sk);
+
+        let sealed = seal(b"secret", b"aad", recipient_pk.as_bytes(), b"YTSP-").unwrap();
+
+        assert!(
+            open(
+                &sealed.ciphertext,
+                b"aad",
+                &sealed.enc,
+                &recipient_sk.to_bytes(),
+                b"OTHER",
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn tampered_ciphertext_fails() {
-        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
-        let sender_pk = PublicKey::from(&sender_sk);
         let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
 
-        let sealed = seal(
-            b"secret",
-            b"aad",
-            &sender_sk.to_bytes(),
-            recipient_pk.as_bytes(),
-            b"",
-        )
-        .unwrap();
+        let sealed = seal(b"secret", b"aad", recipient_pk.as_bytes(), b"").unwrap();
 
         let mut tampered = sealed.ciphertext.clone();
         tampered[0] ^= 0xFF;
 
-        let result = open(
-            &tampered,
-            b"aad",
-            &sealed.enc,
-            &recipient_sk.to_bytes(),
-            sender_pk.as_bytes(),
-            b"",
+        assert!(
+            open(
+                &tampered,
+                b"aad",
+                &sealed.enc,
+                &recipient_sk.to_bytes(),
+                b"",
+            )
+            .is_err()
         );
-
-        assert!(result.is_err());
     }
 
     #[test]
     fn empty_plaintext() {
-        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
-        let sender_pk = PublicKey::from(&sender_sk);
         let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
 
-        let sealed = seal(
-            b"",
-            b"aad",
-            &sender_sk.to_bytes(),
-            recipient_pk.as_bytes(),
-            b"info",
-        )
-        .unwrap();
-
+        let sealed = seal(b"", b"aad", recipient_pk.as_bytes(), b"info").unwrap();
         assert_eq!(sealed.ciphertext.len(), 16); // just the tag
 
         let opened = open(
@@ -485,42 +473,41 @@ mod tests {
             b"aad",
             &sealed.enc,
             &recipient_sk.to_bytes(),
-            sender_pk.as_bytes(),
             b"info",
         )
         .unwrap();
-
         assert!(opened.is_empty());
     }
 
     #[test]
     fn large_plaintext() {
-        let sender_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
-        let sender_pk = PublicKey::from(&sender_sk);
         let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recipient_pk = PublicKey::from(&recipient_sk);
 
         let plaintext = vec![0x42u8; 65536];
-
-        let sealed = seal(
-            &plaintext,
-            b"",
-            &sender_sk.to_bytes(),
-            recipient_pk.as_bytes(),
-            b"",
-        )
-        .unwrap();
-
+        let sealed = seal(&plaintext, b"", recipient_pk.as_bytes(), b"").unwrap();
         let opened = open(
             &sealed.ciphertext,
             b"",
             &sealed.enc,
             &recipient_sk.to_bytes(),
-            sender_pk.as_bytes(),
             b"",
         )
         .unwrap();
-
         assert_eq!(opened, plaintext);
+    }
+
+    /// Every message gets a fresh ephemeral keypair, so two seals of the same
+    /// plaintext to the same recipient share neither `enc` nor ciphertext.
+    #[test]
+    fn each_seal_uses_a_fresh_ephemeral() {
+        let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
+        let recipient_pk = PublicKey::from(&recipient_sk);
+
+        let a = seal(b"same", b"aad", recipient_pk.as_bytes(), b"").unwrap();
+        let b = seal(b"same", b"aad", recipient_pk.as_bytes(), b"").unwrap();
+
+        assert_ne!(a.enc, b.enc);
+        assert_ne!(a.ciphertext, b.ciphertext);
     }
 }

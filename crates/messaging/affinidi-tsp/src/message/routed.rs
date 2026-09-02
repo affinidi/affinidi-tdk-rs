@@ -48,7 +48,6 @@ pub fn pack_routed(
     sender_vid: &str,
     first_hop_vid: &str,
     sender_signing_key: &[u8; 32],
-    sender_encryption_key: &[u8; 32],
     first_hop_encryption_key: &[u8; 32],
 ) -> Result<PackedMessage, TspError> {
     if remaining_route.is_empty() {
@@ -69,7 +68,6 @@ pub fn pack_routed(
         sender_vid,
         first_hop_vid,
         sender_signing_key,
-        sender_encryption_key,
         first_hop_encryption_key,
     )
 }
@@ -82,7 +80,6 @@ pub fn pack_nested(
     sender_vid: &str,
     intermediary_vid: &str,
     sender_signing_key: &[u8; 32],
-    sender_encryption_key: &[u8; 32],
     intermediary_encryption_key: &[u8; 32],
 ) -> Result<PackedMessage, TspError> {
     direct::pack(
@@ -91,7 +88,6 @@ pub fn pack_nested(
         sender_vid,
         intermediary_vid,
         sender_signing_key,
-        sender_encryption_key,
         intermediary_encryption_key,
     )
 }
@@ -175,7 +171,6 @@ mod tests {
                 &alice.vid,
                 &hop1.vid,
                 &alice.sign_sk,
-                &alice.enc_sk,
                 &hop1.enc_pk,
             )
             .is_err()
@@ -194,7 +189,6 @@ mod tests {
                 &alice.vid,
                 &hop1.vid,
                 &alice.sign_sk,
-                &alice.enc_sk,
                 &hop1.enc_pk,
             )
             .is_err()
@@ -243,7 +237,6 @@ mod tests {
             &alice.vid,
             &final_p.vid,
             &alice.sign_sk,
-            &alice.enc_sk,
             &final_p.enc_pk,
         )
         .unwrap();
@@ -256,13 +249,12 @@ mod tests {
             &alice.vid,
             &hop1.vid,
             &alice.sign_sk,
-            &alice.enc_sk,
             &hop1.enc_pk,
         )
         .unwrap();
 
         // 3. hop1 opens its layer (it is the receiver), reads the route.
-        let at_hop1 = unpack(&layer1.bytes, &hop1.enc_sk, &alice.enc_pk, &alice.sign_pk).unwrap();
+        let at_hop1 = unpack(&layer1.bytes, &hop1.enc_sk, &alice.sign_pk).unwrap();
         assert_eq!(at_hop1.message_type, MessageType::Routed);
         let step1 = next_hop(&at_hop1).unwrap();
         let (next1, rest1, carried1) = match step1 {
@@ -285,13 +277,12 @@ mod tests {
             &hop1.vid,
             &hop2.vid,
             &hop1.sign_sk,
-            &hop1.enc_sk,
             &hop2.enc_pk,
         )
         .unwrap();
 
         // 5. hop2 opens its layer, sees route [final] → forward/deliver to final.
-        let at_hop2 = unpack(&layer2.bytes, &hop2.enc_sk, &hop1.enc_pk, &hop1.sign_pk).unwrap();
+        let at_hop2 = unpack(&layer2.bytes, &hop2.enc_sk, &hop1.sign_pk).unwrap();
         let step2 = next_hop(&at_hop2).unwrap();
         let (next2, rest2, carried2) = match step2 {
             RouteStep::Forward {
@@ -307,7 +298,7 @@ mod tests {
         // 6. hop2 forwards the opaque inner to final (no re-seal needed: the
         //    inner is already a complete message sealed alice → final). final
         //    unpacks it directly and recovers the plaintext.
-        let delivered = unpack(&carried2, &final_p.enc_sk, &alice.enc_pk, &alice.sign_pk).unwrap();
+        let delivered = unpack(&carried2, &final_p.enc_sk, &alice.sign_pk).unwrap();
         assert_eq!(delivered.payload, b"the secret");
         assert_eq!(delivered.sender, "did:web:alice");
         assert_eq!(delivered.receiver, "did:web:final");
@@ -321,18 +312,17 @@ mod tests {
         let hop2 = party("did:web:hop2");
 
         let layer = pack_routed(
-            b"inner",
+            b"inner-",  // quadlet-aligned
             &["did:web:hop2".into()],
             &alice.vid,
             &hop1.vid,
             &alice.sign_sk,
-            &alice.enc_sk,
             &hop1.enc_pk,
         )
         .unwrap();
 
         // hop2 tries to open hop1's layer with its own key — must fail.
-        assert!(unpack(&layer.bytes, &hop2.enc_sk, &alice.enc_pk, &alice.sign_pk).is_err());
+        assert!(unpack(&layer.bytes, &hop2.enc_sk, &alice.sign_pk).is_err());
     }
 
     /// Nested wrapper: an inner packed message carried opaquely to an intermediary.
@@ -348,7 +338,6 @@ mod tests {
             &alice.vid,
             &bob.vid,
             &alice.sign_sk,
-            &alice.enc_sk,
             &bob.enc_pk,
         )
         .unwrap();
@@ -359,7 +348,6 @@ mod tests {
             &alice.vid,
             &mediator.vid,
             &alice.sign_sk,
-            &alice.enc_sk,
             &mediator.enc_pk,
         )
         .unwrap();
@@ -368,7 +356,6 @@ mod tests {
         let at_mediator = unpack(
             &nested.bytes,
             &mediator.enc_sk,
-            &alice.enc_pk,
             &alice.sign_pk,
         )
         .unwrap();
@@ -378,7 +365,6 @@ mod tests {
             unpack(
                 &at_mediator.payload,
                 &mediator.enc_sk,
-                &alice.enc_pk,
                 &alice.sign_pk
             )
             .is_err(),
@@ -386,7 +372,7 @@ mod tests {
         );
 
         // bob opens the inner.
-        let at_bob = unpack(&inner.bytes, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk).unwrap();
+        let at_bob = unpack(&inner.bytes, &bob.enc_sk, &alice.sign_pk).unwrap();
         assert_eq!(at_bob.payload, b"for bob only");
     }
 }

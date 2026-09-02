@@ -36,7 +36,7 @@ pub fn is_tsp(bytes: &[u8]) -> bool {
 /// Cleartext metadata of a TSP message, parsed without any keys.
 ///
 /// The TSP envelope carries the sender VID and receiver VID in the clear (they
-/// are bound to the ciphertext via the HPKE `info`, but readable). This lets a
+/// are bound to the ciphertext via the HPKE-Base AAD, but readable). This lets a
 /// relay route and account for a message without being able to decrypt it.
 ///
 /// Note: in the interop wire format the message *kind* (Direct/Nested/Routed/
@@ -85,7 +85,6 @@ mod tests {
 
     fn packed() -> direct::PackedMessage {
         let sign = SigningKey::generate(&mut rand_10::rng());
-        let sender_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recv_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         direct::pack(
             b"payload",
@@ -93,7 +92,6 @@ mod tests {
             "did:web:alice",
             "did:web:bob",
             &sign.to_bytes(),
-            &sender_enc.to_bytes(),
             &PublicKey::from(&recv_enc).to_bytes(),
         )
         .unwrap()
@@ -136,15 +134,13 @@ mod tests {
         // In the interop format the kind is encrypted, so a keys-free parse only
         // recovers addressing (and reports Direct as a placeholder kind).
         let sign = SigningKey::generate(&mut rand_10::rng());
-        let sender_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recv_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         let msg = direct::pack(
-            b"routing-layer",
+            b"routing-layer!!",  // quadlet-aligned: a real inner is a packed message
             MessageType::Routed,
             "did:web:alice",
             "did:web:mediator",
             &sign.to_bytes(),
-            &sender_enc.to_bytes(),
             &PublicKey::from(&recv_enc).to_bytes(),
         )
         .unwrap();

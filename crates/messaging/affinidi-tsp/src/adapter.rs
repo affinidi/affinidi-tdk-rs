@@ -125,7 +125,6 @@ impl MessagingProtocol for TspAdapter {
             our_vid,
             next_hop,
             &our_private.signing_key,
-            &our_private.decryption_key,
             &next.encryption_key,
         )
         .map_err(|e| MessagingError::Protocol(e.to_string()))?;

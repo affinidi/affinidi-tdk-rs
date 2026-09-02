@@ -1,39 +1,46 @@
 //! TSP control messages for relationship management.
 //!
-//! Control messages drive the explicit relationship lifecycle that distinguishes
-//! TSP from DIDComm. On the wire they are **not** a serialized body inside a
-//! generic payload — each is its own CESR payload-frame variant, byte-compatible
-//! with the ToIP `tsp_sdk` reference (v0.9.0-alpha2):
+//! Control messages drive the explicit relationship lifecycle that
+//! distinguishes TSP from DIDComm. On the wire they are **not** a serialized
+//! body inside a generic payload — each is its own CESR payload-frame variant
+//! (spec Rev 3 §9.3), and every one of them begins with the ESSR sender-VID
+//! field and ends with the padding field:
 //!
-//!   * **Invite** (`DirectRelationProposal`) → `XRFI` + hops + `A` nonce(32) +
-//!     empty `B` VID.
-//!   * **Accept** (`DirectRelationAffirm`) → `XRFA` + `I` SHA-256 reply(32).
-//!   * **Cancel** (`RelationshipCancel`) → `XRFD` + `I` SHA-256 reply(32).
+//!   * **Invite** → `XRFI, VID_sndr, Digest, Nonce, Reply_Path, Referral, Pad`
+//!   * **Accept** → `XRFA, VID_sndr, Digest, Reply_Digest, Pad`
+//!   * **Cancel** → `XRFD, VID_sndr, Digest, Pad`
 //!
 //! The CESR encode/decode of these frames lives in [`crate::message::direct`]
 //! (see `encode_payload_frame` / `decode_payload_frame`). This module owns the
-//! semantic [`ControlMessage`] type and a compact self-describing
-//! `encode`/`decode` used to carry a recovered control across the SDK's
-//! `payload` field (the SDK unpacks to bytes, then re-decodes a control).
+//! semantic [`ControlMessage`] type and a local `encode`/`decode` used to carry
+//! a recovered control across the SDK's `payload` field.
 //!
-//! Replay correlation rides on the **thread digest**: `SHA256` of the plaintext
-//! payload frame (the `-Z…` bytes before sealing / after decrypt). The accept's
-//! `reply` is the invite's thread digest; the cancel's `reply` is the
-//! relationship-forming message's thread digest. See
-//! [`crate::message::direct::thread_digest`].
+//! Correlation rides on the **`TSP_Digest`** (§7.2.1), which Rev 3 changed from
+//! a convention into a wire field. It is a self-addressing digest computed over
+//! the message's own envelope and payload with the digest's own slot dummied
+//! out, carried in the message, and recomputed by the receiver. Rev 2 correlated
+//! on a hash of the encrypted payload that was never transmitted and so could
+//! never be checked. An accept's `Reply_Digest` and a cancel's `Digest` echo an
+//! earlier message's digest verbatim; they are not recomputed.
 
 use rand_core::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::error::TspError;
 
-/// Length of a relationship nonce and of a SHA-256 thread digest, in bytes.
+/// Length of a SHA-256 digest, in bytes.
 pub const DIGEST_LEN: usize = 32;
 
-/// Generate a cryptographically random 32-byte nonce (matching the reference's
-/// `Nonce`, which is 32 bytes for 256 bits of security).
-pub fn generate_nonce() -> [u8; DIGEST_LEN] {
-    let mut nonce = [0u8; DIGEST_LEN];
+/// Length of a relationship nonce, in bytes.
+///
+/// Rev 3 §9.2 (D9) fixes the nonce at 128 bits; Rev 2 used 256. The CESR code
+/// follows from the length — 16 bytes lands under the two-character `0A` code —
+/// so this constant is the only place the change needs to be made.
+pub const NONCE_LEN: usize = 16;
+
+/// Generate a cryptographically random 128-bit nonce.
+pub fn generate_nonce() -> [u8; NONCE_LEN] {
+    let mut nonce = [0u8; NONCE_LEN];
     rand_core::OsRng.fill_bytes(&mut nonce);
     nonce
 }
@@ -66,63 +73,88 @@ impl ControlType {
 /// A TSP control message payload.
 ///
 /// The fields used depend on [`ControlType`]:
-///   * **invite** carries a 32-byte `nonce` (and an optional `route` of hop
-///     VIDs, normally empty for a direct relationship); `reply` is `None`.
-///   * **accept** / **cancel** carry a 32-byte SHA-256 `reply` (the thread
-///     digest they respond to); `nonce` is `None` and `route` is empty.
+///   * **invite** carries a 128-bit `nonce` and, once packed, its own `digest`;
+///     `route` is the `Reply_Path`, empty for a direct reply.
+///   * **accept** carries its own `digest` and a `reply` — the invite's digest,
+///     echoed as `Reply_Digest`.
+///   * **cancel** carries only `reply`, the digest of the relationship-forming
+///     message it ends; `digest` mirrors it, since a cancel has no digest of
+///     its own to derive.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlMessage {
     /// The control message type.
     pub control_type: ControlType,
-    /// The 32-byte nonce (invite only).
+    /// This message's own self-addressing digest — the Rev 3 `TSP_Digest`
+    /// (§7.2.1), carried on the wire by an invite and an accept and verified by
+    /// the receiver. It is the thread id of the exchange this message opens.
+    ///
+    /// Set by the packing code, which is the only place that can compute it:
+    /// the derivation covers the envelope, which a caller constructing a
+    /// `ControlMessage` does not yet have.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub nonce: Option<[u8; DIGEST_LEN]>,
-    /// The 32-byte SHA-256 thread reference (accept / cancel only).
+    pub digest: Option<[u8; DIGEST_LEN]>,
+    /// The 128-bit nonce (invite only).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub nonce: Option<[u8; NONCE_LEN]>,
+    /// A digest referring to an earlier message, copied verbatim rather than
+    /// recomputed: an accept's `Reply_Digest` (the invite it answers) or a
+    /// cancel's `Digest` (the relationship-forming message it ends).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub reply: Option<[u8; DIGEST_LEN]>,
-    /// Hop VIDs carried in an invite (empty for a direct relationship).
+    /// The invite's `Reply_Path` (Rev 3 §9.2): the route over which the peer is
+    /// to send its accept. Empty — encoded `-JAA` — for a direct reply.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub route: Vec<String>,
 }
 
 impl ControlMessage {
-    /// Create a Relationship Forming Invite (with a fresh random 32-byte nonce
-    /// and no route).
+    /// Create a Relationship Forming Invite with a fresh 128-bit nonce and a
+    /// direct reply path.
     pub fn invite() -> Self {
         Self {
             control_type: ControlType::RelationshipFormingInvite,
+            digest: None,
             nonce: Some(generate_nonce()),
             reply: None,
             route: Vec::new(),
         }
     }
 
-    /// Create a Relationship Forming Invite carrying a `route` of hop VIDs.
+    /// Create a Relationship Forming Invite carrying a `Reply_Path` — the route
+    /// the peer is to send its accept over.
     pub fn invite_routed(route: Vec<String>) -> Self {
         Self {
             control_type: ControlType::RelationshipFormingInvite,
+            digest: None,
             nonce: Some(generate_nonce()),
             reply: None,
             route,
         }
     }
 
-    /// Create a Relationship Forming Accept referencing the invite's thread
-    /// digest (`reply` = `SHA256` of the invite's plaintext payload frame).
+    /// Create a Relationship Forming Accept answering the invite whose
+    /// `TSP_Digest` is `reply`. The accept's own digest is derived at pack time.
     pub fn accept(reply: [u8; DIGEST_LEN]) -> Self {
         Self {
             control_type: ControlType::RelationshipFormingAccept,
+            digest: None,
             nonce: None,
             reply: Some(reply),
             route: Vec::new(),
         }
     }
 
-    /// Create a Relationship Cancel referencing the relationship-forming
-    /// message's thread digest (`reply` = `SHA256` of that plaintext frame).
+    /// Create a Relationship Cancel naming the relationship-forming message it
+    /// ends by that message's `TSP_Digest`.
+    ///
+    /// Rev 3 §9.3 requires the digest to be present: a relationship cannot be
+    /// formed without an invite, so both parties hold at least that digest.
+    /// This is why the cancel no longer carries a nonce — the nonce existed
+    /// only to cover the case where the digest was absent.
     pub fn cancel(reply: [u8; DIGEST_LEN]) -> Self {
         Self {
             control_type: ControlType::RelationshipCancel,
+            digest: None,
             nonce: None,
             reply: Some(reply),
             route: Vec::new(),
@@ -130,7 +162,7 @@ impl ControlMessage {
     }
 
     /// The nonce, erroring if absent (invariant: present iff invite).
-    pub fn require_nonce(&self) -> Result<&[u8; DIGEST_LEN], TspError> {
+    pub fn require_nonce(&self) -> Result<&[u8; NONCE_LEN], TspError> {
         self.nonce
             .as_ref()
             .ok_or_else(|| TspError::InvalidMessage("invite is missing its nonce".into()))
@@ -143,99 +175,30 @@ impl ControlMessage {
             .ok_or_else(|| TspError::InvalidMessage("control is missing its reply digest".into()))
     }
 
-    /// Encode this control message to a compact self-describing byte form.
+
+    /// Encode this control message to a local, self-describing byte form.
     ///
-    /// This is **not** the TSP wire form (that is the CESR payload frame built in
-    /// [`crate::message::direct`]); it is a local encoding so the SDK — which
-    /// unpacks a message down to a `payload: Vec<u8>` — can recover a
-    /// [`ControlMessage`] via [`ControlMessage::decode`].
+    /// This is **not** the TSP wire form — that is the CESR payload frame built
+    /// in [`crate::message::direct`]. It exists so the SDK, which unpacks a
+    /// message down to a `payload: Vec<u8>`, can recover a [`ControlMessage`]
+    /// via [`ControlMessage::decode`]. Because it never leaves the process,
+    /// its shape is ours to choose, and it uses serde rather than a hand-rolled
+    /// framing so that adding a field cannot silently desynchronize the two
+    /// halves — which is a live risk now that the payload carries a digest, a
+    /// nonce of a different width, and a reply path.
     pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.push(self.control_type as u8);
-
-        match self.control_type {
-            ControlType::RelationshipFormingInvite => {
-                buf.extend_from_slice(self.nonce.as_ref().unwrap_or(&[0u8; DIGEST_LEN]));
-                buf.extend_from_slice(&(self.route.len() as u16).to_be_bytes());
-                for hop in &self.route {
-                    let bytes = hop.as_bytes();
-                    buf.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
-                    buf.extend_from_slice(bytes);
-                }
-            }
-            ControlType::RelationshipFormingAccept | ControlType::RelationshipCancel => {
-                buf.extend_from_slice(self.reply.as_ref().unwrap_or(&[0u8; DIGEST_LEN]));
-            }
-        }
-        buf
+        // A ControlMessage is a small struct of plain data; serialization
+        // cannot fail, and an empty body would be rejected by `decode`.
+        serde_json::to_vec(self).unwrap_or_default()
     }
 
-    /// Decode a control message from its compact self-describing byte form
-    /// (the inverse of [`ControlMessage::encode`]).
+    /// Decode a control message from its local byte form (the inverse of
+    /// [`ControlMessage::encode`]).
     pub fn decode(data: &[u8]) -> Result<Self, TspError> {
-        let control_type = data
-            .first()
-            .ok_or_else(|| TspError::InvalidMessage("control message empty".into()))
-            .and_then(|b| ControlType::from_byte(*b))?;
-        let mut pos = 1;
-
-        match control_type {
-            ControlType::RelationshipFormingInvite => {
-                let nonce = read_digest(data, &mut pos, "invite nonce")?;
-                let hop_count = read_u16(data, &mut pos, "route length")? as usize;
-                let mut route = Vec::with_capacity(hop_count);
-                for _ in 0..hop_count {
-                    let len = read_u16(data, &mut pos, "hop length")? as usize;
-                    let end = pos
-                        .checked_add(len)
-                        .filter(|e| *e <= data.len())
-                        .ok_or_else(|| TspError::InvalidMessage("hop VID truncated".into()))?;
-                    let hop = String::from_utf8(data[pos..end].to_vec())
-                        .map_err(|_| TspError::InvalidMessage("hop VID not UTF-8".into()))?;
-                    pos = end;
-                    route.push(hop);
-                }
-                Ok(Self {
-                    control_type,
-                    nonce: Some(nonce),
-                    reply: None,
-                    route,
-                })
-            }
-            ControlType::RelationshipFormingAccept | ControlType::RelationshipCancel => {
-                let reply = read_digest(data, &mut pos, "reply digest")?;
-                Ok(Self {
-                    control_type,
-                    nonce: None,
-                    reply: Some(reply),
-                    route: Vec::new(),
-                })
-            }
-        }
+        serde_json::from_slice(data)
+            .map_err(|e| TspError::InvalidMessage(format!("malformed control message: {e}")))
     }
 }
-
-fn read_u16(data: &[u8], pos: &mut usize, what: &str) -> Result<u16, TspError> {
-    let end = *pos + 2;
-    if end > data.len() {
-        return Err(TspError::InvalidMessage(format!("{what} truncated")));
-    }
-    let v = u16::from_be_bytes([data[*pos], data[*pos + 1]]);
-    *pos = end;
-    Ok(v)
-}
-
-fn read_digest(data: &[u8], pos: &mut usize, what: &str) -> Result<[u8; DIGEST_LEN], TspError> {
-    let end = *pos + DIGEST_LEN;
-    if end > data.len() {
-        return Err(TspError::InvalidMessage(format!("{what} truncated")));
-    }
-    let mut out = [0u8; DIGEST_LEN];
-    out.copy_from_slice(&data[*pos..end]);
-    *pos = end;
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,7 +209,7 @@ mod tests {
         let decoded = ControlMessage::decode(&msg.encode()).unwrap();
         assert_eq!(decoded, msg);
         assert_eq!(decoded.control_type, ControlType::RelationshipFormingInvite);
-        assert_eq!(decoded.nonce.unwrap().len(), 32);
+        assert_eq!(decoded.nonce.unwrap().len(), NONCE_LEN);
         assert!(decoded.reply.is_none());
         assert!(decoded.route.is_empty());
     }

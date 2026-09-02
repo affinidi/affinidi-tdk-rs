@@ -101,26 +101,38 @@ fn extract_triplet(q: &[u8; 3]) -> u32 {
 
 /// `B`: var-data plaintext payload, and (as fixed-data id) the Ed25519 signature.
 pub const TSP_PLAINTEXT: u32 = cesr_int("B") as u32;
-/// `B`: var-data VID identifier.
+/// `B`: var-data VID identifier. An empty VID encodes to `4BAA` — the Rev 3
+/// NULL VID, which is how "absent" is spelled for every VID-shaped field.
 pub const TSP_VID: u32 = cesr_int("B") as u32;
-/// `G`: var-data HPKE-Auth ciphertext.
-pub const TSP_HPKEAUTH_CIPHERTEXT: u32 = cesr_int("G") as u32;
-/// `B`: fixed-data Ed25519 signature identifier.
+/// `F`: var-data HPKE-Base ciphertext (Rev 3 §9.4, codes `4F`/`5F`/`6F` and the
+/// long forms). Rev 2's HPKE-Auth `G` codes are struck from the code table.
+pub const TSP_HPKE_BASE_CIPHERTEXT: u32 = cesr_int("F") as u32;
+/// `B`: Ed25519 signature identifier, used as the leading character of the
+/// *indexed* signature code `B#` (Rev 3 §9.5).
 pub const ED25519_SIGNATURE: u32 = cesr_int("B") as u32;
-/// `X`: a 2-byte fixed-data marker emitted after the envelope VIDs.
-pub const TSP_TMP: u32 = cesr_int("X") as u32;
-/// `A`: fixed-data id for a relationship nonce (32 bytes).
+/// `A`: fixed-data id for a relationship nonce. Rev 3 §9.2 makes the nonce 128
+/// bits, which puts it under the two-character code `0A`; the code follows from
+/// the payload length in [`encode_fixed_data`].
 pub const TSP_NONCE: u32 = cesr_int("A") as u32;
-/// `I`: fixed-data id for a SHA-256 digest (32 bytes) — the relationship
-/// thread reference (`reply`) carried by accept / cancel.
+/// `I`: fixed-data id for a SHA-256 digest (32 bytes) — the `TSP_Digest` /
+/// `Reply_Digest` carried by the relationship-forming payloads.
 pub const TSP_SHA256: u32 = cesr_int("I") as u32;
 
-/// `-E`: outer count-code wrapper for an encrypted-then-signed (ETS) envelope.
+/// `-E`: the single envelope frame. In Rev 3 its count covers *all* signable
+/// content — version, VIDs and the ciphertext — not just the header, so it can
+/// only be written once the ciphertext size is known. Rev 2's separate `-S`
+/// signed-only wrapper is gone; a signed-only message is an `-E` frame whose
+/// payload is cleartext.
 pub const TSP_ETS_WRAPPER: u16 = cesr_int("E") as u16;
-/// `-Z`: count-code wrapper for the (to-be-encrypted) CESR payload frame.
+/// `-Z`: count-code wrapper for the CESR payload frame.
 pub const TSP_PAYLOAD: u16 = cesr_int("Z") as u16;
-/// `-J`: count-code group for a hop (routing) list.
+/// `-J`: count-code group for a hop (routing) list, a reply path, or a referral.
+/// Rev 3 §9.2: the count is the **byte length** of the group, not the number of
+/// VIDs in it.
 pub const TSP_HOP_LIST: u16 = cesr_int("J") as u16;
+/// `-A`: generic CESR stream, the container Rev 3 §9.2.3 requires around every
+/// `XSCS` / `XCTL` upper-layer payload.
+pub const TSP_GENERIC_STREAM: u16 = cesr_int("A") as u16;
 /// `-C`: count-code attach group for the signature.
 pub const TSP_ATTACH_GRP: u16 = cesr_int("C") as u16;
 /// `-K`: count-code indexed-signature group for the signature.
@@ -140,8 +152,15 @@ pub const XRFA: [u8; 3] = cesr_data("XRFA");
 /// 3-byte payload-type marker for a relationship cancel
 /// (`RelationshipCancel`).
 pub const XRFD: [u8; 3] = cesr_data("XRFD");
+/// 3-byte payload-type marker for a generic control payload (Rev 3 §9.2).
+pub const XCTL: [u8; 3] = cesr_data("XCTL");
+/// 3-byte payload-type marker for a padding-only message (Rev 3 §9.2).
+pub const XPAD: [u8; 3] = cesr_data("XPAD");
 /// 3-byte TSP version genus marker.
 pub const YTSP: [u8; 3] = cesr_data("YTSP");
+/// The TSP protocol code `YTSP-`, used verbatim as the HPKE-Base `info` input
+/// (Rev 3 §8). Five ASCII characters, not the 3-byte binary [`YTSP`] marker.
+pub const TSP_INFO: &[u8] = b"YTSP-";
 
 /// TSP version `(major, minor, patch)` advertised on the wire.
 pub const TSP_VERSION: (u16, u8, u8) = (0, 0, 1);
@@ -187,13 +206,19 @@ pub fn encode_variable_data(identifier: u32, payload: &[u8], out: &mut Vec<u8>) 
 }
 
 /// Encode a count-code group header for `identifier` carrying `count` quadlets.
+///
+/// The long form is `--X#####` (Rev 3 §9). Rev 2 emitted `-0X#####`, which
+/// belonged to a superseded draft of the CESR v2 tables; the master table for
+/// genus `-_AAACAA` that Rev 3 pins carries only the double-dash form. This is
+/// a one-character change that a round-trip test cannot catch — encoder and
+/// decoder agree either way — so `long_count_uses_double_dash` pins the bytes.
 pub fn encode_count(identifier: u16, count: u32, out: &mut Vec<u8>) {
     if count < 4096 {
         let word = (DASH << 18) | (bits(identifier as u32, 6) << 12) | bits(count, 12);
         out.extend_from_slice(&u32::to_be_bytes(word)[1..]);
     } else {
         let word1 =
-            (DASH << 18) | (D0 << 12) | (bits(identifier as u32, 6) << 6) | bits(count >> 24, 6);
+            (DASH << 18) | (DASH << 12) | (bits(identifier as u32, 6) << 6) | bits(count >> 24, 6);
         let word2 = bits(count, 24);
         out.extend_from_slice(&u32::to_be_bytes(word1)[1..]);
         out.extend_from_slice(&u32::to_be_bytes(word2)[1..]);
@@ -206,32 +231,57 @@ pub fn encode_version(out: &mut Vec<u8>) {
     encode_count(TSP_VERSION.0, encoded_version() as u32, out);
 }
 
-/// Encode a hop (routing) list: a `-J<count>` group header followed by one
-/// `B` var-data field per hop VID. Byte-compatible with `tsp_sdk`'s
-/// `encode_hops`. An empty list encodes to just the `-J0` header (this is how
-/// a Nested payload is distinguished from a Routed one).
+/// Encode a `-J` VID list: the group header followed by one `B` var-data field
+/// per VID. Used for the routing hop list, and in Rev 3 also for the
+/// `Reply_Path` and `Referral_Field` payload fields.
+///
+/// Rev 3 §9.2 changed what the count means: it is the **byte length** of the
+/// group (in quadlets), not the number of VIDs. An empty list is `-JAA`, which
+/// is how an absent reply path / referral and a direct (non-routed) nesting are
+/// all spelled.
 pub fn encode_hops(hops: &[impl AsRef<[u8]>], out: &mut Vec<u8>) {
-    encode_count(TSP_HOP_LIST, hops.len() as u32, out);
+    let mut body = Vec::new();
     for hop in hops {
-        encode_variable_data(TSP_VID, hop.as_ref(), out);
+        encode_variable_data(TSP_VID, hop.as_ref(), &mut body);
     }
+    debug_assert!(body.len().is_multiple_of(3));
+    encode_count(TSP_HOP_LIST, (body.len() / 3) as u32, out);
+    out.extend_from_slice(&body);
 }
 
-/// Decode a hop (routing) list at `*pos`. On success advances `*pos` past the
-/// `-J` group + every hop field and returns the hop VID byte vectors.
+/// Decode a `-J` VID list at `*pos`. On success advances `*pos` past the group
+/// header and every VID field, and returns the VID byte vectors.
+///
+/// The group's declared byte length is authoritative: VIDs are read until it is
+/// exactly consumed, and a list whose fields overrun or underrun it is
+/// rejected rather than truncated.
 pub fn decode_hops(stream: &[u8], pos: &mut usize) -> Result<Vec<Vec<u8>>, TspError> {
-    let count = decode_count(TSP_HOP_LIST, stream, pos)
-        .ok_or_else(|| TspError::InvalidMessage("missing -J hop list".into()))?;
-    // The hop list is a route; bound the count by the route limit (not the much
-    // larger field-size cap) so a hostile count can't pre-allocate gigabytes.
-    if count as usize > crate::message::routed::MAX_HOPS {
-        return Err(TspError::InvalidMessage("hop list too long".into()));
-    }
-    let mut hops = Vec::with_capacity(count as usize);
-    for _ in 0..count {
+    let quadlets = decode_count(TSP_HOP_LIST, stream, pos)
+        .ok_or_else(|| TspError::InvalidMessage("missing -J VID list".into()))?;
+    let group_len = (quadlets as usize)
+        .checked_mul(3)
+        .filter(|n| *n <= MAX_FIELD_SIZE)
+        .ok_or_else(|| TspError::InvalidMessage("-J VID list too long".into()))?;
+    let group_end = pos
+        .checked_add(group_len)
+        .filter(|end| *end <= stream.len())
+        .ok_or_else(|| TspError::InvalidMessage("-J VID list overruns message".into()))?;
+
+    let mut hops = Vec::new();
+    while *pos < group_end {
         let hop = decode_variable_data(TSP_VID, stream, pos)
-            .ok_or_else(|| TspError::InvalidMessage("malformed hop VID".into()))?;
+            .ok_or_else(|| TspError::InvalidMessage("malformed VID in -J list".into()))?;
+        if *pos > group_end {
+            return Err(TspError::InvalidMessage(
+                "VID overruns the -J list byte count".into(),
+            ));
+        }
         hops.push(hop);
+        // The route limit bounds the list independently of its byte count, so a
+        // long-but-well-formed list can't drive unbounded allocation.
+        if hops.len() > crate::message::routed::MAX_HOPS {
+            return Err(TspError::InvalidMessage("hop list too long".into()));
+        }
     }
     Ok(hops)
 }
@@ -245,8 +295,11 @@ pub fn decode_count(identifier: u16, stream: &[u8], pos: &mut usize) -> Option<u
     let word = extract_triplet(s.try_into().unwrap());
     let index = word & mask(12);
     let expected = (DASH << 18) | (bits(identifier as u32, 6) << 12) | bits(index, 12);
+    // Long form `--X#####` (Rev 3). No ambiguity with the short form: that
+    // would need an identifier equal to DASH (62), and every TSP group code is
+    // a small letter index.
     let expected_long =
-        (DASH << 18) | (D0 << 12) | (bits(identifier as u32, 6) << 6) | bits(index & 0x3F, 6);
+        (DASH << 18) | (DASH << 12) | (bits(identifier as u32, 6) << 6) | bits(index & 0x3F, 6);
     if word == expected {
         *pos += 3;
         Some(index)
@@ -323,6 +376,16 @@ pub fn decode_variable_data_range(
     let data_end = (offset + 1).next_multiple_of(3) + 3 * size as usize;
     // Bounds check against the sub-slice.
     s.get(data_begin..data_end)?;
+
+    // Rev 3 §3.7: CESR primitives are canonically encoded — lead bytes are
+    // zero — and a receiver MUST reject a non-canonical one rather than
+    // normalize it. Digests and signatures are taken over exact bytes, so
+    // accepting a non-canonical primitive would admit two distinct byte
+    // sequences for the same value, with two different signature inputs.
+    let lead = offset % 3;
+    if s.get(data_begin - lead..data_begin)?.iter().any(|&b| b != 0) {
+        return None;
+    }
     let range = (data_begin + *pos)..(data_end + *pos);
     *pos = range.end;
     Some(range)
@@ -334,18 +397,76 @@ pub fn decode_variable_data(identifier: u32, stream: &[u8], pos: &mut usize) -> 
     Some(stream[range].to_vec())
 }
 
-/// Decode and validate the TSP version marker. Advances `*pos`.
-pub fn decode_version(stream: &[u8], pos: &mut usize) -> Result<(), TspError> {
+/// Decode and validate the TSP version marker, returning `(major, minor,
+/// patch)`. Advances `*pos`.
+///
+/// Rev 3 §9.1 separates two failures that Rev 2 conflated. Bytes that are not a
+/// `YTSP` genus marker at all are [`TspError::NotTsp`]; a well-formed marker
+/// whose MAJOR we do not speak is [`TspError::VersionMismatch`]. MINOR and
+/// PATCH are carried to the caller, never rejected — only MAJOR gates whether
+/// the message is processable.
+pub fn decode_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u8, u8), TspError> {
     let hdr = stream
         .get(*pos..*pos + YTSP.len())
-        .ok_or_else(|| TspError::InvalidMessage("truncated version marker".into()))?;
+        .ok_or_else(|| TspError::NotTsp("truncated version marker".into()))?;
     if hdr != YTSP {
-        return Err(TspError::InvalidMessage("not a YTSP version marker".into()));
+        return Err(TspError::NotTsp("not a YTSP genus marker".into()));
     }
     *pos += YTSP.len();
-    decode_count(TSP_VERSION.0, stream, pos)
-        .ok_or_else(|| TspError::InvalidMessage("bad TSP version count code".into()))?;
-    Ok(())
+
+    let s = stream
+        .get(*pos..*pos + 3)
+        .ok_or_else(|| TspError::NotTsp("truncated version count code".into()))?;
+    let word = extract_triplet(s.try_into().unwrap());
+    if word >> 18 != DASH {
+        return Err(TspError::NotTsp("malformed version count code".into()));
+    }
+    let major = ((word >> 12) & mask(6)) as u16;
+    let packed = word & mask(12);
+    *pos += 3;
+
+    if major != TSP_VERSION.0 {
+        return Err(TspError::VersionMismatch {
+            found: major,
+            supported: TSP_VERSION.0,
+        });
+    }
+    Ok((major, (packed >> 6) as u8, (packed & mask(6)) as u8))
+}
+
+/// Encode an indexed Ed25519 signature primitive (Rev 3 §9.5).
+///
+/// The code is `B#`: `B` identifies an Ed25519 indexed signature and the second
+/// Base64 character is the index of the signing key in the VID's key list. The
+/// 2-byte code is followed by the 64-byte signature, 66 bytes in all (88
+/// characters in the text domain). Rev 2 used the *non-indexed* `0B` code,
+/// which is a different two bytes on the wire.
+pub fn encode_indexed_ed25519_signature(index: u8, signature: &[u8; 64], out: &mut Vec<u8>) {
+    let word = (bits(ED25519_SIGNATURE, 6) << 18) | (bits(index as u32, 6) << 12);
+    out.extend_from_slice(&u32::to_be_bytes(word)[1..=2]);
+    out.extend_from_slice(signature);
+}
+
+/// Decode an indexed Ed25519 signature primitive, returning `(index,
+/// signature)`. Advances `*pos` past the 66-byte primitive.
+pub fn decode_indexed_ed25519_signature(
+    stream: &[u8],
+    pos: &mut usize,
+) -> Option<(u8, [u8; 64])> {
+    let hdr = stream.get(*pos..*pos + 2)?;
+    let word = ((hdr[0] as u32) << 16) | ((hdr[1] as u32) << 8);
+    if word >> 18 != bits(ED25519_SIGNATURE, 6) {
+        return None;
+    }
+    // The low 12 bits of the code word are structural zeroes; a non-zero value
+    // there is a non-canonical primitive, which §3.7 requires us to reject.
+    if word & mask(12) != 0 {
+        return None;
+    }
+    let index = ((word >> 12) & mask(6)) as u8;
+    let sig: [u8; 64] = stream.get(*pos + 2..*pos + 66)?.try_into().ok()?;
+    *pos += 66;
+    Some((index, sig))
 }
 
 #[cfg(test)]
@@ -353,19 +474,131 @@ mod tests {
     use super::*;
 
     #[test]
-    fn codes_match_reference() {
-        // From tsp_sdk: cesr!("B")=1, cesr!("G")=6, cesr!("X")=23, cesr!("E")=4,
-        // cesr!("Z")=25, cesr!("C")=2, cesr!("K")=10.
+    fn codes_match_spec() {
+        // Rev 3 §9: ciphertext moves from the HPKE-Auth `G` codes to the
+        // HPKE-Base `F` codes, and `X` (the deleted XAAA marker) is gone.
         assert_eq!(TSP_VID, 1);
-        assert_eq!(TSP_HPKEAUTH_CIPHERTEXT, 6);
-        assert_eq!(TSP_TMP, 23);
+        assert_eq!(TSP_HPKE_BASE_CIPHERTEXT, 5);
         assert_eq!(TSP_ETS_WRAPPER, 4);
         assert_eq!(TSP_PAYLOAD, 25);
+        assert_eq!(TSP_GENERIC_STREAM, 0);
+        assert_eq!(TSP_HOP_LIST, 9);
         assert_eq!(TSP_ATTACH_GRP, 2);
         assert_eq!(TSP_INDEX_SIG_GRP, 10);
-        // cesr!("A")=0, cesr!("I")=8.
         assert_eq!(TSP_NONCE, 0);
         assert_eq!(TSP_SHA256, 8);
+    }
+
+    #[test]
+    fn long_count_uses_double_dash() {
+        // Rev 3 §9: the long form is `--E#####`, not Rev 2's `-0E#####`. The
+        // second character is DASH (62), not '0' (52). A round-trip test cannot
+        // see this — encoder and decoder agree either way — so pin the bytes.
+        let mut buf = Vec::new();
+        encode_count(TSP_ETS_WRAPPER, 5000, &mut buf);
+        assert_eq!(buf.len(), 6);
+        // word1 = DASH<<18 | DASH<<12 | id<<6 | count>>24
+        //       = 62<<18 | 62<<12 | 4<<6 | 0  -> f8 fe 20 ... wait: check bytes.
+        let word1 = ((buf[0] as u32) << 16) | ((buf[1] as u32) << 8) | buf[2] as u32;
+        assert_eq!(word1 >> 18, 62, "first character must be '-'");
+        assert_eq!((word1 >> 12) & 0x3f, 62, "second character must be '-', not '0'");
+        assert_eq!((word1 >> 6) & 0x3f, TSP_ETS_WRAPPER as u32);
+
+        let mut pos = 0;
+        assert_eq!(decode_count(TSP_ETS_WRAPPER, &buf, &mut pos), Some(5000));
+        assert_eq!(pos, 6);
+    }
+
+    #[test]
+    fn indexed_ed25519_signature_roundtrip() {
+        // Rev 3 §9.5: code `B#`, 66 bytes in all. Index 0 is `B0` -> 04 00.
+        let sig = [0x5Au8; 64];
+        let mut buf = Vec::new();
+        encode_indexed_ed25519_signature(0, &sig, &mut buf);
+        assert_eq!(buf.len(), 66);
+        assert_eq!(&buf[..2], &[0x04, 0x00]);
+
+        let mut pos = 0;
+        let (index, got) = decode_indexed_ed25519_signature(&buf, &mut pos).unwrap();
+        assert_eq!(index, 0);
+        assert_eq!(got, sig);
+        assert_eq!(pos, 66);
+    }
+
+    #[test]
+    fn indexed_signature_carries_its_index() {
+        let sig = [0u8; 64];
+        let mut buf = Vec::new();
+        encode_indexed_ed25519_signature(3, &sig, &mut buf);
+        let mut pos = 0;
+        let (index, _) = decode_indexed_ed25519_signature(&buf, &mut pos).unwrap();
+        assert_eq!(index, 3);
+    }
+
+    #[test]
+    fn rev2_non_indexed_signature_code_is_rejected() {
+        // Rev 2 emitted the non-indexed `0B` code via encode_fixed_data.
+        let sig = [0u8; 64];
+        let mut buf = Vec::new();
+        encode_fixed_data(ED25519_SIGNATURE, &sig, &mut buf);
+        assert_eq!(&buf[..2], &[0xd0, 0x10]);
+        let mut pos = 0;
+        assert!(decode_indexed_ed25519_signature(&buf, &mut pos).is_none());
+    }
+
+    #[test]
+    fn non_canonical_lead_bytes_are_rejected() {
+        // Rev 3 §3.7: lead bytes are zero, and a receiver rejects a primitive
+        // whose padding is not canonical rather than normalizing it.
+        let vid = b"did:web:bob.example"; // 19 bytes -> 2 lead bytes
+        let mut buf = Vec::new();
+        encode_variable_data(TSP_VID, vid, &mut buf);
+        assert_eq!(&buf[3..5], &[0x00, 0x00]);
+
+        let mut pos = 0;
+        assert!(decode_variable_data(TSP_VID, &buf, &mut pos).is_some());
+
+        buf[3] = 0x01;
+        let mut pos = 0;
+        assert!(decode_variable_data(TSP_VID, &buf, &mut pos).is_none());
+    }
+
+    #[test]
+    fn version_reports_major_mismatch_separately_from_not_tsp() {
+        let mut buf = Vec::new();
+        encode_version(&mut buf);
+        let mut pos = 0;
+        assert_eq!(decode_version(&buf, &mut pos).unwrap(), (0, 0, 1));
+
+        // A YTSP marker with a different MAJOR is TSP, but unprocessable.
+        let mut other = Vec::new();
+        other.extend_from_slice(&YTSP);
+        encode_count(1, 0, &mut other);
+        let mut pos = 0;
+        assert!(matches!(
+            decode_version(&other, &mut pos),
+            Err(TspError::VersionMismatch { found: 1, .. })
+        ));
+
+        // Bytes that are not a YTSP marker at all are not TSP.
+        let mut pos = 0;
+        assert!(matches!(
+            decode_version(b"not-tsp-at-all", &mut pos),
+            Err(TspError::NotTsp(_))
+        ));
+    }
+
+    #[test]
+    fn hop_list_count_is_byte_length_not_vid_count() {
+        // Rev 3 §9.2 (D6): the -J count is the byte length of the group.
+        let hops = [b"did:web:hop1".as_slice(), b"did:web:exit".as_slice()];
+        let mut buf = Vec::new();
+        encode_hops(&hops, &mut buf);
+
+        let mut pos = 0;
+        let quadlets = decode_count(TSP_HOP_LIST, &buf, &mut pos).unwrap();
+        assert_eq!(quadlets as usize * 3, buf.len() - pos);
+        assert_ne!(quadlets, 2, "count must not be the number of VIDs");
     }
 
     #[test]
@@ -438,17 +671,6 @@ mod tests {
     }
 
     #[test]
-    fn fixed_data_tmp_marker() {
-        let mut buf = Vec::new();
-        encode_fixed_data(TSP_TMP, &[0, 0], &mut buf);
-        assert_eq!(buf, [0x5c, 0x00, 0x00]);
-        let mut pos = 0;
-        let got = decode_fixed_data::<2>(TSP_TMP, &buf, &mut pos).unwrap();
-        assert_eq!(got, [0, 0]);
-        assert_eq!(pos, 3);
-    }
-
-    #[test]
     fn hops_empty_roundtrip() {
         let mut buf = Vec::new();
         let no_hops: [&[u8]; 0] = [];
@@ -475,14 +697,15 @@ mod tests {
     }
 
     #[test]
-    fn fixed_data_ed25519_sig() {
-        let sig = [0xABu8; 64];
+    fn nonce_is_128_bit_under_the_0a_code() {
+        // Rev 3 §9.2 (D9): the nonce is 128 bits. The two-character code `0A`
+        // follows from the length: 16 bytes -> total 18, header 2 bytes.
+        let nonce = [0x11u8; 16];
         let mut buf = Vec::new();
-        encode_fixed_data(ED25519_SIGNATURE, &sig, &mut buf);
-        // 64 -> total 66, hdr 2 -> word (D0<<18)|(1<<12) -> d0 10
-        assert_eq!(&buf[..2], &[0xd0, 0x10]);
+        encode_fixed_data(TSP_NONCE, &nonce, &mut buf);
+        assert_eq!(buf.len(), 18);
+        assert_eq!(&buf[..2], &[0xd0, 0x00]);
         let mut pos = 0;
-        let got = decode_fixed_data::<64>(ED25519_SIGNATURE, &buf, &mut pos).unwrap();
-        assert_eq!(got, sig);
+        assert_eq!(decode_fixed_data::<16>(TSP_NONCE, &buf, &mut pos).unwrap(), nonce);
     }
 }

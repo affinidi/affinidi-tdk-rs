@@ -18,6 +18,17 @@ pub enum TspError {
     #[error("invalid message: {0}")]
     InvalidMessage(String),
 
+    /// The bytes are not a TSP message at all — no `-E` frame, or no `YTSP`
+    /// genus code. Kept distinct from [`TspError::VersionMismatch`], which
+    /// means "TSP, but a version this build cannot process" (Rev 3 §9.1).
+    #[error("not a TSP message: {0}")]
+    NotTsp(String),
+
+    /// A well-formed TSP message whose MAJOR version this build cannot
+    /// process. MINOR and PATCH differences are carried, not rejected.
+    #[error("unsupported TSP major version {found} (this build speaks {supported})")]
+    VersionMismatch { found: u16, supported: u16 },
+
     #[error("VID error: {0}")]
     Vid(String),
 

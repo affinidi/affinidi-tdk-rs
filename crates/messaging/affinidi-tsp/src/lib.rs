@@ -3,8 +3,9 @@
 //! Trust Spanning Protocol (TSP) implementation for the Affinidi TDK.
 //!
 //! TSP is a ToIP Layer 2 protocol that provides authenticated, encrypted
-//! messaging between Verifiable Identifiers (VIDs). It uses HPKE-Auth for
-//! encryption, Ed25519 for signing, and CESR for encoding.
+//! messaging between Verifiable Identifiers (VIDs). It uses HPKE-Base for
+//! encryption, Ed25519 for signing, and CESR for encoding, per the TSP
+//! specification Rev 3.
 //!
 //! ## Quick Start
 //!
@@ -231,7 +232,6 @@ impl TspAgent {
         let unpacked = direct::unpack(
             wire,
             &our_private.decryption_key,
-            &sender_resolved.encryption_key,
             &sender_resolved.signing_key,
         )?;
 
@@ -304,7 +304,6 @@ impl TspAgent {
             our_vid,
             first_hop,
             &our_private.signing_key,
-            &our_private.decryption_key,
             &first_resolved.encryption_key,
         )
     }
@@ -325,7 +324,6 @@ impl TspAgent {
             our_vid,
             intermediary_vid,
             &our_private.signing_key,
-            &our_private.decryption_key,
             &intermediary.encryption_key,
         )
     }
@@ -347,7 +345,6 @@ impl TspAgent {
         let unpacked = direct::unpack(
             wire,
             &our_private.decryption_key,
-            &prev.encryption_key,
             &prev.signing_key,
         )?;
 
@@ -383,7 +380,6 @@ impl TspAgent {
                     our_vid,
                     &next,
                     &our_private.signing_key,
-                    &our_private.decryption_key,
                     &next_resolved.encryption_key,
                 )?;
                 Ok(ForwardOutcome::Relay {
@@ -417,7 +413,6 @@ impl TspAgent {
             our_vid,
             their_vid,
             &our_private.signing_key,
-            &our_private.decryption_key,
             &their_resolved.encryption_key,
         )
     }

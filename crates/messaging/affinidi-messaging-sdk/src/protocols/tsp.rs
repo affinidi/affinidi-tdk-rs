@@ -477,7 +477,7 @@ impl TspOps<'_> {
         payload: &[u8],
     ) -> Result<Vec<u8>, ATMError> {
         let (from_did, _) = profile.dids()?;
-        let (signing_key, decryption_key) = self.profile_tsp_keys(from_did).await?;
+        let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
         let recipient = self.resolve_vid(to_did).await?;
 
         let packed = direct::pack(
@@ -486,7 +486,6 @@ impl TspOps<'_> {
             from_did,
             to_did,
             &signing_key,
-            &decryption_key,
             &recipient.encryption_key,
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack TSP message: {e}")))?;
@@ -550,7 +549,7 @@ impl TspOps<'_> {
         let first_hop = &route[0];
 
         let (from_did, _) = profile.dids()?;
-        let (signing_key, encryption_key) = self.profile_tsp_keys(from_did).await?;
+        let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
         let first_vid = self.resolve_vid(first_hop).await?;
         let routed = affinidi_tsp::message::routed::pack_routed(
             inner,
@@ -558,7 +557,6 @@ impl TspOps<'_> {
             from_did,
             first_hop,
             &signing_key,
-            &encryption_key,
             &first_vid.encryption_key,
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack routed TSP message: {e}")))?;
@@ -598,7 +596,7 @@ impl TspOps<'_> {
         inner: &[u8],
     ) -> Result<(), ATMError> {
         let (from_did, _) = profile.dids()?;
-        let (signing_key, encryption_key) = self.profile_tsp_keys(from_did).await?;
+        let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
         let intermediary_vid = self.resolve_vid(intermediary).await?;
         let nested = affinidi_tsp::message::direct::pack(
             inner,
@@ -606,7 +604,6 @@ impl TspOps<'_> {
             from_did,
             intermediary,
             &signing_key,
-            &encryption_key,
             &intermediary_vid.encryption_key,
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack nested TSP message: {e}")))?;
@@ -641,7 +638,7 @@ impl TspOps<'_> {
             .ok_or_else(|| ATMError::MsgSendError("route must not be empty".into()))?;
 
         let (from_did, _) = profile.dids()?;
-        let (signing_key, decryption_key) = self.profile_tsp_keys(from_did).await?;
+        let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
 
         // Inner Direct message sealed end-to-end to the final recipient.
         let recipient = self.resolve_vid(to_did).await?;
@@ -651,7 +648,6 @@ impl TspOps<'_> {
             from_did,
             to_did,
             &signing_key,
-            &decryption_key,
             &recipient.encryption_key,
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack inner TSP message: {e}")))?;
@@ -664,7 +660,6 @@ impl TspOps<'_> {
             from_did,
             intermediary,
             &signing_key,
-            &decryption_key,
             &intermediary_vid.encryption_key,
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack nested TSP message: {e}")))?;
@@ -688,7 +683,7 @@ impl TspOps<'_> {
         control: &affinidi_tsp::message::control::ControlMessage,
     ) -> Result<(), ATMError> {
         let (from_did, _) = profile.dids()?;
-        let (signing_key, encryption_key) = self.profile_tsp_keys(from_did).await?;
+        let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
         let to_vid = self.resolve_vid(to_did).await?;
         let packed = affinidi_tsp::message::direct::pack(
             &control.encode(),
@@ -696,7 +691,6 @@ impl TspOps<'_> {
             from_did,
             to_did,
             &signing_key,
-            &encryption_key,
             &to_vid.encryption_key,
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack control TSP message: {e}")))?;
@@ -1214,7 +1208,6 @@ impl TspOps<'_> {
         let unpacked = direct::unpack(
             qb2,
             &decryption_key,
-            &sender.encryption_key,
             &sender.signing_key,
         )
         .map_err(|e| ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}")))?;
@@ -1229,7 +1222,8 @@ impl TspOps<'_> {
 
     /// Unpack a fetched TSP **control** message (raw qb2 bytes), returning the
     /// decoded [`ControlMessage`], the sender VID, and the message's TSP
-    /// **thread digest** (`SHA256` of its plaintext frame).
+    /// **thread digest** — the Rev 3 `TSP_Digest` carried in the message and
+    /// verified on unpack.
     ///
     /// For an invite, the returned `thread_digest` is the value to pass to
     /// [`TspOps::accept_relationship`] (and, later,
@@ -1255,7 +1249,6 @@ impl TspOps<'_> {
         let unpacked = direct::unpack(
             qb2,
             &decryption_key,
-            &sender.encryption_key,
             &sender.signing_key,
         )
         .map_err(|e| ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}")))?;
@@ -1694,7 +1687,6 @@ mod tests {
             "did:example:alice",
             "did:example:bob",
             &alice.signing_key,
-            &alice.decryption_key,
             &bob.encryption_key,
         )
         .unwrap();
@@ -1708,7 +1700,6 @@ mod tests {
         let unpacked = direct::unpack(
             &qb2,
             &bob.decryption_key,
-            &alice.encryption_key,
             &alice.verifying_key,
         )
         .unwrap();

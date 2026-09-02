@@ -1,59 +1,91 @@
 //! TSP direct mode messaging — seal, sign, and CESR-encode a message.
 //!
 //! Direct mode is the simplest TSP message mode: one sender, one receiver, no
-//! intermediaries. The message is HPKE-sealed (encrypted + sender-authenticated)
-//! and then signed with the sender's Ed25519 key. The wire encoding is binary
-//! CESR, byte-compatible with the ToIP `tsp-sdk` reference (v0.9.0-alpha2).
+//! intermediaries. The message is HPKE-Base sealed and then signed with the
+//! sender's Ed25519 key, per spec Rev 3.
 //!
-//! Wire format (an "encrypted-then-signed" / ETS message):
+//! Wire format:
 //! ```text
-//! -E<count>                         envelope frame (HPKE `info`):
-//!   YTSP <version>                    version marker
+//! -E<count>                       one frame; count covers everything below
+//!   YTSP <version>                  `YTSP-AAB`
 //!   <var-data B> sender-VID
-//!   <var-data B> receiver-VID
-//!   X 00 00                           2-byte TMP marker
-//! <var-data G> ciphertext           HPKE-Auth ciphertext: ct ‖ tag(16) ‖ enc(32)
-//! -C<n> -K<n> <fixed B> sig(64)     Ed25519 signature over everything above
+//!   <var-data B> receiver-VID       `4BAA` when absent
+//!   <var-data F> enc ‖ ct         HPKE-Base ciphertext, AEAD tag inside ct
+//! -C23 -K22 B0 sig(64)            indexed Ed25519 signature over the above
 //! ```
 //!
-//! The encrypted plaintext is itself a CESR payload frame:
+//! The encrypted plaintext is itself a CESR payload frame, and every layout has
+//! the same shape: type code, ESSR sender VID, type-specific fields, padding
+//! last (§9.2). For a generic message:
 //! ```text
-//! -Z<count> XSCS <var-data B> plaintext
+//! -Z<count> XSCS <var-data B> sender-VID <var-data B> pad -A<n> <var-data B> body
 //! ```
 //!
-//! HPKE binding (matching the reference exactly): the envelope `-E` frame is the
-//! HPKE **`info`**, and the AEAD **AAD is empty**.
+//! # What Rev 3 changed here
+//!
+//! * **HPKE-Base, not HPKE-Auth.** The sender's KEM key no longer participates,
+//!   so packing and unpacking take one fewer secret than they did.
+//! * **The crypto binding moved.** Rev 2 passed the envelope as HPKE `info` with
+//!   an empty AAD. Rev 3 passes `TSP_Version ‖ VID_sndr ‖ VID_rcvr` as real AAD
+//!   and the fixed code `YTSP-` as `info`. The AAD is what carries the ESSR
+//!   sender binding now that the KEM does not.
+//! * **`TSP_Digest` is on the wire.** Rev 2 correlated relationships on a hash
+//!   of the payload frame that was never transmitted, so a receiver could not
+//!   check it. Rev 3 embeds a self-addressing digest in the payload and the
+//!   receiver recomputes it. See [`derive_said`].
+//! * **The `-E` count covers the ciphertext**, so the frame is finalized after
+//!   sealing rather than built before it.
 
 use crate::crypto::{hpke, signing};
 use crate::error::TspError;
 use crate::message::MessageType;
-use crate::message::control::{ControlMessage, ControlType, DIGEST_LEN};
-use crate::message::envelope::Envelope;
+use crate::message::control::{ControlMessage, ControlType, DIGEST_LEN, NONCE_LEN};
+use crate::message::envelope::{self, Envelope};
 use crate::message::wire;
 
 /// Maximum allowed ciphertext size, kept in lock-step with the variable-data
-/// field cap (which mirrors the ToIP reference's `DATA_LIMIT`). The ciphertext is
-/// itself a `G` variable-data field, so this matches what the wire layer accepts.
+/// field cap. The ciphertext is itself an `F` variable-data field, so this
+/// matches what the wire layer accepts.
 const MAX_MESSAGE_SIZE: usize = crate::message::wire::MAX_FIELD_SIZE;
 
-/// X25519 encapsulated-key length appended to the ciphertext.
+/// X25519 encapsulated-key length, which prefixes the ciphertext.
 const ENC_LEN: usize = 32;
 /// ChaCha20Poly1305 authentication tag length.
 const TAG_LEN: usize = 16;
 /// Ed25519 signature length.
 const SIG_LEN: usize = 64;
 
+/// Length of a CESR-encoded SHA-256 digest: the one-character `I` code plus 32
+/// bytes. This is the width the SAID dummy occupies during derivation.
+const ENCODED_DIGEST_LEN: usize = 33;
+
+/// The dummy byte the SAID derivation writes into the digest's own slot
+/// (Rev 3 §7.2.1). `0x23` is `#`.
+const SAID_DUMMY: u8 = 0x23;
+
+/// Index of the signing key within the VID's key list, carried in the indexed
+/// signature code `B#`. Every VID this crate produces has a single signing key,
+/// so the index is always 0; multi-key VIDs are a VID-type concern.
+const SIG_INDEX: u8 = 0;
+
+/// Quadlet count of the `-K` indexed-signature group: one 66-byte signature.
+const SIG_GROUP_QUADLETS: u32 = 22;
+/// Quadlet count of the `-C` attachment group: the `-K` header plus its content.
+const ATTACH_GROUP_QUADLETS: u32 = SIG_GROUP_QUADLETS + 1;
+
 /// A packed (sealed + signed) TSP direct message ready for transport.
 #[derive(Debug, Clone)]
 pub struct PackedMessage {
     /// The raw wire-format bytes.
     pub bytes: Vec<u8>,
-    /// `SHA256` of the plaintext CESR payload frame (the `-Z…` bytes before
-    /// sealing). This is the TSP **thread digest** used to correlate
-    /// relationship control messages: an accept's `reply` is the invite's
-    /// `thread_digest`, and a cancel's `reply` is the relationship-forming
-    /// message's `thread_digest`. The reference (`tsp_sdk`) computes the same
-    /// value (`sha256` of the decrypted payload frame) on open.
+    /// The relationship thread id.
+    ///
+    /// For a control message this is the Rev 3 `TSP_Digest` — for an invite or
+    /// an accept, the self-addressing digest embedded in and transmitted with
+    /// the message; for a cancel, the digest of the relationship-forming
+    /// message it names. For every other message type there is no digest field
+    /// on the wire and this is a local `SHA256` of the plaintext payload frame,
+    /// useful for correlation but never transmitted or checked.
     pub thread_digest: [u8; DIGEST_LEN],
 }
 
@@ -73,124 +105,229 @@ pub struct UnpackedMessage {
     pub receiver: String,
     /// The message type, recovered from the encrypted payload frame.
     pub message_type: MessageType,
-    /// `SHA256` of the decrypted plaintext CESR payload frame — the TSP
-    /// **thread digest** (see [`PackedMessage::thread_digest`]). Always present;
-    /// the FSM uses it to correlate a received accept/cancel back to the
-    /// relationship-forming message it replies to.
+    /// The relationship thread id — see [`PackedMessage::thread_digest`]. For an
+    /// invite or an accept this value has been recomputed from the received
+    /// bytes and checked against the digest the sender embedded.
     pub thread_digest: [u8; DIGEST_LEN],
     /// For a [`MessageType::Control`] message, the decoded control payload
     /// (invite / accept / cancel). `None` for all other message types.
     pub control: Option<ControlMessage>,
 }
 
-/// Payload-type markers, all using the reference `tsp-sdk` framing verbatim so
-/// they are byte-compatible with `tsp-sdk`:
-///
-///   * Direct → `XSCS`
-///   * Nested → `XHOP` + empty hop list
-///   * Routed → `XHOP` + non-empty hop list
-///   * Control(invite) → `XRFI` + hops + `A` nonce(32) + empty `B` VID
-///   * Control(accept) → `XRFA` + `I` SHA-256 reply(32)
-///   * Control(cancel) → `XRFD` + `I` SHA-256 reply(32)
+/// Payload-type markers (Rev 3 §9.2).
 mod payload_marker {
-    /// Generic message (Direct) — the reference `XSCS` marker, byte-exact.
+    /// Generic upper-layer message (Direct).
     pub const DIRECT: [u8; 3] = crate::message::wire::XSCS;
-    /// Hop-carrying payload (Nested or Routed) — the reference `XHOP` marker.
+    /// Hop-carrying payload (Nested when the hop list is empty, Routed when not).
     pub const HOP: [u8; 3] = crate::message::wire::XHOP;
-    /// Relationship-forming invite (`DirectRelationProposal`).
+    /// Relationship-forming invite.
     pub const INVITE: [u8; 3] = crate::message::wire::XRFI;
-    /// Relationship-forming accept (`DirectRelationAffirm`).
+    /// Relationship-forming accept.
     pub const ACCEPT: [u8; 3] = crate::message::wire::XRFA;
-    /// Relationship cancel (`RelationshipCancel`).
+    /// Relationship cancel.
     pub const CANCEL: [u8; 3] = crate::message::wire::XRFD;
 }
 
-/// Encode a SHA-256 digest as the reference's `encode_digest` does: a fixed-data
-/// field under the `I` (SHA-256) id.
-fn encode_sha256_digest(digest: &[u8; DIGEST_LEN], out: &mut Vec<u8>) {
+/// Encode a SHA-256 digest as a CESR fixed-data field under the `I` code.
+fn encode_digest(digest: &[u8; DIGEST_LEN], out: &mut Vec<u8>) {
     wire::encode_fixed_data(wire::TSP_SHA256, digest, out);
 }
 
 /// Decode a SHA-256 digest (`I`-coded 32-byte fixed-data field).
-fn decode_sha256_digest(frame: &[u8], pos: &mut usize) -> Result<[u8; DIGEST_LEN], TspError> {
+fn decode_digest(frame: &[u8], pos: &mut usize) -> Result<[u8; DIGEST_LEN], TspError> {
     wire::decode_fixed_data::<DIGEST_LEN>(wire::TSP_SHA256, frame, pos)
-        .ok_or_else(|| TspError::InvalidMessage("missing or non-SHA256 reply digest".into()))
+        .ok_or_else(|| TspError::InvalidMessage("missing or non-SHA256 digest field".into()))
 }
 
-/// Build the CESR payload frame that is encrypted (the HPKE plaintext).
+/// Encode the ESSR sender-VID payload field.
 ///
-/// Layout matches the `tsp_sdk` reference's `encode_payload`:
-///   * Direct  → `-Z<count> XSCS <var-data B> body`
-///   * Nested  → `-Z<count> XHOP -J0 <var-data B> body`
-///   * Routed  → `-Z<count> XHOP -J<n> (B hop)* <var-data B> body`
-///   * Control(invite) → `-Z<count> XRFI -J<n> (B hop)* A nonce(32) B(empty)`
-///   * Control(accept) → `-Z<count> XRFA I reply(32)`
-///   * Control(cancel) → `-Z<count> XRFD I reply(32)`
+/// Rev 3 §8 makes this field optional under HPKE-Base — the AAD already binds
+/// the sender — but permits carrying it, in which case a receiver MUST check it
+/// against the envelope. We carry it. The spec's own security considerations
+/// note that the two bindings are then independent, so an implementation "that
+/// does not wish to rely on the associated-data handling of a newer HPKE
+/// implementation obtains the same property from the payload check alone".
+/// Our HPKE is hand-rolled, which is exactly the situation that argues for not
+/// resting the sender binding on a single mechanism.
+fn encode_sender_field(sender_vid: &str, out: &mut Vec<u8>) {
+    wire::encode_variable_data(wire::TSP_VID, sender_vid.as_bytes(), out);
+}
+
+/// Encode the padding field. Rev 3 ends every payload layout with one; an
+/// absent padding is the empty field `4BAA`.
 ///
-/// For Control, `body` is a [`ControlMessage::encode`] blob; it is decoded back
-/// to the structured control so the spec CESR fields can be emitted.
+/// Caller-supplied padding — which is what makes the field useful, by obscuring
+/// message size — is not yet surfaced through this crate's API.
+fn encode_padding(out: &mut Vec<u8>) {
+    wire::encode_variable_data(wire::TSP_PLAINTEXT, &[], out);
+}
+
+/// Derive a self-addressing `TSP_Digest` (Rev 3 §7.2.1).
+///
+/// The digest covers the message's own envelope fields (version and both VIDs)
+/// and its payload fields, with the digest's own slot filled with
+/// [`SAID_DUMMY`] over its full encoded width. The `-E` and `-Z` framing tags
+/// and the padding field are excluded; the payload type code is included.
+///
+/// `before` and `after` are the encoded payload fields that precede and follow
+/// the digest slot, padding excluded. Verification reverses the derivation:
+/// rebuild the same input from the received bytes and compare.
+fn derive_said(
+    envelope_fields: &[u8],
+    type_code: &[u8; 3],
+    before: &[u8],
+    after: &[u8],
+) -> [u8; DIGEST_LEN] {
+    let mut input =
+        Vec::with_capacity(envelope_fields.len() + 3 + before.len() + ENCODED_DIGEST_LEN + after.len());
+    input.extend_from_slice(envelope_fields);
+    input.extend_from_slice(type_code);
+    input.extend_from_slice(before);
+    input.extend_from_slice(&[SAID_DUMMY; ENCODED_DIGEST_LEN]);
+    input.extend_from_slice(after);
+    sha256(&input)
+}
+
+/// Build the CESR payload frame that is encrypted (the HPKE plaintext), and
+/// return it with the message's thread digest.
+///
+/// Layouts (Rev 3 §9.2/§9.3), all beginning with the type code and the ESSR
+/// sender VID and ending with the padding field:
+/// ```text
+/// Direct  -Z<n> XSCS  sndr  pad  -A<n> body
+/// Nested  -Z<n> XHOP  sndr  -JAA        pad  <raw inner message>
+/// Routed  -Z<n> XHOP  sndr  -J<n> hops  pad  <raw inner message>
+/// Invite  -Z<n> XRFI  sndr  Digest  Nonce  Reply_Path  Referral  pad
+/// Accept  -Z<n> XRFA  sndr  Digest  Reply_Digest              pad
+/// Cancel  -Z<n> XRFD  sndr  Digest                            pad
+/// ```
 fn encode_payload_frame(
     body: &[u8],
     kind: MessageType,
     hops: &[String],
-) -> Result<Vec<u8>, TspError> {
-    let mut frame_body = Vec::with_capacity(3 + body.len() + 3);
+    sender_vid: &str,
+    envelope_fields: &[u8],
+) -> Result<(Vec<u8>, [u8; DIGEST_LEN]), TspError> {
+    let mut sender_field = Vec::new();
+    encode_sender_field(sender_vid, &mut sender_field);
+
+    let mut frame_body = Vec::new();
+    let mut said: Option<[u8; DIGEST_LEN]> = None;
+
     match kind {
         MessageType::Direct => {
             frame_body.extend_from_slice(&payload_marker::DIRECT);
-            wire::encode_variable_data(wire::TSP_PLAINTEXT, body, &mut frame_body);
+            frame_body.extend_from_slice(&sender_field);
+            encode_padding(&mut frame_body);
+            // §9.2.3: the upper-layer payload is a generic CESR stream holding
+            // a Bytes primitive. TSP carries its content opaquely.
+            let mut stream = Vec::new();
+            wire::encode_variable_data(wire::TSP_PLAINTEXT, body, &mut stream);
+            wire::encode_count(
+                wire::TSP_GENERIC_STREAM,
+                (stream.len() / 3) as u32,
+                &mut frame_body,
+            );
+            frame_body.extend_from_slice(&stream);
         }
-        MessageType::Nested => {
+        MessageType::Nested | MessageType::Routed => {
             frame_body.extend_from_slice(&payload_marker::HOP);
-            let no_hops: [&[u8]; 0] = [];
-            wire::encode_hops(&no_hops, &mut frame_body);
-            wire::encode_variable_data(wire::TSP_PLAINTEXT, body, &mut frame_body);
-        }
-        MessageType::Routed => {
-            frame_body.extend_from_slice(&payload_marker::HOP);
-            wire::encode_hops(hops, &mut frame_body);
-            wire::encode_variable_data(wire::TSP_PLAINTEXT, body, &mut frame_body);
+            frame_body.extend_from_slice(&sender_field);
+            if matches!(kind, MessageType::Nested) {
+                let no_hops: [&[u8]; 0] = [];
+                wire::encode_hops(&no_hops, &mut frame_body);
+            } else {
+                wire::encode_hops(hops, &mut frame_body);
+            }
+            encode_padding(&mut frame_body);
+            // The inner message is self-framing and carried raw — Rev 3 drops
+            // Rev 2's enclosing `B` var-data field. Every TSP message is
+            // quadlet-aligned, so this keeps the frame aligned.
+            if !body.len().is_multiple_of(3) {
+                return Err(TspError::InvalidMessage(
+                    "nested inner message is not quadlet-aligned".into(),
+                ));
+            }
+            frame_body.extend_from_slice(body);
         }
         MessageType::Control => {
             let control = ControlMessage::decode(body)?;
             match control.control_type {
                 ControlType::RelationshipFormingInvite => {
-                    frame_body.extend_from_slice(&payload_marker::INVITE);
-                    wire::encode_hops(&control.route, &mut frame_body);
+                    let mut after = Vec::new();
                     wire::encode_fixed_data(
                         wire::TSP_NONCE,
                         control.require_nonce()?,
-                        &mut frame_body,
+                        &mut after,
                     );
-                    // empty VID (a direct-relationship invite carries no new VID)
-                    wire::encode_variable_data(wire::TSP_VID, &[], &mut frame_body);
+                    // Reply_Path: the route for the peer's accept, `-JAA` when
+                    // the reply is to come back directly.
+                    wire::encode_hops(&control.route, &mut after);
+                    // Referral_Field: `-JAA`. Introducing a new VID over an
+                    // existing relationship is not implemented.
+                    let no_referral: [&[u8]; 0] = [];
+                    wire::encode_hops(&no_referral, &mut after);
+
+                    let digest =
+                        derive_said(envelope_fields, &payload_marker::INVITE, &sender_field, &after);
+                    frame_body.extend_from_slice(&payload_marker::INVITE);
+                    frame_body.extend_from_slice(&sender_field);
+                    encode_digest(&digest, &mut frame_body);
+                    frame_body.extend_from_slice(&after);
+                    encode_padding(&mut frame_body);
+                    said = Some(digest);
                 }
                 ControlType::RelationshipFormingAccept => {
+                    // Reply_Digest echoes the invite's digest verbatim.
+                    let mut after = Vec::new();
+                    encode_digest(control.require_reply()?, &mut after);
+
+                    let digest =
+                        derive_said(envelope_fields, &payload_marker::ACCEPT, &sender_field, &after);
                     frame_body.extend_from_slice(&payload_marker::ACCEPT);
-                    encode_sha256_digest(control.require_reply()?, &mut frame_body);
+                    frame_body.extend_from_slice(&sender_field);
+                    encode_digest(&digest, &mut frame_body);
+                    frame_body.extend_from_slice(&after);
+                    encode_padding(&mut frame_body);
+                    said = Some(digest);
                 }
                 ControlType::RelationshipCancel => {
+                    // A cancel's Digest names the relationship-forming message
+                    // it ends; it is a reference, not a digest of this message,
+                    // so it is echoed rather than derived.
+                    let reference = *control.require_reply()?;
                     frame_body.extend_from_slice(&payload_marker::CANCEL);
-                    encode_sha256_digest(control.require_reply()?, &mut frame_body);
+                    frame_body.extend_from_slice(&sender_field);
+                    encode_digest(&reference, &mut frame_body);
+                    encode_padding(&mut frame_body);
+                    said = Some(reference);
                 }
             }
         }
     }
 
-    debug_assert!(frame_body.len().is_multiple_of(3));
-    let mut out = Vec::with_capacity(3 + frame_body.len());
+    if !frame_body.len().is_multiple_of(3) {
+        return Err(TspError::InvalidMessage(
+            "payload frame not a multiple of 3 bytes".into(),
+        ));
+    }
+    let mut out = Vec::with_capacity(6 + frame_body.len());
     wire::encode_count(wire::TSP_PAYLOAD, (frame_body.len() / 3) as u32, &mut out);
     out.extend_from_slice(&frame_body);
-    Ok(out)
+
+    let digest = said.unwrap_or_else(|| sha256(&out));
+    Ok((out, digest))
 }
 
 /// A decoded payload frame: its message kind, the remaining hop list (Routed
-/// only), the plaintext body, and — for Control — the structured control.
+/// only), the plaintext body, the structured control (Control only), and the
+/// thread digest.
 struct DecodedFrame {
     kind: MessageType,
     hops: Vec<String>,
     body: Vec<u8>,
     control: Option<ControlMessage>,
+    thread_digest: [u8; DIGEST_LEN],
 }
 
 /// Decode hop VID byte vectors into UTF-8 VID strings.
@@ -203,41 +340,82 @@ fn hops_to_strings(hop_bytes: Vec<Vec<u8>>) -> Result<Vec<String>, TspError> {
         .collect()
 }
 
-/// Decode a CESR payload frame into a [`DecodedFrame`].
+/// Decode a CESR payload frame.
 ///
-/// `XSCS` → Direct; `XHOP` → Nested (empty hops) or Routed (non-empty);
-/// `XRFI`/`XRFA`/`XRFD` → Control (invite / accept / cancel). For Control the
-/// `body` is set to the control's [`ControlMessage::encode`] form (so the SDK,
-/// which only sees the `payload` bytes, can recover it) and `control` carries
-/// the structured message.
-fn decode_payload_frame(frame: &[u8]) -> Result<DecodedFrame, TspError> {
+/// `envelope_fields` and `envelope_sender` come from the message's envelope and
+/// are needed to recompute a control message's `TSP_Digest` and to check the
+/// ESSR sender field against the envelope.
+fn decode_payload_frame(
+    frame: &[u8],
+    envelope_fields: &[u8],
+    envelope_sender: &str,
+) -> Result<DecodedFrame, TspError> {
     let mut pos = 0usize;
-    wire::decode_count(wire::TSP_PAYLOAD, frame, &mut pos)
+    let quadlets = wire::decode_count(wire::TSP_PAYLOAD, frame, &mut pos)
         .ok_or_else(|| TspError::InvalidMessage("missing -Z payload frame".into()))?;
+    let frame_end = (quadlets as usize)
+        .checked_mul(3)
+        .and_then(|len| pos.checked_add(len))
+        .filter(|end| *end <= frame.len())
+        .ok_or_else(|| {
+            TspError::InvalidMessage("-Z frame declares more content than the payload".into())
+        })?;
 
-    // Optional sender-identity VID (ESSR). The reference omits it for HPKE-Auth;
-    // skip it if present so we stay tolerant.
-    let _ = wire::decode_variable_data(wire::TSP_VID, frame, &mut pos);
-
-    let marker = frame
+    let type_code: [u8; 3] = frame
         .get(pos..pos + 3)
-        .ok_or_else(|| TspError::InvalidMessage("missing payload type marker".into()))?;
+        .ok_or_else(|| TspError::InvalidMessage("truncated payload type code".into()))?
+        .try_into()
+        .expect("3-byte slice");
+    pos += 3;
 
-    if marker == payload_marker::DIRECT {
-        pos += 3;
+    // Every Rev 3 layout carries the ESSR sender field next. Under HPKE-Base it
+    // MAY be the NULL VID; when it is not, it MUST equal the envelope sender.
+    let sender_field_begin = pos;
+    let sender_bytes = wire::decode_variable_data(wire::TSP_VID, frame, &mut pos)
+        .ok_or_else(|| TspError::InvalidMessage("missing ESSR sender VID field".into()))?;
+    let sender_field = &frame[sender_field_begin..pos];
+    if !sender_bytes.is_empty() {
+        let payload_sender = std::str::from_utf8(&sender_bytes)
+            .map_err(|_| TspError::InvalidMessage("ESSR sender VID is not UTF-8".into()))?;
+        if payload_sender != envelope_sender {
+            return Err(TspError::Verification(
+                "ESSR sender VID does not match the envelope sender".into(),
+            ));
+        }
+    }
+
+    if type_code == payload_marker::DIRECT {
+        let _pad = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing padding field".into()))?;
+        let stream_quadlets = wire::decode_count(wire::TSP_GENERIC_STREAM, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing -A payload stream".into()))?;
+        let stream_end = (stream_quadlets as usize)
+            .checked_mul(3)
+            .and_then(|len| pos.checked_add(len))
+            .filter(|end| *end <= frame_end)
+            .ok_or_else(|| {
+                TspError::InvalidMessage("-A stream overruns the payload frame".into())
+            })?;
         let body = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
-            .ok_or_else(|| TspError::InvalidMessage("missing payload plaintext".into()))?;
+            .ok_or_else(|| TspError::InvalidMessage("missing payload body".into()))?;
+        if pos > stream_end {
+            return Err(TspError::InvalidMessage(
+                "payload body overruns the -A stream".into(),
+            ));
+        }
         Ok(DecodedFrame {
             kind: MessageType::Direct,
             hops: Vec::new(),
             body,
             control: None,
+            thread_digest: sha256(&frame[..frame_end]),
         })
-    } else if marker == payload_marker::HOP {
-        pos += 3;
+    } else if type_code == payload_marker::HOP {
         let hops = hops_to_strings(wire::decode_hops(frame, &mut pos)?)?;
-        let body = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
-            .ok_or_else(|| TspError::InvalidMessage("missing payload plaintext".into()))?;
+        let _pad = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing padding field".into()))?;
+        // The inner message runs to the end of the frame.
+        let body = frame[pos..frame_end].to_vec();
         let kind = if hops.is_empty() {
             MessageType::Nested
         } else {
@@ -248,20 +426,78 @@ fn decode_payload_frame(frame: &[u8]) -> Result<DecodedFrame, TspError> {
             hops,
             body,
             control: None,
+            thread_digest: sha256(&frame[..frame_end]),
         })
-    } else if marker == payload_marker::INVITE {
-        pos += 3;
-        let route = hops_to_strings(wire::decode_hops(frame, &mut pos)?)?;
-        let nonce = wire::decode_fixed_data::<DIGEST_LEN>(wire::TSP_NONCE, frame, &mut pos)
-            .ok_or_else(|| TspError::InvalidMessage("missing or malformed invite nonce".into()))?;
-        // empty (or new-VID) `B` field; we only support the direct-relationship
-        // form, so the VID is expected to be empty.
-        let _new_vid = wire::decode_variable_data(wire::TSP_VID, frame, &mut pos)
-            .ok_or_else(|| TspError::InvalidMessage("missing invite VID field".into()))?;
+    } else if type_code == payload_marker::INVITE
+        || type_code == payload_marker::ACCEPT
+        || type_code == payload_marker::CANCEL
+    {
+        let digest = decode_digest(frame, &mut pos)?;
+        let after_begin = pos;
+
+        let (control_type, nonce, reply, route) = if type_code == payload_marker::INVITE {
+            let nonce = wire::decode_fixed_data::<NONCE_LEN>(wire::TSP_NONCE, frame, &mut pos)
+                .ok_or_else(|| TspError::InvalidMessage("missing or malformed nonce".into()))?;
+            let reply_path = hops_to_strings(wire::decode_hops(frame, &mut pos)?)?;
+            // Referral_Field. Carried but not acted on: introducing a new VID
+            // over an existing relationship is not implemented, and a message
+            // that tries is refused rather than silently treated as a plain
+            // invite.
+            let referral = wire::decode_hops(frame, &mut pos)?;
+            if !referral.is_empty() {
+                return Err(TspError::InvalidMessage(
+                    "referral invites are not supported".into(),
+                ));
+            }
+            (
+                ControlType::RelationshipFormingInvite,
+                Some(nonce),
+                None,
+                reply_path,
+            )
+        } else if type_code == payload_marker::ACCEPT {
+            let reply = decode_digest(frame, &mut pos)?;
+            (
+                ControlType::RelationshipFormingAccept,
+                None,
+                Some(reply),
+                Vec::new(),
+            )
+        } else {
+            (ControlType::RelationshipCancel, None, None, Vec::new())
+        };
+
+        let after = &frame[after_begin..pos];
+
+        // A cancel's digest is a reference to another message, so there is
+        // nothing to recompute. An invite's and an accept's are self-addressing
+        // and MUST be verified: this is the check Rev 2 could not make, because
+        // the value was never on the wire.
+        let thread_digest = if control_type == ControlType::RelationshipCancel {
+            digest
+        } else {
+            let recomputed = derive_said(envelope_fields, &type_code, sender_field, after);
+            if recomputed != digest {
+                return Err(TspError::Verification(
+                    "TSP_Digest does not match the message it identifies".into(),
+                ));
+            }
+            digest
+        };
+
+        let _pad = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
+            .ok_or_else(|| TspError::InvalidMessage("missing padding field".into()))?;
+
         let control = ControlMessage {
-            control_type: ControlType::RelationshipFormingInvite,
-            nonce: Some(nonce),
-            reply: None,
+            control_type,
+            digest: Some(thread_digest),
+            nonce,
+            // A cancel names its relationship by the digest field itself.
+            reply: reply.or(if control_type == ControlType::RelationshipCancel {
+                Some(digest)
+            } else {
+                None
+            }),
             route,
         };
         Ok(DecodedFrame {
@@ -269,26 +505,7 @@ fn decode_payload_frame(frame: &[u8]) -> Result<DecodedFrame, TspError> {
             hops: Vec::new(),
             body: control.encode(),
             control: Some(control),
-        })
-    } else if marker == payload_marker::ACCEPT || marker == payload_marker::CANCEL {
-        let control_type = if marker == payload_marker::ACCEPT {
-            ControlType::RelationshipFormingAccept
-        } else {
-            ControlType::RelationshipCancel
-        };
-        pos += 3;
-        let reply = decode_sha256_digest(frame, &mut pos)?;
-        let control = ControlMessage {
-            control_type,
-            nonce: None,
-            reply: Some(reply),
-            route: Vec::new(),
-        };
-        Ok(DecodedFrame {
-            kind: MessageType::Control,
-            hops: Vec::new(),
-            body: control.encode(),
-            control: Some(control),
+            thread_digest,
         })
     } else {
         Err(TspError::InvalidMessage(
@@ -297,45 +514,80 @@ fn decode_payload_frame(frame: &[u8]) -> Result<DecodedFrame, TspError> {
     }
 }
 
-/// Encode the signature frame: `-C<n> -K<n> <fixed B> sig`.
+/// Encode the signature attachment: `-C23 -K22 B0 sig(64)`.
+///
+/// Rev 3 §9.5: the counts are length-based — the `-C` group holds the `-K`
+/// header plus its content — and the signature uses the *indexed* code `B#`,
+/// not Rev 2's non-indexed `0B`.
 fn encode_signature_frame(signature: &[u8; SIG_LEN], out: &mut Vec<u8>) {
-    let quadlets = signature.len().div_ceil(3) as u32;
-    wire::encode_count(wire::TSP_ATTACH_GRP, quadlets, out);
-    wire::encode_count(wire::TSP_INDEX_SIG_GRP, quadlets, out);
-    wire::encode_fixed_data(wire::ED25519_SIGNATURE, signature, out);
+    wire::encode_count(wire::TSP_ATTACH_GRP, ATTACH_GROUP_QUADLETS, out);
+    wire::encode_count(wire::TSP_INDEX_SIG_GRP, SIG_GROUP_QUADLETS, out);
+    wire::encode_indexed_ed25519_signature(SIG_INDEX, signature, out);
 }
 
-/// Decode the signature frame at `pos`. Returns the 64-byte Ed25519 signature.
+/// Decode the signature attachment at `pos`, returning the Ed25519 signature.
+///
+/// A signature attachment is mandatory. An attachment that will not parse is a
+/// rejection, never "this message is unsigned" — treating it as the latter is a
+/// verification bypass, since corrupting the attachment code would then skip the
+/// check entirely.
 fn decode_signature_frame(data: &[u8], pos: &mut usize) -> Result<[u8; SIG_LEN], TspError> {
-    let a = wire::decode_count(wire::TSP_ATTACH_GRP, data, pos)
-        .ok_or_else(|| TspError::InvalidMessage("missing -C signature group".into()))?;
-    let k = wire::decode_count(wire::TSP_INDEX_SIG_GRP, data, pos)
-        .ok_or_else(|| TspError::InvalidMessage("missing -K signature group".into()))?;
-    let want = SIG_LEN.div_ceil(3) as u32;
-    if a != want || k != want {
+    let attach = wire::decode_count(wire::TSP_ATTACH_GRP, data, pos)
+        .ok_or_else(|| TspError::InvalidMessage("missing -C signature attachment".into()))?;
+    let group_begin = *pos;
+    let group_end = (attach as usize)
+        .checked_mul(3)
+        .and_then(|len| group_begin.checked_add(len))
+        .filter(|end| *end <= data.len())
+        .ok_or_else(|| {
+            TspError::InvalidMessage("-C attachment declares more content than the message".into())
+        })?;
+
+    let indexed = wire::decode_count(wire::TSP_INDEX_SIG_GRP, data, pos)
+        .ok_or_else(|| TspError::InvalidMessage("missing -K indexed signature group".into()))?;
+    let sig_group_end = (indexed as usize)
+        .checked_mul(3)
+        .and_then(|len| pos.checked_add(len))
+        .filter(|end| *end <= group_end)
+        .ok_or_else(|| {
+            TspError::InvalidMessage("-K group overruns the -C attachment".into())
+        })?;
+
+    let (index, signature) = wire::decode_indexed_ed25519_signature(data, pos)
+        .ok_or_else(|| TspError::InvalidMessage("missing indexed Ed25519 signature".into()))?;
+    if *pos > sig_group_end {
         return Err(TspError::InvalidMessage(
-            "unexpected signature group size".into(),
+            "signature overruns the -K group".into(),
         ));
     }
-    let sig = wire::decode_fixed_data::<SIG_LEN>(wire::ED25519_SIGNATURE, data, pos)
-        .ok_or_else(|| TspError::InvalidMessage("missing Ed25519 signature".into()))?;
-    Ok(sig)
+
+    // We resolve exactly one signing key per VID, so index 0 is the only one we
+    // can check a signature against. Rejecting any other index is not just
+    // tidiness: the index lives in the signature attachment, which the message
+    // signature does not cover, so ignoring it would let anyone flip those bits
+    // and produce a second byte sequence that verifies identically. The
+    // mediator keys message storage and idempotency on a digest of the whole
+    // wire bytes, so that would be a dedup bypass.
+    if index != SIG_INDEX {
+        return Err(TspError::Verification(format!(
+            "signature names key index {index}, but only index {SIG_INDEX} can be verified"
+        )));
+    }
+
+    // Rev 3 tolerates further signatures in the group; we verify the first and
+    // skip the rest, since choosing among a VID's keys by index is a VID-type
+    // concern this crate does not model.
+    *pos = group_end;
+    Ok(signature)
 }
 
 /// Pack a direct TSP message.
-///
-/// 1. Build the `-E` envelope frame (this is the HPKE `info`).
-/// 2. Build the CESR payload frame (`-Z XSCS <plaintext>`) and HPKE-Auth seal it
-///    (empty AAD); append `tag ‖ enc` to the ciphertext.
-/// 3. Append the `G` ciphertext frame to the envelope.
-/// 4. Ed25519-sign everything so far and append the `-C/-K` signature frame.
 pub fn pack(
     payload: &[u8],
     message_type: MessageType,
     sender_vid: &str,
     receiver_vid: &str,
     sender_signing_key: &[u8; 32],
-    sender_encryption_key: &[u8; 32],
     receiver_encryption_key: &[u8; 32],
 ) -> Result<PackedMessage, TspError> {
     pack_with_hops(
@@ -345,7 +597,6 @@ pub fn pack(
         sender_vid,
         receiver_vid,
         sender_signing_key,
-        sender_encryption_key,
         receiver_encryption_key,
     )
 }
@@ -353,7 +604,9 @@ pub fn pack(
 /// Like [`pack`] but carries a routing `hops` list in the payload frame (used by
 /// [`crate::message::routed::pack_routed`] for [`MessageType::Routed`]). For all
 /// other kinds `hops` must be empty.
-#[allow(clippy::too_many_arguments)]
+///
+/// Note that HPKE-Base does not use the sender's encryption key at all, so —
+/// unlike Rev 2 — packing needs only the sender's *signing* secret.
 pub fn pack_with_hops(
     body: &[u8],
     message_type: MessageType,
@@ -361,36 +614,40 @@ pub fn pack_with_hops(
     sender_vid: &str,
     receiver_vid: &str,
     sender_signing_key: &[u8; 32],
-    sender_encryption_key: &[u8; 32],
     receiver_encryption_key: &[u8; 32],
 ) -> Result<PackedMessage, TspError> {
-    // 1. Envelope frame = HPKE info.
+    // 1. Envelope fields. These are the HPKE-Base AAD.
     let envelope = Envelope::new(message_type, sender_vid, receiver_vid);
-    let envelope_bytes = envelope.encode()?;
+    let envelope_fields = envelope.encode_fields()?;
 
-    // 2. CESR payload frame, then HPKE-Auth seal it. The thread digest is
-    //    SHA256 of this plaintext frame (computed before sealing, matching the
-    //    reference's seal-time hash).
-    let payload_frame = encode_payload_frame(body, message_type, hops)?;
-    let thread_digest = sha256(&payload_frame);
+    // 2. Plaintext payload frame, and the thread digest it carries.
+    let (payload_frame, thread_digest) =
+        encode_payload_frame(body, message_type, hops, sender_vid, &envelope_fields)?;
+
+    // 3. Seal. `aad` binds the ciphertext to the version and both VIDs;
+    //    `info` is the fixed protocol code.
     let sealed = hpke::seal(
         &payload_frame,
-        b"", // AAD is empty in the reference
-        sender_encryption_key,
+        &envelope_fields,
         receiver_encryption_key,
-        &envelope_bytes, // envelope frame is the HPKE `info`
+        wire::TSP_INFO,
     )?;
 
-    // Reference ciphertext layout: ct ‖ tag(16) ‖ enc(32). `sealed.ciphertext`
-    // already is `ct ‖ tag` (encrypt_in_place appends the tag), so append `enc`.
-    let mut g_payload = sealed.ciphertext;
-    g_payload.extend_from_slice(&sealed.enc);
+    // 4. Ciphertext field: `enc ‖ ct`, with the AEAD tag inside `ct`. Rev 2 put
+    //    `enc` at the end.
+    let mut ciphertext = Vec::with_capacity(ENC_LEN + sealed.ciphertext.len());
+    ciphertext.extend_from_slice(&sealed.enc);
+    ciphertext.extend_from_slice(&sealed.ciphertext);
 
-    // 3. Build wire: envelope ‖ G(ciphertext).
-    let mut wire_bytes = envelope_bytes;
-    wire::encode_variable_data(wire::TSP_HPKEAUTH_CIPHERTEXT, &g_payload, &mut wire_bytes);
+    let mut ciphertext_field = Vec::new();
+    wire::encode_variable_data(
+        wire::TSP_HPKE_BASE_CIPHERTEXT,
+        &ciphertext,
+        &mut ciphertext_field,
+    );
 
-    // 4. Sign everything so far, append the signature frame.
+    // 5. Close the `-E` frame over the fields and the ciphertext, then sign it.
+    let mut wire_bytes = envelope::finalize_frame(&envelope_fields, &ciphertext_field)?;
     let signature = signing::sign(&wire_bytes, sender_signing_key)?;
     encode_signature_frame(&signature, &mut wire_bytes);
 
@@ -402,33 +659,39 @@ pub fn pack_with_hops(
 
 /// Unpack a direct TSP message.
 ///
-/// 1. Parse the `-E` envelope frame (the HPKE `info`).
-/// 2. Parse the `G` ciphertext frame; verify the Ed25519 signature over the
-///    envelope ‖ ciphertext.
-/// 3. Split `enc` off the ciphertext and HPKE-Auth open (empty AAD).
-/// 4. Decode the CESR payload frame to recover the plaintext.
+/// The signature is verified before anything is decrypted, and the AAD is
+/// rebuilt from the received envelope bytes so that a ciphertext sealed under a
+/// different sender or receiver will not open.
 pub fn unpack(
     wire_bytes: &[u8],
     receiver_decryption_key: &[u8; 32],
-    sender_encryption_key: &[u8; 32],
     sender_signing_key: &[u8; 32],
 ) -> Result<UnpackedMessage, TspError> {
     if wire_bytes.len() < 48 {
         return Err(TspError::InvalidMessage("message too short".into()));
     }
 
-    // 1. Envelope frame (also the HPKE info for tsp-sdk).
+    // 1. Envelope.
     let decoded = Envelope::decode_full(wire_bytes)?;
     let envelope = decoded.envelope;
-    let header_len = decoded.header_len;
-    let envelope_bytes = &wire_bytes[..header_len];
+    let envelope_fields = wire_bytes[decoded.aad.clone()].to_vec();
 
-    // 2. Ciphertext frame (`G` var-data).
-    let mut pos = header_len;
-    let ct_range =
-        wire::decode_variable_data_range(wire::TSP_HPKEAUTH_CIPHERTEXT, wire_bytes, &mut pos)
-            .ok_or_else(|| TspError::InvalidMessage("missing G ciphertext frame".into()))?;
-    let signed_end = pos; // signature covers everything up to here
+    // 2. Ciphertext field.
+    let mut pos = decoded.header_len;
+    let ct_range = wire::decode_variable_data_range(
+        wire::TSP_HPKE_BASE_CIPHERTEXT,
+        wire_bytes,
+        &mut pos,
+    )
+    .ok_or_else(|| TspError::InvalidMessage("missing F ciphertext field".into()))?;
+
+    // The `-E` count is authoritative for where the signable content ends; the
+    // ciphertext field must fill it exactly.
+    if pos != decoded.content_end {
+        return Err(TspError::InvalidMessage(
+            "ciphertext field does not fill the -E frame".into(),
+        ));
+    }
 
     if ct_range.len() > MAX_MESSAGE_SIZE {
         return Err(TspError::InvalidMessage("ciphertext too large".into()));
@@ -437,44 +700,42 @@ pub fn unpack(
         return Err(TspError::InvalidMessage("ciphertext truncated".into()));
     }
 
-    // 3. Signature frame over envelope ‖ ciphertext.
+    // 3. Signature over the whole `-E` frame.
     let signature = decode_signature_frame(wire_bytes, &mut pos)?;
     if pos != wire_bytes.len() {
         return Err(TspError::InvalidMessage(
             "trailing bytes after signature".into(),
         ));
     }
-    signing::verify(&wire_bytes[..signed_end], &signature, sender_signing_key)?;
-
-    // 4. Split `enc` off the tail and HPKE-Auth open the remainder.
-    let g_payload = &wire_bytes[ct_range.clone()];
-    let enc_start = g_payload.len() - ENC_LEN;
-    let enc: [u8; 32] = g_payload[enc_start..]
-        .try_into()
-        .map_err(|_| TspError::InvalidMessage("bad enc size".into()))?;
-    let ct_and_tag = &g_payload[..enc_start]; // ct ‖ tag
-
-    let payload_frame = hpke::open(
-        ct_and_tag,
-        b"", // empty AAD
-        &enc,
-        receiver_decryption_key,
-        sender_encryption_key,
-        envelope_bytes, // envelope frame is the HPKE `info`
+    signing::verify(
+        &wire_bytes[..decoded.content_end],
+        &signature,
+        sender_signing_key,
     )?;
 
-    // 5. The thread digest is SHA256 of the decrypted plaintext frame (computed
-    //    here, after decrypt — identical to the reference's open-time hash and
-    //    to the sender's seal-time `PackedMessage::thread_digest`).
-    let thread_digest = sha256(&payload_frame);
+    // 4. Split `enc` off the front and open the remainder.
+    let ciphertext = &wire_bytes[ct_range.clone()];
+    let enc: [u8; 32] = ciphertext[..ENC_LEN]
+        .try_into()
+        .map_err(|_| TspError::InvalidMessage("bad enc size".into()))?;
 
-    // 6. Decode the CESR payload frame.
+    let payload_frame = hpke::open(
+        &ciphertext[ENC_LEN..],
+        &envelope_fields,
+        &enc,
+        receiver_decryption_key,
+        wire::TSP_INFO,
+    )?;
+
+    // 5. Decode the payload frame, verifying the embedded digest and the ESSR
+    //    sender field against the envelope.
     let DecodedFrame {
         kind: message_type,
         hops,
         body: payload,
         control,
-    } = decode_payload_frame(&payload_frame)?;
+        thread_digest,
+    } = decode_payload_frame(&payload_frame, &envelope_fields, &envelope.sender)?;
 
     Ok(UnpackedMessage {
         payload,
@@ -486,7 +747,6 @@ pub fn unpack(
         control,
     })
 }
-
 /// Compute a SHA-256 digest (the TSP thread-digest hash).
 pub fn sha256(data: &[u8]) -> [u8; DIGEST_LEN] {
     use sha2::{Digest, Sha256};
@@ -512,7 +772,6 @@ pub fn message_digest_bytes(bytes: &[u8]) -> [u8; 32] {
 pub fn message_digest(packed: &PackedMessage) -> [u8; 32] {
     message_digest_bytes(&packed.bytes)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,22 +781,17 @@ mod tests {
     struct TestKeys {
         sender_sign_sk: [u8; 32],
         sender_sign_pk: [u8; 32],
-        sender_enc_sk: [u8; 32],
-        sender_enc_pk: [u8; 32],
         receiver_enc_sk: [u8; 32],
         receiver_enc_pk: [u8; 32],
     }
 
     fn gen_keys() -> TestKeys {
         let sender_sign = SigningKey::generate(&mut rand_10::rng());
-        let sender_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         let receiver_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
 
         TestKeys {
             sender_sign_sk: sender_sign.to_bytes(),
             sender_sign_pk: sender_sign.verifying_key().to_bytes(),
-            sender_enc_sk: sender_enc.to_bytes(),
-            sender_enc_pk: PublicKey::from(&sender_enc).to_bytes(),
             receiver_enc_sk: receiver_enc.to_bytes(),
             receiver_enc_pk: PublicKey::from(&receiver_enc).to_bytes(),
         }
@@ -554,7 +808,6 @@ mod tests {
             "did:web:alice.example",
             "did:web:bob.example",
             &keys.sender_sign_sk,
-            &keys.sender_enc_sk,
             &keys.receiver_enc_pk,
         )
         .unwrap();
@@ -565,7 +818,6 @@ mod tests {
         let unpacked = unpack(
             &packed.bytes,
             &keys.receiver_enc_sk,
-            &keys.sender_enc_pk,
             &keys.sender_sign_pk,
         )
         .unwrap();
@@ -585,7 +837,6 @@ mod tests {
             "did:web:a.example",
             "did:web:b.example",
             &keys.sender_sign_sk,
-            &keys.sender_enc_sk,
             &keys.receiver_enc_pk,
         )
         .unwrap();
@@ -598,8 +849,7 @@ mod tests {
             unpack(
                 &tampered,
                 &keys.receiver_enc_sk,
-                &keys.sender_enc_pk,
-                &keys.sender_sign_pk,
+                    &keys.sender_sign_pk,
             )
             .is_err()
         );
@@ -615,7 +865,6 @@ mod tests {
             "did:web:a.example",
             "did:web:b.example",
             &keys.sender_sign_sk,
-            &keys.sender_enc_sk,
             &keys.receiver_enc_pk,
         )
         .unwrap();
@@ -624,8 +873,7 @@ mod tests {
             unpack(
                 &packed.bytes,
                 &wrong_sk.to_bytes(),
-                &keys.sender_enc_pk,
-                &keys.sender_sign_pk,
+                    &keys.sender_sign_pk,
             )
             .is_err()
         );
@@ -640,7 +888,6 @@ mod tests {
             "did:web:a.example",
             "did:web:b.example",
             &keys.sender_sign_sk,
-            &keys.sender_enc_sk,
             &keys.receiver_enc_pk,
         )
         .unwrap();
@@ -648,7 +895,6 @@ mod tests {
         let unpacked = unpack(
             &packed.bytes,
             &keys.receiver_enc_sk,
-            &keys.sender_enc_pk,
             &keys.sender_sign_pk,
         )
         .unwrap();
@@ -664,10 +910,279 @@ mod tests {
             "did:web:a.example",
             "did:web:b.example",
             &keys.sender_sign_sk,
-            &keys.sender_enc_sk,
             &keys.receiver_enc_pk,
         )
         .unwrap();
         assert_eq!(message_digest(&packed), message_digest(&packed));
+    }
+
+    // ---- Rev 3 conformance ----
+
+    /// The ciphertext is `enc ‖ ct` under the HPKE-Base `F` code. Rev 2 put
+    /// `enc` at the *end* under the HPKE-Auth `G` code, so a message packed by
+    /// a Rev 2 build does not even locate its own ciphertext field here.
+    #[test]
+    fn ciphertext_is_enc_first_under_the_f_code() {
+        let keys = gen_keys();
+        let packed = pack(
+            b"x",
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        let decoded = Envelope::decode_full(&packed.bytes).unwrap();
+        let mut pos = decoded.header_len;
+        let ct = wire::decode_variable_data_range(
+            wire::TSP_HPKE_BASE_CIPHERTEXT,
+            &packed.bytes,
+            &mut pos,
+        )
+        .expect("ciphertext must be an F field");
+        assert!(ct.len() > ENC_LEN + TAG_LEN);
+
+        // The Rev 2 `G` code must not parse.
+        let mut pos = decoded.header_len;
+        assert!(
+            wire::decode_variable_data_range(
+                wire::cesr_int("G") as u32,
+                &packed.bytes,
+                &mut pos
+            )
+            .is_none()
+        );
+    }
+
+    /// The `-E` count covers the ciphertext, so the signature attachment begins
+    /// exactly where the frame's declared content ends.
+    #[test]
+    fn envelope_frame_encloses_the_ciphertext() {
+        let keys = gen_keys();
+        let packed = pack(
+            b"payload",
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        let decoded = Envelope::decode_full(&packed.bytes).unwrap();
+        assert!(decoded.content_end > decoded.header_len);
+        // What follows the frame is the -C attachment: 3 + 3 + 66 bytes.
+        assert_eq!(packed.bytes.len() - decoded.content_end, 72);
+    }
+
+    /// An invite's `TSP_Digest` is on the wire and is recomputed by the
+    /// receiver. Rev 2's thread digest was never transmitted, so this check
+    /// could not exist.
+    #[test]
+    fn invite_digest_is_carried_and_verified() {
+        let keys = gen_keys();
+        let invite = ControlMessage::invite();
+
+        let packed = pack(
+            &invite.encode(),
+            MessageType::Control,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        assert_eq!(unpacked.thread_digest, packed.thread_digest);
+
+        let control = unpacked.control.expect("invite decodes to a control");
+        assert_eq!(control.digest, Some(packed.thread_digest));
+        assert_eq!(control.nonce, invite.nonce);
+    }
+
+    /// The digest is self-addressing, so it binds the envelope too: the same
+    /// invite sent between different VIDs has a different thread id.
+    #[test]
+    fn digest_binds_the_envelope() {
+        let keys = gen_keys();
+        let invite = ControlMessage::invite();
+
+        let to_bob = pack(
+            &invite.encode(),
+            MessageType::Control,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+        let to_carol = pack(
+            &invite.encode(),
+            MessageType::Control,
+            "did:web:alice",
+            "did:web:carol",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        assert_ne!(to_bob.thread_digest, to_carol.thread_digest);
+    }
+
+    /// A tampered digest is caught on receive. The signature covers the
+    /// ciphertext, so this is checked by corrupting the plaintext frame and
+    /// re-sealing it — i.e. by a sender that signs correctly but lies about the
+    /// digest, which is precisely the case the SAID exists to catch.
+    #[test]
+    fn a_lied_about_digest_is_rejected() {
+        let keys = gen_keys();
+        let envelope = Envelope::new(MessageType::Control, "did:web:alice", "did:web:bob");
+        let fields = envelope.encode_fields().unwrap();
+
+        let invite = ControlMessage::invite();
+        let (mut frame, digest) = encode_payload_frame(
+            &invite.encode(),
+            MessageType::Control,
+            &[],
+            "did:web:alice",
+            &fields,
+        )
+        .unwrap();
+
+        // Flip a byte of the embedded digest, then seal and sign honestly.
+        let slot = frame
+            .windows(DIGEST_LEN)
+            .position(|w| w == digest)
+            .expect("digest is embedded in the frame");
+        frame[slot] ^= 0xFF;
+
+        let sealed = hpke::seal(&frame, &fields, &keys.receiver_enc_pk, wire::TSP_INFO).unwrap();
+        let mut ciphertext = sealed.enc.to_vec();
+        ciphertext.extend_from_slice(&sealed.ciphertext);
+        let mut field = Vec::new();
+        wire::encode_variable_data(wire::TSP_HPKE_BASE_CIPHERTEXT, &ciphertext, &mut field);
+        let mut bytes = envelope::finalize_frame(&fields, &field).unwrap();
+        let sig = signing::sign(&bytes, &keys.sender_sign_sk).unwrap();
+        encode_signature_frame(&sig, &mut bytes);
+
+        let err = unpack(&bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap_err();
+        assert!(matches!(err, TspError::Verification(_)), "got {err:?}");
+    }
+
+    /// The ESSR sender field must agree with the envelope. This is the second,
+    /// independent sender binding the spec permits under HPKE-Base — the AAD
+    /// being the first.
+    #[test]
+    fn essr_sender_mismatch_is_rejected() {
+        let keys = gen_keys();
+        let envelope = Envelope::new(MessageType::Direct, "did:web:alice", "did:web:bob");
+        let fields = envelope.encode_fields().unwrap();
+
+        // Build a frame whose ESSR sender field names someone else.
+        let (frame, _) = encode_payload_frame(
+            b"body",
+            MessageType::Direct,
+            &[],
+            "did:web:mallory",
+            &fields,
+        )
+        .unwrap();
+
+        let sealed = hpke::seal(&frame, &fields, &keys.receiver_enc_pk, wire::TSP_INFO).unwrap();
+        let mut ciphertext = sealed.enc.to_vec();
+        ciphertext.extend_from_slice(&sealed.ciphertext);
+        let mut field = Vec::new();
+        wire::encode_variable_data(wire::TSP_HPKE_BASE_CIPHERTEXT, &ciphertext, &mut field);
+        let mut bytes = envelope::finalize_frame(&fields, &field).unwrap();
+        let sig = signing::sign(&bytes, &keys.sender_sign_sk).unwrap();
+        encode_signature_frame(&sig, &mut bytes);
+
+        let err = unpack(&bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap_err();
+        assert!(matches!(err, TspError::Verification(_)), "got {err:?}");
+    }
+
+    /// The AAD names both VIDs, so a ciphertext sealed for one envelope will not
+    /// open under another even when the signature is rebuilt to match.
+    #[test]
+    fn ciphertext_does_not_open_under_a_substituted_envelope() {
+        let keys = gen_keys();
+        let packed = pack(
+            b"secret",
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        // Lift the ciphertext into an envelope naming a different receiver.
+        let decoded = Envelope::decode_full(&packed.bytes).unwrap();
+        let ct_field = &packed.bytes[decoded.header_len..decoded.content_end];
+
+        let substituted = Envelope::new(MessageType::Direct, "did:web:alice", "did:web:carol");
+        let fields = substituted.encode_fields().unwrap();
+        let mut bytes = envelope::finalize_frame(&fields, ct_field).unwrap();
+        let sig = signing::sign(&bytes, &keys.sender_sign_sk).unwrap();
+        encode_signature_frame(&sig, &mut bytes);
+
+        let err = unpack(&bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap_err();
+        assert!(matches!(err, TspError::Hpke(_)), "got {err:?}");
+    }
+
+    /// A corrupted signature attachment must be a rejection, never "unsigned".
+    /// The reference found a real bypass here: an unparseable attachment
+    /// decoded as "no signature" and skipped verification altogether.
+    #[test]
+    fn a_corrupt_signature_attachment_is_rejected_not_ignored() {
+        let keys = gen_keys();
+        let packed = pack(
+            b"payload",
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        let decoded = Envelope::decode_full(&packed.bytes).unwrap();
+        for offset in 0..3 {
+            let mut bytes = packed.bytes.clone();
+            bytes[decoded.content_end + offset] ^= 0xFF;
+            assert!(
+                unpack(&bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).is_err(),
+                "corrupting attachment byte {offset} must not bypass verification"
+            );
+        }
+    }
+
+    /// Flipping any single byte of a packed message must be caught. This is the
+    /// sweep that found the two gaps the reference reported; it is cheap and it
+    /// covers frames we do not otherwise think to test.
+    #[test]
+    fn every_single_byte_flip_is_rejected() {
+        let keys = gen_keys();
+        let packed = pack(
+            b"payload",
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        for i in 0..packed.bytes.len() {
+            let mut bytes = packed.bytes.clone();
+            bytes[i] ^= 0x01;
+            assert!(
+                unpack(&bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).is_err(),
+                "flipping byte {i} produced a message that verified"
+            );
+        }
     }
 }
