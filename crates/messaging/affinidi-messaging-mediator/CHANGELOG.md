@@ -38,6 +38,30 @@
   makes this explicit and the bridge unimplementable as specified. Deployments
   relying on it must move both ends to one protocol.
 
+- **A relayed endpoint-to-endpoint VID is no longer written to disk.** Rev 3
+  §5.3.3 says an intermediary "SHOULD not process the endpoint-to-endpoint VIDs
+  `VID_a2` and `VID_b2` and MUST NOT store `VID_a2` and `VID_b2` in any
+  persistent storage". When this mediator unwrapped a metadata-privacy nesting
+  and the inner recipient was not local, it enqueued the forward with the inner
+  receiver's VID in plaintext — and the forward queue is durable by design, a
+  retry queue that survives restarts and holds entries for
+  `message_expiry_seconds`. So a transit intermediary accumulated
+  `(sender → far endpoint)` pairs from relationships that were not its own,
+  which is the exposure the rule exists to prevent.
+
+  Processing the VID is unavoidable — the message cannot be routed onward
+  without resolving its destination — but retaining it is not, and retention is
+  the part the specification forbids outright. The queue now carries only the
+  hash and the resolved endpoint URL on that path, which is everything delivery
+  used; the plaintext only ever fed diagnostics and the abandonment report, and
+  those fall back to the hash. Local delivery was already clean: it works
+  entirely on hashes.
+
+  Ordinary forwards are unchanged. A route hop, or the destination's VID at its
+  own intermediary, is a routing-layer identifier this mediator is addressed by
+  and may keep — the new `Destination` enum draws that line at the three call
+  sites, which are otherwise indistinguishable.
+
 - Requires `affinidi-tsp` 0.2 when built with `--features tsp`.
 
 ## Unreleased (0.20.6) — TSP forwarding follows a next hop that names its mediator by DID

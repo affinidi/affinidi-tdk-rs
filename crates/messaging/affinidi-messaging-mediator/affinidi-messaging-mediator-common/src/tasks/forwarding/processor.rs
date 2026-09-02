@@ -649,19 +649,35 @@ impl ForwardingProcessor {
     /// the authcrypt sender to this field. A report with no `from` decrypts and
     /// is then rejected — which is indistinguishable, from the sender's side,
     /// from the bug this replaces.
+    /// How to name a forward's destination in diagnostics.
+    ///
+    /// Usually the VID. For a relayed endpoint-to-endpoint message it is the
+    /// hash, because Rev 3 §5.3.3 forbids an intermediary from keeping the VID
+    /// and the queue entry therefore does not carry one. The hash still lets an
+    /// operator correlate a report with the log lines for the same forward,
+    /// which is what these strings are for.
+    fn destination_label(msg: &ForwardQueueEntry) -> &str {
+        if msg.to_did.is_empty() {
+            &msg.to_did_hash
+        } else {
+            &msg.to_did
+        }
+    }
+
     fn build_problem_report(
         msg: &ForwardQueueEntry,
         endpoint_url: &str,
         from: &str,
         now: u64,
     ) -> serde_json::Value {
+        let destination = Self::destination_label(msg);
         let problem_body = serde_json::json!({
             "code": "e.p.me.res.forwarding.abandoned",
             "comment": format!(
                 "Message forwarding to {} failed after {} retries. Destination endpoint: {}",
-                msg.to_did, msg.retry_count, endpoint_url
+                destination, msg.retry_count, endpoint_url
             ),
-            "args": [msg.to_did, msg.retry_count.to_string(), endpoint_url],
+            "args": [destination, msg.retry_count.to_string(), endpoint_url],
         });
 
         serde_json::json!({
@@ -699,7 +715,9 @@ impl ForwardingProcessor {
             error!(
                 "FORWARD_PROBLEM_REPORT_UNSENT: no system message packer configured, so the \
                  abandoned forward to {} (sender {}, endpoint {}) cannot be reported to its sender",
-                msg.to_did, msg.from_did_hash, endpoint_url
+                Self::destination_label(msg),
+                msg.from_did_hash,
+                endpoint_url
             );
             return;
         };
@@ -712,7 +730,10 @@ impl ForwardingProcessor {
                 error!(
                     "FORWARD_PROBLEM_REPORT_UNSENT: couldn't pack the abandonment report for \
                      sender {} (abandoned forward to {}, endpoint {}): {}",
-                    msg.from_did_hash, msg.to_did, endpoint_url, e
+                    msg.from_did_hash,
+                    Self::destination_label(msg),
+                    endpoint_url,
+                    e
                 );
                 return;
             }
@@ -919,6 +940,59 @@ mod tests {
     use super::*;
 
     // --- build_problem_report tests ---
+
+    /// Rev 3 §5.3.3: an entry whose destination was withheld still produces a
+    /// usable report, and does not invent a destination it was not given.
+    ///
+    /// The withholding happens where the queue entry is built — the mediator
+    /// leaves `to_did` empty when relaying an endpoint-to-endpoint message —
+    /// so what is checked here is the other half: that the reporting path
+    /// degrades to the hash rather than emitting an empty string into a message
+    /// sent to the sender, and that nothing reintroduces the VID.
+    #[test]
+    fn a_withheld_destination_reports_as_its_hash() {
+        let mut entry = abandoned_entry();
+        entry.to_did = String::new();
+
+        let report = ForwardingProcessor::build_problem_report(
+            &entry,
+            "https://example/inbound",
+            "did:med",
+            0,
+        );
+        let body = &report["body"];
+
+        let comment = body["comment"].as_str().expect("a comment");
+        assert!(
+            comment.contains("to-hash"),
+            "the hash stands in for the VID: {comment}"
+        );
+        assert!(
+            !comment.contains("forwarding to  failed"),
+            "and does not leave a hole where the destination should be: {comment}"
+        );
+        assert_eq!(body["args"][0], "to-hash");
+    }
+
+    /// An ordinary forward is unaffected: a routing-layer VID is the
+    /// intermediary's own business and is still named in full.
+    #[test]
+    fn an_ordinary_destination_is_still_named() {
+        let entry = abandoned_entry();
+        let report = ForwardingProcessor::build_problem_report(
+            &entry,
+            "https://example/inbound",
+            "did:med",
+            0,
+        );
+        assert_eq!(report["body"]["args"][0], "did:example:recipient");
+        assert!(
+            report["body"]["comment"]
+                .as_str()
+                .expect("a comment")
+                .contains("did:example:recipient")
+        );
+    }
 
     fn abandoned_entry() -> ForwardQueueEntry {
         ForwardQueueEntry {

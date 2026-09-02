@@ -178,6 +178,15 @@ pub struct ForwardQueueEntry {
     pub to_did_hash: String,
     pub from_did_hash: String,
     pub from_did: String,
+    /// The destination VID in plaintext, for diagnostics and the abandonment
+    /// report. **Empty when the destination must not be retained.**
+    ///
+    /// TSP Rev 3 §5.3.3: an intermediary relaying an endpoint-to-endpoint
+    /// message "MUST NOT store `VID_a2` and `VID_b2` in any persistent
+    /// storage". This queue is persistent — it is a durable retry queue — so on
+    /// that path the destination is carried only as [`Self::to_did_hash`] and
+    /// [`Self::endpoint_url`], which is all delivery needs. Nothing routes on
+    /// this field; see [`crate::tasks::forwarding`] for the fallback label.
     pub to_did: String,
     pub endpoint_url: String,
     pub received_at_ms: u128,
