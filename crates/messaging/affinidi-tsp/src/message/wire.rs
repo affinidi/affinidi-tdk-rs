@@ -162,8 +162,18 @@ pub const YTSP: [u8; 3] = cesr_data("YTSP");
 /// (Rev 3 §8). Five ASCII characters, not the 3-byte binary [`YTSP`] marker.
 pub const TSP_INFO: &[u8] = b"YTSP-";
 
-/// TSP version `(major, minor, patch)` advertised on the wire.
-pub const TSP_VERSION: (u16, u8, u8) = (0, 0, 1);
+/// TSP version `(major, minor, patch)` advertised on the wire, encoded as the
+/// `YTSP-###` marker of §9.1 — `YTSP-ABA` for `0.1.0`.
+///
+/// Rev 3 moved this from Rev 2's `0.0.1` (`YTSP-AAB`). It did not at first: the
+/// PR carried the same constant across a revision that changes the crypto mode,
+/// the ciphertext code, the long count-code prefix and every payload layout, so
+/// the two revisions advertised the same version and a Rev 2 frame could only be
+/// told from a Rev 3 one by probing a field Rev 3 deletes. §9.1's own rule says
+/// MINOR tracks code-table changes, and Rev 3 changes the table it pins
+/// (`--AAACAA` → `-_AAACAA`), so MINOR was the version component due to move.
+/// Raised on the spec PR and adopted upstream.
+pub const TSP_VERSION: (u16, u8, u8) = (0, 1, 0);
 
 const fn encoded_version() -> u16 {
     (TSP_VERSION.1 as u16) << 6 | (TSP_VERSION.2 as u16)
@@ -413,7 +423,30 @@ pub fn decode_variable_data(identifier: u32, stream: &[u8], pos: &mut usize) -> 
 /// whose MAJOR we do not speak is [`TspError::VersionMismatch`]. MINOR and
 /// PATCH are carried to the caller, never rejected — only MAJOR gates whether
 /// the message is processable.
+/// Read the version marker at the start of a whole frame, without gating on it.
+///
+/// [`decode_version`] refuses a MAJOR this build does not speak, which is right
+/// on the parsing path and wrong when the question is "what revision is this?".
+/// Used to attribute a failed parse to a revision mismatch, where the frame has
+/// by definition not parsed and the answer is wanted anyway.
+pub fn decode_frame_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u8, u8), TspError> {
+    decode_count(TSP_ETS_WRAPPER, stream, pos)
+        .ok_or_else(|| TspError::NotTsp("missing -E envelope frame".into()))?;
+    read_version(stream, pos)
+}
+
 pub fn decode_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u8, u8), TspError> {
+    let (major, minor, patch) = read_version(stream, pos)?;
+    if major != TSP_VERSION.0 {
+        return Err(TspError::VersionMismatch {
+            found: major,
+            supported: TSP_VERSION.0,
+        });
+    }
+    Ok((major, minor, patch))
+}
+
+fn read_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u8, u8), TspError> {
     let hdr = stream
         .get(*pos..*pos + YTSP.len())
         .ok_or_else(|| TspError::NotTsp("truncated version marker".into()))?;
@@ -432,13 +465,6 @@ pub fn decode_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u8, u8), T
     let major = ((word >> 12) & mask(6)) as u16;
     let packed = word & mask(12);
     *pos += 3;
-
-    if major != TSP_VERSION.0 {
-        return Err(TspError::VersionMismatch {
-            found: major,
-            supported: TSP_VERSION.0,
-        });
-    }
     Ok((major, (packed >> 6) as u8, (packed & mask(6)) as u8))
 }
 
@@ -577,7 +603,7 @@ mod tests {
         let mut buf = Vec::new();
         encode_version(&mut buf);
         let mut pos = 0;
-        assert_eq!(decode_version(&buf, &mut pos).unwrap(), (0, 0, 1));
+        assert_eq!(decode_version(&buf, &mut pos).unwrap(), (0, 1, 0));
 
         // A YTSP marker with a different MAJOR is TSP, but unprocessable.
         let mut other = Vec::new();
@@ -644,7 +670,9 @@ mod tests {
     fn version_roundtrip() {
         let mut buf = Vec::new();
         encode_version(&mut buf);
-        assert_eq!(buf, [0x61, 0x34, 0x8f, 0xf8, 0x00, 0x01]);
+        // `YTSP-ABA`: the `-` selector, MAJOR 0 as `A`, then MINOR/PATCH packed
+        // into the 12-bit count as `BA` — 1 and 0.
+        assert_eq!(buf, [0x61, 0x34, 0x8f, 0xf8, 0x00, 0x40]);
         let mut pos = 0;
         decode_version(&buf, &mut pos).unwrap();
         assert_eq!(pos, 6);

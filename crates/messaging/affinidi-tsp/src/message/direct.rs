@@ -7,7 +7,7 @@
 //! Wire format:
 //! ```text
 //! -E<count>                       one frame; count covers everything below
-//!   YTSP <version>                  `YTSP-AAB`
+//!   YTSP <version>                  `YTSP-ABA`
 //!   <var-data B> sender-VID
 //!   <var-data B> receiver-VID       `4BAA` when absent
 //!   <var-data F> enc ‖ ct         HPKE-Base ciphertext, AEAD tag inside ct
@@ -1207,6 +1207,43 @@ pub fn unpack(
     receiver_decryption_key: &[u8; 32],
     sender_signing_key: &[u8; 32],
 ) -> Result<UnpackedMessage, TspError> {
+    let result = unpack_inner(wire_bytes, receiver_decryption_key, sender_signing_key);
+
+    // Attribute a failure to the revision when the revision can explain it.
+    //
+    // §9.1 uses MINOR to track the CESR code table a revision pins, so a frame
+    // whose MINOR is not ours was built against a table this build does not
+    // have, and that is the likeliest reason it would not parse. Only likeliest,
+    // not certain — a corrupt frame of our own revision fails too — so this
+    // wraps the real error rather than replacing it, and only once parsing has
+    // already failed. A message that decodes is never second-guessed on its
+    // MINOR: §9.1's semver reading makes minor differences carryable, and
+    // rejecting one we could read would break exactly that.
+    let Err(source) = result else {
+        return result;
+    };
+    let mut pos = 0;
+    match wire::decode_frame_version(wire_bytes, &mut pos) {
+        Ok((major, minor, patch)) if (major, minor, patch) != wire::TSP_VERSION => {
+            Err(TspError::RevisionMismatch {
+                found_major: major,
+                found_minor: minor,
+                found_patch: patch,
+                supported_major: wire::TSP_VERSION.0,
+                supported_minor: wire::TSP_VERSION.1,
+                supported_patch: wire::TSP_VERSION.2,
+                source: Box::new(source),
+            })
+        }
+        _ => Err(source),
+    }
+}
+
+fn unpack_inner(
+    wire_bytes: &[u8],
+    receiver_decryption_key: &[u8; 32],
+    sender_signing_key: &[u8; 32],
+) -> Result<UnpackedMessage, TspError> {
     if wire_bytes.len() < 48 {
         return Err(TspError::InvalidMessage("message too short".into()));
     }
@@ -1718,18 +1755,32 @@ mod tests {
 
     // ---- The Rev 2 / Rev 3 boundary ----
     //
-    // These pin what a Rev 2 message does when it meets this build. They exist
-    // because Rev 3 is wire-breaking but did *not* change the version the
-    // envelope advertises — both revisions say `YTSP-AAB` — so the two can only
-    // be told apart structurally. If dual-revision support is ever built, this
-    // is the discriminator it has to rest on.
+    // These pin what a Rev 2 message does when it meets this build.
+    //
+    // Rev 3 as first proposed left the version unchanged across a wire-breaking
+    // revision, which left a structural probe — the byte after the receiver VID,
+    // Rev 2's `XAAA` against Rev 3's `F` — as the only way to tell them apart.
+    // A discriminator built out of a field the new revision deletes. Raised on
+    // the spec PR and fixed upstream: Rev 3 is `YTSP-ABA` (0.1.0) against Rev 2's
+    // `YTSP-AAB` (0.0.1), so the envelope answers the question itself.
+    //
+    // The structural difference is still asserted below. It is what makes the
+    // frames genuinely incompatible, and the version field is a label on that
+    // fact rather than a substitute for it.
 
-    /// Build the Rev 2 wire shape by hand. The envelope prefix is byte-identical
-    /// to Rev 3's; Rev 2 then diverges with the `XAAA` marker and a `G`
-    /// ciphertext where Rev 3 has an `F` one.
+    /// Rev 2's version marker, `YTSP-AAB` — 0.0.1, written out rather than
+    /// derived, since this build's own constant has moved on.
+    fn rev2_version(out: &mut Vec<u8>) {
+        out.extend_from_slice(&wire::YTSP);
+        wire::encode_count(0, 1, out);
+    }
+
+    /// Build the Rev 2 wire shape by hand. Everything from the sender VID to the
+    /// end of the receiver VID is byte-identical to Rev 3; Rev 2 then diverges
+    /// with the `XAAA` marker and a `G` ciphertext where Rev 3 has an `F` one.
     fn rev2_shaped_message(sender: &str, receiver: &str) -> Vec<u8> {
         let mut header = Vec::new();
-        wire::encode_version(&mut header);
+        rev2_version(&mut header);
         wire::encode_variable_data(wire::TSP_VID, sender.as_bytes(), &mut header);
         wire::encode_variable_data(wire::TSP_VID, receiver.as_bytes(), &mut header);
         wire::encode_fixed_data(wire::cesr_int("X") as u32, &[0, 0], &mut header);
@@ -1747,11 +1798,12 @@ mod tests {
         out
     }
 
-    /// The version field does not separate the revisions — both encode
-    /// `YTSP-AAB` — so the first difference is the byte after the two VIDs:
-    /// Rev 2's `XAAA` marker, or Rev 3's `F` ciphertext field.
+    /// Where the two revisions differ on the wire: the version marker, the `-E`
+    /// count, and the byte after the two VIDs — Rev 2's `XAAA` marker against
+    /// Rev 3's `F` ciphertext field. The VIDs themselves are identical, which is
+    /// what lets a relay read either revision's addressing.
     #[test]
-    fn rev2_and_rev3_differ_only_after_the_vids() {
+    fn rev2_and_rev3_differ_in_version_and_after_the_vids() {
         let keys = gen_keys();
         let rev2 = rev2_shaped_message("did:web:alice", "did:web:bob");
         let rev3 = pack(
@@ -1768,10 +1820,16 @@ mod tests {
         let d2 = Envelope::decode_full(&rev2).unwrap();
         let d3 = Envelope::decode_full(&rev3).unwrap();
 
-        // The version marker and both VIDs are byte-identical: everything from
-        // just past the `-E` count code to the end of the receiver VID.
+        // The version marker differs, in the one byte that carries MINOR and
+        // PATCH: Rev 2's `AAB` against Rev 3's `ABA`.
+        assert_eq!(rev2[3..8], rev3[3..8]);
+        assert_eq!(rev2[8], 0x01, "Rev 2 is 0.0.1");
+        assert_eq!(rev3[8], 0x40, "Rev 3 is 0.1.0");
+
+        // Both VIDs are byte-identical, which is the property a relay depends
+        // on: it can read addressing off either revision without knowing which.
         assert_eq!(d2.header_len, d3.header_len);
-        assert_eq!(rev2[3..d2.header_len], rev3[3..d3.header_len]);
+        assert_eq!(rev2[9..d2.header_len], rev3[9..d3.header_len]);
 
         // Two things do differ. The `-E` count, because Rev 3 covers the
         // ciphertext with it and Rev 2 covered only the header...
@@ -1786,17 +1844,67 @@ mod tests {
         );
     }
 
-    /// A Rev 2 message is refused with a clear error rather than misread. It
-    /// gets as far as the ciphertext field, where `G` is no longer a code this
-    /// build knows.
+    /// A Rev 2 message is refused as a *revision* mismatch, naming both
+    /// revisions.
+    ///
+    /// It is the diagnostic that matters here, not the rejection. Without the
+    /// version check the parse dies at the ciphertext selector — "missing F
+    /// ciphertext field" — which sends whoever is reading it to the crypto
+    /// layer to debug a problem that is nothing of the sort. The underlying
+    /// error is still carried, since a corrupt Rev 3 frame produces the same
+    /// shape of failure and the real cause has to survive.
     #[test]
-    fn a_rev2_message_is_rejected_not_misread() {
+    fn a_rev2_message_is_rejected_as_a_revision_mismatch() {
         let keys = gen_keys();
         let rev2 = rev2_shaped_message("did:web:alice", "did:web:bob");
         let err = unpack(&rev2, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap_err();
+
+        let TspError::RevisionMismatch {
+            found_major,
+            found_minor,
+            found_patch,
+            source,
+            ..
+        } = &err
+        else {
+            panic!("expected a revision mismatch, got {err:?}");
+        };
+        assert_eq!((*found_major, *found_minor, *found_patch), (0, 0, 1));
         assert!(
-            matches!(err, TspError::InvalidMessage(_)),
-            "expected a clean rejection, got {err:?}"
+            matches!(**source, TspError::InvalidMessage(_)),
+            "the underlying parse failure is carried, got {source:?}"
+        );
+        assert!(
+            err.to_string().contains("0.0.1") && err.to_string().contains("0.1.0"),
+            "the message names both revisions: {err}"
+        );
+    }
+
+    /// A corrupt message of *our own* revision is not blamed on the revision.
+    ///
+    /// The version check only fires on a mismatch, so an ordinary malformed
+    /// frame keeps its own error and nobody goes looking for a Rev 2 sender that
+    /// does not exist.
+    #[test]
+    fn a_corrupt_rev3_message_keeps_its_own_error() {
+        let keys = gen_keys();
+        let mut packed = pack(
+            b"x",
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap()
+        .bytes;
+        let last = packed.len() - 1;
+        packed[last] ^= 0xFF;
+
+        let err = unpack(&packed, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap_err();
+        assert!(
+            !matches!(err, TspError::RevisionMismatch { .. }),
+            "our own revision must not be blamed on the revision: {err:?}"
         );
     }
 

@@ -25,7 +25,7 @@
 //! Wire layout:
 //! ```text
 //! -E<count>                     count = quadlets of everything below
-//!   YTSP <version>              `YTSP-AAB` for version 0.0.1
+//!   YTSP <version>              `YTSP-ABA` for version 0.1.0
 //!   <var-data B> sender-VID
 //!   <var-data B> receiver-VID   `4BAA` when absent
 //!   <ciphertext or payload>     supplied by the caller

@@ -60,6 +60,21 @@ framing + RFC 9180 HPKE fixes), **#543** (Routed/Nested + size cap), **#544**
 
 ## Caveats
 
+- **We emit `YTSP-ABA` (0.1.0); the reference still emits `YTSP-AAB` (0.0.1).**
+  Rev 3 originally kept Rev 2's version constant, which would have left the two
+  revisions indistinguishable at the envelope; that was raised on
+  [spec PR #63](https://github.com/trustoverip/tswg-tsp-specification/pull/63)
+  and changed upstream in `c80b0e4`, but the reference implementation has not
+  picked it up — `tsp_sdk/src/cesr/packet.rs` still has
+  `TSP_VERSION: (u16, u8, u8) = (0, 0, 1)`.
+
+  Interop is unaffected, and the reason is worth stating because it is the
+  design rather than luck: neither side gates on MINOR. The reference discards
+  it outright (`let _minor_patch = …`), and we carry it, only consulting it to
+  attribute a parse that has *already* failed. So the version disagreement is
+  invisible in both directions and all 14 vectors pass. It resolves itself when
+  the reference takes the one-line change.
+
 - **`tsp-sdk` is alpha** (0.9.0-alpha2). Its wire format isn't frozen, so a future
   release could re-introduce a mismatch; re-run the harness when bumping the
   reference.

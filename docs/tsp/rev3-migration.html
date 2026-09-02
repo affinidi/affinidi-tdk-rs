@@ -521,7 +521,7 @@
         </div>
         <div class="wire-body">
 <pre><span class="k">-E</span>&lt;count&gt;            <span class="note">count covers header only</span>
-  YTSP &lt;ver&gt;
+  YTSP-AAB             <span class="note">0.0.1</span>
   <span class="k">B</span>  sender-VID
   <span class="k">B</span>  receiver-VID
   <span class="gone">X 00 00</span>            <span class="note">XAAA marker</span>
@@ -543,7 +543,7 @@ aad  = "" (empty)</span></pre>
         </div>
         <div class="wire-body">
 <pre><span class="k">-E</span>&lt;count&gt;            <span class="new">count now covers ciphertext</span>
-  YTSP-AAB
+  YTSP-<span class="new">ABA</span>           <span class="new">0.1.0, was 0.0.1</span>
   <span class="k">4B</span> sender-VID
   <span class="k">4B</span> receiver-VID <span class="new">| 4BAA</span>
                      <span class="new">(XAAA deleted)</span>
@@ -665,7 +665,7 @@ aad  = version &#8214; VID_sndr &#8214; VID_rcvr</span></pre>
             <td class="sev"></td>
             <td class="area">Version</td>
             <td class="where">wire.rs:decode_version</td>
-            <td>MAJOR must gate processability; separate <code>NotTsp</code> from <code>VersionMismatch</code>.</td>
+            <td>MAJOR must gate processability; separate <code>NotTsp</code> from <code>VersionMismatch</code>. The constant moves to <code>0.1.0</code> (<code>YTSP-ABA</code>): Rev 3 as proposed left it at Rev 2's <code>0.0.1</code>, which would have made the revisions indistinguishable at the envelope — <a href="https://github.com/trustoverip/tswg-tsp-specification/pull/63">raised on PR&nbsp;#63</a> and adopted upstream.</td>
             <td><span class="chip chip-behave">Behavioural</span></td>
           </tr>
           <tr class="h">

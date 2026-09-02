@@ -16,8 +16,21 @@ Wire format:
   signature alone, which is where Rev 3 puts it. The ciphertext primitive code
   changes with it, `G` (6) → `F` (5). Suite is unchanged:
   DHKEM(X25519, HKDF-SHA256) with ChaCha20Poly1305. `info` is now `YTSP-`.
-- **`TSP_Version` is `0`**, was `1`. Only the major version gates; minor and
-  patch are decoded and reported.
+- **The version marker is `YTSP-ABA` (0.1.0)**, was Rev 2's `YTSP-AAB` (0.0.1).
+  Rev 3 as proposed kept the old constant across a revision that changes the
+  crypto mode, the ciphertext code, the long count-code prefix and every payload
+  layout — leaving the two revisions advertising the same version, and a
+  structural probe on a field Rev 3 *deletes* as the only way to tell them apart.
+  Raised on [spec PR #63][pr63] and changed upstream.
+
+  Only MAJOR gates processability; MINOR and PATCH are carried, per §9.1's semver
+  reading. A parse that fails against a frame whose version is not ours is
+  re-reported as `TspError::RevisionMismatch`, naming both revisions and carrying
+  the underlying error — a Rev 2 frame otherwise dies at the ciphertext selector
+  with "missing F ciphertext field", which points at the crypto layer for a
+  problem that is nothing of the sort.
+
+[pr63]: https://github.com/trustoverip/tswg-tsp-specification/pull/63
 - **Long count codes are `--X#####`**, were Rev 2's `-0X#####`.
 - **Payload type codes replaced**: `XSCS`, `XHOP`, `XRFI`, `XRFA`, `XRFD`, and
   the new `XCTL` and `XPAD`. Rev 2's `XAAA` / `TSP_TMP` is gone.
