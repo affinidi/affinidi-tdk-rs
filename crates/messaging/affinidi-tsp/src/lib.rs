@@ -40,7 +40,7 @@ pub mod vid;
 
 pub use error::TspError;
 pub use message::MessageType;
-pub use message::direct::Padding;
+pub use message::direct::{Padding, pack_signed_only};
 pub use message::meta::{MetaEnvelope, TSP_MAGIC_BYTE, is_tsp};
 pub use message::routed::{MAX_HOPS, RouteStep};
 pub use keystate::{KeyStatePolicy, ManualClock, SystemClock};

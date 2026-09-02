@@ -116,6 +116,15 @@ pub struct UnpackedMessage {
     /// For a [`MessageType::Control`] message, the decoded control payload
     /// (invite / accept / cancel). `None` for all other message types.
     pub control: Option<ControlMessage>,
+    /// Whether the payload arrived encrypted.
+    ///
+    /// Rev 3 §3.5 makes a message "entirely confidential, or entirely
+    /// non-confidential (signed only), but never mixed", so this is a property
+    /// of the whole message rather than of any field. A receiver that acts on a
+    /// payload without checking it cannot tell one the sender protected from
+    /// one the sender published — both are equally authentic, and only one is
+    /// private.
+    pub confidential: bool,
 }
 
 /// Payload-type markers (Rev 3 §9.2).
@@ -891,6 +900,53 @@ pub fn pack_with_hops(
         receiver_encryption_key,
         None,
         &Padding::None,
+        true,
+    )
+}
+
+/// Pack a message that is signed but **not** encrypted (Rev 3 §3.5).
+///
+/// The payload travels in the clear, so anyone who handles the message can read
+/// it. It is still signed — §5.4: "Signing at this layer is required in either
+/// case, as it is for all TSP messages" — so what is given up is privacy, not
+/// authenticity or the sender binding.
+///
+/// For a payload meant to be public. §5.4 gives the case: a source that does
+/// not require confidentiality with respect to the intermediaries "MAY send the
+/// endpoint-to-endpoint message as a non-confidential (signed-only) message,
+/// and the intermediaries will be able to read it".
+///
+/// Refused for a nested or routed message. §4 requires the *outer* message of a
+/// nesting to be confidential, because it is that encryption which conceals the
+/// inner message's metadata — a signed-only outer would carry the inner in
+/// plain view and defeat the arrangement. An inner message may be signed-only,
+/// and this packs one; it is the wrapper that may not be.
+pub fn pack_signed_only(
+    payload: &[u8],
+    message_type: MessageType,
+    sender_vid: &str,
+    receiver_vid: &str,
+    sender_signing_key: &[u8; 32],
+) -> Result<PackedMessage, TspError> {
+    if matches!(message_type, MessageType::Nested | MessageType::Routed) {
+        return Err(TspError::InvalidMessage(
+            "a nested or routed message must be confidential: its encryption is what conceals \
+             the inner message's metadata"
+                .into(),
+        ));
+    }
+    pack_inner(
+        payload,
+        message_type,
+        &[],
+        sender_vid,
+        receiver_vid,
+        sender_signing_key,
+        // Unused: nothing is sealed, so there is no recipient key to seal to.
+        &[0u8; 32],
+        None,
+        &Padding::None,
+        false,
     )
 }
 
@@ -919,6 +975,7 @@ pub fn pack_padded(
         receiver_encryption_key,
         None,
         padding,
+        true,
     )
 }
 
@@ -952,6 +1009,7 @@ pub fn pack_referral_invite(
         receiver_encryption_key,
         Some(new_vid_signing_key),
         &Padding::None,
+        true,
     )
 }
 
@@ -966,6 +1024,7 @@ fn pack_inner(
     receiver_encryption_key: &[u8; 32],
     referral_signing_key: Option<&[u8; 32]>,
     padding: &Padding,
+    confidential: bool,
 ) -> Result<PackedMessage, TspError> {
     // 1. Envelope fields. These are the HPKE-Base AAD.
     let envelope = Envelope::new(message_type, sender_vid, receiver_vid);
@@ -982,30 +1041,39 @@ fn pack_inner(
         padding,
     )?;
 
-    // 3. Seal. `aad` binds the ciphertext to the version and both VIDs;
-    //    `info` is the fixed protocol code.
-    let sealed = hpke::seal(
-        &payload_frame,
-        &envelope_fields,
-        receiver_encryption_key,
-        wire::TSP_INFO,
-    )?;
+    // 3. Either seal the payload, or carry it in the clear.
+    //
+    // Rev 3 §3.5: a message is "entirely confidential, or entirely
+    // non-confidential (signed only), but never mixed". A signed-only message
+    // is an `-E` frame whose payload sits where the ciphertext field would be;
+    // Rev 2's separate `-S` wrapper is gone. It is still signed — §5.4:
+    // "Signing at this layer is required in either case, as it is for all TSP
+    // messages" — so what it gives up is privacy, not authenticity.
+    let body = if confidential {
+        // `aad` binds the ciphertext to the version and both VIDs; `info` is
+        // the fixed protocol code.
+        let sealed = hpke::seal(
+            &payload_frame,
+            &envelope_fields,
+            receiver_encryption_key,
+            wire::TSP_INFO,
+        )?;
 
-    // 4. Ciphertext field: `enc ‖ ct`, with the AEAD tag inside `ct`. Rev 2 put
-    //    `enc` at the end.
-    let mut ciphertext = Vec::with_capacity(ENC_LEN + sealed.ciphertext.len());
-    ciphertext.extend_from_slice(&sealed.enc);
-    ciphertext.extend_from_slice(&sealed.ciphertext);
+        // Ciphertext field: `enc ‖ ct`, with the AEAD tag inside `ct`. Rev 2
+        // put `enc` at the end.
+        let mut ciphertext = Vec::with_capacity(ENC_LEN + sealed.ciphertext.len());
+        ciphertext.extend_from_slice(&sealed.enc);
+        ciphertext.extend_from_slice(&sealed.ciphertext);
 
-    let mut ciphertext_field = Vec::new();
-    wire::encode_variable_data(
-        wire::TSP_HPKE_BASE_CIPHERTEXT,
-        &ciphertext,
-        &mut ciphertext_field,
-    );
+        let mut field = Vec::new();
+        wire::encode_variable_data(wire::TSP_HPKE_BASE_CIPHERTEXT, &ciphertext, &mut field);
+        field
+    } else {
+        payload_frame
+    };
 
-    // 5. Close the `-E` frame over the fields and the ciphertext, then sign it.
-    let mut wire_bytes = envelope::finalize_frame(&envelope_fields, &ciphertext_field)?;
+    // 4. Close the `-E` frame over the fields and the body, then sign it.
+    let mut wire_bytes = envelope::finalize_frame(&envelope_fields, &body)?;
     let signature = signing::sign(&wire_bytes, sender_signing_key)?;
     encode_signature_frame(&signature, &mut wire_bytes);
 
@@ -1034,28 +1102,38 @@ pub fn unpack(
     let envelope = decoded.envelope;
     let envelope_fields = wire_bytes[decoded.aad.clone()].to_vec();
 
-    // 2. Ciphertext field.
+    // 2. The body: either an `F` ciphertext field, or a cleartext payload frame
+    //    for a signed-only message (§3.5). The two are told apart by what
+    //    follows the VIDs — an `F` var-data selector, or the `-Z` count code
+    //    that opens a payload frame. A message is one or the other throughout;
+    //    §3.5 forbids mixing.
     let mut pos = decoded.header_len;
     let ct_range = wire::decode_variable_data_range(
         wire::TSP_HPKE_BASE_CIPHERTEXT,
         wire_bytes,
         &mut pos,
-    )
-    .ok_or_else(|| TspError::InvalidMessage("missing F ciphertext field".into()))?;
+    );
+    let confidential = ct_range.is_some();
+
+    if let Some(range) = ct_range.as_ref() {
+        if range.len() > MAX_MESSAGE_SIZE {
+            return Err(TspError::InvalidMessage("ciphertext too large".into()));
+        }
+        if range.len() < ENC_LEN + TAG_LEN {
+            return Err(TspError::InvalidMessage("ciphertext truncated".into()));
+        }
+    } else {
+        // Signed-only: the payload frame runs to the end of the signable
+        // content, which the `-E` count fixes.
+        pos = decoded.content_end;
+    }
 
     // The `-E` count is authoritative for where the signable content ends; the
-    // ciphertext field must fill it exactly.
+    // body must fill it exactly.
     if pos != decoded.content_end {
         return Err(TspError::InvalidMessage(
-            "ciphertext field does not fill the -E frame".into(),
+            "message body does not fill the -E frame".into(),
         ));
-    }
-
-    if ct_range.len() > MAX_MESSAGE_SIZE {
-        return Err(TspError::InvalidMessage("ciphertext too large".into()));
-    }
-    if ct_range.len() < ENC_LEN + TAG_LEN {
-        return Err(TspError::InvalidMessage("ciphertext truncated".into()));
     }
 
     // 3. Signature over the whole `-E` frame.
@@ -1071,19 +1149,24 @@ pub fn unpack(
         sender_signing_key,
     )?;
 
-    // 4. Split `enc` off the front and open the remainder.
-    let ciphertext = &wire_bytes[ct_range.clone()];
-    let enc: [u8; 32] = ciphertext[..ENC_LEN]
-        .try_into()
-        .map_err(|_| TspError::InvalidMessage("bad enc size".into()))?;
-
-    let payload_frame = hpke::open(
-        &ciphertext[ENC_LEN..],
-        &envelope_fields,
-        &enc,
-        receiver_decryption_key,
-        wire::TSP_INFO,
-    )?;
+    // 4. Recover the payload frame: open the ciphertext, or take it as it
+    //    stands.
+    let payload_frame = match ct_range {
+        Some(range) => {
+            let ciphertext = &wire_bytes[range];
+            let enc: [u8; 32] = ciphertext[..ENC_LEN]
+                .try_into()
+                .map_err(|_| TspError::InvalidMessage("bad enc size".into()))?;
+            hpke::open(
+                &ciphertext[ENC_LEN..],
+                &envelope_fields,
+                &enc,
+                receiver_decryption_key,
+                wire::TSP_INFO,
+            )?
+        }
+        None => wire_bytes[decoded.header_len..decoded.content_end].to_vec(),
+    };
 
     // 5. Decode the payload frame, verifying the embedded digest and the ESSR
     //    sender field against the envelope.
@@ -1103,6 +1186,7 @@ pub fn unpack(
         message_type,
         thread_digest,
         control,
+        confidential,
     })
 }
 /// Compute a SHA-256 digest (the TSP thread-digest hash).
@@ -2078,5 +2162,147 @@ mod tests {
         .unwrap();
         let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
         assert_eq!(unpacked.payload.len(), 500);
+    }
+
+    // ---- Rev 3 §3.5: signed-only messages ----
+
+    /// A signed-only message round-trips, and says so.
+    #[test]
+    fn a_signed_only_message_round_trips_and_reports_itself() {
+        let keys = gen_keys();
+        let packed = pack_signed_only(
+            b"public announcement",
+            MessageType::Direct,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+        )
+        .unwrap();
+
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        assert_eq!(unpacked.payload, b"public announcement");
+        assert!(!unpacked.confidential, "it must report that it was not encrypted");
+
+        // A sealed one reports the opposite, so a receiver can actually tell.
+        let sealed = pack(
+            b"private",
+            MessageType::Direct,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+        let unpacked = unpack(&sealed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        assert!(unpacked.confidential);
+    }
+
+    /// The payload is readable without any key. That is the point — and the
+    /// risk — so it is worth asserting rather than assuming: anyone handling
+    /// the message can read it.
+    #[test]
+    fn a_signed_only_payload_is_readable_without_a_key() {
+        let keys = gen_keys();
+        let payload = b"intended to be public";
+        let packed = pack_signed_only(
+            payload,
+            MessageType::Direct,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+        )
+        .unwrap();
+
+        assert!(
+            packed.bytes.windows(payload.len()).any(|w| w == payload),
+            "a signed-only payload travels in the clear"
+        );
+
+        // A sealed message does not leak it.
+        let sealed = pack(
+            payload,
+            MessageType::Direct,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+        assert!(
+            !sealed.bytes.windows(payload.len()).any(|w| w == payload),
+            "a sealed payload does not appear on the wire"
+        );
+    }
+
+    /// Not encrypted is not unauthenticated. §5.4: "Signing at this layer is
+    /// required in either case, as it is for all TSP messages" — so tampering
+    /// with a signed-only message must still be caught.
+    #[test]
+    fn a_signed_only_message_is_still_authenticated() {
+        let keys = gen_keys();
+        let packed = pack_signed_only(
+            b"public announcement",
+            MessageType::Direct,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+        )
+        .unwrap();
+
+        // The wrong sender key does not verify it.
+        let other = gen_keys();
+        assert!(unpack(&packed.bytes, &keys.receiver_enc_sk, &other.sender_sign_pk).is_err());
+
+        // Nor does any single-byte change survive.
+        for i in 0..packed.bytes.len() {
+            let mut bytes = packed.bytes.clone();
+            bytes[i] ^= 0x01;
+            assert!(
+                unpack(&bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).is_err(),
+                "flipping byte {i} produced a message that verified"
+            );
+        }
+    }
+
+    /// §4: the *outer* message of a nesting must be confidential, since it is
+    /// that encryption which conceals the inner message's metadata. A
+    /// signed-only wrapper would carry the inner in plain view.
+    #[test]
+    fn a_nested_or_routed_wrapper_may_not_be_signed_only() {
+        let keys = gen_keys();
+        for kind in [MessageType::Nested, MessageType::Routed] {
+            let err = pack_signed_only(
+                b"inner-aligned",
+                kind,
+                "did:example:alice",
+                "did:example:mediator",
+                &keys.sender_sign_sk,
+            )
+            .unwrap_err();
+            assert!(matches!(err, TspError::InvalidMessage(_)), "{kind:?}: {err:?}");
+        }
+    }
+
+    /// A control message may be signed-only, and its digest still verifies —
+    /// the derivation covers the plaintext payload either way, so encryption is
+    /// not what makes the thread id checkable.
+    #[test]
+    fn a_signed_only_control_message_keeps_a_verifiable_digest() {
+        let keys = gen_keys();
+        let invite = ControlMessage::invite();
+
+        let packed = pack_signed_only(
+            &invite.encode(),
+            MessageType::Control,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+        )
+        .unwrap();
+
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        assert!(!unpacked.confidential);
+        assert_eq!(unpacked.thread_digest, packed.thread_digest);
+        assert!(unpacked.control.is_some());
     }
 }
