@@ -955,6 +955,17 @@ impl TestMediatorHandle {
         &self.inner.admin_did
     }
 
+    /// The mediator's own store, for tests that need to assert on what the
+    /// mediator persisted rather than on what it delivered.
+    ///
+    /// Most tests should look at messages arriving, not at storage. This exists
+    /// for the cases where *absence* is the property under test — a value the
+    /// mediator is required not to retain leaves no trace in any message, so
+    /// the store is the only place the requirement can be checked.
+    pub fn store(&self) -> Arc<dyn MediatorStore> {
+        self.store.clone()
+    }
+
     /// Pre-populated secrets resolver. Tests should clone this and
     /// pass it into their SDK setup so the test client can sign and
     /// decrypt messages addressed to the mediator.
