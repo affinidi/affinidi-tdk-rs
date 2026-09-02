@@ -63,8 +63,15 @@ async fn didcomm_transport_surfaces_inbound_tsp_frame() {
     for secret in service.secrets.clone() {
         service_tdk.secrets_resolver().insert(secret).await;
     }
+    // Gating off, matching what the framework listener does and for the same
+    // reason: this test drives the transport adapter directly and never runs a
+    // relationship handshake, and the framework has no lifecycle to run one
+    // with. See the note in `service/listener.rs`.
     let service_atm = ATM::new(
-        ATMConfig::builder().build().expect("atm config"),
+        ATMConfig::builder()
+            .with_tsp_relationship_gating(false)
+            .build()
+            .expect("atm config"),
         service_tdk,
     )
     .await

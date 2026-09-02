@@ -244,8 +244,14 @@ mod tsp {
             .expect_err("TSP delivery must be refused when the recipient lacks RECEIVE_MESSAGES")
             .to_string();
         assert!(
-            err.contains("authorization.receive") || err.contains("not authorized to receive"),
-            "expected a RECEIVE_MESSAGES denial, got: {err}"
+            err.contains("delivery.refused"),
+            "expected the uniform refusal, got: {err}"
+        );
+        // Spec Rev 3 §3.7: the sender is not told which check failed. The
+        // specific reason goes to the mediator's log, not down the wire.
+        assert!(
+            !err.contains("authorization.receive") && !err.contains("access_list"),
+            "the refusal must not name the check that failed, got: {err}"
         );
         assert_eq!(
             inbox_len(&env, &bob).await,

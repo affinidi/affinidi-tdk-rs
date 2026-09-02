@@ -140,9 +140,27 @@ impl Listener {
             .insert_vec(self.config.profile.secrets())
             .await;
 
-        let atm_config = ATMConfigBuilder::default()
-            .build()
-            .map_err(StartupError::Config)?;
+        // TSP relationship gating is off here, and that is a gap rather than a
+        // decision.
+        //
+        // Spec Rev 3 §7.2.2 has an endpoint drop an application message from a
+        // VID it holds no relationship with, and a service built on this
+        // framework is an endpoint in that sense. But the framework has no
+        // relationship lifecycle: it unpacks TSP frames and dispatches them,
+        // and never records an invite, sends an accept, or holds any
+        // relationship state. Gating a node that cannot form a relationship
+        // makes it inert — it would discard every application message forever,
+        // silently, because a discard looks exactly like nothing arriving.
+        //
+        // So it stays off until the framework handles TSP control messages.
+        // That is the actual fix; this keeps the framework working in the
+        // meantime rather than shipping something that cannot receive.
+        let atm_config = {
+            let builder = ATMConfigBuilder::default();
+            #[cfg(feature = "tsp")]
+            let builder = builder.with_tsp_relationship_gating(false);
+            builder.build().map_err(StartupError::Config)?
+        };
 
         let atm = ATM::new(atm_config, shared_state)
             .await

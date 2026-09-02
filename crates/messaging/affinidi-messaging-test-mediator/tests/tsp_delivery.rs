@@ -5,14 +5,11 @@
 //! across the SDK + mediator (memory backend, no Redis needed).
 #![cfg(feature = "tsp")]
 
-use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_sdk::messages::MessageProtocol;
 use affinidi_messaging_sdk::messages::fetch::FetchOptions;
 use affinidi_messaging_test_mediator::TestEnvironment;
 use affinidi_tdk::dids::{DID, KeyType, PeerKeyRole, PeerService, PeerServiceEndpoint};
 use affinidi_tsp::message::control::{ControlMessage, ControlType};
-use serde_json::json;
-use uuid::Uuid;
 
 #[tokio::test]
 async fn tsp_direct_message_round_trips_through_the_mediator() {
@@ -266,108 +263,6 @@ async fn tsp_control_message_relays_through_the_mediator() {
 /// the TSP routing layer and delivers the opaque inner to Bob, who recognises it
 /// as DIDComm (not TSP) and unpacks it natively. Proves the mediator bridges
 /// protocols by forwarding on the route, blind to the inner's protocol.
-// NOTE (Rev 3): this test is parked, and the feature it covers needs a
-// decision rather than a fix.
-//
-// The TSP↔DIDComm bridge routes an opaque, non-TSP inner — a DIDComm JWE — so
-// that a recipient who does not speak TSP can still be reached through a
-// TSP-routing mediator. Rev 2 wrapped a routed inner in a `B` var-data field,
-// which made it self-delimiting and let it be any length. Rev 3 §9.4 carries
-// the inner raw as an `Encoded_TSP_Message`, so it must be quadlet-aligned,
-// and an arbitrary blob is not.
-//
-// Wrapping the JWE in an inner TSP message would conform, but defeats the
-// purpose: the recipient cannot unwrap TSP, which is why the bridge exists.
-// Padding to alignment is not safe either — a compact JWE would no longer
-// parse. So the options are to keep the bridge as a documented non-conformant
-// extension, or to drop it under Rev 3.
-
-#[tokio::test]
-#[ignore = "Rev 3 removed the framing the opaque-inner bridge relies on — see the note above"]
-async fn tsp_routed_bridges_a_didcomm_message_to_the_recipient() {
-    let env = TestEnvironment::spawn()
-        .await
-        .expect("spawn test environment");
-
-    let alice = env.add_user("alice").await.expect("add alice");
-    let bob = env.add_user("bob").await.expect("add bob");
-
-    // §7.2.2: an application message from a VID with no relationship is
-    // discarded, so the endpoints exchange control messages first — as the
-    // specification requires of them before any application traffic.
-    env.relate(&alice, &bob).await.expect("alice and bob relate");
-    let mediator_did = env.mediator.did().to_string();
-
-    let text = "hello bob — DIDComm carried over TSP";
-
-    // Alice builds and authcrypts a DIDComm message to Bob — the bridged inner.
-    let msg = Message::build(
-        Uuid::new_v4().to_string(),
-        "https://didcomm.org/basicmessage/2.0/message".to_string(),
-        json!({ "content": text }),
-    )
-    .to(bob.did.clone())
-    .from(alice.did.clone())
-    .finalize();
-    let (jwe, _) = env
-        .atm
-        .pack_encrypted(&msg, &bob.did, Some(&alice.did), Some(&alice.did))
-        .await
-        .expect("authcrypt the DIDComm message for bob");
-
-    // Alice routes that DIDComm message through the mediator to Bob.
-    let route = vec![mediator_did, bob.did.clone()];
-    env.atm
-        .tsp()
-        .send_routed_opaque(&alice.profile, &route, jwe.as_bytes())
-        .await
-        .expect("route the DIDComm message over TSP to bob");
-
-    // Bob fetches it — stored as a plain DIDComm JWE, not a TSP message — and
-    // unpacks it with the DIDComm stack.
-    let fetched = env
-        .atm
-        .fetch_messages(&bob.profile, &FetchOptions::default())
-        .await
-        .expect("bob fetches messages");
-    let element = fetched
-        .success
-        .first()
-        .expect("bob has one bridged message");
-    let stored = element
-        .msg
-        .as_ref()
-        .expect("bridged message carries its body");
-
-    assert!(
-        !env.atm.tsp().is_tsp(stored),
-        "the bridged inner is a DIDComm message, not TSP"
-    );
-    // And the mediator tags it as DIDComm on pickup — a unified fetch, with the
-    // protocol surfaced transparently in the metadata.
-    assert_eq!(
-        element.protocol,
-        Some(MessageProtocol::DidComm),
-        "fetch tags the bridged message as DIDComm"
-    );
-
-    let (received, _meta) = env
-        .atm
-        .unpack(stored)
-        .await
-        .expect("bob unpacks the bridged DIDComm message");
-    assert_eq!(
-        received.body.get("content").and_then(|c| c.as_str()),
-        Some(text),
-        "DIDComm payload survives the TSP bridge"
-    );
-    assert_eq!(
-        received.from.as_deref(),
-        Some(alice.did.as_str()),
-        "DIDComm sender is recovered"
-    );
-}
-
 /// End-to-end TSP **remote forwarding**: the final recipient lives on *another*
 /// mediator. Bob's `did:peer` advertises a TSP transport endpoint elsewhere (via
 /// a `tsp` service entry) and he is not a local account here. Alice routes a

@@ -76,9 +76,7 @@ A TSP message is always sealed **end-to-end to its final recipient**. How it
 
 The crucial property: **the mediator strips the outer (Nested/Routed) layers; the
 recipient always opens the innermost Direct message.** So `unpack` works
-identically no matter how a message was carried — and a Nested/Routed inner can
-even be a **DIDComm** message (the TSP↔DIDComm bridge), which the recipient then
-opens with its native protocol.
+identically no matter how a message was carried.
 
 ---
 
@@ -109,9 +107,17 @@ atm.tsp()
     .await?;
 ```
 
-**Bridging DIDComm over TSP** — `send_routed_opaque` / `send_nested_opaque` take
-an *already-packed* inner (e.g. a DIDComm message from `atm.pack_encrypted`) and
-relay it opaquely; the recipient unpacks it natively.
+**Routing a message you packed yourself** — `send_routed_opaque` /
+`send_nested_opaque` take an *already-packed* TSP inner and relay it without
+opening it.
+
+The inner must be a **TSP** message. These once carried an arbitrary blob — a
+DIDComm JWE, so a recipient who did not speak TSP could be reached through a
+TSP-routing mediator. Spec Rev 3 §9.4 carries a routed or nested inner raw, as
+an `Encoded_TSP_Message`, where Rev 2 wrapped it in a self-delimiting `B`
+var-data field. That wrapper is what the bridge relied on, so the bridge is
+gone: an implementation that kept it would only interoperate with itself, since
+a conformant peer rejects a misaligned inner.
 
 Lower-level building blocks: `pack(profile, to_did, payload)` returns the raw qb2
 bytes without sending; `send_raw(profile, bytes)` POSTs already-packed bytes.

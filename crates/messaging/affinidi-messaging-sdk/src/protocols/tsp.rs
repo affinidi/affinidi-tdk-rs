@@ -680,13 +680,17 @@ impl TspOps<'_> {
         self.send_routed_opaque(profile, route, &inner).await
     }
 
-    /// Route an **already-packed** inner message through one or more relay hops.
+    /// Route an **already-packed** TSP message through one or more relay hops.
     ///
-    /// Like [`send_routed`], but `inner` is a pre-built message sealed to the final
-    /// recipient — which may be a **DIDComm** message (the TSP↔DIDComm bridge): a
-    /// TSP-routing mediator carries it opaquely to the recipient, who unpacks it
-    /// with their native protocol. `route` is the hop list ending at that
-    /// recipient (`route.last()`); the routing layer is sealed to `route[0]`.
+    /// Like [`send_routed`], but `inner` is a pre-built TSP message sealed to the
+    /// final recipient — a nested message, say, that the caller built itself.
+    /// `route` is the hop list ending at that recipient (`route.last()`); the
+    /// routing layer is sealed to `route[0]`.
+    ///
+    /// `inner` must be a TSP message. Spec Rev 3 §9.4 carries a routed inner raw
+    /// as an `Encoded_TSP_Message`, where Rev 2 wrapped it in a `B` var-data
+    /// field. That wrapper is what let this method carry an arbitrary
+    /// non-TSP blob — the TSP↔DIDComm bridge — and Rev 3 removes it.
     pub async fn send_routed_opaque(
         &self,
         profile: &Arc<ATMProfile>,
@@ -697,19 +701,14 @@ impl TspOps<'_> {
             return Err(ATMError::MsgSendError("route must not be empty".into()));
         }
 
-        // Rev 3 §9.4 carries a routed message's inner raw, as an
-        // `Encoded_TSP_Message`, where Rev 2 wrapped it in a `B` var-data
-        // field. The wrapper is what made an arbitrary, non-TSP inner possible;
-        // without it the inner must be quadlet-aligned, which only a real TSP
-        // message reliably is.
-        //
-        // That removes the framing this bridge was built on. Fail here, where
-        // the caller can see why, rather than deep in the CESR encoder.
+        // A routed inner is carried raw under Rev 3 §9.4, so it must be a TSP
+        // message — which is always quadlet-aligned. Fail here, where the caller
+        // can see why, rather than deep in the CESR encoder.
         if !inner.len().is_multiple_of(3) {
             return Err(ATMError::MsgSendError(format!(
-                "a routed inner must be a quadlet-aligned TSP message under spec Rev 3, but this \
-                 one is {} bytes; carrying an opaque non-TSP inner (the DIDComm bridge) relied on \
-                 the Rev 2 var-data wrapper that Rev 3 removed",
+                "a routed inner must be a TSP message and is therefore quadlet-aligned, but this \
+                 one is {} bytes; carrying an arbitrary non-TSP inner relied on the Rev 2 \
+                 var-data wrapper that Rev 3 removed",
                 inner.len()
             )));
         }
@@ -753,10 +752,13 @@ impl TspOps<'_> {
 
     /// Wrap an **already-packed** inner message in a Nested envelope to `intermediary`.
     ///
-    /// Like [`send_nested`], but `inner` is a pre-built message sealed to its final
-    /// recipient — which may be a **DIDComm** message (the TSP↔DIDComm bridge): the
-    /// intermediary unwraps the Nested layer and forwards the opaque inner, blind to
-    /// its protocol.
+    /// Like [`send_nested`], but `inner` is a pre-built TSP message sealed to its
+    /// final recipient. The intermediary unwraps the Nested layer and forwards
+    /// the inner without opening it.
+    ///
+    /// `inner` must be a TSP message. Rev 3 §9.4 carries a nested inner raw as an
+    /// `Encoded_TSP_Message`; the Rev 2 var-data wrapper that let this carry an
+    /// arbitrary non-TSP blob — the TSP↔DIDComm bridge — is gone.
     pub async fn send_nested_opaque(
         &self,
         profile: &Arc<ATMProfile>,
