@@ -32,6 +32,7 @@
 pub mod adapter;
 pub mod crypto;
 pub mod error;
+pub mod keystate;
 pub mod message;
 pub mod relationship;
 pub mod store;
@@ -41,6 +42,7 @@ pub use error::TspError;
 pub use message::MessageType;
 pub use message::meta::{MetaEnvelope, TSP_MAGIC_BYTE, is_tsp};
 pub use message::routed::{MAX_HOPS, RouteStep};
+pub use keystate::{KeyStatePolicy, ManualClock, SystemClock};
 pub use relationship::{RelationshipPolicy, RelationshipState};
 pub use vid::resolver::VidResolver;
 #[cfg(feature = "did-resolver")]
@@ -49,6 +51,7 @@ pub use vid::{PrivateVid, ResolvedVid};
 
 use message::control::ControlMessage;
 use message::direct::{self, PackedMessage};
+use keystate::{Clock, KeyStateTracker};
 use relationship::RelationshipEvent;
 use store::TspStore;
 use vid::resolver::DelegatingVidResolver;
@@ -65,6 +68,9 @@ pub struct TspAgent {
     pub(crate) store: TspStore,
     pub(crate) resolver: DelegatingVidResolver,
     pub(crate) relationship_policy: RelationshipPolicy,
+    pub(crate) key_state_policy: KeyStatePolicy,
+    pub(crate) key_state: KeyStateTracker,
+    pub(crate) clock: Box<dyn Clock>,
 }
 
 impl TspAgent {
@@ -74,7 +80,31 @@ impl TspAgent {
             store: TspStore::new(),
             resolver: DelegatingVidResolver::new(),
             relationship_policy: RelationshipPolicy::default(),
+            key_state_policy: KeyStatePolicy::default(),
+            key_state: KeyStateTracker::new(),
+            clock: Box::new(keystate::SystemClock),
         }
+    }
+
+    /// Set how this endpoint keeps a peer's key state fresh (Rev 3 §7.4.2).
+    pub fn with_key_state_policy(mut self, policy: KeyStatePolicy) -> Self {
+        self.key_state_policy = policy;
+        self
+    }
+
+    /// Replace the VID resolver used for DID-shaped VIDs.
+    ///
+    /// The builder form of [`TspAgent::with_did_resolver`], for chaining onto
+    /// an agent that already has other settings.
+    pub fn with_resolver(mut self, resolver: Box<dyn VidResolver>) -> Self {
+        self.resolver = DelegatingVidResolver::new().with_did_resolver(resolver);
+        self
+    }
+
+    /// Replace the clock the freshness rules measure against. For tests.
+    pub fn with_clock(mut self, clock: Box<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Set whether inbound application messages are gated on an existing
@@ -91,6 +121,9 @@ impl TspAgent {
             store: TspStore::new(),
             resolver: DelegatingVidResolver::new().with_did_resolver(did_resolver),
             relationship_policy: RelationshipPolicy::default(),
+            key_state_policy: KeyStatePolicy::default(),
+            key_state: KeyStateTracker::new(),
+            clock: Box::new(keystate::SystemClock),
         }
     }
 
@@ -237,14 +270,71 @@ impl TspAgent {
 
         // Look up keys
         let our_private = self.store.get_private_vid(our_vid)?;
-        let sender_resolved = self.resolver.resolve(&envelope.sender)?;
 
-        // Unpack
-        let unpacked = direct::unpack(
+        let established = self
+            .store
+            .relationship_state(our_vid, &envelope.sender)
+            .admits_application_message();
+        let now_ms = self.clock.now_ms();
+
+        // §7.4.2, first occasion: a message arriving after a silence longer
+        // than the re-verification threshold is not acted on until the peer's
+        // key state has been refreshed. This is the case that matters under
+        // compromise — stale key state is internally consistent, so a message
+        // signed with a compromised key verifies and gives no warning.
+        let mut sender_resolved = self.resolver.resolve(&envelope.sender)?;
+        if self.key_state_policy.self_resolving
+            && established
+            && self.key_state.silent_longer_than(
+                &envelope.sender,
+                self.key_state_policy.reverification_threshold,
+                now_ms,
+            )
+        {
+            match self.refresh_key_state(&envelope.sender, now_ms) {
+                Ok(Some(fresh)) => sender_resolved = fresh,
+                // Rate-limited: the allowance for this peer is already spent,
+                // so proceed on what we hold rather than resolving again.
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(TspError::Discarded(format!(
+                        "key state for {} could not be confirmed after a silence: {e}",
+                        envelope.sender
+                    )));
+                }
+            }
+        }
+
+        // Unpack. §7.4.2, second occasion: a verification failure inside an
+        // established relationship may be a rotation we have not observed, so
+        // the VID is re-resolved and the verification retried once before the
+        // message is discarded. Outside a relationship it is discarded at once
+        // — otherwise anyone could make us resolve by sending us noise.
+        let unpacked = match direct::unpack(
             wire,
             &our_private.decryption_key,
             &sender_resolved.signing_key,
-        )?;
+        ) {
+            Ok(unpacked) => unpacked,
+            Err(first_error) => {
+                if !(self.key_state_policy.self_resolving && established) {
+                    return Err(first_error);
+                }
+                match self.refresh_key_state(&envelope.sender, now_ms) {
+                    Ok(Some(fresh)) => direct::unpack(
+                        wire,
+                        &our_private.decryption_key,
+                        &fresh.signing_key,
+                    )?,
+                    // No refresh was possible, so the original failure stands.
+                    Ok(None) => return Err(first_error),
+                    Err(_) => return Err(first_error),
+                }
+            }
+        };
+
+        // The message verified, so the key state behind it is confirmed now.
+        self.key_state.record_seen(&envelope.sender, now_ms);
 
         // Handle control messages
         if unpacked.message_type == MessageType::Control {
@@ -462,6 +552,28 @@ impl TspAgent {
     ///
     /// `thread_digest` is the `SHA256` of the received message's plaintext frame
     /// (for an invite it is the value the accepter must echo back as `reply`).
+    /// Re-resolve `vid`, subject to the per-peer rate limit.
+    ///
+    /// `Ok(None)` means the limit is in force and no resolution was attempted;
+    /// the caller proceeds on the key state it already holds. §7.4.2 bounds
+    /// this because re-resolution can be provoked by an unauthenticated
+    /// message, and resolution is more expensive than the message provoking it,
+    /// so the cost would otherwise fall on the peer's infrastructure.
+    fn refresh_key_state(
+        &self,
+        vid: &str,
+        now_ms: u64,
+    ) -> Result<Option<vid::ResolvedVid>, TspError> {
+        if !self
+            .key_state
+            .may_resolve(vid, self.key_state_policy.resolution_rate_limit, now_ms)
+        {
+            return Ok(None);
+        }
+        self.key_state.record_resolved(vid, now_ms);
+        self.resolver.refresh(vid).map(Some)
+    }
+
     fn handle_control(
         &self,
         our_vid: &str,
@@ -1045,5 +1157,289 @@ mod tests {
             bob.relationship_state("did:example:bob", "did:example:alice"),
             RelationshipState::None
         );
+    }
+
+    // ---- Rev 3 §7.4.2 key-state freshness ----
+
+    /// A resolver that counts how often each VID was re-resolved, and can be
+    /// told to hand back a different key state on the next refresh — standing
+    /// in for a peer that has rotated.
+    #[derive(Debug, Default)]
+    struct CountingResolver {
+        current: std::sync::RwLock<std::collections::HashMap<String, ResolvedVid>>,
+        rotated: std::sync::RwLock<std::collections::HashMap<String, ResolvedVid>>,
+        refreshes: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CountingResolver {
+        fn insert(&self, vid: ResolvedVid) {
+            self.current.write().unwrap().insert(vid.id.clone(), vid);
+        }
+        fn stage_rotation(&self, vid: ResolvedVid) {
+            self.rotated.write().unwrap().insert(vid.id.clone(), vid);
+        }
+        fn refreshes(&self) -> usize {
+            self.refreshes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl VidResolver for CountingResolver {
+        fn resolve(&self, vid: &str) -> Result<ResolvedVid, TspError> {
+            self.current
+                .read()
+                .unwrap()
+                .get(vid)
+                .cloned()
+                .ok_or_else(|| TspError::VidNotFound(vid.to_string()))
+        }
+
+        fn refresh(&self, vid: &str) -> Result<ResolvedVid, TspError> {
+            self.refreshes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(rotated) = self.rotated.write().unwrap().remove(vid) {
+                self.current
+                    .write()
+                    .unwrap()
+                    .insert(vid.to_string(), rotated.clone());
+                return Ok(rotated);
+            }
+            self.resolve(vid)
+        }
+    }
+
+    /// Bob, holding a relationship with Alice, resolving key state himself,
+    /// with a clock and resolver the test drives.
+    fn bob_with_resolver() -> (TspAgent, std::sync::Arc<ManualClock>) {
+        let clock = std::sync::Arc::new(ManualClock::new());
+        let bob = TspAgent::new().with_clock(Box::new(clock.clone()));
+        (bob, clock)
+    }
+
+    /// §7.4.2: a verification failure inside an established relationship may be
+    /// a rotation not yet observed, so the VID is re-resolved and the
+    /// verification retried once before the message is discarded.
+    #[test]
+    fn a_rotation_is_recovered_by_retrying_once() {
+        let alice_old = PrivateVid::generate("did:example:alice");
+        let alice_new = PrivateVid::generate("did:example:alice");
+        let b = PrivateVid::generate("did:example:bob");
+
+        // Bob holds Alice's *old* key state; the resolver has the new one ready.
+        let resolver = std::sync::Arc::new(CountingResolver::default());
+        resolver.insert(alice_old.to_resolved());
+        resolver.insert(b.to_resolved());
+        resolver.stage_rotation(alice_new.to_resolved());
+
+        let (bob, _clock) = bob_with_resolver();
+        let bob = bob.with_resolver(Box::new(resolver.clone()));
+        bob.add_private_vid(b.clone());
+        bob.store.set_relationship_state(
+            "did:example:bob",
+            "did:example:alice",
+            RelationshipState::Bidirectional,
+        );
+
+        // Alice signs with her new key, which Bob does not yet know.
+        let alice = TspAgent::new();
+        alice.add_private_vid(alice_new.clone());
+        alice.add_verified_vid(b.to_resolved());
+        let packed = alice
+            .pack_message(
+                "did:example:alice",
+                "did:example:bob",
+                b"after rotation",
+                MessageType::Direct,
+            )
+            .unwrap();
+
+        let got = bob.receive("did:example:bob", &packed.bytes).unwrap();
+        assert_eq!(got.payload, b"after rotation");
+        assert_eq!(resolver.refreshes(), 1, "exactly one retry");
+    }
+
+    /// Outside a relationship a failure is discarded at once — otherwise
+    /// anyone could make the endpoint resolve by sending it noise.
+    #[test]
+    fn a_failure_outside_a_relationship_does_not_resolve() {
+        let alice_old = PrivateVid::generate("did:example:alice");
+        let alice_new = PrivateVid::generate("did:example:alice");
+        let b = PrivateVid::generate("did:example:bob");
+
+        let resolver = std::sync::Arc::new(CountingResolver::default());
+        resolver.insert(alice_old.to_resolved());
+        resolver.stage_rotation(alice_new.to_resolved());
+
+        let (bob, _clock) = bob_with_resolver();
+        let bob = bob.with_resolver(Box::new(resolver.clone()));
+        bob.add_private_vid(b.clone());
+        // No relationship recorded.
+
+        let alice = TspAgent::new();
+        alice.add_private_vid(alice_new);
+        alice.add_verified_vid(b.to_resolved());
+        let packed = alice
+            .pack_message(
+                "did:example:alice",
+                "did:example:bob",
+                b"noise",
+                MessageType::Direct,
+            )
+            .unwrap();
+
+        assert!(bob.receive("did:example:bob", &packed.bytes).is_err());
+        assert_eq!(resolver.refreshes(), 0, "must not resolve for a stranger");
+    }
+
+    /// §7.4.2: resolution of any one peer is rate limited, because it can be
+    /// provoked by messages the endpoint has not authenticated.
+    #[test]
+    fn repeated_failures_resolve_only_once_within_the_rate_limit() {
+        let alice_real = PrivateVid::generate("did:example:alice");
+        let alice_wrong = PrivateVid::generate("did:example:alice");
+        let b = PrivateVid::generate("did:example:bob");
+
+        let resolver = std::sync::Arc::new(CountingResolver::default());
+        resolver.insert(alice_wrong.to_resolved()); // Bob's view never becomes right
+        let (bob, clock) = bob_with_resolver();
+        let bob = bob.with_resolver(Box::new(resolver.clone()));
+        bob.add_private_vid(b.clone());
+        bob.store.set_relationship_state(
+            "did:example:bob",
+            "did:example:alice",
+            RelationshipState::Bidirectional,
+        );
+
+        let alice = TspAgent::new();
+        alice.add_private_vid(alice_real);
+        alice.add_verified_vid(b.to_resolved());
+
+        for _ in 0..5 {
+            let packed = alice
+                .pack_message(
+                    "did:example:alice",
+                    "did:example:bob",
+                    b"never verifies",
+                    MessageType::Direct,
+                )
+                .unwrap();
+            assert!(bob.receive("did:example:bob", &packed.bytes).is_err());
+        }
+        assert_eq!(
+            resolver.refreshes(),
+            1,
+            "five failures inside the limit must provoke one resolution"
+        );
+
+        // Past the limit, one more is allowed.
+        clock.advance(std::time::Duration::from_secs(61));
+        let packed = alice
+            .pack_message(
+                "did:example:alice",
+                "did:example:bob",
+                b"never verifies",
+                MessageType::Direct,
+            )
+            .unwrap();
+        assert!(bob.receive("did:example:bob", &packed.bytes).is_err());
+        assert_eq!(resolver.refreshes(), 2);
+    }
+
+    /// §7.4.2: a message arriving after a silence longer than the
+    /// re-verification threshold prompts a refresh before it is acted on.
+    #[test]
+    fn a_message_after_a_long_silence_refreshes_first() {
+        let a = PrivateVid::generate("did:example:alice");
+        let b = PrivateVid::generate("did:example:bob");
+
+        let resolver = std::sync::Arc::new(CountingResolver::default());
+        resolver.insert(a.to_resolved());
+
+        let (bob, clock) = bob_with_resolver();
+        let bob = bob.with_resolver(Box::new(resolver.clone()));
+        bob.add_private_vid(b.clone());
+        bob.store.set_relationship_state(
+            "did:example:bob",
+            "did:example:alice",
+            RelationshipState::Bidirectional,
+        );
+
+        let alice = TspAgent::new();
+        alice.add_private_vid(a);
+        alice.add_verified_vid(b.to_resolved());
+        let send = || {
+            alice
+                .pack_message(
+                    "did:example:alice",
+                    "did:example:bob",
+                    b"hello",
+                    MessageType::Direct,
+                )
+                .unwrap()
+        };
+
+        // First message: no prior record, so no silence to measure.
+        bob.receive("did:example:bob", &send().bytes).unwrap();
+        assert_eq!(resolver.refreshes(), 0);
+
+        // Well inside the threshold.
+        clock.advance(std::time::Duration::from_secs(60));
+        bob.receive("did:example:bob", &send().bytes).unwrap();
+        assert_eq!(resolver.refreshes(), 0);
+
+        // Past it.
+        clock.advance(std::time::Duration::from_secs(60 * 60 * 25));
+        bob.receive("did:example:bob", &send().bytes).unwrap();
+        assert_eq!(resolver.refreshes(), 1, "a dormant relationship resuming");
+    }
+
+    /// An endpoint that does not resolve key state itself takes no action of
+    /// its own — §7.4.1, where the VID implementation maintains it.
+    #[test]
+    fn a_non_self_resolving_endpoint_never_refreshes() {
+        let a = PrivateVid::generate("did:example:alice");
+        let b = PrivateVid::generate("did:example:bob");
+
+        let resolver = std::sync::Arc::new(CountingResolver::default());
+        resolver.insert(a.to_resolved());
+
+        let (bob, clock) = bob_with_resolver();
+        let bob = bob
+            .with_resolver(Box::new(resolver.clone()))
+            .with_key_state_policy(KeyStatePolicy {
+                self_resolving: false,
+                ..Default::default()
+            });
+        bob.add_private_vid(b.clone());
+        bob.store.set_relationship_state(
+            "did:example:bob",
+            "did:example:alice",
+            RelationshipState::Bidirectional,
+        );
+
+        let alice = TspAgent::new();
+        alice.add_private_vid(a);
+        alice.add_verified_vid(b.to_resolved());
+        let packed = alice
+            .pack_message(
+                "did:example:alice",
+                "did:example:bob",
+                b"hello",
+                MessageType::Direct,
+            )
+            .unwrap();
+        bob.receive("did:example:bob", &packed.bytes).unwrap();
+
+        clock.advance(std::time::Duration::from_secs(60 * 60 * 24 * 30));
+        let packed = alice
+            .pack_message(
+                "did:example:alice",
+                "did:example:bob",
+                b"hello",
+                MessageType::Direct,
+            )
+            .unwrap();
+        bob.receive("did:example:bob", &packed.bytes).unwrap();
+
+        assert_eq!(resolver.refreshes(), 0);
     }
 }
