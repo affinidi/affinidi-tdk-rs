@@ -18,6 +18,16 @@ pub enum TspError {
     #[error("invalid message: {0}")]
     InvalidMessage(String),
 
+    /// The message was well-formed and authentic but is being discarded by a
+    /// protocol rule — no relationship with the sender, a cancellation naming a
+    /// relationship we do not hold, or a losing side of the invite race.
+    ///
+    /// Rev 3 §3.7 requires a receiver to discard silently and send nothing in
+    /// response, so a caller must not turn this into a distinguishable answer:
+    /// any response tells whoever sent it which check failed.
+    #[error("message discarded: {0}")]
+    Discarded(String),
+
     /// The bytes are not a TSP message at all — no `-E` frame, or no `YTSP`
     /// genus code. Kept distinct from [`TspError::VersionMismatch`], which
     /// means "TSP, but a version this build cannot process" (Rev 3 §9.1).

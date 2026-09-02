@@ -17,6 +17,28 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Whether this agent enforces the relationship gating rule of Rev 3 §7.2.2.
+///
+/// The rule addresses an *endpoint*: "If an endpoint receives an application
+/// message destined to one of its legitimate VIDs, but it has not established a
+/// relationship from the source VID in the message to its own VID, it SHOULD
+/// drop the message." It enforces protocol ordering — an exchange begins with
+/// control messages — rather than admission control, which stays a local
+/// decision the application makes when it sees the invite.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum RelationshipPolicy {
+    /// Drop an application message from a VID we hold no relationship with.
+    /// The default, and what §7.2.2 asks of an endpoint.
+    #[default]
+    Gated,
+    /// Accept application messages whatever the relationship state.
+    ///
+    /// For a node that is not an endpoint in the specification's sense — an
+    /// intermediary relaying on behalf of others, which by §5 handles messages
+    /// for relationships it is not a party to.
+    Ungated,
+}
+
 /// The state of a TSP relationship between two VIDs.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RelationshipState {
@@ -35,6 +57,16 @@ impl RelationshipState {
     /// Can we send a message in this state?
     pub fn can_send(&self) -> bool {
         matches!(self, RelationshipState::Bidirectional)
+    }
+
+    /// Does this state admit an inbound *application* message under §7.2.2?
+    ///
+    /// Any recorded relationship does, not only a completed one. Receiving an
+    /// invite records the inbound half, and §3.6 lets a sender pack user data
+    /// with its invite rather than wait a round trip — so gating on
+    /// `Bidirectional` alone would drop messages the spec expects to arrive.
+    pub fn admits_application_message(&self) -> bool {
+        !matches!(self, RelationshipState::None)
     }
 
     /// Apply a state transition.
@@ -64,6 +96,12 @@ impl RelationshipState {
                 Ok(RelationshipState::Bidirectional)
             }
             (RelationshipState::InviteReceived, RelationshipEvent::SendCancel) => {
+                Ok(RelationshipState::None)
+            }
+            // The inviter withdrew before we answered. §7.3 removes the
+            // relationship in this direction; §7.4 covers the mirror case,
+            // where we are the one declining.
+            (RelationshipState::InviteReceived, RelationshipEvent::ReceiveCancel) => {
                 Ok(RelationshipState::None)
             }
 

@@ -44,6 +44,8 @@ pub struct TspStore {
     /// Used to correlate a later accept/cancel back to the forming message.
     /// Key format: "{our_vid}\0{their_vid}".
     thread_digests: RwLock<HashMap<String, [u8; 32]>>,
+    /// The other half's thread id — see [`TspStore::set_reply_thread_digest`].
+    reply_thread_digests: RwLock<HashMap<String, [u8; 32]>>,
 }
 
 impl TspStore {
@@ -53,12 +55,47 @@ impl TspStore {
             remote_vids: RwLock::new(HashMap::new()),
             relationships: RwLock::new(HashMap::new()),
             thread_digests: RwLock::new(HashMap::new()),
+            reply_thread_digests: RwLock::new(HashMap::new()),
         }
     }
 
     // --- Thread-digest correlation ---
 
     /// Remember the thread digest of the relationship-forming message for a pair.
+    /// Record the *reply* thread id — the accept's own self-addressing digest,
+    /// which identifies the relationship in the other direction.
+    ///
+    /// Rev 3 §7.2.1: a bidirectional relationship has two digests, one per
+    /// uni-directional half. The invite's identifies `<VID_a, VID_b>` and the
+    /// accept's identifies `<VID_b, VID_a>`. A cancellation may name either, so
+    /// both must be recognizable.
+    pub fn set_reply_thread_digest(&self, our_vid: &str, their_vid: &str, digest: [u8; 32]) {
+        let key = relationship_key(our_vid, their_vid);
+        self.reply_thread_digests
+            .write()
+            .unwrap()
+            .insert(key, digest);
+    }
+
+    /// The reply thread id, if one has been recorded.
+    pub fn reply_thread_digest(&self, our_vid: &str, their_vid: &str) -> Option<[u8; 32]> {
+        let key = relationship_key(our_vid, their_vid);
+        self.reply_thread_digests.read().unwrap().get(&key).copied()
+    }
+
+    /// Does `digest` name this relationship? True if it matches either half's
+    /// thread id, or if we hold no digest at all to compare against.
+    pub fn recognizes_digest(&self, our_vid: &str, their_vid: &str, digest: &[u8; 32]) -> bool {
+        let held = [
+            self.thread_digest(our_vid, their_vid),
+            self.reply_thread_digest(our_vid, their_vid),
+        ];
+        if held.iter().all(Option::is_none) {
+            return true;
+        }
+        held.iter().flatten().any(|d| d == digest)
+    }
+
     pub fn set_thread_digest(&self, our_vid: &str, their_vid: &str, digest: [u8; 32]) {
         let key = relationship_key(our_vid, their_vid);
         self.thread_digests.write().unwrap().insert(key, digest);
@@ -74,6 +111,7 @@ impl TspStore {
     pub fn clear_thread_digest(&self, our_vid: &str, their_vid: &str) {
         let key = relationship_key(our_vid, their_vid);
         self.thread_digests.write().unwrap().remove(&key);
+        self.reply_thread_digests.write().unwrap().remove(&key);
     }
 
     // --- Private VID management ---
@@ -166,6 +204,28 @@ impl TspStore {
         }
 
         Ok(new_state)
+    }
+
+    /// Set a relationship's state directly, bypassing the transition table.
+    ///
+    /// Used where the protocol replaces one relationship with another rather
+    /// than advancing the existing one — resolving the §7.2.3 invite race,
+    /// where the losing invite is discarded and the winning one adopted in its
+    /// place. Prefer [`TspStore::transition_relationship`] everywhere else, so
+    /// that illegal transitions stay illegal.
+    pub fn set_relationship_state(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        state: RelationshipState,
+    ) {
+        let key = relationship_key(our_vid, their_vid);
+        let mut relationships = self.relationships.write().unwrap();
+        if state == RelationshipState::None {
+            relationships.remove(&key);
+        } else {
+            relationships.insert(key, state);
+        }
     }
 
     /// List all relationships for a given VID.
