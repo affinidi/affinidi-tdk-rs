@@ -32,6 +32,13 @@ async fn send_to_uses_tsp_when_capability_supported() {
         .expect("spawn env with Preferred policy");
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // §7.2.2 gates application messages on an existing relationship. This
+    // test is about transport, not relationship forming, so the relationship
+    // is seeded rather than handshaken — which also keeps the mailbox clean
+    // for the assertions below.
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
 
     // Record that bob's agent speaks TSP.
     env.atm
@@ -78,6 +85,13 @@ async fn send_to_falls_back_to_didcomm_when_unsupported() {
         .expect("spawn env with Preferred policy");
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // §7.2.2 gates application messages on an existing relationship. This
+    // test is about transport, not relationship forming, so the relationship
+    // is seeded rather than handshaken — which also keeps the mailbox clean
+    // for the assertions below.
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
 
     env.atm
         .tsp()
@@ -123,6 +137,13 @@ async fn send_to_required_errors_without_capability() {
         .expect("spawn env with Required policy");
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // §7.2.2 gates application messages on an existing relationship. This
+    // test is about transport, not relationship forming, so the relationship
+    // is seeded rather than handshaken — which also keeps the mailbox clean
+    // for the assertions below.
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
 
     // Explicitly Unsupported so the outcome is deterministic regardless of what
     // bob's DID document advertises.

@@ -244,8 +244,12 @@ impl ATMConfig {
     }
 
     /// The pluggable store backing TSP relationship state.
+    /// The TSP relationship store this config was built with.
+    ///
+    /// Public so a caller can reach the same store the SDK is using — a test
+    /// seeding a relationship, or an application sharing one across ATMs.
     #[cfg(feature = "tsp")]
-    pub(crate) fn relationship_store(&self) -> &Arc<dyn crate::protocols::tsp::RelationshipStore> {
+    pub fn relationship_store(&self) -> &Arc<dyn crate::protocols::tsp::RelationshipStore> {
         &self.relationship_store
     }
 

@@ -28,7 +28,10 @@ use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_secrets_resolver::secrets::KeyType;
 use affinidi_tsp::message::control::{ControlMessage, ControlType};
 use affinidi_tsp::message::direct;
-use affinidi_tsp::relationship::{InvalidTransition, RelationshipEvent, RelationshipState};
+use affinidi_tsp::relationship::{InvalidTransition, RelationshipEvent};
+/// Re-exported so callers can name the states a [`RelationshipStore`] holds
+/// without depending on `affinidi-tsp` directly.
+pub use affinidi_tsp::relationship::RelationshipState;
 use affinidi_tsp::{DidVidResolver, MessageType, MetaEnvelope};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use tokio::sync::RwLock;
@@ -558,6 +561,24 @@ impl TspOps<'_> {
         if route.is_empty() {
             return Err(ATMError::MsgSendError("route must not be empty".into()));
         }
+
+        // Rev 3 §9.4 carries a routed message's inner raw, as an
+        // `Encoded_TSP_Message`, where Rev 2 wrapped it in a `B` var-data
+        // field. The wrapper is what made an arbitrary, non-TSP inner possible;
+        // without it the inner must be quadlet-aligned, which only a real TSP
+        // message reliably is.
+        //
+        // That removes the framing this bridge was built on. Fail here, where
+        // the caller can see why, rather than deep in the CESR encoder.
+        if !inner.len().is_multiple_of(3) {
+            return Err(ATMError::MsgSendError(format!(
+                "a routed inner must be a quadlet-aligned TSP message under spec Rev 3, but this \
+                 one is {} bytes; carrying an opaque non-TSP inner (the DIDComm bridge) relied on \
+                 the Rev 2 var-data wrapper that Rev 3 removed",
+                inner.len()
+            )));
+        }
+
         let first_hop = &route[0];
 
         let (from_did, _) = profile.dids()?;

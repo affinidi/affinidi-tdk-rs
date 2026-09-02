@@ -63,6 +63,15 @@ async fn send_nested_routed_delivers_cross_mediator() {
     let alice = topology.add_user(0, "alice").await.expect("add alice on A");
     let bob = topology.add_user(1, "bob").await.expect("add bob on B");
 
+    // §7.2.2 gates application messages on an existing relationship. The
+    // subject here is delivery across mediators, not relationship forming, so
+    // the relationship is seeded on every node — each side's SDK has its own
+    // store, and one alone would leave the other discarding.
+    topology
+        .relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
+
     let payload = b"hello bob, nested over routed, recipient hidden from mediator A";
     let route = vec![mediator_a, mediator_b];
     topology
@@ -101,6 +110,15 @@ async fn send_to_routes_cross_mediator_when_peer_mediator_known() {
     let mediator_b = topology.mediator_did(1).expect("mediator B").to_string();
     let alice = topology.add_user(0, "alice").await.expect("add alice on A");
     let bob = topology.add_user(1, "bob").await.expect("add bob on B");
+
+    // §7.2.2 gates application messages on an existing relationship. The
+    // subject here is delivery across mediators, not relationship forming, so
+    // the relationship is seeded on every node — each side's SDK has its own
+    // store, and one alone would leave the other discarding.
+    topology
+        .relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
     let a = topology.node(0).unwrap();
 
     // Alice knows bob speaks TSP and lives on mediator B (learned out-of-band).
@@ -153,6 +171,8 @@ async fn routed_invite_teaches_peer_mediator() {
         .expect("spawn env with Preferred policy");
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // No relationship is seeded here: this test forms one, and §7.2.2 does not
+    // gate the control messages that do the forming.
 
     // Alice's own mediator DID — what her routed invite advertises.
     let (_, alice_mediator) = alice.profile.dids().expect("alice dids");

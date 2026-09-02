@@ -86,6 +86,12 @@ pub struct TestEnvironment {
     /// SDK client. Tests call protocol methods on this (e.g.
     /// `atm.trust_ping().send_ping(...)`).
     pub atm: ATM,
+    /// The TSP relationship store the SDK was wired with, so a test can seed a
+    /// relationship without running a handshake. See
+    /// [`TestEnvironment::relate_directly`].
+    #[cfg(feature = "tsp")]
+    pub relationship_store:
+        Arc<dyn affinidi_messaging_sdk::protocols::tsp::RelationshipStore>,
 }
 
 /// One participant in an e2e scenario — Alice, Bob, etc. Owns its own
@@ -182,6 +188,21 @@ impl TestEnvironment {
         Self::new_with_config(mediator, tdk_config, atm_config).await
     }
 
+    /// Spawn the default mediator and wire the SDK with a caller-supplied
+    /// [`ATMConfig`].
+    ///
+    /// For tests that need to reach SDK settings the other constructors do not
+    /// expose — an injected clock, a relationship store the test can seed, or
+    /// the TSP relationship-gating and key-state policies of spec Rev 3.
+    pub async fn spawn_with_atm_config(
+        atm_config: ATMConfig,
+    ) -> Result<Self, TestEnvironmentError> {
+        let mediator = TestMediator::spawn().await?;
+        let tdk_config =
+            TDKConfig::headless().map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+        Self::new_with_config(mediator, tdk_config, atm_config).await
+    }
+
     /// Spawn the default mediator (with the `tsp` feature) and wire up the SDK
     /// with a chosen [`TspPolicy`](affinidi_messaging_sdk::TspPolicy) so
     /// `atm.send_to` protocol selection can be exercised end-to-end.
@@ -194,6 +215,30 @@ impl TestEnvironment {
             TDKConfig::headless().map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
         let atm_config = ATMConfig::builder()
             .with_tsp_policy(policy)
+            .build()
+            .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+        Self::new_with_config(mediator, tdk_config, atm_config).await
+    }
+
+    /// Like [`spawn_with_tsp_policy`](Self::spawn_with_tsp_policy), but with
+    /// the Rev 3 §7.2.2 relationship gate turned off.
+    ///
+    /// For tests whose subject is what an endpoint *learns* from an inbound
+    /// message. Gating and capability learning interact awkwardly there: an
+    /// application message from an unrelated peer is discarded, so nothing is
+    /// observed, while seeding a relationship to admit it is itself a TSP
+    /// capability signal and so decides the outcome in advance. Turning the
+    /// gate off isolates the behaviour under test.
+    #[cfg(feature = "tsp")]
+    pub async fn spawn_ungated_with_tsp_policy(
+        policy: affinidi_messaging_sdk::TspPolicy,
+    ) -> Result<Self, TestEnvironmentError> {
+        let mediator = TestMediator::spawn().await?;
+        let tdk_config =
+            TDKConfig::headless().map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+        let atm_config = ATMConfig::builder()
+            .with_tsp_policy(policy)
+            .with_tsp_relationship_gating(false)
             .build()
             .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
         Self::new_with_config(mediator, tdk_config, atm_config).await
@@ -226,6 +271,10 @@ impl TestEnvironment {
         tdk_config: TDKConfig,
         atm_config: ATMConfig,
     ) -> Result<Self, TestEnvironmentError> {
+        // Keep a handle on the store the SDK is using, so a test can seed a
+        // relationship without running a handshake.
+        #[cfg(feature = "tsp")]
+        let relationship_store = atm_config.relationship_store().clone();
         let tdk = Arc::new(
             TDKSharedState::new(tdk_config)
                 .await
@@ -245,7 +294,144 @@ impl TestEnvironment {
             .await
             .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
 
-        Ok(Self { mediator, tdk, atm })
+        Ok(Self {
+            mediator,
+            tdk,
+            atm,
+            #[cfg(feature = "tsp")]
+            relationship_store,
+        })
+    }
+
+    /// Record a `Bidirectional` TSP relationship between two users without
+    /// exchanging any messages.
+    ///
+    /// Spec Rev 3 §7.2.2 gates application messages on an existing
+    /// relationship, so a test that exercises transport — websocket delivery,
+    /// acknowledgement, redelivery — needs one even though the relationship is
+    /// not what it is testing. Seeding it directly keeps the mailbox clean,
+    /// where [`TestEnvironment::relate`] would leave its own control messages
+    /// there and disturb tests that assert what is queued.
+    ///
+    /// Use `relate` where the handshake itself is under test.
+    #[cfg(feature = "tsp")]
+    pub async fn relate_directly(
+        &self,
+        a: &TestUser,
+        b: &TestUser,
+    ) -> Result<(), TestEnvironmentError> {
+        use affinidi_messaging_sdk::protocols::tsp::RelationshipState;
+
+        for (ours, theirs) in [(&a.did, &b.did), (&b.did, &a.did)] {
+            self.relationship_store
+                .set(ours, theirs, RelationshipState::Bidirectional)
+                .await
+                .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Run a full TSP relationship handshake between two users, leaving both
+    /// sides `Bidirectional`.
+    ///
+    /// Spec Rev 3 §7.2.2 requires this before any application message: "It is
+    /// not permissible that one endpoint which has learned a VID of the other
+    /// simply starts with an application level message without first having an
+    /// exchange of TSP control messages." A test that skips it has its messages
+    /// discarded at the receiver, which is the specified behaviour rather than
+    /// a fault.
+    ///
+    /// Drives the real control-message exchange through the mediator rather
+    /// than seeding state, so the relationship a test relies on is one the
+    /// protocol actually produced.
+    #[cfg(feature = "tsp")]
+    pub async fn relate(
+        &self,
+        initiator: &TestUser,
+        responder: &TestUser,
+    ) -> Result<(), TestEnvironmentError> {
+        let sdk = |e: String| TestEnvironmentError::Sdk(e);
+
+        // Initiator sends the invite.
+        self.atm
+            .tsp()
+            .form_relationship(&initiator.profile, &responder.did)
+            .await
+            .map_err(|e| sdk(e.to_string()))?;
+
+        // Responder picks it up, records it, and accepts.
+        let invite_digest = self
+            .fetch_one_control(responder, &initiator.did)
+            .await?
+            .expect("the invite is waiting for the responder");
+        self.atm
+            .tsp()
+            .accept_relationship(&responder.profile, &initiator.did, invite_digest)
+            .await
+            .map_err(|e| sdk(e.to_string()))?;
+
+        // Initiator picks up the accept, completing the relationship.
+        self.fetch_one_control(initiator, &responder.did)
+            .await?
+            .expect("the accept is waiting for the initiator");
+
+        Ok(())
+    }
+
+    /// Fetch the next control message waiting for `user`, record it against
+    /// `peer`, and return its thread digest.
+    #[cfg(feature = "tsp")]
+    async fn fetch_one_control(
+        &self,
+        user: &TestUser,
+        peer: &str,
+    ) -> Result<Option<[u8; 32]>, TestEnvironmentError> {
+        use affinidi_messaging_sdk::messages::fetch::FetchOptions;
+
+        let sdk = |e: String| TestEnvironmentError::Sdk(e);
+
+        let inbox = self
+            .atm
+            .fetch_messages(&user.profile, &FetchOptions::default())
+            .await
+            .map_err(|e| sdk(e.to_string()))?;
+        let Some(element) = inbox.success.first() else {
+            return Ok(None);
+        };
+        let Some(stored) = element.msg.as_ref() else {
+            return Ok(None);
+        };
+
+        // Consume it. A handshake that leaves its control messages in the
+        // mailbox would otherwise be indistinguishable, to a later fetch, from
+        // the application message the test is actually waiting for.
+        self.atm
+            .delete_messages_direct(
+                &user.profile,
+                &affinidi_messaging_sdk::messages::DeleteMessageRequest {
+                    message_ids: vec![element.msg_id.clone()],
+                },
+            )
+            .await
+            .map_err(|e| sdk(e.to_string()))?;
+        let qb2 = self
+            .atm
+            .tsp()
+            .decode(stored)
+            .map_err(|e| sdk(e.to_string()))?;
+        let (control, sender, digest) = self
+            .atm
+            .tsp()
+            .unpack_control(&user.profile, &qb2)
+            .await
+            .map_err(|e| sdk(e.to_string()))?;
+        assert_eq!(sender, peer, "control message came from an unexpected VID");
+        self.atm
+            .tsp()
+            .record_incoming_control(&user.profile, peer, &control)
+            .await
+            .map_err(|e| sdk(e.to_string()))?;
+        Ok(Some(digest))
     }
 
     /// Add a fresh user with an auto-generated `did:peer:2.*` and

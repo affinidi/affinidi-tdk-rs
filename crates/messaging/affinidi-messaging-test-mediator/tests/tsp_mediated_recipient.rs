@@ -76,6 +76,14 @@ async fn tsp_forward_follows_a_recipients_mediator_did() {
         .await
         .expect("add mediated bob on B");
 
+    // §7.2.2 gates application messages on an existing relationship. The
+    // subject here is that forwarding follows the recipient's mediator DID,
+    // not relationship forming, so the relationship is seeded on every node.
+    topology
+        .relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
+
     let payload = b"hello bob, via the mediator your document names";
 
     // Route: alice -> mediator A (the routing-layer recipient) -> bob (the final

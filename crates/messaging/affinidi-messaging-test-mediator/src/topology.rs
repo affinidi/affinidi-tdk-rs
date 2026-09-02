@@ -229,6 +229,30 @@ impl TestTopology {
         Ok(self.node(index)?.mediator.did())
     }
 
+    /// Record a `Bidirectional` TSP relationship between two users on every
+    /// node of the topology, without exchanging any messages.
+    ///
+    /// Spec Rev 3 §7.2.2 gates application messages on an existing
+    /// relationship. The two users here are served by different mediators and
+    /// therefore different SDK instances, so the relationship has to be seeded
+    /// on each — a single node's store would leave the other side discarding.
+    ///
+    /// For tests whose subject is delivery across mediators rather than
+    /// relationship forming.
+    #[cfg(feature = "tsp")]
+    pub async fn relate_directly(
+        &self,
+        a: &TestUser,
+        b: &TestUser,
+    ) -> Result<(), TestTopologyError> {
+        for node in &self.nodes {
+            node.relate_directly(a, b)
+                .await
+                .map_err(TestTopologyError::Environment)?;
+        }
+        Ok(())
+    }
+
     /// Add a user homed on node `index`, with its WebSocket live stream brought
     /// up so cross-mediator forwards delivered to it surface in real time
     /// (delivery over plain HTTP isn't unwrapped by the SDK's delivery-request

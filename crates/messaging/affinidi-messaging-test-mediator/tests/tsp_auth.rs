@@ -34,6 +34,13 @@ async fn pure_tsp_authentication_round_trips_a_direct_message() {
     // holds, so it can load each one's Ed25519 VID key to sign the challenge.
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // §7.2.2 gates application messages on an existing relationship. This
+    // test is about transport, not relationship forming, so the relationship
+    // is seeded rather than handshaken — which also keeps the mailbox clean
+    // for the assertions below.
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
 
     let payload = b"hello over pure-TSP auth";
 

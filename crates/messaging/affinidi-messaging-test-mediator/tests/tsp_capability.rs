@@ -28,7 +28,11 @@ fn basic_message(from: &str, to: &str, text: &str) -> Message {
 /// is cached `Supported` and her next `send_to` upgrades to TSP.
 #[tokio::test]
 async fn observed_inbound_tsp_upgrades_send_to() {
-    let env = TestEnvironment::spawn_with_tsp_policy(TspPolicy::Preferred)
+    // Gating off: this test's subject is what an observed inbound message
+    // teaches, and §7.2.2 would discard a message from a peer we have no
+    // relationship with — while seeding one would itself signal TSP support
+    // and settle the question before the test asks it.
+    let env = TestEnvironment::spawn_ungated_with_tsp_policy(TspPolicy::Preferred)
         .await
         .expect("spawn env with Preferred policy");
     let alice = env.add_user("alice").await.expect("add alice");
@@ -104,7 +108,9 @@ async fn observed_inbound_tsp_upgrades_send_to() {
 /// inbound TSP message writes nothing, so behaviour is unchanged.
 #[tokio::test]
 async fn observed_inbound_is_inert_under_off_policy() {
-    let env = TestEnvironment::spawn()
+    // Gating off for the same reason as the tests above: the subject is what an
+    // observed inbound message teaches, which §7.2.2 would prevent happening.
+    let env = TestEnvironment::spawn_ungated_with_tsp_policy(TspPolicy::Off)
         .await
         .expect("spawn default (Off) env");
     let alice = env.add_user("alice").await.expect("add alice");
@@ -146,7 +152,11 @@ async fn observed_inbound_is_inert_under_off_policy() {
 /// TSP afterwards. Also the repo's first end-to-end TSP relationship handshake.
 #[tokio::test]
 async fn completed_relationship_marks_peers_tsp_supported() {
-    let env = TestEnvironment::spawn_with_tsp_policy(TspPolicy::Preferred)
+    // Gating off: this test's subject is what an observed inbound message
+    // teaches, and §7.2.2 would discard a message from a peer we have no
+    // relationship with — while seeding one would itself signal TSP support
+    // and settle the question before the test asks it.
+    let env = TestEnvironment::spawn_ungated_with_tsp_policy(TspPolicy::Preferred)
         .await
         .expect("spawn env with Preferred policy");
     let alice = env.add_user("alice").await.expect("add alice");
