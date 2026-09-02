@@ -2,14 +2,20 @@
 
 > **On the `rev3` branch this document describes the past, not the present.**
 >
-> This branch implements TSP spec **Rev 3**, which is wire-incompatible with
-> Rev 2 in both directions. The released reference, `tsp-sdk` 0.9.0-alpha2, is
-> still Rev 2, so the interop harness below **does not pass on this branch** and
-> is not expected to until the reference cuts a Rev 3 release from its own
-> `rev3` branch. Re-pointing the harness at that release is the last phase of
-> the migration; see `docs/tsp/rev3-migration.html`.
+> This branch implements TSP spec **Rev 3** and is verified against the
+> reference's own `rev3` branch (`openwallet-foundation-labs/tsp` @ `85bbf47`):
+> **14/14 PASS**, both directions, for Direct (including a 2 MiB case), Routed,
+> Nested and the three relationship control messages.
 >
-> Everything below describes the Rev 2 state on `main`.
+> Two things changed about running the harness. It now points at
+> `../../tsp-sdk-rev3` rather than `../../tsp-sdk`, and the reference's `rev3`
+> branch builds without the `resolve` feature as-is — so the three patches
+> described below are **obsolete**. It does need a newer toolchain than the
+> workspace pin of 1.95.0, so run it as `cargo +stable run`.
+>
+> The released reference, 0.9.0-alpha2, is still Rev 2 and is wire-incompatible
+> with this branch in both directions. Everything below describes that Rev 2
+> state on `main`.
 
 **Status (as of `affinidi-tsp` 0.1.10): FULLY INTEROPERABLE.**
 
