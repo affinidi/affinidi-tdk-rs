@@ -195,6 +195,11 @@ pub struct ATMConfig {
     /// that sense — an intermediary relaying for others — sets it false.
     #[cfg(feature = "tsp")]
     pub(crate) tsp_relationship_gating: bool,
+    /// How this endpoint keeps a peer's TSP key state fresh (spec Rev 3
+    /// §7.4.2). Defaults to resolving for itself, with a day's
+    /// re-verification threshold and a minute's resolution rate limit.
+    #[cfg(feature = "tsp")]
+    pub(crate) tsp_key_state_policy: affinidi_tsp::KeyStatePolicy,
 }
 
 impl ATMConfig {
@@ -264,6 +269,12 @@ impl ATMConfig {
         self.tsp_relationship_gating
     }
 
+    /// How this endpoint keeps a peer's TSP key state fresh (Rev 3 §7.4.2).
+    #[cfg(feature = "tsp")]
+    pub(crate) fn tsp_key_state_policy(&self) -> affinidi_tsp::KeyStatePolicy {
+        self.tsp_key_state_policy
+    }
+
     /// Returns a builder for `ATMConfig`
     /// Example:
     /// ```
@@ -311,6 +322,8 @@ pub struct ATMConfigBuilder {
     tsp_capability_ttl: Option<Duration>,
     #[cfg(feature = "tsp")]
     tsp_relationship_gating: bool,
+    #[cfg(feature = "tsp")]
+    tsp_key_state_policy: affinidi_tsp::KeyStatePolicy,
 }
 
 impl Default for ATMConfigBuilder {
@@ -336,6 +349,7 @@ impl Default for ATMConfigBuilder {
             #[cfg(feature = "tsp")]
             tsp_capability_ttl: None,
             tsp_relationship_gating: true,
+            tsp_key_state_policy: affinidi_tsp::KeyStatePolicy::default(),
         }
     }
 }
@@ -565,6 +579,21 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// How this endpoint keeps a peer's TSP key state fresh (Rev 3 §7.4.2):
+    /// whether it resolves key state for itself, how long a silence must be
+    /// before a peer's VID is re-resolved, and how often any one peer may be
+    /// resolved.
+    ///
+    /// Defaults to resolving for itself with a day's threshold and a minute's
+    /// rate limit. Set `self_resolving` false where the VID implementation
+    /// maintains key state and delivers changes without being asked (§7.4.1),
+    /// in which case the endpoint takes no action of its own.
+    #[cfg(feature = "tsp")]
+    pub fn with_tsp_key_state_policy(mut self, policy: affinidi_tsp::KeyStatePolicy) -> Self {
+        self.tsp_key_state_policy = policy;
+        self
+    }
+
     pub fn build(self) -> Result<ATMConfig, ATMError> {
         // Process any custom SSL certificates
         let mut certs = vec![];
@@ -636,6 +665,7 @@ impl ATMConfigBuilder {
             #[cfg(feature = "tsp")]
             tsp_capability_ttl: self.tsp_capability_ttl,
             tsp_relationship_gating: self.tsp_relationship_gating,
+            tsp_key_state_policy: self.tsp_key_state_policy,
         })
     }
 }
@@ -673,6 +703,56 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(config.clock().unix_secs(), 1_234);
+    }
+
+    /// Rev 3 §7.2.2 asks an endpoint to gate application messages on an
+    /// existing relationship, so that is the default. An intermediary turns it
+    /// off: by §5 it handles messages for relationships it is not a party to,
+    /// and would otherwise drop every one of them.
+    #[test]
+    #[cfg(feature = "tsp")]
+    fn relationship_gating_defaults_on_and_can_be_turned_off() {
+        let config = ATMConfig::builder().build().unwrap();
+        assert!(config.tsp_relationship_gating());
+
+        let config = ATMConfig::builder()
+            .with_tsp_relationship_gating(false)
+            .build()
+            .unwrap();
+        assert!(!config.tsp_relationship_gating());
+    }
+
+    /// The key-state policy defaults to resolving for oneself (Rev 3 §7.4.2)
+    /// with a day's re-verification threshold and a minute's rate limit, and
+    /// can be replaced wholesale — including turning the rules off for a
+    /// deployment where the VID implementation maintains key state itself.
+    #[test]
+    #[cfg(feature = "tsp")]
+    fn key_state_policy_defaults_and_overrides() {
+        let config = ATMConfig::builder().build().unwrap();
+        let policy = config.tsp_key_state_policy();
+        assert!(policy.self_resolving);
+        assert_eq!(
+            policy.reverification_threshold,
+            std::time::Duration::from_secs(60 * 60 * 24)
+        );
+        assert_eq!(
+            policy.resolution_rate_limit,
+            std::time::Duration::from_secs(60)
+        );
+
+        let config = ATMConfig::builder()
+            .with_tsp_key_state_policy(affinidi_tsp::KeyStatePolicy {
+                self_resolving: false,
+                reverification_threshold: std::time::Duration::from_secs(1),
+                resolution_rate_limit: std::time::Duration::from_secs(2),
+            })
+            .build()
+            .unwrap();
+        let policy = config.tsp_key_state_policy();
+        assert!(!policy.self_resolving);
+        assert_eq!(policy.reverification_threshold, std::time::Duration::from_secs(1));
+        assert_eq!(policy.resolution_rate_limit, std::time::Duration::from_secs(2));
     }
 
     /// Policy-rejected pickup messages are **deleted by default** — the
