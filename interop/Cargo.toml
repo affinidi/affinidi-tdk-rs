@@ -5,9 +5,11 @@
 # `cargo` invocations never build it and tsp_sdk's dependency graph never has to
 # co-resolve with the workspace.
 #
-# Prerequisite: a checkout of tsp_sdk 0.9.0-alpha2 at ../../tsp-sdk (i.e.
-# ~/devel/tsp-sdk, sibling of this repo), patched to build without the `resolve`
-# feature. See interop/README.md for the exact patches.
+# Prerequisite: a checkout of the reference's `rev3` branch at ../../tsp-sdk-rev3
+# (i.e. ~/devel/tsp-sdk-rev3, sibling of this repo). Unlike the published
+# 0.9.0-alpha2, it builds without the `resolve` feature as-is — no patches. It
+# does need a newer toolchain than the workspace pin, so run it with
+# `cargo +stable run`. See interop/README.md.
 [package]
 name = "tsp-interop"
 version = "0.0.0"
@@ -21,10 +23,11 @@ publish = false
 affinidi-tsp = { path = "../crates/messaging/affinidi-tsp", default-features = false }
 # The ToIP reference, built WITHOUT `resolve` (no didwebvh diamond) so it can
 # share one dependency graph with affinidi-tsp.
-tsp_sdk = { path = "../../tsp-sdk", default-features = false, features = ["serialize"] }
+tsp_sdk = { path = "../../tsp-sdk-rev3/tsp_sdk", default-features = false, features = ["serialize"] }
 ed25519-dalek = { version = "3", features = ["rand_core"] }
 x25519-dalek = { version = "3", features = ["static_secrets"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
+rand_10 = { package = "rand", version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 serde_json = "1"
 base64ct = { version = "1", features = ["alloc"] }
 url = "2"

@@ -80,7 +80,6 @@ fn main() {
         alice_id,
         bob_id,
         &alice.sign_sk,
-        &alice.enc_sk,
         &bob.enc_pk,
     )
     .expect("affinidi pack");
@@ -93,7 +92,6 @@ fn main() {
     let r_sealed = tsp_sdk::crypto::seal(
         &alice_vid,
         bob_vid.vid(),
-        None,
         Payload::Content(payload.as_slice()),
     )
     .expect("tsp_sdk seal");
@@ -111,7 +109,7 @@ fn main() {
         // tsp_sdk open needs receiver(private)=bob, sender(verified)=alice
         let mut buf = a_packed.bytes.clone();
         match tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf) {
-            Ok((_ncd, pl, ct, st)) => {
+            Ok((pl, ct, st)) => {
                 println!("  RESULT: OK  crypto={ct:?} sig={st:?}");
                 if let Payload::Content(c) = pl {
                     println!("  payload = {:?}", String::from_utf8_lossy(c));
@@ -129,11 +127,10 @@ fn main() {
         let sealed = tsp_sdk::crypto::seal(
             &alice_vid,
             bob_vid.vid(),
-            None,
             Payload::Content(payload.as_slice()),
         )
         .expect("tsp_sdk seal");
-        match atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk) {
+        match atsp::unpack(&sealed, &bob.enc_sk, &alice.sign_pk) {
             Ok(u) => {
                 println!("  RESULT: OK");
                 println!("  payload = {:?}", String::from_utf8_lossy(&u.payload));
@@ -153,7 +150,7 @@ fn main() {
         let mut buf = a_packed.bytes.clone();
         let ok = matches!(
             tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf),
-            Ok((_, Payload::Content(c), _, _)) if c == payload
+            Ok((Payload::Content(c), _, _)) if c == payload
         );
         results.push(("Direct A->R", ok));
     }
@@ -161,12 +158,11 @@ fn main() {
         let sealed = tsp_sdk::crypto::seal(
             &alice_vid,
             bob_vid.vid(),
-            None,
             Payload::Content(payload.as_slice()),
         )
         .expect("tsp_sdk seal");
         let ok = matches!(
-            atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk),
+            atsp::unpack(&sealed, &bob.enc_sk, &alice.sign_pk),
             Ok(u) if u.payload == payload
         );
         results.push(("Direct R->A", ok));
@@ -183,26 +179,24 @@ fn main() {
             alice_id,
             bob_id,
             &alice.sign_sk,
-            &alice.enc_sk,
             &bob.enc_pk,
         )
         .expect("affinidi pack 2MiB");
         let mut buf = packed.bytes.clone();
         let ar = matches!(
             tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf),
-            Ok((_, Payload::Content(c), _, _)) if c == big.as_slice()
+            Ok((Payload::Content(c), _, _)) if c == big.as_slice()
         );
         results.push(("Direct(2MiB) A->R", ar));
 
         let sealed = tsp_sdk::crypto::seal(
             &alice_vid,
             bob_vid.vid(),
-            None,
             Payload::Content(big.as_slice()),
         )
         .expect("tsp_sdk seal 2MiB");
         let ra = matches!(
-            atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk),
+            atsp::unpack(&sealed, &bob.enc_sk, &alice.sign_pk),
             Ok(u) if u.payload == big
         );
         results.push(("Direct(2MiB) R->A", ra));
@@ -212,7 +206,7 @@ fn main() {
     // byte strings as far as the framing is concerned.
     let route_strs = vec!["did:web:hop2.example".to_string(), bob_id.to_string()];
     let route_bytes: Vec<&[u8]> = route_strs.iter().map(|s| s.as_bytes()).collect();
-    let inner = b"opaque inner message";
+    let inner = b"opaque inner message!";  // quadlet-aligned: a real inner is a packed message
 
     // ================= ROUTED =================
     println!("\n========== ROUTED ==========");
@@ -226,13 +220,12 @@ fn main() {
             alice_id,
             bob_id,
             &alice.sign_sk,
-            &alice.enc_sk,
             &bob.enc_pk,
         )
         .expect("affinidi pack_routed");
         let mut buf = packed.bytes.clone();
         let ok = match tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf) {
-            Ok((_ncd, Payload::RoutedMessage(hops, body), ct, st)) => {
+            Ok((Payload::RoutedMessage(hops, body), ct, st)) => {
                 let hops_match = hops == route_bytes;
                 let body_match = body == inner;
                 println!(
@@ -240,7 +233,7 @@ fn main() {
                 );
                 hops_match && body_match
             }
-            Ok((_, other, _, _)) => {
+            Ok((other, _, _)) => {
                 println!("  RESULT: FAIL -> unexpected payload kind: {other:?}");
                 false
             }
@@ -258,11 +251,10 @@ fn main() {
         let sealed = tsp_sdk::crypto::seal(
             &alice_vid,
             bob_vid.vid(),
-            None,
             Payload::RoutedMessage(route_bytes.clone(), inner.as_slice()),
         )
         .expect("tsp_sdk seal routed");
-        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk) {
+        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.sign_pk) {
             Ok(u) => {
                 let kind_ok = u.message_type == MessageType::Routed;
                 let hops_match = u.hops == route_strs;
@@ -296,7 +288,6 @@ fn main() {
             alice_id,
             bob_id,
             &alice.sign_sk,
-            &alice.enc_sk,
             &bob.enc_pk,
         )
         .expect("inner pack");
@@ -305,18 +296,17 @@ fn main() {
             alice_id,
             bob_id,
             &alice.sign_sk,
-            &alice.enc_sk,
             &bob.enc_pk,
         )
         .expect("affinidi pack_nested");
         let mut buf = packed.bytes.clone();
         let ok = match tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf) {
-            Ok((_ncd, Payload::NestedMessage(body), ct, st)) => {
+            Ok((Payload::NestedMessage(body), ct, st)) => {
                 let body_match = body.as_ref() == inner_packed.bytes.as_slice();
                 println!("  RESULT: OK crypto={ct:?} sig={st:?} body_match={body_match}");
                 body_match
             }
-            Ok((_, other, _, _)) => {
+            Ok((other, _, _)) => {
                 println!("  RESULT: FAIL -> unexpected payload kind: {other:?}");
                 false
             }
@@ -335,11 +325,10 @@ fn main() {
         let sealed = tsp_sdk::crypto::seal(
             &alice_vid,
             bob_vid.vid(),
-            None,
             Payload::NestedMessage(nested_inner.as_slice()),
         )
         .expect("tsp_sdk seal nested");
-        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk) {
+        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.sign_pk) {
             Ok(u) => {
                 let kind_ok = u.message_type == MessageType::Nested;
                 let body_match = u.payload == nested_inner;
@@ -377,14 +366,21 @@ fn main() {
             alice_id,
             bob_id,
             &alice.sign_sk,
-            &alice.enc_sk,
             &bob.enc_pk,
         )
         .expect("affinidi pack invite");
         let mut buf = packed.bytes.clone();
         let ok = match tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf) {
-            Ok((_ncd, Payload::RequestRelationship { route, thread_id }, ct, st)) => {
-                let route_empty = route.is_none();
+            Ok((
+                Payload::RequestRelationship {
+                    reply_path,
+                    thread_id,
+                    ..
+                },
+                ct,
+                st,
+            )) => {
+                let route_empty = reply_path.is_empty();
                 // The reference's derived thread_id must equal affinidi's
                 // thread_digest for the same invite message.
                 let digest_match = thread_id == packed.thread_digest;
@@ -393,7 +389,7 @@ fn main() {
                 );
                 route_empty && digest_match
             }
-            Ok((_, other, _, _)) => {
+            Ok((other, _, _)) => {
                 println!("  RESULT: FAIL -> unexpected payload kind: {other:?}");
                 false
             }
@@ -412,27 +408,29 @@ fn main() {
         let sealed = tsp_sdk::crypto::seal_and_hash(
             &alice_vid,
             bob_vid.vid(),
-            None,
             Payload::RequestRelationship {
-                route: None,
                 thread_id: [0u8; 32],
+                form: tsp_sdk::definitions::RelationshipForm::Direct,
+                reply_path: Vec::new(),
             },
             Some(&mut ref_digest),
         )
         .expect("tsp_sdk seal invite");
-        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk) {
+        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.sign_pk) {
             Ok(u) => {
                 let is_control = u.message_type == MessageType::Control;
                 let control = u.control.as_ref();
+                // Rev 3 narrowed the nonce to 128 bits (spec 9.2, D9); Rev 2
+                // used 256. Asserting 32 here was the Rev 2 expectation.
                 let nonce_ok = control
                     .and_then(|c| c.nonce.as_ref())
-                    .map(|n| n.len() == 32)
+                    .map(|n| n.len() == 16)
                     .unwrap_or(false);
                 // affinidi's thread_digest must equal the reference's seal-time
                 // digest of the same message.
                 let digest_match = u.thread_digest == ref_digest;
                 println!(
-                    "  RESULT: OK kind={:?} nonce_32={nonce_ok} thread_digest_match={digest_match}",
+                    "  RESULT: OK kind={:?} nonce_128={nonce_ok} thread_digest_match={digest_match}",
                     u.message_type
                 );
                 is_control && nonce_ok && digest_match
@@ -465,18 +463,27 @@ fn main() {
             alice_id,
             bob_id,
             &alice.sign_sk,
-            &alice.enc_sk,
             &bob.enc_pk,
         )
         .expect("affinidi pack accept");
         let mut buf = packed.bytes.clone();
         let ok = match tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf) {
-            Ok((_ncd, Payload::AcceptRelationship { thread_id }, ct, st)) => {
+            Ok((
+                Payload::AcceptRelationship {
+                    thread_id,
+                    reply_thread_id,
+                    ..
+                },
+                ct,
+                st,
+            )) => {
+                // thread_id is the invite this accept answers, echoed verbatim.
                 let digest_match = thread_id == reply_digest;
+                let _ = reply_thread_id;
                 println!("  RESULT: OK crypto={ct:?} sig={st:?} reply_match={digest_match}");
                 digest_match
             }
-            Ok((_, other, _, _)) => {
+            Ok((other, _, _)) => {
                 println!("  RESULT: FAIL -> unexpected payload kind: {other:?}");
                 false
             }
@@ -494,13 +501,17 @@ fn main() {
         let sealed = tsp_sdk::crypto::seal(
             &alice_vid,
             bob_vid.vid(),
-            None,
             Payload::AcceptRelationship {
+                // the invite being answered, echoed verbatim
                 thread_id: reply_digest,
+                // the accept's own self-addressing digest; the reference fills
+                // this in during sealing, so the value here is a placeholder
+                reply_thread_id: [0u8; 32],
+                form: tsp_sdk::definitions::RelationshipForm::Direct,
             },
         )
         .expect("tsp_sdk seal accept");
-        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk) {
+        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.sign_pk) {
             Ok(u) => {
                 let reply_match = u.control.as_ref().and_then(|c| c.reply) == Some(reply_digest);
                 println!(
@@ -527,18 +538,17 @@ fn main() {
             alice_id,
             bob_id,
             &alice.sign_sk,
-            &alice.enc_sk,
             &bob.enc_pk,
         )
         .expect("affinidi pack cancel");
         let mut buf = packed.bytes.clone();
         let ok = match tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf) {
-            Ok((_ncd, Payload::CancelRelationship { thread_id }, ct, st)) => {
+            Ok((Payload::CancelRelationship { thread_id }, ct, st)) => {
                 let digest_match = thread_id == reply_digest;
                 println!("  RESULT: OK crypto={ct:?} sig={st:?} reply_match={digest_match}");
                 digest_match
             }
-            Ok((_, other, _, _)) => {
+            Ok((other, _, _)) => {
                 println!("  RESULT: FAIL -> unexpected payload kind: {other:?}");
                 false
             }
@@ -556,13 +566,12 @@ fn main() {
         let sealed = tsp_sdk::crypto::seal(
             &alice_vid,
             bob_vid.vid(),
-            None,
             Payload::CancelRelationship {
                 thread_id: reply_digest,
             },
         )
         .expect("tsp_sdk seal cancel");
-        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk) {
+        let ok = match atsp::unpack(&sealed, &bob.enc_sk, &alice.sign_pk) {
             Ok(u) => {
                 let reply_match = u.control.as_ref().and_then(|c| c.reply) == Some(reply_digest);
                 println!(
@@ -597,17 +606,16 @@ fn main() {
         let mut sealed = tsp_sdk::crypto::seal(
             &alice_vid,
             bob_vid.vid(),
-            None,
             Payload::Content(payload.as_slice()),
         )
         .expect("seal");
         match tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut sealed) {
-            Ok((_n, Payload::Content(c), ct, _st)) => {
+            Ok((Payload::Content(c), ct, _st)) => {
                 println!(
                     "  tsp_sdk self round-trip OK (crypto={ct:?}), payload={:?}",
                     String::from_utf8_lossy(c)
                 );
-                let _ = CryptoType::HpkeAuth;
+                let _ = CryptoType::HpkeBase;
             }
             Ok(_) => println!("  tsp_sdk self round-trip OK (non-content payload)"),
             Err(e) => println!("  tsp_sdk self round-trip FAIL -> {e:?}"),
@@ -617,7 +625,7 @@ fn main() {
     // ---- Diagnostic: affinidi self round-trip ----
     println!("--- Sanity: affinidi-tsp self round-trip with the same raw keys ---");
     {
-        match atsp::unpack(&a_packed.bytes, &bob.enc_sk, &alice.enc_pk, &alice.sign_pk) {
+        match atsp::unpack(&a_packed.bytes, &bob.enc_sk, &alice.sign_pk) {
             Ok(u) => println!(
                 "  affinidi self round-trip OK, payload={:?}",
                 String::from_utf8_lossy(&u.payload)
