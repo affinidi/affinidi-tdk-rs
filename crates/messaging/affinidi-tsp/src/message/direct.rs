@@ -587,13 +587,18 @@ fn decode_signature_frame(data: &[u8], pos: &mut usize) -> Result<[u8; SIG_LEN],
         ));
     }
 
-    // We resolve exactly one signing key per VID, so index 0 is the only one we
-    // can check a signature against. Rejecting any other index is not just
-    // tidiness: the index lives in the signature attachment, which the message
-    // signature does not cover, so ignoring it would let anyone flip those bits
-    // and produce a second byte sequence that verifies identically. The
-    // mediator keys message storage and idempotency on a digest of the whole
-    // wire bytes, so that would be a dedup bypass.
+    // §9.5 allows any index — it selects among a VID's signing keys, and §3
+    // leaves their order to the VID type — but we resolve exactly one key per
+    // VID, so index 0 is the only one we can check a signature against. This is
+    // therefore a limitation of our VID model rather than a rule of the spec,
+    // and it will need revisiting if we ever model multi-key VIDs.
+    //
+    // Rejecting rather than ignoring also matters on its own: the index lives
+    // in the signature attachment, which the message signature does not cover,
+    // so ignoring it would let anyone flip those bits and produce a second byte
+    // sequence that verifies identically. The mediator keys message storage and
+    // idempotency on a digest of the whole wire bytes, so that would be a dedup
+    // bypass.
     if index != SIG_INDEX {
         return Err(TspError::Verification(format!(
             "signature names key index {index}, but only index {SIG_INDEX} can be verified"
