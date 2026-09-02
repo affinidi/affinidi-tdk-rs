@@ -68,6 +68,10 @@ const SAID_DUMMY: u8 = 0x23;
 /// so the index is always 0; multi-key VIDs are a VID-type concern.
 const SIG_INDEX: u8 = 0;
 
+/// Encoded length of an empty padding field, `4BAA`: a three-byte header and no
+/// data.
+const EMPTY_PADDING_FIELD_LEN: usize = 3;
+
 /// Quadlet count of the `-K` indexed-signature group: one 66-byte signature.
 const SIG_GROUP_QUADLETS: u32 = 22;
 /// Quadlet count of the `-C` attachment group: the `-K` header plus its content.
@@ -153,13 +157,56 @@ fn encode_sender_field(sender_vid: &str, out: &mut Vec<u8>) {
     wire::encode_variable_data(wire::TSP_VID, sender_vid.as_bytes(), out);
 }
 
+/// How much padding to put in a message's padding field (Rev 3 §9.2).
+///
+/// Every payload layout carries the field whether or not it carries anything,
+/// so the choice is only what goes in it. Size survives encryption, nesting and
+/// routing alike — §11: "Timing, size, and frequency survive encryption,
+/// nesting, and routing" — and padding is the mechanism the specification gives
+/// for doing something about it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Padding {
+    /// No padding: the field is present but empty, encoded `4BAA`.
+    #[default]
+    None,
+    /// Pad the payload frame out to the next multiple of this many bytes.
+    ///
+    /// The form that does what padding is for: it replaces a continuum of
+    /// observable sizes with a handful of buckets, so an observer learns which
+    /// bucket a message fell into rather than how long it was.
+    ///
+    /// Sizing lands on a three-byte granularity, since CESR frames are
+    /// quadlet-aligned, so a bucket is rounded up to a multiple of three. It
+    /// sizes the *payload frame*; the message carries a constant overhead of
+    /// envelope, ciphertext expansion and signature on top of it.
+    ToMultipleOf(usize),
+    /// Exactly these bytes. The receiver discards them.
+    Exact(Vec<u8>),
+}
+
 /// Encode the padding field. Rev 3 ends every payload layout with one; an
 /// absent padding is the empty field `4BAA`.
+fn encode_padding(bytes: &[u8], out: &mut Vec<u8>) {
+    wire::encode_variable_data(wire::TSP_PLAINTEXT, bytes, out);
+}
+
+/// The bytes a [`Padding`] contributes, given how long the frame body would be
+/// without any padding field at all.
 ///
-/// Caller-supplied padding — which is what makes the field useful, by obscuring
-/// message size — is not yet surfaced through this crate's API.
-fn encode_padding(out: &mut Vec<u8>) {
-    wire::encode_variable_data(wire::TSP_PLAINTEXT, &[], out);
+/// The field itself costs `3 + ceil(len / 3) * 3` bytes — three for its header,
+/// then the data rounded up to a quadlet — so an empty field is not free, and a
+/// bucket has to be measured against the frame *including* it.
+fn padding_bytes(padding: &Padding, body_len_without_field: usize) -> Vec<u8> {
+    match padding {
+        Padding::None => Vec::new(),
+        Padding::Exact(bytes) => bytes.clone(),
+        Padding::ToMultipleOf(bucket) => {
+            let bucket = (*bucket).max(1).next_multiple_of(3);
+            let with_empty_field = body_len_without_field + 3;
+            let target = with_empty_field.next_multiple_of(bucket);
+            vec![0u8; target - with_empty_field]
+        }
+    }
 }
 
 /// Encode the `Referral_Field` (Rev 3 §9.2): a `-J` group holding `VID_new`
@@ -327,18 +374,25 @@ fn encode_payload_frame(
     sender_vid: &str,
     envelope_fields: &[u8],
     referral_signing_key: Option<&[u8; 32]>,
+    padding: &Padding,
 ) -> Result<(Vec<u8>, [u8; DIGEST_LEN]), TspError> {
     let mut sender_field = Vec::new();
     encode_sender_field(sender_vid, &mut sender_field);
 
     let mut frame_body = Vec::new();
     let mut said: Option<[u8; DIGEST_LEN]> = None;
+    // Where the layout put its padding field. Every layout has one, but not
+    // always last — `XSCS` and `XHOP` both carry content after it — so its size
+    // cannot be known when it is written. It goes in empty and is spliced to
+    // its real width once the rest of the body exists.
+    let padding_at;
 
     match kind {
         MessageType::Direct => {
             frame_body.extend_from_slice(&payload_marker::DIRECT);
             frame_body.extend_from_slice(&sender_field);
-            encode_padding(&mut frame_body);
+            padding_at = Some(frame_body.len());
+            encode_padding(&[], &mut frame_body);
             // §9.2.3: the upper-layer payload is a generic CESR stream holding
             // a Bytes primitive. TSP carries its content opaquely.
             let mut stream = Vec::new();
@@ -359,7 +413,8 @@ fn encode_payload_frame(
             } else {
                 wire::encode_hops(hops, &mut frame_body);
             }
-            encode_padding(&mut frame_body);
+            padding_at = Some(frame_body.len());
+            encode_padding(&[], &mut frame_body);
             // The inner message is self-framing and carried raw — Rev 3 drops
             // Rev 2's enclosing `B` var-data field. Every TSP message is
             // quadlet-aligned, so this keeps the frame aligned.
@@ -431,7 +486,8 @@ fn encode_payload_frame(
                     wire::encode_fixed_data(wire::TSP_NONCE, &nonce, &mut frame_body);
                     wire::encode_hops(&control.route, &mut frame_body);
                     encode_referral(referral.as_ref(), &mut frame_body);
-                    encode_padding(&mut frame_body);
+                    padding_at = Some(frame_body.len());
+                    encode_padding(&[], &mut frame_body);
                     said = Some(digest);
                 }
                 ControlType::RelationshipFormingAccept => {
@@ -449,7 +505,8 @@ fn encode_payload_frame(
                     frame_body.extend_from_slice(&payload_marker::ACCEPT);
                     frame_body.extend_from_slice(&before);
                     encode_digest(&digest, &mut frame_body);
-                    encode_padding(&mut frame_body);
+                    padding_at = Some(frame_body.len());
+                    encode_padding(&[], &mut frame_body);
                     said = Some(digest);
                 }
                 ControlType::RelationshipCancel => {
@@ -460,11 +517,22 @@ fn encode_payload_frame(
                     frame_body.extend_from_slice(&payload_marker::CANCEL);
                     frame_body.extend_from_slice(&sender_field);
                     encode_digest(&reference, &mut frame_body);
-                    encode_padding(&mut frame_body);
+                    padding_at = Some(frame_body.len());
+                    encode_padding(&[], &mut frame_body);
                     said = Some(reference);
                 }
             }
         }
+    }
+
+    // Widen the padding field. Safe to do after the digest: §7.2.1 excludes the
+    // padding field from the derivation, so this cannot change what was signed.
+    let padding_at = padding_at.expect("every payload layout emits a padding field");
+    let bytes = padding_bytes(padding, frame_body.len() - EMPTY_PADDING_FIELD_LEN);
+    if !bytes.is_empty() {
+        let mut field = Vec::new();
+        encode_padding(&bytes, &mut field);
+        frame_body.splice(padding_at..padding_at + EMPTY_PADDING_FIELD_LEN, field);
     }
 
     if !frame_body.len().is_multiple_of(3) {
@@ -822,6 +890,35 @@ pub fn pack_with_hops(
         sender_signing_key,
         receiver_encryption_key,
         None,
+        &Padding::None,
+    )
+}
+
+/// Like [`pack`], but pads the payload so the message's size carries less
+/// information (Rev 3 §9.2, §11).
+///
+/// A message's size survives encryption, nesting and routing alike, so an
+/// observer of any hop learns it whatever else is concealed.
+/// [`Padding::ToMultipleOf`] replaces a continuum of sizes with buckets.
+pub fn pack_padded(
+    payload: &[u8],
+    message_type: MessageType,
+    sender_vid: &str,
+    receiver_vid: &str,
+    sender_signing_key: &[u8; 32],
+    receiver_encryption_key: &[u8; 32],
+    padding: &Padding,
+) -> Result<PackedMessage, TspError> {
+    pack_inner(
+        payload,
+        message_type,
+        &[],
+        sender_vid,
+        receiver_vid,
+        sender_signing_key,
+        receiver_encryption_key,
+        None,
+        padding,
     )
 }
 
@@ -854,6 +951,7 @@ pub fn pack_referral_invite(
         sender_signing_key,
         receiver_encryption_key,
         Some(new_vid_signing_key),
+        &Padding::None,
     )
 }
 
@@ -867,6 +965,7 @@ fn pack_inner(
     sender_signing_key: &[u8; 32],
     receiver_encryption_key: &[u8; 32],
     referral_signing_key: Option<&[u8; 32]>,
+    padding: &Padding,
 ) -> Result<PackedMessage, TspError> {
     // 1. Envelope fields. These are the HPKE-Base AAD.
     let envelope = Envelope::new(message_type, sender_vid, receiver_vid);
@@ -880,6 +979,7 @@ fn pack_inner(
         sender_vid,
         &envelope_fields,
         referral_signing_key,
+        padding,
     )?;
 
     // 3. Seal. `aad` binds the ciphertext to the version and both VIDs;
@@ -1310,6 +1410,8 @@ mod tests {
             &fields,
 
             None,
+
+            &Padding::None,
         )
         .unwrap();
 
@@ -1350,6 +1452,7 @@ mod tests {
             "did:web:mallory",
             &fields,
             None,
+            &Padding::None,
         )
         .unwrap();
 
@@ -1680,6 +1783,8 @@ mod tests {
             &fields,
 
             None,
+
+            &Padding::None,
         )
         .unwrap();
 
@@ -1818,9 +1923,160 @@ mod tests {
             "did:example:alice",
             &fields,
             None,
+            &Padding::None,
         )
         .unwrap_err();
         assert!(matches!(err, TspError::Signing(_)), "got {err:?}");
         let _ = keys;
+    }
+
+    // ---- Rev 3 §9.2: the padding field ----
+
+    fn packed_len(payload: &[u8], padding: &Padding, keys: &TestKeys) -> usize {
+        pack_padded(
+            payload,
+            MessageType::Direct,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            padding,
+        )
+        .unwrap()
+        .bytes
+        .len()
+    }
+
+    /// Padding does what it is for: messages of different lengths come out the
+    /// same size, so an observer learns the bucket rather than the length.
+    ///
+    /// This is the property, and it is worth asserting rather than asserting
+    /// that some padding was added — padding that does not equalise sizes has
+    /// cost bytes and bought nothing.
+    #[test]
+    fn bucketed_padding_makes_different_payloads_the_same_size() {
+        let keys = gen_keys();
+        let bucket = Padding::ToMultipleOf(512);
+
+        let sizes: Vec<usize> = [1usize, 7, 50, 120, 200]
+            .iter()
+            .map(|n| packed_len(&vec![b'x'; *n], &bucket, &keys))
+            .collect();
+
+        assert!(
+            sizes.windows(2).all(|w| w[0] == w[1]),
+            "payloads inside one bucket must pack to one size, got {sizes:?}"
+        );
+
+        // A payload past the bucket lands in the next one, not the same one.
+        let bigger = packed_len(&vec![b'x'; 900], &bucket, &keys);
+        assert!(bigger > sizes[0], "a larger payload takes a larger bucket");
+    }
+
+    /// Without padding the size tracks the payload, which is the exposure the
+    /// field exists to remove.
+    #[test]
+    fn unpadded_messages_leak_their_payload_length() {
+        let keys = gen_keys();
+        let small = packed_len(b"x", &Padding::None, &keys);
+        let large = packed_len(&[b'x'; 200], &Padding::None, &keys);
+        assert!(large > small);
+    }
+
+    /// Padding is invisible to the receiver: it round-trips to the same payload
+    /// and is not appended to it.
+    #[test]
+    fn padding_does_not_reach_the_payload() {
+        let keys = gen_keys();
+        let payload = b"exactly this";
+        let packed = pack_padded(
+            payload,
+            MessageType::Direct,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            &Padding::ToMultipleOf(256),
+        )
+        .unwrap();
+
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        assert_eq!(unpacked.payload, payload);
+    }
+
+    /// §7.2.1 excludes the padding field from the digest derivation, so padding
+    /// an invite must not change its thread id. If it did, the two endpoints
+    /// would disagree about the relationship's identity whenever one padded.
+    #[test]
+    fn padding_does_not_change_a_control_messages_digest() {
+        let keys = gen_keys();
+        let invite = ControlMessage::invite();
+
+        let plain = pack_padded(
+            &invite.encode(),
+            MessageType::Control,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            &Padding::None,
+        )
+        .unwrap();
+        let padded = pack_padded(
+            &invite.encode(),
+            MessageType::Control,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            &Padding::ToMultipleOf(512),
+        )
+        .unwrap();
+
+        assert_eq!(plain.thread_digest, padded.thread_digest);
+        assert!(padded.bytes.len() > plain.bytes.len(), "padding was applied");
+
+        // And the padded one still verifies its own digest on receive.
+        unpack(&padded.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+    }
+
+    /// Exact padding is carried verbatim and still discarded on receive.
+    #[test]
+    fn exact_padding_is_carried_and_discarded() {
+        let keys = gen_keys();
+        let packed = pack_padded(
+            b"body",
+            MessageType::Direct,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            &Padding::Exact(vec![0xAB; 30]),
+        )
+        .unwrap();
+        let plain = packed_len(b"body", &Padding::None, &keys);
+
+        assert_eq!(packed.bytes.len(), plain + 30);
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        assert_eq!(unpacked.payload, b"body");
+    }
+
+    /// A bucket smaller than the message still produces a well-formed message —
+    /// there is simply nothing to add.
+    #[test]
+    fn a_bucket_smaller_than_the_message_is_harmless() {
+        let keys = gen_keys();
+        let packed = pack_padded(
+            &vec![b'x'; 500],
+            MessageType::Direct,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            &Padding::ToMultipleOf(16),
+        )
+        .unwrap();
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        assert_eq!(unpacked.payload.len(), 500);
     }
 }
