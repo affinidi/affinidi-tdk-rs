@@ -1,0 +1,809 @@
+<title>TSP Rev 3 Migration</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+  :root {
+    --paper:      #f3f5f8;
+    --surface:    #ffffff;
+    --surface-2:  #e9edf3;
+    --ink:        #151a21;
+    --ink-2:      #414b5a;
+    --ink-3:      #6d788a;
+    --rule:       #cfd6e0;
+    --rule-soft:  #e2e7ee;
+    --accent:     #3a5a9b;
+    --accent-2:   #274371;
+    --accent-wash:#e3eaf6;
+
+    --break:      #b4442e;
+    --break-wash: #f7e6e1;
+    --behave:     #8a6a1f;
+    --behave-wash:#f6eedb;
+    --safe:       #3f6f5c;
+    --safe-wash:  #e2eee9;
+
+    --display: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+    --body: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+    --measure: 68ch;
+    --page: 1180px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #111419;
+      --surface:    #171c24;
+      --surface-2:  #1e242e;
+      --ink:        #e5e9ef;
+      --ink-2:      #b3bcca;
+      --ink-3:      #838e9f;
+      --rule:       #2c333f;
+      --rule-soft:  #232933;
+      --accent:     #85a5de;
+      --accent-2:   #a8c0e9;
+      --accent-wash:#1b2434;
+
+      --break:      #e08670;
+      --break-wash: #2c1c19;
+      --behave:     #d3ac5b;
+      --behave-wash:#2a2417;
+      --safe:       #7cb69f;
+      --safe-wash:  #17241f;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #111419;
+    --surface:    #171c24;
+    --surface-2:  #1e242e;
+    --ink:        #e5e9ef;
+    --ink-2:      #b3bcca;
+    --ink-3:      #838e9f;
+    --rule:       #2c333f;
+    --rule-soft:  #232933;
+    --accent:     #85a5de;
+    --accent-2:   #a8c0e9;
+    --accent-wash:#1b2434;
+
+    --break:      #e08670;
+    --break-wash: #2c1c19;
+    --behave:     #d3ac5b;
+    --behave-wash:#2a2417;
+    --safe:       #7cb69f;
+    --safe-wash:  #17241f;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: var(--page);
+    margin: 0 auto;
+    padding: 0 28px 96px;
+  }
+
+  .col { max-width: var(--measure); }
+
+  /* ---------- masthead ---------- */
+
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    padding: 56px 0 22px;
+    margin-bottom: 34px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 18px;
+  }
+  h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: clamp(38px, 6vw, 62px);
+    line-height: 1.02;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+    margin: 0 0 18px;
+  }
+  .standfirst {
+    font-size: 20px;
+    line-height: 1.5;
+    color: var(--ink-2);
+    max-width: 62ch;
+    margin: 0;
+  }
+
+  /* ---------- status strip ---------- */
+
+  .status {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin: 34px 0 52px;
+  }
+  .status-cell {
+    background: var(--surface);
+    padding: 16px 18px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .status-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .status-value {
+    font-family: var(--display);
+    font-size: 19px;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+  .status-note {
+    font-size: 14px;
+    color: var(--ink-3);
+    line-height: 1.4;
+  }
+  .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+    vertical-align: 1px;
+  }
+  .dot-break { background: var(--break); }
+  .dot-behave { background: var(--behave); }
+  .dot-safe { background: var(--safe); }
+
+  /* ---------- sections ---------- */
+
+  section { margin-bottom: 60px; }
+
+  h2 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 4px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .h2-sub {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(25px, 3.2vw, 33px);
+    line-height: 1.16;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 18px 0 16px;
+  }
+  h3 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 21px;
+    line-height: 1.25;
+    margin: 34px 0 10px;
+    letter-spacing: -0.005em;
+  }
+  p { margin: 0 0 16px; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  code, .mono { font-family: var(--mono); }
+  p code, li code, td code, .status-note code {
+    font-size: 0.855em;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+
+  ul.plain { margin: 0 0 16px; padding-left: 20px; }
+  ul.plain li { margin-bottom: 9px; }
+
+  .lede {
+    border-left: 3px solid var(--break);
+    background: var(--break-wash);
+    padding: 20px 24px;
+    margin: 0 0 30px;
+  }
+  .lede p:last-child { margin-bottom: 0; }
+  .lede strong { color: var(--break); }
+
+  /* ---------- wire comparison ---------- */
+
+  .wire {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 22px;
+    margin: 26px 0 8px;
+  }
+  .wire-panel {
+    border: 1px solid var(--rule);
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+  }
+  .wire-head {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .wire-title {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 16px;
+  }
+  .wire-tag {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .wire-body {
+    padding: 16px;
+    overflow-x: auto;
+  }
+  pre {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.85;
+    margin: 0;
+    white-space: pre;
+    color: var(--ink-2);
+  }
+  pre .k { color: var(--ink); font-weight: 700; }
+  pre .gone { color: var(--break); text-decoration: line-through; text-decoration-thickness: 1px; }
+  pre .new { color: var(--break); font-weight: 700; }
+  pre .note { color: var(--ink-3); }
+
+  /* ---------- delta table ---------- */
+
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    background: var(--surface);
+    margin-top: 24px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 800px;
+    font-size: 15px;
+  }
+  thead th {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    text-align: left;
+    font-weight: 500;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--rule);
+    background: var(--surface-2);
+    white-space: nowrap;
+  }
+  tbody td {
+    padding: 13px 14px;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.where { font-family: var(--mono); font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+  td.area { font-family: var(--display); font-weight: 600; font-size: 16px; white-space: nowrap; }
+  td.sev { width: 4px; padding: 0; }
+  tr.b td.sev { background: var(--break); }
+  tr.h td.sev { background: var(--behave); }
+
+  .chip {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .chip-break { background: var(--break-wash); color: var(--break); }
+  .chip-behave { background: var(--behave-wash); color: var(--behave); }
+  .chip-safe { background: var(--safe-wash); color: var(--safe); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    margin-top: 14px;
+    font-size: 14px;
+    color: var(--ink-3);
+  }
+
+  /* ---------- phases ---------- */
+
+  .phase {
+    display: grid;
+    grid-template-columns: 92px 1fr;
+    gap: 26px;
+    padding: 26px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .phase:last-of-type { border-bottom: 1px solid var(--rule); }
+  .phase-num {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 46px;
+    line-height: 0.85;
+    color: var(--accent);
+    letter-spacing: -0.03em;
+  }
+  .phase-mirror {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--ink-3);
+    margin-top: 10px;
+    line-height: 1.5;
+  }
+  .phase h3 { margin: -4px 0 8px; }
+  .phase p, .phase ul { max-width: var(--measure); }
+  .phase p:last-child, .phase ul:last-child { margin-bottom: 0; }
+
+  .now {
+    border: 1px solid var(--safe);
+    background: var(--safe-wash);
+    padding: 22px 24px;
+    margin-top: 34px;
+  }
+  .now h3 { margin-top: 0; color: var(--safe); }
+  .now li::marker { color: var(--safe); }
+  .now ul { margin-bottom: 0; }
+
+  /* ---------- gaps grid ---------- */
+
+  .gaps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(238px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin-top: 22px;
+  }
+  .gap {
+    background: var(--surface);
+    padding: 15px 17px 17px;
+  }
+  .gap-name {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 5px;
+  }
+  .gap-note { font-size: 14px; color: var(--ink-3); line-height: 1.45; }
+
+  footer {
+    border-top: 2px solid var(--ink);
+    padding-top: 20px;
+    margin-top: 20px;
+    font-size: 14px;
+    color: var(--ink-3);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 28px;
+  }
+  footer .mono { font-size: 12.5px; }
+
+  @media (max-width: 620px) {
+    body { font-size: 16px; }
+    .phase { grid-template-columns: 1fr; gap: 10px; }
+    .phase-num { font-size: 34px; }
+    .phase-mirror { margin-top: 2px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="eyebrow">affinidi-tdk-rs &middot; crates/messaging/affinidi-tsp &middot; 1 September 2026</div>
+    <h1>TSP Rev 3 Migration</h1>
+    <p class="standfirst">Rev 3 of the Trust Spanning Protocol deletes the HPKE mode our crypto layer implements and rewrites every payload layout we emit. This is what changed, what it costs us, and the order to do it in.</p>
+  </header>
+
+  <div class="status">
+    <div class="status-cell">
+      <div class="status-label">Spec</div>
+      <div class="status-value"><span class="dot dot-behave"></span>PR #63 open</div>
+      <div class="status-note">trustoverip/tswg-tsp-specification &middot; +409/&minus;305 in <code>spec/spec.md</code> &middot; proposed as the R1 candidate. Test vectors deferred until after review.</div>
+    </div>
+    <div class="status-cell">
+      <div class="status-label">Reference SDK</div>
+      <div class="status-value"><span class="dot dot-break"></span>Already migrated</div>
+      <div class="status-note">openwallet-foundation-labs/tsp &middot; PRs #332, #333, #335, #336 merged to the <code>rev3</code> branch. Latest release <code>v0.9.0-alpha2</code> is still Rev 2.</div>
+    </div>
+    <div class="status-cell">
+      <div class="status-label">Us</div>
+      <div class="status-value"><span class="dot dot-break"></span>Rev 2, 14/14 interop</div>
+      <div class="status-note"><code>affinidi-tsp</code> 0.1.15 &middot; a byte-exact port of <code>tsp-sdk</code> 0.9.0-alpha2. Goes to 0/14 the day they cut a release.</div>
+    </div>
+  </div>
+
+  <section>
+    <h2>The finding</h2>
+    <div class="col">
+      <div class="lede">
+        <p><strong>Rev 3 removes HPKE-Auth, which is the only mode we implement.</strong> <code>src/crypto/hpke.rs</code> is <code>MODE_AUTH = 0x02</code> throughout — <code>auth_encap</code>, <code>auth_decap</code>, the two-DH KEM. The spec's first Rev 3 commit is <em>&ldquo;Remove HPKE_Auth mode and update&rdquo;</em>, and the normative text is now <em>&ldquo;TSP implementations MUST support HPKE-Base mode&rdquo;</em>. The <code>4G</code>–<code>9G</code> ciphertext codes are struck from the CESR table.</p>
+      </div>
+      <p>There is no partial-compatibility path. The envelope layout, the ciphertext code, the AAD and <code>info</code> inputs, and all five payload layouts change together, so a message is either wholly Rev 2 or wholly Rev 3. Everything below follows from that.</p>
+      <p>The mitigating fact is that the reference SDK has already done this work in the open across four well-documented PRs, and our crate is a deliberate port of theirs. Their sequencing is a tested migration order, not a guess — the plan at the bottom of this page mirrors it.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>What changed</h2>
+    <p class="h2-sub">The break is concentrated in the crypto binding and the CESR frame</p>
+
+    <div class="col">
+      <h3>Cryptography (&sect;8)</h3>
+      <ul class="plain">
+        <li>HPKE-Base only. Sender authentication moves entirely to the signature plus an AAD binding — the receiver no longer proves the sender held a KEM private key.</li>
+        <li><code>aad</code> becomes <code>CONCAT(TSP_Version, VID_sndr, VID_rcvr)</code>, passed as real AEAD associated data. <code>info</code> becomes the literal CESR code <code>YTSP-</code>. <code>TSP_Tag</code> is explicitly excluded from the AAD.</li>
+        <li>Ciphertext is <code>CONCAT(enc, ct)</code> with the AEAD tag inside <code>ct</code>.</li>
+        <li><code>Non_Confidential_Fields</code> is deleted throughout. A message is now entirely confidential or entirely signed-only, never mixed.</li>
+        <li>The ESSR sender-VID payload field is mandatory under Sealed Box and optional-but-must-match under HPKE-Base — but the <em>field</em> is always present, defaulting to the NULL VID <code>4BAA</code>.</li>
+        <li>Post-quantum is no longer a separate mode: HPKE-Base with KEM <code>X25519MLKEM768</code> (<code>0x647a</code>), chosen by the recipient VID's key type, on the same wire codes. ML-DSA-65 signatures added as <code>1AAQ</code> (provisional, pending CESR issue #14).</li>
+        <li>Sealed Box: the <code>crypto_box_seal_open</code> description is corrected to take the <em>receiver's</em> public key.</li>
+      </ul>
+
+      <h3>Encoding (&sect;9)</h3>
+      <ul class="plain">
+        <li>Long-form count codes change from <code>-0X#####</code> to <code>--X#####</code>. The <code>-0</code> form belonged to a superseded draft of the v2 tables.</li>
+        <li>The master code table moves from <code>--AAACAA</code> to <code>-_AAACAA</code>, genus AAA v2.00.</li>
+        <li>Every payload layout is rewritten to one shape: type code, then <code>VID_sndr | 4BAA</code>, then type-specific fields, then a mandatory <code>Padding_Field</code> last.</li>
+        <li><code>XRFI</code> collapses to a single layout that gains <code>Reply_Path</code> and <code>Referral_Field</code>; <code>XRFA</code> to a single layout with no referral; <code>XRFD</code> loses its nonce.</li>
+        <li>Nonce is 128-bit under code <code>0A</code>.</li>
+        <li>The Ed25519 signature moves inside an indexed group as <code>B#</code>, and the <code>-C</code>/<code>-K</code> counts become length-based.</li>
+        <li><code>TSP_Digest</code> becomes a true self-addressing identifier, computed over the message's own version, both VIDs and plaintext payload with the digest's own slot filled with <code>0x23</code> dummy bytes — excluding the <code>-E</code>/<code>-Z</code> tags, the padding field and <code>Signature_new</code>. Receivers recompute and reject on mismatch.</li>
+        <li><code>XSCS</code>/<code>XCTL</code> carry application data as a <code>-A##</code> generic CESR stream; non-native JSON, CBOR or MsgPak must sit inside <code>-H##</code> groups rather than being freely interleaved.</li>
+        <li>Canonical padding is mandatory — a receiver <strong>MUST</strong> reject non-canonical pad bits, since digests and signatures are taken over exact bytes.</li>
+      </ul>
+
+      <h3>Protocol behaviour (&sect;3, &sect;5, &sect;7)</h3>
+      <ul class="plain">
+        <li>A route's exit entry is the <em>destination's</em> VID, not the intermediary's — <code>VID_q1</code> became <code>VID_b1</code> throughout &sect;5.</li>
+        <li>New general invalid-message rule: discard silently, <strong>send no response</strong>, do not act. Within an established relationship, re-resolve the sender's VID and retry verification once. Rate-limit resolution. Suspend reliance on key state that conflicts rather than extends.</li>
+        <li>VIDs for public use MUST support rotation and provenance verification, and rotation authority MUST be separate from the signing key.</li>
+        <li>Key rotation preserves relationships — a relationship is a VID pair, not a key pair — and there is deliberately no TSP control message for rotation.</li>
+        <li>The <em>Route Info</em> section is deleted; a large, mostly informative Security &amp; Privacy section is added.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>Wire format</h2>
+    <p class="h2-sub">Every frame we write today changes shape</p>
+    <div class="wire">
+      <div class="wire-panel">
+        <div class="wire-head">
+          <span class="wire-title">What we emit now</span>
+          <span class="wire-tag">Rev 2</span>
+        </div>
+        <div class="wire-body">
+<pre><span class="k">-E</span>&lt;count&gt;            <span class="note">count covers header only</span>
+  YTSP &lt;ver&gt;
+  <span class="k">B</span>  sender-VID
+  <span class="k">B</span>  receiver-VID
+  <span class="gone">X 00 00</span>            <span class="note">XAAA marker</span>
+<span class="k">G</span>  ct &#8214; tag &#8214; enc      <span class="note">HPKE-Auth</span>
+<span class="k">-C</span>22 <span class="k">-K</span>22 <span class="k">B</span> sig(64)
+
+<span class="note">sealed plaintext frame:</span>
+<span class="k">-Z</span>&lt;count&gt; XSCS <span class="k">B</span> body
+
+<span class="note">info = the -E frame
+aad  = "" (empty)</span></pre>
+        </div>
+      </div>
+
+      <div class="wire-panel">
+        <div class="wire-head">
+          <span class="wire-title">What Rev 3 requires</span>
+          <span class="wire-tag">Rev 3</span>
+        </div>
+        <div class="wire-body">
+<pre><span class="k">-E</span>&lt;count&gt;            <span class="new">count now covers ciphertext</span>
+  YTSP-AAB
+  <span class="k">4B</span> sender-VID
+  <span class="k">4B</span> receiver-VID <span class="new">| 4BAA</span>
+                     <span class="new">(XAAA deleted)</span>
+<span class="new">4F</span> enc &#8214; ct           <span class="note">HPKE-Base, tag in ct</span>
+<span class="k">-C</span><span class="new">23</span> <span class="k">-K</span>22 <span class="new">B0</span> sig(64)   <span class="note">indexed</span>
+
+<span class="note">sealed plaintext frame:</span>
+<span class="k">-Z</span>&lt;count&gt; XSCS <span class="new">VID_sndr|4BAA</span>
+        <span class="new">Padding_Field</span> <span class="k">-A</span>&lt;count&gt; body
+
+<span class="note">info = "YTSP-"
+aad  = version &#8214; VID_sndr &#8214; VID_rcvr</span></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Delta against our code</h2>
+    <p class="h2-sub">Nothing in <code style="font-size:0.8em">affinidi-tsp</code> survives untouched</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Area</th>
+            <th>Where</th>
+            <th>Change</th>
+            <th>Kind</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="b">
+            <td class="sev"></td>
+            <td class="area">HPKE mode</td>
+            <td class="where">crypto/hpke.rs</td>
+            <td>Base mode (<code>0x00</code>), single ephemeral DH, <code>kem_context = enc&#8214;pkRm</code>. Recommend dropping the hand-rolled HPKE for the <code>hpke</code> 0.14 crate as the reference did — we need XWing for PQ regardless.</td>
+            <td><span class="chip chip-break">Breaking</span></td>
+          </tr>
+          <tr class="b">
+            <td class="sev"></td>
+            <td class="area">AAD / info</td>
+            <td class="where">message/direct.rs:376</td>
+            <td>Today <code>info</code> is the envelope frame and the AAD is <em>empty</em>. Both flip: <code>info = "YTSP-"</code>, <code>aad = version&#8214;VID_sndr&#8214;VID_rcvr</code>.</td>
+            <td><span class="chip chip-break">Breaking</span></td>
+          </tr>
+          <tr class="b">
+            <td class="sev"></td>
+            <td class="area">Ciphertext</td>
+            <td class="where">direct.rs, wire.rs</td>
+            <td>Layout <code>ct&#8214;tag&#8214;enc</code> becomes <code>enc&#8214;ct</code>; code <code>G</code> (6) becomes <code>F</code> (5). <code>TSP_HPKEAUTH_CIPHERTEXT</code> is retired.</td>
+            <td><span class="chip chip-break">Breaking</span></td>
+          </tr>
+          <tr class="b">
+            <td class="sev"></td>
+            <td class="area">Envelope</td>
+            <td class="where">message/envelope.rs</td>
+            <td>Drop the trailing <code>X 00 00</code> (<code>XAAA</code>) marker. The <code>-E</code> count now covers the ciphertext, so it can only be written after sealing — the reference added a <code>finalize_envelope_frame</code> for this. Our <code>header_len == AAD length</code> assumption dies with it.</td>
+            <td><span class="chip chip-break">Breaking</span></td>
+          </tr>
+          <tr class="b">
+            <td class="sev"></td>
+            <td class="area">Payload layouts</td>
+            <td class="where">direct.rs<br>encode_payload_frame</td>
+            <td>All five rewritten: emit <code>VID_sndr</code> (at minimum <code>4BAA</code>) first, <code>Padding_Field</code> last, wrap <code>XSCS</code> bodies in <code>-A##</code>. Our <code>XRFI</code> currently emits <code>hops, nonce, empty-VID</code> — wrong fields in the wrong order, and missing the digest.</td>
+            <td><span class="chip chip-break">Breaking</span></td>
+          </tr>
+          <tr class="b">
+            <td class="sev"></td>
+            <td class="area">Hop list</td>
+            <td class="where">wire.rs:encode_hops</td>
+            <td>The count is the <em>byte length</em>, not the number of VIDs.</td>
+            <td><span class="chip chip-break">Breaking</span></td>
+          </tr>
+          <tr class="b">
+            <td class="sev"></td>
+            <td class="area">Nested inner</td>
+            <td class="where">direct.rs</td>
+            <td>Inner message carried raw and 3-byte aligned, not wrapped in a <code>B</code> var-data field.</td>
+            <td><span class="chip chip-break">Breaking</span></td>
+          </tr>
+          <tr class="b">
+            <td class="sev"></td>
+            <td class="area">Long counts</td>
+            <td class="where">wire.rs<br>encode_count / decode_count</td>
+            <td><code>-0</code> becomes <code>--</code>. Two lines, and invisible to a round-trip test because encoder and decoder agree either way — pin the bytes. Our 2&nbsp;MiB interop case exercises this path.</td>
+            <td><span class="chip chip-break">Breaking</span></td>
+          </tr>
+          <tr class="b">
+            <td class="sev"></td>
+            <td class="area">Nonce</td>
+            <td class="where">message/control.rs</td>
+            <td>32 bytes under <code>A</code> becomes 16 bytes under <code>0A</code>. <code>DIGEST_LEN</code> is currently shared between nonce and digest — split it.</td>
+            <td><span class="chip chip-break">Breaking</span></td>
+          </tr>
+          <tr class="b">
+            <td class="sev"></td>
+            <td class="area">Thread digest</td>
+            <td class="where">direct.rs, relationship.rs<br>public API</td>
+            <td>Ours is <code>SHA256(plaintext payload frame)</code>, computed out of band and never placed on the wire. Rev 3 wants the embedded SAID, verified on receive. Changes the <code>PackedMessage</code> / <code>UnpackedMessage</code> public fields and the relationship FSM.</td>
+            <td><span class="chip chip-break">Breaking</span></td>
+          </tr>
+          <tr class="b">
+            <td class="sev"></td>
+            <td class="area">Signature</td>
+            <td class="where">direct.rs:300</td>
+            <td>Indexed <code>B#</code> code; <code>-C</code> count 22 becomes 23. Also: an unparseable signature must be a <em>rejection</em> — the reference found a real hole where corrupting the attachment code bypassed verification entirely. Check our decoder for the same shape.</td>
+            <td><span class="chip chip-break">Breaking</span></td>
+          </tr>
+          <tr class="h">
+            <td class="sev"></td>
+            <td class="area">Canonicality</td>
+            <td class="where">wire.rs<br>decode_variable_data_range</td>
+            <td>We skip lead bytes without checking they are zero. Rev 3 requires rejection. <strong>Correct under Rev 2 as well</strong> — can land now.</td>
+            <td><span class="chip chip-behave">Behavioural</span></td>
+          </tr>
+          <tr class="h">
+            <td class="sev"></td>
+            <td class="area">Version</td>
+            <td class="where">wire.rs:decode_version</td>
+            <td>MAJOR must gate processability; separate <code>NotTsp</code> from <code>VersionMismatch</code>.</td>
+            <td><span class="chip chip-behave">Behavioural</span></td>
+          </tr>
+          <tr class="h">
+            <td class="sev"></td>
+            <td class="area">Key state</td>
+            <td class="where">vid/resolver.rs</td>
+            <td><code>VidResolver</code> exposes only <code>resolve()</code>. Needs invalidate/refresh, a re-verification threshold, and per-peer resolution rate limiting.</td>
+            <td><span class="chip chip-behave">Behavioural</span></td>
+          </tr>
+          <tr class="h">
+            <td class="sev"></td>
+            <td class="area">Mediator errors</td>
+            <td class="where">mediator/src/messages<br>/inbound.rs</td>
+            <td>We return <code>BAD_REQUEST</code> / <code>NOT_FOUND</code> / <code>FORBIDDEN</code> on TSP failures. &sect;3.7 says send no response; the reference changed its intermediary to return the same acknowledgement whatever happens and log the reason locally. Distinct codes tell an unauthenticated sender which check failed — the same anti-probe reasoning we applied to <code>explicit_allow</code>. <strong>Correct under Rev 2 as well</strong>.</td>
+            <td><span class="chip chip-behave">Behavioural</span></td>
+          </tr>
+          <tr class="h">
+            <td class="sev"></td>
+            <td class="area">Route exit</td>
+            <td class="where">message/routed.rs<br>mediator forwarding</td>
+            <td>Hop lists must end in the destination's VID. Our <code>next_hop_parts</code> may already be agnostic — needs checking rather than assuming.</td>
+            <td><span class="chip chip-behave">Behavioural</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <span><span class="chip chip-break">Breaking</span> &nbsp;changes bytes on the wire</span>
+      <span><span class="chip chip-behave">Behavioural</span> &nbsp;changes what we accept or answer</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Not built at all</h2>
+    <p class="h2-sub">Newly required, or newly specified, and absent from our crate</p>
+    <div class="gaps">
+      <div class="gap">
+        <div class="gap-name">Signed-only messages</div>
+        <div class="gap-note">Non-confidential frames with no ciphertext. <code>-S##</code> is gone; these are just <code>-E</code> frames without a ciphertext field.</div>
+      </div>
+      <div class="gap">
+        <div class="gap-name">XCTL</div>
+        <div class="gap-note">Generic control payload carrying an opaque upper-layer stream.</div>
+      </div>
+      <div class="gap">
+        <div class="gap-name">XPAD &amp; padding</div>
+        <div class="gap-note">Padding messages and the caller-visible padding field that every layout now ends with.</div>
+      </div>
+      <div class="gap">
+        <div class="gap-name">Reply_Path</div>
+        <div class="gap-note">Routed relationship forming. <em>The reference has not built this either</em> — it is the next piece of work on their side.</div>
+      </div>
+      <div class="gap">
+        <div class="gap-name">Referral_Field</div>
+        <div class="gap-note">A new VID plus its own signature, introduced over an existing relationship.</div>
+      </div>
+      <div class="gap">
+        <div class="gap-name">Sealed Box</div>
+        <div class="gap-note">Libsodium anonymous sealed box, code <code>4C</code>. The spec says implementors SHOULD migrate away from it; low priority.</div>
+      </div>
+      <div class="gap">
+        <div class="gap-name">X25519MLKEM768</div>
+        <div class="gap-note">PQ/T hybrid KEM <code>0x647a</code>. Realistically arrives with the <code>hpke</code> crate rather than by hand.</div>
+      </div>
+      <div class="gap">
+        <div class="gap-name">ML-DSA-65</div>
+        <div class="gap-note">Post-quantum signatures under the provisional code <code>1AAQ</code>.</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Plan</h2>
+    <p class="h2-sub">Four phases on a long-lived branch, mirroring the reference's tested order</p>
+
+    <div class="col">
+      <p>The spec PR is still open, test vectors are explicitly deferred until after review, and <code>1AAQ</code> is provisional — so byte-level details can still move. Keep <code>main</code> on Rev 2 until <code>tsp-sdk</code> cuts a Rev 3 release, and do the work on a <code>rev3</code> branch that tracks theirs.</p>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">01</div>
+      <div>
+        <h3>CESR wire format</h3>
+        <p>Envelope, payload and signature encoding. Long-form count codes, <code>XAAA</code> removal, the single <code>-E</code> frame covering ciphertext, the unified payload layouts with <code>VID_sndr</code> first and padding last, byte-length hop counts, the indexed signature code, mandatory signature attachment, canonical padding enforcement, receive-side size limits.</p>
+        <div class="phase-mirror">mirrors tsp-sdk #332</div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">02</div>
+      <div>
+        <h3>Crypto</h3>
+        <p>HPKE-Base with the real AAD and <code>YTSP-</code> info, the <code>enc&#8214;ct</code> layout and the <code>4F</code> code; removal of the non-confidential data field; the self-referencing digest replacing our out-of-band payload hash. Swap the hand-rolled HPKE for the <code>hpke</code> crate here, and bring over known-answer tests against the RFC 9180 A.2 and draft-ietf-hpke-pq vectors — the reference used them to confirm the tag-inside-<code>ct</code> convention, and they are the cheapest possible check that we got the binding right.</p>
+        <div class="phase-mirror">mirrors tsp-sdk #333</div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">03</div>
+      <div>
+        <h3>Protocol behaviour</h3>
+        <p>Relationship gating, the RFI race tiebreak, RFD semantics, key-state staleness with re-resolve-and-retry plus rate limiting, the route exit as the destination's VID, and silent discard with no response. This phase touches the mediator and the SDK, not just the crate.</p>
+        <div class="phase-mirror">mirrors tsp-sdk #335</div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">04</div>
+      <div>
+        <h3>Spec resync</h3>
+        <p>Reconcile against wherever PR&nbsp;#63 has landed by then, re-point the interop harness at the released <code>tsp-sdk</code>, and get back to a green matrix in both directions across all four message types. Update <code>docs/tsp/interop.md</code>, which currently claims full interoperability against 0.9.0-alpha2.</p>
+        <div class="phase-mirror">mirrors tsp-sdk #336</div>
+      </div>
+    </div>
+
+    <div class="now">
+      <h3>Two things worth landing on <code>main</code> now</h3>
+      <p>Both are correct under Rev 2 as well as Rev 3, so neither has to wait for the branch:</p>
+      <ul class="plain">
+        <li><strong>Uniform mediator responses on TSP failure.</strong> Return one acknowledgement whatever went wrong and log the reason locally, instead of three distinguishable status codes.</li>
+        <li><strong>Canonical padding rejection in the decoder.</strong> Reject non-zero lead bytes rather than skipping them.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>Blast radius</h2>
+    <div class="col">
+      <p>The crate is consumed by the mediator (<code>handlers/authenticate/tsp.rs</code>, <code>message_inbound.rs</code>, <code>websocket.rs</code>, <code>messages/inbound.rs</code>), the SDK (<code>protocols/tsp.rs</code>, <code>tsp_wire.rs</code>, <code>tsp_auth.rs</code>), the <code>affinidi-tdk</code> facade, the DIDComm v1 adapter, and the <code>test-mediator</code> TSP test suite.</p>
+      <p>Most of the change is internal to <code>affinidi-tsp</code>, so consumers largely see stable signatures — with one exception that matters: the thread digest is a public field on <code>PackedMessage</code> and <code>UnpackedMessage</code> and is what the relationship FSM correlates on. Changing it from an out-of-band hash to a verified on-wire SAID is a source-visible change.</p>
+      <p>Per ADR 0003 and the version-collision trap we have hit repeatedly: run <code>check-workspace-duplicates.sh</code> on the version bumps, and note that a behavioural change to send/receive semantics is breaking for consumers even where signatures hold — R3.6 applies, and this one is breaking on the wire as well.</p>
+    </div>
+  </section>
+
+  <footer>
+    <span class="mono">spec: trustoverip/tswg-tsp-specification#63</span>
+    <span class="mono">reference: openwallet-foundation-labs/tsp @ rev3</span>
+    <span class="mono">affinidi-tsp 0.1.15</span>
+  </footer>
+
+</div>

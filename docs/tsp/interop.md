@@ -1,5 +1,16 @@
 # TSP interop status: `affinidi-tsp` vs the ToIP reference
 
+> **On the `rev3` branch this document describes the past, not the present.**
+>
+> This branch implements TSP spec **Rev 3**, which is wire-incompatible with
+> Rev 2 in both directions. The released reference, `tsp-sdk` 0.9.0-alpha2, is
+> still Rev 2, so the interop harness below **does not pass on this branch** and
+> is not expected to until the reference cuts a Rev 3 release from its own
+> `rev3` branch. Re-pointing the harness at that release is the last phase of
+> the migration; see `docs/tsp/rev3-migration.html`.
+>
+> Everything below describes the Rev 2 state on `main`.
+
 **Status (as of `affinidi-tsp` 0.1.10): FULLY INTEROPERABLE.**
 
 `affinidi-tsp` wire-interoperates with the official ToIP reference,
