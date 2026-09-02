@@ -427,6 +427,18 @@ async fn advance_state(
     Ok(next)
 }
 
+/// What an inbound control message did to relationship state, and what it asks
+/// of this endpoint next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IncomingControl {
+    /// The relationship state after applying the message.
+    pub state: RelationshipState,
+    /// The peer cancelled a relationship we held in both directions, so Rev 3
+    /// §7.3 asks us to answer with a cancellation of our own before forgetting
+    /// it. False for every other control message.
+    pub reply_expected: bool,
+}
+
 /// TSP protocol operations, obtained from [`crate::ATM::tsp`].
 pub struct TspOps<'a> {
     pub(crate) atm: &'a ATM,
@@ -847,13 +859,28 @@ impl TspOps<'_> {
         profile: &Arc<ATMProfile>,
         peer_did: &str,
         control: &ControlMessage,
-    ) -> Result<RelationshipState, ATMError> {
+    ) -> Result<IncomingControl, ATMError> {
         let (our_did, _) = profile.dids()?;
         let event = match control.control_type {
             ControlType::RelationshipFormingInvite => RelationshipEvent::ReceiveInvite,
             ControlType::RelationshipFormingAccept => RelationshipEvent::ReceiveAccept,
             ControlType::RelationshipCancel => RelationshipEvent::ReceiveCancel,
         };
+
+        // Rev 3 §7.3 gives a cancellation three cases, distinguished by what we
+        // hold. One naming a relationship we do not hold at all is ignored
+        // rather than answered, so it cannot be used to probe which
+        // relationships exist. The other two are handled by the caller, which
+        // reads `IncomingControl::reply_expected`.
+        let prior = self.relationship_store().get(our_did, peer_did).await?;
+        if control.control_type == ControlType::RelationshipCancel
+            && prior == RelationshipState::None
+        {
+            return Err(ATMError::MsgReceiveError(format!(
+                "TSP cancellation from {peer_did} discarded: no relationship with {our_did}"
+            )));
+        }
+
         let new_state = advance_state(self.relationship_store(), our_did, peer_did, event).await?;
         // If the peer advertised its mediator in the control's route (a routed
         // invite/accept), cache it so `send_to` can route to this peer on a
@@ -871,7 +898,17 @@ impl TspOps<'_> {
             self.learn_tsp_supported(our_did, peer_did, CapabilitySource::Relationship)
                 .await?;
         }
-        Ok(new_state)
+
+        // §7.3: a cancellation of a relationship we held in both directions is
+        // answered with a cancellation of our own before we forget it. Sending
+        // it is the caller's business, so report it rather than doing it here.
+        let reply_expected = control.control_type == ControlType::RelationshipCancel
+            && prior == RelationshipState::Bidirectional;
+
+        Ok(IncomingControl {
+            state: new_state,
+            reply_expected,
+        })
     }
 
     // ── Protocol selection / capability ───────────────────────────────────────
@@ -1211,6 +1248,28 @@ impl TspOps<'_> {
             &sender.signing_key,
         )
         .map_err(|e| ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}")))?;
+
+        // Rev 3 §7.2.2: an application message from a VID we hold no
+        // relationship with is dropped. "It is not permissible that one
+        // endpoint which has learned a VID of the other simply starts with an
+        // application level message without first having an exchange of TSP
+        // control messages."
+        //
+        // Any recorded relationship admits one, not only a completed one:
+        // receiving an invite records the inbound half, and §3.6 lets a sender
+        // pack user data alongside its invite rather than wait a round trip.
+        if self.atm.inner.config.tsp_relationship_gating() {
+            let state = self
+                .relationship_store()
+                .get(profile_did, &unpacked.sender)
+                .await?;
+            if !state.admits_application_message() {
+                return Err(ATMError::MsgReceiveError(format!(
+                    "TSP message from {} discarded: no relationship with {profile_did}",
+                    unpacked.sender
+                )));
+            }
+        }
 
         // Observing an authenticated inbound TSP message confirms the sender's
         // agent speaks TSP (no-op unless a TSP policy is set).
@@ -2055,5 +2114,91 @@ mod tests {
             ],
         };
         assert!(!disclosure_advertises_tsp(&d));
+    }
+
+    // ---- Rev 3 §7.2.2 / §7.3, at the SDK layer ----
+
+    /// §7.2.2 gates on *any* recorded relationship, not only a completed one.
+    /// An invite records the inbound half, and §3.6 lets a sender pack user
+    /// data alongside its invite rather than wait a round trip, so gating on
+    /// `Bidirectional` alone would drop messages the specification expects.
+    #[tokio::test]
+    async fn gating_admits_any_recorded_relationship() {
+        let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+
+        // A stranger is refused.
+        assert!(
+            !store
+                .get(BOB, ALICE)
+                .await
+                .unwrap()
+                .admits_application_message()
+        );
+
+        // Receiving an invite is enough.
+        advance_state(&store, BOB, ALICE, RelationshipEvent::ReceiveInvite)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .get(BOB, ALICE)
+                .await
+                .unwrap()
+                .admits_application_message()
+        );
+
+        // As is having sent one.
+        let store2: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+        advance_state(&store2, ALICE, BOB, RelationshipEvent::SendInvite)
+            .await
+            .unwrap();
+        assert!(
+            store2
+                .get(ALICE, BOB)
+                .await
+                .unwrap()
+                .admits_application_message()
+        );
+    }
+
+    /// §7.3: a cancellation removes a half-formed relationship, and the state
+    /// machine has a transition for it — an inviter may withdraw before being
+    /// answered.
+    #[tokio::test]
+    async fn a_cancellation_removes_a_half_formed_relationship() {
+        let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+
+        advance_state(&store, BOB, ALICE, RelationshipEvent::ReceiveInvite)
+            .await
+            .unwrap();
+        let next = advance_state(&store, BOB, ALICE, RelationshipEvent::ReceiveCancel)
+            .await
+            .unwrap();
+
+        assert_eq!(next, RelationshipState::None);
+        assert_eq!(store.get(BOB, ALICE).await.unwrap(), RelationshipState::None);
+    }
+
+    /// §7.3: the reply expectation follows the state held *before* the
+    /// cancellation — bidirectional is answered, one-sided is not.
+    #[tokio::test]
+    async fn only_a_bidirectional_cancellation_expects_a_reply() {
+        for (prior, expected) in [
+            (RelationshipState::Bidirectional, true),
+            (RelationshipState::InviteReceived, false),
+            (RelationshipState::Pending, false),
+        ] {
+            let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+            store.set(BOB, ALICE, prior).await.unwrap();
+
+            let held = store.get(BOB, ALICE).await.unwrap();
+            let reply_expected = held == RelationshipState::Bidirectional;
+            assert_eq!(reply_expected, expected, "prior state {prior:?}");
+
+            advance_state(&store, BOB, ALICE, RelationshipEvent::ReceiveCancel)
+                .await
+                .unwrap();
+            assert_eq!(store.get(BOB, ALICE).await.unwrap(), RelationshipState::None);
+        }
     }
 }

@@ -230,7 +230,7 @@ async fn completed_relationship_marks_peers_tsp_supported() {
         .record_incoming_control(&alice.profile, &bob.did, &accept)
         .await
         .expect("alice records the accept");
-    assert_eq!(alice_final, RelationshipState::Bidirectional);
+    assert_eq!(alice_final.state, RelationshipState::Bidirectional);
     assert!(
         matches!(
             env.atm

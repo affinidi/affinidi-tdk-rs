@@ -189,6 +189,12 @@ pub struct ATMConfig {
     /// injected [`clock`](Self::clock).
     #[cfg(feature = "tsp")]
     pub(crate) tsp_capability_ttl: Option<Duration>,
+    /// Whether inbound TSP application messages are gated on an existing
+    /// relationship (Rev 3 §7.2.2). Defaults to true, which is what the
+    /// specification asks of an endpoint; a node that is not an endpoint in
+    /// that sense — an intermediary relaying for others — sets it false.
+    #[cfg(feature = "tsp")]
+    pub(crate) tsp_relationship_gating: bool,
 }
 
 impl ATMConfig {
@@ -251,6 +257,13 @@ impl ATMConfig {
         self.tsp_capability_ttl
     }
 
+    /// Whether inbound TSP application messages are gated on an existing
+    /// relationship (spec Rev 3 §7.2.2).
+    #[cfg(feature = "tsp")]
+    pub(crate) fn tsp_relationship_gating(&self) -> bool {
+        self.tsp_relationship_gating
+    }
+
     /// Returns a builder for `ATMConfig`
     /// Example:
     /// ```
@@ -296,6 +309,8 @@ pub struct ATMConfigBuilder {
     tsp_policy: crate::protocols::tsp::TspPolicy,
     #[cfg(feature = "tsp")]
     tsp_capability_ttl: Option<Duration>,
+    #[cfg(feature = "tsp")]
+    tsp_relationship_gating: bool,
 }
 
 impl Default for ATMConfigBuilder {
@@ -320,6 +335,7 @@ impl Default for ATMConfigBuilder {
             tsp_policy: crate::protocols::tsp::TspPolicy::Off,
             #[cfg(feature = "tsp")]
             tsp_capability_ttl: None,
+            tsp_relationship_gating: true,
         }
     }
 }
@@ -536,6 +552,19 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// Whether inbound TSP application messages are gated on an existing
+    /// relationship (Rev 3 §7.2.2).
+    ///
+    /// Defaults to `true`, which is what the specification asks of an endpoint.
+    /// Set `false` for a node that is not an endpoint in that sense — an
+    /// intermediary, which by §5 handles messages for relationships it is not a
+    /// party to and would otherwise drop all of them.
+    #[cfg(feature = "tsp")]
+    pub fn with_tsp_relationship_gating(mut self, gated: bool) -> Self {
+        self.tsp_relationship_gating = gated;
+        self
+    }
+
     pub fn build(self) -> Result<ATMConfig, ATMError> {
         // Process any custom SSL certificates
         let mut certs = vec![];
@@ -606,6 +635,7 @@ impl ATMConfigBuilder {
             tsp_policy: self.tsp_policy,
             #[cfg(feature = "tsp")]
             tsp_capability_ttl: self.tsp_capability_ttl,
+            tsp_relationship_gating: self.tsp_relationship_gating,
         })
     }
 }
