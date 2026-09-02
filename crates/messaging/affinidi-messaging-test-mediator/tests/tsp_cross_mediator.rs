@@ -215,3 +215,94 @@ async fn routed_invite_teaches_peer_mediator() {
         "bob learned alice's mediator from the routed invite"
     );
 }
+
+/// Rev 3 §7.2.4, relationship forming over a routed path: an invite that
+/// carries a `Reply_Path` obliges the responder to send its accept back over
+/// that path — "If the `Reply_Path` is present, then `B` MUST use the routed
+/// path specified by `Reply_Path` to send the `TSP_RFA` message".
+///
+/// Sending the accept directly is not merely a missed optimisation. It
+/// discloses to the inviter, and to anyone watching the wire, an endpoint that
+/// the route exists to keep out of view. So this asserts the accept arrives and
+/// completes the relationship having gone through the mediator as a routed
+/// message, rather than as a direct one.
+#[tokio::test]
+async fn an_accept_travels_the_reply_path_the_invite_supplied() {
+    let env = TestEnvironment::spawn_with_tsp_policy(TspPolicy::Preferred)
+        .await
+        .expect("spawn env with Preferred policy");
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+
+    let (_, alice_mediator) = alice.profile.dids().expect("alice dids");
+    let alice_mediator = alice_mediator.to_string();
+
+    // Alice invites over a routed path: her mediator, then herself. §5.3.3 puts
+    // the destination's own VID last, so the exit delivers to her.
+    env.atm
+        .tsp()
+        .form_relationship_routed(&alice.profile, &bob.did)
+        .await
+        .expect("alice forms a routed relationship");
+
+    let stored = poll_inbox(&env, &bob.profile).await;
+    let invite_qb2 = env.atm.tsp().decode(&stored).expect("decode invite");
+    let (invite, sender, invite_digest) = env
+        .atm
+        .tsp()
+        .unpack_control(&bob.profile, &invite_qb2)
+        .await
+        .expect("bob unpacks the invite");
+    assert_eq!(sender, alice.did);
+
+    // The invite carries the path, ending at Alice herself.
+    assert_eq!(
+        invite.route,
+        vec![alice_mediator.clone(), alice.did.clone()],
+        "the reply path names alice's mediator, then alice"
+    );
+
+    let incoming = env
+        .atm
+        .tsp()
+        .record_incoming_control(&bob.profile, &alice.did, &invite)
+        .await
+        .expect("bob records the invite");
+    assert_eq!(
+        incoming.reply_path,
+        vec![alice_mediator, alice.did.clone()],
+        "the reply path is reported to the caller as well as kept"
+    );
+
+    // Bob accepts. He passes no route: the stored reply path is used without
+    // being asked, because §7.2.4 makes it mandatory rather than optional.
+    env.atm
+        .tsp()
+        .accept_relationship(&bob.profile, &alice.did, invite_digest)
+        .await
+        .expect("bob accepts over the reply path");
+
+    // The accept reached Alice through the mediator and completes her side.
+    let stored = poll_inbox(&env, &alice.profile).await;
+    let accept_qb2 = env.atm.tsp().decode(&stored).expect("decode accept");
+    let (accept, accept_sender, _) = env
+        .atm
+        .tsp()
+        .unpack_control(&alice.profile, &accept_qb2)
+        .await
+        .expect("alice unpacks the accept");
+    assert_eq!(accept_sender, bob.did);
+
+    let final_state = env
+        .atm
+        .tsp()
+        .record_incoming_control(&alice.profile, &bob.did, &accept)
+        .await
+        .expect("alice records the accept");
+    assert_eq!(
+        final_state.state,
+        affinidi_messaging_sdk::protocols::tsp::RelationshipState::Bidirectional
+    );
+
+}
+

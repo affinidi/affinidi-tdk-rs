@@ -244,6 +244,33 @@ pub trait RelationshipStore: Send + Sync {
     ) -> Result<(), ATMError> {
         Ok(())
     }
+
+    /// The `Reply_Path` an inviting peer supplied — the route its accept is to
+    /// travel back over (Rev 3 §7.2.4). Empty when the invite asked for a
+    /// direct reply.
+    ///
+    /// A store that does not keep it returns empty, and an accept then goes
+    /// direct. That is a conformance loss, not just a missing optimisation:
+    /// §7.2.4 says the responder MUST use the path, and going direct discloses
+    /// to the destination — and to observers — an endpoint the route existed to
+    /// keep out of view.
+    async fn reply_path(
+        &self,
+        _our_vid: &str,
+        _their_vid: &str,
+    ) -> Result<Vec<String>, ATMError> {
+        Ok(Vec::new())
+    }
+
+    /// Persist the `Reply_Path` from an invite. Default impl is a no-op.
+    async fn set_reply_path(
+        &self,
+        _our_vid: &str,
+        _their_vid: &str,
+        _path: Vec<String>,
+    ) -> Result<(), ATMError> {
+        Ok(())
+    }
 }
 
 /// Default, ephemeral [`RelationshipStore`] backed by an in-memory map.
@@ -259,6 +286,7 @@ pub struct InMemoryRelationshipStore {
     inner: RwLock<HashMap<(String, String), RelationshipState>>,
     capabilities: RwLock<HashMap<(String, String), PeerCapability>>,
     digests: RwLock<HashMap<(String, String), ThreadDigests>>,
+    reply_paths: RwLock<HashMap<(String, String), Vec<String>>>,
 }
 
 #[async_trait::async_trait]
@@ -302,6 +330,26 @@ impl RelationshipStore for InMemoryRelationshipStore {
     ) -> Result<(), ATMError> {
         let key = (our_vid.to_string(), their_vid.to_string());
         self.digests.write().await.insert(key, digests);
+        Ok(())
+    }
+
+    async fn reply_path(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+    ) -> Result<Vec<String>, ATMError> {
+        let key = (our_vid.to_string(), their_vid.to_string());
+        Ok(self.reply_paths.read().await.get(&key).cloned().unwrap_or_default())
+    }
+
+    async fn set_reply_path(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        path: Vec<String>,
+    ) -> Result<(), ATMError> {
+        let key = (our_vid.to_string(), their_vid.to_string());
+        self.reply_paths.write().await.insert(key, path);
         Ok(())
     }
 
@@ -511,7 +559,7 @@ async fn advance_state(
 
 /// What an inbound control message did to relationship state, and what it asks
 /// of this endpoint next.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncomingControl {
     /// The relationship state after applying the message.
     pub state: RelationshipState,
@@ -519,6 +567,14 @@ pub struct IncomingControl {
     /// §7.3 asks us to answer with a cancellation of our own before forgetting
     /// it. False for every other control message.
     pub reply_expected: bool,
+    /// The `Reply_Path` an invite carried — the route its accept is to travel
+    /// back over (§7.2.4). Empty for a direct invite and for every other
+    /// control message.
+    ///
+    /// [`TspOps::accept_relationship`] uses the stored copy of this without
+    /// being asked; it is reported here so a caller can see the route rather
+    /// than having to infer it.
+    pub reply_path: Vec<String>,
 }
 
 /// TSP protocol operations, obtained from [`crate::ATM::tsp`].
@@ -814,6 +870,43 @@ impl TspOps<'_> {
         Ok(packed.thread_digest)
     }
 
+    /// Send a control message to `to_did` over `route` instead of directly.
+    ///
+    /// Used for the accept that answers an invite carrying a `Reply_Path`
+    /// (Rev 3 §7.2.4). The control message is sealed end-to-end to `to_did`
+    /// and carried opaquely by the intermediaries, so what they relay is
+    /// indistinguishable from any other routed message.
+    ///
+    /// `route` is the path as the inviter supplied it, and §5.3.3 has it ending
+    /// at the inviter's own VID rather than its intermediary's, so it is used
+    /// as given. §7.2.4 allows a responder to prepend hops of its own; this
+    /// does not, which is permitted — "the minimal required condition is that
+    /// the last intermediary in `B`'s hop list knows how to reach the first hop
+    /// in `A`'s list", and with no hops of its own that is B's own intermediary.
+    async fn send_control_routed(
+        &self,
+        profile: &Arc<ATMProfile>,
+        to_did: &str,
+        control: &affinidi_tsp::message::control::ControlMessage,
+        route: &[String],
+    ) -> Result<[u8; 32], ATMError> {
+        let (from_did, _) = profile.dids()?;
+        let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
+        let to_vid = self.resolve_vid(to_did).await?;
+        let inner = affinidi_tsp::message::direct::pack(
+            &control.encode(),
+            affinidi_tsp::MessageType::Control,
+            from_did,
+            to_did,
+            &signing_key,
+            &to_vid.encryption_key,
+        )
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't pack control TSP message: {e}")))?;
+
+        self.send_routed_opaque(profile, route, &inner.bytes).await?;
+        Ok(inner.thread_digest)
+    }
+
     // ── Relationship management ───────────────────────────────────────────────
 
     /// The configured [`RelationshipStore`] backing relationship state.
@@ -875,7 +968,10 @@ impl TspOps<'_> {
         self.send_control(
             profile,
             their_did,
-            &ControlMessage::invite_routed(vec![our_mediator.to_string()]),
+            // §5.3.3: a hop list ends at the destination's own VID, not its
+            // intermediary's — so the path back to us is our mediator, then us.
+            // Rev 2 advertised only the mediator, which left the exit ambiguous.
+            &ControlMessage::invite_routed(vec![our_mediator.to_string(), our_did.to_string()]),
         )
         .await?;
         store.set(our_did, their_did, next).await?;
@@ -904,13 +1000,26 @@ impl TspOps<'_> {
         let (our_did, _) = profile.dids()?;
         let store = self.relationship_store();
         let next = next_state(store, our_did, their_did, RelationshipEvent::SendAccept).await?;
-        self.send_control(
-            profile,
-            their_did,
-            &ControlMessage::accept(invite_thread_digest),
-        )
-        .await?;
+        let accept = ControlMessage::accept(invite_thread_digest);
+
+        // §7.2.4: "If the `Reply_Path` is present, then `B` MUST use the routed
+        // path specified by `Reply_Path` to send the `TSP_RFA` message". Sending
+        // direct would disclose to the inviter, and to anyone watching, an
+        // endpoint the route exists to keep out of view — so the path is
+        // honoured here rather than left to the caller to remember.
+        let reply_path = store.reply_path(our_did, their_did).await?;
+        let digest = if reply_path.is_empty() {
+            self.send_control(profile, their_did, &accept).await?
+        } else {
+            self.send_control_routed(profile, their_did, &accept, &reply_path)
+                .await?
+        };
+
         store.set(our_did, their_did, next).await?;
+        // The accept's own digest identifies the other direction (§7.2.1).
+        let mut digests = store.thread_digests(our_did, their_did).await?;
+        digests.accept = Some(digest);
+        store.set_thread_digests(our_did, their_did, digests).await?;
         // A completed relationship confirms the peer's agent speaks TSP.
         if next == RelationshipState::Bidirectional {
             self.learn_tsp_supported(our_did, their_did, CapabilitySource::Relationship)
@@ -1014,9 +1123,13 @@ impl TspOps<'_> {
                     },
                 )
                 .await?;
+            store
+                .set_reply_path(our_did, peer_did, control.route.clone())
+                .await?;
             return Ok(IncomingControl {
                 state: RelationshipState::InviteReceived,
                 reply_expected: false,
+                reply_path: control.route.clone(),
             });
         }
 
@@ -1049,6 +1162,12 @@ impl TspOps<'_> {
             ControlType::RelationshipFormingInvite => {
                 digests.invite = control.digest;
                 store.set_thread_digests(our_did, peer_did, digests).await?;
+                // §7.2.4: the accept MUST travel back over the path the invite
+                // supplied, so it is kept rather than left to the caller to
+                // notice — a responder that forgets it silently goes direct.
+                store
+                    .set_reply_path(our_did, peer_did, control.route.clone())
+                    .await?;
             }
             ControlType::RelationshipFormingAccept => {
                 digests.accept = control.digest;
@@ -1058,6 +1177,7 @@ impl TspOps<'_> {
                 store
                     .set_thread_digests(our_did, peer_did, ThreadDigests::default())
                     .await?;
+                store.set_reply_path(our_did, peer_did, Vec::new()).await?;
             }
         }
         // If the peer advertised its mediator in the control's route (a routed
@@ -1086,6 +1206,10 @@ impl TspOps<'_> {
         Ok(IncomingControl {
             state: new_state,
             reply_expected,
+            reply_path: match control.control_type {
+                ControlType::RelationshipFormingInvite => control.route.clone(),
+                _ => Vec::new(),
+            },
         })
     }
 
@@ -2008,7 +2132,7 @@ impl TspWebSocket {
 
 #[cfg(test)]
 mod tests {
-    use super::ThreadDigests;
+    use super::{ControlMessage, ThreadDigests};
     use affinidi_tsp::message::direct;
     use affinidi_tsp::{MessageType, PrivateVid};
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
@@ -2571,5 +2695,98 @@ mod tests {
                 "exactly one side keeps its own invite"
             );
         }
+    }
+
+    // ---- Rev 3 §7.2.4: relationship forming over a routed path ----
+
+    #[tokio::test]
+    async fn the_store_round_trips_a_reply_path() {
+        let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+        assert!(store.reply_path(BOB, ALICE).await.unwrap().is_empty());
+
+        let path = vec!["did:example:m1".to_string(), ALICE.to_string()];
+        store
+            .set_reply_path(BOB, ALICE, path.clone())
+            .await
+            .unwrap();
+        assert_eq!(store.reply_path(BOB, ALICE).await.unwrap(), path);
+
+        // Per pair and per direction.
+        assert!(store.reply_path(ALICE, BOB).await.unwrap().is_empty());
+    }
+
+    /// §5.3.3: a hop list ends at the destination's own VID, not its
+    /// intermediary's. A reply path is a hop list, so an invite that asks for a
+    /// routed reply names the mediator *and* the inviter — Rev 2 advertised
+    /// only the mediator, which left the exit ambiguous.
+    #[test]
+    fn a_routed_invite_names_the_inviter_as_the_exit() {
+        let mediator = "did:example:mediator".to_string();
+        let inviter = "did:example:alice".to_string();
+        let control = ControlMessage::invite_routed(vec![mediator.clone(), inviter.clone()]);
+
+        assert_eq!(control.route, vec![mediator, inviter.clone()]);
+        assert_eq!(
+            control.route.last(),
+            Some(&inviter),
+            "the path must end at the inviter, so the exit delivers to it"
+        );
+    }
+
+    /// A reply path survives the invite's wire encoding: it is the `-J` field
+    /// of the `XRFI` payload, so it has to come back out of a packed message.
+    #[test]
+    fn a_reply_path_round_trips_through_the_wire() {
+        let alice = PrivateVid::generate("did:example:alice");
+        let bob = PrivateVid::generate("did:example:bob");
+        let path = vec![
+            "did:example:mediator".to_string(),
+            "did:example:alice".to_string(),
+        ];
+
+        let packed = direct::pack(
+            &ControlMessage::invite_routed(path.clone()).encode(),
+            MessageType::Control,
+            "did:example:alice",
+            "did:example:bob",
+            &alice.signing_key,
+            &bob.encryption_key,
+        )
+        .unwrap();
+
+        let unpacked = direct::unpack(
+            &packed.bytes,
+            &bob.decryption_key,
+            &alice.verifying_key,
+        )
+        .unwrap();
+        let control = unpacked.control.expect("an invite decodes to a control");
+        assert_eq!(control.route, path);
+    }
+
+    /// An invite with no reply path leaves the field empty, and the accept then
+    /// goes direct — the `-JAA` case.
+    #[test]
+    fn a_direct_invite_carries_no_reply_path() {
+        let alice = PrivateVid::generate("did:example:alice");
+        let bob = PrivateVid::generate("did:example:bob");
+
+        let packed = direct::pack(
+            &ControlMessage::invite().encode(),
+            MessageType::Control,
+            "did:example:alice",
+            "did:example:bob",
+            &alice.signing_key,
+            &bob.encryption_key,
+        )
+        .unwrap();
+
+        let unpacked = direct::unpack(
+            &packed.bytes,
+            &bob.decryption_key,
+            &alice.verifying_key,
+        )
+        .unwrap();
+        assert!(unpacked.control.unwrap().route.is_empty());
     }
 }
