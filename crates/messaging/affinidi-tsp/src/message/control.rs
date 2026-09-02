@@ -144,8 +144,13 @@ pub struct ControlMessage {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub nonce: Option<[u8; NONCE_LEN]>,
     /// A digest referring to an earlier message, copied verbatim rather than
-    /// recomputed: an accept's `Reply_Digest` (the invite it answers) or a
-    /// cancel's `Digest` (the relationship-forming message it ends).
+    /// recomputed: an accept's `Digest` (the invite it answers) or a cancel's
+    /// `Digest` (the relationship-forming message it ends).
+    ///
+    /// Note which spec field this is, because the accept's two digests are easy
+    /// to swap: §7 puts the *echoed* one in `Digest` and the accept's own SAID
+    /// in `Reply_Digest`, so the self-addressing one is [`Self::digest`] and
+    /// this is not it, despite the name.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub reply: Option<[u8; DIGEST_LEN]>,
     /// The invite's `Reply_Path` (Rev 3 §9.2): the route over which the peer is
@@ -249,7 +254,6 @@ impl ControlMessage {
             .as_ref()
             .ok_or_else(|| TspError::InvalidMessage("control is missing its reply digest".into()))
     }
-
 
     /// Encode this control message to a local, self-describing byte form.
     ///
