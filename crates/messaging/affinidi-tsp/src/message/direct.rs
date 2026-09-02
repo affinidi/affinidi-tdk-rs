@@ -405,7 +405,21 @@ fn encode_payload_frame(
             padding_at = Some(frame_body.len());
             encode_padding(&[], &mut frame_body);
             // §9.2.3: the upper-layer payload is a generic CESR stream holding
-            // a Bytes primitive. TSP carries its content opaquely.
+            // a Bytes primitive. TSP carries its content opaquely — "the upper
+            // layer parses its content. TSP itself does not interpret it."
+            //
+            // A Bytes primitive sitting directly in the `-A` stream is the
+            // "native CESR" arm of §9.2.3's grammar, which the specification's
+            // own `direct-hpke-base` vector confirms: its payload is
+            // `-AAF 5BAE <"hello world">`, with no enclosing group.
+            //
+            // What this deliberately does *not* do is wrap the payload in the
+            // non-native message group `-H##`. §9.2.3 requires that group for a
+            // JSON, CBOR or MsgPak serialization, and that requirement binds the
+            // upper layer, not this one: a caller handing us opaque bytes has
+            // not told us it is sending JSON, and guessing would be wrong in
+            // both directions. A caller that wants conformant interleaving must
+            // build the `-H` group itself and pass the result here.
             let mut stream = Vec::new();
             wire::encode_variable_data(wire::TSP_PLAINTEXT, body, &mut stream);
             wire::encode_count(
