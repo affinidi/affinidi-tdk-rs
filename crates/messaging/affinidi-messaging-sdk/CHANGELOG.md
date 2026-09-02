@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased (0.22.0) — TSP Rev 3
+
+Requires `affinidi-tsp` 0.2. **See that crate's changelog first: the wire format
+changed and there is no Rev 2 compatibility.** Everything here follows from it.
+
+- **`unpack_message` returns `InboundTsp`**, an enum separating an application
+  payload from a control message, rather than a payload alone. A caller that
+  ignored control messages was silently dropping the relationship handshake.
+- **Relationship state is enforced, not just recorded.** `RelationshipStore`
+  gains `thread_digests` / `set_thread_digests` / `reply_path` / `set_reply_path`,
+  all defaulted, so an existing implementation still compiles — but one that does
+  not override them keeps no digest, and so loses the §7.2.3 invite-race tiebreak
+  and recognises any cancellation.
+- New: `form_relationship_routed` (§7.2.4, an invite that asks for its accept
+  over a route), and `form_parallel_relationship` /
+  `accept_parallel_relationship` / `record_parallel_accept` (§7.2.5,
+  introducing a VID over a relationship that already exists).
+- **§7.4.2 key-state freshness is applied on every unpack**, driven by
+  `ATMConfig::with_tsp_key_state_policy`. A peer's VID is re-resolved when an
+  unpack fails against the key state we hold, and after the peer has been
+  silent longer than the policy's threshold, rate-limited so a failing peer
+  cannot drive resolution traffic. No new public call: `unpack`,
+  `unpack_message` and `unpack_control` all go through it.
+- **Five problem codes are retired** in favour of a single uniform refusal — see
+  the mediator changelog for the list and the reasoning. A consumer matching on
+  any of them will stop matching.
+
 ## Unreleased (0.21.1) — a mediated peer is TSP-capable
 
 - `TspOps::select_protocol` decided "does this peer speak TSP" with

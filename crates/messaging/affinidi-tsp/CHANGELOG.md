@@ -1,5 +1,78 @@
 # Affinidi TSP Changelog
 
+## Unreleased (0.2.0) — Trust Spanning Protocol specification Rev 3
+
+**Breaking: nothing this crate packs can be unpacked by a Rev 2 peer, and
+nothing a Rev 2 peer packs can be unpacked here.** There is no compatibility
+mode and no negotiation. Rev 3 changed the crypto mode, the version byte, the
+long count-code prefix and every payload type code at once, so the two revisions
+share no frame either side can even classify — the failure is a decode error,
+not a downgrade. See `docs/tsp/rev3-migration.html`.
+
+Wire format:
+
+- **HPKE-Auth → HPKE-Base** (RFC 9180 mode `0x02` → `0x00`). The sender's static
+  key no longer enters the KEM; sender authenticity comes from the ESSR
+  signature alone, which is where Rev 3 puts it. The ciphertext primitive code
+  changes with it, `G` (6) → `F` (5). Suite is unchanged:
+  DHKEM(X25519, HKDF-SHA256) with ChaCha20Poly1305. `info` is now `YTSP-`.
+- **`TSP_Version` is `0`**, was `1`. Only the major version gates; minor and
+  patch are decoded and reported.
+- **Long count codes are `--X#####`**, were Rev 2's `-0X#####`.
+- **Payload type codes replaced**: `XSCS`, `XHOP`, `XRFI`, `XRFA`, `XRFD`, and
+  the new `XCTL` and `XPAD`. Rev 2's `XAAA` / `TSP_TMP` is gone.
+- **Rev 2's `-S` signed-only wrapper is gone.** §3.5 makes a message "entirely
+  confidential, or entirely non-confidential (signed only), but never mixed": a
+  signed-only message is now an `-E` frame whose payload sits where the
+  ciphertext would be.
+- **A nested message's inner frame is carried raw**, without Rev 2's enclosing
+  `B` variable-data field.
+- **The nonce is 128-bit**, was 256-bit.
+- **An accept's two digests swapped order.** §7 puts the echoed invite digest in
+  `Digest` and the accept's own SAID in `Reply_Digest`; we had it the other way
+  round. `ControlMessage::reply` holds the echoed one and
+  `ControlMessage::digest` the self-addressing one — note which is which, the
+  field names read backwards against the spec.
+- Digests are §7.2.1 SAIDs: derived over the whole message with the digest slot
+  filled by 33 dummy `0x23` bytes, with the padding field excluded.
+
+Protocol behaviour, all new:
+
+- **Application messages are gated on a relationship** (§7.2.2). Default is
+  `RelationshipPolicy::Gated`; `Ungated` restores the old accept-anything
+  behaviour for deployments that want it. Any recorded relationship admits an
+  application message, not only a completed one — §3.6 lets a sender pack user
+  data with its invite.
+- **The §7.2.3 invite race is broken by digest comparison.** Both endpoints keep
+  the invite with the lexicographically lower digest, so simultaneous invites
+  converge instead of forming two half-relationships.
+- **Cancellation follows §7.3's three cases**, including answering a cancel that
+  names a digest belonging to neither half of the relationship we hold.
+- **Key state is re-resolved on failure and after silence** (§7.4.2), behind a
+  `KeyStatePolicy` with a re-verification threshold and a resolution rate limit,
+  and an injectable `Clock` so the timing is testable.
+- **`Reply_Path`** (§7.2.4): an invite can ask for its accept over a route.
+- **`Referral_Field`** (§7.2.5): a VID can be introduced over an existing
+  relationship, carrying that VID's own signature. `verify_referral` checks it,
+  and needs the introduced VID's key, so resolution — and therefore the caller —
+  supplies it.
+- **The padding field is fillable** (§7.5), and `XPAD` sends padding alone.
+  Padding is excluded from the digest derivation, so filling it cannot change
+  what was signed.
+- **`XCTL`** carries an upper-layer control payload.
+
+Bug fixes found on the way, both latent on `main`:
+
+- `decode_count` returned long-form counts with the identifier bits still in
+  them. Every long-framed message decoded to a wrong length.
+- `is_tsp` and the ingress classifiers in the SDK, mediator and mediator-common
+  knew only the short count code `0xF8`, so a long-framed TSP message was not
+  recognised as TSP at all. The *constants* had never drifted; the predicates
+  had.
+
+Interop: 14/14 against the ToIP reference implementation's `rev3` branch, both
+directions, across direct, routed, nested, 2 MiB, invite, accept and cancel.
+
 ## 31st August 2026 (0.1.15)
 
 **Bug fix: a DID-valued `TSPTransport` endpoint was returned as a transport URL.**

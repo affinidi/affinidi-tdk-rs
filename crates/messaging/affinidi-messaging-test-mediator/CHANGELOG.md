@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (0.5.0) — relationships for Rev 3's gating
+
+Rev 3 gates application messages on a relationship, so a test that just sends
+now needs one first. Three helpers, and which to use depends on what the test is
+actually about:
+
+- `relate` runs the real handshake through the mediator and deletes the messages
+  it consumes. Use it unless the handshake is in the way.
+- `relate_directly` seeds the relationship store. Use it when the test is about
+  something else and the handshake is scaffolding.
+- `spawn_ungated_with_tsp_policy` starts an environment with
+  `RelationshipPolicy::Ungated`. Use it only when the test's subject *is* the
+  ungated path.
+
+Also `spawn_with_atm_config`, and a `relationship_store` field on the
+environment.
+
 ## Unreleased (0.4.2) — a test user that is mediated the way production is
 
 - New `TestEnvironment::add_tsp_mediated_user` / `TestTopology::add_tsp_mediated_user`:

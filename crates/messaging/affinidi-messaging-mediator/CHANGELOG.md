@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased (0.21.0) — TSP Rev 3: a uniform delivery refusal, and no DIDComm bridge
+
+**Breaking, deliberately.**
+
+- **Every refused delivery now answers the same way**, over TSP and DIDComm
+  alike. These five codes are retired:
+
+  ```text
+  direct_delivery.recipient.unknown
+  authorization.receive
+  authorization.receive_anon
+  authorization.receive_forwarded
+  authorization.access_list.denied
+  ```
+
+  All ten sites that raised them now answer `delivery.refused` /
+  "Message not accepted for delivery" with `403`, and log the real reason
+  against the session so operators keep full diagnostics.
+
+  Each of the retired codes told an unauthenticated sender something it had no
+  business learning — whether a DID has an account here, and if so which of
+  several ACL rules turned it away. Distinguishing them is a probing oracle,
+  and the distinction was never actionable by a legitimate sender, who can do
+  nothing differently on learning which rule refused. A refusal is now a
+  refusal.
+
+  A consumer matching on any of these will stop matching. The scan across the
+  VTI repos found no code that does — the only occurrences are two doc comments
+  in `openvtc-core/src/tsp.rs` recalling a past debugging session, which will
+  read as stale once this lands.
+
+- **The DIDComm↔TSP bridge is removed.** It re-packed a TSP message as DIDComm
+  and back, which cannot be done without breaking the end-to-end guarantee the
+  ESSR signature exists to provide: the bridge is by construction a point where
+  the message is decrypted and re-signed by someone who is not the sender. Rev 3
+  makes this explicit and the bridge unimplementable as specified. Deployments
+  relying on it must move both ends to one protocol.
+
+- Requires `affinidi-tsp` 0.2 when built with `--features tsp`.
+
 ## Unreleased (0.20.6) — TSP forwarding follows a next hop that names its mediator by DID
 
 **Bug fix: TSP remote forwarding could not deliver to a mediated peer.** Observed
