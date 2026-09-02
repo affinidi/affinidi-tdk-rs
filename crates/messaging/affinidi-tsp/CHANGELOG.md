@@ -87,10 +87,10 @@ Conformance:
 
 - **The specification's own test vectors now run as a test suite**
   (`tests/spec_vectors.rs`, fixture lifted from spec commit `c80b0e4`). Seven of
-  the nine Appendix A vectors cover what this crate implements, and all seven
-  pass: HPKE-Base direct, signed-only, invite, accept, cancel-by-reference,
-  nested and routed. The two Sealed Box vectors are carried in the fixture
-  unexercised.
+  the nine Appendix A vectors are in scope for this crate, and **six pass**:
+  HPKE-Base direct, signed-only, invite, accept, nested and routed. The seventh,
+  `control-rfd`, does not decode at all — see below. The two Sealed Box vectors
+  are out of scope and carried in the fixture unexercised.
 
   These check something interop cannot. The harness packs with one
   implementation and unpacks with the other, so a *shared* misreading passes it.
