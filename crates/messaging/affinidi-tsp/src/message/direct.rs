@@ -278,16 +278,20 @@ fn encode_payload_frame(
                     said = Some(digest);
                 }
                 ControlType::RelationshipFormingAccept => {
-                    // Reply_Digest echoes the invite's digest verbatim.
-                    let mut after = Vec::new();
-                    encode_digest(control.require_reply()?, &mut after);
+                    // An accept carries two digests, and which is which is easy
+                    // to get backwards. `Digest` is the *invite's* digest,
+                    // echoed verbatim; `Reply_Digest` is this reply's own
+                    // self-addressing digest, and so is the slot the derivation
+                    // dummies out. Both fields sit before the padding, so the
+                    // echoed digest is part of the derivation input.
+                    let mut before = sender_field.clone();
+                    encode_digest(control.require_reply()?, &mut before);
 
                     let digest =
-                        derive_said(envelope_fields, &payload_marker::ACCEPT, &sender_field, &after);
+                        derive_said(envelope_fields, &payload_marker::ACCEPT, &before, &[]);
                     frame_body.extend_from_slice(&payload_marker::ACCEPT);
-                    frame_body.extend_from_slice(&sender_field);
+                    frame_body.extend_from_slice(&before);
                     encode_digest(&digest, &mut frame_body);
-                    frame_body.extend_from_slice(&after);
                     encode_padding(&mut frame_body);
                     said = Some(digest);
                 }
@@ -432,7 +436,10 @@ fn decode_payload_frame(
         || type_code == payload_marker::ACCEPT
         || type_code == payload_marker::CANCEL
     {
-        let digest = decode_digest(frame, &mut pos)?;
+        // The first digest field means different things per type: an invite's
+        // is its own self-addressing digest, an accept's and a cancel's is a
+        // reference to an earlier message.
+        let first_digest = decode_digest(frame, &mut pos)?;
         let after_begin = pos;
 
         let (control_type, nonce, reply, route) = if type_code == payload_marker::INVITE {
@@ -456,33 +463,50 @@ fn decode_payload_frame(
                 reply_path,
             )
         } else if type_code == payload_marker::ACCEPT {
-            let reply = decode_digest(frame, &mut pos)?;
+            // An accept's second digest is its own; the first, already read, is
+            // the invite it answers.
+            let own = decode_digest(frame, &mut pos)?;
             (
                 ControlType::RelationshipFormingAccept,
                 None,
-                Some(reply),
+                Some(own),
                 Vec::new(),
             )
         } else {
             (ControlType::RelationshipCancel, None, None, Vec::new())
         };
 
-        let after = &frame[after_begin..pos];
-
-        // A cancel's digest is a reference to another message, so there is
-        // nothing to recompute. An invite's and an accept's are self-addressing
-        // and MUST be verified: this is the check Rev 2 could not make, because
-        // the value was never on the wire.
-        let thread_digest = if control_type == ControlType::RelationshipCancel {
-            digest
-        } else {
-            let recomputed = derive_said(envelope_fields, &type_code, sender_field, after);
-            if recomputed != digest {
-                return Err(TspError::Verification(
-                    "TSP_Digest does not match the message it identifies".into(),
-                ));
+        // Which slot the derivation dummies out, and therefore what counts as
+        // "before" and "after" it, differs by type.
+        let thread_digest = match control_type {
+            // The digest slot is first: everything after it is derivation input.
+            ControlType::RelationshipFormingInvite => {
+                let after = &frame[after_begin..pos];
+                let recomputed = derive_said(envelope_fields, &type_code, sender_field, after);
+                if recomputed != first_digest {
+                    return Err(TspError::Verification(
+                        "TSP_Digest does not match the message it identifies".into(),
+                    ));
+                }
+                first_digest
             }
-            digest
+            // The digest slot is last, and the echoed invite digest before it is
+            // part of the input.
+            ControlType::RelationshipFormingAccept => {
+                let own = reply.expect("accept always decodes its own digest");
+                let mut before = sender_field.to_vec();
+                encode_digest(&first_digest, &mut before);
+                let recomputed = derive_said(envelope_fields, &type_code, &before, &[]);
+                if recomputed != own {
+                    return Err(TspError::Verification(
+                        "TSP_Digest does not match the message it identifies".into(),
+                    ));
+                }
+                own
+            }
+            // A cancel's only digest references another message, so there is
+            // nothing self-addressing to recompute.
+            ControlType::RelationshipCancel => first_digest,
         };
 
         let _pad = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
@@ -492,12 +516,14 @@ fn decode_payload_frame(
             control_type,
             digest: Some(thread_digest),
             nonce,
-            // A cancel names its relationship by the digest field itself.
-            reply: reply.or(if control_type == ControlType::RelationshipCancel {
-                Some(digest)
-            } else {
-                None
-            }),
+            // `reply` is always the digest of the earlier message this one
+            // refers to: for an accept and a cancel, the first digest field.
+            reply: match control_type {
+                ControlType::RelationshipFormingInvite => None,
+                ControlType::RelationshipFormingAccept | ControlType::RelationshipCancel => {
+                    Some(first_digest)
+                }
+            },
             route,
         };
         Ok(DecodedFrame {
@@ -1347,5 +1373,89 @@ mod tests {
 
         assert_eq!(small.bytes[0], crate::message::meta::TSP_MAGIC_BYTE);
         assert_eq!(large.bytes[0], crate::message::meta::TSP_MAGIC_BYTE_LONG);
+    }
+
+    /// An accept carries two digests and their order is interop-visible:
+    /// `XRFA, VID_sndr, Digest, Reply_Digest` where `Digest` is the *invite's*
+    /// digest echoed verbatim and `Reply_Digest` is the accept's own
+    /// self-addressing digest.
+    ///
+    /// A round-trip test cannot see this. Encoder and decoder agree with each
+    /// other under either order, so the only way to catch a swap is to assert
+    /// the position of a value that came from somewhere else — here, the
+    /// invite's digest, which must appear in the *first* slot.
+    #[test]
+    fn an_accept_echoes_the_invite_digest_in_the_first_slot() {
+        let keys = gen_keys();
+
+        let invite_packed = pack(
+            &ControlMessage::invite().encode(),
+            MessageType::Control,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+        let invite_digest = invite_packed.thread_digest;
+
+        let accept_packed = pack(
+            &ControlMessage::accept(invite_digest).encode(),
+            MessageType::Control,
+            "did:web:bob",
+            "did:web:alice",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        // The accept's own digest is distinct from the invite's...
+        assert_ne!(accept_packed.thread_digest, invite_digest);
+
+        let unpacked = unpack(
+            &accept_packed.bytes,
+            &keys.receiver_enc_sk,
+            &keys.sender_sign_pk,
+        )
+        .unwrap();
+        let control = unpacked.control.expect("accept decodes to a control");
+
+        // ...`reply` is the invite it answers, read from the first slot...
+        assert_eq!(control.reply, Some(invite_digest));
+        // ...and `digest` is the accept's own, read from the second.
+        assert_eq!(control.digest, Some(accept_packed.thread_digest));
+        assert_eq!(unpacked.thread_digest, accept_packed.thread_digest);
+    }
+
+    /// Pin the accept's field order in the plaintext frame directly: the
+    /// invite's digest must sit in the first digest position, before the
+    /// accept's own.
+    #[test]
+    fn accept_field_order_is_digest_then_reply_digest() {
+        let envelope = Envelope::new(MessageType::Control, "did:web:bob", "did:web:alice");
+        let fields = envelope.encode_fields().unwrap();
+        let invite_digest = [0x7Au8; DIGEST_LEN];
+
+        let (frame, own) = encode_payload_frame(
+            &ControlMessage::accept(invite_digest).encode(),
+            MessageType::Control,
+            &[],
+            "did:web:bob",
+            &fields,
+        )
+        .unwrap();
+
+        let first = frame
+            .windows(DIGEST_LEN)
+            .position(|w| w == invite_digest)
+            .expect("the invite digest is carried");
+        let second = frame
+            .windows(DIGEST_LEN)
+            .position(|w| w == own)
+            .expect("the accept's own digest is carried");
+        assert!(
+            first < second,
+            "the echoed invite digest must precede the accept's own"
+        );
     }
 }
