@@ -173,6 +173,36 @@ pub const TSP_INFO: &[u8] = b"YTSP-";
 /// MINOR tracks code-table changes, and Rev 3 changes the table it pins
 /// (`--AAACAA` → `-_AAACAA`), so MINOR was the version component due to move.
 /// Raised on the spec PR and adopted upstream.
+///
+/// # The three components are contested, and this may become `(0, 2)`
+///
+/// §9.1 currently reads the three characters as MAJOR, MINOR, PATCH, which is
+/// what this tuple encodes. On the same PR Sam Smith notes that the agreed
+/// layout was 1 character MAJOR and 2 characters MINOR, and that PATCH has no
+/// role in a wire version at all: semver defines it as a backward-compatible
+/// bug fix, which by definition cannot change what goes over the wire, so a
+/// receiver can never act on it.
+///
+/// The wire bytes are the same either way; only the trailing 12 bits are read
+/// differently — as one MINOR, or as MINOR and PATCH of 6 bits each. Which
+/// matters, because the two readings disagree about the value:
+///
+/// ```text
+/// marker                MAJOR   trailing 12 bits   MAJOR.MINOR   MAJOR.MINOR.PATCH
+/// AAB  (Rev 2)              0                  1           0.1               0.0.1
+/// ABA  (as published)       0                 64          0.64               0.1.0
+/// AAC                       0                  2           0.2               0.0.2
+/// ```
+///
+/// Rev 2 was 1 and the next version became 64 — an artifact of the split, not a
+/// version anyone chose. Under MAJOR.MINOR, Rev 3 is `YTSP-AAC`.
+///
+/// We hold at `ABA` deliberately: it is what §9.1 says and what the published
+/// Appendix A vectors carry, and `tests/spec_vectors.rs` checks against those.
+/// Moving first would fail conformance with the specification as it stands.
+/// When it settles this becomes one constant and the split in `decode_version`;
+/// the MAJOR gate is unaffected, since MAJOR is the same first character under
+/// both readings.
 pub const TSP_VERSION: (u16, u8, u8) = (0, 1, 0);
 
 const fn encoded_version() -> u16 {
