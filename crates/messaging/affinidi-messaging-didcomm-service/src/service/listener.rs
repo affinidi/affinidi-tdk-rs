@@ -468,7 +468,7 @@ impl Listener {
                                     thread_id: control_message_id(&thread_digest),
                                     parent_thread_id: None,
                                 },
-                                control,
+                                *control,
                                 sender,
                                 thread_digest,
                             )

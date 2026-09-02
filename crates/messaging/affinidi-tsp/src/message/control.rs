@@ -70,6 +70,53 @@ impl ControlType {
     }
 }
 
+/// A new VID introduced over an existing relationship (spec Rev 3 §7.2.5).
+///
+/// An endpoint that already has a relationship with a peer can use it to
+/// introduce a second, parallel one: the invite names the new VID and carries
+/// that VID's own signature, so the peer learns the new identifier over a
+/// channel it already trusts and can check that whoever controls the new VID
+/// agreed to the introduction.
+///
+/// The signature is made by `VID_new`'s key over the payload fields that
+/// precede it — the type code, the ESSR sender VID, the digest, the nonce, the
+/// reply path and `VID_new` itself. The referral field's own code and count are
+/// not covered; the message signature covers those.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Referral {
+    /// The VID being introduced.
+    pub new_vid: String,
+    /// `Signature_new`, made by `new_vid`'s key. See [`Referral`].
+    #[serde(with = "signature_bytes")]
+    pub signature: [u8; 64],
+}
+
+/// serde for a 64-byte signature.
+///
+/// serde derives array impls only up to 32 elements, and this is the local
+/// encoding used to carry a recovered control through the SDK's `payload`
+/// field, not the wire form — so it serializes as a byte sequence and checks
+/// the length coming back rather than widening the type to a `Vec`.
+mod signature_bytes {
+    use serde::{Deserialize, Deserializer, Serializer, de::Error as _};
+
+    pub(super) fn serialize<S: Serializer>(
+        signature: &[u8; 64],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(signature.iter())
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<[u8; 64], D::Error> {
+        let bytes = Vec::<u8>::deserialize(deserializer)?;
+        bytes.try_into().map_err(|v: Vec<u8>| {
+            D::Error::custom(format!("expected a 64-byte signature, got {}", v.len()))
+        })
+    }
+}
+
 /// A TSP control message payload.
 ///
 /// The fields used depend on [`ControlType`]:
@@ -105,6 +152,11 @@ pub struct ControlMessage {
     /// to send its accept. Empty — encoded `-JAA` — for a direct reply.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub route: Vec<String>,
+    /// The invite's `Referral_Field` (§7.2.5): a new VID introduced over this
+    /// relationship, with that VID's own signature. `None` — encoded `-JAA` —
+    /// for an invite that introduces nothing.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub referral: Option<Referral>,
 }
 
 impl ControlMessage {
@@ -117,6 +169,7 @@ impl ControlMessage {
             nonce: Some(generate_nonce()),
             reply: None,
             route: Vec::new(),
+            referral: None,
         }
     }
 
@@ -129,6 +182,26 @@ impl ControlMessage {
             nonce: Some(generate_nonce()),
             reply: None,
             route,
+            referral: None,
+        }
+    }
+
+    /// Create a Relationship Forming Invite that introduces `new_vid` over an
+    /// existing relationship (§7.2.5, parallel relationship forming).
+    ///
+    /// The signature is left empty here and filled in when the message is
+    /// packed: it covers the digest, which does not exist until then.
+    pub fn invite_referral(new_vid: impl Into<String>) -> Self {
+        Self {
+            control_type: ControlType::RelationshipFormingInvite,
+            digest: None,
+            nonce: Some(generate_nonce()),
+            reply: None,
+            route: Vec::new(),
+            referral: Some(Referral {
+                new_vid: new_vid.into(),
+                signature: [0u8; 64],
+            }),
         }
     }
 
@@ -141,6 +214,7 @@ impl ControlMessage {
             nonce: None,
             reply: Some(reply),
             route: Vec::new(),
+            referral: None,
         }
     }
 
@@ -158,6 +232,7 @@ impl ControlMessage {
             nonce: None,
             reply: Some(reply),
             route: Vec::new(),
+            referral: None,
         }
     }
 

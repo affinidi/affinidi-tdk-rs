@@ -597,8 +597,10 @@ pub enum InboundTsp {
     },
     /// A relationship control message: an invite, an accept or a cancellation.
     Control {
-        /// The decoded control payload.
-        control: ControlMessage,
+        /// The decoded control payload. Boxed: a control message is several
+        /// times the size of an application one, and an unboxed variant would
+        /// make every inbound frame pay for it.
+        control: Box<ControlMessage>,
         /// The sender's VID.
         sender: String,
         /// This message's `TSP_Digest` — the value an accept must echo back.
@@ -1640,7 +1642,7 @@ impl TspOps<'_> {
 
         if let Some(control) = unpacked.control {
             return Ok(InboundTsp::Control {
-                control,
+                control: Box::new(control),
                 sender: unpacked.sender,
                 thread_digest: unpacked.thread_digest,
             });

@@ -39,7 +39,7 @@
 use crate::crypto::{hpke, signing};
 use crate::error::TspError;
 use crate::message::MessageType;
-use crate::message::control::{ControlMessage, ControlType, DIGEST_LEN, NONCE_LEN};
+use crate::message::control::{ControlMessage, ControlType, DIGEST_LEN, NONCE_LEN, Referral};
 use crate::message::envelope::{self, Envelope};
 use crate::message::wire;
 
@@ -162,6 +162,124 @@ fn encode_padding(out: &mut Vec<u8>) {
     wire::encode_variable_data(wire::TSP_PLAINTEXT, &[], out);
 }
 
+/// Encode the `Referral_Field` (Rev 3 §9.2): a `-J` group holding `VID_new`
+/// followed by `Signature_new`, or `-JAA` when the invite introduces nothing.
+///
+/// The signature uses the same attachment encoding as a message signature.
+fn encode_referral(referral: Option<&Referral>, out: &mut Vec<u8>) {
+    let Some(referral) = referral else {
+        wire::encode_count(wire::TSP_HOP_LIST, 0, out);
+        return;
+    };
+
+    let mut body = Vec::new();
+    wire::encode_variable_data(wire::TSP_VID, referral.new_vid.as_bytes(), &mut body);
+    encode_signature_frame(&referral.signature, &mut body);
+
+    debug_assert!(body.len().is_multiple_of(3));
+    wire::encode_count(wire::TSP_HOP_LIST, (body.len() / 3) as u32, out);
+    out.extend_from_slice(&body);
+}
+
+/// Decode a `Referral_Field`. `None` for the empty `-JAA` form.
+fn decode_referral(frame: &[u8], pos: &mut usize) -> Result<Option<Referral>, TspError> {
+    let quadlets = wire::decode_count(wire::TSP_HOP_LIST, frame, pos)
+        .ok_or_else(|| TspError::InvalidMessage("missing referral field".into()))?;
+    if quadlets == 0 {
+        return Ok(None);
+    }
+    let group_end = (quadlets as usize)
+        .checked_mul(3)
+        .and_then(|len| pos.checked_add(len))
+        .filter(|end| *end <= frame.len())
+        .ok_or_else(|| TspError::InvalidMessage("referral field overruns the payload".into()))?;
+
+    let new_vid = wire::decode_variable_data(wire::TSP_VID, frame, pos)
+        .ok_or_else(|| TspError::InvalidMessage("malformed VID in referral field".into()))?;
+    let new_vid = String::from_utf8(new_vid)
+        .map_err(|_| TspError::InvalidMessage("referral VID is not UTF-8".into()))?;
+    if new_vid.is_empty() {
+        return Err(TspError::InvalidMessage(
+            "referral field names the NULL VID".into(),
+        ));
+    }
+    let signature = decode_signature_frame(frame, pos)?;
+    if *pos != group_end {
+        return Err(TspError::InvalidMessage(
+            "referral field does not fill its own count".into(),
+        ));
+    }
+    Ok(Some(Referral {
+        new_vid,
+        signature,
+    }))
+}
+
+/// Build the bytes `Signature_new` is made over (Rev 3 §9.3).
+///
+/// "`Signature_new` within the `Referral_Field` is made by `VID_new`'s key over
+/// {`XRFI`, `VID_sndr | 4BAA`, `Digest`, `Nonce`, `Reply_Path`, `VID_new`}. The
+/// referral field's own code and count are not covered; the message signature
+/// covers them."
+///
+/// So `VID_new` contributes as a bare VID field here, without the enclosing
+/// `-J` group it sits inside on the wire.
+fn referral_signed_data(
+    sender_field: &[u8],
+    digest: &[u8; DIGEST_LEN],
+    nonce: &[u8; NONCE_LEN],
+    reply_path: &[String],
+    new_vid: &str,
+) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(&payload_marker::INVITE);
+    data.extend_from_slice(sender_field);
+    encode_digest(digest, &mut data);
+    wire::encode_fixed_data(wire::TSP_NONCE, nonce, &mut data);
+    wire::encode_hops(reply_path, &mut data);
+    wire::encode_variable_data(wire::TSP_VID, new_vid.as_bytes(), &mut data);
+    data
+}
+
+/// Verify the `Signature_new` carried by a referral invite (Rev 3 §7.2.5).
+///
+/// Not done during [`unpack`], and deliberately so: checking it needs
+/// `VID_new`'s public key, and `VID_new` is exactly the identifier the invite
+/// exists to introduce — so it has to be resolved first, which this crate's
+/// key-in-hand unpacking cannot do. [`unpack`] therefore returns the referral
+/// unverified and a caller that can resolve calls this.
+///
+/// Until it does, the referral is a claim: it says the sender wishes to
+/// introduce `VID_new`, and nothing about whether whoever controls `VID_new`
+/// agreed. That is the whole point of the signature, so an application that
+/// acts on a referral without calling this has skipped the check.
+pub fn verify_referral(
+    control: &ControlMessage,
+    sender_vid: &str,
+    new_vid_signing_key: &[u8; 32],
+) -> Result<(), TspError> {
+    let Some(referral) = control.referral.as_ref() else {
+        return Err(TspError::InvalidMessage(
+            "control message carries no referral to verify".into(),
+        ));
+    };
+    let digest = control.digest.ok_or_else(|| {
+        TspError::InvalidMessage("a referral invite must carry its digest".into())
+    })?;
+    let nonce = control.require_nonce()?;
+
+    let mut sender_field = Vec::new();
+    encode_sender_field(sender_vid, &mut sender_field);
+    let signed = referral_signed_data(
+        &sender_field,
+        &digest,
+        nonce,
+        &control.route,
+        &referral.new_vid,
+    );
+    signing::verify(&signed, &referral.signature, new_vid_signing_key)
+}
+
 /// Derive a self-addressing `TSP_Digest` (Rev 3 §7.2.1).
 ///
 /// The digest covers the message's own envelope fields (version and both VIDs)
@@ -201,12 +319,14 @@ fn derive_said(
 /// Accept  -Z<n> XRFA  sndr  Digest  Reply_Digest              pad
 /// Cancel  -Z<n> XRFD  sndr  Digest                            pad
 /// ```
+#[allow(clippy::too_many_arguments)]
 fn encode_payload_frame(
     body: &[u8],
     kind: MessageType,
     hops: &[String],
     sender_vid: &str,
     envelope_fields: &[u8],
+    referral_signing_key: Option<&[u8; 32]>,
 ) -> Result<(Vec<u8>, [u8; DIGEST_LEN]), TspError> {
     let mut sender_field = Vec::new();
     encode_sender_field(sender_vid, &mut sender_field);
@@ -254,26 +374,63 @@ fn encode_payload_frame(
             let control = ControlMessage::decode(body)?;
             match control.control_type {
                 ControlType::RelationshipFormingInvite => {
-                    let mut after = Vec::new();
-                    wire::encode_fixed_data(
-                        wire::TSP_NONCE,
-                        control.require_nonce()?,
-                        &mut after,
-                    );
-                    // Reply_Path: the route for the peer's accept, `-JAA` when
-                    // the reply is to come back directly.
-                    wire::encode_hops(&control.route, &mut after);
-                    // Referral_Field: `-JAA`. Introducing a new VID over an
-                    // existing relationship is not implemented.
-                    let no_referral: [&[u8]; 0] = [];
-                    wire::encode_hops(&no_referral, &mut after);
+                    let nonce = *control.require_nonce()?;
 
-                    let digest =
-                        derive_said(envelope_fields, &payload_marker::INVITE, &sender_field, &after);
+                    // The digest covers the payload fields, and the referral's
+                    // contribution to that input is a bare `VID_new` — not the
+                    // `-J` group it sits inside on the wire, whose "own code and
+                    // count are not covered" (§9.3).
+                    let mut digest_after = Vec::new();
+                    wire::encode_fixed_data(wire::TSP_NONCE, &nonce, &mut digest_after);
+                    wire::encode_hops(&control.route, &mut digest_after);
+                    match control.referral.as_ref() {
+                        Some(referral) => wire::encode_variable_data(
+                            wire::TSP_VID,
+                            referral.new_vid.as_bytes(),
+                            &mut digest_after,
+                        ),
+                        None => wire::encode_count(wire::TSP_HOP_LIST, 0, &mut digest_after),
+                    }
+
+                    let digest = derive_said(
+                        envelope_fields,
+                        &payload_marker::INVITE,
+                        &sender_field,
+                        &digest_after,
+                    );
+
+                    // `Signature_new` covers the digest, so it can only be made
+                    // once the digest exists — which is why a referral invite
+                    // needs the new VID's signing key at pack time rather than
+                    // being signable by the caller beforehand.
+                    let referral = match (control.referral.as_ref(), referral_signing_key) {
+                        (Some(referral), Some(key)) => {
+                            let signed = referral_signed_data(
+                                &sender_field,
+                                &digest,
+                                &nonce,
+                                &control.route,
+                                &referral.new_vid,
+                            );
+                            Some(Referral {
+                                new_vid: referral.new_vid.clone(),
+                                signature: signing::sign(&signed, key)?,
+                            })
+                        }
+                        (Some(_), None) => {
+                            return Err(TspError::Signing(
+                                "a referral invite needs the introduced VID's signing key".into(),
+                            ));
+                        }
+                        (None, _) => None,
+                    };
+
                     frame_body.extend_from_slice(&payload_marker::INVITE);
                     frame_body.extend_from_slice(&sender_field);
                     encode_digest(&digest, &mut frame_body);
-                    frame_body.extend_from_slice(&after);
+                    wire::encode_fixed_data(wire::TSP_NONCE, &nonce, &mut frame_body);
+                    wire::encode_hops(&control.route, &mut frame_body);
+                    encode_referral(referral.as_ref(), &mut frame_body);
                     encode_padding(&mut frame_body);
                     said = Some(digest);
                 }
@@ -440,22 +597,13 @@ fn decode_payload_frame(
         // is its own self-addressing digest, an accept's and a cancel's is a
         // reference to an earlier message.
         let first_digest = decode_digest(frame, &mut pos)?;
-        let after_begin = pos;
 
+        let mut referral = None;
         let (control_type, nonce, reply, route) = if type_code == payload_marker::INVITE {
             let nonce = wire::decode_fixed_data::<NONCE_LEN>(wire::TSP_NONCE, frame, &mut pos)
                 .ok_or_else(|| TspError::InvalidMessage("missing or malformed nonce".into()))?;
             let reply_path = hops_to_strings(wire::decode_hops(frame, &mut pos)?)?;
-            // Referral_Field. Carried but not acted on: introducing a new VID
-            // over an existing relationship is not implemented, and a message
-            // that tries is refused rather than silently treated as a plain
-            // invite.
-            let referral = wire::decode_hops(frame, &mut pos)?;
-            if !referral.is_empty() {
-                return Err(TspError::InvalidMessage(
-                    "referral invites are not supported".into(),
-                ));
-            }
+            referral = decode_referral(frame, &mut pos)?;
             (
                 ControlType::RelationshipFormingInvite,
                 Some(nonce),
@@ -481,8 +629,25 @@ fn decode_payload_frame(
         let thread_digest = match control_type {
             // The digest slot is first: everything after it is derivation input.
             ControlType::RelationshipFormingInvite => {
-                let after = &frame[after_begin..pos];
-                let recomputed = derive_said(envelope_fields, &type_code, sender_field, after);
+                // Rebuild the derivation input rather than slicing the frame:
+                // §9.3 puts a bare `VID_new` in it, not the `-J` group the
+                // referral occupies on the wire, so the bytes here and the bytes
+                // there are deliberately different.
+                let mut after = Vec::new();
+                if let Some(n) = nonce {
+                    wire::encode_fixed_data(wire::TSP_NONCE, &n, &mut after);
+                }
+                wire::encode_hops(&route, &mut after);
+                match referral.as_ref() {
+                    Some(r) => wire::encode_variable_data(
+                        wire::TSP_VID,
+                        r.new_vid.as_bytes(),
+                        &mut after,
+                    ),
+                    None => wire::encode_count(wire::TSP_HOP_LIST, 0, &mut after),
+                }
+
+                let recomputed = derive_said(envelope_fields, &type_code, sender_field, &after);
                 if recomputed != first_digest {
                     return Err(TspError::Verification(
                         "TSP_Digest does not match the message it identifies".into(),
@@ -525,6 +690,7 @@ fn decode_payload_frame(
                 }
             },
             route,
+            referral,
         };
         Ok(DecodedFrame {
             kind: MessageType::Control,
@@ -647,13 +813,74 @@ pub fn pack_with_hops(
     sender_signing_key: &[u8; 32],
     receiver_encryption_key: &[u8; 32],
 ) -> Result<PackedMessage, TspError> {
+    pack_inner(
+        body,
+        message_type,
+        hops,
+        sender_vid,
+        receiver_vid,
+        sender_signing_key,
+        receiver_encryption_key,
+        None,
+    )
+}
+
+/// Pack an invite that introduces `new_vid` over this relationship (Rev 3
+/// §7.2.5, parallel relationship forming).
+///
+/// `new_vid_signing_key` signs `Signature_new`, which covers the message's
+/// digest and so cannot be produced before packing — which is why the key is
+/// needed here rather than the caller signing beforehand.
+#[allow(clippy::too_many_arguments)]
+pub fn pack_referral_invite(
+    control: &ControlMessage,
+    sender_vid: &str,
+    receiver_vid: &str,
+    sender_signing_key: &[u8; 32],
+    new_vid_signing_key: &[u8; 32],
+    receiver_encryption_key: &[u8; 32],
+) -> Result<PackedMessage, TspError> {
+    if control.referral.is_none() {
+        return Err(TspError::InvalidMessage(
+            "pack_referral_invite needs a control message carrying a referral".into(),
+        ));
+    }
+    pack_inner(
+        &control.encode(),
+        MessageType::Control,
+        &[],
+        sender_vid,
+        receiver_vid,
+        sender_signing_key,
+        receiver_encryption_key,
+        Some(new_vid_signing_key),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pack_inner(
+    body: &[u8],
+    message_type: MessageType,
+    hops: &[String],
+    sender_vid: &str,
+    receiver_vid: &str,
+    sender_signing_key: &[u8; 32],
+    receiver_encryption_key: &[u8; 32],
+    referral_signing_key: Option<&[u8; 32]>,
+) -> Result<PackedMessage, TspError> {
     // 1. Envelope fields. These are the HPKE-Base AAD.
     let envelope = Envelope::new(message_type, sender_vid, receiver_vid);
     let envelope_fields = envelope.encode_fields()?;
 
     // 2. Plaintext payload frame, and the thread digest it carries.
-    let (payload_frame, thread_digest) =
-        encode_payload_frame(body, message_type, hops, sender_vid, &envelope_fields)?;
+    let (payload_frame, thread_digest) = encode_payload_frame(
+        body,
+        message_type,
+        hops,
+        sender_vid,
+        &envelope_fields,
+        referral_signing_key,
+    )?;
 
     // 3. Seal. `aad` binds the ciphertext to the version and both VIDs;
     //    `info` is the fixed protocol code.
@@ -806,6 +1033,7 @@ pub fn message_digest(packed: &PackedMessage) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PrivateVid;
     use ed25519_dalek::SigningKey;
     use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -1080,6 +1308,8 @@ mod tests {
             &[],
             "did:web:alice",
             &fields,
+
+            None,
         )
         .unwrap();
 
@@ -1119,6 +1349,7 @@ mod tests {
             &[],
             "did:web:mallory",
             &fields,
+            None,
         )
         .unwrap();
 
@@ -1447,6 +1678,8 @@ mod tests {
             &[],
             "did:web:bob",
             &fields,
+
+            None,
         )
         .unwrap();
 
@@ -1462,5 +1695,132 @@ mod tests {
             first < second,
             "the echoed invite digest must precede the accept's own"
         );
+    }
+
+    // ---- Rev 3 §7.2.5: parallel relationship forming ----
+
+    /// A referral invite round-trips, and its `Signature_new` verifies against
+    /// the introduced VID's key.
+    #[test]
+    fn a_referral_invite_round_trips_and_its_signature_verifies() {
+        let keys = gen_keys();
+        let new_vid = PrivateVid::generate("did:example:alice-parallel");
+
+        let packed = pack_referral_invite(
+            &ControlMessage::invite_referral("did:example:alice-parallel"),
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &new_vid.signing_key,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        let control = unpacked.control.expect("a referral invite decodes to a control");
+        let referral = control.referral.as_ref().expect("the referral survives");
+        assert_eq!(referral.new_vid, "did:example:alice-parallel");
+
+        verify_referral(&control, "did:example:alice", &new_vid.verifying_key)
+            .expect("Signature_new verifies against the introduced VID");
+    }
+
+    /// The signature is made by the *introduced* VID, not the sender. Checking
+    /// it against the sender's key must fail, or the field would prove nothing
+    /// beyond what the message signature already proves.
+    #[test]
+    fn a_referral_signature_does_not_verify_against_the_senders_key() {
+        let keys = gen_keys();
+        let new_vid = PrivateVid::generate("did:example:alice-parallel");
+
+        let packed = pack_referral_invite(
+            &ControlMessage::invite_referral("did:example:alice-parallel"),
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &new_vid.signing_key,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        let control = unpacked.control.unwrap();
+
+        assert!(
+            verify_referral(&control, "did:example:alice", &keys.sender_sign_pk).is_err(),
+            "the sender's key must not satisfy Signature_new"
+        );
+    }
+
+    /// The signature covers the digest, which covers the envelope — so a
+    /// referral lifted into a message between different VIDs does not verify.
+    /// That is what stops one being replayed into another relationship.
+    #[test]
+    fn a_referral_does_not_survive_being_moved_to_another_relationship() {
+        let keys = gen_keys();
+        let new_vid = PrivateVid::generate("did:example:alice-parallel");
+        let control = ControlMessage::invite_referral("did:example:alice-parallel");
+
+        let to_bob = pack_referral_invite(
+            &control,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &new_vid.signing_key,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        let unpacked = unpack(&to_bob.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        let decoded = unpacked.control.unwrap();
+
+        // Same referral, checked as though it had arrived from a different
+        // sender: the digest in the signed data no longer matches.
+        assert!(
+            verify_referral(&decoded, "did:example:mallory", &new_vid.verifying_key).is_err(),
+            "a referral must not verify under a different sender VID"
+        );
+    }
+
+    /// An invite that introduces nothing carries the empty `-JAA` field, and
+    /// there is nothing to verify.
+    #[test]
+    fn a_plain_invite_carries_no_referral() {
+        let keys = gen_keys();
+        let packed = pack(
+            &ControlMessage::invite().encode(),
+            MessageType::Control,
+            "did:example:alice",
+            "did:example:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
+        let control = unpacked.control.unwrap();
+        assert!(control.referral.is_none());
+        assert!(verify_referral(&control, "did:example:alice", &keys.sender_sign_pk).is_err());
+    }
+
+    /// Packing a referral without the introduced VID's key is refused rather
+    /// than silently producing an invite with an unusable signature.
+    #[test]
+    fn a_referral_invite_needs_the_introduced_vids_key() {
+        let keys = gen_keys();
+        let envelope = Envelope::new(MessageType::Control, "did:example:alice", "did:example:bob");
+        let fields = envelope.encode_fields().unwrap();
+
+        let err = encode_payload_frame(
+            &ControlMessage::invite_referral("did:example:alice-parallel").encode(),
+            MessageType::Control,
+            &[],
+            "did:example:alice",
+            &fields,
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, TspError::Signing(_)), "got {err:?}");
+        let _ = keys;
     }
 }
