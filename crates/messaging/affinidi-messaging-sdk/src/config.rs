@@ -352,7 +352,9 @@ impl Default for ATMConfigBuilder {
             tsp_policy: crate::protocols::tsp::TspPolicy::Off,
             #[cfg(feature = "tsp")]
             tsp_capability_ttl: None,
+            #[cfg(feature = "tsp")]
             tsp_relationship_gating: true,
+            #[cfg(feature = "tsp")]
             tsp_key_state_policy: affinidi_tsp::KeyStatePolicy::default(),
         }
     }
@@ -668,7 +670,9 @@ impl ATMConfigBuilder {
             tsp_policy: self.tsp_policy,
             #[cfg(feature = "tsp")]
             tsp_capability_ttl: self.tsp_capability_ttl,
+            #[cfg(feature = "tsp")]
             tsp_relationship_gating: self.tsp_relationship_gating,
+            #[cfg(feature = "tsp")]
             tsp_key_state_policy: self.tsp_key_state_policy,
         })
     }

@@ -229,7 +229,7 @@ pub mod transports;
 pub mod tsp_wire;
 
 pub use transport_adapter::DidCommTransport;
-pub use tsp_wire::{TSP_MAGIC_BYTE, looks_like_tsp};
+pub use tsp_wire::{TSP_MAGIC_BYTE, TSP_MAGIC_BYTE_LONG, looks_like_tsp};
 
 #[derive(Clone)]
 pub struct ATM {

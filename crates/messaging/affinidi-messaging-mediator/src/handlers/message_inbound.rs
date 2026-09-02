@@ -44,7 +44,15 @@ const DIDCOMM_V1_CONTENT_TYPE: &str = "application/ssi-agent-wire";
 /// as an unsatisfiable requirement.
 #[cfg(not(feature = "tsp"))]
 pub(crate) fn looks_like_tsp_bytes(bytes: &[u8]) -> bool {
-    bytes.first() == Some(&affinidi_messaging_sdk::TSP_MAGIC_BYTE)
+    // Both framings: Rev 3 widened the `-E` count to cover the ciphertext, so a
+    // message over roughly 12 KB is framed `--E#####` and leads with the long
+    // byte instead. Recognising only the short one drops exactly the large
+    // messages.
+    matches!(
+        bytes.first(),
+        Some(&affinidi_messaging_sdk::TSP_MAGIC_BYTE)
+            | Some(&affinidi_messaging_sdk::TSP_MAGIC_BYTE_LONG)
+    )
 }
 
 #[derive(Serialize, Deserialize, Debug)]
