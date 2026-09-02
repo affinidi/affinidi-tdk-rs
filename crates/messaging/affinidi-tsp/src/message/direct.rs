@@ -269,10 +269,7 @@ fn decode_referral(frame: &[u8], pos: &mut usize) -> Result<Option<Referral>, Ts
             "referral field does not fill its own count".into(),
         ));
     }
-    Ok(Some(Referral {
-        new_vid,
-        signature,
-    }))
+    Ok(Some(Referral { new_vid, signature }))
 }
 
 /// Build the bytes `Signature_new` is made over (Rev 3 §9.3).
@@ -356,8 +353,9 @@ fn derive_said(
     before: &[u8],
     after: &[u8],
 ) -> [u8; DIGEST_LEN] {
-    let mut input =
-        Vec::with_capacity(envelope_fields.len() + 3 + before.len() + ENCODED_DIGEST_LEN + after.len());
+    let mut input = Vec::with_capacity(
+        envelope_fields.len() + 3 + before.len() + ENCODED_DIGEST_LEN + after.len(),
+    );
     input.extend_from_slice(envelope_fields);
     input.extend_from_slice(type_code);
     input.extend_from_slice(before);
@@ -795,11 +793,9 @@ fn decode_payload_frame(
                 }
                 wire::encode_hops(&route, &mut after);
                 match referral.as_ref() {
-                    Some(r) => wire::encode_variable_data(
-                        wire::TSP_VID,
-                        r.new_vid.as_bytes(),
-                        &mut after,
-                    ),
+                    Some(r) => {
+                        wire::encode_variable_data(wire::TSP_VID, r.new_vid.as_bytes(), &mut after)
+                    }
                     None => wire::encode_count(wire::TSP_HOP_LIST, 0, &mut after),
                 }
 
@@ -897,9 +893,7 @@ fn decode_signature_frame(data: &[u8], pos: &mut usize) -> Result<[u8; SIG_LEN],
         .checked_mul(3)
         .and_then(|len| pos.checked_add(len))
         .filter(|end| *end <= group_end)
-        .ok_or_else(|| {
-            TspError::InvalidMessage("-K group overruns the -C attachment".into())
-        })?;
+        .ok_or_else(|| TspError::InvalidMessage("-K group overruns the -C attachment".into()))?;
 
     let (index, signature) = wire::decode_indexed_ed25519_signature(data, pos)
         .ok_or_else(|| TspError::InvalidMessage("missing indexed Ed25519 signature".into()))?;
@@ -1228,11 +1222,8 @@ pub fn unpack(
     //    that opens a payload frame. A message is one or the other throughout;
     //    §3.5 forbids mixing.
     let mut pos = decoded.header_len;
-    let ct_range = wire::decode_variable_data_range(
-        wire::TSP_HPKE_BASE_CIPHERTEXT,
-        wire_bytes,
-        &mut pos,
-    );
+    let ct_range =
+        wire::decode_variable_data_range(wire::TSP_HPKE_BASE_CIPHERTEXT, wire_bytes, &mut pos);
     let confidential = ct_range.is_some();
 
     if let Some(range) = ct_range.as_ref() {
@@ -1378,12 +1369,7 @@ mod tests {
         // First byte is the -E count code.
         assert_eq!(packed.bytes[0], 0xf8);
 
-        let unpacked = unpack(
-            &packed.bytes,
-            &keys.receiver_enc_sk,
-            &keys.sender_sign_pk,
-        )
-        .unwrap();
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
 
         assert_eq!(unpacked.payload, payload);
         assert_eq!(unpacked.sender, "did:web:alice.example");
@@ -1408,14 +1394,7 @@ mod tests {
         let mid = tampered.len() / 2;
         tampered[mid] ^= 0xFF;
 
-        assert!(
-            unpack(
-                &tampered,
-                &keys.receiver_enc_sk,
-                    &keys.sender_sign_pk,
-            )
-            .is_err()
-        );
+        assert!(unpack(&tampered, &keys.receiver_enc_sk, &keys.sender_sign_pk,).is_err());
     }
 
     #[test]
@@ -1432,14 +1411,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            unpack(
-                &packed.bytes,
-                &wrong_sk.to_bytes(),
-                    &keys.sender_sign_pk,
-            )
-            .is_err()
-        );
+        assert!(unpack(&packed.bytes, &wrong_sk.to_bytes(), &keys.sender_sign_pk,).is_err());
     }
 
     #[test]
@@ -1455,12 +1427,7 @@ mod tests {
         )
         .unwrap();
 
-        let unpacked = unpack(
-            &packed.bytes,
-            &keys.receiver_enc_sk,
-            &keys.sender_sign_pk,
-        )
-        .unwrap();
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
         assert!(unpacked.payload.is_empty());
     }
 
@@ -1510,12 +1477,8 @@ mod tests {
         // The Rev 2 `G` code must not parse.
         let mut pos = decoded.header_len;
         assert!(
-            wire::decode_variable_data_range(
-                wire::cesr_int("G") as u32,
-                &packed.bytes,
-                &mut pos
-            )
-            .is_none()
+            wire::decode_variable_data_range(wire::cesr_int("G") as u32, &packed.bytes, &mut pos)
+                .is_none()
         );
     }
 
@@ -1612,9 +1575,7 @@ mod tests {
             &[],
             "did:web:alice",
             &fields,
-
             None,
-
             &Padding::None,
         )
         .unwrap();
@@ -1819,7 +1780,10 @@ mod tests {
 
         // ...and, unambiguously, the byte after the VIDs.
         assert_eq!(rev2[d2.header_len], 0x5c, "Rev 2 continues with XAAA");
-        assert_ne!(rev3[d3.header_len], 0x5c, "Rev 3 continues with the F field");
+        assert_ne!(
+            rev3[d3.header_len], 0x5c,
+            "Rev 3 continues with the F field"
+        );
     }
 
     /// A Rev 2 message is refused with a clear error rather than misread. It
@@ -1985,9 +1949,7 @@ mod tests {
             &[],
             "did:web:bob",
             &fields,
-
             None,
-
             &Padding::None,
         )
         .unwrap();
@@ -2026,7 +1988,9 @@ mod tests {
         .unwrap();
 
         let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
-        let control = unpacked.control.expect("a referral invite decodes to a control");
+        let control = unpacked
+            .control
+            .expect("a referral invite decodes to a control");
         let referral = control.referral.as_ref().expect("the referral survives");
         assert_eq!(referral.new_vid, "did:example:alice-parallel");
 
@@ -2238,7 +2202,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(plain.thread_digest, padded.thread_digest);
-        assert!(padded.bytes.len() > plain.bytes.len(), "padding was applied");
+        assert!(
+            padded.bytes.len() > plain.bytes.len(),
+            "padding was applied"
+        );
 
         // And the padded one still verifies its own digest on receive.
         unpack(&padded.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
@@ -2301,7 +2268,10 @@ mod tests {
 
         let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
         assert_eq!(unpacked.payload, b"public announcement");
-        assert!(!unpacked.confidential, "it must report that it was not encrypted");
+        assert!(
+            !unpacked.confidential,
+            "it must report that it was not encrypted"
+        );
 
         // A sealed one reports the opposite, so a receiver can actually tell.
         let sealed = pack(
@@ -2399,7 +2369,10 @@ mod tests {
                 &keys.sender_sign_sk,
             )
             .unwrap_err();
-            assert!(matches!(err, TspError::InvalidMessage(_)), "{kind:?}: {err:?}");
+            assert!(
+                matches!(err, TspError::InvalidMessage(_)),
+                "{kind:?}: {err:?}"
+            );
         }
     }
 

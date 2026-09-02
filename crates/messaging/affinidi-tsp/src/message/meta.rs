@@ -150,7 +150,7 @@ mod tests {
         let sign = SigningKey::generate(&mut rand_10::rng());
         let recv_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         let msg = direct::pack(
-            b"routing-layer!!",  // quadlet-aligned: a real inner is a packed message
+            b"routing-layer!!", // quadlet-aligned: a real inner is a packed message
             MessageType::Routed,
             "did:web:alice",
             "did:web:mediator",

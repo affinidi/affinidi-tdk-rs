@@ -8,9 +8,9 @@ use affinidi_tdk_common::TDKSharedState;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
 #[cfg(feature = "tsp")]
 use tracing::debug;
+use tracing::{error, info, warn};
 
 use crate::config::ListenerConfig;
 use crate::error::{DIDCommServiceError, StartupError};
@@ -424,10 +424,9 @@ impl Listener {
         };
 
         let (payload, sender_vid) = match inbound {
-            affinidi_messaging_sdk::protocols::tsp::InboundTsp::Application {
-                payload,
-                sender,
-            } => (payload, sender),
+            affinidi_messaging_sdk::protocols::tsp::InboundTsp::Application { payload, sender } => {
+                (payload, sender)
+            }
             affinidi_messaging_sdk::protocols::tsp::InboundTsp::Control {
                 control,
                 sender,
@@ -551,7 +550,6 @@ impl Listener {
         Ok(())
     }
 
-
     pub(crate) async fn dispatch_message(
         listener_id: &str,
         atm: &ATM,
@@ -619,8 +617,10 @@ impl Listener {
 #[cfg(feature = "tsp")]
 fn control_message_id(digest: &[u8; 32]) -> String {
     use std::fmt::Write as _;
-    digest.iter().fold(String::from("tsp-control-"), |mut acc, b| {
-        let _ = write!(acc, "{b:02x}");
-        acc
-    })
+    digest
+        .iter()
+        .fold(String::from("tsp-control-"), |mut acc, b| {
+            let _ = write!(acc, "{b:02x}");
+            acc
+        })
 }

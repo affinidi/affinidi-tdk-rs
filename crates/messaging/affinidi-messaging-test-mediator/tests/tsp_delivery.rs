@@ -24,7 +24,9 @@ async fn tsp_direct_message_round_trips_through_the_mediator() {
     // §7.2.2: an application message from a VID with no relationship is
     // discarded, so the endpoints exchange control messages first — as the
     // specification requires of them before any application traffic.
-    env.relate(&alice, &bob).await.expect("alice and bob relate");
+    env.relate(&alice, &bob)
+        .await
+        .expect("alice and bob relate");
 
     let payload = b"hello over TSP";
 
@@ -91,7 +93,9 @@ async fn tsp_routed_message_relays_through_the_mediator() {
     // §7.2.2: an application message from a VID with no relationship is
     // discarded, so the endpoints exchange control messages first — as the
     // specification requires of them before any application traffic.
-    env.relate(&alice, &bob).await.expect("alice and bob relate");
+    env.relate(&alice, &bob)
+        .await
+        .expect("alice and bob relate");
     let mediator_did = env.mediator.did().to_string();
 
     let payload = b"routed hello over TSP";
@@ -151,7 +155,9 @@ async fn tsp_nested_message_relays_through_the_mediator() {
     // §7.2.2: an application message from a VID with no relationship is
     // discarded, so the endpoints exchange control messages first — as the
     // specification requires of them before any application traffic.
-    env.relate(&alice, &bob).await.expect("alice and bob relate");
+    env.relate(&alice, &bob)
+        .await
+        .expect("alice and bob relate");
     let mediator_did = env.mediator.did().to_string();
 
     let payload = b"nested hello over TSP";
@@ -213,7 +219,9 @@ async fn tsp_control_message_relays_through_the_mediator() {
     // §7.2.2: an application message from a VID with no relationship is
     // discarded, so the endpoints exchange control messages first — as the
     // specification requires of them before any application traffic.
-    env.relate(&alice, &bob).await.expect("alice and bob relate");
+    env.relate(&alice, &bob)
+        .await
+        .expect("alice and bob relate");
 
     // Alice sends a relationship-forming invite (a Control message) to Bob.
     let invite = ControlMessage::invite();

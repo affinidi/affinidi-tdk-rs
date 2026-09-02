@@ -39,20 +39,20 @@ pub mod store;
 pub mod vid;
 
 pub use error::TspError;
+pub use keystate::{KeyStatePolicy, ManualClock, SystemClock};
 pub use message::MessageType;
 pub use message::direct::{Padding, pack_padding_message, pack_signed_only};
 pub use message::meta::{MetaEnvelope, TSP_MAGIC_BYTE, is_tsp};
 pub use message::routed::{MAX_HOPS, RouteStep};
-pub use keystate::{KeyStatePolicy, ManualClock, SystemClock};
 pub use relationship::{RelationshipPolicy, RelationshipState};
 pub use vid::resolver::VidResolver;
 #[cfg(feature = "did-resolver")]
 pub use vid::{DidVidResolver, TSP_SERVICE_TYPE};
 pub use vid::{PrivateVid, ResolvedVid};
 
+use keystate::{Clock, KeyStateTracker};
 use message::control::ControlMessage;
 use message::direct::{self, PackedMessage};
-use keystate::{Clock, KeyStateTracker};
 use relationship::RelationshipEvent;
 use store::TspStore;
 use vid::resolver::DelegatingVidResolver;
@@ -322,11 +322,9 @@ impl TspAgent {
                     return Err(first_error);
                 }
                 match self.refresh_key_state(&envelope.sender, now_ms) {
-                    Ok(Some(fresh)) => direct::unpack(
-                        wire,
-                        &our_private.decryption_key,
-                        &fresh.signing_key,
-                    )?,
+                    Ok(Some(fresh)) => {
+                        direct::unpack(wire, &our_private.decryption_key, &fresh.signing_key)?
+                    }
                     // No refresh was possible, so the original failure stands.
                     Ok(None) => return Err(first_error),
                     Err(_) => return Err(first_error),
@@ -463,11 +461,7 @@ impl TspAgent {
         }
         let our_private = self.store.get_private_vid(our_vid)?;
         let prev = self.resolver.resolve(&envelope.sender)?;
-        let unpacked = direct::unpack(
-            wire,
-            &our_private.decryption_key,
-            &prev.signing_key,
-        )?;
+        let unpacked = direct::unpack(wire, &our_private.decryption_key, &prev.signing_key)?;
 
         // The message kind lives in the encrypted payload (the cleartext envelope
         // reports a Direct placeholder), so verify it after unpacking.
@@ -1483,9 +1477,7 @@ mod tests {
             .unwrap();
 
         // The route carried to the first hop ends in Bob's VID, not m2's.
-        let at_m1 = m1
-            .forward_routed("did:example:m1", &layer1.bytes)
-            .unwrap();
+        let at_m1 = m1.forward_routed("did:example:m1", &layer1.bytes).unwrap();
         let layer2 = match at_m1 {
             ForwardOutcome::Relay { to, message } => {
                 assert_eq!(to, "did:example:m2");

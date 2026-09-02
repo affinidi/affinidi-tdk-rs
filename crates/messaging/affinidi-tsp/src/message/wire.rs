@@ -388,7 +388,10 @@ pub fn decode_variable_data_range(
     // accepting a non-canonical primitive would admit two distinct byte
     // sequences for the same value, with two different signature inputs.
     let lead = offset % 3;
-    if s.get(data_begin - lead..data_begin)?.iter().any(|&b| b != 0) {
+    if s.get(data_begin - lead..data_begin)?
+        .iter()
+        .any(|&b| b != 0)
+    {
         return None;
     }
     let range = (data_begin + *pos)..(data_end + *pos);
@@ -454,10 +457,7 @@ pub fn encode_indexed_ed25519_signature(index: u8, signature: &[u8; 64], out: &m
 
 /// Decode an indexed Ed25519 signature primitive, returning `(index,
 /// signature)`. Advances `*pos` past the 66-byte primitive.
-pub fn decode_indexed_ed25519_signature(
-    stream: &[u8],
-    pos: &mut usize,
-) -> Option<(u8, [u8; 64])> {
+pub fn decode_indexed_ed25519_signature(stream: &[u8], pos: &mut usize) -> Option<(u8, [u8; 64])> {
     let hdr = stream.get(*pos..*pos + 2)?;
     let word = ((hdr[0] as u32) << 16) | ((hdr[1] as u32) << 8);
     if word >> 18 != bits(ED25519_SIGNATURE, 6) {
@@ -506,7 +506,11 @@ mod tests {
         //       = 62<<18 | 62<<12 | 4<<6 | 0  -> f8 fe 20 ... wait: check bytes.
         let word1 = ((buf[0] as u32) << 16) | ((buf[1] as u32) << 8) | buf[2] as u32;
         assert_eq!(word1 >> 18, 62, "first character must be '-'");
-        assert_eq!((word1 >> 12) & 0x3f, 62, "second character must be '-', not '0'");
+        assert_eq!(
+            (word1 >> 12) & 0x3f,
+            62,
+            "second character must be '-', not '0'"
+        );
         assert_eq!((word1 >> 6) & 0x3f, TSP_ETS_WRAPPER as u32);
 
         let mut pos = 0;
@@ -711,6 +715,9 @@ mod tests {
         assert_eq!(buf.len(), 18);
         assert_eq!(&buf[..2], &[0xd0, 0x00]);
         let mut pos = 0;
-        assert_eq!(decode_fixed_data::<16>(TSP_NONCE, &buf, &mut pos).unwrap(), nonce);
+        assert_eq!(
+            decode_fixed_data::<16>(TSP_NONCE, &buf, &mut pos).unwrap(),
+            nonce
+        );
     }
 }

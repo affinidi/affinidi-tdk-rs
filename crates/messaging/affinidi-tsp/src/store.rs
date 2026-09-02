@@ -213,12 +213,7 @@ impl TspStore {
     /// where the losing invite is discarded and the winning one adopted in its
     /// place. Prefer [`TspStore::transition_relationship`] everywhere else, so
     /// that illegal transitions stay illegal.
-    pub fn set_relationship_state(
-        &self,
-        our_vid: &str,
-        their_vid: &str,
-        state: RelationshipState,
-    ) {
+    pub fn set_relationship_state(&self, our_vid: &str, their_vid: &str, state: RelationshipState) {
         let key = relationship_key(our_vid, their_vid);
         let mut relationships = self.relationships.write().unwrap();
         if state == RelationshipState::None {

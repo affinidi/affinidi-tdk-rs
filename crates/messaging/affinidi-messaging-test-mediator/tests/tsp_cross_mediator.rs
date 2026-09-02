@@ -303,6 +303,4 @@ async fn an_accept_travels_the_reply_path_the_invite_supplied() {
         final_state.state,
         affinidi_messaging_sdk::protocols::tsp::RelationshipState::Bidirectional
     );
-
 }
-

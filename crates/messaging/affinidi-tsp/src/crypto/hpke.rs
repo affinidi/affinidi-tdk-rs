@@ -296,7 +296,6 @@ const KEM_SUITE_ID: &[u8] = b"KEM\x00\x20";
 /// = HPKE || 0x0020 (DHKEM X25519) || 0x0001 (HKDF-SHA256) || 0x0003 (ChaCha20Poly1305).
 const HPKE_SUITE_ID: &[u8] = b"HPKE\x00\x20\x00\x01\x00\x03";
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

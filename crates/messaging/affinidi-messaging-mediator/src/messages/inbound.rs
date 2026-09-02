@@ -147,20 +147,17 @@ pub(crate) async fn handle_inbound_tsp(
 
     let identity = state.tsp_identity().await?;
     let sender = resolve_tsp_vid(state, &meta.sender, &session.session_id).await?;
-    let unpacked = affinidi_tsp::message::direct::unpack(
-        raw,
-        &identity.decryption_key,
-        &sender.signing_key,
-    )
-    .map_err(|e| {
-        tsp_problem(
-            session,
-            37,
-            "message.tsp.unpack",
-            format!("couldn't unpack TSP layer addressed to mediator: {e}"),
-            StatusCode::BAD_REQUEST,
-        )
-    })?;
+    let unpacked =
+        affinidi_tsp::message::direct::unpack(raw, &identity.decryption_key, &sender.signing_key)
+            .map_err(|e| {
+            tsp_problem(
+                session,
+                37,
+                "message.tsp.unpack",
+                format!("couldn't unpack TSP layer addressed to mediator: {e}"),
+                StatusCode::BAD_REQUEST,
+            )
+        })?;
 
     match unpacked.message_type {
         // We are a relay hop: unwrap our routing layer and forward the onward
@@ -263,9 +260,7 @@ pub(crate) async fn handle_inbound_tsp(
         TspMessageType::Direct
         | TspMessageType::Control
         | TspMessageType::GenericControl
-        | TspMessageType::PaddingOnly => {
-            deliver_tsp_local(state, session, raw).await
-        }
+        | TspMessageType::PaddingOnly => deliver_tsp_local(state, session, raw).await,
     }
 }
 

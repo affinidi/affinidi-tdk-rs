@@ -759,8 +759,14 @@ mod tests {
             .unwrap();
         let policy = config.tsp_key_state_policy();
         assert!(!policy.self_resolving);
-        assert_eq!(policy.reverification_threshold, std::time::Duration::from_secs(1));
-        assert_eq!(policy.resolution_rate_limit, std::time::Duration::from_secs(2));
+        assert_eq!(
+            policy.reverification_threshold,
+            std::time::Duration::from_secs(1)
+        );
+        assert_eq!(
+            policy.resolution_rate_limit,
+            std::time::Duration::from_secs(2)
+        );
     }
 
     /// Policy-rejected pickup messages are **deleted by default** — the

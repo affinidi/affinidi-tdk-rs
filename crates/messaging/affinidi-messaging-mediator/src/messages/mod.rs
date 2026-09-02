@@ -516,4 +516,3 @@ mod delivery_refusal_tests {
         assert!(with_id.contains("msg-1"));
     }
 }
-

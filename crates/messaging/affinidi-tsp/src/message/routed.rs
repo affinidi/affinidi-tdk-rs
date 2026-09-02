@@ -312,7 +312,7 @@ mod tests {
         let hop2 = party("did:web:hop2");
 
         let layer = pack_routed(
-            b"inner-",  // quadlet-aligned
+            b"inner-", // quadlet-aligned
             &["did:web:hop2".into()],
             &alice.vid,
             &hop1.vid,
@@ -353,21 +353,11 @@ mod tests {
         .unwrap();
 
         // mediator opens the outer, gets the opaque inner, cannot read bob's plaintext.
-        let at_mediator = unpack(
-            &nested.bytes,
-            &mediator.enc_sk,
-            &alice.sign_pk,
-        )
-        .unwrap();
+        let at_mediator = unpack(&nested.bytes, &mediator.enc_sk, &alice.sign_pk).unwrap();
         assert_eq!(at_mediator.message_type, MessageType::Nested);
         assert_eq!(at_mediator.payload, inner.bytes);
         assert!(
-            unpack(
-                &at_mediator.payload,
-                &mediator.enc_sk,
-                &alice.sign_pk
-            )
-            .is_err(),
+            unpack(&at_mediator.payload, &mediator.enc_sk, &alice.sign_pk).is_err(),
             "mediator must not be able to open the inner sealed to bob"
         );
 

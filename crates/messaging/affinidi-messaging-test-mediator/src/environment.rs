@@ -90,8 +90,7 @@ pub struct TestEnvironment {
     /// relationship without running a handshake. See
     /// [`TestEnvironment::relate_directly`].
     #[cfg(feature = "tsp")]
-    pub relationship_store:
-        Arc<dyn affinidi_messaging_sdk::protocols::tsp::RelationshipStore>,
+    pub relationship_store: Arc<dyn affinidi_messaging_sdk::protocols::tsp::RelationshipStore>,
 }
 
 /// One participant in an e2e scenario — Alice, Bob, etc. Owns its own
