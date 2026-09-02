@@ -27,7 +27,7 @@ use http::StatusCode;
 #[cfg(any(feature = "didcomm", feature = "tsp"))]
 use sha256::digest;
 #[cfg(feature = "didcomm")]
-use tracing::{Instrument, debug, span, warn};
+use tracing::{Instrument, debug, span};
 
 #[cfg(any(feature = "didcomm", feature = "tsp"))]
 use super::{ProcessMessageResponse, WrapperType};
@@ -313,22 +313,25 @@ async fn deliver_opaque(
         .delivery_decision(&to_hash, Some(&from_hash))
         .await?
     else {
-        return Err(tsp_delivery_refused(
+        return Err(crate::messages::delivery_refused(
             session,
+            None,
             "recipient is not local to this mediator",
         ));
     };
 
     if authz::require_capability(&recipient.acls, Capability::ReceiveMessages).is_err() {
-        return Err(tsp_delivery_refused(
+        return Err(crate::messages::delivery_refused(
             session,
+            None,
             "recipient is not authorized to receive messages through this mediator",
         ));
     }
 
     if !recipient.access_list_allows {
-        return Err(tsp_delivery_refused(
+        return Err(crate::messages::delivery_refused(
             session,
+            None,
             "delivery blocked by the recipient's access list",
         ));
     }
@@ -621,41 +624,6 @@ async fn resolve_tsp_vid(
 
 /// Build a TSP protocol problem report with a single human-readable message.
 #[cfg(feature = "tsp")]
-/// Refuse delivery without saying why.
-///
-/// Spec Rev 3 §3.7: "Any response — an error, a different timing, a change in
-/// subsequent behavior — is information available to a party that has not
-/// authenticated itself." The three reasons a local delivery is refused —
-/// the recipient is not hosted here, it may not receive, its access list
-/// blocked this sender — are each a fact about *another* DID, and answering
-/// them separately lets an authenticated peer enumerate which DIDs this
-/// mediator serves and probe their ACLs. The same reasoning the challenge
-/// path already applies, where an unknown DID is refused identically to a
-/// blocked one.
-///
-/// The reason is logged against the session, so an operator keeps full
-/// diagnostics; only the sender is told nothing.
-///
-/// This refuses rather than acknowledging. A uniform *success* would hide the
-/// reason equally well and would be the stricter reading of §3.7, but it would
-/// tell a sender its message was accepted when it was dropped — the failure
-/// R1.1 exists to prevent, and the one this repository treats as the most
-/// consequential lie a transport can tell.
-fn tsp_delivery_refused(session: &Session, reason: &str) -> MediatorError {
-    warn!(
-        session = %session.session_id,
-        reason = %reason,
-        "TSP delivery refused; the sender is told only that it was refused"
-    );
-    tsp_problem(
-        session,
-        73,
-        "delivery.refused",
-        "Message not accepted for delivery".to_string(),
-        StatusCode::FORBIDDEN,
-    )
-}
-
 fn tsp_problem(
     session: &Session,
     code: u16,
@@ -818,16 +786,10 @@ async fn handle_inbound_didcomm(
                         .delivery_decision(&to_hash, from_hash.as_deref())
                         .await?
                     else {
-                        return Err(MediatorError::problem(
-                            72,
-                            &session.session_id,
+                        return Err(crate::messages::delivery_refused(
+                            session,
                             None,
-                            ProblemReportSorter::Warning,
-                            ProblemReportScope::Message,
-                            "direct_delivery.recipient.unknown",
-                            "Direct Delivery Recipient is not known on this Mediator",
-                            vec![],
-                            StatusCode::FORBIDDEN,
+                            "direct-delivery recipient is not known on this mediator",
                         ));
                     };
 
@@ -898,30 +860,18 @@ async fn handle_inbound_didcomm(
                     if authz::require_capability(&recipient.acls, Capability::ReceiveMessages)
                         .is_err()
                     {
-                        return Err(MediatorError::problem(
-                            74,
-                            &session.session_id,
+                        return Err(crate::messages::delivery_refused(
+                            session,
                             None,
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.receive",
-                            "Recipient DID is not authorized to receive messages through this mediator",
-                            vec![],
-                            StatusCode::FORBIDDEN,
+                            "recipient is not authorized to receive messages through this mediator",
                         ));
                     }
 
                     if !recipient.access_list_allows {
-                        return Err(MediatorError::problem(
-                            73,
-                            &session.session_id,
+                        return Err(crate::messages::delivery_refused(
+                            session,
                             None,
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.access_list.denied",
-                            "Delivery blocked due to ACLs (access_list denied)",
-                            vec![],
-                            StatusCode::FORBIDDEN,
+                            "delivery blocked by the recipient's access list",
                         ));
                     }
 
@@ -1517,55 +1467,3 @@ mod tsp_relay_tests {
         // "no transport URL" error as `Nothing`, and does not resolve again.
     }
 }
-
-#[cfg(test)]
-#[cfg(feature = "tsp")]
-mod tsp_refusal_tests {
-    use super::tsp_delivery_refused;
-    use crate::common::session::Session;
-
-    /// Rev 3 §3.7: the reasons a local TSP delivery is refused must be
-    /// indistinguishable to the sender, or an authenticated peer can enumerate
-    /// which DIDs this mediator serves and probe their access lists.
-    ///
-    /// Asserted here rather than end-to-end because this is where the property
-    /// lives: every refusal goes through one helper that ignores its reason
-    /// when building the response. An e2e comparison would need two recipients
-    /// differing only in why they are refused, and the obvious pair —
-    /// hosted-but-blocked against not-hosted-at-all — is not comparable, since
-    /// an unresolvable DID fails in the client before a request is ever sent.
-    #[test]
-    fn every_refusal_reason_produces_the_same_response() {
-        let session = Session {
-            did: "did:example:alice".to_string(),
-            session_id: "test-session".to_string(),
-            ..Default::default()
-        };
-
-        let reasons = [
-            "recipient is not local to this mediator",
-            "recipient is not authorized to receive messages through this mediator",
-            "delivery blocked by the recipient's access list",
-        ];
-
-        let rendered: Vec<String> = reasons
-            .iter()
-            .map(|r| format!("{:?}", tsp_delivery_refused(&session, r)))
-            .collect();
-
-        for other in &rendered[1..] {
-            assert_eq!(
-                &rendered[0], other,
-                "refusals must be indistinguishable to the sender"
-            );
-        }
-
-        for reason in reasons {
-            assert!(
-                !rendered[0].contains(reason),
-                "the response leaked the reason: {reason}"
-            );
-        }
-    }
-}
-

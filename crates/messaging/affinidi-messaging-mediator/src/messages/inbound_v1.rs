@@ -247,12 +247,10 @@ async fn deliver_v1_forward(
     let Some(to_did) = state.database.v1_routing_key_lookup(to_verkey).await? else {
         // Deliberately the same shape of answer as "no such account": a prober
         // learns only that this mediator will not route for that verkey.
-        return Err(v1_problem(
+        return Err(crate::messages::delivery_refused(
             session,
-            58,
-            "direct_delivery.recipient.unknown",
-            "no local account is bound to that DIDComm v1 routing key".to_string(),
-            StatusCode::NOT_FOUND,
+            None,
+            "no local account is bound to that DIDComm v1 routing key",
         ));
     };
 
@@ -266,32 +264,26 @@ async fn deliver_v1_forward(
             %to_verkey,
             "v1 routing key resolves to a DID with no account record; treating as unknown"
         );
-        return Err(v1_problem(
+        return Err(crate::messages::delivery_refused(
             session,
-            58,
-            "direct_delivery.recipient.unknown",
-            "no local account is bound to that DIDComm v1 routing key".to_string(),
-            StatusCode::NOT_FOUND,
+            None,
+            "no local account is bound to that DIDComm v1 routing key",
         ));
     };
 
     if authz::require_capability(&recipient.acls, Capability::ReceiveMessages).is_err() {
-        return Err(v1_problem(
+        return Err(crate::messages::delivery_refused(
             session,
-            74,
-            "authorization.receive",
-            "Recipient DID is not authorized to receive messages through this mediator".to_string(),
-            StatusCode::FORBIDDEN,
+            None,
+            "recipient is not authorized to receive messages through this mediator",
         ));
     }
 
     if !recipient.access_list_allows {
-        return Err(v1_problem(
+        return Err(crate::messages::delivery_refused(
             session,
-            73,
-            "authorization.access_list.denied",
-            "Delivery blocked due to ACLs (access_list denied)".to_string(),
-            StatusCode::FORBIDDEN,
+            None,
+            "delivery blocked by the recipient's access list",
         ));
     }
 

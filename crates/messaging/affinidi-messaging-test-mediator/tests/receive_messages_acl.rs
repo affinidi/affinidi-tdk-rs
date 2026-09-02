@@ -133,9 +133,12 @@ async fn direct_delivery_is_refused_when_recipient_lacks_receive_messages() {
         .await
         .expect_err("delivery must be refused when the recipient lacks RECEIVE_MESSAGES");
 
+    // The refusal is uniform: a sender is not told which check failed, so this
+    // asserts the shared code and that the specific reason did not leak. The
+    // reason goes to the mediator's log instead.
     assert!(
-        err.contains("authorization.receive") || err.contains("not authorized to receive"),
-        "expected a RECEIVE_MESSAGES denial, got: {err}"
+        err.contains("delivery.refused") && !err.contains("authorization.receive"),
+        "expected the uniform refusal, got: {err}"
     );
     assert_eq!(
         inbox_len(&env, &bob).await,

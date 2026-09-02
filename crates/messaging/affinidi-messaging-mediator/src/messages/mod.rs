@@ -1,3 +1,56 @@
+/// Refuse delivery without saying why.
+///
+/// The reasons a message is not delivered to a local recipient — no such
+/// account here, the recipient may not receive, its access list blocked this
+/// sender, it does not accept anonymous or forwarded messages — are each a fact
+/// about *another* DID. Answering them apart lets a sender enumerate which DIDs
+/// this mediator serves and probe their access lists, one refusal at a time.
+///
+/// So every one of them returns this. The specific reason is logged against the
+/// session, so an operator keeps full diagnostics and only the sender is told
+/// nothing.
+///
+/// The same reasoning the challenge path already applies, where an unknown DID
+/// is refused identically to a blocked one, and the same answer the TSP
+/// delivery path gives. Spec Rev 3 §3.7 requires it of TSP; nothing requires it
+/// of DIDComm, but the leak is identical and so is the fix, and a mediator that
+/// closed it on one protocol and left it open on the other would simply be
+/// probed over the other.
+///
+/// This refuses rather than acknowledging. A uniform *success* would conceal
+/// the reason equally well and is the stricter reading of §3.7, but it would
+/// tell a sender its message was accepted when it was dropped — the failure
+/// R1.1 exists to prevent, and the one this repository treats as the most
+/// consequential lie a transport can tell.
+///
+/// Gated on `didcomm` rather than on both protocols because every supported
+/// build has it: `default` includes `didcomm`, and `tsp` is additive on top.
+/// A `tsp`-without-`didcomm` build does not compile for unrelated reasons
+/// already, so widening this would buy nothing.
+#[cfg(feature = "didcomm")]
+pub(crate) fn delivery_refused(
+    session: &Session,
+    message_id: Option<String>,
+    reason: &str,
+) -> MediatorError {
+    tracing::warn!(
+        session = %session.session_id,
+        reason = %reason,
+        "delivery refused; the sender is told only that it was refused"
+    );
+    MediatorError::problem(
+        73,
+        &session.session_id,
+        message_id,
+        ProblemReportSorter::Error,
+        ProblemReportScope::Protocol,
+        "delivery.refused",
+        "Message not accepted for delivery",
+        vec![],
+        StatusCode::FORBIDDEN,
+    )
+}
+
 #[cfg(feature = "didcomm")]
 use self::protocols::ping;
 #[cfg(feature = "didcomm")]
@@ -395,3 +448,72 @@ impl MessageHandler for Message {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg(feature = "didcomm")]
+mod delivery_refusal_tests {
+    use super::delivery_refused;
+    use crate::common::session::Session;
+
+    fn session() -> Session {
+        Session {
+            did: "did:example:alice".to_string(),
+            session_id: "test-session".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Every reason a delivery is refused must look the same to the sender.
+    ///
+    /// Each reason is a fact about another DID — whether it is hosted here,
+    /// what its access list says, whether it accepts anonymous or forwarded
+    /// messages. Answering them apart lets a sender enumerate the mediator's
+    /// accounts and probe their ACLs one refusal at a time.
+    ///
+    /// Asserted here because this is where the property lives: every refusal
+    /// across the direct, forwarded and v1 paths goes through this one helper,
+    /// which ignores its reason when building the response.
+    #[test]
+    fn every_reason_produces_the_same_response() {
+        let reasons = [
+            "direct-delivery recipient is not known on this mediator",
+            "recipient is not authorized to receive messages through this mediator",
+            "delivery blocked by the recipient's access list",
+            "recipient is not accepting anonymous messages",
+            "recipient is not accepting forwarded messages",
+            "no local account is bound to that DIDComm v1 routing key",
+        ];
+
+        let rendered: Vec<String> = reasons
+            .iter()
+            .map(|r| format!("{:?}", delivery_refused(&session(), None, r)))
+            .collect();
+
+        for other in &rendered[1..] {
+            assert_eq!(
+                &rendered[0], other,
+                "refusals must be indistinguishable to the sender"
+            );
+        }
+
+        for reason in reasons {
+            assert!(
+                !rendered[0].contains(reason),
+                "the response leaked the reason: {reason}"
+            );
+        }
+    }
+
+    /// A message id is carried through — it identifies the sender's *own*
+    /// message, so returning it reveals nothing about a third party and lets a
+    /// legitimate sender correlate the refusal with what it sent.
+    #[test]
+    fn the_senders_own_message_id_is_still_returned() {
+        let with_id = format!(
+            "{:?}",
+            delivery_refused(&session(), Some("msg-1".to_string()), "any reason")
+        );
+        assert!(with_id.contains("msg-1"));
+    }
+}
+
