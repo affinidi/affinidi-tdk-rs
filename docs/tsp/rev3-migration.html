@@ -438,24 +438,24 @@
   <header class="masthead">
     <div class="eyebrow">affinidi-tdk-rs &middot; crates/messaging/affinidi-tsp &middot; 1 September 2026</div>
     <h1>TSP Rev 3 Migration</h1>
-    <p class="standfirst">Rev 3 of the Trust Spanning Protocol deletes the HPKE mode our crypto layer implements and rewrites every payload layout we emit. This is what changed, what it costs us, and the order to do it in.</p>
+    <p class="standfirst">Rev 3 of the Trust Spanning Protocol deletes the HPKE mode our crypto layer implements and rewrites every payload layout we emit. This is what changed, what it cost us, and where the work stands.</p>
   </header>
 
   <div class="status">
     <div class="status-cell">
       <div class="status-label">Spec</div>
       <div class="status-value"><span class="dot dot-behave"></span>PR #63 open</div>
-      <div class="status-note">trustoverip/tswg-tsp-specification &middot; +409/&minus;305 in <code>spec/spec.md</code> &middot; proposed as the R1 candidate. Test vectors deferred until after review.</div>
+      <div class="status-note">trustoverip/tswg-tsp-specification &middot; proposed as the R1 candidate. Appendix A test vectors now published. Two questions open from our review: the version field's layout, and one truncated vector.</div>
     </div>
     <div class="status-cell">
       <div class="status-label">Reference SDK</div>
-      <div class="status-value"><span class="dot dot-break"></span>Already migrated</div>
-      <div class="status-note">openwallet-foundation-labs/tsp &middot; PRs #332, #333, #335, #336 merged to the <code>rev3</code> branch. Latest release <code>v0.9.0-alpha2</code> is still Rev 2.</div>
+      <div class="status-value"><span class="dot dot-behave"></span>On <code>rev3</code>, one step behind</div>
+      <div class="status-note">openwallet-foundation-labs/tsp &middot; interoperates with us 14/14. Still emits <code>YTSP-AAB</code> and discards MINOR, so it has not taken the version change; harmless in both directions because neither side gates on MINOR.</div>
     </div>
     <div class="status-cell">
       <div class="status-label">Us</div>
-      <div class="status-value"><span class="dot dot-break"></span>Rev 2, 14/14 interop</div>
-      <div class="status-note"><code>affinidi-tsp</code> 0.1.15 &middot; a byte-exact port of <code>tsp-sdk</code> 0.9.0-alpha2. Goes to 0/14 the day they cut a release.</div>
+      <div class="status-value"><span class="dot dot-safe"></span>Rev 3, 14/14 interop</div>
+      <div class="status-note">Branch <code>tsp-rev3</code> &middot; every planned area landed, plus six of the seven in-scope spec vectors passing (the seventh is the truncated one). Two conformance defects found and fixed along the way.</div>
     </div>
   </div>
 
@@ -467,6 +467,44 @@
       </div>
       <p>There is no partial-compatibility path. The envelope layout, the ciphertext code, the AAD and <code>info</code> inputs, and all five payload layouts change together, so a message is either wholly Rev 2 or wholly Rev 3. Everything below follows from that.</p>
       <p>The mitigating fact is that the reference SDK has already done this work in the open across four well-documented PRs, and our crate is a deliberate port of theirs. Their sequencing is a tested migration order, not a guess — the plan at the bottom of this page mirrors it.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where it stands</h2>
+    <p class="h2-sub">Every area below the fold is done; this is what the plan did not anticipate</p>
+
+    <div class="col">
+      <div class="lede">
+        <p>All sixteen areas in the plan landed, and the branch interoperates 14/14 with the reference across direct, routed, nested, 2&nbsp;MiB, invite, accept and cancel. The rest of this page is the analysis that produced that plan, and remains accurate as a description of Rev 3. What follows is what turned up once the work was underway &mdash; none of it visible from reading the diff.</p>
+      </div>
+
+      <h3>Two conformance defects, found by reading the spec against the code</h3>
+      <p>The Rev 3 text carries 42 normative statements at MUST level and 14 at SHOULD. Auditing the branch against each found one violation in either set, and both had real consequences rather than being paperwork.</p>
+      <ul class="plain">
+        <li><strong>&sect;5.3.3 &mdash; a relayed endpoint-to-endpoint VID was persisted.</strong> An intermediary &ldquo;MUST NOT store <code>VID_a2</code> and <code>VID_b2</code> in any persistent storage&rdquo;. When the mediator unwrapped a metadata-privacy nesting and the inner recipient was elsewhere, it queued the forward with that recipient's VID in plaintext &mdash; and the forward queue is durable by design. A transit mediator was accumulating <em>(sender &rarr; far endpoint)</em> pairs from relationships that were not its own. Nothing needed the plaintext: delivery uses the endpoint URL resolved at enqueue time, and lookup uses the hash.</li>
+        <li><strong>&sect;9.4 &mdash; padding messages were delivered, not discarded.</strong> A padding-only message carries no relationship control payload, so it fell through to the application path and arrived at the peer as an <em>empty message from a contact</em>. It exists to make traffic analysis harder, so delivering it is worse than not sending it. The same dispatch collapsed <code>XCTL</code> into <code>XSCS</code>, discarding the one thing a separate type code conveys.</li>
+      </ul>
+
+      <h3>Things the plan did not know it needed</h3>
+      <ul class="plain">
+        <li><strong>Relationship forming has more shapes than Rev 2 had.</strong> Routed relationship forming (<code>Reply_Path</code>, &sect;7.2.4) and parallel relationship forming (<code>Referral_Field</code>, &sect;7.2.5). The second is subtler than it looks: a referral names a pair that does not fully exist yet, so it advances nothing on arrival &mdash; the receiver has not chosen its own new VID, which is the decision the introduction asks for.</li>
+        <li><strong>Two latent bugs predating Rev 3.</strong> <code>decode_count</code> returned long-form counts with the identifier bits still in them, and four separate ingress classifiers knew only the short count code. Neither could fire until Rev 3 widened the <code>-E</code> count to cover the ciphertext, which made the long form reachable for the first time. The constants had never drifted; the predicates had.</li>
+        <li><strong>Features with only one half built.</strong> <code>affinidi-tsp</code> could pack padding and upper-layer control messages, but nothing in the SDK sent either &mdash; a countermeasure and a control channel that could be received and never used.</li>
+      </ul>
+
+      <h3>Two questions raised upstream</h3>
+      <ul class="plain">
+        <li><strong>The version field.</strong> Rev 3 as proposed kept Rev 2's <code>YTSP-AAB</code> across a wire-breaking revision, leaving the two indistinguishable at the envelope and a structural probe &mdash; on a field Rev 3 <em>deletes</em> &mdash; as the only discriminator. Raised, and changed upstream to <code>YTSP-ABA</code>. Sam Smith has since questioned the three-component reading itself: under 1&nbsp;character MAJOR and 2&nbsp;characters MINOR, <code>ABA</code> reads as version 64 rather than 2, and Rev 3 should be <code>YTSP-AAC</code>. Unsettled, so we hold at what the spec and its vectors currently say.</li>
+        <li><strong>A truncated test vector.</strong> <code>control-rfd</code> is 393 characters, a length base64 cannot produce. Every TSP message is <code>3 + count&times;3 + 72</code> bytes and every other vector satisfies that identity exactly; this one is three characters short of its own declared length, lost in editing. Reported, and pinned in our suite as an assertion that starts failing when the vector is republished.</li>
+      </ul>
+
+      <h3>Deliberately not built</h3>
+      <ul class="plain">
+        <li><strong>Libsodium Sealed Box.</strong> &sect;8 keeps it for existing implementations while directing new ones to HPKE-Base. Its two vectors are carried in our fixture unexercised, so the decision is reversible.</li>
+        <li><strong>The post-quantum KEM</strong> (<code>X25519MLKEM768</code>). Would mean replacing our HPKE internals, which currently pass the RFC&nbsp;9180 A.2 known-answer vectors. A peer publishing only an ML-KEM key already fails cleanly rather than being misread, so nothing is silently wrong in the meantime.</li>
+        <li><strong>ML-DSA-65.</strong> Its code point <code>1AAQ</code> is provisional pending CESR issue #14, so implementing it now would pin a value that may move.</li>
+      </ul>
     </div>
   </section>
 
