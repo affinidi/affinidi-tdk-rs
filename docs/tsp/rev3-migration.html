@@ -450,7 +450,7 @@
     <div class="status-cell">
       <div class="status-label">Reference SDK</div>
       <div class="status-value"><span class="dot dot-behave"></span>On <code>rev3</code>, one step behind</div>
-      <div class="status-note">openwallet-foundation-labs/tsp &middot; interoperates with us 14/14. Still emits <code>YTSP-AAB</code> and discards MINOR, so it has not taken the version change; harmless in both directions because neither side gates on MINOR.</div>
+      <div class="status-note">openwallet-foundation-labs/tsp &middot; interoperates with us 14/14. Still emits <code>YTSP-AAB</code> and discards MINOR, so it has taken neither version change; harmless in both directions because neither side gates on MINOR.</div>
     </div>
     <div class="status-cell">
       <div class="status-label">Us</div>
@@ -495,7 +495,7 @@
 
       <h3>Two questions raised upstream</h3>
       <ul class="plain">
-        <li><strong>The version field.</strong> Rev 3 as proposed kept Rev 2's <code>YTSP-AAB</code> across a wire-breaking revision, leaving the two indistinguishable at the envelope and a structural probe &mdash; on a field Rev 3 <em>deletes</em> &mdash; as the only discriminator. Raised, and changed upstream to <code>YTSP-ABA</code>. Sam Smith has since questioned the three-component reading itself: under 1&nbsp;character MAJOR and 2&nbsp;characters MINOR, <code>ABA</code> reads as version 64 rather than 2, and Rev 3 should be <code>YTSP-AAC</code>. Unsettled, so we hold at what the spec and its vectors currently say.</li>
+        <li><strong>The version field.</strong> Rev 3 as proposed kept Rev 2's <code>YTSP-AAB</code> across a wire-breaking revision, leaving the two indistinguishable at the envelope and a structural probe &mdash; on a field Rev 3 <em>deletes</em> &mdash; as the only discriminator. Raised, and changed upstream to <code>YTSP-ABA</code>. Sam Smith has since questioned the three-component reading itself: under 1&nbsp;character MAJOR and 2&nbsp;characters MINOR, <code>ABA</code> reads as version 64 rather than 2. We now emit <code>YTSP-AAC</code>, which is where that argument lands, ahead of the spec text. It costs nothing to be early: only MAJOR gates processability, MAJOR is the same either way, and the published vectors still verify because a message's digest covers the version bytes <em>it</em> carries.</li>
         <li><strong>A truncated test vector.</strong> <code>control-rfd</code> is 393 characters, a length base64 cannot produce. Every TSP message is <code>3 + count&times;3 + 72</code> bytes and every other vector satisfies that identity exactly; this one is three characters short of its own declared length, lost in editing. Reported, and pinned in our suite as an assertion that starts failing when the vector is republished.</li>
       </ul>
 
@@ -559,7 +559,7 @@
         </div>
         <div class="wire-body">
 <pre><span class="k">-E</span>&lt;count&gt;            <span class="note">count covers header only</span>
-  YTSP-AAB             <span class="note">0.0.1</span>
+  YTSP-AAB             <span class="note">0.1</span>
   <span class="k">B</span>  sender-VID
   <span class="k">B</span>  receiver-VID
   <span class="gone">X 00 00</span>            <span class="note">XAAA marker</span>
@@ -581,7 +581,7 @@ aad  = "" (empty)</span></pre>
         </div>
         <div class="wire-body">
 <pre><span class="k">-E</span>&lt;count&gt;            <span class="new">count now covers ciphertext</span>
-  YTSP-<span class="new">ABA</span>           <span class="new">0.1.0, was 0.0.1</span>
+  YTSP-<span class="new">AAC</span>           <span class="new">0.2, was 0.1</span>
   <span class="k">4B</span> sender-VID
   <span class="k">4B</span> receiver-VID <span class="new">| 4BAA</span>
                      <span class="new">(XAAA deleted)</span>
@@ -703,7 +703,7 @@ aad  = version &#8214; VID_sndr &#8214; VID_rcvr</span></pre>
             <td class="sev"></td>
             <td class="area">Version</td>
             <td class="where">wire.rs:decode_version</td>
-            <td>MAJOR must gate processability; separate <code>NotTsp</code> from <code>VersionMismatch</code>. The constant moves to <code>0.1.0</code> (<code>YTSP-ABA</code>): Rev 3 as proposed left it at Rev 2's <code>0.0.1</code>, which would have made the revisions indistinguishable at the envelope — <a href="https://github.com/trustoverip/tswg-tsp-specification/pull/63">raised on PR&nbsp;#63</a> and adopted upstream.</td>
+            <td>MAJOR must gate processability; separate <code>NotTsp</code> from <code>VersionMismatch</code>. The constant moves to <code>0.2</code> (<code>YTSP-AAC</code>): Rev 3 as proposed left it at Rev 2's value, which would have made the revisions indistinguishable at the envelope — <a href="https://github.com/trustoverip/tswg-tsp-specification/pull/63">raised on PR&nbsp;#63</a>. The field is MAJOR.MINOR, two components; PATCH cannot by definition change anything a receiver could act on.</td>
             <td><span class="chip chip-behave">Behavioural</span></td>
           </tr>
           <tr class="h">

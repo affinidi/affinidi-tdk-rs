@@ -16,19 +16,37 @@ Wire format:
   signature alone, which is where Rev 3 puts it. The ciphertext primitive code
   changes with it, `G` (6) → `F` (5). Suite is unchanged:
   DHKEM(X25519, HKDF-SHA256) with ChaCha20Poly1305. `info` is now `YTSP-`.
-- **The version marker is `YTSP-ABA` (0.1.0)**, was Rev 2's `YTSP-AAB` (0.0.1).
-  Rev 3 as proposed kept the old constant across a revision that changes the
-  crypto mode, the ciphertext code, the long count-code prefix and every payload
-  layout — leaving the two revisions advertising the same version, and a
-  structural probe on a field Rev 3 *deletes* as the only way to tell them apart.
-  Raised on [spec PR #63][pr63] and changed upstream.
+- **The version marker is `YTSP-AAC` (0.2)**, was Rev 2's `YTSP-AAB` (0.1), and
+  the field is **MAJOR.MINOR — two components, not three**.
 
-  Only MAJOR gates processability; MINOR and PATCH are carried, per §9.1's semver
-  reading. A parse that fails against a frame whose version is not ours is
-  re-reported as `TspError::RevisionMismatch`, naming both revisions and carrying
-  the underlying error — a Rev 2 frame otherwise dies at the ciphertext selector
-  with "missing F ciphertext field", which points at the crypto layer for a
-  problem that is nothing of the sort.
+  Rev 3 as proposed kept Rev 2's constant across a revision that changes the
+  crypto mode, the ciphertext code, the long count-code prefix and every payload
+  layout, leaving the two revisions advertising the same version and a structural
+  probe on a field Rev 3 *deletes* as the only discriminator. Raised on
+  [spec PR #63][pr63]; upstream changed it to `ABA`, reading the three characters
+  as MAJOR, MINOR, PATCH.
+
+  We do not follow that reading. PATCH has no role in a wire version — semver
+  defines it as a backward-compatible bug fix, a change that by definition cannot
+  alter what goes over the wire, so a receiver can never act on it. The two
+  readings also disagree about the value: the trailing 12 bits are one number
+  under MAJOR.MINOR, so Rev 2 is 1, `ABA` is **64**, and the next version is
+  `AAC` = 2. The jump to 64 is an artifact of splitting the field. Raised
+  upstream by Sam Smith; this anticipates that resolution rather than waiting
+  for it.
+
+  **Nothing about interoperating depends on the choice.** Only MAJOR gates
+  processability, MAJOR is the same first character either way, and neither
+  implementation refuses a message on MINOR — the reference discards it entirely.
+  The published Appendix A vectors carry `ABA` and still verify here, because a
+  message's digest and signature cover the version bytes *it* carries, not ours;
+  the vector suite and the 14/14 interop run both confirm it.
+
+  A parse that fails against a frame whose version is not ours is re-reported as
+  `TspError::RevisionMismatch`, naming both revisions and carrying the underlying
+  error — a Rev 2 frame otherwise dies at the ciphertext selector with "missing F
+  ciphertext field", which points at the crypto layer for a problem that is
+  nothing of the sort.
 
 [pr63]: https://github.com/trustoverip/tswg-tsp-specification/pull/63
 - **Long count codes are `--X#####`**, were Rev 2's `-0X#####`.

@@ -54,15 +54,13 @@ pub enum TspError {
     /// ciphertext field", which points an implementer at the crypto layer for a
     /// problem that is nothing of the sort.
     #[error(
-        "TSP revision mismatch: message is {found_major}.{found_minor}.{found_patch}, this build          speaks {supported_major}.{supported_minor}.{supported_patch} ({source})"
+        "TSP revision mismatch: message is {found_major}.{found_minor}, this build speaks {supported_major}.{supported_minor} ({source})"
     )]
     RevisionMismatch {
         found_major: u16,
-        found_minor: u8,
-        found_patch: u8,
+        found_minor: u16,
         supported_major: u16,
-        supported_minor: u8,
-        supported_patch: u8,
+        supported_minor: u16,
         source: Box<TspError>,
     },
 

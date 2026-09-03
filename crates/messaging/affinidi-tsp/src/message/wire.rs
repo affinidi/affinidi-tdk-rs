@@ -162,51 +162,50 @@ pub const YTSP: [u8; 3] = cesr_data("YTSP");
 /// (Rev 3 §8). Five ASCII characters, not the 3-byte binary [`YTSP`] marker.
 pub const TSP_INFO: &[u8] = b"YTSP-";
 
-/// TSP version `(major, minor, patch)` advertised on the wire, encoded as the
-/// `YTSP-###` marker of §9.1 — `YTSP-ABA` for `0.1.0`.
+/// TSP version `(major, minor)` advertised on the wire, encoded as the
+/// `YTSP-###` marker of §9.1 — `YTSP-AAC` for `0.2`.
 ///
-/// Rev 3 moved this from Rev 2's `0.0.1` (`YTSP-AAB`). It did not at first: the
-/// PR carried the same constant across a revision that changes the crypto mode,
-/// the ciphertext code, the long count-code prefix and every payload layout, so
-/// the two revisions advertised the same version and a Rev 2 frame could only be
-/// told from a Rev 3 one by probing a field Rev 3 deletes. §9.1's own rule says
-/// MINOR tracks code-table changes, and Rev 3 changes the table it pins
-/// (`--AAACAA` → `-_AAACAA`), so MINOR was the version component due to move.
-/// Raised on the spec PR and adopted upstream.
+/// # Two components, not three
 ///
-/// # The three components are contested, and this may become `(0, 2)`
+/// The marker is one character of MAJOR and two of MINOR. The published §9.1
+/// text reads the three characters as MAJOR, MINOR, PATCH instead, and gives
+/// the current version as `YTSP-ABA`; we do not follow it, deliberately.
 ///
-/// §9.1 currently reads the three characters as MAJOR, MINOR, PATCH, which is
-/// what this tuple encodes. On the same PR Sam Smith notes that the agreed
-/// layout was 1 character MAJOR and 2 characters MINOR, and that PATCH has no
-/// role in a wire version at all: semver defines it as a backward-compatible
-/// bug fix, which by definition cannot change what goes over the wire, so a
-/// receiver can never act on it.
+/// PATCH has no role in a wire version. Semver defines it as a
+/// backward-compatible bug fix — a change that by definition cannot alter what
+/// goes over the wire — so a receiver can never act on it, and six bits of
+/// every envelope would carry something no peer can use. Semver versions code;
+/// a library implementing TSP has two versions, its own and the protocol's, and
+/// they are not the same number.
 ///
-/// The wire bytes are the same either way; only the trailing 12 bits are read
-/// differently — as one MINOR, or as MINOR and PATCH of 6 bits each. Which
-/// matters, because the two readings disagree about the value:
+/// The two readings also disagree about the value, which is how the split shows
+/// itself. The trailing 12 bits are identical on the wire; only their
+/// interpretation differs:
 ///
 /// ```text
 /// marker                MAJOR   trailing 12 bits   MAJOR.MINOR   MAJOR.MINOR.PATCH
 /// AAB  (Rev 2)              0                  1           0.1               0.0.1
-/// ABA  (as published)       0                 64          0.64               0.1.0
-/// AAC                       0                  2           0.2               0.0.2
+/// ABA  (published Rev 3)    0                 64          0.64               0.1.0
+/// AAC  (here)               0                  2           0.2               0.0.2
 /// ```
 ///
-/// Rev 2 was 1 and the next version became 64 — an artifact of the split, not a
-/// version anyone chose. Under MAJOR.MINOR, Rev 3 is `YTSP-AAC`.
+/// Rev 2 was 1 and `ABA` reads as 64 — a jump that is an artifact of splitting
+/// the field, not a version anyone chose. Raised on the spec PR by Sam Smith,
+/// whose reading this follows; ours anticipates the resolution rather than
+/// waiting for it, on the grounds that `AAC` is where it lands if the argument
+/// holds.
 ///
-/// We hold at `ABA` deliberately: it is what §9.1 says and what the published
-/// Appendix A vectors carry, and `tests/spec_vectors.rs` checks against those.
-/// Moving first would fail conformance with the specification as it stands.
-/// When it settles this becomes one constant and the split in `decode_version`;
-/// the MAJOR gate is unaffected, since MAJOR is the same first character under
-/// both readings.
-pub const TSP_VERSION: (u16, u8, u8) = (0, 1, 0);
+/// Nothing about interoperating depends on the choice. Only MAJOR gates
+/// processability, MAJOR is the same first character under both readings, and
+/// neither the reference implementation nor this one refuses a message on
+/// MINOR — the reference discards MINOR entirely. The published Appendix A
+/// vectors carry `ABA` and still verify here, because a message's digest and
+/// signature cover the version bytes *it* carries, not ours.
+pub const TSP_VERSION: (u16, u16) = (0, 2);
 
+/// MINOR occupies the whole 12-bit count of the version code.
 const fn encoded_version() -> u16 {
-    (TSP_VERSION.1 as u16) << 6 | (TSP_VERSION.2 as u16)
+    TSP_VERSION.1
 }
 
 // ---- Encoding ----
@@ -459,24 +458,24 @@ pub fn decode_variable_data(identifier: u32, stream: &[u8], pos: &mut usize) -> 
 /// on the parsing path and wrong when the question is "what revision is this?".
 /// Used to attribute a failed parse to a revision mismatch, where the frame has
 /// by definition not parsed and the answer is wanted anyway.
-pub fn decode_frame_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u8, u8), TspError> {
+pub fn decode_frame_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u16), TspError> {
     decode_count(TSP_ETS_WRAPPER, stream, pos)
         .ok_or_else(|| TspError::NotTsp("missing -E envelope frame".into()))?;
     read_version(stream, pos)
 }
 
-pub fn decode_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u8, u8), TspError> {
-    let (major, minor, patch) = read_version(stream, pos)?;
+pub fn decode_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u16), TspError> {
+    let (major, minor) = read_version(stream, pos)?;
     if major != TSP_VERSION.0 {
         return Err(TspError::VersionMismatch {
             found: major,
             supported: TSP_VERSION.0,
         });
     }
-    Ok((major, minor, patch))
+    Ok((major, minor))
 }
 
-fn read_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u8, u8), TspError> {
+fn read_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u16), TspError> {
     let hdr = stream
         .get(*pos..*pos + YTSP.len())
         .ok_or_else(|| TspError::NotTsp("truncated version marker".into()))?;
@@ -493,9 +492,9 @@ fn read_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u8, u8), TspErro
         return Err(TspError::NotTsp("malformed version count code".into()));
     }
     let major = ((word >> 12) & mask(6)) as u16;
-    let packed = word & mask(12);
+    let minor = (word & mask(12)) as u16;
     *pos += 3;
-    Ok((major, (packed >> 6) as u8, (packed & mask(6)) as u8))
+    Ok((major, minor))
 }
 
 /// Encode an indexed Ed25519 signature primitive (Rev 3 §9.5).
@@ -633,7 +632,7 @@ mod tests {
         let mut buf = Vec::new();
         encode_version(&mut buf);
         let mut pos = 0;
-        assert_eq!(decode_version(&buf, &mut pos).unwrap(), (0, 1, 0));
+        assert_eq!(decode_version(&buf, &mut pos).unwrap(), (0, 2));
 
         // A YTSP marker with a different MAJOR is TSP, but unprocessable.
         let mut other = Vec::new();
@@ -700,9 +699,9 @@ mod tests {
     fn version_roundtrip() {
         let mut buf = Vec::new();
         encode_version(&mut buf);
-        // `YTSP-ABA`: the `-` selector, MAJOR 0 as `A`, then MINOR/PATCH packed
-        // into the 12-bit count as `BA` — 1 and 0.
-        assert_eq!(buf, [0x61, 0x34, 0x8f, 0xf8, 0x00, 0x40]);
+        // `YTSP-AAC`: the `-` selector, MAJOR 0 as `A`, then MINOR 2 filling
+        // the 12-bit count as `AC`.
+        assert_eq!(buf, [0x61, 0x34, 0x8f, 0xf8, 0x00, 0x02]);
         let mut pos = 0;
         decode_version(&buf, &mut pos).unwrap();
         assert_eq!(pos, 6);

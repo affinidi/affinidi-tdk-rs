@@ -60,12 +60,16 @@ framing + RFC 9180 HPKE fixes), **#543** (Routed/Nested + size cap), **#544**
 
 ## Caveats
 
-- **We emit `YTSP-ABA` (0.1.0); the reference still emits `YTSP-AAB` (0.0.1).**
+- **We emit `YTSP-AAC` (0.2); the reference still emits `YTSP-AAB` (0.1), and
+  the published spec says `YTSP-ABA`.** Three different values, and it does not
+  matter — see below.
   Rev 3 originally kept Rev 2's version constant, which would have left the two
   revisions indistinguishable at the envelope; that was raised on
   [spec PR #63](https://github.com/trustoverip/tswg-tsp-specification/pull/63)
-  and changed upstream in `c80b0e4`, but the reference implementation has not
-  picked it up — `tsp_sdk/src/cesr/packet.rs` still has
+  and changed upstream in `c80b0e4` to `ABA`. Sam Smith then questioned the
+  three-component reading itself — under MAJOR.MINOR, `ABA` reads as version 64
+  rather than 2 — so we moved to `AAC`, which is where that argument lands. The
+  reference has taken neither change: `tsp_sdk/src/cesr/packet.rs` still has
   `TSP_VERSION: (u16, u8, u8) = (0, 0, 1)`.
 
   Interop is unaffected, and the reason is worth stating because it is the

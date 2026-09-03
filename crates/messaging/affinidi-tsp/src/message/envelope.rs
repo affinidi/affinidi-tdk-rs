@@ -70,9 +70,11 @@ pub struct DecodedEnvelope {
     /// where the signature attachment begins.
     pub content_end: usize,
     /// MINOR version carried by the message. Never gates processing.
-    pub minor: u8,
-    /// PATCH version carried by the message. Never gates processing.
-    pub patch: u8,
+    ///
+    /// The whole 12-bit count of the version code — see
+    /// [`wire::TSP_VERSION`](crate::message::wire::TSP_VERSION) for why this is
+    /// one number rather than a MINOR and a PATCH.
+    pub minor: u16,
 }
 
 impl Envelope {
@@ -136,8 +138,8 @@ impl Envelope {
                 TspError::InvalidMessage("-E frame declares more content than the message".into())
             })?;
 
-        // Version marker. MAJOR gates processability; MINOR/PATCH are carried.
-        let (_, minor, patch) = wire::decode_version(data, &mut pos)?;
+        // Version marker. MAJOR gates processability; MINOR is carried.
+        let (_, minor) = wire::decode_version(data, &mut pos)?;
 
         let aad_begin = content_begin;
 
@@ -176,7 +178,6 @@ impl Envelope {
             header_len: pos,
             content_end,
             minor,
-            patch,
         })
     }
 }

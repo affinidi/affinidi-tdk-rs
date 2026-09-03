@@ -1238,14 +1238,12 @@ pub fn unpack(
     };
     let mut pos = 0;
     match wire::decode_frame_version(wire_bytes, &mut pos) {
-        Ok((major, minor, patch)) if (major, minor, patch) != wire::TSP_VERSION => {
+        Ok((major, minor)) if (major, minor) != wire::TSP_VERSION => {
             Err(TspError::RevisionMismatch {
                 found_major: major,
                 found_minor: minor,
-                found_patch: patch,
                 supported_major: wire::TSP_VERSION.0,
                 supported_minor: wire::TSP_VERSION.1,
-                supported_patch: wire::TSP_VERSION.2,
                 source: Box::new(source),
             })
         }
@@ -1775,14 +1773,14 @@ mod tests {
     // revision, which left a structural probe — the byte after the receiver VID,
     // Rev 2's `XAAA` against Rev 3's `F` — as the only way to tell them apart.
     // A discriminator built out of a field the new revision deletes. Raised on
-    // the spec PR and fixed upstream: Rev 3 is `YTSP-ABA` (0.1.0) against Rev 2's
-    // `YTSP-AAB` (0.0.1), so the envelope answers the question itself.
+    // the spec PR and fixed: Rev 3 is `YTSP-AAC` (0.2) against Rev 2's
+    // `YTSP-AAB` (0.1), so the envelope answers the question itself.
     //
     // The structural difference is still asserted below. It is what makes the
     // frames genuinely incompatible, and the version field is a label on that
     // fact rather than a substitute for it.
 
-    /// Rev 2's version marker, `YTSP-AAB` — 0.0.1, written out rather than
+    /// Rev 2's version marker, `YTSP-AAB` — 0.1, written out rather than
     /// derived, since this build's own constant has moved on.
     fn rev2_version(out: &mut Vec<u8>) {
         out.extend_from_slice(&wire::YTSP);
@@ -1834,11 +1832,11 @@ mod tests {
         let d2 = Envelope::decode_full(&rev2).unwrap();
         let d3 = Envelope::decode_full(&rev3).unwrap();
 
-        // The version marker differs, in the one byte that carries MINOR and
-        // PATCH: Rev 2's `AAB` against Rev 3's `ABA`.
+        // The version marker differs, in the byte that carries MINOR: Rev 2's
+        // `AAB` against Rev 3's `AAC`.
         assert_eq!(rev2[3..8], rev3[3..8]);
-        assert_eq!(rev2[8], 0x01, "Rev 2 is 0.0.1");
-        assert_eq!(rev3[8], 0x40, "Rev 3 is 0.1.0");
+        assert_eq!(rev2[8], 0x01, "Rev 2 is 0.1");
+        assert_eq!(rev3[8], 0x02, "Rev 3 is 0.2");
 
         // Both VIDs are byte-identical, which is the property a relay depends
         // on: it can read addressing off either revision without knowing which.
@@ -1876,20 +1874,19 @@ mod tests {
         let TspError::RevisionMismatch {
             found_major,
             found_minor,
-            found_patch,
             source,
             ..
         } = &err
         else {
             panic!("expected a revision mismatch, got {err:?}");
         };
-        assert_eq!((*found_major, *found_minor, *found_patch), (0, 0, 1));
+        assert_eq!((*found_major, *found_minor), (0, 1), "Rev 2 is 0.1");
         assert!(
             matches!(**source, TspError::InvalidMessage(_)),
             "the underlying parse failure is carried, got {source:?}"
         );
         assert!(
-            err.to_string().contains("0.0.1") && err.to_string().contains("0.1.0"),
+            err.to_string().contains("0.1") && err.to_string().contains("0.2"),
             "the message names both revisions: {err}"
         );
     }
