@@ -24,6 +24,10 @@ name: checks-storage
 # `#[cfg(feature = "tsp")]` test compiles out, so an all-green CI run said
 # nothing whatsoever about the TSP transport.
 #
+# `didcomm-service (tsp)` is the same problem one crate over. Enabling the
+# fixture's `tsp` reaches the mediator and the SDK but not that crate, so its
+# own feature stayed dark even after the job above was added.
+#
 # `storage-secrets-matrix` adds a representative storage x secrets
 # cross-check. `checks.yaml` exercises the default (redis + keyring) and
 # `checks-features.yaml` sweeps every secrets backend against the default
@@ -40,6 +44,7 @@ on:
     paths:
       - "crates/messaging/affinidi-messaging-mediator/**"
       - "crates/messaging/affinidi-messaging-test-mediator/**"
+      - "crates/messaging/affinidi-messaging-didcomm-service/**"
       - ".github/workflows/checks-storage.yaml"
 
 env:
@@ -294,6 +299,59 @@ jobs:
         run: |
           cargo test \
             -p affinidi-messaging-test-mediator \
+            --features tsp \
+            --tests
+
+  didcomm-service-tsp:
+    # `affinidi-messaging-didcomm-service` multiplexes TSP alongside DIDComm on
+    # one websocket, behind its own `tsp` feature — off by default, and until
+    # now compiled by nothing.
+    #
+    # Not covered by `test-mediator (tsp)`: that enables the *fixture's* `tsp`,
+    # which reaches the mediator and the SDK but never this crate, since the
+    # fixture is not one of its dependents. Nor by the default workspace test,
+    # which builds this crate without the feature. Confirmed with a
+    # `compile_error!` canary under the cfg — it fired for
+    # `--workspace --features tsp` and for neither CI invocation.
+    #
+    # What was dark is the inbound TSP dispatch: the relationship-lifecycle
+    # handling that admits application traffic under Rev 3 §7.2.2 gating, and
+    # the arms that discard a padding message and route an upper-layer control
+    # one. A service that mishandles those is not lossy but inert — no
+    # relationship can form, so every application message is then refused.
+    name: didcomm-service (tsp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          components: clippy
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: didcomm-service-tsp
+
+      - name: cargo clippy -p affinidi-messaging-didcomm-service --features tsp
+        run: |
+          cargo clippy \
+            -p affinidi-messaging-didcomm-service \
+            --features tsp \
+            --all-targets \
+            -- -D warnings
+
+      - name: cargo test -p affinidi-messaging-didcomm-service --features tsp
+        run: |
+          cargo test \
+            -p affinidi-messaging-didcomm-service \
             --features tsp \
             --tests
 

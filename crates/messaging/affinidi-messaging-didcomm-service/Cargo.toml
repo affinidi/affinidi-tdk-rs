@@ -50,7 +50,11 @@ affinidi-did-common = "0.4"
 # regression test. Sister-crate path deps carry an explicit `version =` so the
 # package stays publishable while using the in-tree path for dev-builds.
 affinidi-messaging-test-mediator = { version = "0.4", path = "../affinidi-messaging-test-mediator", features = ["tsp"] }
-affinidi-tdk = { version = "0.10", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
+# `messaging` as well as `did-peer`: the TSP test targets use
+# `affinidi_tdk::messaging::ATM`. A workspace build supplied it through feature
+# unification, so this was only wrong when the crate is built on its own —
+# which is how CI builds it.
+affinidi-tdk = { version = "0.10", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer", "messaging"] }
 affinidi-messaging-core = { version = "0.1", path = "../affinidi-messaging-core" }
 futures-util = "0.3"
 
