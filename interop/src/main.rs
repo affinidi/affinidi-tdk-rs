@@ -10,6 +10,7 @@ use affinidi_tsp::message::routed as artd;
 use affinidi_tsp::message::MessageType;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use ed25519_dalek::SigningKey;
+#[allow(unused_imports)]
 use rand_core::OsRng;
 use tsp_sdk::cesr::CryptoType;
 use tsp_sdk::definitions::Payload;
@@ -166,6 +167,55 @@ fn main() {
             Ok(u) if u.payload == payload
         );
         results.push(("Direct R->A", ok));
+    }
+
+    // ---- Sealed Box, both directions ----
+    //
+    // The specification's own vectors already prove we can *read* a sealed box.
+    // What they cannot prove is that anything else can read what we *write*: a
+    // vector is a fixed message someone else produced, so it only ever exercises
+    // our unpack. These two cases close that half.
+    //
+    // Worth the trouble for this scheme in particular. §8.3's construction has
+    // three details that a self-consistent implementation gets wrong silently —
+    // the HSalsa20 key-derivation step, libsodium's MAC-before-ciphertext
+    // layout, and the nonce being derived from both public keys — and a sender
+    // that got any of them wrong would still open its own messages perfectly.
+    println!("--- Sealed Box A->R: affinidi pack -> tsp_sdk open ---");
+    {
+        let packed = atsp::pack_sealed_box(
+            payload.as_slice(),
+            MessageType::Direct,
+            alice_id,
+            bob_id,
+            &alice.sign_sk,
+            &bob.enc_pk,
+        )
+        .expect("affinidi pack_sealed_box");
+        let mut buf = packed.bytes.clone();
+        let ok = matches!(
+            tsp_sdk::crypto::open(&bob_vid, alice_vid.vid(), &mut buf),
+            Ok((Payload::Content(c), _, _)) if c == payload
+        );
+        println!("  RESULT: {}", if ok { "OK" } else { "FAIL" });
+        results.push(("SealedBox A->R", ok));
+    }
+
+    println!("--- Sealed Box R->A: tsp_sdk seal -> affinidi unpack ---");
+    {
+        let sealed = tsp_sdk::crypto::seal_with_crypto_type(
+            &alice_vid,
+            bob_vid.vid(),
+            Payload::Content(payload.as_slice()),
+            CryptoType::SealedBox,
+        )
+        .expect("tsp_sdk seal under the sealed box");
+        let ok = matches!(
+            atsp::unpack(&sealed, &bob.enc_sk, &alice.sign_pk),
+            Ok(u) if u.payload == payload
+        );
+        println!("  RESULT: {}", if ok { "OK" } else { "FAIL" });
+        results.push(("SealedBox R->A", ok));
     }
 
     // Large-payload Direct: 2 MiB exercises the *large* CESR variable-data code
@@ -615,7 +665,7 @@ fn main() {
                     "  tsp_sdk self round-trip OK (crypto={ct:?}), payload={:?}",
                     String::from_utf8_lossy(c)
                 );
-                let _ = CryptoType::HpkeBase;
+                // `CryptoType` is now used in earnest by the sealed-box cases.
             }
             Ok(_) => println!("  tsp_sdk self round-trip OK (non-content payload)"),
             Err(e) => println!("  tsp_sdk self round-trip FAIL -> {e:?}"),
