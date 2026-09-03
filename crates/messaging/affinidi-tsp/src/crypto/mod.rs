@@ -4,4 +4,5 @@
 //! - [`signing`]: Ed25519 outer signatures
 
 pub mod hpke;
+pub mod sealed_box;
 pub mod signing;

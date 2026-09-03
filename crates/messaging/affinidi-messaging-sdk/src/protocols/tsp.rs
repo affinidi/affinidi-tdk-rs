@@ -1015,6 +1015,43 @@ impl TspOps<'_> {
         Ok(next)
     }
 
+    /// Send a message under the **libsodium sealed box** (Rev 3 §8.3) instead of
+    /// HPKE-Base.
+    ///
+    /// For a peer that has not migrated. §8 keeps this scheme for
+    /// implementations that already had it and tells new ones otherwise —
+    /// "implementors SHOULD consider migrating to the HPKE option specified in
+    /// this document. We MAY remove this option in the future" — so [`send`] is
+    /// the default and this is a per-peer compatibility decision.
+    ///
+    /// Nothing has to be agreed in advance: the receiver reads the scheme off
+    /// the ciphertext field's code, and [`unpack`] accepts either.
+    ///
+    /// [`send`]: Self::send
+    /// [`unpack`]: Self::unpack
+    pub async fn send_sealed_box(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        payload: &[u8],
+    ) -> Result<(), ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let (signing_key, _) = self.profile_tsp_keys(our_did).await?;
+        let their_vid = self.resolve_vid(their_did).await?;
+
+        let packed = affinidi_tsp::message::direct::pack_sealed_box(
+            payload,
+            affinidi_tsp::MessageType::Direct,
+            our_did,
+            their_did,
+            &signing_key,
+            &their_vid.encryption_key,
+        )
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't pack a sealed-box message: {e}")))?;
+
+        self.send_raw(profile, &packed.bytes).await
+    }
+
     /// Send an upper-layer control message (`XCTL`) carrying `payload`.
     ///
     /// Travels exactly like an application message and is gated the same way;
@@ -1426,6 +1463,9 @@ impl TspOps<'_> {
                 ))
             })?;
             affinidi_tsp::message::direct::verify_referral(
+                // The SDK packs referrals under HPKE-Base, so that is the
+                // digest algorithm the signature covers.
+                affinidi_tsp::message::direct::PkaeScheme::HpkeBase,
                 control,
                 peer_did,
                 &introduced.signing_key,

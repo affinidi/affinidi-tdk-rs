@@ -9,6 +9,14 @@ pub enum TspError {
     #[error("HPKE error: {0}")]
     Hpke(String),
 
+    /// A libsodium sealed box failed to seal or open (Rev 3 §8.3).
+    ///
+    /// Kept apart from [`TspError::Hpke`] because the two schemes fail for
+    /// different reasons and an operator reading a log needs to know which one
+    /// a peer was using — the ciphertext code says which, and this preserves it.
+    #[error("sealed box error: {0}")]
+    SealedBox(String),
+
     #[error("signing error: {0}")]
     Signing(String),
 

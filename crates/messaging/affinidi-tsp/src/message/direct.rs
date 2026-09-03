@@ -145,15 +145,27 @@ mod payload_marker {
     pub const PADDING_ONLY: [u8; 3] = crate::message::wire::XPAD;
 }
 
-/// Encode a SHA-256 digest as a CESR fixed-data field under the `I` code.
-fn encode_digest(digest: &[u8; DIGEST_LEN], out: &mut Vec<u8>) {
-    wire::encode_fixed_data(wire::TSP_SHA256, digest, out);
+/// Encode a digest as a CESR fixed-data field under the scheme's code — `I` for
+/// SHA-256 under HPKE-Base, `F` for Blake2b-256 under the sealed box.
+fn encode_digest(scheme: PkaeScheme, digest: &[u8; DIGEST_LEN], out: &mut Vec<u8>) {
+    wire::encode_fixed_data(scheme.digest_code(), digest, out);
 }
 
-/// Decode a SHA-256 digest (`I`-coded 32-byte fixed-data field).
-fn decode_digest(frame: &[u8], pos: &mut usize) -> Result<[u8; DIGEST_LEN], TspError> {
-    wire::decode_fixed_data::<DIGEST_LEN>(wire::TSP_SHA256, frame, pos)
-        .ok_or_else(|| TspError::InvalidMessage("missing or non-SHA256 digest field".into()))
+/// Decode a digest field, requiring the code the scheme in use calls for.
+///
+/// Both digests are 32 bytes, so the code is the only thing separating them. A
+/// mismatch is refused here rather than at the digest comparison further on,
+/// where it would read as a tampered message rather than as the wrong scheme.
+fn decode_digest(
+    scheme: PkaeScheme,
+    frame: &[u8],
+    pos: &mut usize,
+) -> Result<[u8; DIGEST_LEN], TspError> {
+    wire::decode_fixed_data::<DIGEST_LEN>(scheme.digest_code(), frame, pos).ok_or_else(|| {
+        TspError::InvalidMessage(format!(
+            "missing digest field, or one not coded for {scheme:?}"
+        ))
+    })
 }
 
 /// Encode the ESSR sender-VID payload field.
@@ -168,6 +180,62 @@ fn decode_digest(frame: &[u8], pos: &mut usize) -> Result<[u8; DIGEST_LEN], TspE
 /// resting the sender binding on a single mechanism.
 fn encode_sender_field(sender_vid: &str, out: &mut Vec<u8>) {
     wire::encode_variable_data(wire::TSP_VID, sender_vid.as_bytes(), out);
+}
+
+/// Which PKAE scheme seals a message's payload (Rev 3 §8).
+///
+/// Carried on the wire only as the ciphertext field's code — `F` for HPKE-Base,
+/// `C` for the sealed box — so a receiver reads it off the envelope and a
+/// sender chooses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum PkaeScheme {
+    /// HPKE-Base (§8.2): DHKEM(X25519, HKDF-SHA256) with ChaCha20Poly1305.
+    /// What §8 requires of every implementation, and what to use.
+    #[default]
+    HpkeBase,
+    /// The libsodium sealed box (§8.3).
+    ///
+    /// Supported to read messages from peers that still send them. §8 tells new
+    /// implementations otherwise — "implementors SHOULD consider migrating to
+    /// the HPKE option specified in this document. We MAY remove this option in
+    /// the future" — so sending one is a compatibility decision, not a default.
+    SealedBox,
+}
+
+impl PkaeScheme {
+    /// The CESR identifier of this scheme's ciphertext field.
+    fn ciphertext_code(self) -> u32 {
+        match self {
+            PkaeScheme::HpkeBase => wire::TSP_HPKE_BASE_CIPHERTEXT,
+            PkaeScheme::SealedBox => wire::TSP_SEALED_BOX_CIPHERTEXT,
+        }
+    }
+
+    /// The CESR identifier of the digest this scheme's payloads carry.
+    fn digest_code(self) -> u32 {
+        match self {
+            PkaeScheme::HpkeBase => wire::TSP_SHA256,
+            PkaeScheme::SealedBox => wire::TSP_BLAKE2B256,
+        }
+    }
+
+    /// Hash a `TSP_Digest` derivation input under this scheme's algorithm.
+    fn digest(self, input: &[u8]) -> [u8; DIGEST_LEN] {
+        match self {
+            PkaeScheme::HpkeBase => sha256(input),
+            PkaeScheme::SealedBox => blake2b256(input),
+        }
+    }
+}
+
+/// Blake2b-256, the digest the sealed-box scheme pairs with (§8.3).
+fn blake2b256(input: &[u8]) -> [u8; DIGEST_LEN] {
+    use blake2::Blake2b;
+    use blake2::digest::{Digest, consts::U32};
+    let mut hasher = Blake2b::<U32>::new();
+    hasher.update(input);
+    hasher.finalize().into()
 }
 
 /// How much padding to put in a message's padding field (Rev 3 §9.2).
@@ -282,6 +350,7 @@ fn decode_referral(frame: &[u8], pos: &mut usize) -> Result<Option<Referral>, Ts
 /// So `VID_new` contributes as a bare VID field here, without the enclosing
 /// `-J` group it sits inside on the wire.
 fn referral_signed_data(
+    scheme: PkaeScheme,
     sender_field: &[u8],
     digest: &[u8; DIGEST_LEN],
     nonce: &[u8; NONCE_LEN],
@@ -291,7 +360,7 @@ fn referral_signed_data(
     let mut data = Vec::new();
     data.extend_from_slice(&payload_marker::INVITE);
     data.extend_from_slice(sender_field);
-    encode_digest(digest, &mut data);
+    encode_digest(scheme, digest, &mut data);
     wire::encode_fixed_data(wire::TSP_NONCE, nonce, &mut data);
     wire::encode_hops(reply_path, &mut data);
     wire::encode_variable_data(wire::TSP_VID, new_vid.as_bytes(), &mut data);
@@ -311,6 +380,7 @@ fn referral_signed_data(
 /// agreed. That is the whole point of the signature, so an application that
 /// acts on a referral without calling this has skipped the check.
 pub fn verify_referral(
+    scheme: PkaeScheme,
     control: &ControlMessage,
     sender_vid: &str,
     new_vid_signing_key: &[u8; 32],
@@ -328,6 +398,7 @@ pub fn verify_referral(
     let mut sender_field = Vec::new();
     encode_sender_field(sender_vid, &mut sender_field);
     let signed = referral_signed_data(
+        scheme,
         &sender_field,
         &digest,
         nonce,
@@ -348,6 +419,7 @@ pub fn verify_referral(
 /// the digest slot, padding excluded. Verification reverses the derivation:
 /// rebuild the same input from the received bytes and compare.
 fn derive_said(
+    scheme: PkaeScheme,
     envelope_fields: &[u8],
     type_code: &[u8; 3],
     before: &[u8],
@@ -361,7 +433,7 @@ fn derive_said(
     input.extend_from_slice(before);
     input.extend_from_slice(&[SAID_DUMMY; ENCODED_DIGEST_LEN]);
     input.extend_from_slice(after);
-    sha256(&input)
+    scheme.digest(&input)
 }
 
 /// Build the CESR payload frame that is encrypted (the HPKE plaintext), and
@@ -379,6 +451,7 @@ fn derive_said(
 /// ```
 #[allow(clippy::too_many_arguments)]
 fn encode_payload_frame(
+    scheme: PkaeScheme,
     body: &[u8],
     kind: MessageType,
     hops: &[String],
@@ -510,6 +583,7 @@ fn encode_payload_frame(
                     }
 
                     let digest = derive_said(
+                        scheme,
                         envelope_fields,
                         &payload_marker::INVITE,
                         &sender_field,
@@ -523,6 +597,7 @@ fn encode_payload_frame(
                     let referral = match (control.referral.as_ref(), referral_signing_key) {
                         (Some(referral), Some(key)) => {
                             let signed = referral_signed_data(
+                                scheme,
                                 &sender_field,
                                 &digest,
                                 &nonce,
@@ -544,7 +619,7 @@ fn encode_payload_frame(
 
                     frame_body.extend_from_slice(&payload_marker::INVITE);
                     frame_body.extend_from_slice(&sender_field);
-                    encode_digest(&digest, &mut frame_body);
+                    encode_digest(scheme, &digest, &mut frame_body);
                     wire::encode_fixed_data(wire::TSP_NONCE, &nonce, &mut frame_body);
                     wire::encode_hops(&control.route, &mut frame_body);
                     encode_referral(referral.as_ref(), &mut frame_body);
@@ -560,13 +635,18 @@ fn encode_payload_frame(
                     // dummies out. Both fields sit before the padding, so the
                     // echoed digest is part of the derivation input.
                     let mut before = sender_field.clone();
-                    encode_digest(control.require_reply()?, &mut before);
+                    encode_digest(scheme, control.require_reply()?, &mut before);
 
-                    let digest =
-                        derive_said(envelope_fields, &payload_marker::ACCEPT, &before, &[]);
+                    let digest = derive_said(
+                        scheme,
+                        envelope_fields,
+                        &payload_marker::ACCEPT,
+                        &before,
+                        &[],
+                    );
                     frame_body.extend_from_slice(&payload_marker::ACCEPT);
                     frame_body.extend_from_slice(&before);
-                    encode_digest(&digest, &mut frame_body);
+                    encode_digest(scheme, &digest, &mut frame_body);
                     padding_at = Some(frame_body.len());
                     encode_padding(&[], &mut frame_body);
                     said = Some(digest);
@@ -578,7 +658,7 @@ fn encode_payload_frame(
                     let reference = *control.require_reply()?;
                     frame_body.extend_from_slice(&payload_marker::CANCEL);
                     frame_body.extend_from_slice(&sender_field);
-                    encode_digest(&reference, &mut frame_body);
+                    encode_digest(scheme, &reference, &mut frame_body);
                     padding_at = Some(frame_body.len());
                     encode_padding(&[], &mut frame_body);
                     said = Some(reference);
@@ -637,6 +717,7 @@ fn hops_to_strings(hop_bytes: Vec<Vec<u8>>) -> Result<Vec<String>, TspError> {
 /// are needed to recompute a control message's `TSP_Digest` and to check the
 /// ESSR sender field against the envelope.
 fn decode_payload_frame(
+    scheme: PkaeScheme,
     frame: &[u8],
     envelope_fields: &[u8],
     envelope_sender: &str,
@@ -764,7 +845,7 @@ fn decode_payload_frame(
         // The first digest field means different things per type: an invite's
         // is its own self-addressing digest, an accept's and a cancel's is a
         // reference to an earlier message.
-        let first_digest = decode_digest(frame, &mut pos)?;
+        let first_digest = decode_digest(scheme, frame, &mut pos)?;
 
         let mut referral = None;
         let (control_type, nonce, reply, route) = if type_code == payload_marker::INVITE {
@@ -781,7 +862,7 @@ fn decode_payload_frame(
         } else if type_code == payload_marker::ACCEPT {
             // An accept's second digest is its own; the first, already read, is
             // the invite it answers.
-            let own = decode_digest(frame, &mut pos)?;
+            let own = decode_digest(scheme, frame, &mut pos)?;
             (
                 ControlType::RelationshipFormingAccept,
                 None,
@@ -813,7 +894,8 @@ fn decode_payload_frame(
                     None => wire::encode_count(wire::TSP_HOP_LIST, 0, &mut after),
                 }
 
-                let recomputed = derive_said(envelope_fields, &type_code, sender_field, &after);
+                let recomputed =
+                    derive_said(scheme, envelope_fields, &type_code, sender_field, &after);
                 if recomputed != first_digest {
                     return Err(TspError::Verification(
                         "TSP_Digest does not match the message it identifies".into(),
@@ -826,8 +908,8 @@ fn decode_payload_frame(
             ControlType::RelationshipFormingAccept => {
                 let own = reply.expect("accept always decodes its own digest");
                 let mut before = sender_field.to_vec();
-                encode_digest(&first_digest, &mut before);
-                let recomputed = derive_said(envelope_fields, &type_code, &before, &[]);
+                encode_digest(scheme, &first_digest, &mut before);
+                let recomputed = derive_said(scheme, envelope_fields, &type_code, &before, &[]);
                 if recomputed != own {
                     return Err(TspError::Verification(
                         "TSP_Digest does not match the message it identifies".into(),
@@ -962,6 +1044,41 @@ pub fn pack(
     )
 }
 
+/// Pack a direct TSP message under the **libsodium sealed box** (§8.3) rather
+/// than HPKE-Base.
+///
+/// For talking to a peer that has not migrated. §8 tells new implementations to
+/// use HPKE-Base and reserves the right to remove this scheme, so reach for
+/// [`pack`] unless a specific peer requires otherwise — the receiver reads the
+/// scheme off the ciphertext code, so nothing needs to be agreed in advance.
+///
+/// The two payload rules §8 attaches to this scheme are handled by the packing
+/// code, not the caller: the sender VID travels inside the encrypted payload
+/// (there is no AAD to bind it to), and control messages carry a Blake2b-256
+/// digest under CESR code `F` rather than SHA-256 under `I`.
+pub fn pack_sealed_box(
+    payload: &[u8],
+    message_type: MessageType,
+    sender_vid: &str,
+    receiver_vid: &str,
+    sender_signing_key: &[u8; 32],
+    receiver_encryption_key: &[u8; 32],
+) -> Result<PackedMessage, TspError> {
+    pack_inner(
+        payload,
+        message_type,
+        &[],
+        sender_vid,
+        receiver_vid,
+        sender_signing_key,
+        receiver_encryption_key,
+        None,
+        &Padding::None,
+        true,
+        PkaeScheme::SealedBox,
+    )
+}
+
 /// Like [`pack`] but carries a routing `hops` list in the payload frame (used by
 /// [`crate::message::routed::pack_routed`] for [`MessageType::Routed`]). For all
 /// other kinds `hops` must be empty.
@@ -988,6 +1105,7 @@ pub fn pack_with_hops(
         None,
         &Padding::None,
         true,
+        PkaeScheme::HpkeBase,
     )
 }
 
@@ -1029,6 +1147,7 @@ pub fn pack_padding_message(
         None,
         padding,
         true,
+        PkaeScheme::HpkeBase,
     )
 }
 
@@ -1075,6 +1194,7 @@ pub fn pack_signed_only(
         None,
         &Padding::None,
         false,
+        PkaeScheme::HpkeBase,
     )
 }
 
@@ -1104,6 +1224,7 @@ pub fn pack_padded(
         None,
         padding,
         true,
+        PkaeScheme::HpkeBase,
     )
 }
 
@@ -1138,6 +1259,7 @@ pub fn pack_referral_invite(
         Some(new_vid_signing_key),
         &Padding::None,
         true,
+        PkaeScheme::HpkeBase,
     )
 }
 
@@ -1153,6 +1275,7 @@ fn pack_inner(
     referral_signing_key: Option<&[u8; 32]>,
     padding: &Padding,
     confidential: bool,
+    scheme: PkaeScheme,
 ) -> Result<PackedMessage, TspError> {
     // 1. Envelope fields. These are the HPKE-Base AAD.
     let envelope = Envelope::new(message_type, sender_vid, receiver_vid);
@@ -1160,6 +1283,7 @@ fn pack_inner(
 
     // 2. Plaintext payload frame, and the thread digest it carries.
     let (payload_frame, thread_digest) = encode_payload_frame(
+        scheme,
         body,
         message_type,
         hops,
@@ -1178,23 +1302,34 @@ fn pack_inner(
     // "Signing at this layer is required in either case, as it is for all TSP
     // messages" — so what it gives up is privacy, not authenticity.
     let body = if confidential {
-        // `aad` binds the ciphertext to the version and both VIDs; `info` is
-        // the fixed protocol code.
-        let sealed = hpke::seal(
-            &payload_frame,
-            &envelope_fields,
-            receiver_encryption_key,
-            wire::TSP_INFO,
-        )?;
+        let ciphertext = match scheme {
+            PkaeScheme::HpkeBase => {
+                // `aad` binds the ciphertext to the version and both VIDs;
+                // `info` is the fixed protocol code.
+                let sealed = hpke::seal(
+                    &payload_frame,
+                    &envelope_fields,
+                    receiver_encryption_key,
+                    wire::TSP_INFO,
+                )?;
 
-        // Ciphertext field: `enc ‖ ct`, with the AEAD tag inside `ct`. Rev 2
-        // put `enc` at the end.
-        let mut ciphertext = Vec::with_capacity(ENC_LEN + sealed.ciphertext.len());
-        ciphertext.extend_from_slice(&sealed.enc);
-        ciphertext.extend_from_slice(&sealed.ciphertext);
+                // Ciphertext field: `enc ‖ ct`, with the AEAD tag inside `ct`.
+                // Rev 2 put `enc` at the end.
+                let mut ciphertext = Vec::with_capacity(ENC_LEN + sealed.ciphertext.len());
+                ciphertext.extend_from_slice(&sealed.enc);
+                ciphertext.extend_from_slice(&sealed.ciphertext);
+                ciphertext
+            }
+            // A sealed box takes no associated data — there is nowhere to bind
+            // the envelope — which is why §8 requires the sender VID inside the
+            // payload instead. The field is `ephemeral_pk ‖ MAC ‖ ct`.
+            PkaeScheme::SealedBox => {
+                crate::crypto::sealed_box::seal(&payload_frame, receiver_encryption_key)?
+            }
+        };
 
         let mut field = Vec::new();
-        wire::encode_variable_data(wire::TSP_HPKE_BASE_CIPHERTEXT, &ciphertext, &mut field);
+        wire::encode_variable_data(scheme.ciphertext_code(), &ciphertext, &mut field);
         field
     } else {
         payload_frame
@@ -1265,21 +1400,42 @@ fn unpack_inner(
     let envelope = decoded.envelope;
     let envelope_fields = wire_bytes[decoded.aad.clone()].to_vec();
 
-    // 2. The body: either an `F` ciphertext field, or a cleartext payload frame
-    //    for a signed-only message (§3.5). The two are told apart by what
-    //    follows the VIDs — an `F` var-data selector, or the `-Z` count code
-    //    that opens a payload frame. A message is one or the other throughout;
-    //    §3.5 forbids mixing.
+    // 2. The body: a ciphertext field, or a cleartext payload frame for a
+    //    signed-only message (§3.5). What follows the VIDs says which, and for
+    //    a ciphertext it also says which scheme sealed it: `F` for HPKE-Base,
+    //    `C` for the sealed box. Anything else is the `-Z` count code opening a
+    //    cleartext frame. A message is one or the other throughout; §3.5
+    //    forbids mixing.
+    //
+    //    The code is the *only* signal of the scheme — there is no negotiation
+    //    and no field naming it — so this is where the two paths separate.
     let mut pos = decoded.header_len;
-    let ct_range =
+    let mut scheme = PkaeScheme::HpkeBase;
+    let mut ct_range =
         wire::decode_variable_data_range(wire::TSP_HPKE_BASE_CIPHERTEXT, wire_bytes, &mut pos);
+    if ct_range.is_none() {
+        let mut sb_pos = decoded.header_len;
+        ct_range = wire::decode_variable_data_range(
+            wire::TSP_SEALED_BOX_CIPHERTEXT,
+            wire_bytes,
+            &mut sb_pos,
+        );
+        if ct_range.is_some() {
+            scheme = PkaeScheme::SealedBox;
+            pos = sb_pos;
+        }
+    }
     let confidential = ct_range.is_some();
 
     if let Some(range) = ct_range.as_ref() {
         if range.len() > MAX_MESSAGE_SIZE {
             return Err(TspError::InvalidMessage("ciphertext too large".into()));
         }
-        if range.len() < ENC_LEN + TAG_LEN {
+        let minimum = match scheme {
+            PkaeScheme::HpkeBase => ENC_LEN + TAG_LEN,
+            PkaeScheme::SealedBox => crate::crypto::sealed_box::SEAL_OVERHEAD,
+        };
+        if range.len() < minimum {
             return Err(TspError::InvalidMessage("ciphertext truncated".into()));
         }
     } else {
@@ -1314,16 +1470,35 @@ fn unpack_inner(
     let payload_frame = match ct_range {
         Some(range) => {
             let ciphertext = &wire_bytes[range];
-            let enc: [u8; 32] = ciphertext[..ENC_LEN]
-                .try_into()
-                .map_err(|_| TspError::InvalidMessage("bad enc size".into()))?;
-            hpke::open(
-                &ciphertext[ENC_LEN..],
-                &envelope_fields,
-                &enc,
-                receiver_decryption_key,
-                wire::TSP_INFO,
-            )?
+            match scheme {
+                PkaeScheme::HpkeBase => {
+                    let enc: [u8; 32] = ciphertext[..ENC_LEN]
+                        .try_into()
+                        .map_err(|_| TspError::InvalidMessage("bad enc size".into()))?;
+                    hpke::open(
+                        &ciphertext[ENC_LEN..],
+                        &envelope_fields,
+                        &enc,
+                        receiver_decryption_key,
+                        wire::TSP_INFO,
+                    )?
+                }
+                // The sealed box needs the recipient's *public* key as well as
+                // its secret, because the nonce is derived from both it and the
+                // ephemeral key. Deriving it here rather than asking the caller
+                // for it keeps the unpack signature the same for both schemes.
+                PkaeScheme::SealedBox => {
+                    let recipient_public = x25519_dalek::PublicKey::from(
+                        &x25519_dalek::StaticSecret::from(*receiver_decryption_key),
+                    )
+                    .to_bytes();
+                    crate::crypto::sealed_box::open(
+                        ciphertext,
+                        &recipient_public,
+                        receiver_decryption_key,
+                    )?
+                }
+            }
         }
         None => wire_bytes[decoded.header_len..decoded.content_end].to_vec(),
     };
@@ -1336,7 +1511,7 @@ fn unpack_inner(
         body: payload,
         control,
         thread_digest,
-    } = decode_payload_frame(&payload_frame, &envelope_fields, &envelope.sender)?;
+    } = decode_payload_frame(scheme, &payload_frame, &envelope_fields, &envelope.sender)?;
 
     Ok(UnpackedMessage {
         payload,
@@ -1619,6 +1794,7 @@ mod tests {
 
         let invite = ControlMessage::invite();
         let (mut frame, digest) = encode_payload_frame(
+            PkaeScheme::HpkeBase,
             &invite.encode(),
             MessageType::Control,
             &[],
@@ -1660,6 +1836,7 @@ mod tests {
 
         // Build a frame whose ESSR sender field names someone else.
         let (frame, _) = encode_payload_frame(
+            PkaeScheme::HpkeBase,
             b"body",
             MessageType::Direct,
             &[],
@@ -2063,6 +2240,7 @@ mod tests {
         let invite_digest = [0x7Au8; DIGEST_LEN];
 
         let (frame, own) = encode_payload_frame(
+            PkaeScheme::HpkeBase,
             &ControlMessage::accept(invite_digest).encode(),
             MessageType::Control,
             &[],
@@ -2113,8 +2291,13 @@ mod tests {
         let referral = control.referral.as_ref().expect("the referral survives");
         assert_eq!(referral.new_vid, "did:example:alice-parallel");
 
-        verify_referral(&control, "did:example:alice", &new_vid.verifying_key)
-            .expect("Signature_new verifies against the introduced VID");
+        verify_referral(
+            PkaeScheme::HpkeBase,
+            &control,
+            "did:example:alice",
+            &new_vid.verifying_key,
+        )
+        .expect("Signature_new verifies against the introduced VID");
     }
 
     /// The signature is made by the *introduced* VID, not the sender. Checking
@@ -2139,7 +2322,13 @@ mod tests {
         let control = unpacked.control.unwrap();
 
         assert!(
-            verify_referral(&control, "did:example:alice", &keys.sender_sign_pk).is_err(),
+            verify_referral(
+                PkaeScheme::HpkeBase,
+                &control,
+                "did:example:alice",
+                &keys.sender_sign_pk
+            )
+            .is_err(),
             "the sender's key must not satisfy Signature_new"
         );
     }
@@ -2169,7 +2358,13 @@ mod tests {
         // Same referral, checked as though it had arrived from a different
         // sender: the digest in the signed data no longer matches.
         assert!(
-            verify_referral(&decoded, "did:example:mallory", &new_vid.verifying_key).is_err(),
+            verify_referral(
+                PkaeScheme::HpkeBase,
+                &decoded,
+                "did:example:mallory",
+                &new_vid.verifying_key
+            )
+            .is_err(),
             "a referral must not verify under a different sender VID"
         );
     }
@@ -2192,7 +2387,15 @@ mod tests {
         let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap();
         let control = unpacked.control.unwrap();
         assert!(control.referral.is_none());
-        assert!(verify_referral(&control, "did:example:alice", &keys.sender_sign_pk).is_err());
+        assert!(
+            verify_referral(
+                PkaeScheme::HpkeBase,
+                &control,
+                "did:example:alice",
+                &keys.sender_sign_pk
+            )
+            .is_err()
+        );
     }
 
     /// Packing a referral without the introduced VID's key is refused rather
@@ -2204,6 +2407,7 @@ mod tests {
         let fields = envelope.encode_fields().unwrap();
 
         let err = encode_payload_frame(
+            PkaeScheme::HpkeBase,
             &ControlMessage::invite_referral("did:example:alice-parallel").encode(),
             MessageType::Control,
             &[],

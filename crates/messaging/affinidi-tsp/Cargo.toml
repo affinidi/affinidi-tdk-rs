@@ -43,6 +43,15 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 rand_10 = { package = "rand", version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 zeroize = { version = "1", features = ["derive"] }
 blake2 = "0.10"
+## Libsodium sealed box (spec Rev 3 §8.3), for the deprecated PKAE scheme.
+## `salsa20` supplies HSalsa20 for the crypto_box key derivation and
+## `crypto_secretbox` the XSalsa20-Poly1305 that wraps the payload. Deliberately
+## NOT the RustCrypto `crypto_box` crate, which would be a drop-in but depends on
+## curve25519-dalek 4 and would reintroduce a second dalek generation into a
+## workspace that is on 5 — the same trap `affinidi-messaging-didcomm-v1`
+## documents against the same primitive.
+salsa20 = "0.10"
+crypto_secretbox = { version = "0.1", default-features = false, features = ["salsa20"] }
 
 # Encoding / serialization
 serde = { version = "1", features = ["derive"] }

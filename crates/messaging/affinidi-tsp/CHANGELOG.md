@@ -101,14 +101,44 @@ Bug fixes found on the way, both latent on `main`:
   recognised as TSP at all. The *constants* had never drifted; the predicates
   had.
 
+- **The libsodium sealed box (§8.3) is implemented**, so a message from a peer
+  that has not migrated can be read. `PkaeScheme` names the two schemes,
+  `pack_sealed_box` sends under the old one, and `unpack` accepts either — the
+  ciphertext field's code (`C` against HPKE-Base's `F`) is the only thing on the
+  wire that says which, so nothing is negotiated.
+
+  §8 tells new implementations not to use it: "implementors SHOULD consider
+  migrating to the HPKE option specified in this document. We MAY remove this
+  option in the future." It is here for reading, not for choosing.
+
+  Two payload rules come with the scheme and are handled by the packing code
+  rather than the caller. The sender VID travels *inside* the encrypted payload,
+  because a sealed box is anonymous and has no AAD to bind it to — §3.7 step 7
+  has the receiver check it against the envelope. And control messages carry a
+  Blake2b-256 digest under CESR code `F` rather than SHA-256 under `I`; both are
+  32 bytes, so the code is the only thing separating them, and a mismatch is
+  refused at the field rather than later at the digest comparison where it would
+  read as tampering.
+
+  Built on the same primitives as `affinidi-messaging-didcomm-v1` and for the
+  same reason: the RustCrypto `crypto_box` crate would be a drop-in but depends
+  on curve25519-dalek 4, which would reintroduce a second dalek generation into a
+  workspace that is on 5.
+
 Conformance:
 
 - **The specification's own test vectors now run as a test suite**
-  (`tests/spec_vectors.rs`, fixture lifted from spec commit `c80b0e4`). Seven of
-  the nine Appendix A vectors are in scope for this crate, and **six pass**:
-  HPKE-Base direct, signed-only, invite, accept, nested and routed. The seventh,
-  `control-rfd`, does not decode at all — see below. The two Sealed Box vectors
-  are out of scope and carried in the fixture unexercised.
+  (`tests/spec_vectors.rs`, fixture lifted from spec commit `c80b0e4`). **Eight
+  of the nine pass** — every vector except `control-rfd`, which does not decode
+  at all because it is truncated upstream (see below).
+
+  The two sealed-box vectors are the reason that scheme is worth having tested
+  rather than merely written: a sealed box is non-deterministic, so it cannot be
+  checked by re-packing and comparing bytes, and three details of the
+  construction are invisible to a round-trip test because an implementation that
+  gets them wrong agrees with itself perfectly — the HSalsa20 key-derivation
+  step, libsodium's MAC-before-ciphertext layout, and the nonce being derived
+  from both public keys rather than random.
 
   These check something interop cannot. The harness packs with one
   implementation and unpacks with the other, so a *shared* misreading passes it.

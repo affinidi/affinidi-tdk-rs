@@ -115,8 +115,22 @@ pub const ED25519_SIGNATURE: u32 = cesr_int("B") as u32;
 /// the payload length in [`encode_fixed_data`].
 pub const TSP_NONCE: u32 = cesr_int("A") as u32;
 /// `I`: fixed-data id for a SHA-256 digest (32 bytes) — the `TSP_Digest` /
-/// `Reply_Digest` carried by the relationship-forming payloads.
+/// `Reply_Digest` carried by the relationship-forming payloads under HPKE-Base.
 pub const TSP_SHA256: u32 = cesr_int("I") as u32;
+/// `F`: fixed-data id for a Blake2b-256 digest (32 bytes).
+///
+/// The digest code is a property of the PKAE scheme, not of the message: §8.3
+/// pairs the libsodium sealed box with Blake2b-256 where HPKE-Base uses
+/// SHA-256. Both are 32 bytes, so only the code distinguishes them, and reading
+/// a sealed-box digest as SHA-256 fails at the comparison rather than at the
+/// parse.
+pub const TSP_BLAKE2B256: u32 = cesr_int("F") as u32;
+/// `C`: var-data libsodium sealed-box ciphertext (Rev 3 §8.3, codes
+/// `4C`/`5C`/`6C` and the long forms), where HPKE-Base uses `F`.
+///
+/// This code is how a receiver tells the two schemes apart — it is the only
+/// thing in the envelope that says which was used.
+pub const TSP_SEALED_BOX_CIPHERTEXT: u32 = cesr_int("C") as u32;
 
 /// `-E`: the single envelope frame. In Rev 3 its count covers *all* signable
 /// content — version, VIDs and the ciphertext — not just the header, so it can

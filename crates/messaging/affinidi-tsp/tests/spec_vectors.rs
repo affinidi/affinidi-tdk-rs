@@ -373,23 +373,118 @@ fn routed() {
     assert_eq!(inner.payload, b"hello world");
 }
 
-/// The two Sealed Box vectors are not exercised: this crate implements
-/// HPKE-Base only.
+/// The libsodium sealed box (§8.3), against the specification's own vectors.
 ///
-/// Kept as a note rather than deleted from the fixture. §8 keeps the libsodium
-/// sealed box for existing implementations while telling new ones to use
-/// HPKE-Base, so not implementing it is a decision rather than an omission — and
-/// if that is ever revisited, the vectors are already here. They differ in two
-/// payload rules beyond the cipher: the digest is Blake2b-256 under CESR code
-/// `F` rather than `I`, and `VID_sndr` must carry the sender because the sealed
-/// box is anonymous.
+/// This is the scheme §8 tells new implementations not to use — "implementors
+/// SHOULD consider migrating to the HPKE option specified in this document. We
+/// MAY remove this option in the future" — so it exists here to read messages
+/// from peers that have not migrated. Which makes vector conformance the whole
+/// point: an implementation nobody sends to has no other way to know it is
+/// right, and a sealed box is non-deterministic, so it cannot be checked by
+/// re-packing and comparing bytes.
+///
+/// Three details in the construction are invisible to a round-trip test,
+/// because an implementation that gets them wrong agrees with itself perfectly:
+/// the HSalsa20 key-derivation step, libsodium's MAC-before-ciphertext layout,
+/// and the nonce being derived from both public keys rather than random. These
+/// vectors are what catches all three.
 #[test]
-fn sealed_box_vectors_are_present_but_unimplemented() {
+fn direct_sealed_box() {
     let v = Vectors::load();
-    for name in ["direct-sealed-box", "control-rfi-sealed-box"] {
-        assert!(
-            !v.field(name, "message").is_empty(),
-            "{name} is in the fixture for whenever Sealed Box is implemented"
-        );
-    }
+    let unpacked = v.unpack("direct-sealed-box");
+    v.assert_parties("direct-sealed-box", &unpacked);
+    assert_eq!(unpacked.message_type, MessageType::Direct);
+    assert_eq!(unpacked.payload, b"hello world");
+    assert!(unpacked.confidential);
+}
+
+/// A sealed-box invite, which exercises the two payload rules the scheme
+/// changes.
+///
+/// The digest is Blake2b-256 under CESR code `F`, not SHA-256 under `I`. Both
+/// are 32 bytes, so nothing but the code distinguishes them — and since `unpack`
+/// recomputes the SAID and refuses a mismatch, this vector verifying at all is
+/// the assertion that we hash with the right algorithm *and* read the right
+/// code.
+///
+/// The sender VID also travels inside the encrypted payload rather than as the
+/// NULL VID. It has to: a sealed box is anonymous and has no AAD, so the payload
+/// is the only place the sender's identity can be bound (§8, and §3.7 step 7
+/// makes the receiver check it against the envelope).
+#[test]
+fn control_rfi_sealed_box() {
+    let v = Vectors::load();
+    let unpacked = v.unpack("control-rfi-sealed-box");
+    v.assert_parties("control-rfi-sealed-box", &unpacked);
+    assert_eq!(unpacked.message_type, MessageType::Control);
+
+    let control = unpacked.control.as_ref().expect("an invite is a control");
+    assert_eq!(control.control_type, ControlType::RelationshipFormingInvite);
+    assert_eq!(
+        control.digest,
+        Some(unpacked.thread_digest),
+        "the invite's Blake2b-256 Digest is its own SAID"
+    );
+    assert_eq!(control.nonce.expect("a nonce").len(), 16);
+
+    // The same exchange under HPKE-Base produces a *different* digest for
+    // otherwise identical content, because the algorithm differs. Worth
+    // asserting: it is what proves the Blake2b path is actually being taken
+    // rather than SHA-256 quietly agreeing.
+    let hpke_invite = v.unpack("control-rfi-direct");
+    assert_ne!(
+        unpacked.thread_digest, hpke_invite.thread_digest,
+        "Blake2b-256 and SHA-256 must not produce the same digest"
+    );
+}
+
+/// A sealed box packed here is read back here, and is not mistaken for
+/// HPKE-Base.
+///
+/// The round trip is the weak half of this test; the useful half is that the
+/// ciphertext code differs, since that code is the only thing on the wire that
+/// says which scheme sealed a message.
+#[test]
+fn a_sealed_box_round_trips_and_is_distinguishable() {
+    use affinidi_tsp::message::direct::{pack, pack_sealed_box};
+
+    let v = Vectors::load();
+    let alice = v.id("alice", "id");
+    let bob = v.id("bob", "id");
+    let alice_sign = key(&v.id("alice", "skS"));
+    let bob_enc_pk = key(&v.id("bob", "pkE"));
+    let bob_enc_sk = key(&v.id("bob", "skE"));
+    let alice_verify = key(&v.id("alice", "pkS"));
+
+    let sealed = pack_sealed_box(
+        b"over the old scheme",
+        MessageType::Direct,
+        &alice,
+        &bob,
+        &alice_sign,
+        &bob_enc_pk,
+    )
+    .expect("pack under the sealed box");
+
+    let unpacked = unpack(&sealed.bytes, &bob_enc_sk, &alice_verify).expect("unpack it");
+    assert_eq!(unpacked.payload, b"over the old scheme");
+    assert_eq!(unpacked.sender, alice);
+
+    // Same message, other scheme: the bytes must differ where the ciphertext
+    // code sits, which is what lets a receiver tell them apart at all.
+    let hpke = pack(
+        b"over the old scheme",
+        MessageType::Direct,
+        &alice,
+        &bob,
+        &alice_sign,
+        &bob_enc_pk,
+    )
+    .expect("pack under HPKE-Base");
+    let unpacked_hpke = unpack(&hpke.bytes, &bob_enc_sk, &alice_verify).expect("unpack it");
+    assert_eq!(unpacked_hpke.payload, b"over the old scheme");
+    assert_ne!(
+        sealed.bytes, hpke.bytes,
+        "the two schemes produce different frames"
+    );
 }
