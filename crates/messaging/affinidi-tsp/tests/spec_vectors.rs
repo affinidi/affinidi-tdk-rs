@@ -260,7 +260,11 @@ fn control_rfa_echoes_the_invite() {
 /// carries one digest naming the relationship it ends, and no nonce, Rev 3
 /// having removed the one it used to have.
 ///
-/// Reported upstream against PR #63.
+/// Reported upstream against PR #63, where it turned out not to be alone:
+/// scanning the whole appendix found five values three characters short —
+/// this one, `pq_alice`'s ML-DSA signing key, the post-quantum vector, and two
+/// long-form DIDs whose `did:peer:4` self-certifying hash no longer matches the
+/// document they carry. Only this one is in our fixture's way.
 #[test]
 fn control_rfd_vector_is_truncated_upstream() {
     let v = Vectors::load();

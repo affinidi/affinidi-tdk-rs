@@ -455,7 +455,7 @@
     <div class="status-cell">
       <div class="status-label">Us</div>
       <div class="status-value"><span class="dot dot-safe"></span>Rev 3, 14/14 interop</div>
-      <div class="status-note">Branch <code>tsp-rev3</code> &middot; every planned area landed, plus six of the seven in-scope spec vectors passing (the seventh is the truncated one). Two conformance defects found and fixed along the way.</div>
+      <div class="status-note">Branch <code>tsp-rev3</code> &middot; every planned area landed, both PKAE schemes implemented, and eight of the nine spec vectors passing &mdash; the ninth is truncated upstream. Two conformance defects found and fixed along the way.</div>
     </div>
   </div>
 
@@ -496,14 +496,12 @@
       <h3>Two questions raised upstream</h3>
       <ul class="plain">
         <li><strong>The version field.</strong> Rev 3 as proposed kept Rev 2's <code>YTSP-AAB</code> across a wire-breaking revision, leaving the two indistinguishable at the envelope and a structural probe &mdash; on a field Rev 3 <em>deletes</em> &mdash; as the only discriminator. Raised, and changed upstream to <code>YTSP-ABA</code>. Sam Smith has since questioned the three-component reading itself: under 1&nbsp;character MAJOR and 2&nbsp;characters MINOR, <code>ABA</code> reads as version 64 rather than 2. We now emit <code>YTSP-AAC</code>, which is where that argument lands, ahead of the spec text. It costs nothing to be early: only MAJOR gates processability, MAJOR is the same either way, and the published vectors still verify because a message's digest covers the version bytes <em>it</em> carries.</li>
-        <li><strong>A truncated test vector.</strong> <code>control-rfd</code> is 393 characters, a length base64 cannot produce. Every TSP message is <code>3 + count&times;3 + 72</code> bytes and every other vector satisfies that identity exactly; this one is three characters short of its own declared length, lost in editing. Reported, and pinned in our suite as an assertion that starts failing when the vector is republished.</li>
+        <li><strong>Five truncated values.</strong> <code>control-rfd</code> is 393 characters, a length base64 cannot produce &mdash; and it is not alone. Scanning the appendix found the same three-character loss in <code>pq_alice</code>'s ML-DSA signing key, the post-quantum vector, and two long-form DIDs whose <code>did:peer:4</code> self-certifying hash no longer matches the document they carry. That last check is independent of any base64 reasoning: six of the eight long forms hash correctly to the identifier they are printed under, and only those two do not. In the source, 688 of the 692 continuation lines are 68 characters and the four that are 65 fall in four of the five. Reported, and <code>control-rfd</code> is pinned in our suite as an assertion that starts failing when it is republished.</li>
       </ul>
 
       <h3>Deliberately not built</h3>
       <ul class="plain">
-        <li><strong>Libsodium Sealed Box.</strong> &sect;8 keeps it for existing implementations while directing new ones to HPKE-Base. Its two vectors are carried in our fixture unexercised, so the decision is reversible.</li>
-        <li><strong>The post-quantum KEM</strong> (<code>X25519MLKEM768</code>). Would mean replacing our HPKE internals, which currently pass the RFC&nbsp;9180 A.2 known-answer vectors. A peer publishing only an ML-KEM key already fails cleanly rather than being misread, so nothing is silently wrong in the meantime.</li>
-        <li><strong>ML-DSA-65.</strong> Its code point <code>1AAQ</code> is provisional pending CESR issue #14, so implementing it now would pin a value that may move.</li>
+        <li><strong>Post-quantum &mdash; the <code>X25519MLKEM768</code> KEM and ML-DSA-65 signatures.</strong> Blocked on having anything to check against, not on effort. The post-quantum vector does not decode, and neither does <code>pq_alice</code>'s ML-DSA signing key; <code>pq_bob</code>'s encryption secret is a 32-byte seed whose expansion to a 2400-byte ML-KEM decapsulation key is not specified. So a hybrid KEM and a post-quantum signature scheme would ship validated by nothing but agreement with themselves &mdash; which the sealed box just demonstrated is not enough, since three details of <em>that</em> construction are invisible to a round-trip test and only its vectors caught them. Nothing is silently wrong meanwhile: a peer publishing only an ML-KEM key fails cleanly at resolution rather than being misread. ML-DSA's code point <code>1AAQ</code> is also still provisional pending CESR issue&nbsp;#14.</li>
       </ul>
     </div>
   </section>
