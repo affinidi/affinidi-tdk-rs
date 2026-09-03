@@ -427,6 +427,34 @@ impl Listener {
             affinidi_messaging_sdk::protocols::tsp::InboundTsp::Application { payload, sender } => {
                 (payload, sender)
             }
+            // §9.4: "The receiver SHOULD silently discard padding messages."
+            // Logged at debug and dropped — it is normal traffic whose whole
+            // purpose is to carry nothing, so anything louder would turn the
+            // countermeasure into noise in the operator's log.
+            affinidi_messaging_sdk::protocols::tsp::InboundTsp::Padding { sender } => {
+                debug!(
+                    profile = %profile.inner.alias,
+                    from = %sender,
+                    "Discarded a TSP padding message"
+                );
+                return;
+            }
+            // Carried like an application message but labelled as control for
+            // the layer above. This service has no upper layer of its own to
+            // hand it to, so it is dropped rather than passed off as user data
+            // — which is what would happen if the label were ignored.
+            affinidi_messaging_sdk::protocols::tsp::InboundTsp::UpperLayerControl {
+                sender,
+                ..
+            } => {
+                debug!(
+                    profile = %profile.inner.alias,
+                    from = %sender,
+                    "Ignored an upper-layer TSP control message (XCTL); this service has no \
+                     upper layer to route it to"
+                );
+                return;
+            }
             affinidi_messaging_sdk::protocols::tsp::InboundTsp::Control {
                 control,
                 sender,
@@ -485,6 +513,19 @@ impl Listener {
                         );
                     }
                 }
+                return;
+            }
+            // `InboundTsp` is `#[non_exhaustive]`: a kind added later must not
+            // fall through to the application-message path, which is what an
+            // exhaustive match would have forced on the next person to add one.
+            // Dropped and named, so it shows up as unhandled rather than as
+            // user data.
+            other => {
+                warn!(
+                    profile = %profile.inner.alias,
+                    kind = ?std::mem::discriminant(&other),
+                    "Dropped a TSP message of a kind this service does not handle"
+                );
                 return;
             }
         };

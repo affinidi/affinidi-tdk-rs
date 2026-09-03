@@ -591,11 +591,41 @@ pub struct IncomingControl {
 /// anything that must treat them differently needs to unpack once and be told,
 /// rather than guess and unpack twice.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum InboundTsp {
     /// An application message for the upper layer.
     Application {
         /// The decrypted payload.
         payload: Vec<u8>,
+        /// The sender's VID.
+        sender: String,
+    },
+    /// An upper-layer control message (`XCTL`).
+    ///
+    /// Carried exactly like an application message and opaque to TSP, but the
+    /// sender marked it as control for the layer above rather than as user
+    /// data, and that distinction is the only thing the separate type code
+    /// exists to convey. Handing it over as [`Self::Application`] would throw
+    /// away the one bit of information it carries.
+    UpperLayerControl {
+        /// The decrypted payload.
+        payload: Vec<u8>,
+        /// The sender's VID.
+        sender: String,
+    },
+    /// A padding-only message (`XPAD`), carrying nothing.
+    ///
+    /// §9.4: "The receiver SHOULD silently discard padding messages." It exists
+    /// to make traffic analysis harder — a message whose entire content is
+    /// filler, so an observer cannot tell a conversation's shape from the
+    /// pattern of what crosses the wire.
+    ///
+    /// Reported rather than swallowed inside the SDK because a caller that
+    /// fetched it still has to delete it from the mailbox, and one that cannot
+    /// see it would leave it there forever. "Silently" constrains what reaches
+    /// the application and what goes back to the sender, not whether the
+    /// receiving code is told it arrived.
+    Padding {
         /// The sender's VID.
         sender: String,
     },
@@ -983,6 +1013,84 @@ impl TspOps<'_> {
             )
             .await?;
         Ok(next)
+    }
+
+    /// Send an upper-layer control message (`XCTL`) carrying `payload`.
+    ///
+    /// Travels exactly like an application message and is gated the same way;
+    /// TSP does not interpret the payload either way. The difference is the
+    /// label: the receiver gets [`InboundTsp::UpperLayerControl`] rather than
+    /// [`InboundTsp::Application`], so a protocol layered on top of TSP can
+    /// keep its own signalling apart from user data without inventing a
+    /// convention inside the payload.
+    ///
+    /// Not to be confused with [`send_control`](Self::send_control), which
+    /// carries TSP's *own* relationship messages — invites, accepts and
+    /// cancellations.
+    pub async fn send_generic_control(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        payload: &[u8],
+    ) -> Result<(), ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let (signing_key, _) = self.profile_tsp_keys(our_did).await?;
+        let their_vid = self.resolve_vid(their_did).await?;
+
+        let packed = affinidi_tsp::message::direct::pack(
+            payload,
+            affinidi_tsp::MessageType::GenericControl,
+            our_did,
+            their_did,
+            &signing_key,
+            &their_vid.encryption_key,
+        )
+        .map_err(|e| {
+            ATMError::MsgSendError(format!("couldn't pack an upper-layer control message: {e}"))
+        })?;
+
+        self.send_raw(profile, &packed.bytes).await
+    }
+
+    /// Send a padding-only message (`XPAD`) — content-free traffic, sized by
+    /// `padding`.
+    ///
+    /// §11 notes that "timing, size, and frequency survive encryption, nesting,
+    /// and routing alike": an observer of a hop learns when a relationship is
+    /// busy even when it learns nothing else. A message with no content still
+    /// occupies all three, so these let an endpoint spend them deliberately
+    /// rather than leaking the shape of a real conversation.
+    ///
+    /// The other use is §7.4.3. An endpoint that rotated because its keys may
+    /// have been compromised sends one to each peer, because "a peer holding
+    /// stale key state will fail to verify it and will therefore obtain the new
+    /// key state, whereas a peer that receives nothing has no occasion to". It
+    /// is signed with the new keys, so an adversary holding the old ones cannot
+    /// produce it.
+    ///
+    /// The receiver discards it silently — [`InboundTsp::Padding`] — so nothing
+    /// reaches the peer's application and no reply comes back. A padding
+    /// message that provoked a response would defeat its own purpose.
+    pub async fn send_padding(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        padding: &affinidi_tsp::Padding,
+    ) -> Result<(), ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let (signing_key, _) = self.profile_tsp_keys(our_did).await?;
+        let their_vid = self.resolve_vid(their_did).await?;
+
+        let packed = affinidi_tsp::message::direct::pack_padding_message(
+            our_did,
+            their_did,
+            &signing_key,
+            &their_vid.encryption_key,
+            padding,
+        )
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't pack a padding message: {e}")))?;
+
+        self.send_raw(profile, &packed.bytes).await
     }
 
     /// Introduce a new VID over an existing relationship, opening a second one
@@ -1833,6 +1941,19 @@ impl TspOps<'_> {
         self.learn_tsp_supported(profile_did, &unpacked.sender, CapabilitySource::Observed)
             .await?;
 
+        // A padding message has no payload, and this signature has no way to
+        // say so: returning it would hand the caller an empty `Vec` that looks
+        // exactly like a real message the peer sent with no content. Refusing
+        // is the honest answer, and `unpack_message` is the API that can
+        // actually express the distinction.
+        if unpacked.message_type == affinidi_tsp::MessageType::PaddingOnly {
+            return Err(ATMError::MsgReceiveError(format!(
+                "TSP padding message from {} carries no payload; use unpack_message to \
+                 handle padding",
+                unpacked.sender
+            )));
+        }
+
         Ok((unpacked.payload, unpacked.sender))
     }
 
@@ -1876,6 +1997,15 @@ impl TspOps<'_> {
             });
         }
 
+        // A padding message carries nothing, so it is neither gated nor
+        // delivered — §9.4 has the receiver discard it silently. It is still
+        // named, so the caller can clear it from the mailbox.
+        if unpacked.message_type == affinidi_tsp::MessageType::PaddingOnly {
+            return Ok(InboundTsp::Padding {
+                sender: unpacked.sender,
+            });
+        }
+
         // §7.2.2, as in `unpack_bytes`: an application message from a VID we
         // hold no relationship with is discarded.
         if self.atm.inner.config.tsp_relationship_gating() {
@@ -1889,6 +2019,15 @@ impl TspOps<'_> {
                     unpacked.sender
                 )));
             }
+        }
+
+        // `XCTL` and `XSCS` travel identically and are gated identically; only
+        // the label the sender attached differs, and it is preserved here.
+        if unpacked.message_type == affinidi_tsp::MessageType::GenericControl {
+            return Ok(InboundTsp::UpperLayerControl {
+                payload: unpacked.payload,
+                sender: unpacked.sender,
+            });
         }
 
         Ok(InboundTsp::Application {

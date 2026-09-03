@@ -6,6 +6,7 @@
 use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_sdk::messages::MessageProtocol;
 use affinidi_messaging_sdk::messages::fetch::FetchOptions;
+use affinidi_messaging_sdk::protocols::tsp::InboundTsp;
 use affinidi_messaging_sdk::{SendProtocol, TspPolicy, TspSupport};
 use affinidi_messaging_test_mediator::TestEnvironment;
 use affinidi_tsp::message::control::ControlMessage;
@@ -447,6 +448,127 @@ async fn a_referral_opens_a_parallel_relationship() {
         .expect("bob's new VID unpacks it");
     assert_eq!(payload, b"over the parallel relationship");
     assert_eq!(from, alice2.did);
+
+    env.shutdown().await.expect("shutdown");
+}
+
+/// Rev 3 §9.4: "The receiver SHOULD silently discard padding messages."
+///
+/// A padding message is content-free traffic — §11 notes that "timing, size,
+/// and frequency survive encryption, nesting, and routing alike", so an
+/// endpoint sends these to spend those three deliberately rather than let them
+/// trace the shape of a real conversation.
+///
+/// Which makes what the receiver does with one load-bearing. Before this, a
+/// padding message had no `control` payload and so fell through to the
+/// application path: the countermeasure arrived at the peer's application as an
+/// empty message from a contact, which is worse than not sending it. It has to
+/// be distinguishable, and it has to travel the whole way to be worth anything
+/// — so this goes through the mediator rather than round-tripping in memory.
+#[tokio::test]
+async fn a_padding_message_is_discarded_not_delivered() {
+    let env = TestEnvironment::spawn_with_tsp_policy(TspPolicy::Preferred)
+        .await
+        .expect("spawn env");
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+    env.relate(&alice, &bob)
+        .await
+        .expect("alice and bob relate");
+
+    env.atm
+        .tsp()
+        .send_padding(&alice.profile, &bob.did, &affinidi_tsp::Padding::None)
+        .await
+        .expect("alice sends padding");
+
+    let stored = poll_inbox(&env, &bob.profile).await;
+    let qb2 = env.atm.tsp().decode(&stored).expect("decode");
+
+    match env
+        .atm
+        .tsp()
+        .unpack_message(&bob.profile, &qb2)
+        .await
+        .expect("bob unpacks it")
+    {
+        InboundTsp::Padding { sender } => assert_eq!(sender, alice.did),
+        other => panic!("padding must be recognised as padding, got {other:?}"),
+    }
+
+    // The `(payload, sender)` API has no way to say "this was padding", so it
+    // refuses rather than handing back an empty `Vec` indistinguishable from a
+    // real message the peer sent with no content.
+    let err = env
+        .atm
+        .tsp()
+        .unpack_bytes(&bob.profile, &qb2)
+        .await
+        .expect_err("unpack cannot represent a padding message");
+    assert!(
+        err.to_string().contains("padding"),
+        "refused for the right reason, got: {err}"
+    );
+
+    // A real message still arrives normally: the padding did not disturb the
+    // relationship or the mailbox.
+    env.atm
+        .tsp()
+        .send(&alice.profile, &bob.did, b"a real one")
+        .await
+        .expect("alice sends a real message");
+    let stored = poll_inbox(&env, &bob.profile).await;
+    let (payload, from) = env
+        .atm
+        .tsp()
+        .unpack(&bob.profile, &stored)
+        .await
+        .expect("bob unpacks the real message");
+    assert_eq!(payload, b"a real one");
+    assert_eq!(from, alice.did);
+
+    env.shutdown().await.expect("shutdown");
+}
+
+/// An upper-layer control message (`XCTL`) is delivered, but not as application
+/// data.
+///
+/// It travels exactly like an application message and TSP does not interpret
+/// it; the separate type code exists only to say the sender meant it as control
+/// for the layer above. Collapsing it into the application path — which is what
+/// happened before — discards the one thing it carries.
+#[tokio::test]
+async fn an_upper_layer_control_message_keeps_its_label() {
+    let env = TestEnvironment::spawn_with_tsp_policy(TspPolicy::Preferred)
+        .await
+        .expect("spawn env");
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+    env.relate(&alice, &bob)
+        .await
+        .expect("alice and bob relate");
+
+    env.atm
+        .tsp()
+        .send_generic_control(&alice.profile, &bob.did, b"upper-layer control")
+        .await
+        .expect("alice sends an XCTL message");
+
+    let stored = poll_inbox(&env, &bob.profile).await;
+    let qb2 = env.atm.tsp().decode(&stored).expect("decode");
+    match env
+        .atm
+        .tsp()
+        .unpack_message(&bob.profile, &qb2)
+        .await
+        .expect("bob unpacks it")
+    {
+        InboundTsp::UpperLayerControl { payload, sender } => {
+            assert_eq!(payload, b"upper-layer control");
+            assert_eq!(sender, alice.did);
+        }
+        other => panic!("XCTL must not arrive as an application message, got {other:?}"),
+    }
 
     env.shutdown().await.expect("shutdown");
 }

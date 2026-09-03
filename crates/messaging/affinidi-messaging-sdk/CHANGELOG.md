@@ -23,6 +23,34 @@ changed and there is no Rev 2 compatibility.** Everything here follows from it.
   silent longer than the policy's threshold, rate-limited so a failing peer
   cannot drive resolution traffic. No new public call: `unpack`,
   `unpack_message` and `unpack_control` all go through it.
+- **`InboundTsp` gains `Padding` and `UpperLayerControl`, and is
+  `#[non_exhaustive]`.** Two of Rev 3's payload types were arriving as ordinary
+  application messages, because neither carries a relationship `ControlMessage`
+  and that was the only thing the dispatch looked at:
+
+  - `XPAD`, a padding-only message, reached the application as an *empty
+    message from a contact*. §9.4 says "the receiver SHOULD silently discard
+    padding messages", and it exists to make traffic analysis harder — so
+    delivering it is worse than not sending it. Now reported as `Padding` and
+    dropped; it is named rather than swallowed so a caller can still clear it
+    from the mailbox.
+  - `XCTL`, an upper-layer control message, was indistinguishable from `XSCS`.
+    The two travel identically and TSP interprets neither; the separate type
+    code exists only to say the sender meant it as control for the layer above,
+    which collapsing them discarded.
+
+  `unpack`/`unpack_bytes` now refuse a padding message rather than return an
+  empty `Vec` that looks like a real message with no content — that signature
+  has no way to express the distinction, and `unpack_message` does.
+
+- **New `send_padding` and `send_generic_control`.** `affinidi-tsp` could pack
+  both, but nothing in the SDK sent them, so the traffic-shaping countermeasure
+  and the upper-layer control channel were unreachable through the client. The
+  first also covers §7.4.3: an endpoint that rotated after a suspected
+  compromise sends padding to each peer, because "a peer holding stale key state
+  will fail to verify it and will therefore obtain the new key state, whereas a
+  peer that receives nothing has no occasion to".
+
 - **Five problem codes are retired** in favour of a single uniform refusal — see
   the mediator changelog for the list and the reasoning. A consumer matching on
   any of them will stop matching.
