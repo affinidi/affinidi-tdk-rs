@@ -164,12 +164,11 @@ impl DIDWeb {
         // fetch an internal or cloud-metadata endpoint. Refuse a non-routable
         // host before issuing any request. (Redirects are already disabled, so a
         // 3xx cannot pivot to one after the fact either.)
-        if let Ok(parsed_url) = reqwest::Url::parse(&url) {
-            if let Some(host) = parsed_url.host_str() {
-                if host_is_blocked(host) {
-                    return Err(DidWebError::BlockedHost(host.to_owned()));
-                }
-            }
+        if let Ok(parsed_url) = reqwest::Url::parse(&url)
+            && let Some(host) = parsed_url.host_str()
+            && host_is_blocked(host)
+        {
+            return Err(DidWebError::BlockedHost(host.to_owned()));
         }
 
         debug!(target: "affinidi_did_web", did, %url, "resolving did:web");

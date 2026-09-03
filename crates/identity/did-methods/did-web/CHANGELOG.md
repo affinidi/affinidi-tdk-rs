@@ -2,6 +2,15 @@
 
 ## Changelog history
 
+## 3rd September 2026
+
+### 0.1.4 — SSRF hardening
+
+- Block resolution of DIDs that name a non-routable or cloud-metadata host
+  (for example did:web:localhost or did:web:169.254.169.254) before any request
+  is issued, and cap the resolver response body size. Stops a did:web value from
+  steering the resolver at internal endpoints.
+
 ## 19th July 2026
 
 ### 0.1.3 — affinidi-did-common 0.4
