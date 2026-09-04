@@ -452,6 +452,23 @@ async fn a_referral_opens_a_parallel_relationship() {
     env.shutdown().await.expect("shutdown");
 }
 
+/// The CESR identifier of a message's ciphertext field, as a Base64 character.
+///
+/// This is the only thing on the wire that says which PKAE scheme sealed a
+/// message — `F` for HPKE-Base, `C` for the libsodium sealed box (§8.3) — so it
+/// is what a receiver reads, and what a test should read rather than inferring
+/// the scheme from anything else.
+fn ciphertext_code(qb2: &[u8]) -> char {
+    const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let decoded =
+        affinidi_tsp::message::envelope::Envelope::decode_full(qb2).expect("the envelope parses");
+    let field = &qb2[decoded.header_len..decoded.header_len + 3];
+    // A variable-data header packs `selector | identifier | size` into three
+    // bytes; the identifier is the middle six bits.
+    let word = u32::from_be_bytes([0, field[0], field[1], field[2]]);
+    B64[((word >> 12) & 0x3F) as usize] as char
+}
+
 /// Rev 3 §9.4: "The receiver SHOULD silently discard padding messages."
 ///
 /// A padding message is content-free traffic — §11 notes that "timing, size,
@@ -569,6 +586,91 @@ async fn an_upper_layer_control_message_keeps_its_label() {
         }
         other => panic!("XCTL must not arrive as an application message, got {other:?}"),
     }
+
+    env.shutdown().await.expect("shutdown");
+}
+
+/// A sealed-box message survives the whole path — packed by the SDK, carried by
+/// the mediator, opened by the peer — with nothing told in advance.
+///
+/// §8.3's scheme is not negotiated: the receiver reads it off the ciphertext
+/// field's code, `C` where HPKE-Base uses `F`. So the interesting assertion is
+/// that bob unpacks it with the *same* call he uses for everything else, having
+/// no idea which scheme alice chose.
+///
+/// The mediator is the other half. It routes on the envelope, which is
+/// identical under both schemes, so it should carry a sealed box without
+/// noticing — and a mediator that did notice would be reading further into the
+/// message than it has any business reading.
+#[tokio::test]
+async fn a_sealed_box_message_travels_the_normal_path() {
+    let env = TestEnvironment::spawn_with_tsp_policy(TspPolicy::Preferred)
+        .await
+        .expect("spawn env");
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+    env.relate(&alice, &bob)
+        .await
+        .expect("alice and bob relate");
+
+    env.atm
+        .tsp()
+        .send_sealed_box(&alice.profile, &bob.did, b"over the old scheme")
+        .await
+        .expect("alice sends under the sealed box");
+
+    let stored = poll_inbox(&env, &bob.profile).await;
+
+    // The scheme is visible on the wire before anything is opened: the field
+    // after the two VIDs is the ciphertext, and its CESR identifier is `C` for
+    // a sealed box where HPKE-Base uses `F`. Reading that identifier is what
+    // makes the unpack below meaningful — comparing whole frames would not,
+    // since both schemes draw fresh randomness per message and so differ
+    // regardless of which was used.
+    let qb2 = env.atm.tsp().decode(&stored).expect("decode");
+    assert_eq!(
+        ciphertext_code(&qb2),
+        'C',
+        "send_sealed_box must actually emit a sealed box"
+    );
+
+    let hpke = env
+        .atm
+        .tsp()
+        .pack(&alice.profile, &bob.did, b"over the old scheme")
+        .await
+        .expect("pack the same content under HPKE-Base");
+    assert_eq!(
+        ciphertext_code(&hpke),
+        'F',
+        "and the default is still HPKE-Base"
+    );
+
+    // Bob uses the ordinary call. He was told nothing.
+    let (payload, sender) = env
+        .atm
+        .tsp()
+        .unpack(&bob.profile, &stored)
+        .await
+        .expect("bob unpacks it without knowing the scheme");
+    assert_eq!(payload, b"over the old scheme");
+    assert_eq!(sender, alice.did);
+
+    // And an ordinary message still works on the same relationship, so choosing
+    // the scheme per message costs nothing.
+    env.atm
+        .tsp()
+        .send(&alice.profile, &bob.did, b"and back to HPKE")
+        .await
+        .expect("alice sends under HPKE-Base");
+    let stored = poll_inbox(&env, &bob.profile).await;
+    let (payload, _) = env
+        .atm
+        .tsp()
+        .unpack(&bob.profile, &stored)
+        .await
+        .expect("bob unpacks that too");
+    assert_eq!(payload, b"and back to HPKE");
 
     env.shutdown().await.expect("shutdown");
 }
