@@ -8,25 +8,13 @@ use std::future::Future;
 use std::pin::Pin;
 
 use affinidi_did_common::{DID, DIDMethod};
-pub use affinidi_did_web::HostPolicy;
-// `Document` is only named by the ssi-backed helper below, which is gated.
-#[cfg(feature = "did-cheqd")]
-use affinidi_did_common::Document;
 use affinidi_did_resolver_traits::{AsyncResolver, Resolution, ResolverError};
+pub use affinidi_did_web::HostPolicy;
 use tracing::error;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Convert an ssi `DIDResolver` result (typed output) into a `Document`.
-#[cfg(feature = "did-cheqd")]
-fn document_from_ssi_output(output: impl serde::Serialize) -> Result<Document, ResolverError> {
-    let value = serde_json::to_value(output)
-        .map_err(|e| ResolverError::InvalidDocument(format!("Serialization failed: {e}")))?;
-    serde_json::from_value(value)
-        .map_err(|e| ResolverError::InvalidDocument(format!("Invalid document shape: {e}")))
-}
 
 // ---------------------------------------------------------------------------
 // did:ethr
@@ -256,7 +244,18 @@ impl AsyncResolver for WebvhResolver {
 // did:cheqd (feature-gated)
 // ---------------------------------------------------------------------------
 
-/// Resolver for `did:cheqd` — Cheqd network DID method.
+/// Resolver for `did:cheqd` — retired in 0.8.36, kept so the type still exists.
+///
+/// It now declines every DID with a `ResolutionFailed` explaining why, rather
+/// than resolving. The implementation came from `did-resolver-cheqd`, a crate
+/// with no published source repository and a single 2025 release, which pinned
+/// `ssi-dids-core 0.1` and pulled eight advisories — including a live h2 DoS —
+/// into the lockfile even though the feature is off by default and nothing in
+/// this workspace enabled it.
+///
+/// `did:cheqd` still *parses* (see `affinidi-did-common`). To resolve it, append
+/// your own [`AsyncResolver`] for the method; the chain is a public extension
+/// point precisely so a method can live outside this crate.
 #[cfg(feature = "did-cheqd")]
 pub struct CheqdResolver;
 
@@ -275,29 +274,16 @@ impl AsyncResolver for CheqdResolver {
                 return None;
             }
 
-            let did_str = did.to_string();
-            use ssi_dids_core::DIDResolver;
-            let ssi_did = match ssi_dids_core::DID::new(&did_str) {
-                Ok(d) => d,
-                Err(e) => {
-                    return Some(Err(ResolverError::InvalidDocument(format!(
-                        "Invalid DID: {e}"
-                    ))));
-                }
-            };
-
-            Some(
-                match did_resolver_cheqd::DIDCheqd::default()
-                    .resolve(ssi_did)
-                    .await
-                {
-                    Ok(res) => document_from_ssi_output(res.document.into_document()),
-                    Err(e) => {
-                        error!("did:cheqd resolution error: {e:?}");
-                        Err(ResolverError::ResolutionFailed(e.to_string()))
-                    }
-                },
-            )
+            // Deliberately `Some(Err(..))`, not `None`: declining would fall
+            // through to "no resolver registered for DID method 'cheqd'", which
+            // reads like a configuration mistake. This says what actually
+            // happened and what to do about it.
+            error!("did:cheqd resolution is retired; refusing {did}");
+            Some(Err(ResolverError::ResolutionFailed(
+                "did:cheqd resolution was retired in affinidi-did-resolver-cache-sdk 0.8.36; \
+                 append your own AsyncResolver for the method if you need it"
+                    .to_string(),
+            )))
         })
     }
 }

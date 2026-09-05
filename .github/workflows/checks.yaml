@@ -54,7 +54,13 @@ jobs:
       # is unmaintained and its repo was archived 2026-05-03. Clears together with
       # RUSTSEC-2026-0258 when did-resolver-cheqd moves off ssi-dids-core 0.1
       # (cheqd/did-resolver-rs#3).
-      auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373,RUSTSEC-2026-0258,RUSTSEC-2023-0126"
+      # Only quinn-proto remains. The other four entries were retired with
+      # did:cheqd in cache-sdk 0.8.36: RUSTSEC-2026-0258 (h2 DoS) and
+      # RUSTSEC-2023-0126 (im) came through `did-resolver-cheqd`, and
+      # owning_ref / rsa left the graph with it. h2 now resolves at 0.4.19,
+      # above the >=0.4.16 fix, so that DoS is fixed rather than suppressed.
+      # Anything re-entering the graph should fail the build, not be inherited.
+      auditIgnore: "RUSTSEC-2024-0373"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       coverage: 0
       useRedis: true
