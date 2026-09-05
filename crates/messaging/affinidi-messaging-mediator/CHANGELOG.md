@@ -1,5 +1,68 @@
 # Changelog
 
+## Unreleased (0.20.7) — bind a TSP envelope's sender to the authenticated session
+
+**Security fix: the TSP ingress trusted the envelope's claimed sender.**
+Reported as [#754], measured against a public deployment: a TSP frame sent on a
+socket authenticated as DID A, carrying envelope sender DID E (never
+authenticated), was forwarded normally.
+
+A TSP envelope names its sender in the clear and the mediator does not decrypt
+it, so `meta.sender` is a claim. `handle_inbound_tsp` never consulted the
+session at all — it passed that claim straight to `deliver_opaque`, which hashes
+it into the recipient's `delivery_decision` access-list lookup. An authenticated
+client could therefore borrow any allow-listed VID and be admitted to an inbox
+that does not admit it.
+
+This is the TSP twin of the DIDComm direct-delivery bypass fixed in 0.15.5. The
+TSP path was written after that fix and did not carry it. `docs/acls.md` §6 has
+documented the flow as "Direct delivery (DIDComm and TSP)" — including the
+session-DID match — the whole time, so the contract was already stated; only the
+implementation was missing.
+
+- The cleartext envelope sender is now bound to the session DID under the same
+  `security.force_session_did_match` switch the DIDComm paths use, reusing the
+  same `check_direct_delivery_session_match` predicate and returning the same
+  `authorization.did.session_mismatch` problem report.
+- Checked on the **outer** envelope, before the receiver branch, so it covers
+  relayed and nested submissions too: a client must have authored the layer it
+  hands over. Inner layers are exempt by construction — they are sealed to
+  someone else.
+- **Anonymous sessions are exempt**, exactly as on the DIDComm side since 0.20.4:
+  an inter-mediator relay hop is POSTed to `/inbound` with no `Authorization`
+  header and lands on the anonymous `ANON-INBOUND` session, whose DID is empty.
+  Without the exemption cross-mediator TSP delivery would stop entirely. The
+  residual cost is the one already named for blind relay: on an anonymous hop the
+  claimed sender stays unverified, which is inherent to relaying. Note the
+  asymmetry: DIDComm deployments that need the relaying peer authenticated can run
+  `RelayMode::Rewrap` with `processors.forwarding.relay_trusted_mediators`, and
+  **TSP has no equivalent yet** — `relay_peer_trusted` is DIDComm-only. Anonymous
+  inbound is itself opt-in (`security.enable_inter_mediator_relay`, or the legacy
+  implicit `SEND_FORWARDED` in `global_acl_default`), which bounds the exposure to
+  relay-enabled deployments.
+- Direct TSP delivery now also checks the sender's own `SEND_MESSAGES`, mirroring
+  the DIDComm direct-delivery branch. This is load-bearing on the **WebSocket**
+  ingress in particular, which gates only on `LOCAL` at upgrade: a DID whose
+  `SEND_MESSAGES` had been revoked could still post TSP frames over a socket.
+
+**Behaviour change.** A client that deliberately sends under a VID other than the
+one it authenticated as will now be refused with
+`e.p.authorization.did.session_mismatch` unless the deployment sets
+`security.force_session_did_match = "false"`. Deployments relying on the split
+between connection identity and egress identity should move to TSP **routed**
+mode, where the outer sender is the connection identity and the egress identity
+travels inside the sealed layer — that shape satisfies the binding by
+construction (R3.6: coordinate with consuming repos).
+
+**Still outstanding, tracked separately:** TSP direct delivery does not honour
+`security.local_direct_delivery_allowed`, so a deployment that has turned direct
+delivery off to force everything through a routing envelope still accepts direct
+TSP. That is a policy change with far wider blast radius than this fix — it
+changes the default fixture's behaviour for ~20 existing tests — and is being
+handled on its own rather than folded in here.
+
+[#754]: https://github.com/affinidi/affinidi-tdk-rs/issues/754
+
 ## Unreleased (0.20.6) — TSP forwarding follows a next hop that names its mediator by DID
 
 **Bug fix: TSP remote forwarding could not deliver to a mediated peer.** Observed

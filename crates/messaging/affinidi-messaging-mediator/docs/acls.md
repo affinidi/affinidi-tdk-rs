@@ -229,6 +229,18 @@ deliberately identical (§2).
 └─ recipient's access list admits the sender?   else 403 authorization.access_list.denied
 ```
 
+The claimed sender is unverified in both protocols — the mediator holds no key
+for an envelope it is only carrying, so it reads the JWE `skid` (DIDComm) or the
+cleartext CESR sender field (TSP). `force_session_did_match` is what makes it
+trustworthy enough to feed the access-list lookup, by pinning it to the DID that
+authenticated. It is skipped for unauthenticated sessions, because an
+inter-mediator relay hop arrives anonymously and has no session DID to match
+against; on such a hop the claimed sender stays unverified.
+
+One deviation remains: **TSP does not yet honour `local_direct_delivery_allowed`**
+— a deployment that has turned direct delivery off still accepts direct TSP
+delivery. Every other step above applies to both protocols.
+
 ### Forwarding
 
 ```
