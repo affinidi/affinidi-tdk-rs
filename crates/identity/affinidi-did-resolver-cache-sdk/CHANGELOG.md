@@ -1,5 +1,53 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.36) — retire did:cheqd resolution, clearing eight advisories
+
+Closes [#760]. `did:cheqd` still **parses**; this SDK no longer **resolves** it.
+
+`did-resolver-cheqd` was an optional dependency behind the opt-in `did-cheqd`
+feature — off by default, enabled by nothing in this workspace, and compiled by
+no build. It still put eight advisories into `Cargo.lock`, because `cargo audit`
+reads the lockfile rather than the build graph:
+
+| Advisory | Crate | Reached via |
+|----------|-------|-------------|
+| RUSTSEC-2026-0258 (**vulnerability**, h2 DoS) | `h2 0.3.27` | `ssi-dids-core 0.1.3` → `reqwest 0.11` → `hyper 0.14` |
+| RUSTSEC-2025-0134 | `rustls-pemfile 1.0.4` / `2.2.0` | `reqwest 0.11`, and `tonic 0.12.3` |
+| RUSTSEC-2026-0248, RUSTSEC-2023-0126 | `im 15.1.0` | `linked-data 0.1.2` → `json-ld 0.21` |
+| RUSTSEC-2026-0251, RUSTSEC-2026-0255 | `sized-chunks 0.6.5` | `im` |
+| RUSTSEC-2026-0247 | `bitmaps 2.1.0` | `im` |
+| RUSTSEC-2026-0215 | `smallstr 0.3.1` | `json-syntax` |
+| RUSTSEC-2024-0370 | `proc-macro-error 1.0.4` | `linked-data-derive` |
+
+The upstream crate publishes **no source repository**, has a single release from
+2025, and pins `ssi-dids-core ^0.1` — so there was no version to move to and no
+repository to fork. It used ssi only as a type vocabulary; both call sites here
+serialised its document straight back out to JSON.
+
+**Result:** every one of the eight is gone. `h2` now resolves at 0.4.19, above
+the `>=0.4.16` fix, so the DoS is *fixed* rather than suppressed — its
+`auditIgnore` entry has been removed from CI along with three others that went
+with it. `cargo audit` drops from 1 vulnerability + 12 warnings to 0 + 1, and the
+resolved graph from 1064 crates to 942. The `tonic 0.12` / rustls `ring` conflict
+that made `did-cheqd` awkward to enable is gone with it.
+
+**Nothing was removed from the public API.** The `did-cheqd` feature remains
+(now empty), `CheqdResolver` remains and declines with an explanatory
+`ResolutionFailed`, and `DIDMethod::Cheqd` in `affinidi-did-common` is untouched.
+Code that named any of them still compiles, which is why this ships as a patch:
+under ADR 0003 a true minor would break the external `[patch.crates-io]`
+redirects (`vta-sdk 0.32.3` pins `^0.8`) and require sequencing releases in
+another repository first. Verified with `check-workspace-duplicates.sh`.
+
+To resolve `did:cheqd`, append your own resolver — the chain is a public
+extension point for exactly this:
+
+```rust,ignore
+client.append_resolver(MethodName::Cheqd, Box::new(MyCheqdResolver));
+```
+
+[#760]: https://github.com/affinidi/affinidi-tdk-rs/issues/760
+
 ## 0.8.35
 
 ### Changed

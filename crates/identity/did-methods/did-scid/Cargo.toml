@@ -1,7 +1,7 @@
 
 [package]
 name = "did-scid"
-version = "0.2.5"
+version = "0.2.6"
 description = "Implementation of did:scid in Rust"
 repository.workspace = true
 edition.workspace = true
@@ -14,16 +14,11 @@ readme = "README.md"
 rust-version.workspace = true
 
 [features]
-# `did-cheqd` is intentionally NOT in `default`: it pulls `did-resolver-cheqd`,
-# whose `tonic 0.12` dependency hardcodes the rustls `ring` backend on
-# `tokio-rustls`/`rustls 0.23`. Forcing `ring` clashes with downstream binaries
-# that select `aws_lc_rs` (the ecosystem default via kube/reqwest/jsonwebtoken),
-# producing a "no process-level CryptoProvider available" panic. Opt in to
-# `did-cheqd` only when you accept the `ring` backend (and install a
-# CryptoProvider in your binary's `main`).
+# Retired in 0.2.6 and now inert: `did:cheqd` resolution was removed (see the
+# CHANGELOG). Kept, and empty, so a consumer enabling it still builds.
+did-cheqd = []
 default = ["did-webvh"]
 
-did-cheqd = ["dep:did-resolver-cheqd", "dep:ssi-dids-core"]
 did-webvh = ["dep:didwebvh-rs"]
 # did:scid:ke — a KERI AID via did:webs. Optional so did-scid does not pull the
 # KERI stack into builds that never resolve it.
@@ -37,10 +32,8 @@ affinidi-did-common = "0.4"
 
 affinidi-did-webs = { version = "0.7", optional = true }
 didwebvh-rs = { version = "0.6", optional = true }
-did-resolver-cheqd = { version = "1", optional = true }
 regex = "1"
 serde_json = "1"
-ssi-dids-core = { version = "0.1", optional = true }
 thiserror = "2"
 tracing = "0.1"
 

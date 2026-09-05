@@ -105,36 +105,30 @@ pub async fn resolve(
             }
         }
         ScidMethod::Webs(webs_did) => resolve_webs(&webs_did).await,
+        // Retired in 0.2.6. The `did:cheqd` shape still parses and this arm still
+        // exists, so nothing a consumer named has gone away — only the
+        // implementation. It came from `did-resolver-cheqd`, a crate with no
+        // published source repository and a single 2025 release, which pinned
+        // `ssi-dids-core 0.1` and pulled eight advisories (including an h2 DoS)
+        // into the lockfile. Register your own resolver for the method if you
+        // need it; see the CHANGELOG.
         #[cfg(feature = "did-cheqd")]
         ScidMethod::Cheqd(cheqd_did) => {
-            use did_resolver_cheqd::DIDCheqd;
-            use ssi_dids_core::{DID, DIDResolver};
-
-            debug!("Resolving Cheqd DID: {cheqd_did}");
-            let parsed = DID::new::<str>(&cheqd_did).map_err(|e| {
-                DIDSCIDError::DidUrlError(format!(
-                    "derived cheqd DID is not a valid DID ({cheqd_did}): {e}"
-                ))
-            })?;
-            match DIDCheqd::default().resolve(parsed).await {
-                Ok(res) => {
-                    let doc_value = serde_json::to_value(res.document.into_document())?;
-                    Ok(serde_json::from_value(doc_value)?)
-                }
-                Err(e) => {
-                    error!("Error: {e:?}");
-                    Err(DIDSCIDError::CheqdError(e.to_string()))
-                }
-            }
+            debug!("did:cheqd resolution is retired; refusing {cheqd_did}");
+            Err(DIDSCIDError::CheqdError(format!(
+                "did:cheqd resolution was retired in did-scid 0.2.6 and this crate no longer \
+                 resolves {cheqd_did}; register your own resolver for the method"
+            )))
         }
     }
 }
 
 /// Derive a `did:cheqd` method DID from a URL-mode `?src=did:cheqd:...` source.
 ///
-/// `did-cheqd` is optional because `did-resolver-cheqd` forces the rustls `ring`
-/// TLS backend (via `tonic 0.12`); see the crate's feature docs. When the
-/// feature is disabled this returns a clear error instead of failing to compile.
+/// `did-cheqd` is now an inert feature: it gates the `did:cheqd` *shape* only.
+/// Resolution was retired in 0.2.6 (see `resolve`), so enabling it changes what
+/// parses, not what resolves. When the feature is disabled this returns a clear
+/// error instead of failing to compile.
 #[cfg(feature = "did-cheqd")]
 fn derive_cheqd_url(src: &str, scid: &str) -> Result<ScidMethod, DIDSCIDError> {
     let cheqd = format!("{src}:{scid}");
@@ -747,27 +741,6 @@ mod tests {
                 assert_eq!(doc.id.as_str(), "did:webvh:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai:identity.foundation:didwebvh-implementations:implementations:affinidi-didwebvh-rs");
             }
             Err(_) => panic!("Couldn't resolve SCID WebVH DID")
-        }
-    }
-
-    #[cfg(feature = "did-cheqd")]
-    #[tokio::test]
-    #[ignore = "requires external network (cheqd.net)"]
-    async fn test_scid_cheqd_resolution() {
-        match resolve(
-            "did:scid:vh:1:cad53e1d-71e0-48d2-9352-39cc3d0fac99?src=did:cheqd:testnet",
-            None,
-            None,
-        )
-        .await
-        {
-            Ok(doc) => {
-                assert_eq!(
-                    doc.id.as_str(),
-                    "did:cheqd:testnet:cad53e1d-71e0-48d2-9352-39cc3d0fac99"
-                );
-            }
-            Err(_) => panic!("Couldn't resolve SCID Cheqd DID"),
         }
     }
 }

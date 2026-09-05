@@ -1,5 +1,23 @@
 # did:scid
 
+## Unreleased (0.2.6) — retire did:cheqd resolution
+
+Part of [#760]. A `did:scid` whose `?src=` names a `did:cheqd` still parses, and
+`ScidMethod::Cheqd` is unchanged; `resolve` now returns an explanatory
+`CheqdError` instead of resolving.
+
+The implementation came from `did-resolver-cheqd`, which pinned `ssi-dids-core
+0.1` and — even unbuilt, behind an off-by-default feature — pulled eight
+advisories into `Cargo.lock`, including a live `h2` denial-of-service. The crate
+publishes no source repository and has a single 2025 release, so there was
+nothing to upgrade to and nothing to fork. See
+`affinidi-did-resolver-cache-sdk` 0.8.36 for the full accounting.
+
+Nothing was removed from the public API: the `did-cheqd` feature remains (now
+empty) and so does the enum variant, so code naming either still compiles.
+
+[#760]: https://github.com/affinidi/affinidi-tdk-rs/issues/760
+
 ## 0.2.5
 
 ### Changed
