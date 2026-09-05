@@ -12,22 +12,19 @@ jobs:
     with:
       toolchain: "1.95.0"
       rustflags: "-D warnings --cfg tracing_unstable"
-      # RUSTSEC-2026-0258 (h2, unbounded empty DATA frames). The fixable half is
-      # fixed: the lockfile takes h2 0.4.16. What remains is h2 **0.3.27**,
-      # which has no patched release — it is the newest 0.3 and the advisory
-      # names >=0.4.16 as the only fix. It arrives through reqwest 0.11 <-
-      # ssi-dids-core, as an HTTP *client*.
+      # Only quinn-proto (RUSTSEC-2024-0373) is still suppressed.
       #
-      # Since #719 the ONLY path to it is the optional `did-cheqd` feature
-      # (did-resolver-cheqd 1.0.1 pins ssi-dids-core ^0.1). No crate in this
-      # workspace enables that feature, so h2 0.3.27 is never compiled — it is
-      # in Cargo.lock only, and cargo-audit reads the lockfile rather than the
-      # build graph. did:ethr / did:pkh / did:jwk no longer touch ssi at all.
+      # RUSTSEC-2026-0258 (h2, unbounded empty DATA frames) was the reason this
+      # list existed. It is now genuinely fixed rather than suppressed: h2 0.3.27
+      # arrived through reqwest 0.11 <- ssi-dids-core <- the optional `did-cheqd`
+      # feature, and cache-sdk 0.8.36 retired did:cheqd resolution and dropped
+      # `did-resolver-cheqd` altogether. The lockfile now takes only h2 0.4.19,
+      # above the >=0.4.16 the advisory names as the fix.
       #
-      # Drop this entry when did-resolver-cheqd moves off ssi-dids-core 0.1
-      # (see cheqd/did-resolver-rs#3), NOT when "those crates move to reqwest
-      # 0.12" as this comment previously said — the crates it named are gone.
-      auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373,RUSTSEC-2026-0258"
+      # The same removal took owning_ref (2022-0040), rsa (2023-0071) and im
+      # (2023-0126) out of the graph, so their entries went with it. Anything
+      # re-entering the graph should fail the build rather than be inherited.
+      auditIgnore: "RUSTSEC-2024-0373"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       release_debug: true
       # `workspace_publish: true` uses `cargo publish --workspace`, which errors on
