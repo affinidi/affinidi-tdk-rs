@@ -311,6 +311,9 @@ See:
 - [docs/memory-tuning.md](docs/memory-tuning.md) — what the mediator holds
   in memory, which knob to raise for throughput, and how the Fjall and Redis
   backends differ (they put their memory in different places).
+- [docs/mediation-and-routing.md](docs/mediation-and-routing.md) — the
+  addressing contract: DIDComm v2 is DID-addressed and needs no keylist, v1
+  is keylist-addressed and does, and what actually gates reachability.
 
 ### Re-running the wizard / tearing down
 

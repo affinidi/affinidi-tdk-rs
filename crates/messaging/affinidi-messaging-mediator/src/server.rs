@@ -601,19 +601,15 @@ pub async fn serve_internal(
     }
 
     #[cfg(feature = "didcomm")]
+    // The advertised set is the mediator's public protocol contract and lives in
+    // one place, next to the tests that pin it. Notably it carries no
+    // coordinate-mediation entry: v2 routing is DID-addressed and needs no
+    // keylist (issue #755, `docs/mediation-and-routing.md`).
     let discover_features = Arc::new(DiscoverFeatures {
-        protocols: vec![
-            "https://didcomm.org/discover-features/2.0".to_string(),
-            "https://didcomm.org/routing/2.0".to_string(),
-            "https://didcomm.org/trust-ping/2.0".to_string(),
-            "https://didcomm.org/out-of-band/2.0".to_string(),
-            "https://didcomm.org/messagepickup/3.0".to_string(),
-            "https://affinidi.com/atm/1.0/authenticate".to_string(),
-            "https://didcomm.org/mediator/1.0/admin-management".to_string(),
-            "https://didcomm.org/mediator/1.0/account-management".to_string(),
-            "https://didcomm.org/mediator/1.0/acl-management".to_string(),
-            "https://didcomm.org/report-problem/2.0".to_string(),
-        ],
+        protocols: crate::messages::protocols::discover_features::ADVERTISED_PROTOCOLS
+            .iter()
+            .map(|p| p.to_string())
+            .collect(),
         ..Default::default()
     });
 
