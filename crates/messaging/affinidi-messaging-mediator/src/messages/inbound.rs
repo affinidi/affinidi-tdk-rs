@@ -176,15 +176,35 @@ pub(crate) async fn handle_inbound_tsp(
     //   * receiver == this mediator → we hold the key, so unpack to learn the kind
     //     and act as the relay hop (Routed) / metadata-privacy intermediary (Nested).
     if meta.receiver != state.config.mediator_did {
-        // Direct delivery. The sender's own SEND_MESSAGES, distinct from the
-        // session's: the WebSocket ingress gates only on LOCAL at upgrade, so
-        // without this a DID whose SEND_MESSAGES was revoked could still post
-        // TSP frames over a socket. Mirrors the DIDComm direct-delivery branch.
+        // Direct delivery, and subject to the same two gates the DIDComm
+        // direct-delivery branch applies. `docs/acls.md` §6 documents this flow
+        // as "Direct delivery (DIDComm and TSP)" and has always promised both.
         //
-        // `local_direct_delivery_allowed` is the other gate `docs/acls.md` §6
-        // promises for this flow and TSP does not honour it either — that one is
-        // a policy change with much wider blast radius than this fix, and is
-        // tracked separately rather than smuggled in here.
+        // The policy gate first: an operator who turns direct delivery off wants
+        // everything to arrive inside a routing envelope, so the relay layer can
+        // audit, scrub metadata, or inspect it. TSP ignoring this switch meant
+        // any TSP-capable sender walked straight past that control.
+        //
+        // Note there is no TSP analogue of `local_direct_delivery_allow_anon`:
+        // that hatch exists because a DIDComm envelope can be anon-packed with no
+        // sender at all, whereas a TSP envelope always names its sender in the
+        // clear. There is no anonymous TSP case to admit.
+        if !state.config.security.local_direct_delivery_allowed {
+            return Err(tsp_problem(
+                session,
+                71,
+                "direct_delivery.denied",
+                "Mediator is not accepting direct delivery of TSP messages. They must be \
+                 relayed through a routing envelope"
+                    .to_string(),
+                StatusCode::FORBIDDEN,
+            ));
+        }
+
+        // Then the sender's own SEND_MESSAGES, distinct from the session's: the
+        // WebSocket ingress gates only on LOCAL at upgrade, so without this a DID
+        // whose SEND_MESSAGES was revoked could still post TSP frames over a
+        // socket.
         let from_acls = authz::effective_acls(state, &digest(meta.sender.as_bytes())).await?;
         if authz::require_capability(&from_acls, Capability::SendMessages).is_err() {
             return Err(tsp_problem(

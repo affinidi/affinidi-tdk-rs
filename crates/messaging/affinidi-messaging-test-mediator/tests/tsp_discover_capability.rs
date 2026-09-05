@@ -169,7 +169,7 @@ async fn disclosure_without_tsp_uri_stays_didcomm() {
 /// consuming a disclosure that lists it is inert — capability tracking stays off.
 #[tokio::test]
 async fn discovery_is_inert_under_off_policy() {
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn default (Off) env");
     let alice = env.add_user("alice").await.expect("add alice");

@@ -61,7 +61,7 @@ async fn token_and_ws_uri(env: &TestEnvironment, user: &TestUser) -> (String, Ur
 async fn tsp_websocket_flushes_and_deletes_queued_message() {
     init_tracing();
 
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 
@@ -162,7 +162,7 @@ async fn tsp_websocket_flushes_and_deletes_queued_message() {
 async fn tsp_websocket_sdk_consumer_flushes_and_deletes() {
     init_tracing();
 
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 
@@ -236,7 +236,7 @@ async fn tsp_websocket_sdk_consumer_flushes_and_deletes() {
 async fn tsp_websocket_delivers_messages_that_arrive_after_connect() {
     init_tracing();
 
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 
@@ -327,7 +327,7 @@ async fn wait_for_empty_inbox(env: &TestEnvironment, user: &TestUser) -> bool {
 async fn tsp_ack_mode_keeps_the_message_until_the_client_acks() {
     init_tracing();
 
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 
@@ -398,7 +398,7 @@ async fn tsp_ack_mode_keeps_the_message_until_the_client_acks() {
 async fn an_unacked_tsp_message_is_redelivered_on_reconnect() {
     init_tracing();
 
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 
@@ -472,7 +472,7 @@ async fn an_unacked_tsp_message_is_redelivered_on_reconnect() {
 async fn an_unacked_message_is_not_resent_within_the_same_connection() {
     init_tracing();
 
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 
@@ -540,7 +540,7 @@ async fn an_unacked_message_is_not_resent_within_the_same_connection() {
 async fn tsp_ack_is_selected_even_though_the_client_lists_it_second() {
     init_tracing();
 
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
     let bob = env.add_user("bob").await.expect("add bob");
