@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased (0.20.8) — state the v2 addressing contract: DID-addressed, no keylist
+
+Answers [#755]. A downstream transport binding measured that delivery to a
+`did:key` client works purely on the authenticated session DID, with no keylist
+update, and asked whether that is a contract or an accident.
+
+It is structural, and now it is written down.
+
+- **New `docs/mediation-and-routing.md`.** DIDComm v2 routing is DID-addressed:
+  a `routing/2.0` forward names its next hop as a DID, which hashes straight
+  into the recipient's account lookup. There is no verkey indirection for a
+  keylist to populate, so a v2 client registers nothing. The mediator maintains
+  the account itself — `resolve_next_account` creates one on first forward, and
+  authentication registers the DID too.
+- **The keylist that exists is v1-only, and the document says why.** A DIDComm
+  v1 (Aries RFC 0019) envelope carries no DID, so the recipient is identified by
+  verkey and the mediator must hold the verkey→account mapping; the keylist is
+  how a wallet populates it. It exists to manufacture a stable identifier for a
+  client that has none — which a v2 `did:key` client already has.
+- **The advertised protocol set is now a named constant**,
+  `messages::protocols::discover_features::ADVERTISED_PROTOCOLS`, which
+  `server.rs` builds its `DiscoverFeatures` state from. The list was previously
+  inline in a long startup function and could not be asserted on.
+- **`coordinate_mediation_is_not_advertised`** pins the absence, so implementing
+  v2 mediation becomes a deliberate act — amending a contract other people have
+  built on — rather than an incidental change that silently invalidates it.
+  `did_addressed_delivery_protocols_are_advertised` is its control: without it
+  the first test would pass just as happily against an empty list.
+
+The document is also explicit that "no keylist" is not "no requirements", since
+that is the part most likely to bite a client author. `mediator_acl_mode =
+"explicit_allow"`, the `LOCAL` / `RECEIVE_MESSAGES` / `RECEIVE_FORWARDED`
+capabilities, the recipient's access list and `local_direct_delivery_allowed`
+all gate reachability without any keylist being involved — and direct delivery
+to a DID that has never authenticated is refused (`direct_delivery.recipient.unknown`)
+where a forward to the same DID would auto-create the account.
+
+No behaviour change: documentation, one extracted constant, and three tests.
+
+[#755]: https://github.com/affinidi/affinidi-tdk-rs/issues/755
+
 ## Unreleased (0.20.7) — bind a TSP envelope's sender to the authenticated session
 
 **Security fix: the TSP ingress trusted the envelope's claimed sender.**
