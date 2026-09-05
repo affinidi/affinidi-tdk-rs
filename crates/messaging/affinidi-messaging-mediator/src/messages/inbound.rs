@@ -155,6 +155,15 @@ pub(crate) async fn handle_inbound_tsp(
     // DID is empty, and could only ever fail the comparison. The residual cost is
     // the one named on the DIDComm side: on an anonymous relay hop the claimed
     // sender stays unverified. That is inherent to relaying, not given away here.
+    //
+    // One asymmetry worth naming rather than leaving to be inferred: on the
+    // DIDComm side a deployment that needs the relaying peer authenticated can
+    // run [`RelayMode::Rewrap`] with `processors.forwarding.relay_trusted_mediators`.
+    // TSP has no equivalent — `relay_peer_trusted` is DIDComm-only — so for TSP
+    // the anonymous hop currently has no opt-in hardening at all. Anonymous
+    // inbound is itself opt-in (`security.enable_inter_mediator_relay`, or the
+    // legacy implicit `SEND_FORWARDED` in `global_acl_default`), which bounds
+    // the exposure to relay-enabled deployments.
     if state.config.security.force_session_did_match && session.authenticated {
         check_direct_delivery_session_match(session, Some(meta.sender.as_str()))?;
     }

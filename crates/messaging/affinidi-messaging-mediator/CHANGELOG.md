@@ -33,7 +33,13 @@ implementation was missing.
   header and lands on the anonymous `ANON-INBOUND` session, whose DID is empty.
   Without the exemption cross-mediator TSP delivery would stop entirely. The
   residual cost is the one already named for blind relay: on an anonymous hop the
-  claimed sender stays unverified, which is inherent to relaying.
+  claimed sender stays unverified, which is inherent to relaying. Note the
+  asymmetry: DIDComm deployments that need the relaying peer authenticated can run
+  `RelayMode::Rewrap` with `processors.forwarding.relay_trusted_mediators`, and
+  **TSP has no equivalent yet** — `relay_peer_trusted` is DIDComm-only. Anonymous
+  inbound is itself opt-in (`security.enable_inter_mediator_relay`, or the legacy
+  implicit `SEND_FORWARDED` in `global_acl_default`), which bounds the exposure to
+  relay-enabled deployments.
 - Direct TSP delivery now also checks the sender's own `SEND_MESSAGES`, mirroring
   the DIDComm direct-delivery branch. This is load-bearing on the **WebSocket**
   ingress in particular, which gates only on `LOCAL` at upgrade: a DID whose
