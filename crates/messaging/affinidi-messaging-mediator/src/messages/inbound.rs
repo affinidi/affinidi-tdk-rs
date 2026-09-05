@@ -6,7 +6,7 @@ use crate::messages::MessageHandler;
 use crate::messages::protocols::routing::{relay_peer_trusted, rewrap_inner_attachment};
 use crate::{SharedData, common::session::Session};
 // Shared by both the DIDComm direct-delivery path and the TSP delivery path.
-#[cfg(feature = "didcomm")]
+#[cfg(any(feature = "didcomm", feature = "tsp"))]
 use crate::common::authz::Capability;
 #[cfg(any(feature = "didcomm", feature = "tsp"))]
 use crate::{common::authz, messages::store::store_message};
@@ -134,6 +134,31 @@ pub(crate) async fn handle_inbound_tsp(
 
     use affinidi_tsp::message::routed::{RouteStep, next_hop, pack_routed};
 
+    // Bind the cleartext envelope sender to the identity that authenticated,
+    // exactly as the DIDComm paths do. A TSP envelope names its sender in the
+    // clear and the mediator does not decrypt it here, so `meta.sender` is a
+    // claim; it is also what feeds the recipient's access-list lookup in
+    // `deliver_opaque`, so on an authenticated session it has to be pinned to
+    // the session DID or the access list is evaluated against an attacker-chosen
+    // VID. This is the TSP twin of the DIDComm direct-delivery bypass fixed in
+    // mediator 0.15.5.
+    //
+    // Checked on the OUTER envelope, before the receiver branch, so it covers
+    // relay and nested submissions too: whatever a client hands its mediator, it
+    // has to have authored the layer it handed over. Inner layers are exempt by
+    // construction — they are sealed to someone else and the client did not
+    // write their envelopes.
+    //
+    // Skipped for unauthenticated sessions, exactly as the DIDComm branches skip
+    // it: an inter-mediator relay hop is POSTed to `/inbound` with no
+    // Authorization header, lands on the anonymous `ANON-INBOUND` session whose
+    // DID is empty, and could only ever fail the comparison. The residual cost is
+    // the one named on the DIDComm side: on an anonymous relay hop the claimed
+    // sender stays unverified. That is inherent to relaying, not given away here.
+    if state.config.security.force_session_did_match && session.authenticated {
+        check_direct_delivery_session_match(session, Some(meta.sender.as_str()))?;
+    }
+
     // The message kind (Direct/Routed/Nested/Control) now lives in the ENCRYPTED
     // payload, not the cleartext envelope, so a keys-free relay can no longer
     // dispatch on it. Route on the cleartext *receiver* instead:
@@ -142,6 +167,26 @@ pub(crate) async fn handle_inbound_tsp(
     //   * receiver == this mediator → we hold the key, so unpack to learn the kind
     //     and act as the relay hop (Routed) / metadata-privacy intermediary (Nested).
     if meta.receiver != state.config.mediator_did {
+        // Direct delivery. The sender's own SEND_MESSAGES, distinct from the
+        // session's: the WebSocket ingress gates only on LOCAL at upgrade, so
+        // without this a DID whose SEND_MESSAGES was revoked could still post
+        // TSP frames over a socket. Mirrors the DIDComm direct-delivery branch.
+        //
+        // `local_direct_delivery_allowed` is the other gate `docs/acls.md` §6
+        // promises for this flow and TSP does not honour it either — that one is
+        // a policy change with much wider blast radius than this fix, and is
+        // tracked separately rather than smuggled in here.
+        let from_acls = authz::effective_acls(state, &digest(meta.sender.as_bytes())).await?;
+        if authz::require_capability(&from_acls, Capability::SendMessages).is_err() {
+            return Err(tsp_problem(
+                session,
+                44,
+                "authorization.send",
+                "Sender DID is not authorized to send messages through this mediator".to_string(),
+                StatusCode::FORBIDDEN,
+            ));
+        }
+
         return deliver_tsp_local(state, session, raw).await;
     }
 
@@ -1054,17 +1099,18 @@ fn check_session_sender_match(
     ))
 }
 
-/// Ensure a direct-delivery envelope's claimed sender matches the session DID.
+/// Ensure an opaque envelope's claimed sender matches the session DID.
 ///
-/// The mediator holds no key for a directly-delivered envelope, so `from_did`
-/// here is whatever the JWE `skid` header claims — unverified. It is also the
-/// value that feeds the recipient's access-list lookup, so on an authenticated
-/// session it has to be pinned to the DID that authenticated.
+/// The mediator holds no key for the envelope it is being handed, so the sender
+/// here is only a claim — the JWE `skid` header for DIDComm direct delivery, the
+/// cleartext CESR sender field for TSP. In both cases it is also the value that
+/// feeds the recipient's access-list lookup, so on an authenticated session it
+/// has to be pinned to the DID that authenticated.
 ///
 /// Only the caller can decide whether the session is one that can be matched
 /// against: an anonymous inter-mediator relay hop has no session DID, and is
 /// exempted at the call site rather than here.
-#[cfg(feature = "didcomm")]
+#[cfg(any(feature = "didcomm", feature = "tsp"))]
 fn check_direct_delivery_session_match(
     session: &Session,
     claimed_sender: Option<&str>,
