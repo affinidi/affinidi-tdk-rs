@@ -35,6 +35,17 @@ Tear down with `docker compose -f docker-compose.test.yml down -v`.
   `docker/did-web/.well-known/did.json` (an Ed25519 verification key; resolution
   target only — no private key is published).
 
+  Since `affinidi-did-web` 0.1.4 the resolver refuses non-routable hosts, so
+  this DID does **not** resolve through the default resolver — that is the SSRF
+  guard doing its job. The smoke test fetches the document over HTTP directly.
+  Code that needs to resolve it must opt out explicitly:
+
+  ```rust
+  use affinidi_did_resolver_cache_sdk::resolver::network_resolvers::{HostPolicy, WebResolver};
+
+  client.set_resolver(MethodName::Web, Box::new(WebResolver::with_policy(HostPolicy::AllowPrivate)));
+  ```
+
 The identity is regenerable from the committed recipe:
 
 ```bash

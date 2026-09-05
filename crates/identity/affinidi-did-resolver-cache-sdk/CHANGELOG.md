@@ -1,5 +1,28 @@
 # Affinidi DID Resolver Cache SDK
 
+## 0.8.35
+
+### Changed
+
+- **SECURITY / BEHAVIOUR (SSRF):** `did:web` resolution now refuses a
+  non-routable target — loopback, RFC 1918 / unique-local, carrier-grade NAT,
+  link-local (`169.254.169.254`), `localhost`, `*.local` — both when the DID
+  names one literally and when the DID's hostname *resolves* to one. See
+  `affinidi-did-web` 0.1.4.
+
+  This is breaking in effect for deployments whose did:web hosts genuinely live
+  on an internal network. They opt back in explicitly:
+
+  ```rust
+  use affinidi_did_resolver_cache_sdk::resolver::network_resolvers::{HostPolicy, WebResolver};
+
+  client.set_resolver(MethodName::Web, Box::new(WebResolver::with_policy(HostPolicy::AllowPrivate)));
+  ```
+
+### Added
+
+- `WebResolver::with_policy` and the re-exported `HostPolicy`.
+
 ## 0.8.34
 
 ### Changed
