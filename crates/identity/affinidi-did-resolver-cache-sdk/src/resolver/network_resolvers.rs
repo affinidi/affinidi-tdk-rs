@@ -8,6 +8,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use affinidi_did_common::{DID, DIDMethod};
+pub use affinidi_did_web::HostPolicy;
 // `Document` is only named by the ssi-backed helper below, which is gated.
 #[cfg(feature = "did-cheqd")]
 use affinidi_did_common::Document;
@@ -108,15 +109,28 @@ impl AsyncResolver for PkhResolver {
 /// instead of the spruceid `did-web` crate's `reqwest 0.11` / `rustls 0.21`
 /// stack — clearing the rustls-webpki advisories that previously came in
 /// transitively through this resolver.
+///
+/// A `did:web` value names the host to fetch from, so by default this refuses
+/// non-routable targets — see [`HostPolicy`]. A deployment whose did:web hosts
+/// really do live on an internal network (or a local test stack using
+/// `did:web:localhost%3A8080`) opts out with [`WebResolver::with_policy`] and
+/// installs it via [`crate::DIDCacheClient::set_resolver`].
 pub struct WebResolver {
     inner: affinidi_did_web::DIDWeb,
 }
 
 impl WebResolver {
-    /// Create a resolver with the default HTTP client.
+    /// Create a resolver with the default HTTP client, refusing non-routable
+    /// hosts.
     pub fn new() -> Self {
+        Self::with_policy(HostPolicy::PublicOnly)
+    }
+
+    /// Create a resolver with the default HTTP client under an explicit
+    /// [`HostPolicy`].
+    pub fn with_policy(policy: HostPolicy) -> Self {
         Self {
-            inner: affinidi_did_web::DIDWeb::new(),
+            inner: affinidi_did_web::DIDWeb::with_policy(policy),
         }
     }
 }

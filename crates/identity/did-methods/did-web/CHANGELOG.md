@@ -2,6 +2,44 @@
 
 ## Changelog history
 
+## 3rd September 2026
+
+### 0.1.4 — SSRF hardening
+
+- **SECURITY (SSRF):** a `did:web` value names the host the resolver fetches
+  from, so an attacker-supplied DID could steer the resolver at an internal or
+  cloud-metadata endpoint. Two checks now close that:
+  - the DID's host is refused when it *is* a non-routable address —
+    loopback, RFC 1918 / unique-local, carrier-grade NAT (`100.64.0.0/10`,
+    which holds the Alibaba/Oracle metadata address and many Kubernetes node
+    CIDRs), link-local (`169.254.169.254`), `0.0.0.0/8`, broadcast, the
+    IPv4-mapped/-compatible and NAT64 spellings of any of those, or the names
+    `localhost`, `*.localhost` and `*.local` (with or without a trailing root
+    dot);
+  - the DID's host is refused when it *resolves to* one. A name is not a
+    defence: nothing stops an attacker pointing `evil.example.com` at
+    `169.254.169.254`. The default client filters at DNS-resolution time, which
+    also closes the rebinding window — the connection is made to the addresses
+    the guard vetted, with no second unchecked lookup.
+- The resolver response body is now capped at `MAX_DOCUMENT_BYTES` (1 MiB) and
+  read incrementally, so a hostile server cannot stream an unbounded body into
+  memory.
+- **BEHAVIOUR CHANGE (breaking in effect, shipped as a patch per ADR-0003).**
+  A deployment whose did:web hosts legitimately live on RFC-1918 space,
+  `.local`, or loopback — an internal mediator resolving peers on `10.x`, or a
+  local stack using `did:web:localhost%3A8080` — now gets
+  `DidWebError::BlockedHost` where 0.1.3 resolved. Opt back in explicitly:
+
+  ```rust
+  use affinidi_did_web::{DIDWeb, HostPolicy};
+  let resolver = DIDWeb::with_policy(HostPolicy::AllowPrivate);
+  ```
+
+- New public API (all additive): `HostPolicy`, `DIDWeb::with_policy`,
+  `DIDWeb::with_client_and_policy`, and `guarded_dns_resolver()` — install the
+  latter on a client you pass to `DIDWeb::with_client`, which otherwise gets
+  only the literal-address half of the guard.
+
 ## 19th July 2026
 
 ### 0.1.3 — affinidi-did-common 0.4
