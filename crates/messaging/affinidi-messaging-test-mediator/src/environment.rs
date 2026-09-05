@@ -123,6 +123,25 @@ impl TestEnvironment {
         Self::new(TestMediator::spawn().await?).await
     }
 
+    /// Spawn the default mediator with `local_direct_delivery_allowed = true`.
+    ///
+    /// The fixture default is `false`, matching the code default for an unset
+    /// setting rather than the shipped `conf/mediator.toml` (which sets
+    /// `"true"`). A test whose subject is *what happens after* a message is
+    /// accepted — pickup, streaming, capability discovery — has to enable it, or
+    /// it fails on the policy gate before reaching the thing under test.
+    ///
+    /// Prefer this over building a mediator by hand for that case: it states the
+    /// requirement once, and keeps "this test needs direct delivery" visible at
+    /// the call site rather than buried in a builder chain.
+    pub async fn spawn_with_direct_delivery() -> Result<Self, TestEnvironmentError> {
+        let mediator = TestMediator::builder()
+            .local_direct_delivery(true, false)
+            .spawn()
+            .await?;
+        Self::new(mediator).await
+    }
+
     /// Spawn the default mediator (with the `tsp` feature) and wire up
     /// the SDK to authenticate every profile over **pure TSP** instead
     /// of the built-in DIDComm flow.
@@ -145,7 +164,13 @@ impl TestEnvironment {
         use affinidi_secrets_resolver::ThreadedSecretsResolver;
         use affinidi_tdk::did_authentication::CustomAuthHandlers;
 
-        let mediator = TestMediator::spawn().await?;
+        // Direct delivery on: this helper exists to round-trip a TSP Direct
+        // message, which the `local_direct_delivery_allowed` gate would
+        // otherwise refuse before the auth path under test is reached.
+        let mediator = TestMediator::builder()
+            .local_direct_delivery(true, false)
+            .spawn()
+            .await?;
 
         // Build the shared resolver exactly as `TDKSharedState::new`
         // does when the config doesn't supply one. We need a handle to
@@ -189,7 +214,12 @@ impl TestEnvironment {
     pub async fn spawn_with_tsp_policy(
         policy: affinidi_messaging_sdk::TspPolicy,
     ) -> Result<Self, TestEnvironmentError> {
-        let mediator = TestMediator::spawn().await?;
+        // Direct delivery on, for the same reason as `spawn_with_tsp_auth`:
+        // protocol selection is only observable once a message is accepted.
+        let mediator = TestMediator::builder()
+            .local_direct_delivery(true, false)
+            .spawn()
+            .await?;
         let tdk_config =
             TDKConfig::headless().map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
         let atm_config = ATMConfig::builder()

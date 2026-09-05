@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 #[tokio::test]
 async fn tsp_direct_message_round_trips_through_the_mediator() {
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 
@@ -79,7 +79,7 @@ async fn tsp_direct_message_round_trips_through_the_mediator() {
 /// own TSP identity → unpack the layer sealed to it → `next_hop` → deliver.
 #[tokio::test]
 async fn tsp_routed_message_relays_through_the_mediator() {
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 
@@ -134,7 +134,7 @@ async fn tsp_routed_message_relays_through_the_mediator() {
 /// → unpack the layer sealed to it → route the inner by its own envelope → deliver.
 #[tokio::test]
 async fn tsp_nested_message_relays_through_the_mediator() {
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 
@@ -191,7 +191,7 @@ async fn tsp_nested_message_relays_through_the_mediator() {
 /// coverage (Direct / Routed / Nested / Control).
 #[tokio::test]
 async fn tsp_control_message_relays_through_the_mediator() {
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 
@@ -248,7 +248,7 @@ async fn tsp_control_message_relays_through_the_mediator() {
 /// protocols by forwarding on the route, blind to the inner's protocol.
 #[tokio::test]
 async fn tsp_routed_bridges_a_didcomm_message_to_the_recipient() {
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 
@@ -335,7 +335,7 @@ async fn tsp_routed_bridges_a_didcomm_message_to_the_recipient() {
 /// resolution + the remote-forward enqueue path.
 #[tokio::test]
 async fn tsp_routed_forwards_to_a_remote_recipients_mediator() {
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 

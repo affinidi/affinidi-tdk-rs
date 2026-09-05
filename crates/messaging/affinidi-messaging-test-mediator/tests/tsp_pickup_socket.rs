@@ -25,7 +25,7 @@ use affinidi_messaging_test_mediator::TestEnvironment;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tsp_frame_arriving_between_polls_is_not_dropped() {
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 
@@ -109,7 +109,7 @@ async fn tsp_frame_arriving_between_polls_is_not_dropped() {
 async fn a_slow_consumer_does_not_lose_packed_frames() {
     const FRAMES: usize = 130;
 
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn test environment");
 

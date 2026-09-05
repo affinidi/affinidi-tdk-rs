@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased (0.20.9) — TSP direct delivery honours `local_direct_delivery_allowed`
+
+Closes [#757], the gap deliberately left open by 0.20.7 and independently
+confirmed by the security review on that PR.
+
+`security.local_direct_delivery_allowed` exists so an operator can refuse
+unwrapped direct delivery and force everything through a routing envelope, where
+the relay layer can audit it, scrub metadata, or inspect it. The DIDComm path
+enforced it; `handle_inbound_tsp` did not, so any TSP-capable sender walked
+straight past that control and the operator got no such enforcement for TSP
+traffic.
+
+- The `receiver != mediator` branch of `handle_inbound_tsp` — the genuine
+  direct-delivery case — now returns the same `direct_delivery.denied` (code 71)
+  report the DIDComm branch does when the switch is off.
+- **No TSP analogue of `local_direct_delivery_allow_anon`, deliberately.** That
+  hatch exists because a DIDComm envelope can be anon-packed with no sender at
+  all; a TSP envelope always names its sender in the clear, so there is no
+  anonymous TSP case to admit. `docs/acls.md` now records this as the single
+  remaining asymmetry between the two protocols, in place of the deviation note
+  0.20.7 added.
+- Relay and nested submissions are unaffected: they are addressed to the
+  mediator, not to a local account, so they never reach this branch.
+
+**Behaviour change.** A deployment running with direct delivery disabled — the
+code default when the setting is absent, though the shipped `conf/mediator.toml`
+sets `"true"` — will now refuse direct TSP delivery that it previously accepted.
+That is the point of the fix, but it is a break for anyone who had (knowingly or
+not) been relying on TSP bypassing the switch (R3.6).
+
+**Test-harness change (`affinidi-messaging-test-mediator` 0.4.4).** The fixture
+defaults the flag off, and 23 TSP tests across nine files were written against a
+path that ignored it. Rather than 23 hand-rolled builders, the harness gained
+`TestEnvironment::spawn_with_direct_delivery()`, and the two TSP-specific spawns
+(`spawn_with_tsp_auth`, `spawn_with_tsp_policy`) now enable direct delivery
+themselves — every caller of those needs it, since protocol selection and pure-TSP
+auth are only observable once a message is accepted. Tests whose subject *is* the
+policy state it at the call site instead.
+
+[#757]: https://github.com/affinidi/affinidi-tdk-rs/issues/757
+
 ## Unreleased (0.20.8) — state the v2 addressing contract: DID-addressed, no keylist
 
 Answers [#755]. A downstream transport binding measured that delivery to a

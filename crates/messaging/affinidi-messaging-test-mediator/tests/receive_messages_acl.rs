@@ -221,7 +221,7 @@ mod tsp {
     #[tokio::test]
     async fn tsp_delivery_is_refused_when_recipient_lacks_receive_messages() {
         init_tracing();
-        let env = TestEnvironment::spawn().await.expect("spawn environment");
+        let env = spawn_direct_delivery_env().await;
         let alice = env.add_user("alice").await.expect("add alice");
         let bob = env.add_user("bob").await.expect("add bob");
 
@@ -260,7 +260,7 @@ mod tsp {
     #[tokio::test]
     async fn tsp_delivery_succeeds_when_recipient_has_receive_messages() {
         init_tracing();
-        let env = TestEnvironment::spawn().await.expect("spawn environment");
+        let env = spawn_direct_delivery_env().await;
         let alice = env.add_user("alice").await.expect("add alice");
         let bob = env.add_user("bob").await.expect("add bob");
 

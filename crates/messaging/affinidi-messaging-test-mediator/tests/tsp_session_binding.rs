@@ -11,6 +11,17 @@
 //! frame sent on a socket authenticated as DID A, with envelope sender DID E,
 //! was forwarded normally.
 //!
+//! The file also covers the *policy* gate on the same branch (#757): TSP direct
+//! delivery ignored `security.local_direct_delivery_allowed`, so an operator who
+//! had turned direct delivery off — to force everything through a routing
+//! envelope the relay layer can audit — got no such enforcement for TSP.
+//!
+//! Note which fixture each test uses, because it is load-bearing.
+//! `spawn_with_direct_delivery` is for tests whose subject is the *sender*
+//! gates; plain `spawn()` leaves the policy off, which is how
+//! `direct_delivery_disabled_refuses_tsp_direct_delivery` pins the refusal and,
+//! incidentally, that the fixture default is still off.
+//!
 //! Each test asserts the recipient's mailbox as well as the send result, so
 //! "the mediator returned an error" is distinguished from "the mediator
 //! returned an error *and* stored nothing" — the DIDComm ACL tests make the
@@ -39,7 +50,9 @@ async fn inbox_len(env: &TestEnvironment, user: &TestUser) -> usize {
 /// mediator over her own authenticated session via `send_raw`.
 #[tokio::test]
 async fn spoofed_envelope_sender_is_refused() {
-    let env = TestEnvironment::spawn().await.expect("spawn environment");
+    let env = TestEnvironment::spawn_with_direct_delivery()
+        .await
+        .expect("spawn environment");
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
     let mallory = env.add_user("mallory").await.expect("add mallory");
@@ -77,7 +90,9 @@ async fn spoofed_envelope_sender_is_refused() {
 /// never manages to deliver anything at all.
 #[tokio::test]
 async fn envelope_sender_matching_the_session_is_accepted() {
-    let env = TestEnvironment::spawn().await.expect("spawn environment");
+    let env = TestEnvironment::spawn_with_direct_delivery()
+        .await
+        .expect("spawn environment");
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
 
@@ -106,7 +121,9 @@ async fn envelope_sender_matching_the_session_is_accepted() {
 /// Mallory in the envelope.
 #[tokio::test]
 async fn spoofed_sender_cannot_pass_the_recipients_access_list() {
-    let env = TestEnvironment::spawn().await.expect("spawn environment");
+    let env = TestEnvironment::spawn_with_direct_delivery()
+        .await
+        .expect("spawn environment");
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
     let mallory = env.add_user("mallory").await.expect("add mallory");
@@ -183,6 +200,7 @@ async fn spoofed_sender_cannot_pass_the_recipients_access_list() {
 async fn force_session_did_match_off_still_accepts_a_mismatched_sender() {
     let mediator = TestMediator::builder()
         .force_session_did_match(false)
+        .local_direct_delivery(true, false)
         .spawn()
         .await
         .expect("spawn mediator with session matching disabled");
@@ -208,6 +226,66 @@ async fn force_session_did_match_off_still_accepts_a_mismatched_sender() {
         .expect("with the check disabled the mismatched sender is still accepted");
 
     assert_eq!(inbox_len(&env, &bob).await, 1, "the message is delivered");
+
+    env.shutdown().await.expect("shutdown");
+}
+
+/// The gate closed for #757: TSP direct delivery is subject to
+/// `local_direct_delivery_allowed`, which it previously ignored entirely.
+///
+/// An operator turns direct delivery off so everything arrives inside a routing
+/// envelope, where the relay layer can audit or scrub it. Before this, any
+/// TSP-capable sender walked straight past that control while the DIDComm path
+/// honoured it.
+///
+/// This uses the fixture default (`false`) rather than configuring it, so it
+/// also pins that the default is still off — the reason every other test in this
+/// file has to opt in.
+#[tokio::test]
+async fn direct_delivery_disabled_refuses_tsp_direct_delivery() {
+    let env = TestEnvironment::spawn().await.expect("spawn environment");
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+
+    let err = env
+        .atm
+        .tsp()
+        .send(&alice.profile, &bob.did, b"direct delivery probe")
+        .await
+        .expect_err("direct TSP delivery must be refused when the policy forbids it")
+        .to_string();
+
+    assert!(
+        err.contains("direct_delivery.denied") || err.contains("not accepting direct delivery"),
+        "expected a direct-delivery policy denial, got: {err}"
+    );
+    assert_eq!(inbox_len(&env, &bob).await, 0, "nothing is stored");
+
+    env.shutdown().await.expect("shutdown");
+}
+
+/// The control: the same send, on a mediator that permits direct delivery.
+/// Without it the denial above would pass against any breakage that stops TSP
+/// delivery working at all.
+#[tokio::test]
+async fn direct_delivery_enabled_accepts_tsp_direct_delivery() {
+    let env = TestEnvironment::spawn_with_direct_delivery()
+        .await
+        .expect("spawn environment");
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+
+    env.atm
+        .tsp()
+        .send(&alice.profile, &bob.did, b"direct delivery probe")
+        .await
+        .expect("direct TSP delivery must be accepted when the policy allows it");
+
+    assert_eq!(
+        inbox_len(&env, &bob).await,
+        1,
+        "the message reaches the mailbox"
+    );
 
     env.shutdown().await.expect("shutdown");
 }

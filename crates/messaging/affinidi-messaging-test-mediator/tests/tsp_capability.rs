@@ -104,7 +104,7 @@ async fn observed_inbound_tsp_upgrades_send_to() {
 /// inbound TSP message writes nothing, so behaviour is unchanged.
 #[tokio::test]
 async fn observed_inbound_is_inert_under_off_policy() {
-    let env = TestEnvironment::spawn()
+    let env = TestEnvironment::spawn_with_direct_delivery()
         .await
         .expect("spawn default (Off) env");
     let alice = env.add_user("alice").await.expect("add alice");

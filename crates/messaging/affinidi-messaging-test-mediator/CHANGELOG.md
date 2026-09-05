@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased (0.4.4) — a fixture that can permit direct delivery
+
+Support for mediator 0.20.9, which makes TSP direct delivery honour
+`security.local_direct_delivery_allowed` (issue #757). The fixture defaults that
+flag **off** — matching the code default for an unset setting rather than the
+shipped `conf/mediator.toml`, which sets `"true"` — so 23 TSP tests that had been
+written against a path which ignored it now need it on.
+
+- **`TestEnvironment::spawn_with_direct_delivery()`** — the default mediator with
+  `local_direct_delivery_allowed = true`. Use it whenever the subject of a test
+  is what happens *after* a message is accepted (pickup, streaming, capability
+  discovery); without it such a test fails on the policy gate before reaching
+  what it is actually asserting.
+- **`spawn_with_tsp_auth` and `spawn_with_tsp_policy` now enable direct delivery
+  themselves.** Both exist to round-trip a TSP Direct message — pure-TSP
+  authentication and `send_to` protocol selection are only observable once a
+  message is accepted — so every caller needed it and none of them was testing
+  the policy.
+
+`TestEnvironment::spawn()` is unchanged and still defaults the flag off, which is
+what lets a test pin the refusal.
+
 ## Unreleased (0.4.3) — a test user that is mediated the way production is
 
 - Requires `affinidi-tdk` 0.11 (was 0.10), which re-exports `affinidi-mdoc`
