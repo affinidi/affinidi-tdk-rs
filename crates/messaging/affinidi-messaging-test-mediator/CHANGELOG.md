@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (0.5.1) — no longer depends on `jsonwebtoken`
+
+Support for mediator 0.22.0 (issue #770). The fixture used to build
+`EncodingKey`/`DecodingKey` itself and assign them into `SecurityConfig`; it now
+generates the Ed25519 PKCS#8 document and hands the bytes to
+`SecurityConfig::set_jwt_keys_from_pkcs8`.
+
+The `jsonwebtoken` dependency is **gone from this crate entirely**, which is the
+practical proof that it is now private to the mediator: there is no second copy
+left to mismatch. `install_default_crypto_provider` delegates to the mediator's
+`install_jwt_crypto_provider()` for the same reason — that provider is registered
+per `jsonwebtoken` instance, and it is the mediator's copy that verifies tokens.
+
 ## Unreleased (0.5.0) — `trust-tasks-rs` 0.18
 
 - Follows `affinidi-messaging-sdk` 0.22.0 and `affinidi-messaging-mediator`

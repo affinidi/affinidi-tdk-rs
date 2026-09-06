@@ -273,10 +273,19 @@ pub struct SecurityConfig {
     pub ssl_certificate_file: Option<String>,
     #[serde(skip_serializing)]
     pub ssl_key_file: Option<String>,
+    // Private on purpose. These are `jsonwebtoken` types, and while they were
+    // `pub` that crate was a *public dependency* of this one: a consumer
+    // constructing a `SecurityConfig` had to name `EncodingKey`/`DecodingKey`,
+    // so it had to compile against the same `jsonwebtoken` major we did. Bumping
+    // it was then source-breaking for consumers rather than routine currency,
+    // which is how mediator 0.20.11 nearly shipped a break as a patch (#770).
+    //
+    // Build them with [`SecurityConfig::set_jwt_keys_from_pkcs8`] instead, which
+    // takes bytes and keeps the dependency private.
     #[serde(skip_serializing)]
-    pub jwt_encoding_key: EncodingKey,
+    jwt_encoding_key: EncodingKey,
     #[serde(skip_serializing)]
-    pub jwt_decoding_key: DecodingKey,
+    jwt_decoding_key: DecodingKey,
     pub jwt_access_expiry: u64,
     pub jwt_refresh_expiry: u64,
     #[serde(skip_serializing)]
@@ -335,6 +344,43 @@ impl Debug for SecurityConfig {
 }
 
 impl SecurityConfig {
+    /// Derive and install the JWT signing and verification keys from an Ed25519
+    /// **PKCS#8** document — the same bytes the production path reads from the
+    /// `JWT_SECRET` well-known entry.
+    ///
+    /// This is the only way to set them, and deliberately so: the keys are
+    /// `jsonwebtoken` types, and taking bytes here keeps that crate a *private*
+    /// dependency of this one. While the fields were public a consumer had to
+    /// name `EncodingKey`/`DecodingKey` to build a `SecurityConfig`, which made
+    /// every `jsonwebtoken` major bump source-breaking for consumers (#770).
+    ///
+    /// Both keys come from the one document: the signing key is the PKCS#8
+    /// itself, the verification key is the public half derived from it, so they
+    /// cannot drift apart.
+    pub fn set_jwt_keys_from_pkcs8(&mut self, pkcs8: &[u8]) -> Result<(), MediatorError> {
+        let pair = Ed25519KeyPair::from_pkcs8(pkcs8).map_err(|err| {
+            tracing::error!("Could not create JWT key pair. {err}");
+            MediatorError::ConfigError(
+                12,
+                "NA".into(),
+                format!("Could not create JWT key pair. {err}"),
+            )
+        })?;
+        self.jwt_encoding_key = EncodingKey::from_ed_der(pkcs8);
+        self.jwt_decoding_key = DecodingKey::from_ed_der(pair.public_key().as_ref());
+        Ok(())
+    }
+
+    /// The JWT signing key, for this crate's authentication handlers.
+    pub(crate) fn jwt_encoding_key(&self) -> &EncodingKey {
+        &self.jwt_encoding_key
+    }
+
+    /// The JWT verification key, for this crate's authentication handlers.
+    pub(crate) fn jwt_decoding_key(&self) -> &DecodingKey {
+        &self.jwt_decoding_key
+    }
+
     /// Construct a baseline `SecurityConfig` with conservative defaults
     /// and zero-byte JWT keys. Used by [`Config::headless`] and the
     /// `MediatorBuilder` as a starting point — embedded callers MUST
@@ -747,17 +793,7 @@ impl SecurityConfigRawExt for SecurityConfigRaw {
             }
         };
 
-        config.jwt_encoding_key = EncodingKey::from_ed_der(&jwt_bytes);
-
-        let pair = Ed25519KeyPair::from_pkcs8(&jwt_bytes).map_err(|err| {
-            tracing::error!("Could not create JWT key pair. {err}");
-            MediatorError::ConfigError(
-                12,
-                "NA".into(),
-                format!("Could not create JWT key pair. {err}"),
-            )
-        })?;
-        config.jwt_decoding_key = DecodingKey::from_ed_der(pair.public_key().as_ref());
+        config.set_jwt_keys_from_pkcs8(&jwt_bytes)?;
 
         Ok(config)
     }

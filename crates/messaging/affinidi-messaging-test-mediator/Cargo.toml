@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.5.0"
+version = "0.5.1"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -35,7 +35,7 @@ affinidi-messaging-didcomm-v1 = { path = "../affinidi-messaging-didcomm-v1", ver
 ## is publishable to crates.io while still using the in-tree path for
 ## workspace dev-builds. Pins follow the workspace's caret-pin policy
 ## (major.minor only) so transitive patch fixes resolve automatically.
-affinidi-messaging-mediator = { version = "0.21", path = "../affinidi-messaging-mediator", default-features = false, features = ["didcomm", "memory-backend"] }
+affinidi-messaging-mediator = { version = "0.22", path = "../affinidi-messaging-mediator", default-features = false, features = ["didcomm", "memory-backend"] }
 # `test-clock` compiles the advanceable `TestClock` this fixture injects via
 # `TestMediatorBuilder::clock` for fast expiry/TTL tests.
 affinidi-messaging-mediator-common = { version = "0.15", path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common", features = [
@@ -57,7 +57,6 @@ affinidi-did-resolver-cache-sdk = { version = "0.8", path = "../../identity/affi
 affinidi-messaging-sdk = { version = "0.22.0", path = "../affinidi-messaging-sdk" }
 
 # ── JWT signing key generation for the test mediator's session tokens ───
-jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 ring = { version = "0.17", features = ["std"] }
 
 # ── rustls: needed to install a `CryptoProvider` at fixture startup so
