@@ -1,5 +1,34 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.40) — kube 4, k8s-openapi 0.28, azure 1.0
+
+No behaviour change and no source change: four major-version dependency bumps
+that needed nothing but the version numbers.
+
+- **`kube` 3.1 → 4.2** and **`k8s-openapi` 0.27 → 0.28**, which move together.
+- **`azure_core`** and **`azure_identity`** 0.35 → **1.0**, and
+  **`azure_security_keyvault_secrets`** 0.14 → **1.0**.
+
+They bump this cleanly because both backends already keep their SDK types
+private: `K8sStore` and `AzureStore` hold only `String` fields plus a lazily
+constructed client, and neither `kube` nor `azure_*` appears in a public
+signature. That is the property `jsonwebtoken` lacked in the mediator (#770) —
+worth stating, because it is the reason one of these was a patch and the other
+was a breaking change.
+
+**`keyring` 3 → 4 is deliberately not here.** It is a migration rather than a
+bump: v4 splits into `keyring-core` plus separate store crates
+(`apple-native-keyring-store`, `linux-keyutils-keyring-store`,
+`dbus-secret-service-keyring-store`, …), and the `apple-native` / `linux-native`
+features this crate selects no longer exist. Dropping those features *compiles* —
+which is the trap — but leaves no credential store registered at all, a silent
+runtime failure on the `secrets-keyring` backend. Tracked separately.
+
+Coverage note, so the green suite is not read as more than it is: the 241 tests
+here include seven touching these two backends, but they are unit-level. Neither
+backend is integration-tested against a real cluster or vault, so the strongest
+evidence for these bumps is that they required no source change at all.
+
 ## Unreleased (0.15.39) — dependency currency
 
 No behaviour change: `itertools` 0.14 → 0.15. 241 tests green.
