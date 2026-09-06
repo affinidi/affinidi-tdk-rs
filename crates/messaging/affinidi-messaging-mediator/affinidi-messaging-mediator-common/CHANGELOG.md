@@ -1,5 +1,48 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.41) — keyring 4: depend on keyring-core and pick the store explicitly
+
+`keyring` 3 → 4 is a restructure rather than a new major. v4 splits into
+`keyring-core` plus one crate per credential store, and its own docs say an
+application that wants to choose its stores should link to those directly rather
+than to the `keyring` facade. This crate is exactly that application, so it now
+depends on `keyring-core` plus `apple-native-keyring-store` (macOS) and
+`linux-keyutils-keyring-store` (Linux), and installs the store itself.
+
+**Behaviour is deliberately unchanged on both platforms**, which took some care:
+
+| | keyring 3 | now |
+|---|---|---|
+| macOS | `apple-native` → Keychain | `apple-native-keyring-store/keychain` |
+| Linux | `linux-native` → kernel keyutils | `linux-keyutils-keyring-store` |
+
+The trap avoided was the facade's `v1` compatibility shim, which looks like a
+drop-in — the API is identical — but selects **Secret Service** on Linux rather
+than keyutils. Secret Service needs a D-Bus session with an unlocked collection,
+which a headless mediator host does not have, so taking it would have moved the
+`secrets-keyring` backend onto a daemon that isn't running, failing at first
+secret access rather than at boot.
+
+- The store is installed once per process, latched in a `OnceLock` so a repeated
+  `open()` (config reload, tests) gets the same outcome including a failure.
+- Platforms other than macOS and Linux now fail at `open()` with an explicit
+  message instead of erroring later from `Entry` with nothing to say about why.
+- The call surface is otherwise unchanged: `Entry::new`, `get_password`,
+  `set_password`, `delete_credential`, `Error::NoEntry` all exist on
+  `keyring-core` with the same shapes.
+
+**Operational caveat, now documented in the module rather than left implicit:**
+keyutils keeps credentials in kernel memory, so on Linux secrets stored via
+`keyring://` **do not survive a reboot**. This is not a regression — `keyring 3`
+selected the same backend — but it makes `keyring://` a poor choice for a Linux
+mediator's operating secrets unless something re-seeds them at start. Use
+`vault://`, `k8s://` or a cloud secret manager for durable storage.
+
+Verification note: the macOS path is compiled and tested here (197 tests). The
+Linux path is **not** compiled locally — no Linux target is installed — so it
+rests on the store crate exposing the same `Store::new() -> Result<Arc<Self>>`
+shape as the macOS one, which was confirmed against its published source. CI
+builds Linux.
 ## Unreleased (0.15.40) — kube 4, k8s-openapi 0.28, azure 1.0
 
 No behaviour change and no source change: four major-version dependency bumps
