@@ -1,5 +1,9 @@
 # Affinidi Messaging Mediator Setup
 
+## Unreleased (0.1.30) — dependency currency
+
+No behaviour change: `serial_test` 3 → 4, a dev-dependency. 406 tests green.
+
 ## Unreleased (0.1.29) — setup completes against a DIDComm/TSP-only VTA
 
 **Bug fix: provisioning no longer aborts when the VTA advertises no REST URL.**

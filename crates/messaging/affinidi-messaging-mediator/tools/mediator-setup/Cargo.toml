@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-setup"
-version = "0.1.29"
+version = "0.1.30"
 description = "Interactive TUI setup wizard for Affinidi Messaging Mediator"
 edition.workspace = true
 authors.workspace = true
@@ -194,7 +194,7 @@ tempfile = "3"
 ## default and the global CWD is shared, so the double-run detector
 ## could race against an unrelated test's artefacts. `#[serial]`
 ## forces affected tests to run one at a time.
-serial_test = "3"
+serial_test = "4"
 ## Sealed-handoff tests construct `ProducerAssertion` values with
 ## `producer_did` as a did:key — uses the `affinidi-crypto` dep
 ## already declared in `[dependencies]`.

@@ -1,5 +1,9 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.39) — dependency currency
+
+No behaviour change: `itertools` 0.14 → 0.15. 241 tests green.
+
 ## Unreleased (0.15.38) — document where the relay allowlist applies
 
 Documentation only, alongside mediator 0.20.10 (issue #758).
