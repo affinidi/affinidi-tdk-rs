@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased (0.20.11) — dependency currency
+
+No behaviour change. Two major-version dependency bumps, verified against the
+full suite (242 unit tests, 30 e2e suites) rather than a compile:
+
+- **`itertools` 0.14 → 0.15.**
+- **`tikv-jemallocator` 0.6 → 0.7** — the allocator behind the `jemalloc`
+  feature. The memory work in 0.17.0 measured against jemalloc, so this is worth
+  re-measuring if RSS is ever in question again.
+
+`jsonwebtoken` 10 → 11 was attempted here and pulled back out: `SecurityConfig`
+exposes `pub jwt_encoding_key: EncodingKey` and `pub jwt_decoding_key:
+DecodingKey`, so jsonwebtoken is a **public dependency** of this crate's API and
+bumping it is semver-breaking rather than routine currency. Tracked separately.
+
 ## Unreleased (0.20.10) — TSP relay honours the peer-mediator allowlist
 
 Closes [#758], raised by the AgenticSec review on #756 (alert 67) and by the

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-common"
-version = "0.15.38"
+version = "0.15.39"
 description = "Shared types for the Affinidi Messaging Mediator (errors, database handler, config)"
 edition.workspace = true
 authors.workspace = true
@@ -203,7 +203,7 @@ redis = { version = "1.1", features = [
   "connection-manager",
   "ahash",
 ], optional = true }
-itertools = { version = "0.14", optional = true }
+itertools = { version = "0.15", optional = true }
 ## Constant-time DID-hash comparisons.
 subtle = { version = "2", optional = true }
 
