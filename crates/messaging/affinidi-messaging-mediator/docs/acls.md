@@ -252,6 +252,33 @@ to admit or refuse.
 └─ access list check
 ```
 
+### Inter-mediator relay admission
+
+`processors.forwarding.relay_trusted_mediators` allowlists the peer mediators
+whose relays this mediator accepts. Empty means any peer (still ACL-gated).
+
+It applies wherever the relaying peer can actually be identified:
+
+| Protocol | Applies | Why |
+|----------|---------|-----|
+| DIDComm, `RelayMode::Rewrap` | yes | the re-wrap layer is addressed to this mediator, so authcrypt names its sender |
+| DIDComm, `RelayMode::Blind` | no | nothing is addressed to us; the peer is invisible |
+| TSP, routed/nested hop | yes | the hop is sealed to this mediator; unpacking verifies an Ed25519 signature *and* HPKE-Auth |
+| TSP, opaque pass-through | no | addressed to a local recipient, not to us — no peer to identify |
+
+TSP needs no `RelayMode` choice: a routed hop is re-wrap-like by construction.
+
+Two scoping rules matter. The check runs only on **anonymous** sessions, because
+that is how an inter-mediator hop arrives — an ordinary client's routed message
+(metadata privacy, TSP §5.5) is authenticated and must not be gated by a list of
+peer *mediators*. And it runs only on relay arms: `Direct` and `Control`
+addressed to this mediator are messages *to* it — Trust Tasks over TSP arrive
+that way — not relays through it.
+
+Where no peer can be identified, `security.enable_inter_mediator_relay` (which
+gates anonymous inbound at all) and `security.local_direct_delivery_allowed` are
+the levers.
+
 ### Access-list evaluation
 
 The single decision, applied on every delivery:

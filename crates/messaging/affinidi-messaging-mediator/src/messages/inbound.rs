@@ -3,7 +3,10 @@ use crate::didcomm_compat::MetaEnvelope;
 #[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
 #[cfg(feature = "didcomm")]
-use crate::messages::protocols::routing::{relay_peer_trusted, rewrap_inner_attachment};
+use crate::messages::protocols::routing::rewrap_inner_attachment;
+// Shared by the DIDComm re-wrap peel and the TSP routed-relay peer allowlist.
+#[cfg(any(feature = "didcomm", feature = "tsp"))]
+use crate::messages::protocols::routing::relay_peer_trusted;
 use crate::{SharedData, common::session::Session};
 // Shared by both the DIDComm direct-delivery path and the TSP delivery path.
 #[cfg(any(feature = "didcomm", feature = "tsp"))]
@@ -156,14 +159,22 @@ pub(crate) async fn handle_inbound_tsp(
     // the one named on the DIDComm side: on an anonymous relay hop the claimed
     // sender stays unverified. That is inherent to relaying, not given away here.
     //
-    // One asymmetry worth naming rather than leaving to be inferred: on the
-    // DIDComm side a deployment that needs the relaying peer authenticated can
-    // run [`RelayMode::Rewrap`] with `processors.forwarding.relay_trusted_mediators`.
-    // TSP has no equivalent — `relay_peer_trusted` is DIDComm-only — so for TSP
-    // the anonymous hop currently has no opt-in hardening at all. Anonymous
-    // inbound is itself opt-in (`security.enable_inter_mediator_relay`, or the
-    // legacy implicit `SEND_FORWARDED` in `global_acl_default`), which bounds
-    // the exposure to relay-enabled deployments.
+    // Which anonymous hops this leaves unverified, precisely — the two TSP
+    // branches differ and it matters:
+    //
+    //   * A hop addressed to *this mediator* (`receiver == mediator_did`, the
+    //     routed/nested relay below) is not affected. It gets unpacked, which
+    //     authenticates `meta.sender` cryptographically, and the peer allowlist
+    //     is applied to it there. Session binding is redundant for that branch.
+    //   * A hop that is opaque pass-through (`receiver != mediator_did`) has
+    //     nothing addressed to us to open, so its sender stays a bare claim.
+    //     This is the true analogue of DIDComm blind relay, and no allowlist can
+    //     apply to a peer we cannot identify.
+    //
+    // For that second case the levers are `local_direct_delivery_allowed` and
+    // `security.enable_inter_mediator_relay` — anonymous inbound is opt-in (that
+    // flag, or the legacy implicit `SEND_FORWARDED` in `global_acl_default`),
+    // which bounds the exposure to relay-enabled deployments.
     if state.config.security.force_session_did_match && session.authenticated {
         check_direct_delivery_session_match(session, Some(meta.sender.as_str()))?;
     }
@@ -236,6 +247,65 @@ pub(crate) async fn handle_inbound_tsp(
             StatusCode::BAD_REQUEST,
         )
     })?;
+
+    // Peer-mediator allowlist for the branches where we act as a *relay*.
+    //
+    // `meta.sender` is safe to authorise on here, and this is the one place in
+    // the TSP path where that is true. The `unpack` above verified an Ed25519
+    // signature over envelope‖ciphertext against the signing key resolved from
+    // `meta.sender`'s DID document, and opened the payload with HPKE **Auth**,
+    // which binds the sender's static key as well. Two independent proofs, so
+    // reaching this line means the peer really is who the envelope says.
+    //
+    // That is what the DIDComm side gets only in [`RelayMode::Rewrap`], where a
+    // layer addressed to this mediator can be authcrypt-opened. TSP routed relay
+    // is Rewrap-like by construction — every hop is sealed to the next and
+    // authenticated as the previous — so there is no mode to choose and no blind
+    // variant to except. The allowlist is simply always applicable here.
+    //
+    // Scoped to *inter-mediator* relay, which needs two conditions, and getting
+    // either wrong breaks something:
+    //
+    //   * A relay arm. `Direct` and `Control` addressed to this mediator are
+    //     messages *to* us, not relays through us — Trust Tasks over TSP arrive
+    //     that way — so a list of trusted peer mediators must not gate them.
+    //   * An anonymous session. This is the part that differs from DIDComm and
+    //     is easy to get wrong: on the DIDComm side only a peer mediator ever
+    //     produces a re-wrap layer, so peeling one is inter-mediator by
+    //     construction. A TSP *routed* message is not — an ordinary client sends
+    //     one through its own mediator for metadata privacy (§5.5), and that
+    //     client is not a peer mediator. Gating those on this list would refuse
+    //     every routed client the moment an operator populated it.
+    //
+    // An inter-mediator hop is POSTed to `/inbound` with no Authorization header
+    // (see the forwarding processor), so it lands on the anonymous session —
+    // which is exactly the traffic this allowlist exists to admit or refuse. An
+    // authenticated peer is a known account and is governed by its ACLs instead,
+    // the same as an authenticated peer using DIDComm blind relay.
+    //
+    // The opaque pass-through branch above (`receiver != mediator`) is the real
+    // analogue of blind relay: nothing there is addressed to us, so there is no
+    // layer to open and no peer identity to check. No allowlist can apply to a
+    // peer we cannot identify; `local_direct_delivery_allowed` and
+    // `security.enable_inter_mediator_relay` are the levers for that case.
+    if !session.authenticated
+        && matches!(
+            unpacked.message_type,
+            TspMessageType::Routed | TspMessageType::Nested
+        )
+        && !relay_peer_trusted(
+            &state.config.processors.forwarding.relay_trusted_mediators,
+            Some(meta.sender.as_str()),
+        )
+    {
+        return Err(tsp_problem(
+            session,
+            60,
+            "authorization.relay.untrusted_peer",
+            "Relaying peer is not in the trusted relay allowlist".to_string(),
+            StatusCode::FORBIDDEN,
+        ));
+    }
 
     match unpacked.message_type {
         // We are a relay hop: unwrap our routing layer and forward the onward
