@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased (0.20.10) — TSP relay honours the peer-mediator allowlist
+
+Closes [#758], raised by the AgenticSec review on #756 (alert 67) and by the
+correction it prompted: `relay_peer_trusted` was DIDComm-only, so a TSP
+deployment that needed its relaying peer authenticated had no lever at all.
+
+`processors.forwarding.relay_trusted_mediators` now applies to TSP relay hops,
+and TSP gets a stronger form of it than DIDComm. A routed or nested hop is
+sealed to this mediator, so `handle_inbound_tsp` unpacks it — verifying an
+Ed25519 signature over envelope‖ciphertext against the key in the sender's DID
+document, *and* opening the payload with HPKE **Auth**, which binds the sender's
+static key. Two independent proofs, so the peer identity the allowlist is
+checked against is cryptographically established rather than claimed.
+
+**No `RelayMode` distinction is needed.** DIDComm can only identify its peer in
+`RelayMode::Rewrap`, where a layer addressed to this mediator can be
+authcrypt-opened; in `Blind` the peer is invisible and the allowlist is ignored.
+TSP routed relay is re-wrap-like *by construction* — every hop is sealed to the
+next and authenticated as the previous — so there is no mode to select and no
+blind variant to except.
+
+Two scoping rules, both load-bearing:
+
+- **Anonymous sessions only.** This is the part that differs from DIDComm and is
+  easy to get wrong. Only a peer mediator ever produces a DIDComm re-wrap layer,
+  so peeling one is inter-mediator by construction; a TSP *routed* message is
+  not — an ordinary client sends one through its own mediator for metadata
+  privacy (TSP §5.5). Gating those on a list of peer *mediators* would refuse
+  every routed client the moment an operator populated it. An inter-mediator hop
+  arrives with no `Authorization` header, on the anonymous session, which is
+  exactly the traffic this list exists to admit or refuse.
+- **Relay arms only.** `Direct` and `Control` addressed to this mediator are
+  messages *to* it — Trust Tasks over TSP arrive that way — not relays through
+  it.
+
+What this does **not** cover, stated plainly: TSP opaque pass-through (a message
+addressed to a local recipient rather than to this mediator) has nothing
+addressed to us to open, so there is no peer to identify and no allowlist can
+apply. That is the true analogue of DIDComm blind relay. `security.enable_inter_mediator_relay`,
+which gates anonymous inbound at all, and `security.local_direct_delivery_allowed`
+are the levers there. The comment added in 0.20.7 saying TSP had no equivalent
+hardening has been corrected to say precisely which hops are now covered.
+
+Not a behaviour change for any deployment leaving `relay_trusted_mediators`
+empty, which is the default and means "accept any peer".
+
+[#758]: https://github.com/affinidi/affinidi-tdk-rs/issues/758
+
 ## Unreleased (0.20.9) — TSP direct delivery honours `local_direct_delivery_allowed`
 
 Closes [#757], the gap deliberately left open by 0.20.7 and independently

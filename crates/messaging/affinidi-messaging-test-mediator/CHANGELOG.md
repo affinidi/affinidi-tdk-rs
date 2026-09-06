@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (0.4.5) — support for the TSP relay peer allowlist
+
+Support for mediator 0.20.10 (issue #758). No API change; the fixture already
+exposed `relay_trusted_mediators` on `TestMediatorBuilder` and `configure_each`
+on `TestTopologyBuilder`, which is what the new `tsp_relay_peer_trust` suite
+drives.
+
 ## Unreleased (0.4.4) — a fixture that can permit direct delivery
 
 Support for mediator 0.20.9, which makes TSP direct delivery honour

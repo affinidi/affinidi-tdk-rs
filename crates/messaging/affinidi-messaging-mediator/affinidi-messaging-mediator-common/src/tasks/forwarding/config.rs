@@ -70,10 +70,26 @@ pub struct ForwardingConfig {
     /// How to relay a forward to a remote next-hop mediator. See [`RelayMode`].
     /// Defaults to [`RelayMode::Blind`] (historical behaviour, no regression).
     pub relay_mode: RelayMode,
-    /// In [`RelayMode::Rewrap`], the allowlist of peer-mediator DIDs whose
-    /// re-wrapped relays this mediator will accept on its inbound endpoint.
-    /// Empty = accept any peer (capability still gated by ACLs). Ignored in
-    /// [`RelayMode::Blind`], where the relaying peer's identity is not visible.
+    /// Allowlist of peer-mediator DIDs whose relays this mediator will accept on
+    /// its inbound endpoint. Empty = accept any peer (the relay capability is
+    /// still gated by ACLs).
+    ///
+    /// Applies wherever the relaying peer can actually be identified:
+    ///
+    /// * **DIDComm**, in [`RelayMode::Rewrap`] only — the re-wrap layer is
+    ///   addressed to this mediator, so authcrypt names its sender. Ignored in
+    ///   [`RelayMode::Blind`], where the peer's identity is not visible.
+    /// * **TSP**, on every routed/nested relay hop — no mode to select. Such a
+    ///   hop is sealed to this mediator, and unpacking it verifies an Ed25519
+    ///   signature over the envelope *and* opens the payload with HPKE-Auth, so
+    ///   the peer is authenticated twice over. TSP routed relay is Rewrap-like by
+    ///   construction.
+    ///
+    /// It does **not** apply to TSP opaque pass-through (a message addressed to a
+    /// local recipient rather than to this mediator): nothing there is addressed
+    /// to us, so there is no peer to identify. That case is governed by
+    /// `security.local_direct_delivery_allowed` and
+    /// `security.enable_inter_mediator_relay`.
     pub relay_trusted_mediators: HashSet<String>,
 }
 

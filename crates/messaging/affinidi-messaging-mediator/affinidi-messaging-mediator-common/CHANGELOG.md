@@ -1,5 +1,18 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.38) — document where the relay allowlist applies
+
+Documentation only, alongside mediator 0.20.10 (issue #758).
+
+`ForwardingConfig::relay_trusted_mediators` said it was ignored outside
+`RelayMode::Rewrap`, which stopped being the whole story when the allowlist
+started applying to TSP relay hops. It now states which hops it governs per
+protocol and why: DIDComm only in `Rewrap` (the re-wrap layer is authcrypt-opened
+so the peer is named), TSP on every routed/nested hop (sealed to this mediator,
+so unpacking verifies both a signature and HPKE-Auth — no `RelayMode` to choose),
+and neither for TSP opaque pass-through, where nothing is addressed to us and
+there is no peer to identify.
+
 ## Unreleased (0.15.37) — every forwarding abandonment was silent to the sender
 
 **Bug fix: the forwarding-failure problem report is now authcrypted, so a
