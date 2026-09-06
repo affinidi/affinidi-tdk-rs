@@ -1,9 +1,17 @@
 # Changelog
 
-## Unreleased (0.20.11) — dependency currency
+## Unreleased (0.21.0) — `trust-tasks-rs` 0.18
 
-No behaviour change. Two major-version dependency bumps, verified against the
-full suite (242 unit tests, 30 e2e suites) rather than a compile:
+**`trust-tasks-rs` 0.17 → 0.18.** Follows `affinidi-messaging-sdk` 0.22.0. No
+source change; the generated types this crate uses are unaffected by 0.18's
+only change. Minor rather than patch because the SDK's move is breaking for
+consumers — `trust-tasks-rs` is a public dependency of its API — and this
+crate's requirement moves with it.
+
+## 0.20.11 — dependency currency
+
+Published. No behaviour change. Two major-version dependency bumps, verified
+against the full suite (242 unit tests, 30 e2e suites) rather than a compile:
 
 - **`itertools` 0.14 → 0.15.**
 - **`tikv-jemallocator` 0.6 → 0.7** — the allocator behind the `jemalloc`

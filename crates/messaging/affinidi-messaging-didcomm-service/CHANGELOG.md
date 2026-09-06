@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (0.6.0) — `trust-tasks-rs` 0.18
+
+- Follows `affinidi-messaging-sdk` 0.22.0 to `trust-tasks-rs` 0.18. No source
+  change.
+
 ## Unreleased (0.5.1) — `trust-tasks-rs` 0.17
 
 - Requires `affinidi-tdk` 0.11 (was 0.10), which re-exports `affinidi-mdoc`

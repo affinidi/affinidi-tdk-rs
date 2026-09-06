@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased (0.22.0) — `trust-tasks-rs` 0.18
+
+- Bumps `trust-tasks-rs` 0.17 → 0.18. No source change: 0.18.0 carries exactly
+  one upstream change (trustoverip/dtgwg-trust-tasks-tf#370, retyping the
+  `resolved` array of `persona/profile/get/1.0`), and this crate does not touch
+  the persona family.
+- **Breaking for consumers, for the same reason as 0.21.0.** This crate's public
+  API carries generated types — `TrustTasks::account_update` takes an
+  `account::update::v0_1::MediatorAcl` and returns an
+  `account::update::v0_1::Account` — so the dependency is a *public* one. A
+  consumer must move to 0.18 in the same change: two `trust-tasks-rs` versions
+  in one graph do not warn, they fail with `expected MediatorAcl, found a
+  different MediatorAcl`.
+- That failure is why this bump exists. `vta-sdk` could not reach 0.18 while
+  this crate required ^0.17.
+
 ## Unreleased (0.21.1) — a mediated peer is TSP-capable
 
 - `TspOps::select_protocol` decided "does this peer speak TSP" with
