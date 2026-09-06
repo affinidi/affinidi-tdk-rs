@@ -1,8 +1,24 @@
 [advisories]
 version = 2
-ignore = [
-  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error (unmaintained) is a build-time-only transitive dep of the ssi-json-ld stack (ssi-dids-core -> linked-data-derive); no runtime exposure. Drops out once upstream ssi-* releases migrate off it." },
-]
+# Deliberately empty: no advisory is currently suppressed for the build graph.
+#
+# The sole entry here ignored RUSTSEC-2024-0370 (proc-macro-error) on the grounds
+# that it was a build-time-only transitive of the ssi-json-ld stack, and said it
+# would "drop out once upstream ssi-* releases migrate off it". Rather than wait
+# for upstream, cache-sdk 0.8.36 retired did:cheqd resolution and dropped
+# `did-resolver-cheqd`, which took the whole ssi-0.1 stack out of the graph — so
+# the entry stopped matching anything and cargo-deny began warning
+# `advisory-not-detected` about it.
+#
+# Keep it empty. A suppression list nobody trusts is a list nobody audits, and an
+# entry that matches nothing is indistinguishable from one that matters. If an
+# advisory genuinely has to be accepted, add it with a reason *and* the condition
+# that would clear it, and delete it the moment that condition is met.
+#
+# Note this governs the BUILD GRAPH. `cargo audit` reads Cargo.lock and has its
+# own list, `auditIgnore`, duplicated in .github/workflows/checks.yaml and
+# release.yaml — change those together.
+ignore = []
 
 [bans]
 multiple-versions = "allow"
