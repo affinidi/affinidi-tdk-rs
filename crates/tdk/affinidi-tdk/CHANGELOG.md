@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
+## 0.12.0
+
+- Re-exports `affinidi-messaging-sdk` 0.22.0, whose move to `trust-tasks-rs`
+  0.18 is breaking for consumers: the SDK's public API carries generated types
+  (`TrustTasks::account_update` takes an `account::update::v0_1::MediatorAcl`),
+  so two `trust-tasks-rs` versions in one graph fail to compile rather than
+  warn. A consumer must move to 0.18 in the same change.
+
 ## 0.11.0
 
 ### Changed

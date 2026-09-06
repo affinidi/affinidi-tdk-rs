@@ -1,16 +1,27 @@
 # Changelog
 
-## Unreleased (0.20.11) — dependency currency
+## Unreleased (0.21.0) — `trust-tasks-rs` 0.18, and dependency currency
 
-No behaviour change. Two major-version dependency bumps, verified against the
-full suite (242 unit tests, 30 e2e suites) rather than a compile:
+Two changes ship together. 0.20.11 was bumped for the dependency work below
+but never published, and the `trust-tasks-rs` move needs a minor, so both land
+here rather than as a phantom patch release.
+
+**`trust-tasks-rs` 0.17 → 0.18.** Follows `affinidi-messaging-sdk` 0.22.0. No
+source change; the generated types this crate uses are unaffected by 0.18's
+only change. Minor rather than patch because the SDK's move is breaking for
+consumers — `trust-tasks-rs` is a public dependency of its API — and this
+crate's requirement moves with it.
+
+**Dependency currency.** No behaviour change. Two major-version dependency
+bumps, verified against the full suite (242 unit tests, 30 e2e suites) rather
+than a compile:
 
 - **`itertools` 0.14 → 0.15.**
 - **`tikv-jemallocator` 0.6 → 0.7** — the allocator behind the `jemalloc`
   feature. The memory work in 0.17.0 measured against jemalloc, so this is worth
   re-measuring if RSS is ever in question again.
 
-`jsonwebtoken` 10 → 11 was attempted here and pulled back out: `SecurityConfig`
+`jsonwebtoken` 10 → 11 was attempted there and pulled back out: `SecurityConfig`
 exposes `pub jwt_encoding_key: EncodingKey` and `pub jwt_decoding_key:
 DecodingKey`, so jsonwebtoken is a **public dependency** of this crate's API and
 bumping it is semver-breaking rather than routine currency. Tracked separately.

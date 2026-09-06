@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (0.5.0) — `trust-tasks-rs` 0.18
+
+- Follows `affinidi-messaging-sdk` 0.22.0 and `affinidi-messaging-mediator`
+  0.21.0 to `trust-tasks-rs` 0.18. No source change.
+
 ## Unreleased (0.4.5) — support for the TSP relay peer allowlist
 
 Support for mediator 0.20.10 (issue #758). No API change; the fixture already
