@@ -337,7 +337,7 @@ pub async fn authentication_response(
             &session.session_id,
             state.config.security.jwt_access_expiry,
             now,
-            &state.config.security.jwt_encoding_key,
+            state.config.security.jwt_encoding_key(),
         )?;
 
         let refresh_expiry =
@@ -347,7 +347,7 @@ pub async fn authentication_response(
             &session.session_id,
             refresh_expiry,
             now,
-            &state.config.security.jwt_encoding_key,
+            state.config.security.jwt_encoding_key(),
         )?;
 
         session.expires_at = access_expires_at;

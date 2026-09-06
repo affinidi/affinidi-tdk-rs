@@ -137,7 +137,7 @@ pub(crate) async fn authenticate_token(
 ) -> Result<Session, AuthError> {
     let token_data: TokenData<SessionClaims> = match jsonwebtoken::decode::<SessionClaims>(
         token,
-        &state.config.security.jwt_decoding_key,
+        state.config.security.jwt_decoding_key(),
         &clock_aware_validation(),
     ) {
         Ok(token_data) => token_data,

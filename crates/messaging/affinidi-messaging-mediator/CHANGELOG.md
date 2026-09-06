@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased (0.22.0) — `jsonwebtoken` is now a private dependency, and moves to 11
+
+Closes [#770]. **Breaking:** `SecurityConfig::jwt_encoding_key` and
+`jwt_decoding_key` are no longer public fields. Set them with the new
+[`SecurityConfig::set_jwt_keys_from_pkcs8`], which takes the Ed25519 PKCS#8
+document — the same bytes the production path already reads from the
+`JWT_SECRET` well-known entry — and derives both keys from it.
+
+**Why this was worth a breaking change.** Those fields are `jsonwebtoken` types,
+so while they were public, `jsonwebtoken` was a *public dependency* of this
+crate: anyone constructing a `SecurityConfig` had to name `EncodingKey` /
+`DecodingKey` and therefore had to compile against the same `jsonwebtoken`
+major we did. Every bump of it was then source-breaking for consumers rather
+than routine currency.
+
+That is not theoretical. It was caught in #767, where bumping to 11 as ordinary
+dependency currency made `affinidi-messaging-test-mediator` fail to build
+against the published mediator with `expected jsonwebtoken::decoding::DecodingKey,
+found DecodingKey`. It would have gone green at release time, because crates
+publish in dependency order — so a breaking change would have shipped as a patch
+bump, and any consumer mixing versions would have got a type error pointing at
+neither crate.
+
+**`jsonwebtoken` 10 → 11** now lands as part of this, and from here on such
+bumps are internal.
+
+Two smaller consequences worth naming:
+
+- The key derivation lived in two places (the config loader and the test
+  fixture), each doing `Ed25519KeyPair::from_pkcs8` then `DecodingKey::from_ed_der`.
+  It now lives only in `set_jwt_keys_from_pkcs8`, so the signing and verification
+  keys cannot drift apart.
+- New `install_jwt_crypto_provider()` at the crate root. `jsonwebtoken`'s
+  `aws_lc_rs` provider is registered per *instance* of that crate, so a consumer
+  installing it against its own copy installs nothing for the copy this mediator
+  verifies with. While the key fields were public that mismatch was at least a
+  compile error; with the dependency private it would have become a silent
+  runtime failure, so the installation has to be callable from here.
+
+[#770]: https://github.com/affinidi/affinidi-tdk-rs/issues/770
+
 ## Unreleased (0.21.0) — `trust-tasks-rs` 0.18
 
 **`trust-tasks-rs` 0.17 → 0.18.** Follows `affinidi-messaging-sdk` 0.22.0. No

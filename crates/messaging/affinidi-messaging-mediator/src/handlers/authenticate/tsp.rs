@@ -177,7 +177,7 @@ pub async fn tsp_authentication_response(
             &session.session_id,
             state.config.security.jwt_access_expiry,
             now,
-            &state.config.security.jwt_encoding_key,
+            state.config.security.jwt_encoding_key(),
         )?;
         let refresh_expiry =
             state.config.security.jwt_refresh_expiry - state.config.security.jwt_access_expiry;
@@ -186,7 +186,7 @@ pub async fn tsp_authentication_response(
             &session.session_id,
             refresh_expiry,
             now,
-            &state.config.security.jwt_encoding_key,
+            state.config.security.jwt_encoding_key(),
         )?;
 
         state
