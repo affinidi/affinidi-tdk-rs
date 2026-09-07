@@ -6,7 +6,10 @@
 //! by the known-answer tests in [`super::kat`].
 
 use aes::Aes256;
-use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
+// cipher 0.5 renamed the block traits: BlockEncrypt/BlockDecrypt became
+// BlockCipherEncrypt/BlockCipherDecrypt. The `encrypt_block`/`decrypt_block`
+// methods themselves are unchanged.
+use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 
 use crate::error::CryptoError;
 
@@ -42,7 +45,10 @@ pub fn wrap(kek: &[u8; 32], plaintext_key: &[u8]) -> Result<Vec<u8>, CryptoError
             block[..8].copy_from_slice(&a.to_be_bytes());
             block[8..].copy_from_slice(&ri.to_be_bytes());
 
-            let b = aes::Block::from_mut_slice(&mut block);
+            // hybrid-array deprecated `from_mut_slice` (it panics on a length
+            // mismatch); `block` is a fixed `[u8; 16]`, so the infallible
+            // array conversion applies and the length is checked at compile time.
+            let b: &mut aes::Block = (&mut block).into();
             cipher.encrypt_block(b);
 
             // A = MSB(64, B) XOR t where t = (n*j)+i+1
@@ -93,7 +99,10 @@ pub fn unwrap(kek: &[u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError>
             block[..8].copy_from_slice(&(a ^ t).to_be_bytes());
             block[8..].copy_from_slice(&r[i].to_be_bytes());
 
-            let b = aes::Block::from_mut_slice(&mut block);
+            // hybrid-array deprecated `from_mut_slice` (it panics on a length
+            // mismatch); `block` is a fixed `[u8; 16]`, so the infallible
+            // array conversion applies and the length is checked at compile time.
+            let b: &mut aes::Block = (&mut block).into();
             cipher.decrypt_block(b);
 
             a = u64::from_be_bytes(block[..8].try_into().unwrap());

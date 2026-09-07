@@ -1,5 +1,19 @@
 # Affinidi TSP Changelog
 
+## Unreleased (0.1.16) — `sha2` 0.11, `hkdf` 0.13, `blake2` 0.11, `chacha20poly1305` 0.11
+
+No behaviour change and no public API change: these are private dependencies
+here, which is what lets each crate move on its own schedule. Verified by
+`cargo tree`/grep that no RustCrypto type appears in a public signature anywhere
+in the workspace.
+
+One import changed, in the HPKE path: `aead` 0.6 renamed `AeadInPlace` to
+`AeadInOut` (the in-place helpers remain provided methods on it) and replaced
+generic-array with hybrid-array, so `aead::generic_array::GenericArray` became
+`aead::array::Array`.
+
+99 tests green, including the HPKE seal/open round-trips.
+
 ## 31st August 2026 (0.1.15)
 
 **Bug fix: a DID-valued `TSPTransport` endpoint was returned as a transport URL.**
