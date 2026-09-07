@@ -199,6 +199,7 @@ federation both roles apply to both mediators.
 | `security.global_acl_default` | must grant `RECEIVE_FORWARDED` (§6) | must grant `SEND_FORWARDED` (§6) | a relay deployment typically runs `ALLOW_ALL`; see [`acls.md` §7](./acls.md) |
 | `security.local_direct_delivery_allowed` | — | `true` for single-forward relays (§1b) | not needed for the double forward |
 | `server.local_endpoints` | required behind a hostname/LB | required behind a hostname/LB | otherwise the mediator relays to itself; `LOCAL_ENDPOINTS`, comma-separated |
+| `processors.forwarding.ws_threshold_msgs_per_10s` | rate at which the relay socket engages | — | default 1; see §7 for what the rate actually measures |
 | storage backend | any | any | Redis only if you also scale each mediator across processes |
 
 ---
@@ -252,16 +253,23 @@ Once A classifies a next hop as remote, the forward is enqueued on `FORWARD_Q`
 
 - **Transport.** Per-endpoint rate is tracked over `rate_window_seconds`; at
   or above `ws_threshold_msgs_per_10s` (default 1 msg/10s) the processor
-  prefers a pooled WebSocket, otherwise REST. **Between two mediators running
-  this implementation the WebSocket never opens, and every hop lands on
-  REST**: `deliver_via_websocket` connects with no `Authorization` header —
-  the relaying mediator holds no session on its peer — while the peer's
-  upgrade handler requires a valid bearer token *and* the `LOCAL` capability.
-  The first failed attempt suppresses WebSocket for that endpoint for five
-  minutes (`WS_SUPPRESSION_WINDOW`) so the cost is one failed connect per
-  window rather than one per message; the window then re-probes, so a peer
-  that does accept anonymous upgrades is still picked up. Watch for
-  `Falling back to REST and suppressing WebSocket` in the logs.
+  prefers a pooled WebSocket, otherwise REST. Note what that threshold means
+  in practice: the rate is `total / rate_window_seconds * 10`, so over the
+  default 300-second window a steady ~30 messages have to be in flight before
+  the socket engages at all. Below that, relay is REST.
+- **The relay socket is anonymous, so it carries its own acknowledgement.**
+  A relaying mediator holds no session on its peer, so it opens the socket
+  with no credential and identifies itself by offering the `relay-ack`
+  subprotocol; the peer admits it under `enable_inter_mediator_relay` (§4) and
+  echoes `relay-ack`. Every relayed frame is then answered by a `RelayAck`
+  naming the frame by `sha256` of its bytes. **A frame is only reported
+  delivered once that ack comes back positive** — a negative ack, a missing
+  one, or a socket error fails the message and is retried and abandoned
+  exactly as a non-2xx is on REST. This is what keeps the two transports
+  equivalent: a bare socket write would ACK the queue entry for a message the
+  peer refused. A peer that does not echo `relay-ack` is never relayed to over
+  the socket; the connection is dropped and the endpoint falls back to REST
+  (and stays there for `WS_SUPPRESSION_WINDOW`, five minutes).
 - **REST shape.** `POST {endpoint}/inbound`, `Content-Type:
   application/didcomm-encrypted+json` for DIDComm, `application/tsp` (raw qb2)
   for TSP. TSP always goes over REST regardless of rate.
@@ -386,19 +394,16 @@ mediator **DIDs**, not URLs).
 | Error 94 `loop_detected` | genuine loop, or `max_hops` too low for the topology | inspect the route before raising `max_hops` |
 | `FORWARD_ABANDONED` in A's logs | B unreachable through `max_retries` | check B's endpoint and TLS; the sender receives a problem report |
 | TSP messages never leave A | B advertises no `TSPTransport` service | add it (§8); `did:peer`/`did:webvh` need it at DID-generation time |
+| `peer … did not negotiate the \`relay-ack\` subprotocol` in A's logs | B predates the relay socket, or isn't relay-enabled | expected against an older mediator — delivery continues over REST; if B should accept it, check `enable_inter_mediator_relay` on B |
+| `peer refused the relayed message` in A's logs | B nacked the frame | the reason and mediator error code are in the log line; look it up in §6 or `ERRORS.md` — the sender gets a problem report once retries are exhausted |
 
 ---
 
 ## 11. Known gaps
 
-Accurate as of this document's commit; verify before relying on it.
-
-- **Inter-mediator WebSocket delivery cannot authenticate.** A relay hop is
-  anonymous by design, and the WebSocket route is not; the transport therefore
-  degrades to REST between two mediators running this implementation (§7).
-  Restoring it needs a relay-scoped WebSocket admission path on the receiving
-  side — the same decision `security.enable_inter_mediator_relay` already
-  makes for `/inbound` — not a change in the forwarding processor.
+None outstanding for the relay path. The one that stood here — that
+inter-mediator WebSocket delivery could not authenticate, so it degraded to
+REST — was closed by the `relay-ack` admission path described in §7.
 
 ---
 

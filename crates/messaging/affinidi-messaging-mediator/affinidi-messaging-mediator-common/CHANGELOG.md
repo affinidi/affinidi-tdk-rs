@@ -1,5 +1,49 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.44) — the `relay-ack` subprotocol: WebSocket relay that can't lie
+
+WebSocket relay between mediators now works, and is as safe as the REST path it
+sits beside. Both halves of that mattered.
+
+**Admission.** `deliver_via_websocket` opens the socket offering the
+`relay-ack` subprotocol (new module `tasks::forwarding::relay_ack`), which is
+how an anonymous upgrade identifies itself as an inter-mediator relay rather
+than a client. The mediator side of the admission decision is in
+affinidi-messaging-mediator 0.22.2.
+
+**Acknowledgement, which is the point.** A WebSocket write says only that the
+bytes left this process. Relaying over a bare socket would therefore ACK the
+`FORWARD_Q` entry for a message the peer *refused* — untrusted relay peer, ACL
+denial, detected loop — with the rejection surviving as nothing but a log line
+on the far side, while `deliver_via_rest` has always turned a non-2xx into a
+retry and eventually a `FORWARD_ABANDONED` plus a problem report to the
+original sender.
+
+So every relayed frame is now answered by a `RelayAck` that names the frame by
+`sha256` of its exact bytes (content-addressed, so neither side keeps ordering
+state and an ack can never be read as the answer to a different frame). A frame
+is reported delivered only on a positive ack; a negative ack, a missing one
+inside 30s, or a socket error fails the message and takes the existing retry /
+abandonment path. The two transports now have the same delivery semantics.
+
+**Compatibility is the subprotocol.** A peer that does not echo `relay-ack`
+gets no frames over the socket at all — the connection is closed and delivery
+falls back to REST, which is what carried this traffic before. There is no
+version of the exchange in which a frame is relayed without an acknowledgement
+path, so an older peer is unaffected.
+
+Two smaller consequences:
+
+- `PooledWebSocket` keeps the whole `WebSocketStream` rather than just the
+  write half — this side now reads too. There is no concurrent use to split
+  for: a frame is sent, then its ack awaited.
+- A rejection keeps the pooled connection (the peer answered; the socket is
+  fine) while a transport failure drops it. Both fail the message.
+
+The 0.15.43 WebSocket suppression window stays, and still does its job: it is
+what keeps a peer that *can't* negotiate `relay-ack` from costing a connect per
+message.
+
 ## Unreleased (0.15.43) — stop re-probing a WebSocket the peer will never accept
 
 The forwarding processor prefers a pooled WebSocket over REST once an endpoint
