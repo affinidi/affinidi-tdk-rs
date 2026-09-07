@@ -2,8 +2,8 @@
  * Core BBS types: SecretKey, PublicKey, Signature, Proof.
  */
 
+use bls12_381_plus::ff::Field;
 use bls12_381_plus::{G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
-use ff::Field;
 use zeroize::Zeroize;
 
 use crate::error::{BbsError, Result};
