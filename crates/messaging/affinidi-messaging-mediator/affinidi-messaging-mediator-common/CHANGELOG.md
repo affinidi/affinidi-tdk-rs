@@ -1,5 +1,15 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.42) — `sha2` 0.11, `hmac` 0.13, `hkdf` 0.13, `aes-gcm` 0.11, `argon2` 0.6
+
+No behaviour change and no public API change: these are private dependencies
+here, which is what lets each crate move on its own schedule. Verified by
+`cargo tree`/grep that no RustCrypto type appears in a public signature anywhere
+in the workspace.
+
+One-line change: `new_from_slice` moved from the `Mac` trait to `KeyInit`.
+241 tests green.
+
 ## Unreleased (0.15.41) — keyring 4: depend on keyring-core and pick the store explicitly
 
 `keyring` 3 → 4 is a restructure rather than a new major. v4 splits into

@@ -1,5 +1,15 @@
 # Affinidi mdoc Changelog
 
+## Unreleased (0.3.1) — `sha2` 0.11, `hmac` 0.13, `hkdf` 0.13, `aes-gcm` 0.11
+
+No behaviour change and no public API change: these are private dependencies
+here, which is what lets each crate move on its own schedule. Verified by
+`cargo tree`/grep that no RustCrypto type appears in a public signature anywhere
+in the workspace.
+
+One-line change: `new_from_slice` moved from the `Mac` trait to `KeyInit`.
+144 tests green, including the device-MAC round-trips.
+
 ## 1st September 2026 (0.3.0)
 
 Moves to **coset 0.4**.

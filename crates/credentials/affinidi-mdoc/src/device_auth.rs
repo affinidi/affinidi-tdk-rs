@@ -32,7 +32,8 @@
 use std::collections::BTreeMap;
 
 use coset::{CoseSign1, CoseSign1Builder, HeaderBuilder};
-use hmac::{Hmac, Mac};
+// `new_from_slice` moved from `Mac` to `KeyInit` in the digest 0.11 generation.
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::cose::{CoseSigner, CoseVerifier};

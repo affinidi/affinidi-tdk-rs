@@ -6,7 +6,9 @@
 //! This implements only the specific HPKE suite required by TSP, built from
 //! standard cryptographic primitives rather than a generic HPKE library.
 
-use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, KeyInit, aead::generic_array::GenericArray};
+// aead 0.6: `AeadInPlace` became `AeadInOut` (the in-place helpers are still
+// provided methods on it), and generic-array became hybrid-array `Array`.
+use chacha20poly1305::{AeadInOut, ChaCha20Poly1305, KeyInit, aead::array::Array as GenericArray};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
