@@ -41,8 +41,17 @@ than by enumeration:
   configuration — so turning relay off takes effect without a restart.
 
 `docs/multi-mediator.md` §7 is updated, and its §11 "known gaps" is now empty:
-this was the gap. Requires mediator-common 0.15.44, which carries the
-subprotocol and the sending half.
+this was the gap.
+
+The `affinidi-messaging-mediator-common` requirement moves from `0.15.37` to
+`0.15.44`, the version that introduces `relay_ack`. The old floor allowed a
+consumer resolving from the registry to pick a `0.15.x` without the module and
+fail to build this crate — normally masked by cargo picking the newest patch,
+but not under a lockfile pinning an older one. (`publish dry-run` is expected
+to be red on this PR: it resolves each crate against the registry in isolation
+and cannot see an unpublished sibling from the same PR. mediator-common 0.15.44
+verifies and publishes cleanly on its own, so the release job's dependency
+ordering resolves it.)
 
 ## Unreleased (0.22.1) — a multi-mediator guide, and the gaps writing it exposed
 
