@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (0.5.2) — `forwarding_ws_threshold` so the relay socket can be tested
+
+`TestMediatorBuilder::forwarding_ws_threshold(msgs_per_10s)` sets the rate at
+or above which the forwarding processor relays over a WebSocket instead of
+REST. Pass `0` to force the socket on the first relayed message.
+
+Without it the WebSocket relay path had no end-to-end coverage and could not
+get any. The production default reads as 1 msg/10s, but the rate is measured
+over a 300-second window — `total / window * 10` — so a single relayed message
+scores 0.03 and every short test silently relays over REST. A test could
+therefore assert cross-mediator delivery, pass, and never once exercise the
+transport it looked like it was covering.
+
+New `tests/ws_relay_admission.rs` uses it for the two-mediator case, alongside
+three raw-socket tests of the receiving side: the anonymous upgrade is admitted
+and echoes `relay-ack`, an accepted frame is acked *and* really delivered, a
+refused frame comes back nacked with the mediator's error code, and a
+non-relay mediator refuses the upgrade outright.
+
 ## Unreleased (0.5.1) — no longer depends on `jsonwebtoken`
 
 Support for mediator 0.22.0 (issue #770). The fixture used to build

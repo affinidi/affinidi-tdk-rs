@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased (0.22.2) — admit an inter-mediator relay over WebSocket
+
+The WebSocket route now admits an anonymous inter-mediator relay hop, on the
+same terms `/inbound` has always used: only when the operator has opted in via
+`security.enable_inter_mediator_relay` (or the legacy implicit
+`SEND_FORWARDED` in `global_acl_default`), and only for a socket that
+identifies itself by offering the `relay-ack` subprotocol. The admission
+decision itself now lives in one place — `jwt_auth::anonymous_relay_session` —
+so the two routes cannot drift on *who* is let in.
+
+What such a socket may do is deliberately narrow, and structurally so rather
+than by enumeration:
+
+- **It is never registered with the streaming task.** A relay session has no
+  DID, so registering would claim the empty `did_hash`'s stream for an
+  anonymous peer. Skipping it is what makes "a relay can only send" a property
+  of the code rather than of which message types we happen to handle: the
+  socket's inbound channel can never yield.
+- **It is gated on `SEND_MESSAGES`, not `LOCAL`** — the same capability
+  `message_inbound_handler` requires of the REST relay session. `LOCAL` gates
+  access to an inbox this session does not have.
+- **It gets a `RelayAck` per frame instead of a problem report.** A problem
+  report is packed *to* `session.did`, which a relay session does not have,
+  and the peer is a mediator waiting on a transport answer rather than a client
+  reading its inbox. The ack carries the mediator error code and reason on
+  refusal, so the rejection reaches the relaying peer's logs and — once retries
+  are exhausted — the original sender.
+- **Raw-TSP mode is forced off, and a binary frame closes the socket.** Neither
+  can arise from a correct peer; both are enforced rather than assumed, because
+  the cost of being wrong is an anonymous socket registered as a live streaming
+  client.
+- **`relay-ack` is echoed if and only if the socket will actually be acked.**
+  An authenticated client that offers it is not a relay — a relay hop presents
+  no credential — so the entry is dropped from the echo rather than reflected
+  back. Same honesty requirement as `tsp-ack`, and here it is load-bearing: the
+  relaying peer relays over the socket *because* of that echo.
+- **The socket has a bounded lifetime** (one hour). There is no token expiry to
+  inherit, and re-admission re-runs the relay-enabled check against current
+  configuration — so turning relay off takes effect without a restart.
+
+`docs/multi-mediator.md` §7 is updated, and its §11 "known gaps" is now empty:
+this was the gap.
+
+The `affinidi-messaging-mediator-common` requirement moves from `0.15.37` to
+`0.15.44`, the version that introduces `relay_ack`. The old floor allowed a
+consumer resolving from the registry to pick a `0.15.x` without the module and
+fail to build this crate — normally masked by cargo picking the newest patch,
+but not under a lockfile pinning an older one. (`publish dry-run` is expected
+to be red on this PR: it resolves each crate against the registry in isolation
+and cannot see an unpublished sibling from the same PR. mediator-common 0.15.44
+verifies and publishes cleanly on its own, so the release job's dependency
+ordering resolves it.)
+
 ## Unreleased (0.22.1) — a multi-mediator guide, and the gaps writing it exposed
 
 `docs/multi-mediator.md` documents federating two or more independent

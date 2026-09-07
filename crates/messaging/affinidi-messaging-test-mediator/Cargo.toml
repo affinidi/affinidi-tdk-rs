@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.5.1"
+version = "0.5.2"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -38,7 +38,7 @@ affinidi-messaging-didcomm-v1 = { path = "../affinidi-messaging-didcomm-v1", ver
 affinidi-messaging-mediator = { version = "0.22", path = "../affinidi-messaging-mediator", default-features = false, features = ["didcomm", "memory-backend"] }
 # `test-clock` compiles the advanceable `TestClock` this fixture injects via
 # `TestMediatorBuilder::clock` for fast expiry/TTL tests.
-affinidi-messaging-mediator-common = { version = "0.15", path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common", features = [
+affinidi-messaging-mediator-common = { version = "0.15.44", path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common", features = [
   "test-clock",
 ] }
 

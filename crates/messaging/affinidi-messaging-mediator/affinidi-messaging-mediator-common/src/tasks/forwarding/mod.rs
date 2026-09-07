@@ -10,6 +10,12 @@
 pub mod config;
 pub use config::{ForwardingConfig, RelayMode};
 
+// The `relay-ack` subprotocol: the per-frame acknowledgement that gives
+// WebSocket relay the same delivery semantics as the status-checked REST
+// path. Shared with the mediator, which answers these frames.
+pub mod relay_ack;
+pub use relay_ack::{RELAY_ACK_SUBPROTOCOL, RELAY_ACK_TYPE, RelayAck, frame_id};
+
 // The mediator's own outbound packing, injected rather than implemented
 // here — see the module docs for why this crate can't pack for itself.
 pub mod packer;

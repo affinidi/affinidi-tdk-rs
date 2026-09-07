@@ -7,7 +7,7 @@ use crate::{
     SharedData,
     common::authz::{self, Capability},
     common::config::{CorsOriginPolicy, origin_matches},
-    common::jwt_auth::{AuthError, authenticate_token},
+    common::jwt_auth::{AuthError, anonymous_relay_session, authenticate_token},
     common::session::Session,
     messages::inbound::handle_inbound,
     tasks::websocket_streaming::{
@@ -21,6 +21,9 @@ use affinidi_messaging_mediator_common::errors::{AppError, MediatorError};
 #[cfg(feature = "tsp")]
 use affinidi_messaging_mediator_common::store::DeletionAuthority;
 use affinidi_messaging_mediator_common::store::StatCounter;
+use affinidi_messaging_mediator_common::tasks::forwarding::relay_ack::{
+    RELAY_ACK_SUBPROTOCOL, RelayAck, frame_id,
+};
 #[cfg(feature = "tsp")]
 use affinidi_messaging_mediator_common::types::messages::FetchOptions;
 #[cfg(feature = "didcomm")]
@@ -193,17 +196,54 @@ pub async fn websocket_handler(
         extract_bearer_subprotocol(headers.get_all(SEC_WEBSOCKET_PROTOCOL).iter())
     };
 
-    let Some(token) = token else {
-        warn!(
-            "WebSocket upgrade rejected: no bearer token in Authorization header or Sec-WebSocket-Protocol"
-        );
-        return AuthError::MissingCredentials.into_response();
-    };
+    // 1a. No token: the one case that may still be admitted is an
+    //     inter-mediator relay hop, which is anonymous by construction — the
+    //     relaying mediator holds no session here, exactly as on `/inbound`.
+    //     It has to *say* that it is one by offering the `relay-ack`
+    //     subprotocol, which is also its promise to consume the per-frame
+    //     acknowledgements that give this transport the REST path's delivery
+    //     semantics. Everything else is refused as before.
+    let offered = app_subprotocols(headers.get_all(SEC_WEBSOCKET_PROTOCOL).iter());
+    let wants_relay = offered.iter().any(|p| p == RELAY_ACK_SUBPROTOCOL);
 
-    // 2. Validate the token → Session (identical checks for both paths).
-    let session = match authenticate_token(&state, &token).await {
-        Ok(session) => session,
-        Err(e) => return e.into_response(),
+    let (session, is_relay) = match token {
+        Some(token) => {
+            // 2. Validate the token → Session (identical checks for both paths).
+            match authenticate_token(&state, &token).await {
+                Ok(session) => (session, false),
+                Err(e) => return e.into_response(),
+            }
+        }
+        None if wants_relay => {
+            let security = &state.config.security;
+            match anonymous_relay_session(
+                security.enable_inter_mediator_relay,
+                &security.global_acl_default,
+            ) {
+                Some(mut session) => {
+                    // No JWT means no expiry to inherit, and an anonymous
+                    // socket that never ends is a resource a peer can hold
+                    // open indefinitely. Give it a bounded lifetime instead;
+                    // the relaying peer's pool reconnects transparently.
+                    session.expires_at = state.clock.unix_secs() + RELAY_SOCKET_LIFETIME_SECS;
+                    (session, true)
+                }
+                None => {
+                    warn!(
+                        "WebSocket upgrade rejected: `{}` offered but this mediator is not \
+                         configured as an inter-mediator relay",
+                        RELAY_ACK_SUBPROTOCOL
+                    );
+                    return AuthError::MissingCredentials.into_response();
+                }
+            }
+        }
+        None => {
+            warn!(
+                "WebSocket upgrade rejected: no bearer token in Authorization header or Sec-WebSocket-Protocol"
+            );
+            return AuthError::MissingCredentials.into_response();
+        }
     };
 
     let _span = span!(
@@ -212,8 +252,17 @@ pub async fn websocket_handler(
         session = session.session_id
     );
 
-    // 3. ACL Check (websockets only work on local DID's).
-    if authz::require_capability(&session.acls, Capability::Local).is_err() {
+    // 3. ACL Check. A relay socket has no account here and never touches one:
+    //    it may only push frames, so it is gated on `SEND_MESSAGES` — the same
+    //    capability `message_inbound_handler` requires of the REST relay
+    //    session — instead of `LOCAL`, which exists to gate access to an
+    //    inbox this session does not have.
+    let required = if is_relay {
+        Capability::SendMessages
+    } else {
+        Capability::Local
+    };
+    if authz::require_capability(&session.acls, required).is_err() {
         let error: AppError = MediatorError::problem(
             40,
             session.session_id,
@@ -236,15 +285,23 @@ pub async fn websocket_handler(
     //    bearer entry, no subprotocol is selected and the response
     //    carries no `Sec-WebSocket-Protocol` header (RFC 6455 permits
     //    this; browsers accept it).
-    let app_protocols = app_subprotocols(headers.get_all(SEC_WEBSOCKET_PROTOCOL).iter());
+    let app_protocols = offered;
 
     // A client opts into raw-TSP WebSocket delivery by offering a `tsp`
     // subprotocol alongside `bearer.<jwt>`. The `tsp` marker is echoed back to
     // the client via the `app_protocols` path below (it's a genuine app
     // subprotocol, not the bearer entry), so the client learns the mode was
     // accepted from the 101 response's `Sec-WebSocket-Protocol` header.
+    //
+    // Never on a relay socket: raw-TSP mode is a *delivery* mode — it registers
+    // the socket as a live client and flushes an inbox — and a relay session
+    // has no DID and no inbox to flush. (It also cannot arise in practice: the
+    // relaying mediator offers `relay-ack` alone, and TSP forwards go over
+    // REST. Enforced rather than assumed, because the cost of being wrong is an
+    // anonymous socket registered as a live streaming client under the empty
+    // DID hash.)
     #[cfg(feature = "tsp")]
-    let tsp_mode = app_protocols.iter().any(|p| p == "tsp" || p == "tsp-ack");
+    let tsp_mode = !is_relay && app_protocols.iter().any(|p| p == "tsp" || p == "tsp-ack");
 
     // `tsp-ack` opts into DELETE-TO-ACK delivery. Plain `tsp` keeps the
     // original delete-on-send contract, which is at-most-once past the socket
@@ -264,7 +321,7 @@ pub async fn websocket_handler(
     // for silent duplication, since a client that never acks would be
     // redelivered its whole inbox on every reconnect.
     #[cfg(feature = "tsp")]
-    let tsp_ack_mode = app_protocols.iter().any(|p| p == "tsp-ack");
+    let tsp_ack_mode = !is_relay && app_protocols.iter().any(|p| p == "tsp-ack");
 
     // The echo has to be a HONEST capability signal, and by default it isn't:
     // the offered list is just the client's own list reflected back, so a
@@ -287,6 +344,24 @@ pub async fn websocket_handler(
         app_protocols
     };
 
+    // Same honesty requirement as `tsp-ack` above, and here it is load-bearing:
+    // the relaying peer treats the echoed `relay-ack` as proof that its frames
+    // will be acknowledged, and refuses to relay over the socket without it. A
+    // reflected-by-accident echo would be a mediator promising acks it does not
+    // send — so narrow the offer to exactly what this mediator implements.
+    let app_protocols = if is_relay {
+        vec![RELAY_ACK_SUBPROTOCOL.to_string()]
+    } else {
+        // And the converse: an authenticated client that offers `relay-ack`
+        // is not a relay (a relay hop presents no credential), so it must not
+        // be told it will get acks it is never going to receive. Drop the
+        // entry rather than reflect it.
+        app_protocols
+            .into_iter()
+            .filter(|p| p != RELAY_ACK_SUBPROTOCOL)
+            .collect()
+    };
+
     let ws = if app_protocols.is_empty() {
         ws
     } else {
@@ -303,7 +378,7 @@ pub async fn websocket_handler(
     {
         async move {
             ws.on_upgrade(move |socket| {
-                handle_socket(socket, state, session, tsp_mode, tsp_ack_mode)
+                handle_socket(socket, state, session, is_relay, tsp_mode, tsp_ack_mode)
             })
         }
         .instrument(_span)
@@ -311,7 +386,7 @@ pub async fn websocket_handler(
     }
     #[cfg(not(feature = "tsp"))]
     {
-        async move { ws.on_upgrade(move |socket| handle_socket(socket, state, session)) }
+        async move { ws.on_upgrade(move |socket| handle_socket(socket, state, session, is_relay)) }
             .instrument(_span)
             .await
     }
@@ -351,6 +426,31 @@ mod close_code {
     pub const TRY_AGAIN_LATER: u16 = 1013;
 }
 
+/// How long an anonymous inter-mediator relay socket may stay open.
+///
+/// A relay hop presents no JWT, so there is no token expiry to inherit and
+/// nothing would otherwise bound the connection. An hour keeps the peer's
+/// pooled socket useful while still forcing it to be re-admitted periodically
+/// — re-running the relay-enabled check against current configuration, which
+/// is what makes turning relay *off* take effect without a restart.
+const RELAY_SOCKET_LIFETIME_SECS: u64 = 3600;
+
+/// The error code and reason to hand back in a negative [`RelayAck`].
+///
+/// A mediator problem report already carries both, and they are what the
+/// relaying peer logs (and, once the message is abandoned, what reaches the
+/// original sender). Anything without a problem report is an internal failure
+/// the peer cannot act on beyond retrying, so it becomes a bare 500.
+fn relay_refusal(error: &MediatorError) -> (u16, String) {
+    match error {
+        MediatorError::MediatorError(code, _, _, _, _, log_message) => (*code, log_message.clone()),
+        other => (
+            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+            other.to_string(),
+        ),
+    }
+}
+
 /// Build a close message carrying an RFC 6455 code + human-readable reason.
 fn close_with(code: u16, reason: &'static str) -> Message {
     Message::Close(Some(CloseFrame {
@@ -364,6 +464,9 @@ async fn handle_socket(
     mut socket: WebSocket,
     state: SharedData,
     session: Session,
+    // An anonymous inter-mediator relay socket: it may push frames and
+    // receives nothing but the `RelayAck` answers to them.
+    is_relay: bool,
     #[cfg(feature = "tsp")] tsp_mode: bool,
     #[cfg(feature = "tsp")] tsp_ack_mode: bool,
 ) {
@@ -399,6 +502,12 @@ async fn handle_socket(
             *entry += 1;
             *entry
         };
+        // Note for relay sockets: they carry no DID, so they all share the
+        // empty-hash bucket and `max_websocket_connections_per_did` (default
+        // 100) becomes the ceiling on *concurrent relay sockets across all
+        // peers*. That is the intended bound — it is the only thing limiting
+        // anonymous sockets — and the empty string cannot collide with a real
+        // DID's bucket, which is a sha256 hash.
         let _per_did_guard = PerDidConnectionGuard {
             registry: state.ws_connections_per_did.clone(),
             did_hash: session.did_hash.clone(),
@@ -424,7 +533,17 @@ async fn handle_socket(
         // Register the transmission channel between websocket_streaming task and this websocket.
         let (tx, mut rx): (Sender<QueuedCommand>, Receiver<QueuedCommand>) =
             mpsc::channel(WS_CHANNEL_SLOTS);
-        if let Some(streaming) = &state.streaming_task {
+
+        // A relay socket is push-only and must never be registered with the
+        // streaming task. It has no DID, so it would register under the empty
+        // did_hash — claiming that stream for an anonymous peer and pointing
+        // live delivery at a socket that belongs to no account. Skipping the
+        // registration is what makes "relays can only send" structural rather
+        // than a matter of which messages we happen to handle: `rx` below can
+        // never yield.
+        if let Some(streaming) = &state.streaming_task
+            && !is_relay
+        {
 
             let start = StreamingUpdate {
                 did_hash: session.did_hash.clone(),
@@ -562,8 +681,16 @@ async fn handle_socket(
         loop {
             select! {
                 _ = &mut auth_timeout => {
-                    debug!("Auth Timeout reached");
-                    close_reason = (close_code::POLICY, "authentication token expired");
+                    debug!("Socket lifetime reached");
+                    close_reason = if is_relay {
+                        // No token was ever presented — this is the relay
+                        // socket's bounded lifetime, and the peer should
+                        // reconnect rather than go looking for a credential
+                        // problem it doesn't have.
+                        (close_code::POLICY, "relay socket lifetime reached")
+                    } else {
+                        (close_code::POLICY, "authentication token expired")
+                    };
                     break;
                 }
                 value = socket.recv() => {
@@ -577,7 +704,45 @@ async fn handle_socket(
                                     }
 
                                     // Process the message, which also takes care of any storing and live-streaming of the message
-                                    match handle_inbound(&state, &session, &msg).await {
+                                    let outcome = handle_inbound(&state, &session, &msg).await;
+
+                                    // A relay socket gets a `relay-ack` per frame instead of a
+                                    // problem report. Two reasons it cannot have the latter: a
+                                    // problem report is packed *to* `session.did`, which a relay
+                                    // session does not have; and the relaying peer is a mediator
+                                    // waiting on a transport answer, not a client reading its
+                                    // inbox. The ack is what stops a refused frame from being
+                                    // reported as delivered — see `relay_ack`.
+                                    if is_relay {
+                                        let ack = match &outcome {
+                                            Ok(_) => RelayAck::accepted(frame_id(msg.as_bytes())),
+                                            Err(e) => {
+                                                warn!("Relay frame refused: {}", e);
+                                                let (code, reason) = relay_refusal(e);
+                                                RelayAck::rejected(frame_id(msg.as_bytes()), code, reason)
+                                            }
+                                        };
+                                        match serde_json::to_string(&ack) {
+                                            Ok(body) => {
+                                                if let Err(e) = socket.send(Message::Text(body.into())).await {
+                                                    warn!("Failed to send relay-ack: {e}");
+                                                    close_reason = (close_code::GOING_AWAY, "peer disconnected");
+                                                    break;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                // Unreachable for this type, and if it ever
+                                                // happened the peer must not read silence as
+                                                // success: drop the socket so it retries.
+                                                warn!("Couldn't serialise relay-ack: {e}");
+                                                close_reason = (close_code::SERVER_ERROR, "could not acknowledge");
+                                                break;
+                                            }
+                                        }
+                                        continue;
+                                    }
+
+                                    match outcome {
                                         Ok(_) => {}
                                         Err(e) => {
                                             warn!("WebSocket inbound error: {}", e);
@@ -617,6 +782,18 @@ async fn handle_socket(
                                     // Don't need to do anything
                                 }
                                 Message::Binary(msg) => {
+                                    // The relay contract is Text frames answered by acks.
+                                    // A binary frame on a relay socket is either a
+                                    // confused peer or something that is not a peer at
+                                    // all; either way it cannot be acknowledged, and
+                                    // staying open would leave the sender waiting out the
+                                    // ack timeout for every frame. Close instead, so it
+                                    // falls back to REST immediately.
+                                    if is_relay {
+                                        warn!("Binary frame on a relay socket; closing");
+                                        close_reason = (close_code::POLICY, "relay sockets carry text frames only");
+                                        break;
+                                    }
                                     if msg.len() > state.config.limits.ws_size {
                                         warn!("Error processing message, the size is too big. limit is {}, message size is {}", state.config.limits.ws_size, msg.len());
                                         continue;
@@ -735,8 +912,11 @@ async fn handle_socket(
             }
         }
 
-        // Remove this websocket and associated info from the streaming task
-        if !already_deregistered_flag { // Skip if close initiated by the streaming task
+        // Remove this websocket and associated info from the streaming task.
+        // A relay socket was never registered (see above), so there is nothing
+        // to deregister — and doing so under the empty did_hash would be a
+        // deregistration for an account that isn't this session's.
+        if !already_deregistered_flag && !is_relay { // Skip if close initiated by the streaming task
             if let Some(streaming) = &state.streaming_task  {
                 let stop = StreamingUpdate {
                     did_hash: session.did_hash.clone(),

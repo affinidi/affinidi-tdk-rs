@@ -306,6 +306,34 @@ fn v1_anonymous_acls() -> MediatorACLSet {
     MediatorACLSet::from_string_ruleset("DENY_ALL,SEND_MESSAGES").unwrap_or_default()
 }
 
+/// The anonymous inter-mediator relay session, if this mediator is configured
+/// to act as a relay.
+///
+/// The single place the relay-admission decision is made, so the REST
+/// `/inbound` route and the WebSocket route cannot drift apart on *who* is let
+/// in — only on what they may then do. Relay is enabled by the explicit
+/// `enable_inter_mediator_relay` flag or, for backward compatibility, by
+/// `global_acl_default` granting `SEND_FORWARDED` (the legacy implicit-relay
+/// behaviour, which boot-time validation warns about).
+///
+/// The session carries [`relay_anonymous_acls`] — `SEND_MESSAGES` +
+/// `SEND_FORWARDED`, nothing else — and no DID, which is what stops it from
+/// reaching anything that belongs to an account.
+pub(crate) fn anonymous_relay_session(
+    enable_relay_flag: bool,
+    global_acl_default: &MediatorACLSet,
+) -> Option<Session> {
+    (enable_relay_flag || anonymous_inbound_allowed(global_acl_default)).then(|| Session {
+        session_id: ANON_RELAY_SESSION_ID.to_string(),
+        acls: relay_anonymous_acls(),
+        ..Default::default()
+    })
+}
+
+/// Session id for an anonymous inter-mediator relay session, on either
+/// transport. Carries no DID — see [`anonymous_relay_session`].
+pub(crate) const ANON_RELAY_SESSION_ID: &str = "ANON-INBOUND";
+
 /// Decide whether an authentication failure should be downgraded to an anonymous
 /// relay session, and if so build that session.
 ///
@@ -333,12 +361,8 @@ fn anonymous_session_for(
 
     // Relay admission is unchanged and takes precedence: such a session keeps
     // its SEND_FORWARDED capability and is not restricted to v1 bodies.
-    if enable_relay_flag || anonymous_inbound_allowed(global_acl_default) {
-        return Some(Session {
-            session_id: "ANON-INBOUND".to_string(),
-            acls: relay_anonymous_acls(),
-            ..Default::default()
-        });
+    if let Some(session) = anonymous_relay_session(enable_relay_flag, global_acl_default) {
+        return Some(session);
     }
 
     // Otherwise a v1 forward may still be admitted, but only as a v1-scoped

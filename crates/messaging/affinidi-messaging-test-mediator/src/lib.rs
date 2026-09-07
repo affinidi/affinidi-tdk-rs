@@ -296,6 +296,7 @@ pub struct TestMediatorBuilder {
     /// forwarding processor. `None` keeps `ForwardingConfig::default`, whose
     /// production values take ~31s to abandon an undeliverable forward.
     forwarding_retry_policy: Option<(u32, u64, u64)>,
+    forwarding_ws_threshold: Option<u64>,
     enable_message_expiry: bool,
     enable_streaming: bool,
     /// Additional DIDs to register as LOCAL accounts at startup. Tests
@@ -365,6 +366,7 @@ impl Default for TestMediatorBuilder {
             relay_mode: RelayMode::Blind,
             relay_trusted_mediators: Vec::new(),
             forwarding_retry_policy: None,
+            forwarding_ws_threshold: None,
             enable_message_expiry: false,
             enable_streaming: true,
             local_dids: Vec::new(),
@@ -493,6 +495,25 @@ impl TestMediatorBuilder {
             initial_backoff.as_millis() as u64,
             max_backoff.as_millis() as u64,
         ));
+        self
+    }
+
+    /// Messages-per-10s rate at or above which the forwarding processor
+    /// relays over a WebSocket instead of REST. `None` keeps the production
+    /// default of 1.
+    ///
+    /// Pass `0` to force the WebSocket transport on the very first relayed
+    /// message. Production's default effectively never engages it in a test:
+    /// the rate is measured over a 300-second window, so one message reads as
+    /// 0.03 msgs/10s and every short test relays over REST. Without this knob
+    /// the WebSocket relay path — subprotocol negotiation and the `relay-ack`
+    /// round trip — has no end-to-end coverage at all.
+    ///
+    /// Has no effect unless [`enable_forwarding`] is `true`.
+    ///
+    /// [`enable_forwarding`]: Self::enable_forwarding
+    pub fn forwarding_ws_threshold(mut self, msgs_per_10s: u64) -> Self {
+        self.forwarding_ws_threshold = Some(msgs_per_10s);
         self
     }
 
@@ -856,6 +877,9 @@ impl TestMediatorBuilder {
             processors.forwarding.max_retries = max_retries;
             processors.forwarding.initial_backoff_ms = initial_backoff_ms;
             processors.forwarding.max_backoff_ms = max_backoff_ms;
+        }
+        if let Some(threshold) = self.forwarding_ws_threshold {
+            processors.forwarding.ws_threshold_msgs_per_10s = threshold;
         }
         processors.message_expiry_cleanup.enabled = self.enable_message_expiry;
 
