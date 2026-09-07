@@ -19,51 +19,29 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Everything except tests and coverage. Split out from the aggregate
+  # `checks.yaml` so coverage can be scheduled separately — see the `coverage`
+  # job below for why.
   rust-pipeline:
-    uses: affinidi/pipeline-rust/.github/workflows/checks.yaml@main
+    uses: affinidi/pipeline-rust/.github/workflows/checks-no-test.yaml@main
     secrets: inherit
     with:
       toolchain: "1.95.0"
       rustflags: "-D warnings --cfg tracing_unstable"
-      # RUSTSEC-2026-0098 / -0099 / -0104 (rustls-webpki) were listed here and
-      # are now genuinely fixed — the aws-sdk crates no longer pull the legacy
-      # rustls 0.21 stack. Removed from the ignore list on purpose: if the
-      # legacy stack comes back, audit must fail rather than stay quiet.
-      # RUSTSEC-2026-0258 (h2, unbounded empty DATA frames). The fixable half is
-      # fixed: the lockfile takes h2 0.4.16. What remains is h2 **0.3.27**,
-      # which has no patched release — it is the newest 0.3 and the advisory
-      # names >=0.4.16 as the only fix. It arrives through reqwest 0.11 <-
-      # ssi-dids-core, as an HTTP *client*.
+      # Only quinn-proto (RUSTSEC-2024-0373) is suppressed.
       #
-      # Since #719 the ONLY path to it is the optional `did-cheqd` feature
-      # (did-resolver-cheqd 1.0.1 pins ssi-dids-core ^0.1). No crate in this
-      # workspace enables that feature, so h2 0.3.27 is never compiled — it is
-      # in Cargo.lock only, and cargo-audit reads the lockfile rather than the
-      # build graph. did:ethr / did:pkh / did:jwk no longer touch ssi at all.
+      # The four entries that used to sit here went with did:cheqd in cache-sdk
+      # 0.8.36: RUSTSEC-2026-0258 (h2 DoS) and RUSTSEC-2023-0126 (im) arrived via
+      # `did-resolver-cheqd`, and owning_ref / rsa left the graph alongside them.
+      # h2 now resolves at 0.4.19, above the >=0.4.16 the advisory names as the
+      # fix, so that DoS is fixed rather than suppressed.
       #
-      # Drop this entry when did-resolver-cheqd moves off ssi-dids-core 0.1
-      # (see cheqd/did-resolver-rs#3), NOT when "those crates move to reqwest
-      # 0.12" as this comment previously said — the crates it named are gone.
-      #
-      # RUSTSEC-2023-0126 (im, OrdSet insertion unsoundness). Same story as the h2
-      # entry above: since #719 `im` reaches the lockfile ONLY via the optional
-      # `did-cheqd` feature (did-resolver-cheqd -> ssi-dids-core 0.1 -> linked-data
-      # -> im), which no crate in this workspace enables, so it is never compiled
-      # (`cargo tree -i im --workspace` is empty; cargo-deny, which reads the build
-      # graph rather than the lockfile, does not report it). No fix exists: the crate
-      # is unmaintained and its repo was archived 2026-05-03. Clears together with
-      # RUSTSEC-2026-0258 when did-resolver-cheqd moves off ssi-dids-core 0.1
-      # (cheqd/did-resolver-rs#3).
-      # Only quinn-proto remains. The other four entries were retired with
-      # did:cheqd in cache-sdk 0.8.36: RUSTSEC-2026-0258 (h2 DoS) and
-      # RUSTSEC-2023-0126 (im) came through `did-resolver-cheqd`, and
-      # owning_ref / rsa left the graph with it. h2 now resolves at 0.4.19,
-      # above the >=0.4.16 fix, so that DoS is fixed rather than suppressed.
-      # Anything re-entering the graph should fail the build, not be inherited.
+      # Anything re-entering the graph should fail the build rather than be
+      # inherited. `deny.toml` carries the build-graph equivalent of this list and
+      # is deliberately empty; `release.yaml` carries a second copy of *this* one,
+      # so change them together.
       auditIgnore: "RUSTSEC-2024-0373"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
-      coverage: 0
-      useRedis: true
       # PR-only. `verify-publish` resolves each crate from the registry in
       # isolation, which is a useful pre-merge gate but is *expected* to fail on
       # `main`: the release job publishes after merge, so between a merge and
@@ -72,3 +50,37 @@ jobs:
       # whole scan would be ignored within a week.
       verifyPublish: ${{ github.event_name == 'pull_request' }}
       deprecationCheck: true
+
+  # Tests run on every event, including PRs — this is the gate that matters.
+  test:
+    uses: affinidi/pipeline-rust/.github/workflows/test.yaml@main
+    secrets: inherit
+    with:
+      toolchain: "1.95.0"
+      rustflags: "-D warnings --cfg tracing_unstable"
+      ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
+      useRedis: true
+
+  # Coverage is NOT run on pull requests, and that is the point of this split.
+  #
+  # It took 26 minutes — two and a half times the next-longest job — and so set
+  # the wall-clock time of every PR on its own. It also gates nothing: the
+  # threshold is 0, so it reports a number and can never fail. Paying 26 minutes
+  # per PR for a value nothing acts on is the wrong trade; measured against a
+  # recent run, dropping it takes a PR from ~26 minutes to ~11.5.
+  #
+  # It still runs against `main` on the daily schedule and on demand, so the
+  # number stays current — it just stops standing between a change and its
+  # review. Raise `coverage:` above 0 if it should ever gate, but then it needs
+  # to be back on PRs, because a threshold nobody sees before merge is not a
+  # gate either.
+  coverage:
+    if: github.event_name != 'pull_request'
+    uses: affinidi/pipeline-rust/.github/workflows/coverage.yaml@main
+    secrets: inherit
+    with:
+      toolchain: "1.95.0"
+      rustflags: "-D warnings --cfg tracing_unstable"
+      ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
+      coverage: 0
+      useRedis: true
