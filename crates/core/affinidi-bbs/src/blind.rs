@@ -34,8 +34,8 @@
  * blind-signatures draft test vectors.
  */
 
+use bls12_381_plus::ff::Field;
 use bls12_381_plus::{G1Projective, Scalar};
-use ff::Field;
 use rand::{Rng, SeedableRng};
 use zeroize::Zeroize;
 

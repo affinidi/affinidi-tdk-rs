@@ -11,7 +11,7 @@
  */
 
 use bls12_381_plus::Scalar;
-use elliptic_curve::hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
+use bls12_381_plus::elliptic_curve::hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
 use sha2::Sha256;
 
 use crate::ciphersuite::Ciphersuite;

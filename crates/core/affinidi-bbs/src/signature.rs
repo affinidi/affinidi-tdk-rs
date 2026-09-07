@@ -16,10 +16,10 @@
  *   2. Check pairing: e(A, W + BP2*e) == e(B, BP2)
  */
 
+use bls12_381_plus::group::Group;
 use bls12_381_plus::{
     G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective, Scalar, multi_miller_loop,
 };
-use group::Group;
 use zeroize::Zeroize;
 
 use crate::ciphersuite::Ciphersuite;
