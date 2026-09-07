@@ -103,6 +103,9 @@ admin_did = "did://did:peer:2.Vz6MkksX9huJxJwvLtj9vc3gXbT2m1WVy4Uoi3ssEiSSH2ZYJ.
 ### Hostnames are compared case-insensitively; IPv6 literals are
 ### normalized so a bracketed URL form (`http://[::1]:7037`) matches a
 ### bind address recorded as `::1`.
+###
+### Env: LOCAL_ENDPOINTS — comma-separated (the TOML form is an array);
+### an empty value clears the list.
 # local_endpoints = ["https://mediator.example.com", "https://mediator.example.com:7037"]
 
 ### ****************************************************************************************************************************
@@ -543,6 +546,12 @@ max_backoff_ms = "60000"
 ### stream consumer group shared across processor instances; on Fjall and
 ### in-memory backends it names the single in-process group.
 consumer_group = "forwarding"
+
+### Env: PROCESSOR_FORWARDING_MAX_HOPS
+### Maximum relay hops before a forward is rejected as a loop. Counts every
+### mediator-to-mediator hop, and is also the depth limit when peeling
+### re-wrap layers.
+max_hops = "10"
 
 ### Env: PROCESSOR_FORWARDING_RELAY_MODE
 ### How to relay a forward whose next hop is a *remote* mediator:

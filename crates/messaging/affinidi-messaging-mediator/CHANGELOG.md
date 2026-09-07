@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased (0.22.1) — a multi-mediator guide, and the gaps writing it exposed
+
+`docs/multi-mediator.md` documents federating two or more independent
+mediators. The material existed only as scattered fragments — a section of
+`docs/acls.md`, a section of the test-mediator README, `TestTopology`'s
+rustdoc, and the config file's per-key comments — with nothing tying them
+together.
+
+What it covers, and the parts that were not written down anywhere before:
+
+- **The two hop shapes land on different code paths at the receiving
+  mediator.** A double forward arrives as a forward and needs
+  `RECEIVE_FORWARDED`; a single forward (`ATM::send_to`'s DIDComm shape)
+  arrives as a *direct delivery* and needs `local_direct_delivery_allowed`.
+- **The four accounts one cross-mediator delivery consults**, with the error
+  code each produces — including the non-obvious one: the *peer mediator's*
+  DID needs an account with `RECEIVE_FORWARDED` on the relaying mediator, and
+  nothing but `global_acl_default` creates it. The shipped default grants
+  neither forwarded bit, so it is not a federation configuration.
+- **Endpoint classification** — DID vs URL, one hop of indirection, and the
+  three "Storing locally — it will not be delivered" warnings that follow a
+  `200` to the sender.
+- Blind vs rewrap, relay admission, delivery mechanics, the TSP differences, a
+  `TestTopology` recipe, and a symptom-to-cause table.
+
+Every claim is sourced from the code path named in its section and from the
+cross-mediator e2e suites, which the document lists as its executable form.
+
+**`ERRORS.md`:** the table stopped at 89 while the code reaches 94. Adds 90
+(`me.res.forwarding.enqueue`), 91, 92, 94 (`protocol.forwarding.loop_detected`)
+and the second variants of 58 (`message.tsp.no_endpoint`) and 60
+(`authorization.relay.untrusted_peer`) — the last two both on relay paths this
+document sends readers to. Corrects the access-list batch limit row, which was
+still filed under 82 after the code moved it to 93.
+
+**`conf/mediator.toml`:** documents `max_hops` (previously defaulted at 10 with
+no mention in the file) and names `LOCAL_ENDPOINTS`. The `Env:` lines for
+`PROCESSOR_FORWARDING_RELAY_MODE` and
+`PROCESSOR_FORWARDING_RELAY_TRUSTED_MEDIATORS` were describing overrides that
+did not exist; they do now — see mediator-config 0.2.2.
+
+Also picks up mediator-common 0.15.43, which stops the forwarding processor
+re-attempting a WebSocket upgrade that an anonymous relay hop can never pass.
+
+Documentation, configuration comments and a dependency bump — no behaviour
+change in this crate.
+
 ## Unreleased (0.22.0) — `jsonwebtoken` is now a private dependency, and moves to 11
 
 Closes [#770]. **Breaking:** `SecurityConfig::jwt_encoding_key` and

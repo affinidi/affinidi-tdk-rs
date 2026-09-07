@@ -1,5 +1,28 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.43) — stop re-probing a WebSocket the peer will never accept
+
+The forwarding processor prefers a pooled WebSocket over REST once an endpoint
+crosses `ws_threshold_msgs_per_10s` (default 1 msg/10s). Between two mediators
+running this implementation that upgrade cannot succeed: `deliver_via_websocket`
+connects with no `Authorization` header — a relay hop is anonymous, the relaying
+mediator holds no session on its peer — while the peer's WebSocket route
+requires a valid bearer token *and* the `LOCAL` capability. Every message above
+the threshold therefore paid a doomed connect before the REST fallback that was
+always going to carry it.
+
+`EndpointState` now records `ws_suppressed_until`. A failed WebSocket attempt
+suppresses the transport for that endpoint for five minutes; a successful one
+clears it. The cost of a peer that refuses upgrades drops to one connect per
+window, and because the window expires rather than latching, a peer that does
+accept anonymous upgrades is still picked up without a restart. The transition
+is logged once (`Falling back to REST and suppressing WebSocket`) instead of
+per message.
+
+No configuration change, and no change to what is delivered or in what order —
+REST was already carrying this traffic. See the mediator's
+`docs/multi-mediator.md` §7 for where this sits in a relay hop.
+
 ## Unreleased (0.15.42) — `sha2` 0.11, `hmac` 0.13, `hkdf` 0.13, `aes-gcm` 0.11, `argon2` 0.6
 
 No behaviour change and no public API change: these are private dependencies

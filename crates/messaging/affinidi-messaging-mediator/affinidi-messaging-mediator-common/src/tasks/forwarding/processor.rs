@@ -137,12 +137,36 @@ fn decode_tsp_forward(message: &str) -> Option<Vec<u8>> {
 /// still in active use is never dropped out from under a retry.
 const ENDPOINT_IDLE_TTL: Duration = Duration::from_secs(300);
 
+/// How long an endpoint is left on REST after a WebSocket attempt failed.
+///
+/// Long enough that a peer which cannot accept our WebSocket costs one failed
+/// connect per window instead of one per message; short enough that a peer
+/// which gains the capability (or recovers) is picked up without a restart.
+const WS_SUPPRESSION_WINDOW: Duration = Duration::from_secs(300);
+
 /// State for a connection to a remote mediator endpoint
 struct EndpointState {
     rate_tracker: EndpointRateTracker,
     last_activity: Instant,
     /// Consecutive failure count for backoff calculation
     consecutive_failures: u32,
+    /// Set when a WebSocket attempt to this endpoint failed; until it elapses,
+    /// delivery goes straight to REST.
+    ///
+    /// An inter-mediator hop is posted anonymously — the relaying mediator
+    /// holds no session on the peer — and this mediator's own WebSocket route
+    /// requires a bearer token, so a peer running this implementation refuses
+    /// the upgrade every time. Without this, crossing the rate threshold buys
+    /// a failed connect on *every* message before the REST fallback that was
+    /// always going to carry it.
+    ws_suppressed_until: Option<Instant>,
+}
+
+impl EndpointState {
+    /// Whether a WebSocket attempt is currently suppressed for this endpoint.
+    fn ws_suppressed(&self, now: Instant) -> bool {
+        self.ws_suppressed_until.is_some_and(|until| now < until)
+    }
 }
 
 /// Shared HTTP client to avoid creating one per request
@@ -472,17 +496,20 @@ impl ForwardingProcessor {
                     rate_tracker: EndpointRateTracker::new(self.config.rate_window_seconds),
                     last_activity: Instant::now(),
                     consecutive_failures: 0,
+                    ws_suppressed_until: None,
                 });
 
+            let now = Instant::now();
             state.rate_tracker.record_and_rate(ready.len() as u32);
-            state.last_activity = Instant::now();
+            state.last_activity = now;
 
             let rate = state.rate_tracker.current_rate();
+            let suppressed = state.ws_suppressed(now);
             debug!(
-                "Endpoint {} rate: {:.2} msgs/10s (threshold: {})",
-                endpoint_url, rate, self.config.ws_threshold_msgs_per_10s
+                "Endpoint {} rate: {:.2} msgs/10s (threshold: {}, ws_suppressed: {})",
+                endpoint_url, rate, self.config.ws_threshold_msgs_per_10s, suppressed
             );
-            rate >= self.config.ws_threshold_msgs_per_10s as f64
+            rate >= self.config.ws_threshold_msgs_per_10s as f64 && !suppressed
         };
 
         // Deliver messages
@@ -756,19 +783,52 @@ impl ForwardingProcessor {
         let use_websocket = use_websocket && decode_tsp_forward(&msg.message).is_none();
         if use_websocket {
             match self.deliver_via_websocket(endpoint_url, msg).await {
-                Ok(()) => Ok(()),
+                Ok(()) => {
+                    self.set_ws_suppression(endpoint_url, None).await;
+                    Ok(())
+                }
                 Err(ws_err) => {
-                    // WebSocket failed — fall back to REST for this message
-                    debug!(
-                        "WebSocket delivery failed for {}, falling back to REST: {}",
-                        endpoint_url, ws_err
-                    );
+                    // WebSocket failed — fall back to REST for this message,
+                    // and stop attempting it for this endpoint for a while
+                    // (see `EndpointState::ws_suppressed_until`).
+                    let until = Instant::now() + WS_SUPPRESSION_WINDOW;
+                    let first = self.set_ws_suppression(endpoint_url, Some(until)).await;
+                    if first {
+                        warn!(
+                            "WebSocket delivery to {} failed ({}). Falling back to REST and \
+                             suppressing WebSocket for {}s.",
+                            endpoint_url,
+                            ws_err,
+                            WS_SUPPRESSION_WINDOW.as_secs()
+                        );
+                    } else {
+                        debug!(
+                            "WebSocket delivery failed for {}, falling back to REST: {}",
+                            endpoint_url, ws_err
+                        );
+                    }
                     self.deliver_via_rest(endpoint_url, msg).await
                 }
             }
         } else {
             self.deliver_via_rest(endpoint_url, msg).await
         }
+    }
+
+    /// Set (or clear) the WebSocket suppression window for an endpoint.
+    ///
+    /// Returns true when this call started a new suppression window, so the
+    /// caller can log the transition once rather than per message.
+    async fn set_ws_suppression(&self, endpoint_url: &str, until: Option<Instant>) -> bool {
+        let mut endpoints = self.endpoints.write().await;
+        let Some(state) = endpoints.get_mut(endpoint_url) else {
+            // Reaped between the transport decision and here; the next batch
+            // re-creates it unsuppressed, which is the safe direction.
+            return false;
+        };
+        let was_suppressed = state.ws_suppressed(Instant::now());
+        state.ws_suppressed_until = until;
+        until.is_some() && !was_suppressed
     }
 
     /// Deliver a message via REST POST to the remote mediator's inbound endpoint
@@ -1156,5 +1216,44 @@ mod tests {
         let backoff = compute_backoff(u64::MAX / 2, 60000, 5);
         // Should be capped at max_backoff_ms
         assert_eq!(backoff, Duration::from_millis(60000));
+    }
+
+    // --- WebSocket suppression tests ---
+
+    fn endpoint_state(ws_suppressed_until: Option<Instant>) -> EndpointState {
+        EndpointState {
+            rate_tracker: EndpointRateTracker::new(300),
+            last_activity: Instant::now(),
+            consecutive_failures: 0,
+            ws_suppressed_until,
+        }
+    }
+
+    #[test]
+    fn ws_is_not_suppressed_by_default() {
+        assert!(!endpoint_state(None).ws_suppressed(Instant::now()));
+    }
+
+    #[test]
+    fn ws_is_suppressed_inside_the_window_and_free_after_it() {
+        let now = Instant::now();
+        let state = endpoint_state(Some(now + WS_SUPPRESSION_WINDOW));
+
+        assert!(state.ws_suppressed(now));
+        assert!(state.ws_suppressed(now + WS_SUPPRESSION_WINDOW - Duration::from_secs(1)));
+        // The window is half-open: at the deadline the endpoint is re-probed.
+        assert!(!state.ws_suppressed(now + WS_SUPPRESSION_WINDOW));
+        assert!(!state.ws_suppressed(now + WS_SUPPRESSION_WINDOW + Duration::from_secs(1)));
+    }
+
+    /// The suppression window must outlast the rate tracker's 10s window,
+    /// which is what put the endpoint on WebSocket in the first place —
+    /// otherwise a busy peer is re-probed on every batch and the suppression
+    /// buys nothing. (An endpoint quiet for `ENDPOINT_IDLE_TTL` is reaped
+    /// along with its suppression, which is the intended reset: the next
+    /// forward to a long-silent peer probes afresh.)
+    #[test]
+    fn ws_suppression_window_outlasts_the_rate_window() {
+        assert!(WS_SUPPRESSION_WINDOW > Duration::from_secs(10));
     }
 }
