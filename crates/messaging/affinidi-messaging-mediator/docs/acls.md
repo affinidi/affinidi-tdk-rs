@@ -279,6 +279,10 @@ Where no peer can be identified, `security.enable_inter_mediator_relay` (which
 gates anonymous inbound at all) and `security.local_direct_delivery_allowed` are
 the levers.
 
+The end-to-end picture these gates sit inside — how a relay hop is built,
+routed and admitted across two mediators — is in
+[`multi-mediator.md`](./multi-mediator.md).
+
 ### Access-list evaluation
 
 The single decision, applied on every delivery:
