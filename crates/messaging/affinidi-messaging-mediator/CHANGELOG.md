@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased (0.22.3) — answer management Trust Tasks over TSP
+
+A TSP-only deployment could not manage its own accounts. The dispatcher that
+turns a `TrustTaskEnvelope` into `account/update`, `acl/get`,
+`access-list/update` and the rest — `MessageType::process` — is wholly
+`#[cfg(feature = "didcomm")]` and takes a DIDComm `Message`, so a TSP
+`Direct`/`Control` message addressed to the mediator never reached it. It went
+to `deliver_tsp_local` → `deliver_opaque`, which files it for pickup. There was
+no packet a TSP-only client could send to set its own account ACL.
+
+That bites where it is least visible. An account is created at authentication
+with `global_acl_default`, so a permissive default hides the gap entirely; a
+restrictive one leaves the client unable to fix its own ACL over any transport.
+TSP delivery is not exempt from ACLs — `deliver_opaque` applies existence,
+`RECEIVE_MESSAGES` and the access-list verdict through `delivery_decision`.
+
+The handlers were already transport-agnostic: each takes the document, the
+authenticated sender, `state` and `session`, and nothing about them is DIDComm.
+So the dispatch splits into a core plus a wrapper per transport.
+
+- `consume` runs the dispatch and returns the response document. It requires the
+  caller to have established the sender cryptographically — the handlers
+  authorise against that sender, so a caller passing an unverified claim would
+  hand over the admin surface.
+- The DIDComm wrapper is unchanged in behaviour: sender from `UnpackMetadata`,
+  document from the message body, reply packed as a DIDComm message.
+- The TSP wrapper unpacks a `Direct`/`Control` message addressed to this
+  mediator, dispatches, then seals the reply to the sender and delivers it
+  through the ordinary local path — so it arrives on the client's existing
+  pickup socket. No second socket, and no new delivery mechanism.
+
+The TSP sender carries the same standing as the DIDComm one: `direct::unpack`
+verifies Ed25519 over envelope‖ciphertext against the key resolved from the
+VID's DID document *and* opens with HPKE-Auth, binding the sender's static key.
+Two independent proofs, which is what lets the handlers authorise on it
+unchanged.
+
+Requests are recognised by payload rather than a binding type URI, because the
+client packs the bare task document and there is no envelope tag to switch on. A
+document that parses *and* names a served type is claimed; everything else falls
+through to delivery unchanged, so ordinary traffic addressed to the mediator is
+unaffected.
+
+**Behavioural note for operators.** A message that previously landed in the
+mediator's own inbox is now answered if it is a served management task. Nothing
+else changes, and no client is required to move — the DIDComm path is
+untouched.
+
 ## Unreleased (0.22.2) — admit an inter-mediator relay over WebSocket
 
 The WebSocket route now admits an anonymous inter-mediator relay hop, on the
