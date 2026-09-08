@@ -274,10 +274,15 @@ pub(crate) async fn consume(
     Ok(Some(response_value))
 }
 
-/// Every Trust Task type this mediator serves. The dispatch in [`consume`]
+/// Every Trust Task type this mediator serves.
+///
+/// `tsp`-gated with [`parse_if_served`]: the DIDComm binding carries an envelope
+/// type URI, so it never needs to recognise a request by its payload. Only the
+/// TSP arm does. The dispatch in [`consume`]
 /// must stay in step with it — [`parse_if_served`] uses it to decide whether an
 /// untagged payload is a management request, and a type missing here would be
 /// filed into the mediator's inbox instead of answered.
+#[cfg(feature = "tsp")]
 fn served_type_uris() -> [TypeUri; 11] {
     [
         type_uri_of::<ping::v0_1::Payload>(),
@@ -304,6 +309,7 @@ fn served_type_uris() -> [TypeUri; 11] {
 /// being wrong runs one way only: a served type mis-parsed as mail would be
 /// silently filed, so the type check is the thing that must not drift, which is
 /// why [`served_type_uris`] is a single list next to the dispatch that uses it.
+#[cfg(feature = "tsp")]
 pub(crate) fn parse_if_served(payload: &[u8]) -> Option<TrustTask<Value>> {
     let doc: TrustTask<Value> = serde_json::from_slice(payload).ok()?;
     served_type_uris().contains(&doc.type_uri).then_some(doc)
@@ -1908,7 +1914,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tsp"))]
 mod tsp_dispatch_tests {
     use super::*;
 
