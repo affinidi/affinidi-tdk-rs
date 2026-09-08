@@ -114,11 +114,6 @@ pub(crate) async fn process(
                 StatusCode::BAD_REQUEST,
             )
         })?;
-    let sender_did = sender_kid
-        .split('#')
-        .next()
-        .unwrap_or(&sender_kid)
-        .to_string();
 
     // The body is the full TrustTask document.
     let doc: TrustTask<Value> = serde_json::from_value(message.body.clone()).map_err(|e| {
@@ -131,6 +126,64 @@ pub(crate) async fn process(
     })?;
 
     let now_secs = state.clock.unix_secs();
+    let Some(response_value) = consume(doc, state, session, &sender_kid, now_secs).await? else {
+        // identity_mismatch with no transport sender → emit nothing.
+        return Ok(ProcessMessageResponse::default());
+    };
+    let sender_did = vid_of(&sender_kid);
+
+    // Pack the response back through the mediator's existing outbound path.
+    // `thid` threads it to the request so the caller's live-stream correlates it.
+    let response_msg = Message::build(
+        Uuid::new_v4().to_string(),
+        ENVELOPE_TYPE.to_string(),
+        response_value,
+    )
+    .thid(message.id.clone())
+    .to(sender_did)
+    .from(mediator_did)
+    .created_time(now_secs)
+    .expires_time(now_secs + 300)
+    .finalize();
+
+    Ok(ProcessMessageResponse {
+        store_message: true,
+        force_live_delivery: false,
+        data: WrapperType::Message(Box::new(response_msg)),
+        forward_message: false,
+    })
+}
+
+/// Strip a key fragment from a `did#key` to get the framework VID.
+pub(crate) fn vid_of(kid: &str) -> String {
+    kid.split('#').next().unwrap_or(kid).to_string()
+}
+
+/// Consume one Trust Task document from an authenticated sender and produce the
+/// response document. `None` means "emit nothing" (a ping identity mismatch).
+///
+/// **Transport-agnostic on purpose.** Every `consume_*` handler below takes the
+/// document, the authenticated sender and `state`/`session` — nothing about a
+/// DIDComm envelope — so the only transport-specific work is establishing
+/// `sender_kid` and packing the reply, which the callers do. That is what lets
+/// the same management surface answer over TSP: see the TSP arm in
+/// [`crate::messages::inbound`], which unpacks a `Direct`/`Control` message
+/// addressed to this mediator and calls straight into here.
+///
+/// `sender_kid` MUST have been established cryptographically by the caller — a
+/// DIDComm authcrypt/JWS unpack, or a TSP unpack (Ed25519 over
+/// envelope‖ciphertext plus HPKE-Auth). Handlers authorise against it, so a
+/// caller that passes an unverified claim hands an attacker the admin surface.
+pub(crate) async fn consume(
+    doc: TrustTask<Value>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &str,
+    now_secs: u64,
+) -> Result<Option<Value>, MediatorError> {
+    let mediator_did = state.config.mediator_did.clone();
+    let sender_kid = sender_kid.to_string();
+    let sender_did = vid_of(&sender_kid);
     let now = chrono::DateTime::from_timestamp(now_secs as i64, 0).unwrap_or_else(chrono::Utc::now);
 
     // Route by task type across the ping / account / acl / access-list families.
@@ -139,7 +192,7 @@ pub(crate) async fn process(
         match consume_ping(downcast(&doc, session)?, &mediator_did, &sender_did, now).await? {
             Some(value) => value,
             // identity_mismatch with no transport sender → emit nothing.
-            None => return Ok(ProcessMessageResponse::default()),
+            None => return Ok(None),
         }
     } else if doc.type_uri == type_uri_of::<account::get::v0_1::Payload>() {
         consume_account_get(
@@ -218,26 +271,48 @@ pub(crate) async fn process(
         ));
     };
 
-    // Pack the response back through the mediator's existing outbound path.
-    // `thid` threads it to the request so the caller's live-stream correlates it.
-    let response_msg = Message::build(
-        Uuid::new_v4().to_string(),
-        ENVELOPE_TYPE.to_string(),
-        response_value,
-    )
-    .thid(message.id.clone())
-    .to(sender_did)
-    .from(mediator_did)
-    .created_time(now_secs)
-    .expires_time(now_secs + 300)
-    .finalize();
+    Ok(Some(response_value))
+}
 
-    Ok(ProcessMessageResponse {
-        store_message: true,
-        force_live_delivery: false,
-        data: WrapperType::Message(Box::new(response_msg)),
-        forward_message: false,
-    })
+/// Every Trust Task type this mediator serves.
+///
+/// `tsp`-gated with [`parse_if_served`]: the DIDComm binding carries an envelope
+/// type URI, so it never needs to recognise a request by its payload. Only the
+/// TSP arm does. The dispatch in [`consume`]
+/// must stay in step with it — [`parse_if_served`] uses it to decide whether an
+/// untagged payload is a management request, and a type missing here would be
+/// filed into the mediator's inbox instead of answered.
+#[cfg(feature = "tsp")]
+fn served_type_uris() -> [TypeUri; 11] {
+    [
+        type_uri_of::<ping::v0_1::Payload>(),
+        type_uri_of::<account::get::v0_1::Payload>(),
+        type_uri_of::<account::list::v0_1::Payload>(),
+        type_uri_of::<account::update::v0_1::Payload>(),
+        type_uri_of::<account::remove::v0_1::Payload>(),
+        type_uri_of::<account::add::v0_1::Payload>(),
+        type_uri_of::<acl::get::v0_1::Payload>(),
+        type_uri_of::<access_list::update::v0_1::Payload>(),
+        type_uri_of::<access_list::list::v0_1::Payload>(),
+        type_uri_of::<audit::list::v0_1::Payload>(),
+        type_uri_of::<config::show::v0_1::Payload>(),
+    ]
+}
+
+/// Parse `payload` as a Trust Task document, but only claim it when this
+/// mediator actually serves the type.
+///
+/// Used by the TSP arm, which has no envelope tag to switch on: the client packs
+/// the bare task document. Being strict about the type is what keeps that safe —
+/// an ordinary message that merely happens to deserialise into the document
+/// shape is *not* claimed, so it still reaches the mediator's inbox. The cost of
+/// being wrong runs one way only: a served type mis-parsed as mail would be
+/// silently filed, so the type check is the thing that must not drift, which is
+/// why [`served_type_uris`] is a single list next to the dispatch that uses it.
+#[cfg(feature = "tsp")]
+pub(crate) fn parse_if_served(payload: &[u8]) -> Option<TrustTask<Value>> {
+    let doc: TrustTask<Value> = serde_json::from_slice(payload).ok()?;
+    served_type_uris().contains(&doc.type_uri).then_some(doc)
 }
 
 /// The canonical request type URI of a generated payload `P`.
@@ -1836,5 +1911,139 @@ mod tests {
         // respond_with swaps the parties: the mediator answers alice.
         assert_eq!(resp.issuer.as_deref(), Some("did:example:mediator"));
         assert_eq!(resp.recipient.as_deref(), Some("did:example:alice"));
+    }
+}
+
+#[cfg(all(test, feature = "tsp"))]
+mod tsp_dispatch_tests {
+    use super::*;
+
+    /// A minimal but structurally valid Trust Task document of `type_uri`.
+    fn doc_json(type_uri: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "id": "urn:uuid:2b1e0a1e-0000-4000-8000-000000000001",
+            "type": type_uri,
+            "issuer": "did:key:zSender",
+            "recipient": "did:key:zMediator",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "payload": {},
+        }))
+        .expect("test document serialises")
+    }
+
+    #[test]
+    fn a_served_management_task_is_claimed() {
+        // The whole point of the TSP arm: `account/update` addressed to the
+        // mediator must be *answered*, not filed into its inbox.
+        let uri = type_uri_of::<account::update::v0_1::Payload>();
+        let claimed = parse_if_served(&doc_json(&uri.to_string()))
+            .expect("a served type must be claimed for dispatch");
+        assert_eq!(claimed.type_uri, uri);
+    }
+
+    #[test]
+    fn the_served_list_matches_what_consume_dispatches() {
+        // `served_type_uris` decides what the TSP arm *claims*; the if/else
+        // chain in `consume` decides what it *answers*. Drift either way is
+        // silent and expensive:
+        //
+        //   * dispatched but not served → over TSP the request is filed into
+        //     the mediator's inbox instead of answered, and the caller waits out
+        //     its timeout with no error logged anywhere;
+        //   * served but not dispatched → the arm claims the message, then
+        //     `consume` refuses it as unsupported, so a message that would have
+        //     been delivered is now an error.
+        //
+        // Neither is reachable from a runtime assertion: the dispatch is an
+        // if/else chain, not a table, so nothing enumerates it. Read the source
+        // instead — the same technique the chain itself would need to be
+        // rewritten to avoid.
+        const SRC: &str = include_str!("trust_tasks.rs");
+
+        let consume_body = {
+            let start = SRC
+                .find("pub(crate) async fn consume(")
+                .expect("`consume` must exist");
+            let rest = &SRC[start..];
+            &rest[..rest.find("\n}\n").expect("`consume` must terminate")]
+        };
+        let served_body = {
+            let start = SRC
+                .find("fn served_type_uris()")
+                .expect("`served_type_uris` must exist");
+            let rest = &SRC[start..];
+            &rest[..rest
+                .find("\n}\n")
+                .expect("`served_type_uris` must terminate")]
+        };
+
+        // Every `type_uri_of::<X>()` mentioned, by its turbofish payload path.
+        fn payload_paths(body: &str) -> std::collections::BTreeSet<&str> {
+            body.match_indices("type_uri_of::<")
+                .filter_map(|(i, m)| {
+                    let rest = &body[i + m.len()..];
+                    rest.find(">()").map(|end| rest[..end].trim())
+                })
+                .collect()
+        }
+
+        let dispatched = payload_paths(consume_body);
+        let served = payload_paths(served_body);
+
+        assert!(
+            !dispatched.is_empty(),
+            "failed to read the dispatch chain — did `consume` change shape?"
+        );
+        let missing: Vec<_> = dispatched.difference(&served).collect();
+        assert!(
+            missing.is_empty(),
+            "dispatched by `consume` but absent from `served_type_uris`, so the TSP arm \
+             will file these as mail and the caller will time out: {missing:?}"
+        );
+        let extra: Vec<_> = served.difference(&dispatched).collect();
+        assert!(
+            extra.is_empty(),
+            "listed in `served_type_uris` but not dispatched by `consume`, so the TSP arm \
+             will claim these and then refuse them as unsupported: {extra:?}"
+        );
+    }
+
+    #[test]
+    fn an_unserved_trust_task_is_left_alone() {
+        // Shape alone must not be enough. A Trust Task the mediator does not
+        // serve is someone else's traffic that happens to be addressed here —
+        // it belongs in the inbox, not in the management dispatch.
+        assert!(
+            parse_if_served(&doc_json(
+                "https://trusttasks.org/spec/vta/contexts/list/1.0"
+            ))
+            .is_none(),
+            "a type this mediator does not serve must fall through to delivery"
+        );
+    }
+
+    #[test]
+    fn ordinary_traffic_is_left_alone() {
+        // The TSP arm sees every Direct/Control message addressed to the
+        // mediator, most of which is not a Trust Task at all.
+        for payload in [
+            &b"not json at all"[..],
+            &b"{}"[..],
+            &br#"{"hello":"world"}"#[..],
+            &b""[..],
+        ] {
+            assert!(
+                parse_if_served(payload).is_none(),
+                "non-Trust-Task payload must fall through to delivery"
+            );
+        }
+    }
+
+    #[test]
+    fn the_vid_helper_strips_a_key_fragment() {
+        // DIDComm gives a `did#key`; TSP gives a bare VID. Handlers authorise on
+        // the VID, so both must land on the same string.
+        assert_eq!(vid_of("did:key:zAlice#z6Mk"), "did:key:zAlice");
+        assert_eq!(vid_of("did:key:zAlice"), "did:key:zAlice");
     }
 }

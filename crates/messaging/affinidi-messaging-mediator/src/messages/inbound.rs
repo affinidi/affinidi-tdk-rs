@@ -11,6 +11,8 @@ use crate::{SharedData, common::session::Session};
 // Shared by both the DIDComm direct-delivery path and the TSP delivery path.
 #[cfg(any(feature = "didcomm", feature = "tsp"))]
 use crate::common::authz::Capability;
+#[cfg(feature = "tsp")]
+use crate::messages::protocols::trust_tasks;
 #[cfg(any(feature = "didcomm", feature = "tsp"))]
 use crate::{common::authz, messages::store::store_message};
 use affinidi_messaging_mediator_common::errors::MediatorError;
@@ -397,14 +399,103 @@ pub(crate) async fn handle_inbound_tsp(
             .await
         }
 
-        // Direct or Control addressed to the mediator itself: store it for the
-        // mediator's own pickup (the mediator is the addressed recipient). Direct
-        // and Control messages destined for *local accounts* never reach here —
-        // they took the `receiver != mediator` opaque pass-through above.
+        // Direct or Control addressed to the mediator itself.
+        //
+        // Two kinds of traffic arrive here and they are not interchangeable. A
+        // **management Trust Task** is a request the mediator must *answer* —
+        // `account/update`, `acl/get`, `access-list/update` and friends. Anything
+        // else addressed to us is mail for the mediator's own account, which is
+        // stored for its pickup.
+        //
+        // Telling them apart on the payload rather than a binding type URI is
+        // deliberate: the client sends the bare Trust Task document (that is what
+        // `VtaClient`'s TSP arm packs — the task document, not a `{type,
+        // document}` wrapper), so there is no envelope tag to switch on. A
+        // document that parses as a Trust Task *and* names a type the mediator
+        // serves is unambiguous; everything else falls through unchanged.
         TspMessageType::Direct | TspMessageType::Control => {
+            if let Some(doc) = trust_tasks::parse_if_served(&unpacked.payload) {
+                return dispatch_tsp_trust_task(state, session, &meta.sender, doc).await;
+            }
             deliver_tsp_local(state, session, raw).await
         }
     }
+}
+
+/// Answer a management Trust Task that arrived over TSP.
+///
+/// The mediator's management surface is one core
+/// ([`trust_tasks::consume`]) with a wrapper per transport; this is the TSP
+/// wrapper. It exists so a **TSP-only deployment is not a second-class one**:
+/// without it a client cannot set its own account ACL over any transport, since
+/// the DIDComm dispatcher (`MessageType::process`) is the only other way in and
+/// takes a DIDComm `Message`.
+///
+/// `sender_vid` is the envelope sender, which the caller has already proven:
+/// `direct::unpack` verified an Ed25519 signature over envelope‖ciphertext
+/// against the key resolved from that VID's DID document, and opened the payload
+/// with HPKE-Auth, which binds the sender's static key too. Two independent
+/// proofs — the same standing the DIDComm path gets from authcrypt, which is
+/// what lets the handlers authorise against it unchanged.
+///
+/// The reply is sealed back to the sender and delivered through the ordinary
+/// local-delivery path, so it reaches a connected client on its existing pickup
+/// socket. No second socket, and no new delivery mechanism.
+#[cfg(feature = "tsp")]
+async fn dispatch_tsp_trust_task(
+    state: &SharedData,
+    session: &Session,
+    sender_vid: &str,
+    doc: trust_tasks_rs::TrustTask<serde_json::Value>,
+) -> Result<InboundMessageResponse, MediatorError> {
+    let now_secs = state.clock.unix_secs();
+
+    // The sender VID is the framework identity; TSP VIDs carry no key fragment,
+    // so it is already the shape `consume` wants.
+    let Some(response) = trust_tasks::consume(doc, state, session, sender_vid, now_secs).await?
+    else {
+        // A ping identity mismatch emits nothing — same as the DIDComm path.
+        return Ok(InboundMessageResponse::Stored(
+            affinidi_messaging_sdk::messages::sending::InboundMessageList::default(),
+        ));
+    };
+
+    let identity = state.tsp_identity().await?;
+    let recipient = resolve_tsp_vid(state, sender_vid, &session.session_id).await?;
+
+    let payload = serde_json::to_vec(&response).map_err(|e| {
+        tsp_problem(
+            session,
+            37,
+            "message.tsp.trust_task.serialize",
+            format!("could not serialise the Trust Task response: {e}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )
+    })?;
+
+    let packed = affinidi_tsp::message::direct::pack(
+        &payload,
+        affinidi_tsp::MessageType::Direct,
+        &identity.vid,
+        sender_vid,
+        &identity.signing_key,
+        &identity.decryption_key,
+        &recipient.encryption_key,
+    )
+    .map_err(|e| {
+        tsp_problem(
+            session,
+            37,
+            "message.tsp.trust_task.seal",
+            format!("could not seal the Trust Task response: {e}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )
+    })?;
+
+    // Delivered as any other local message: `deliver_opaque` applies the
+    // recipient's own access-list against the mediator as sender, then stores +
+    // live-streams. A client that can reach us to ask can receive the answer.
+    deliver_opaque(state, session, sender_vid, &identity.vid, &packed.bytes).await
 }
 
 /// Deliver a TSP message to the local recipient named in *its own envelope*:
