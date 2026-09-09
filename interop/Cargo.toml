@@ -5,11 +5,11 @@
 # `cargo` invocations never build it and tsp_sdk's dependency graph never has to
 # co-resolve with the workspace.
 #
-# Prerequisite: a checkout of the reference's `rev3` branch at ../../tsp-sdk-rev3
-# (i.e. ~/devel/tsp-sdk-rev3, sibling of this repo). Unlike the published
-# 0.9.0-alpha2, it builds without the `resolve` feature as-is — no patches. It
-# does need a newer toolchain than the workspace pin, so run it with
-# `cargo +stable run`. See interop/README.md.
+# The reference comes from crates.io. tsp_sdk 0.10.0 is the first release to
+# implement Rev 3, so there is no longer a local checkout to prepare and no
+# patches to apply — the earlier 0.9.0-alpha2 needed three, and the rev3 branch
+# needed a sibling clone. It does need a newer toolchain than the workspace pin,
+# so run it with `cargo +stable run`. See interop/README.md.
 [package]
 name = "tsp-interop"
 version = "0.0.0"
@@ -20,10 +20,12 @@ publish = false
 
 [dependencies]
 # affinidi-tsp from this repo (picks up local edits).
-affinidi-tsp = { path = "../crates/messaging/affinidi-tsp", default-features = false }
+affinidi-tsp = { path = "../crates/messaging/affinidi-tsp", default-features = false, features = ["pq"] }
 # The ToIP reference, built WITHOUT `resolve` (no didwebvh diamond) so it can
-# share one dependency graph with affinidi-tsp.
-tsp_sdk = { path = "../../tsp-sdk-rev3/tsp_sdk", default-features = false, features = ["serialize"] }
+# share one dependency graph with affinidi-tsp. `nacl` is the sealed box and
+# `pq` the post-quantum suite; both are off in a default-features = false build
+# and both are scheme coverage we now have on our side.
+tsp_sdk = { version = "0.10", default-features = false, features = ["serialize", "nacl", "pq"] }
 ed25519-dalek = { version = "3", features = ["rand_core"] }
 x25519-dalek = { version = "3", features = ["static_secrets"] }
 rand_core = { version = "0.6", features = ["getrandom"] }

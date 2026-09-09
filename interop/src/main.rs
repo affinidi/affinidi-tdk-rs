@@ -1,12 +1,21 @@
-//! TSP interop experiment: affinidi-tsp <-> tsp_sdk 0.9.0-alpha2
+//! TSP interop harness: affinidi-tsp <-> tsp_sdk 0.10.0 (Rev 3)
 //!
 //! Generates ONE set of raw Ed25519 + X25519 keypairs and feeds the SAME raw
-//! bytes to both libraries, then attempts a Direct-message round-trip both
+//! bytes to both libraries, then round-trips every message type in both
 //! directions.
+//!
+//! The post-quantum case is the exception and uses the specification's own
+//! published `pq_alice`/`pq_bob` instead of fresh keys. Generating an ML-DSA-65
+//! key pair and a hybrid KEM key pair here would mean adding both algorithms to
+//! the harness as dependencies, and the published identities are better
+//! evidence anyway: a third party fixed them, so agreement is agreement with
+//! the specification rather than with whichever library generated the keys.
 
 use affinidi_tsp::message::control::ControlMessage;
 use affinidi_tsp::message::direct as atsp;
 use affinidi_tsp::message::routed as artd;
+use affinidi_tsp::crypto::{hpke_pq, ml_dsa};
+use affinidi_tsp::message::direct::{DecryptionKey, VerifyingKey};
 use affinidi_tsp::message::MessageType;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use ed25519_dalek::SigningKey;
@@ -62,8 +71,62 @@ fn owned_vid(id: &str, k: &Keys) -> OwnedVid {
     serde_json::from_str(&s).expect("OwnedVid deserialize")
 }
 
+/// The specification's published post-quantum identities (Rev 3 Appendix A),
+/// read from the same fixture the crate's vector suite uses.
+struct PqKeys {
+    id: String,
+    sign_sk: Box<[u8; ml_dsa::SK_LEN]>,
+    sign_pk: Box<[u8; ml_dsa::PK_LEN]>,
+    enc_sk: Box<[u8; hpke_pq::SK_LEN]>,
+    enc_pk: Box<[u8; hpke_pq::PK_LEN]>,
+    raw: serde_json::Value,
+}
+
+fn pq_keys(name: &str) -> PqKeys {
+    const FIXTURE: &str =
+        include_str!("../../crates/messaging/affinidi-tsp/tests/vectors/rev3.json");
+    let json: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture parses");
+    let id = json["identifiers"][name].clone();
+    let field = |k: &str| -> Vec<u8> {
+        Base64UrlUnpadded::decode_vec(id[k].as_str().expect("field present")).expect("base64url")
+    };
+    let sized = |v: Vec<u8>, n: usize| -> Box<[u8]> {
+        assert_eq!(v.len(), n, "{name}: unexpected key length");
+        v.into_boxed_slice()
+    };
+    PqKeys {
+        id: id["id"].as_str().expect("id").to_string(),
+        sign_sk: sized(field("skS"), ml_dsa::SK_LEN).try_into().unwrap(),
+        sign_pk: sized(field("pkS"), ml_dsa::PK_LEN).try_into().unwrap(),
+        enc_sk: sized(field("skE"), hpke_pq::SK_LEN).try_into().unwrap(),
+        enc_pk: sized(field("pkE"), hpke_pq::PK_LEN).try_into().unwrap(),
+        raw: id,
+    }
+}
+
+/// The tsp_sdk side of a post-quantum identity.
+///
+/// Same shape as [`owned_vid`] plus the two key-type tags, which are what tell
+/// the reference to use the hybrid KEM and ML-DSA-65 — §8.2.1 selects the KEM
+/// from the recipient VID's key type, so without these the same bytes would be
+/// read as X25519.
+fn owned_vid_pq(k: &PqKeys) -> OwnedVid {
+    let json = serde_json::json!({
+        "id": k.id,
+        "transport": "tcp://127.0.0.1:1",
+        "sigKeyType": k.raw["sigKeyType"],
+        "encKeyType": k.raw["encKeyType"],
+        "publicSigkey": k.raw["pkS"],
+        "publicEnckey": k.raw["pkE"],
+        "sigkey": k.raw["skS"],
+        "enckey": k.raw["skE"],
+    });
+    let s = serde_json::to_string(&json).expect("json to_string");
+    serde_json::from_str(&s).expect("post-quantum OwnedVid deserialize")
+}
+
 fn main() {
-    println!("=== TSP interop: affinidi-tsp vs tsp_sdk 0.9.0-alpha2 ===\n");
+    println!("=== TSP interop: affinidi-tsp vs tsp_sdk 0.10.0 (Rev 3) ===\n");
 
     let alice = gen_keys();
     let bob = gen_keys();
@@ -638,11 +701,91 @@ fn main() {
         results.push(("Cancel R->A", ok));
     }
 
+    // ================= POST-QUANTUM =================
+    //
+    // The pairing that makes this worth running: our hand-written hybrid-KEM
+    // and ML-DSA-65 path against the reference's, over identities neither of us
+    // generated. The vector suite already proves we can *read* the reference's
+    // post-quantum bytes; this proves it can read ours, which no published
+    // vector can establish because HPKE seals with fresh randomness.
+    println!("\n========== POST-QUANTUM ==========");
+    {
+        let pq_alice = pq_keys("pq_alice");
+        let pq_bob = pq_keys("pq_bob");
+        let pq_alice_vid = owned_vid_pq(&pq_alice);
+        let pq_bob_vid = owned_vid_pq(&pq_bob);
+
+        println!("--- A->R: affinidi pack_pq -> tsp_sdk open ---");
+        let packed = atsp::pack_pq(
+            payload,
+            MessageType::Direct,
+            &pq_alice.id,
+            &pq_bob.id,
+            &pq_alice.sign_sk,
+            &pq_bob.enc_pk,
+        )
+        .expect("affinidi pack_pq");
+        let ok = {
+            let mut buf = packed.bytes.clone();
+            match tsp_sdk::crypto::open(&pq_bob_vid, pq_alice_vid.vid(), &mut buf) {
+                Ok((Payload::Content(c), ct, st)) => {
+                    println!("  RESULT: OK crypto={ct:?} sig={st:?}");
+                    c == payload
+                }
+                Ok((other, _, _)) => {
+                    println!("  RESULT: FAIL unexpected payload {other:?}");
+                    false
+                }
+                Err(e) => {
+                    println!("  RESULT: FAIL -> {e:?}");
+                    false
+                }
+            }
+        };
+        results.push(("PQ Direct A->R", ok));
+
+        println!("--- R->A: tsp_sdk seal -> affinidi unpack_with ---");
+        let sealed = tsp_sdk::crypto::seal(
+            &pq_alice_vid,
+            pq_bob_vid.vid(),
+            Payload::Content(payload.as_slice()),
+        )
+        .expect("tsp_sdk post-quantum seal");
+        let ok = match atsp::unpack_with(
+            &sealed,
+            DecryptionKey::MlKem768X25519(&pq_bob.enc_sk),
+            VerifyingKey::MlDsa65(&pq_alice.sign_pk),
+        ) {
+            Ok(u) => {
+                println!(
+                    "  RESULT: OK kind={:?} confidential={}",
+                    u.message_type, u.confidential
+                );
+                u.payload == payload && u.sender == pq_alice.id && u.receiver == pq_bob.id
+            }
+            Err(e) => {
+                println!("  RESULT: FAIL -> {e:?}");
+                false
+            }
+        };
+        results.push(("PQ Direct R->A", ok));
+
+        // The two libraries must disagree about a classical key here: reading a
+        // hybrid ciphertext as X25519 splits `enc` at 32 bytes instead of 1120,
+        // and that has to fail rather than produce something.
+        let classical = atsp::unpack(&sealed, &bob.enc_sk, &alice.sign_pk);
+        println!(
+            "  post-quantum bytes under classical keys: {}",
+            if classical.is_err() { "refused" } else { "ACCEPTED (wrong)" }
+        );
+        results.push(("PQ not read as classical", classical.is_err()));
+    }
+
     // ================= SUMMARY =================
     println!("\n========== INTEROP GATE SUMMARY ==========");
     let mut all_ok = true;
     for (name, ok) in &results {
-        println!("  {:<14} {}", name, if *ok { "PASS" } else { "FAIL" });
+        println!("  {:<24} {}", name, if *ok { "PASS" } else { "FAIL" });
         all_ok &= ok;
     }
     println!(

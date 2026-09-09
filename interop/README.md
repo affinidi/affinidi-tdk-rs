@@ -1,53 +1,69 @@
 # TSP interop harness
 
 A fast, local round-trip harness between **`affinidi-tsp`** (this repo) and the
-ToIP reference **`tsp_sdk` 0.9.0-alpha2**. It feeds the *same* raw Ed25519 +
-X25519 keys to both libraries and attempts a Direct-message round-trip both
-directions, printing the wire bytes and the pass/fail per direction.
+ToIP reference **`tsp_sdk` 0.10.0**, the reference's first Rev 3 release. It
+feeds the *same* raw keys, VIDs and payload to both libraries, round-trips every
+message type in both directions, and prints a pass/fail gate.
 
 ```
 cd interop
-cargo run
+cargo +stable run
 ```
 
-This is a **developer-only** harness: it is its own standalone Cargo workspace
+`+stable` is not optional: the harness needs a newer toolchain than the
+workspace pin in `rust-toolchain.toml`.
+
+This is a **developer-only** harness. It is its own standalone Cargo workspace
 (see the empty `[workspace]` in `Cargo.toml`), so the main workspace and CI never
 build it, and `tsp_sdk`'s dependency graph never has to co-resolve with the
 workspace.
 
-## Prerequisite: `~/devel/tsp-sdk` (a patched tsp_sdk checkout)
+## No prerequisites
 
-The harness expects `tsp_sdk` 0.9.0-alpha2 at `../../tsp-sdk` (i.e.
-`~/devel/tsp-sdk`, a sibling of this repo). The published alpha does **not** build
-as-is (see `docs/tsp/interop.md`); apply these three minimal, behaviour-preserving
-patches so it builds **without** the `resolve` feature — which is what removes the
-didwebvh/`affinidi-secrets-resolver` dependency diamond and lets it share one
-dependency graph with `affinidi-tsp`:
+The reference comes from crates.io. There is nothing to clone and nothing to
+patch — a change from every earlier revision of this harness:
 
-1. **Relax the exact serde pin.** In `Cargo.toml`, change `serde = "=1.0.219"` to
-   `serde = "1.0"`.
+- 0.9.0-alpha2 (Rev 2) did not build without its `resolve` feature and needed
+  three source patches, applied by hand to a sibling checkout.
+- The Rev 3 work was done against the reference's `rev3` branch, which built
+  clean but still had to be cloned to `../../tsp-sdk-rev3`.
+- 0.10.0 builds with `default-features = false, features = ["serialize", "nacl",
+  "pq"]` as published.
 
-2. **Relocate the JWK key-type enums out of the `resolve`-gated module.** The core
-   `definitions` module uses `Curve`/`KeyType`/`Algorithm`/`Usage`, but they live
-   in `src/vid/did/web.rs`, which is `#[cfg(feature = "resolve")]`. Move those four
-   enums (and their `From<VidEncryptionKeyType>` / `From<VidSignatureKeyType>`
-   impls) into a new, non-gated `src/definitions/jwk.rs`; add `pub mod jwk;` to
-   `src/definitions/mod.rs` and repoint its imports to `jwk::…`; in
-   `src/vid/did/web.rs` import them back via `use crate::definitions::jwk::…`.
+`nacl` is the libsodium sealed box and `pq` the post-quantum suite; both are off
+in a `default-features = false` build and both are coverage this crate now has.
 
-3. **Gate `store` behind `resolve`.** `src/store.rs` imports
-   `vid::resolve::verify_vid_offline`, so in `src/lib.rs` gate both `mod store;`
-   and `pub use store::{Aliases, SecureStore};` with `#[cfg(feature = "resolve")]`
-   (`async` already implies `resolve`, so async builds are unaffected).
+## What it covers
 
-With those, `cargo check --no-default-features --features serialize` in
-`~/devel/tsp-sdk` succeeds.
+19 cases, all passing:
 
-## What it currently shows
+| | |
+|---|---|
+| Direct (HPKE-Base) | both directions |
+| Direct, 2 MiB payload | both directions |
+| Direct (sealed box, §8.3) | both directions |
+| Routed | both directions |
+| Nested | both directions |
+| Control — invite / accept / cancel | both directions |
+| Direct, post-quantum | both directions, plus a negative case |
 
-The **CESR framing is byte-perfect** vs the reference (identical envelope, same
-204-byte length, same `0xf8` lead). The remaining gap is the **HPKE crypto**:
-affinidi-tsp's hand-rolled HPKE derives a different key/nonce than the `hpke`
-crate `tsp_sdk` uses, so cross-implementation AEAD open fails in both directions
-(each library's own self-round-trip passes). Closing that is the last step to a
-green interop round-trip.
+The post-quantum case uses the specification's published `pq_alice`/`pq_bob`
+rather than generated keys — see [`docs/tsp/interop.md`](../docs/tsp/interop.md)
+for why, and for what it adds over the vector suite. Its negative case asserts
+that a post-quantum ciphertext offered classical keys is refused rather than
+misread.
+
+## What the harness is for
+
+It catches what the specification's own vectors cannot. A published vector fixes
+one direction: it proves this crate can *read* bytes the reference produced.
+Nothing in a vector can pin an encoder, because HPKE seals with fresh randomness
+and no two runs produce the same message. Only a live pairing shows that the
+reference can read what we write.
+
+The converse is also true, which is why both exist. The harness packs with one
+implementation and unpacks with the other, so a *shared* misreading of the spec
+passes it — both sides agree, and nothing external says whether the agreement is
+right. That is not hypothetical: the accept's two digests were in the wrong
+order on this branch until the spec text settled it, and an interop run between
+two implementations making the same choice would have been green.

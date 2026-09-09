@@ -445,17 +445,17 @@
     <div class="status-cell">
       <div class="status-label">Spec</div>
       <div class="status-value"><span class="dot dot-behave"></span>PR #63 open</div>
-      <div class="status-note">trustoverip/tswg-tsp-specification &middot; proposed as the R1 candidate. Appendix A test vectors now published. Two questions open from our review: the version field's layout, and one truncated vector.</div>
+      <div class="status-note">trustoverip/tswg-tsp-specification &middot; proposed as the R1 candidate. Every defect we reported is fixed. One question outstanding: the version field's layout, agreed in principle on 8&nbsp;September but not yet edited into the text.</div>
     </div>
     <div class="status-cell">
       <div class="status-label">Reference SDK</div>
-      <div class="status-value"><span class="dot dot-behave"></span>On <code>rev3</code>, one step behind</div>
-      <div class="status-note">openwallet-foundation-labs/tsp &middot; interoperates with us 14/14. Still emits <code>YTSP-AAB</code> and discards MINOR, so it has taken neither version change; harmless in both directions because neither side gates on MINOR.</div>
+      <div class="status-value"><span class="dot dot-safe"></span>Released 0.10.0</div>
+      <div class="status-note">openwallet-foundation-labs/tsp &middot; the first Rev 3 release, 8&nbsp;September, on crates.io. Interoperates with us 19/19. Emits <code>YTSP-ABA</code> and discards MINOR, so it has not taken the version change; harmless in both directions because neither side gates on MINOR.</div>
     </div>
     <div class="status-cell">
       <div class="status-label">Us</div>
-      <div class="status-value"><span class="dot dot-safe"></span>Rev 3, 14/14 interop</div>
-      <div class="status-note">Branch <code>tsp-rev3</code> &middot; every planned area landed, both PKAE schemes implemented, and eight of the nine spec vectors passing &mdash; the ninth is truncated upstream. Two conformance defects found and fixed along the way.</div>
+      <div class="status-value"><span class="dot dot-safe"></span>Rev 3, 19/19 interop</div>
+      <div class="status-note">Branch <code>tsp-rev3</code> &middot; every planned area landed, both PKAE schemes and post-quantum implemented, and all ten spec vectors passing. Two conformance defects found and fixed along the way.</div>
     </div>
   </div>
 
@@ -476,7 +476,7 @@
 
     <div class="col">
       <div class="lede">
-        <p>All sixteen areas in the plan landed, and the branch interoperates 14/14 with the reference across direct, routed, nested, 2&nbsp;MiB, invite, accept and cancel. The rest of this page is the analysis that produced that plan, and remains accurate as a description of Rev 3. What follows is what turned up once the work was underway &mdash; none of it visible from reading the diff.</p>
+        <p>All sixteen areas in the plan landed, and the branch interoperates 19/19 with the released reference across direct, routed, nested, 2&nbsp;MiB, the sealed box, invite, accept, cancel and post-quantum. The rest of this page is the analysis that produced that plan, and remains accurate as a description of Rev 3. What follows is what turned up once the work was underway &mdash; none of it visible from reading the diff.</p>
       </div>
 
       <h3>Two conformance defects, found by reading the spec against the code</h3>
@@ -495,13 +495,15 @@
 
       <h3>Two questions raised upstream</h3>
       <ul class="plain">
-        <li><strong>The version field.</strong> Rev 3 as proposed kept Rev 2's <code>YTSP-AAB</code> across a wire-breaking revision, leaving the two indistinguishable at the envelope and a structural probe &mdash; on a field Rev 3 <em>deletes</em> &mdash; as the only discriminator. Raised, and changed upstream to <code>YTSP-ABA</code>. Sam Smith has since questioned the three-component reading itself: under 1&nbsp;character MAJOR and 2&nbsp;characters MINOR, <code>ABA</code> reads as version 64 rather than 2. We now emit <code>YTSP-AAC</code>, which is where that argument lands, ahead of the spec text. It costs nothing to be early: only MAJOR gates processability, MAJOR is the same either way, and the published vectors still verify because a message's digest covers the version bytes <em>it</em> carries.</li>
-        <li><strong>Five truncated values.</strong> <code>control-rfd</code> is 393 characters, a length base64 cannot produce &mdash; and it is not alone. Scanning the appendix found the same three-character loss in <code>pq_alice</code>'s ML-DSA signing key, the post-quantum vector, and two long-form DIDs whose <code>did:peer:4</code> self-certifying hash no longer matches the document they carry. That last check is independent of any base64 reasoning: six of the eight long forms hash correctly to the identifier they are printed under, and only those two do not. In the source, 688 of the 692 continuation lines are 68 characters and the four that are 65 fall in four of the five. Reported, and <code>control-rfd</code> is pinned in our suite as an assertion that starts failing when it is republished.</li>
+        <li><strong>The version field &mdash; accepted, not yet written down.</strong> Rev 3 as proposed kept Rev 2's <code>YTSP-AAB</code> across a wire-breaking revision, leaving the two indistinguishable at the envelope and a structural probe &mdash; on a field Rev 3 <em>deletes</em> &mdash; as the only discriminator. Raised, and changed upstream to <code>YTSP-ABA</code>. Sam Smith then questioned the three-component reading itself: under 1&nbsp;character MAJOR and 2&nbsp;characters MINOR, <code>ABA</code> reads as version 64 rather than 2. We moved to <code>YTSP-AAC</code> ahead of the spec text, and on 8&nbsp;September the editor agreed &mdash; &ldquo;I'm fine with MAJOR.MINOR only&hellip; note that this will cause the test vectors to update one more time&rdquo;. &sect;9.1 still says <code>ABA</code> and still reads the field as semver, so the bet stands and one more vector regeneration is coming. It costs nothing to be early: only MAJOR gates processability, MAJOR is the same either way, and the published vectors still verify because a message's digest covers the version bytes <em>it</em> carries.</li>
+        <li><strong>Five truncated values &mdash; fixed.</strong> <code>control-rfd</code> was 393 characters, a length base64 cannot produce &mdash; and it was not alone. Scanning the appendix found the same three-character loss in <code>pq_alice</code>'s ML-DSA signing key, the post-quantum vector, and two long-form DIDs whose <code>did:peer:4</code> self-certifying hash no longer matched the document they carry. That last check is independent of any base64 reasoning: six of the eight long forms hashed correctly to the identifier they are printed under, and only those two did not. All five are repaired as of spec commit <code>66a1580</code>: every vector now decodes, all eight long forms hash, and the fixture is re-extracted and cross-checked against the reference's own <code>rev3.json</code>. Two further reports landed with them &mdash; the KEM spelled <code>X25519MLKEM768</code> where IANA has <code>0x647a</code> as X-Wing, now <code>MLKEM768-X25519</code>, and two MTI citations that did not render.</li>
       </ul>
 
-      <h3>Deliberately not built</h3>
+      <h3>Post-quantum, once there was something to check it against</h3>
       <ul class="plain">
-        <li><strong>Post-quantum &mdash; the <code>X25519MLKEM768</code> KEM and ML-DSA-65 signatures.</strong> Blocked on having anything to check against, not on effort. The post-quantum vector does not decode, and neither does <code>pq_alice</code>'s ML-DSA signing key; <code>pq_bob</code>'s encryption secret is a 32-byte seed whose expansion to a 2400-byte ML-KEM decapsulation key is not specified. So a hybrid KEM and a post-quantum signature scheme would ship validated by nothing but agreement with themselves &mdash; which the sealed box just demonstrated is not enough, since three details of <em>that</em> construction are invisible to a round-trip test and only its vectors caught them. Nothing is silently wrong meanwhile: a peer publishing only an ML-KEM key fails cleanly at resolution rather than being misread. ML-DSA's code point <code>1AAQ</code> is also still provisional pending CESR issue&nbsp;#14.</li>
+        <li><strong>Held back, then built.</strong> The <code>MLKEM768-X25519</code> KEM and ML-DSA-65 signatures were blocked on evidence, not effort: the post-quantum vector did not decode, nor did <code>pq_alice</code>'s ML-DSA signing key, and <code>pq_bob</code>'s 32-byte encryption secret had no specified expansion. A hybrid KEM and a signature scheme would have shipped validated by nothing but agreement with themselves &mdash; which the sealed box had just demonstrated is not enough, since three details of <em>that</em> construction are invisible to a round-trip test and only its vectors caught them. All four gaps closed upstream: four truncations repaired, and &sect;8.2.1 gained a sentence saying the 32-byte key <em>is</em> the whole key, a seed <code>DeriveKeyPair</code> expands.</li>
+        <li><strong>What it is checked by.</strong> Behind the <code>pq</code> feature, with <code>crypto::hpke_pq</code>, <code>crypto::ml_dsa</code>, <code>pack_pq</code> and a key-typed <code>unpack_with</code>. The specification's <code>direct-hpke-base-pq</code> vector opens, the seed expansion reproduces both published public keys, and the interop harness round-trips post-quantum against <code>tsp_sdk</code> 0.10.0 in both directions. Three choices here are invisible to a round trip and each is a plausible way to be wrong on the wire: which hybrid &mdash; X-Wing and <code>MLKEM768-X25519</code> share every size, so building the wrong one fails decapsulation with no length mismatch to catch it &mdash; which ML-DSA, and which key expansion.</li>
+        <li><strong>Still not wired above the crate.</strong> <code>ResolvedVid</code>'s keys are <code>[u8;&nbsp;32]</code> and an ML-DSA-65 verifying key is 1952 bytes, so no resolver produces a post-quantum VID and neither the SDK nor the mediator can carry one. <code>1AAQ</code> is also still provisional pending CESR issue&nbsp;#14. Off by default for both reasons; see <code>docs/tsp/post-quantum.md</code>.</li>
       </ul>
     </div>
   </section>
@@ -812,7 +814,7 @@ aad  = version &#8214; VID_sndr &#8214; VID_rcvr</span></pre>
       <div class="phase-num">04</div>
       <div>
         <h3>Spec resync</h3>
-        <p>Reconcile against wherever PR&nbsp;#63 has landed by then, re-point the interop harness at the released <code>tsp-sdk</code>, and get back to a green matrix in both directions across all four message types. Update <code>docs/tsp/interop.md</code>, which currently claims full interoperability against 0.9.0-alpha2.</p>
+        <p><strong>Done.</strong> The fixture is re-extracted from spec commit <code>66a1580</code> and cross-checked against the reference's own <code>rev3.json</code>; the harness depends on the published <code>tsp_sdk</code> 0.10.0 rather than a sibling checkout, with no patches and nothing to clone; and the matrix is green in both directions across every message type plus post-quantum, 19/19. <code>docs/tsp/interop.md</code> is rewritten.</p>
         <div class="phase-mirror">mirrors tsp-sdk #336</div>
       </div>
     </div>

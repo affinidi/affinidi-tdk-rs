@@ -128,9 +128,10 @@ Bug fixes found on the way, both latent on `main`:
 Conformance:
 
 - **The specification's own test vectors now run as a test suite**
-  (`tests/spec_vectors.rs`, fixture lifted from spec commit `c80b0e4`). **Eight
-  of the nine pass** — every vector except `control-rfd`, which does not decode
-  at all because it is truncated upstream (see below).
+  (`tests/spec_vectors.rs`, fixture extracted from spec commit `66a1580` and
+  checked value by value against `tsp_sdk` 0.10.0's own
+  `tsp_sdk/test_vectors/rev3.json`, which is the file the appendix was rendered
+  from). **All ten pass**, including the post-quantum vector.
 
   The two sealed-box vectors are the reason that scheme is worth having tested
   rather than merely written: a sealed box is non-deterministic, so it cannot be
@@ -147,15 +148,51 @@ Conformance:
   validates the whole §7.2.1 derivation — version, both VIDs, payload fields,
   digest slot dummied — against a value this crate had no part in producing.
 
-- **Found a defect in a published vector.** `control-rfd`'s message is 393
-  characters, a length base64 cannot produce. Every TSP message is
-  `3 + count*3 + 72` bytes and every other vector in the appendix satisfies that
-  identity exactly; this one is 3 characters short of its own declared length.
-  Reported upstream; asserted as a defect in the test suite so that it starts
-  failing when the vector is republished.
+- **Found five defects in the published appendix, and all five are now fixed
+  upstream.** `control-rfd`'s message was 393 characters, a length base64 cannot
+  produce; the scan that followed found the same three-character loss in
+  `pq_alice`'s ML-DSA signing key, in the post-quantum vector, and in two long
+  forms whose `did:peer:4` self-certifying hash no longer matched the document
+  they carried. Every TSP message is its `-E` count code, the content that count
+  declares, and a signature group that declares its own length the same way;
+  every intact vector satisfies that identity exactly.
 
-Interop: 14/14 against the ToIP reference implementation's `rev3` branch, both
-directions, across direct, routed, nested, 2 MiB, invite, accept and cancel.
+  Reported against [spec PR #63][pr63] and repaired there. The suite now asserts
+  the identity across all ten vectors rather than the eight that decoded, and
+  `control-rfd` carries its real check: a cancel names the relationship-forming
+  message it ends by that message's digest, and carries no nonce.
+
+- **Post-quantum is implemented, behind the `pq` feature** (§8.1, §8.2.1):
+  HPKE-Base over the `MLKEM768-X25519` hybrid KEM (`crypto::hpke_pq`) and
+  ML-DSA-65 signatures under the code `1AAQ` (`crypto::ml_dsa`), with
+  `direct::pack_pq` and a key-typed `direct::unpack_with`. `unpack` is unchanged
+  and still means Ed25519 and X25519.
+
+  It was held back until now for want of anything to check it against, and that
+  is what changed: three of the four things missing were the truncated values
+  above, and the fourth was whether the published 32-byte encryption key was a
+  whole key. Rev 3 gained a sentence on 8 September saying it is — a seed
+  `DeriveKeyPair` expands — and the suite now verifies that expansion reproduces
+  each identity's published 1216-byte public key.
+
+  Three choices here are invisible to a round-trip test and each is a plausible
+  way to be wrong on the wire: which hybrid (X-Wing and `MLKEM768-X25519` share
+  every size, so building the wrong one fails decapsulation with no length
+  mismatch to point at), which ML-DSA (pure, prehash and `sign_internal` all
+  produce a 3309-byte signature that verifies against itself), and which key
+  expansion. The vector settles all three.
+
+  **The VID model does not carry these keys** — `ResolvedVid`'s are `[u8; 32]`
+  and an ML-DSA-65 verifying key is 1952 bytes — so nothing above this crate can
+  send or receive one yet, and `1AAQ` is still provisional pending CESR issue
+  #14. See `docs/tsp/post-quantum.md`. Off by default for both reasons.
+
+Interop: **19/19 against the released `tsp_sdk` 0.10.0**, the reference's first
+Rev 3 release — both directions across direct, routed, nested, 2 MiB, the sealed
+box, invite, accept, cancel and post-quantum, plus a negative case asserting that
+a post-quantum ciphertext offered classical keys is refused rather than misread.
+The harness no longer needs a local checkout of the reference or any patches to
+it; see `docs/tsp/interop.md`.
 
 ## 31st August 2026 (0.1.15)
 
