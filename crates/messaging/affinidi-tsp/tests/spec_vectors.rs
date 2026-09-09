@@ -237,69 +237,62 @@ fn control_rfa_echoes_the_invite() {
     );
 }
 
-/// The `control-rfd` vector as published is truncated, and cannot be decoded by
-/// anyone.
+/// The relationship cancel, and the two fields Rev 3 changed about it.
 ///
-/// Its `message` is 393 characters — a length base64 cannot produce, since 4
-/// characters carry 3 bytes and a remainder of 1 is impossible. In the spec
-/// source the fourth line of the block is 65 characters where every other line
-/// in every other vector is 68, so three characters were lost in generation or
-/// editing.
+/// A cancel names the relationship it ends by the digest of the message that
+/// formed it, and carries no nonce — Rev 2 had one, for the case where the
+/// digest was absent, and Rev 3 removed both the case and the nonce.
 ///
-/// The arithmetic says exactly how many. Every TSP message is
-/// `3 + count*3 + 72` bytes: the `-E` count code, the content it declares, and
-/// the signature group (`-C` plus its 23 quadlets). This vector's `-E` declares
-/// 74 quadlets, so it should be 297 bytes / 396 characters. Every other vector
-/// in the appendix satisfies that identity exactly; this one is 3 characters
-/// short of it.
+/// The cross-vector check is what makes this a cancel of *this* relationship
+/// rather than a well-formed message in isolation: its echoed digest must be
+/// the `control-rfi-direct` vector's SAID, the same value the accept echoes.
 ///
-/// So this test asserts the defect rather than working around it. When the
-/// specification republishes the vector it will start failing, which is the
-/// signal to replace it with the real check — the assertions are written out
-/// below ready for that, since they are the point of the vector: a cancel
-/// carries one digest naming the relationship it ends, and no nonce, Rev 3
-/// having removed the one it used to have.
-///
-/// Reported upstream against PR #63, where it turned out not to be alone:
-/// scanning the whole appendix found five values three characters short —
-/// this one, `pq_alice`'s ML-DSA signing key, the post-quantum vector, and two
-/// long-form DIDs whose `did:peer:4` self-certifying hash no longer matches the
-/// document they carry. Only this one is in our fixture's way.
+/// This vector was truncated when the appendix was first published — 393
+/// characters, a length base64 cannot produce — and this crate carried a test
+/// asserting the defect until it was fixed. Reported against PR #63, where it
+/// turned out not to be alone: five values were three characters short, this
+/// one, `pq_alice`'s ML-DSA signing key, the post-quantum vector, and two long
+/// forms whose `did:peer:4` hash no longer matched the document they carried.
+/// All five are repaired as of spec commit `66a1580`, and the fixture check in
+/// `every_vector_has_a_self_consistent_length` below now covers the whole
+/// appendix rather than the part of it that decoded.
 #[test]
-fn control_rfd_vector_is_truncated_upstream() {
+fn control_rfd() {
     let v = Vectors::load();
-    let message = v.field("control-rfd", "message");
+    let invite = v.unpack("control-rfi-direct");
+    let cancel = v.unpack("control-rfd");
+    v.assert_parties("control-rfd", &cancel);
+    assert_eq!(cancel.message_type, MessageType::Control);
 
+    let control = cancel.control.as_ref().expect("a cancel is a control");
+    assert_eq!(control.control_type, ControlType::RelationshipCancel);
     assert_eq!(
-        message.len() % 4,
-        1,
-        "if this vector now decodes, the spec has republished it — restore the real check: \
-         unpack it, assert ControlType::RelationshipCancel, assert its `reply` equals the \
-         control-rfi-direct vector's thread digest, and assert `nonce` is None"
+        control.reply,
+        Some(invite.thread_digest),
+        "the cancel names the relationship-forming message it ends"
     );
-
-    // The length it should have, from the count its own envelope declares.
-    let declared = qb64(&message[..4]);
-    let count = (u32::from_be_bytes([0, declared[0], declared[1], declared[2]]) & 0xFFF) as usize;
-    let expected_bytes = 3 + count * 3 + 72;
-    assert_eq!(expected_bytes, 297);
-    assert_eq!(
-        expected_bytes * 4 / 3,
-        396,
-        "the vector should be 396 characters; it is {}",
-        message.len()
+    assert!(
+        control.nonce.is_none(),
+        "Rev 3 removed the cancel's nonce, which existed only for the case where the digest \
+         was absent"
     );
+    assert!(control.route.is_empty(), "a cancel has no reply path");
+    assert!(control.referral.is_none(), "a cancel introduces nothing");
 }
 
-/// The identity the truncation was caught by, applied to every vector that is
-/// intact: a TSP message is its `-E` count code, the content that count
-/// declares, and a fixed-size signature group.
+/// The identity the truncation was caught by, now applied to every vector in
+/// the appendix: a TSP message is its `-E` count code, the content that count
+/// declares, and a signature group that declares its own length the same way.
 ///
-/// Worth asserting across the whole appendix rather than only where it failed.
-/// It is a cheap check that catches a whole class of transcription damage, and
-/// it found a real defect in a published vector on first contact.
+/// Cheap, and it catches a whole class of transcription damage — it found a
+/// real defect in a published vector on first contact, and the scan that
+/// followed found four more. Written against both count codes rather than a
+/// fixed 72-byte tail, so it covers the post-quantum vector too: an ML-DSA-65
+/// signature group is 3318 bytes where an indexed Ed25519 one is 72, and a test
+/// that assumed the smaller would simply skip the vector most likely to be
+/// mis-transcribed.
 #[test]
-fn every_intact_vector_has_a_self_consistent_length() {
+fn every_vector_has_a_self_consistent_length() {
     let v = Vectors::load();
     let names = [
         "direct-sealed-box",
@@ -307,17 +300,33 @@ fn every_intact_vector_has_a_self_consistent_length() {
         "direct-signed-only",
         "control-rfi-direct",
         "control-rfa-direct",
+        "control-rfd",
         "control-rfi-sealed-box",
         "nested-direct",
         "routed",
+        "direct-hpke-base-pq",
     ];
+    // A CESR count code is four characters: two of identifier, two of count in
+    // base64. Both `-E` and `-C` are counted in quadlets, each three bytes.
+    fn count_at(bytes: &[u8], at: usize) -> usize {
+        (u32::from_be_bytes([0, bytes[at], bytes[at + 1], bytes[at + 2]]) & 0xFFF) as usize
+    }
+
     for name in names {
-        let bytes = qb64(&v.field(name, "message"));
-        let count = (u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]) & 0xFFF) as usize;
+        let raw = v.field(name, "message");
+        assert_eq!(
+            raw.len() % 4,
+            0,
+            "{name}: {} characters, which base64 cannot produce",
+            raw.len()
+        );
+        let bytes = qb64(&raw);
+        let signable = 3 + count_at(&bytes, 0) * 3;
+        let signature = 3 + count_at(&bytes, signable) * 3;
         assert_eq!(
             bytes.len(),
-            3 + count * 3 + 72,
-            "{name}: -E count code + declared content + signature group"
+            signable + signature,
+            "{name}: -E count code + declared content + declared signature group"
         );
     }
 }
