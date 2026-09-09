@@ -9,6 +9,38 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
+### Changed
+
+- **`trust-tasks-rs` 0.18 → 0.19 across the messaging family (breaking).**
+  **`affinidi-messaging-sdk` 0.23.0**, **`affinidi-messaging-didcomm-service` 0.7.0**,
+  **`affinidi-messaging-mediator` 0.23.0**, **`affinidi-messaging-test-mediator` 0.6.0**,
+  **`affinidi-tdk` 0.13.0**.
+
+  `trust-tasks-rs` is a **public** dependency of `affinidi-messaging-sdk` — types like
+  `account::update::v0_1::MediatorAcl` appear in its signatures — so moving it changes
+  these crates' APIs even though not a line of their own source did. That is why the bump
+  is a minor rather than a patch, and why `affinidi-tdk` moves with them: it re-exports the
+  SDK, and a consumer reaching `MediatorAcl` through the facade sees the same change.
+
+  These six move together because a **mixed** graph is the failure mode. Two `Cargo.toml`
+  comments in this workspace already record the symptom — `expected MediatorAcl, found a
+  different MediatorAcl` — from the two previous times a stale node survived a move.
+
+  It moves now because that mixed graph escaped the workspace.
+  `verifiable-trust-infrastructure` needs 0.19 for two new room specs and could not take
+  it while `affinidi-messaging-sdk 0.22.0` required 0.18: pinning the consumer at 0.19 put
+  two `trust-tasks-rs` nodes in *its* graph and broke `vta-sdk` on exactly that error.
+  Nothing in the consumer's manifests was wrong and no semver check flags it, because the
+  break arrives through a public dependency — the only fix is here.
+
+  0.19 is additive for everything these crates use: it adds two room spec versions and
+  retires their predecessors, and a retired spec keeps its generated module.
+
+  One pre-existing duplicate is untouched and is a different problem: published `vta-sdk`
+  → `affinidi-tdk 0.11.0` → `affinidi-messaging-sdk 0.21.1` → `trust-tasks-rs 0.17.10`, an
+  older published copy of this workspace's own crate arriving back through a consumer. It
+  compiles because no type crosses that boundary.
+
 ### Added
 
 - **Composed test stack `docker-compose.test.yml` (TI3).** `docker compose -f
