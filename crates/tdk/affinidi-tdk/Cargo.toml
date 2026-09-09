@@ -51,7 +51,21 @@ did-scid = ["dep:did-scid"]
 
 # ── Trust + TSP ──────────────────────────────────────────────────────────
 trust = ["dep:affinidi-trust-lists"]
-tsp = ["dep:affinidi-tsp"]
+# `tsp` has to reach the messaging SDK, not only pull in the TSP crate.
+#
+# Without the second entry a consumer who enables `tsp` on this facade gets
+# `affinidi_tdk::tsp` and a `DidCommTransport` whose inbound stream **drops every
+# TSP frame** — the `#[cfg(not(feature = "tsp"))]` arm of `tsp_to_inbound` logs
+# and returns `None`. Nothing fails to compile and nothing errors at runtime;
+# TSP simply never arrives, which is the hardest shape of bug to find from the
+# outside. The only way to turn it on was to name `affinidi-messaging-sdk`
+# directly alongside the facade and rely on cargo unifying the features, which
+# is exactly the "use the facade OR direct sub-crate deps, not both" the
+# dependency comment below warns against.
+#
+# `?/` so this stays additive: enabling `tsp` without `messaging` does not drag
+# the messaging SDK in, it just says what `tsp` means once something else has.
+tsp = ["dep:affinidi-tsp", "affinidi-messaging-sdk?/tsp"]
 
 [dependencies]
 affinidi-did-resolver-cache-sdk = "0.8"

@@ -474,7 +474,6 @@ fn mediator_endpoint(state: &SharedData) -> String {
                 .find(|s| s.type_.iter().any(|t| t == "DIDCommMessaging"))
                 .and_then(|s| s.service_endpoint.get_uri())
         })
-        .map(|uri| uri.trim_matches('"').to_string())
         .unwrap_or_else(|| state.config.listen_address.clone())
 }
 
