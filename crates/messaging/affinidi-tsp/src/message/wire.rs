@@ -110,6 +110,15 @@ pub const TSP_HPKE_BASE_CIPHERTEXT: u32 = cesr_int("F") as u32;
 /// `B`: Ed25519 signature identifier, used as the leading character of the
 /// *indexed* signature code `B#` (Rev 3 §9.5).
 pub const ED25519_SIGNATURE: u32 = cesr_int("B") as u32;
+/// `AAQ`: fixed-data id for an ML-DSA-65 signature, which renders as the
+/// four-character code `1AAQ` — the `1` is the selector [`encode_fixed_data`]
+/// derives from the payload length, not part of the identifier.
+///
+/// §8.1: 3309 bytes, a multiple of 3, so no lead pad. The code point is
+/// **provisional** — it is the next free code in the master table for genus
+/// `-_AAACAA` and collides with nothing, but CESR issue #14 has not registered
+/// it, so a peer built against a later table may disagree.
+pub const ML_DSA_65_SIGNATURE: u32 = cesr_int("AAQ") as u32;
 /// `A`: fixed-data id for a relationship nonce. Rev 3 §9.2 makes the nonce 128
 /// bits, which puts it under the two-character code `0A`; the code follows from
 /// the payload length in [`encode_fixed_data`].

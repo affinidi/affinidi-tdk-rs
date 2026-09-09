@@ -965,6 +965,114 @@ fn encode_signature_frame(signature: &[u8; SIG_LEN], out: &mut Vec<u8>) {
     wire::encode_indexed_ed25519_signature(SIG_INDEX, signature, out);
 }
 
+/// An outer signature, in whichever scheme the sender's VID signs with.
+///
+/// §8.1 makes this a property of the sender's key type rather than of the
+/// message, so nothing negotiates it and nothing in the envelope declares it —
+/// the CESR code inside the `-K` group is the only thing on the wire that says
+/// which, exactly as the ciphertext code is the only thing that says which
+/// PKAE scheme sealed a message.
+#[derive(Debug, Clone)]
+pub enum Signature {
+    /// A 64-byte Ed25519 signature, carried under the indexed code `B#`.
+    Ed25519([u8; SIG_LEN]),
+    /// A 3309-byte ML-DSA-65 signature, carried under `1AAQ` (provisional).
+    #[cfg(feature = "pq")]
+    MlDsa65(Box<[u8; crate::crypto::ml_dsa::SIG_LEN]>),
+}
+
+/// Decode the signature attachment at `pos`, accepting either scheme.
+///
+/// Same rejection discipline as [`decode_signature_frame`]: an attachment that
+/// will not parse is a rejection, never "this message is unsigned". The extra
+/// care here is that trying a second code after the first fails must not turn a
+/// malformed Ed25519 attachment into a silently unsigned message — so both
+/// attempts start from the same position and a failure of both is an error, not
+/// a fall-through.
+#[cfg(not(feature = "pq"))]
+fn decode_any_signature_frame(data: &[u8], pos: &mut usize) -> Result<Signature, TspError> {
+    decode_signature_frame(data, pos).map(Signature::Ed25519)
+}
+
+#[cfg(feature = "pq")]
+fn decode_any_signature_frame(data: &[u8], pos: &mut usize) -> Result<Signature, TspError> {
+    let start = *pos;
+    match decode_signature_frame(data, pos) {
+        Ok(sig) => Ok(Signature::Ed25519(sig)),
+        Err(ed25519) => {
+            *pos = start;
+            decode_ml_dsa_signature_frame(data, pos)
+                .map(Signature::MlDsa65)
+                // Report the Ed25519 failure, not the ML-DSA one: almost every
+                // message is Ed25519, so that is the error an operator needs,
+                // and "missing 1AAQ" would describe a code the sender never
+                // meant to write.
+                .map_err(|_| ed25519)
+        }
+    }
+}
+
+/// Decode an ML-DSA-65 signature attachment: `-C## -K## 1AAQ sig(3309)`.
+///
+/// The group framing is the Ed25519 one; only the primitive inside it differs.
+/// Note that `1AAQ` is *not* an indexed code — where Ed25519 moved to `B#` in
+/// Rev 3, ML-DSA-65 sits in the same `-K` group under a plain fixed-data code,
+/// so there is no index to check and no index to forge.
+#[cfg(feature = "pq")]
+fn decode_ml_dsa_signature_frame(
+    data: &[u8],
+    pos: &mut usize,
+) -> Result<Box<[u8; crate::crypto::ml_dsa::SIG_LEN]>, TspError> {
+    let attach = wire::decode_count(wire::TSP_ATTACH_GRP, data, pos)
+        .ok_or_else(|| TspError::InvalidMessage("missing -C signature attachment".into()))?;
+    let group_end = (attach as usize)
+        .checked_mul(3)
+        .and_then(|len| pos.checked_add(len))
+        .filter(|end| *end <= data.len())
+        .ok_or_else(|| {
+            TspError::InvalidMessage("-C attachment declares more content than the message".into())
+        })?;
+
+    let indexed = wire::decode_count(wire::TSP_INDEX_SIG_GRP, data, pos)
+        .ok_or_else(|| TspError::InvalidMessage("missing -K indexed signature group".into()))?;
+    let sig_group_end = (indexed as usize)
+        .checked_mul(3)
+        .and_then(|len| pos.checked_add(len))
+        .filter(|end| *end <= group_end)
+        .ok_or_else(|| TspError::InvalidMessage("-K group overruns the -C attachment".into()))?;
+
+    let signature = wire::decode_fixed_data::<{ crate::crypto::ml_dsa::SIG_LEN }>(
+        wire::ML_DSA_65_SIGNATURE,
+        data,
+        pos,
+    )
+    .ok_or_else(|| TspError::InvalidMessage("missing 1AAQ ML-DSA-65 signature".into()))?;
+    if *pos > sig_group_end {
+        return Err(TspError::InvalidMessage(
+            "signature overruns the -K group".into(),
+        ));
+    }
+
+    *pos = group_end;
+    Ok(Box::new(signature))
+}
+
+/// Encode an ML-DSA-65 signature attachment: `-C## -K## 1AAQ sig(3309)`.
+#[cfg(feature = "pq")]
+fn encode_ml_dsa_signature_frame(
+    signature: &[u8; crate::crypto::ml_dsa::SIG_LEN],
+    out: &mut Vec<u8>,
+) {
+    // The `1AAQ` code is 3 bytes and the signature 3309, so the `-K` group is
+    // 3312 bytes = 1104 quadlets and the `-C` group is that plus its own `-K`
+    // header: 1105.
+    const SIG_GROUP: u32 = (3 + crate::crypto::ml_dsa::SIG_LEN as u32) / 3;
+    const ATTACH_GROUP: u32 = SIG_GROUP + 1;
+    wire::encode_count(wire::TSP_ATTACH_GRP, ATTACH_GROUP, out);
+    wire::encode_count(wire::TSP_INDEX_SIG_GRP, SIG_GROUP, out);
+    wire::encode_fixed_data(wire::ML_DSA_65_SIGNATURE, signature, out);
+}
+
 /// Decode the signature attachment at `pos`, returning the Ed25519 signature.
 ///
 /// A signature attachment is mandatory. An attachment that will not parse is a
@@ -1346,7 +1454,96 @@ fn pack_inner(
     })
 }
 
-/// Unpack a direct TSP message.
+/// Pack a direct TSP message between two endpoints whose VIDs declare
+/// post-quantum key types (§8.1, §8.2.1).
+///
+/// Deliberately narrower than [`pack`]: direct messages only, no hops, no
+/// padding, no referral. Those all sit in the payload frame, which is identical
+/// across key types — what differs here is only the KEM and the signature — so
+/// widening this is plumbing rather than protocol. It is kept narrow until the
+/// VID model carries keys of these sizes and there is something to plumb it to;
+/// see `docs/tsp/post-quantum.md`.
+///
+/// Both key types must be post-quantum together, which is not a limitation of
+/// this function but of the specification's vector suite and of §8.1: an
+/// endpoint signs with the key type its VID declares, and a VID declaring
+/// ML-DSA-65 for signing and X25519 for encryption is a shape nothing tests.
+#[cfg(feature = "pq")]
+pub fn pack_pq(
+    payload: &[u8],
+    message_type: MessageType,
+    sender_vid: &str,
+    receiver_vid: &str,
+    sender_signing_key: &[u8; crate::crypto::ml_dsa::SK_LEN],
+    receiver_encryption_key: &[u8; crate::crypto::hpke_pq::PK_LEN],
+) -> Result<PackedMessage, TspError> {
+    use crate::crypto::{hpke_pq, ml_dsa};
+
+    let envelope = Envelope::new(message_type, sender_vid, receiver_vid);
+    let envelope_fields = envelope.encode_fields()?;
+
+    let (payload_frame, thread_digest) = encode_payload_frame(
+        PkaeScheme::HpkeBase,
+        payload,
+        message_type,
+        &[],
+        sender_vid,
+        &envelope_fields,
+        None,
+        &Padding::None,
+    )?;
+
+    let sealed = hpke_pq::seal(
+        &payload_frame,
+        &envelope_fields,
+        receiver_encryption_key,
+        wire::TSP_INFO,
+    )?;
+
+    let mut ciphertext = Vec::with_capacity(hpke_pq::ENC_LEN + sealed.ciphertext.len());
+    ciphertext.extend_from_slice(sealed.enc.as_slice());
+    ciphertext.extend_from_slice(&sealed.ciphertext);
+
+    let mut body = Vec::new();
+    wire::encode_variable_data(wire::TSP_HPKE_BASE_CIPHERTEXT, &ciphertext, &mut body);
+
+    let mut wire_bytes = envelope::finalize_frame(&envelope_fields, &body)?;
+    let signature = ml_dsa::sign(&wire_bytes, sender_signing_key)?;
+    encode_ml_dsa_signature_frame(&signature, &mut wire_bytes);
+
+    Ok(PackedMessage {
+        bytes: wire_bytes,
+        thread_digest,
+    })
+}
+
+/// The receiver's private key, tagged with the KEM it belongs to.
+///
+/// The tag is not redundant with the key bytes: both KEMs take a 32-byte
+/// private key — `draft-ietf-hpke-pq` defines the hybrid's as a seed —  so
+/// nothing about the value says which one it is, and choosing wrong is a
+/// decapsulation failure that reads as a bad key. §8.2.1 settles it from the
+/// recipient VID's declared key type, which is where a caller gets this from.
+#[derive(Debug, Clone, Copy)]
+pub enum DecryptionKey<'a> {
+    /// `DHKEM(X25519, HKDF-SHA256)`, KEM `0x0020`.
+    X25519(&'a [u8; 32]),
+    /// The `MLKEM768-X25519` hybrid, KEM `0x647a`. The key is a 32-byte seed.
+    #[cfg(feature = "pq")]
+    MlKem768X25519(&'a [u8; crate::crypto::hpke_pq::SK_LEN]),
+}
+
+/// The sender's public verification key, tagged with its signature scheme.
+#[derive(Debug, Clone, Copy)]
+pub enum VerifyingKey<'a> {
+    /// Ed25519, 32 bytes.
+    Ed25519(&'a [u8; 32]),
+    /// ML-DSA-65, 1952 bytes.
+    #[cfg(feature = "pq")]
+    MlDsa65(&'a [u8; crate::crypto::ml_dsa::PK_LEN]),
+}
+
+/// Unpack a direct TSP message signed with Ed25519 and sealed to an X25519 key.
 ///
 /// The signature is verified before anything is decrypted, and the AAD is
 /// rebuilt from the received envelope bytes so that a ciphertext sealed under a
@@ -1355,6 +1552,24 @@ pub fn unpack(
     wire_bytes: &[u8],
     receiver_decryption_key: &[u8; 32],
     sender_signing_key: &[u8; 32],
+) -> Result<UnpackedMessage, TspError> {
+    unpack_with(
+        wire_bytes,
+        DecryptionKey::X25519(receiver_decryption_key),
+        VerifyingKey::Ed25519(sender_signing_key),
+    )
+}
+
+/// Unpack a TSP message with keys of any supported type.
+///
+/// [`unpack`] is this with both keys classical, and remains the entry point for
+/// every caller whose VIDs are Ed25519 and X25519 — which, until the VID model
+/// carries post-quantum key sizes, is all of them outside the vector suite. See
+/// `docs/tsp/post-quantum.md`.
+pub fn unpack_with(
+    wire_bytes: &[u8],
+    receiver_decryption_key: DecryptionKey<'_>,
+    sender_signing_key: VerifyingKey<'_>,
 ) -> Result<UnpackedMessage, TspError> {
     let result = unpack_inner(wire_bytes, receiver_decryption_key, sender_signing_key);
 
@@ -1388,8 +1603,8 @@ pub fn unpack(
 
 fn unpack_inner(
     wire_bytes: &[u8],
-    receiver_decryption_key: &[u8; 32],
-    sender_signing_key: &[u8; 32],
+    receiver_decryption_key: DecryptionKey<'_>,
+    sender_signing_key: VerifyingKey<'_>,
 ) -> Result<UnpackedMessage, TspError> {
     if wire_bytes.len() < 48 {
         return Err(TspError::InvalidMessage("message too short".into()));
@@ -1432,7 +1647,13 @@ fn unpack_inner(
             return Err(TspError::InvalidMessage("ciphertext too large".into()));
         }
         let minimum = match scheme {
-            PkaeScheme::HpkeBase => ENC_LEN + TAG_LEN,
+            PkaeScheme::HpkeBase => match receiver_decryption_key {
+                DecryptionKey::X25519(_) => ENC_LEN + TAG_LEN,
+                #[cfg(feature = "pq")]
+                DecryptionKey::MlKem768X25519(_) => {
+                    crate::crypto::hpke_pq::ENC_LEN + crate::crypto::hpke_pq::TAG_LEN
+                }
+            },
             PkaeScheme::SealedBox => crate::crypto::sealed_box::SEAL_OVERHEAD,
         };
         if range.len() < minimum {
@@ -1453,17 +1674,33 @@ fn unpack_inner(
     }
 
     // 3. Signature over the whole `-E` frame.
-    let signature = decode_signature_frame(wire_bytes, &mut pos)?;
+    //
+    // The scheme is fixed by the sender's key, not by what the attachment
+    // happens to carry: a message signed with the other scheme is a message we
+    // cannot verify, and accepting whichever code turns up would let anyone
+    // re-sign a frame under a scheme the VID does not use.
+    let signature = decode_any_signature_frame(wire_bytes, &mut pos)?;
     if pos != wire_bytes.len() {
         return Err(TspError::InvalidMessage(
             "trailing bytes after signature".into(),
         ));
     }
-    signing::verify(
-        &wire_bytes[..decoded.content_end],
-        &signature,
-        sender_signing_key,
-    )?;
+    let signable = &wire_bytes[..decoded.content_end];
+    match (&signature, sender_signing_key) {
+        (Signature::Ed25519(sig), VerifyingKey::Ed25519(key)) => {
+            signing::verify(signable, sig, key)?
+        }
+        #[cfg(feature = "pq")]
+        (Signature::MlDsa65(sig), VerifyingKey::MlDsa65(key)) => {
+            crate::crypto::ml_dsa::verify(signable, sig, key)?
+        }
+        #[cfg(feature = "pq")]
+        _ => {
+            return Err(TspError::Verification(
+                "signature scheme does not match the sender VID's signing key type".into(),
+            ));
+        }
+    }
 
     // 4. Recover the payload frame: open the ciphertext, or take it as it
     //    stands.
@@ -1471,32 +1708,68 @@ fn unpack_inner(
         Some(range) => {
             let ciphertext = &wire_bytes[range];
             match scheme {
-                PkaeScheme::HpkeBase => {
-                    let enc: [u8; 32] = ciphertext[..ENC_LEN]
-                        .try_into()
-                        .map_err(|_| TspError::InvalidMessage("bad enc size".into()))?;
-                    hpke::open(
-                        &ciphertext[ENC_LEN..],
-                        &envelope_fields,
-                        &enc,
-                        receiver_decryption_key,
-                        wire::TSP_INFO,
-                    )?
-                }
+                PkaeScheme::HpkeBase => match receiver_decryption_key {
+                    DecryptionKey::X25519(key) => {
+                        let enc: [u8; 32] = ciphertext[..ENC_LEN]
+                            .try_into()
+                            .map_err(|_| TspError::InvalidMessage("bad enc size".into()))?;
+                        hpke::open(
+                            &ciphertext[ENC_LEN..],
+                            &envelope_fields,
+                            &enc,
+                            key,
+                            wire::TSP_INFO,
+                        )?
+                    }
+                    // §8.2.1: same code, same aad, same info — the split point
+                    // moves, because `Nenc` is 1120 rather than 32, and only
+                    // the recipient's key type says so.
+                    #[cfg(feature = "pq")]
+                    DecryptionKey::MlKem768X25519(key) => {
+                        use crate::crypto::hpke_pq;
+                        let enc: &[u8; hpke_pq::ENC_LEN] = ciphertext
+                            .get(..hpke_pq::ENC_LEN)
+                            .and_then(|s| s.try_into().ok())
+                            .ok_or_else(|| {
+                                TspError::InvalidMessage(
+                                    "post-quantum ciphertext is shorter than its encapsulated key"
+                                        .into(),
+                                )
+                            })?;
+                        hpke_pq::open(
+                            &ciphertext[hpke_pq::ENC_LEN..],
+                            &envelope_fields,
+                            enc,
+                            key,
+                            wire::TSP_INFO,
+                        )?
+                    }
+                },
                 // The sealed box needs the recipient's *public* key as well as
                 // its secret, because the nonce is derived from both it and the
                 // ephemeral key. Deriving it here rather than asking the caller
                 // for it keeps the unpack signature the same for both schemes.
                 PkaeScheme::SealedBox => {
-                    let recipient_public = x25519_dalek::PublicKey::from(
-                        &x25519_dalek::StaticSecret::from(*receiver_decryption_key),
-                    )
-                    .to_bytes();
-                    crate::crypto::sealed_box::open(
-                        ciphertext,
-                        &recipient_public,
-                        receiver_decryption_key,
-                    )?
+                    // §8.3 has no post-quantum counterpart — the sealed box is
+                    // X25519 by construction, and a VID with a hybrid key has
+                    // no sealed-box option at all.
+                    // Infallible without `pq`, which is why clippy is silenced
+                    // here rather than the match rewritten as a `let`: with the
+                    // feature on there is a second arm, and it has to reject.
+                    #[cfg_attr(not(feature = "pq"), allow(clippy::infallible_destructuring_match))]
+                    let key = match receiver_decryption_key {
+                        DecryptionKey::X25519(key) => key,
+                        #[cfg(feature = "pq")]
+                        DecryptionKey::MlKem768X25519(_) => {
+                            return Err(TspError::SealedBox(
+                                "the libsodium sealed box has no post-quantum variant".into(),
+                            ));
+                        }
+                    };
+                    let recipient_public =
+                        x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(*key))
+                            .to_bytes();
+                    crate::crypto::sealed_box::open(ciphertext, &recipient_public, key)?
                 }
             }
         }

@@ -501,3 +501,218 @@ fn a_sealed_box_round_trips_and_is_distinguishable() {
         "the two schemes produce different frames"
     );
 }
+/// The post-quantum vector, and everything it is the only check on.
+///
+/// This is the vector the branch could not use when Rev 3's appendix was first
+/// published: its message, `pq_alice`'s ML-DSA signing key and both
+/// post-quantum long forms were truncated, and the spec did not say whether the
+/// 32-byte encryption key was a whole key or a prefix of one. All four were
+/// reported against PR #63 and all four are fixed, which is what makes this
+/// test possible at all.
+///
+/// It is worth the effort because a round-trip proves nothing here. Three
+/// choices in the post-quantum path are invisible to `pack` talking to
+/// `unpack`, and each is a plausible way to be wrong on the wire:
+///
+/// * **Which hybrid.** IANA assigns `0x647a` to X-Wing; `draft-ietf-hpke-pq`
+///   asks to replace that entry with `MLKEM768-X25519`. Same `Nsecret`, `Nenc`,
+///   `Npk`, `Nsk` — so building the wrong one fails decapsulation with no
+///   length mismatch to point at it.
+/// * **Which ML-DSA.** Pure with an empty context, prehash, and `sign_internal`
+///   all produce a 3309-byte signature over the same message, and each verifies
+///   perfectly against itself.
+/// * **Which key expansion.** The published encryption key is a 32-byte seed;
+///   an implementation that took it for a raw ML-KEM key would agree with
+///   itself and with nobody.
+#[cfg(feature = "pq")]
+mod post_quantum {
+    use super::*;
+    use affinidi_tsp::crypto::{hpke_pq, ml_dsa};
+    use affinidi_tsp::message::direct::{DecryptionKey, VerifyingKey, pack_pq, unpack_with};
+
+    fn sized<const N: usize>(v: &Vectors, id: &str, field: &str) -> Box<[u8; N]> {
+        qb64(&v.id(id, field))
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|b: Box<[u8]>| {
+                panic!("{id}.{field} is {} bytes, expected {N}", b.len())
+            })
+    }
+
+    /// The published post-quantum keys are the sizes the algorithms define.
+    ///
+    /// Cheap, and it is the check that would have caught the truncation without
+    /// any base64 reasoning: a 5373-character ML-DSA signing key is 4029 bytes
+    /// where FIPS 204 says 4032.
+    #[test]
+    fn the_published_key_sizes_are_the_algorithms_own() {
+        let v = Vectors::load();
+        for id in ["pq_alice", "pq_bob"] {
+            assert_eq!(qb64(&v.id(id, "pkS")).len(), ml_dsa::PK_LEN, "{id}.pkS");
+            assert_eq!(qb64(&v.id(id, "skS")).len(), ml_dsa::SK_LEN, "{id}.skS");
+            assert_eq!(qb64(&v.id(id, "pkE")).len(), hpke_pq::PK_LEN, "{id}.pkE");
+            assert_eq!(qb64(&v.id(id, "skE")).len(), hpke_pq::SK_LEN, "{id}.skE");
+            assert_eq!(v.id(id, "sigKeyType"), "MlDsa65");
+            assert_eq!(v.id(id, "encKeyType"), "X25519MlKem768");
+        }
+    }
+
+    /// The 32-byte encryption key is a seed, and `DeriveKeyPair` expands it to
+    /// the published 1216-byte public key.
+    ///
+    /// This is the sentence Rev 3 gained on 8 September, checked rather than
+    /// taken on trust — and it is what settles the key expansion independently
+    /// of whether the message opens.
+    #[test]
+    fn the_seed_expands_to_the_published_public_key() {
+        let v = Vectors::load();
+        for id in ["pq_alice", "pq_bob"] {
+            let seed = sized::<{ hpke_pq::SK_LEN }>(&v, id, "skE");
+            let published = sized::<{ hpke_pq::PK_LEN }>(&v, id, "pkE");
+            let derived = hpke_pq::public_key_from_private(&seed).expect("expand the seed");
+            assert_eq!(
+                derived.as_slice(),
+                published.as_slice(),
+                "{id}: DeriveKeyPair(seed) must be the published encryption key"
+            );
+        }
+    }
+
+    /// The whole post-quantum path, end to end, against bytes we had no hand in
+    /// producing: the hybrid KEM, the ML-DSA-65 signature under `1AAQ`, and the
+    /// `4F` ciphertext split at 1120 rather than 32.
+    #[test]
+    fn direct_hpke_base_pq() {
+        let v = Vectors::load();
+        let message = qb64(&v.field("direct-hpke-base-pq", "message"));
+        let sk = sized::<{ hpke_pq::SK_LEN }>(&v, "pq_bob", "skE");
+        let pk = sized::<{ ml_dsa::PK_LEN }>(&v, "pq_alice", "pkS");
+
+        let unpacked = unpack_with(
+            &message,
+            DecryptionKey::MlKem768X25519(&sk),
+            VerifyingKey::MlDsa65(&pk),
+        )
+        .expect("the post-quantum vector must unpack");
+
+        assert_eq!(unpacked.sender, v.id("pq_alice", "id"));
+        assert_eq!(unpacked.receiver, v.id("pq_bob", "id"));
+        assert_eq!(unpacked.message_type, MessageType::Direct);
+        assert_eq!(unpacked.payload, b"hello world");
+        assert!(unpacked.confidential);
+
+        // Same plaintext as `direct-hpke-base`, which is the point of the
+        // vector: post-quantum is not a different message, only different keys.
+        let classical = v.unpack("direct-hpke-base");
+        assert_eq!(unpacked.payload, classical.payload);
+    }
+
+    /// A post-quantum message this crate packs is one the same crate reads
+    /// back, and its frame has the shape the vector has.
+    ///
+    /// The round trip is the weak half. The useful half is the framing, which
+    /// is otherwise checked by nothing: HPKE seals with fresh randomness, so
+    /// the vector's bytes cannot be reproduced and only their structure can be
+    /// compared.
+    ///
+    /// The one structural difference is deliberate and is asserted rather than
+    /// tolerated. §8 makes the ESSR sender field optional under HPKE-Base,
+    /// because the AAD already binds the sender; the reference omits it and we
+    /// carry it, for the reason given at `encode_sender_field`. So our frame is
+    /// longer than the vector's by exactly that field and by nothing else —
+    /// which is a sharper check than equality would have been, since it pins
+    /// where the difference is allowed to be.
+    #[test]
+    fn a_packed_post_quantum_message_matches_the_vector_shape() {
+        let v = Vectors::load();
+        let alice = v.id("pq_alice", "id");
+        let bob = v.id("pq_bob", "id");
+        let sign = sized::<{ ml_dsa::SK_LEN }>(&v, "pq_alice", "skS");
+        let verify = sized::<{ ml_dsa::PK_LEN }>(&v, "pq_alice", "pkS");
+        let enc_pk = sized::<{ hpke_pq::PK_LEN }>(&v, "pq_bob", "pkE");
+        let enc_sk = sized::<{ hpke_pq::SK_LEN }>(&v, "pq_bob", "skE");
+
+        let packed = pack_pq(
+            b"hello world",
+            MessageType::Direct,
+            &alice,
+            &bob,
+            &sign,
+            &enc_pk,
+        )
+        .expect("pack a post-quantum message");
+
+        let vector = qb64(&v.field("direct-hpke-base-pq", "message"));
+
+        // `4B##` code plus the VID, against the vector's `4BAA` NULL VID.
+        let sender_field = 3 + alice.len().next_multiple_of(3);
+        assert_eq!(
+            packed.bytes.len(),
+            vector.len() + sender_field - 3,
+            "our frame is the vector's plus the optional ESSR sender field"
+        );
+
+        // The framing itself. A CESR code word is 24 bits — six of selector,
+        // six of identifier, twelve of count — so comparing whole code bytes
+        // would compare the counts, which differ by the sender field. Compare
+        // the selector and identifier, which are what say *what* a field is.
+        let code_at = |bytes: &[u8], at: usize| -> (u32, u32) {
+            let w = u32::from_be_bytes([0, bytes[at], bytes[at + 1], bytes[at + 2]]);
+            (w >> 18, (w >> 12) & 0x3f)
+        };
+        assert_eq!(
+            code_at(&packed.bytes, 0),
+            code_at(&vector, 0),
+            "the -E frame code is unchanged by the key type"
+        );
+
+        // The envelope is identical in both — same version, same two VIDs — so
+        // the ciphertext field starts at the same offset in each.
+        let ciphertext_at = 3 + 6 + 60 + 60;
+        assert_eq!(
+            code_at(&packed.bytes, ciphertext_at),
+            code_at(&vector, ciphertext_at),
+            "a post-quantum ciphertext uses the same 4F/5F/6F code as any other"
+        );
+
+        // And the signature: `1AAQ` rather than the indexed `B#`, in both.
+        let sig_at = |bytes: &[u8]| -> usize {
+            let count = u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]) & 0xfff;
+            3 + count as usize * 3
+        };
+        assert_eq!(
+            &packed.bytes[sig_at(&packed.bytes) + 6..sig_at(&packed.bytes) + 9],
+            &vector[sig_at(&vector) + 6..sig_at(&vector) + 9],
+            "an ML-DSA-65 signature sits under 1AAQ inside the same -C/-K groups"
+        );
+
+        let unpacked = unpack_with(
+            &packed.bytes,
+            DecryptionKey::MlKem768X25519(&enc_sk),
+            VerifyingKey::MlDsa65(&verify),
+        )
+        .expect("read it back");
+        assert_eq!(unpacked.payload, b"hello world");
+    }
+
+    /// A post-quantum message must not verify against a classical key, and the
+    /// failure has to come from the scheme rather than from the bytes.
+    #[test]
+    fn the_signature_scheme_must_match_the_senders_key_type() {
+        let v = Vectors::load();
+        let message = qb64(&v.field("direct-hpke-base-pq", "message"));
+        let sk = sized::<{ hpke_pq::SK_LEN }>(&v, "pq_bob", "skE");
+        let ed25519 = key(&v.id("alice", "pkS"));
+
+        let err = unpack_with(
+            &message,
+            DecryptionKey::MlKem768X25519(&sk),
+            VerifyingKey::Ed25519(&ed25519),
+        )
+        .expect_err("an ML-DSA signature must not be checked against an Ed25519 key");
+        assert!(
+            format!("{err}").contains("does not match"),
+            "expected a scheme mismatch, got: {err}"
+        );
+    }
+}
