@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (0.7.0) — `trust-tasks-rs` 0.20
+
+- Bumps `trust-tasks-rs` 0.19 → 0.20. **No source change** — only manifests.
+  0.20 is additive for everything this crate uses: its one breaking change is a
+  `process-attestation` schema tightening (digest floor 16 → 43 base64url
+  characters, a category correction, a dropped duplicate member), and no crate
+  in this workspace references that spec.
+- **Moves because it is the path, not because its own code changed.** This crate
+  re-exports `affinidi-messaging-sdk`, so a consumer reaching a generated type
+  through the facade sees the same API change. Leaving it unbumped would publish
+  a move that never arrives — and the version guard cannot see it, because only
+  its manifest changed.
+
 ## Unreleased (0.5.2) — `forwarding_ws_threshold` so the relay socket can be tested
 
 `TestMediatorBuilder::forwarding_ws_threshold(msgs_per_10s)` sets the rate at

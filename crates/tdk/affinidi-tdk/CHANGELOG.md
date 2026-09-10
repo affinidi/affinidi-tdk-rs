@@ -1,5 +1,18 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.14.0) — `trust-tasks-rs` 0.20
+
+- Bumps `trust-tasks-rs` 0.19 → 0.20. **No source change** — only manifests.
+  0.20 is additive for everything this crate uses: its one breaking change is a
+  `process-attestation` schema tightening (digest floor 16 → 43 base64url
+  characters, a category correction, a dropped duplicate member), and no crate
+  in this workspace references that spec.
+- **Moves because it is the path, not because its own code changed.** This crate
+  re-exports `affinidi-messaging-sdk`, so a consumer reaching a generated type
+  through the facade sees the same API change. Leaving it unbumped would publish
+  a move that never arrives — and the version guard cannot see it, because only
+  its manifest changed.
+
 All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).

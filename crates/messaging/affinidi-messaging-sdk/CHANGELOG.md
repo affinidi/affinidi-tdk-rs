@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (0.24.0) — `trust-tasks-rs` 0.20
+
+- Bumps `trust-tasks-rs` 0.19 → 0.20. **No source change** — only manifests.
+  0.20 is additive for everything this crate uses: its one breaking change is a
+  `process-attestation` schema tightening (digest floor 16 → 43 base64url
+  characters, a category correction, a dropped duplicate member), and no crate
+  in this workspace references that spec.
+- **Breaking for consumers, for the same reason as every previous
+  `trust-tasks-rs` move here.** This crate's public API carries generated types —
+  `TrustTasks::account_update` takes an `account::update::v0_1::MediatorAcl` and
+  returns an `account::update::v0_1::Account` — so the dependency is a *public*
+  one. A consumer must move to 0.20 in the same change: two `trust-tasks-rs`
+  versions in one graph do not warn, they fail with `expected MediatorAcl, found
+  a different MediatorAcl`.
+- That failure is why this bump exists. `verifiable-trust-infrastructure` needs
+  0.20.1 for `vta/contexts/secrets/1.0` and could not reach it while this crate
+  required ^0.19.
+
 ## Unreleased (0.22.0) — `trust-tasks-rs` 0.18
 
 - Bumps `trust-tasks-rs` 0.17 → 0.18. No source change: 0.18.0 carries exactly
