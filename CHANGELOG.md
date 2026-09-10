@@ -11,6 +11,41 @@ Per-crate version history is summarised here; for the full code history see
 
 ### Changed
 
+- **`trust-tasks-rs` 0.19 → 0.20 across the messaging family (breaking).**
+  **`affinidi-messaging-sdk` 0.24.0**, **`affinidi-messaging-didcomm-service` 0.8.0**,
+  **`affinidi-messaging-mediator` 0.24.0**, **`affinidi-messaging-test-mediator` 0.7.0**,
+  **`affinidi-tdk` 0.14.0**.
+
+  The same move as 0.18 → 0.19 below, for the same reason and with the same shape:
+  `trust-tasks-rs` is a **public** dependency of `affinidi-messaging-sdk`, so its version
+  is part of these crates' APIs though not a line of their own source changed. Not one
+  source file is touched by this commit — only manifests.
+
+  **It moves now because the mixed graph escaped the workspace again.**
+  `verifiable-trust-infrastructure` needs 0.20.1 for `vta/contexts/secrets/1.0`, the task
+  by which a service fetches the keys of the DID it operates. It could not take it while
+  `affinidi-messaging-sdk 0.23.0` required 0.19: pinning the consumer at 0.20 put two
+  `trust-tasks-rs` nodes in its graph and broke `vta-sdk` on exactly the
+  `expected MediatorAcl, found a different MediatorAcl` error the two `Cargo.toml`
+  comments in this workspace already record. Nothing in the consumer's manifests is
+  wrong and no semver check flags it, because the break arrives through a public
+  dependency. The only fix is here.
+
+  0.20 is additive for everything these crates use. Its one breaking change is a
+  `process-attestation` schema tightening — a digest floor raised from 16 to 43 base64url
+  characters, a category correction, and a dropped duplicate member — and no crate in this
+  workspace references that spec.
+
+  One pre-existing duplicate is untouched, being a different problem: published
+  `vta-sdk` → `affinidi-tdk 0.11.0` → `affinidi-messaging-sdk 0.21.1` →
+  `trust-tasks-rs 0.17.10`, an older published copy arriving back through a consumer. It
+  compiles because no type crosses that boundary, and it is the cycle the mediator's
+  `Cargo.toml` comment describes.
+
+  Refs: trustoverip/dtgwg-trust-tasks-tf#440
+
+### Changed
+
 - **`trust-tasks-rs` 0.18 → 0.19 across the messaging family (breaking).**
   **`affinidi-messaging-sdk` 0.23.0**, **`affinidi-messaging-didcomm-service` 0.7.0**,
   **`affinidi-messaging-mediator` 0.23.0**, **`affinidi-messaging-test-mediator` 0.6.0**,
