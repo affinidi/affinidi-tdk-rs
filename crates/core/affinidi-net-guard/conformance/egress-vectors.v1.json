@@ -1,0 +1,377 @@
+{
+  "version": 1,
+  "description": "Shared egress-guard conformance vectors. Every implementation (Rust, Node, browser, Swift) loads this file and must pass each vector, or skip a section or vector whose `requires` names a capability it declares it lacks. An unknown section or capability is a failure, so new vectors cannot be silently ignored.",
+  "defaultPolicy": "public_internet",
+  "defaultPolicyDescription": "https and wss only; globally routable addresses only; no special-use names; no userinfo; any port; no redirects.",
+  "policyFields": {
+    "devLoopback": "true admits loopback hosts (the literals 127.0.0.0/8 and ::1, the names localhost and *.localhost) and plain http/ws to them. A non-localhost name resolving to loopback stays blocked.",
+    "allowList": "Array of {\"exact\": host} | {\"suffix\": domain} | {\"origin\": \"scheme://host:port\"}. Narrows; never re-admits an address class; is the only way to name a special-use host other than localhost.",
+    "allowCidrs": "Array of CIDR strings re-admitted. Never re-admits loopback, link-local, this-network, multicast or broadcast. An IPv4 range also covers that address's embedded IPv6 forms.",
+    "ports": "Array of admitted ports (narrows).",
+    "schemes": "Array of admitted schemes (narrows)."
+  },
+  "expectations": {
+    "allow": "vetted / resolved / final 2xx response",
+    "block": "refused by the guard",
+    "invalid": "the input is not a valid URL",
+    "error": "failed without a policy refusal (for example, no addresses)",
+    "not-followed": "the 3xx response is returned and not followed"
+  },
+  "reasons": {
+    "scheme": "scheme not admitted, including an https-to-http redirect downgrade",
+    "userinfo": "URL carries a username or password",
+    "address": "host is, or resolves to, a blocked address",
+    "name": "host is a special-use name",
+    "not-allowed": "host is not on the allow-list",
+    "cross-origin": "a same-origin redirect left the origin",
+    "port": "port not admitted",
+    "too-many-redirects": "redirect hop cap exceeded"
+  },
+  "capabilities": {
+    "classify": "Classify a literal IP address (pure).",
+    "vet": "Parse, canonicalise (WHATWG) and vet a URL (pure).",
+    "dns": "Vet the answers of an injected stub resolver.",
+    "dns-online": "Resolve real public names that point at loopback.",
+    "pinning": "Connect only to the addresses the guard vetted, with one lookup per connection.",
+    "redirect-inspect": "Inspect and re-vet each redirect hop.",
+    "webvh-url": "Derive the did:webvh log URL from a DID.",
+    "mediator-doc": "Extract service endpoints from a DID document and vet them."
+  },
+  "sections": {
+    "ip": {
+      "requires": ["classify"],
+      "vectors": [
+        { "input": "127.0.0.1", "expect": "block", "class": "loopback" },
+        { "input": "127.255.255.254", "expect": "block", "class": "loopback" },
+        { "input": "0.0.0.0", "expect": "block", "class": "this-network" },
+        { "input": "0.1.2.3", "expect": "block", "class": "this-network" },
+        { "input": "10.0.0.1", "expect": "block", "class": "private" },
+        { "input": "172.16.0.1", "expect": "block", "class": "private" },
+        { "input": "172.31.255.255", "expect": "block", "class": "private" },
+        { "input": "192.168.0.1", "expect": "block", "class": "private" },
+        { "input": "169.254.169.254", "expect": "block", "class": "link-local", "note": "cloud metadata" },
+        { "input": "169.254.170.2", "expect": "block", "class": "link-local", "note": "ECS task metadata" },
+        { "input": "100.64.0.1", "expect": "block", "class": "shared-cgnat" },
+        { "input": "100.100.100.200", "expect": "block", "class": "shared-cgnat", "note": "Alibaba Cloud metadata" },
+        { "input": "100.127.255.254", "expect": "block", "class": "shared-cgnat" },
+        { "input": "192.0.0.1", "expect": "block", "class": "protocol-assignment" },
+        { "input": "198.18.0.1", "expect": "block", "class": "benchmarking" },
+        { "input": "198.19.255.255", "expect": "block", "class": "benchmarking" },
+        { "input": "192.0.2.1", "expect": "block", "class": "documentation" },
+        { "input": "198.51.100.1", "expect": "block", "class": "documentation" },
+        { "input": "203.0.113.1", "expect": "block", "class": "documentation" },
+        { "input": "224.0.0.1", "expect": "block", "class": "multicast" },
+        { "input": "239.255.255.250", "expect": "block", "class": "multicast" },
+        { "input": "240.0.0.1", "expect": "block", "class": "reserved" },
+        { "input": "255.255.255.255", "expect": "block", "class": "broadcast" },
+        { "input": "::1", "expect": "block", "class": "loopback" },
+        { "input": "::", "expect": "block", "class": "this-network" },
+        { "input": "::ffff:127.0.0.1", "expect": "block", "class": "embedded", "via": "v4-mapped", "inner": "loopback" },
+        { "input": "::ffff:7f00:1", "expect": "block", "class": "embedded", "via": "v4-mapped", "inner": "loopback" },
+        { "input": "::ffff:169.254.169.254", "expect": "block", "class": "embedded", "via": "v4-mapped", "inner": "link-local" },
+        { "input": "::127.0.0.1", "expect": "block", "class": "embedded", "via": "v4-compatible", "inner": "loopback" },
+        { "input": "64:ff9b::7f00:1", "expect": "block", "class": "embedded", "via": "nat64", "inner": "loopback" },
+        { "input": "64:ff9b::a9fe:a9fe", "expect": "block", "class": "embedded", "via": "nat64", "inner": "link-local", "note": "NAT64 to metadata" },
+        { "input": "64:ff9b:1::a00:1", "expect": "block", "class": "embedded", "via": "nat64-local-use", "inner": "private" },
+        { "input": "64:ff9b:1:1::a00:1", "expect": "block", "class": "reserved", "note": "local-use NAT64 outside the /96 form has no single destination" },
+        { "input": "2002:7f00:1::1", "expect": "block", "class": "embedded", "via": "6to4", "inner": "loopback" },
+        { "input": "2001:0:4136:e378::1", "expect": "block", "class": "embedded", "via": "teredo", "inner": "reserved", "note": "client address ~0.0.0.1 = 255.255.255.254" },
+        { "input": "fc00::1", "expect": "block", "class": "unique-local" },
+        { "input": "fd00::1", "expect": "block", "class": "unique-local" },
+        { "input": "fd00:ec2::254", "expect": "block", "class": "unique-local", "note": "AWS IMDSv6" },
+        { "input": "fe80::1", "expect": "block", "class": "link-local" },
+        { "input": "febf::1", "expect": "block", "class": "link-local" },
+        { "input": "fec0::1", "expect": "block", "class": "site-local" },
+        { "input": "ff02::1", "expect": "block", "class": "multicast" },
+        { "input": "2001:db8::1", "expect": "block", "class": "documentation" },
+        { "input": "3fff::1", "expect": "block", "class": "documentation" },
+        { "input": "100::1", "expect": "block", "class": "reserved" },
+        { "input": "5f00::1", "expect": "block", "class": "reserved" },
+        { "input": "2001:2::1", "expect": "block", "class": "benchmarking" },
+        { "input": "2001:10::1", "expect": "block", "class": "protocol-assignment" },
+        { "input": "8.8.8.8", "expect": "allow", "class": "global" },
+        { "input": "1.1.1.1", "expect": "allow", "class": "global" },
+        { "input": "11.0.0.1", "expect": "allow", "class": "global" },
+        { "input": "100.63.255.255", "expect": "allow", "class": "global" },
+        { "input": "100.128.0.0", "expect": "allow", "class": "global" },
+        { "input": "172.15.255.255", "expect": "allow", "class": "global" },
+        { "input": "172.32.0.1", "expect": "allow", "class": "global" },
+        { "input": "169.253.255.255", "expect": "allow", "class": "global" },
+        { "input": "192.169.0.1", "expect": "allow", "class": "global" },
+        { "input": "198.20.0.1", "expect": "allow", "class": "global" },
+        { "input": "2606:4700:4700::1111", "expect": "allow", "class": "global" },
+        { "input": "2001:4860:4860::8888", "expect": "allow", "class": "global" },
+        { "input": "2001:1::1", "expect": "allow", "class": "global" },
+        { "input": "2001:4:112::1", "expect": "allow", "class": "global" },
+        { "input": "64:ff9b::808:808", "expect": "allow", "class": "embedded", "via": "nat64", "inner": "global", "note": "NAT64 to a public address" },
+        { "input": "64:ff9b:1::808:808", "expect": "allow", "class": "embedded", "via": "nat64-local-use", "inner": "global" },
+        { "input": "::ffff:8.8.8.8", "expect": "allow", "class": "embedded", "via": "v4-mapped", "inner": "global" },
+        { "input": "2002:808:808::1", "expect": "allow", "class": "embedded", "via": "6to4", "inner": "global" },
+        { "input": "2001:0:4136:e378:8000:63bf:f7f7:f7f7", "expect": "allow", "class": "embedded", "via": "teredo", "inner": "global", "note": "client address ~f7f7f7f7 = 8.8.8.8" }
+      ]
+    },
+    "url": {
+      "requires": ["vet"],
+      "note": "`host` is the WHATWG canonical host of the input, independent of the verdict.",
+      "vectors": [
+        { "input": "https://2130706433/", "expect": "block", "reason": "address", "host": "127.0.0.1" },
+        { "input": "https://0x7f000001/", "expect": "block", "reason": "address", "host": "127.0.0.1" },
+        { "input": "https://017700000001/", "expect": "block", "reason": "address", "host": "127.0.0.1" },
+        { "input": "https://0177.0.0.1/", "expect": "block", "reason": "address", "host": "127.0.0.1" },
+        { "input": "https://0x7f.0.0.1/", "expect": "block", "reason": "address", "host": "127.0.0.1" },
+        { "input": "https://127.1/", "expect": "block", "reason": "address", "host": "127.0.0.1" },
+        { "input": "https://127.0.1/", "expect": "block", "reason": "address", "host": "127.0.0.1" },
+        { "input": "https://0/", "expect": "block", "reason": "address", "host": "0.0.0.0" },
+        { "input": "https://169.254.169.254./", "expect": "block", "reason": "address", "host": "169.254.169.254" },
+        { "input": "https://%31%32%37.0.0.1/", "expect": "block", "reason": "address", "host": "127.0.0.1" },
+        { "input": "https://①②⑦.0.0.1/", "expect": "block", "reason": "address", "host": "127.0.0.1" },
+        { "input": "https://127。0。0。1/", "expect": "block", "reason": "address", "host": "127.0.0.1" },
+        { "input": "https://[::ffff:127.0.0.1]/", "expect": "block", "reason": "address", "host": "[::ffff:7f00:1]" },
+        { "input": "https://[0:0:0:0:0:ffff:7f00:1]/", "expect": "block", "reason": "address", "host": "[::ffff:7f00:1]" },
+        { "input": "https://[::1]:8443/", "expect": "block", "reason": "address", "host": "[::1]" },
+        { "input": "wss://0x7f.1/", "expect": "block", "reason": "address", "host": "127.0.0.1" },
+        { "input": "https://example.com@127.0.0.1/", "expect": "block", "host": "127.0.0.1", "note": "userinfo and a loopback host; either reason is correct" },
+        { "input": "https://127.0.0.1\\@example.com/", "expect": "block", "reason": "address", "host": "127.0.0.1" },
+        { "input": "https://user:pass@example.com/", "expect": "block", "reason": "userinfo", "host": "example.com" },
+        { "input": "https://0x100000000/", "expect": "invalid" },
+        { "input": "https://1.2.3.4.5/", "expect": "invalid" },
+        { "input": "https://[fe80::1%25en0]/", "expect": "invalid" },
+        { "input": "https://example.com/", "expect": "allow", "host": "example.com" },
+        { "input": "https://example.com:8443/", "expect": "allow", "host": "example.com" },
+        { "input": "https://93.184.216.34/", "expect": "allow", "host": "93.184.216.34" },
+        { "input": "https://10.20.0.5/", "policy": { "allowCidrs": ["10.20.0.0/16"] }, "expect": "allow" },
+        { "input": "https://[::ffff:10.20.0.5]/", "policy": { "allowCidrs": ["10.20.0.0/16"] }, "expect": "allow" },
+        { "input": "https://10.21.0.5/", "policy": { "allowCidrs": ["10.20.0.0/16"] }, "expect": "block", "reason": "address" },
+        { "input": "https://127.0.0.1/", "policy": { "allowCidrs": ["127.0.0.0/8"] }, "expect": "block", "reason": "address" },
+        { "input": "https://169.254.169.254/", "policy": { "allowCidrs": ["169.254.0.0/16"] }, "expect": "block", "reason": "address" },
+        { "input": "https://example.com:8443/", "policy": { "ports": [443] }, "expect": "block", "reason": "port" },
+        { "input": "https://example.com/", "policy": { "ports": [443] }, "expect": "allow" },
+        { "input": "https://example.com/", "policy": { "allowList": [{ "exact": "example.com" }] }, "expect": "allow" },
+        { "input": "https://other.example/", "policy": { "allowList": [{ "exact": "example.com" }] }, "expect": "block", "reason": "not-allowed" },
+        { "input": "https://api.push.apple.com/", "policy": { "allowList": [{ "suffix": ".push.apple.com" }] }, "expect": "allow" },
+        { "input": "https://push.apple.com/", "policy": { "allowList": [{ "suffix": ".push.apple.com" }] }, "expect": "block", "reason": "not-allowed" },
+        { "input": "https://evilpush.apple.com/", "policy": { "allowList": [{ "suffix": ".push.apple.com" }] }, "expect": "block", "reason": "not-allowed" },
+        { "input": "https://example.com:8443/", "policy": { "allowList": [{ "origin": "https://example.com:8443" }] }, "expect": "allow" },
+        { "input": "https://example.com/", "policy": { "allowList": [{ "origin": "https://example.com:8443" }] }, "expect": "block", "reason": "not-allowed" },
+        { "input": "https://127.0.0.1/", "policy": { "allowList": [{ "exact": "127.0.0.1" }] }, "expect": "block", "reason": "address", "note": "an allow-list never re-admits an address class" }
+      ]
+    },
+    "names": {
+      "requires": ["vet"],
+      "vectors": [
+        { "input": "https://localhost/", "expect": "block", "reason": "name" },
+        { "input": "https://LOCALHOST./", "expect": "block", "reason": "name" },
+        { "input": "https://svc.localhost/", "expect": "block", "reason": "name" },
+        { "input": "https://printer.local/", "expect": "block", "reason": "name" },
+        { "input": "https://printer.local./", "expect": "block", "reason": "name" },
+        { "input": "https://kube-dns.kube-system.svc.cluster.local/", "expect": "block", "reason": "name" },
+        { "input": "https://metadata.google.internal/", "expect": "block", "reason": "name" },
+        { "input": "https://router.home.arpa/", "expect": "block", "reason": "name" },
+        { "input": "https://metadata/", "expect": "block", "reason": "name" },
+        { "input": "https://metadata./", "expect": "block", "reason": "name" },
+        { "input": "https://example.com/", "expect": "allow" },
+        { "input": "https://example.com./", "expect": "allow" },
+        { "input": "https://localhost.example.com/", "expect": "allow" },
+        { "input": "https://local.example.com/", "expect": "allow" },
+        { "input": "https://metadata/", "policy": { "allowList": [{ "exact": "metadata" }] }, "expect": "allow", "note": "an explicit allow-list entry names an internal host; its addresses are still vetted" },
+        { "input": "https://kube-dns.kube-system.svc.cluster.local/", "policy": { "allowList": [{ "suffix": ".svc.cluster.local" }] }, "expect": "allow" },
+        { "input": "https://localhost/", "policy": { "allowList": [{ "exact": "localhost" }] }, "expect": "block", "reason": "name", "note": "localhost needs devLoopback" },
+        { "input": "https://localhost/", "policy": { "devLoopback": true }, "expect": "allow" },
+        { "input": "https://svc.localhost/", "policy": { "devLoopback": true }, "expect": "allow" },
+        { "input": "https://printer.local/", "policy": { "devLoopback": true }, "expect": "block", "reason": "name" }
+      ]
+    },
+    "scheme": {
+      "requires": ["vet"],
+      "vectors": [
+        { "input": "http://example.com/", "expect": "block", "reason": "scheme" },
+        { "input": "ws://example.com/", "expect": "block", "reason": "scheme" },
+        { "input": "ftp://example.com/", "expect": "block", "reason": "scheme" },
+        { "input": "file:///etc/passwd", "expect": "block", "reason": "scheme" },
+        { "input": "gopher://example.com/", "expect": "block", "reason": "scheme" },
+        { "input": "data:text/plain,x", "expect": "block", "reason": "scheme" },
+        { "input": "javascript:alert(1)", "expect": "block", "reason": "scheme" },
+        { "input": "blob:https://x/y", "expect": "block", "reason": "scheme" },
+        { "input": "https://example.com/", "expect": "allow" },
+        { "input": "wss://example.com/", "expect": "allow" },
+        { "input": "wss://example.com/", "policy": { "schemes": ["https"] }, "expect": "block", "reason": "scheme" },
+        { "input": "http://localhost:8000/", "policy": { "devLoopback": true }, "expect": "allow" },
+        { "input": "http://127.0.0.1:9099/", "policy": { "devLoopback": true }, "expect": "allow" },
+        { "input": "http://[::1]:7037/", "policy": { "devLoopback": true }, "expect": "allow" },
+        { "input": "ws://localhost:8080/", "policy": { "devLoopback": true }, "expect": "allow" },
+        { "input": "http://10.0.0.5/", "policy": { "devLoopback": true }, "expect": "block", "reason": "address" },
+        { "input": "http://169.254.169.254/", "policy": { "devLoopback": true }, "expect": "block", "reason": "address" },
+        { "input": "http://[::ffff:127.0.0.1]/", "policy": { "devLoopback": true }, "expect": "block", "reason": "address" },
+        { "input": "http://example.com/", "policy": { "devLoopback": true }, "expect": "block", "reason": "scheme" }
+      ]
+    },
+    "webvh": {
+      "requires": ["webvh-url"],
+      "vectors": [
+        { "did": "did:webvh:QmS:example.com", "expect": "allow", "url": "https://example.com/.well-known/did.jsonl" },
+        { "did": "did:webvh:QmS:example.com:users:alice", "expect": "allow", "url": "https://example.com/users/alice/did.jsonl" },
+        { "did": "did:webvh:QmS:example.com:localhost", "expect": "allow", "url": "https://example.com/localhost/did.jsonl", "note": "regression: a path segment named localhost must not downgrade to http" },
+        { "did": "did:webvh:QmS:localhost%3A8000", "expect": "block" },
+        { "did": "did:webvh:QmS:localhost%3A8000", "policy": { "devLoopback": true }, "expect": "allow", "url": "http://localhost:8000/.well-known/did.jsonl" },
+        { "did": "did:webvh:QmS:127.0.0.1", "expect": "block" },
+        { "did": "did:webvh:QmS:2130706433", "expect": "block" },
+        { "did": "did:webvh:QmS:169.254.169.254%3A80", "expect": "block" },
+        { "did": "did:web:127.0.0.1%3A9099", "expect": "block" },
+        { "did": "did:web:localhost", "expect": "block" }
+      ]
+    },
+    "mediatorDoc": {
+      "requires": ["mediator-doc"],
+      "vectors": [
+        { "serviceEndpoint": [{ "uri": "https://mediator.example.com" }], "expect": "accept" },
+        { "serviceEndpoint": [{ "uri": "https://127.0.0.1:7037" }], "expect": "reject" },
+        { "serviceEndpoint": [{ "uri": "wss://10.0.0.5/ws" }], "expect": "reject" },
+        { "serviceEndpoint": "https://169.254.169.254/", "expect": "reject" },
+        { "authentication": "https://[fd00:ec2::254]/", "expect": "reject" },
+        { "serviceEndpoint": [{ "uri": "https://mediator.example.com" }, { "uri": "wss://10.0.0.5/ws" }], "expect": "reject", "note": "fail closed on a mixed document" },
+        { "serviceEndpoint": "http://mediator.example.com", "expect": "reject" },
+        { "serviceEndpoint": "http://10.0.0.5", "allowInsecure": true, "expect": "reject", "note": "allowInsecure is a scheme opt-out only" }
+      ]
+    },
+    "dns": {
+      "requires": ["dns"],
+      "vectors": [
+        { "name": "a.test", "answers": ["93.184.216.34"], "expect": "allow" },
+        { "name": "b.test", "answers": ["127.0.0.1"], "expect": "block" },
+        { "name": "c.test", "answers": ["93.184.216.34", "10.0.0.1"], "expect": "block", "note": "one bad answer fails the whole name" },
+        { "name": "d.test", "answers": ["::ffff:169.254.169.254"], "expect": "block" },
+        { "name": "e.test", "answers": ["64:ff9b::7f00:1"], "expect": "block" },
+        { "name": "f.test", "answers": [], "expect": "error" },
+        { "name": "g.test", "answers": ["2606:4700:4700::1111", "93.184.216.34"], "expect": "allow" },
+        { "name": "localhost", "answers": ["127.0.0.1", "::1"], "expect": "block" },
+        { "name": "localhost", "answers": ["127.0.0.1", "::1"], "policy": { "devLoopback": true }, "expect": "allow" },
+        { "name": "rebind.test", "answers": ["127.0.0.1"], "policy": { "devLoopback": true }, "expect": "block", "note": "dev loopback admits localhost names, not any name that resolves to loopback" },
+        { "name": "internal.test", "answers": ["10.20.0.5"], "policy": { "allowCidrs": ["10.20.0.0/16"] }, "expect": "allow" },
+        { "name": "internal.test", "answers": ["10.20.0.5", "10.30.0.5"], "policy": { "allowCidrs": ["10.20.0.0/16"] }, "expect": "block" },
+        { "name": "localtest.me", "requires": ["dns-online"], "expect": "block" },
+        { "name": "127.0.0.1.nip.io", "requires": ["dns-online"], "expect": "block" }
+      ]
+    },
+    "rebinding": {
+      "requires": ["dns", "pinning"],
+      "note": "The stub returns `lookups[n]` on the nth lookup. A runner maps each public answer to a local listener; a blocked answer must reach no listener at all.",
+      "vectors": [
+        {
+          "id": "rebind-after-pool-expiry",
+          "name": "rebind.test",
+          "lookups": [["93.184.216.34"], ["127.0.0.1"]],
+          "requests": [{ "expect": "allow" }, { "expect": "block" }],
+          "assert": { "lookupsPerConnection": 1, "blockedTargetConnections": 0, "connectTargetIsVetted": true }
+        }
+      ]
+    },
+    "redirect": {
+      "requires": ["redirect-inspect", "pinning"],
+      "note": "Names in `zone` resolve through a stub, and a runner maps each public answer to a local listener that serves `routes`. `{sink}` is the port of a listener standing in for an internal service. `zeroConnections` names listeners that must see no connection. `mode` defaults to none.",
+      "zone": {
+        "origin.test": ["93.184.216.34"],
+        "public.test": ["93.184.216.35"],
+        "private.test": ["127.0.0.1"]
+      },
+      "vectors": [
+        {
+          "id": "default-mode-returns-the-3xx",
+          "start": "https://origin.test/",
+          "routes": { "/": { "status": 302, "location": "https://public.test/" } },
+          "expect": "not-followed",
+          "zeroConnections": ["public.test"]
+        },
+        {
+          "id": "push-gateway-poc-replay",
+          "start": "https://origin.test/",
+          "routes": { "/": { "status": 302, "location": "http://127.0.0.1:{sink}/listener" } },
+          "expect": "not-followed",
+          "zeroConnections": ["sink"]
+        },
+        {
+          "id": "revet-http-loopback-literal",
+          "mode": { "type": "revet", "max": 10 },
+          "start": "https://origin.test/",
+          "routes": { "/": { "status": 302, "location": "http://127.0.0.1:{sink}/" } },
+          "expect": "block",
+          "zeroConnections": ["sink"]
+        },
+        {
+          "id": "revet-ipv6-loopback-literal",
+          "mode": { "type": "revet", "max": 10 },
+          "start": "https://origin.test/",
+          "routes": { "/": { "status": 302, "location": "https://[::1]:{sink}/" } },
+          "expect": "block",
+          "reason": "address",
+          "zeroConnections": ["sink"]
+        },
+        {
+          "id": "revet-name-resolving-to-loopback",
+          "mode": { "type": "revet", "max": 10 },
+          "start": "https://origin.test/",
+          "routes": { "/": { "status": 302, "location": "https://private.test/" } },
+          "expect": "block",
+          "reason": "address",
+          "zeroConnections": ["sink"]
+        },
+        {
+          "id": "revet-https-to-http-downgrade",
+          "mode": { "type": "revet", "max": 10 },
+          "start": "https://origin.test/",
+          "routes": { "/": { "status": 307, "location": "http://public.test/" } },
+          "expect": "block",
+          "reason": "scheme",
+          "zeroConnections": ["public.test"]
+        },
+        {
+          "id": "revet-relative-location",
+          "mode": { "type": "revet", "max": 10 },
+          "start": "https://origin.test/",
+          "routes": { "/": { "status": 302, "location": "/x" }, "/x": { "status": 200 } },
+          "expect": "allow"
+        },
+        {
+          "id": "revet-allow-list-escape",
+          "mode": { "type": "revet", "max": 10 },
+          "policy": { "allowList": [{ "exact": "origin.test" }] },
+          "start": "https://origin.test/",
+          "routes": { "/": { "status": 302, "location": "https://public.test/" } },
+          "expect": "block",
+          "reason": "not-allowed",
+          "zeroConnections": ["public.test"]
+        },
+        {
+          "id": "revet-10-hops",
+          "mode": { "type": "revet", "max": 10 },
+          "start": "https://origin.test/hop/0",
+          "chain": 10,
+          "expect": "allow"
+        },
+        {
+          "id": "revet-11-hops",
+          "mode": { "type": "revet", "max": 10 },
+          "start": "https://origin.test/hop/0",
+          "chain": 11,
+          "expect": "block",
+          "reason": "too-many-redirects"
+        },
+        {
+          "id": "same-origin-refuses-another-host",
+          "mode": { "type": "same-origin", "max": 10 },
+          "start": "https://origin.test/",
+          "routes": { "/": { "status": 302, "location": "https://public.test/" } },
+          "expect": "block",
+          "reason": "cross-origin",
+          "zeroConnections": ["public.test"]
+        },
+        {
+          "id": "same-origin-follows-a-relative-location",
+          "mode": { "type": "same-origin", "max": 10 },
+          "start": "https://origin.test/",
+          "routes": { "/": { "status": 302, "location": "/x" }, "/x": { "status": 200 } },
+          "expect": "allow"
+        }
+      ]
+    }
+  }
+}
