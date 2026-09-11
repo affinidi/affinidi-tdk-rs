@@ -194,8 +194,52 @@ impl AsyncResolver for JwkResolver {
 // ---------------------------------------------------------------------------
 
 /// Resolver for `did:webvh` — Web Verifiable History DID method.
+///
+/// Like `did:web`, a `did:webvh` value names the host its log is fetched from,
+/// so by default this refuses non-public hosts — see [`HostPolicy`]. Special-use
+/// names such as `localhost` are refused before any request is made, and a
+/// name that resolves to a non-public address is refused at connect time. A
+/// local stack using `did:webvh:{SCID}:localhost%3A8000` opts out with
+/// [`WebvhResolver::with_policy`], or with
+/// [`DIDCacheConfigBuilder::with_host_policy`](crate::config::DIDCacheConfigBuilder::with_host_policy),
+/// which sets did:web and did:webvh together.
+///
+/// No HTTP client is handed to `didwebvh-rs`, so resolution uses the client it
+/// builds itself: redirects refused, system proxy settings ignored and, under
+/// [`HostPolicy::PublicOnly`], every resolved address vetted before connecting.
 #[cfg(feature = "did-webvh")]
-pub struct WebvhResolver;
+#[derive(Debug, Clone, Copy)]
+pub struct WebvhResolver {
+    policy: HostPolicy,
+}
+
+#[cfg(feature = "did-webvh")]
+impl WebvhResolver {
+    /// Create a resolver refusing non-public hosts.
+    pub fn new() -> Self {
+        Self::with_policy(HostPolicy::PublicOnly)
+    }
+
+    /// Create a resolver under an explicit [`HostPolicy`].
+    pub fn with_policy(policy: HostPolicy) -> Self {
+        Self { policy }
+    }
+
+    fn resolve_options(&self) -> didwebvh_rs::resolve::ResolveOptions {
+        let policy = match self.policy {
+            HostPolicy::AllowPrivate => didwebvh_rs::resolve::HostPolicy::AllowPrivate,
+            _ => didwebvh_rs::resolve::HostPolicy::PublicOnly,
+        };
+        didwebvh_rs::resolve::ResolveOptions::default().with_host_policy(policy)
+    }
+}
+
+#[cfg(feature = "did-webvh")]
+impl Default for WebvhResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[cfg(feature = "did-webvh")]
 impl AsyncResolver for WebvhResolver {
@@ -217,7 +261,8 @@ impl AsyncResolver for WebvhResolver {
             let mut method = didwebvh_rs::DIDWebVHState::default();
             let did_str = did.to_string();
 
-            Some(match method.resolve(&did_str, Default::default()).await {
+            let resolution = method.resolve(&did_str, self.resolve_options()).await;
+            Some(match resolution {
                 Ok((log_entry, _)) => {
                     let doc_value = log_entry.get_did_document().map_err(|e| {
                         ResolverError::InvalidDocument(format!(
@@ -230,6 +275,10 @@ impl AsyncResolver for WebvhResolver {
                         }),
                         Err(e) => Err(e),
                     }
+                }
+                Err(e @ didwebvh_rs::DIDWebVHError::BlockedHost(_)) => {
+                    tracing::warn!("did:webvh resolution refused by host policy: {e}");
+                    Err(ResolverError::ResolutionFailed(e.to_string()))
                 }
                 Err(e) => {
                     error!("did:webvh resolution error: {e:?}");

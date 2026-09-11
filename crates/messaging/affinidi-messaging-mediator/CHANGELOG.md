@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (0.24.1) — `didwebvh-rs` 0.7
+
+- Bumps `didwebvh-rs` 0.6 → 0.7. There is no source change: this crate reads
+  its own did:webvh log through `LogEntry`, which 0.7 leaves unchanged.
+- **Behaviour, through `affinidi-did-resolver-cache-sdk` 0.8.37:** the resolver
+  this mediator builds from `[did_resolver]` now refuses did:webvh DIDs on
+  non-public hosts, as it already did for did:web. `[did_resolver]` has no
+  setting for this. Two consequences:
+  - A mediator whose own DID is `did:webvh:…:localhost%3A<port>`, and which
+    does not self-host that DID, logs the existing "Could not resolve our own
+    published DID document at boot" warning and skips the operating-secret
+    coverage check.
+  - Peers whose DIDs are on such hosts no longer resolve.
+
+  An embedder can pass a `DIDCacheConfig` built with
+  `with_host_policy(HostPolicy::AllowPrivate)` to `MediatorBuilder::did_resolver`.
+
 ## Unreleased (0.24.0) — `trust-tasks-rs` 0.20
 
 - Bumps `trust-tasks-rs` 0.19 → 0.20. **No source change** — only manifests.

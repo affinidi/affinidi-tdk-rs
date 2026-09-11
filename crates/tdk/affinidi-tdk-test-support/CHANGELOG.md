@@ -1,5 +1,12 @@
 # Affinidi TDK Test Support
 
+## Unreleased (0.8.5) — document the did:webvh host policy
+
+- Documentation only. A DID minted with `MockDidWebServer::webvh_authority`
+  (`did:webvh:…:localhost%3A<port>`) resolves only through a resolver that
+  allows private hosts, because `didwebvh-rs` 0.7 refuses `localhost` by
+  default. The module docs now show the `HostPolicy::AllowPrivate` opt-in.
+
 ## Unreleased (0.8.4) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

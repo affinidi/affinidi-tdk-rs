@@ -1,5 +1,58 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.37) — did:webvh host policy, one setting for did:web and did:webvh
+
+### Changed
+
+- **SECURITY / BEHAVIOUR (SSRF):** `did:webvh` resolution now refuses
+  non-public hosts by default, as `did:web` resolution has since 0.8.35. This
+  moves to `didwebvh-rs` 0.7, which:
+  - rejects `localhost`, `*.localhost`, `*.local`, `*.internal`, `home.arpa`
+    and single-label names before making any request;
+  - refuses, at connect time, a name that resolves to a loopback,
+    private-network, carrier-grade NAT, link-local or other non-public address;
+  - ignores system proxy settings in its default client.
+
+  Before, `did:webvh:{SCID}:localhost%3A<port>` was fetched over `http://`, and
+  any other name was fetched from whatever address it resolved to. A refused
+  DID now fails with `DIDCacheError::DIDError` naming `BlockedHost`.
+
+  This is breaking in effect for local stacks and for deployments whose
+  did:webvh hosts are on a private network. One setting opts both did:web and
+  did:webvh back in:
+
+  ```rust
+  use affinidi_did_resolver_cache_sdk::{
+      config::DIDCacheConfigBuilder, network_resolvers::HostPolicy,
+  };
+
+  let config = DIDCacheConfigBuilder::default()
+      .with_host_policy(HostPolicy::AllowPrivate)
+      .build();
+  ```
+
+- `DIDCacheClient::new` builds both its did:web and did:webvh resolvers from
+  the configured policy. The default is still `PublicOnly`, so did:web
+  behaviour does not change unless the setting is used.
+- `WebvhResolver` passes no HTTP client to `didwebvh-rs`, so the client that
+  crate builds is used. It refuses redirects, ignores proxies and vets resolved
+  addresses.
+- `WebvhResolver` is now a struct with a private field instead of a unit
+  struct. Code that used the value directly (`Box::new(WebvhResolver)`) must
+  call `WebvhResolver::new()` instead. No caller in this workspace did.
+- The `did-scid` feature now requires `did-scid` 0.2.7, which is built on
+  `didwebvh-rs` 0.7. `did:scid:vh` resolution therefore also contacts public
+  hosts only, and `with_host_policy` does not change that.
+
+### Added
+
+- `DIDCacheConfigBuilder::with_host_policy`.
+- `WebvhResolver::new`, `WebvhResolver::with_policy` and `Default`, mirroring
+  `WebResolver`.
+
+This is a patch bump per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md)
+point 3: `vta-sdk` pins `^0.8` through `[patch.crates-io]`.
+
 ## Unreleased (0.8.36) — retire did:cheqd resolution, clearing eight advisories
 
 Closes [#760]. `did:cheqd` still **parses**; this SDK no longer **resolves** it.
