@@ -62,12 +62,12 @@
  * ```
  */
 
-use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
+use std::net::IpAddr;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use affinidi_did_common::{DID, DIDMethod, Document};
+use affinidi_net_guard::{EgressError, EgressPolicy};
 use percent_encoding::percent_decode_str;
 use thiserror::Error;
 use tracing::debug;
@@ -250,7 +250,9 @@ impl DIDWeb {
             .map_err(|e| {
                 blocked_address_in_chain(&e).map_or_else(
                     || DidWebError::Http(format!("GET {url}: {e}")),
-                    |blocked| DidWebError::BlockedHost(blocked.to_string()),
+                    |(host, addr)| {
+                        DidWebError::BlockedHost(format!("{host} resolves to non-routable {addr}"))
+                    },
                 )
             })?;
 
@@ -306,6 +308,11 @@ pub async fn resolve(did: &str) -> Result<Document, DidWebError> {
 /// This classifies the host *as written in the DID*. A hostname that resolves
 /// to one of these addresses is caught separately, at connect time, by
 /// [`guarded_dns_resolver`].
+///
+/// Addresses are classified by `affinidi_net_guard`. The name set is this
+/// crate's own and deliberately narrower than `affinidi-net-guard`'s default
+/// (which also refuses `*.internal`, `*.home.arpa` and single-label names):
+/// adopting that is a behaviour change, left for a minor release.
 fn host_is_blocked(host: &str) -> bool {
     // A trailing root dot is part of a legal hostname and survives URL
     // normalisation, so `localhost.` must normalise to `localhost` before the
@@ -324,81 +331,23 @@ fn host_is_blocked(host: &str) -> bool {
     }
 }
 
-/// Reject a resolved address that must never be connected to.
+/// Reject a resolved address that must never be connected to: anything
+/// `affinidi_net_guard` does not classify as globally routable.
 fn ip_is_blocked(addr: IpAddr) -> bool {
-    match addr {
-        IpAddr::V4(a) => ipv4_is_blocked(a),
-        IpAddr::V6(a) => ipv6_is_blocked(a),
-    }
+    !affinidi_net_guard::is_globally_routable(addr)
 }
 
-fn ipv4_is_blocked(a: Ipv4Addr) -> bool {
-    let o = a.octets();
-    a.is_loopback()
-        || a.is_private()
-        || a.is_link_local() // 169.254.0.0/16 — covers cloud metadata 169.254.169.254
-        || a.is_broadcast()
-        || o[0] == 0 // 0.0.0.0/8 "this network" — includes the unspecified address
-        // 100.64.0.0/10 carrier-grade NAT: the Alibaba/Oracle metadata address
-        // 100.100.100.200 lives here, as do the node/pod CIDRs of many
-        // Kubernetes deployments. `Ipv4Addr::is_shared` is still unstable.
-        || (o[0] == 100 && (64..128).contains(&o[1]))
-        || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24 IETF protocol assignments
-        || (o[0] == 198 && (o[1] & 0xfe) == 18) // 198.18.0.0/15 benchmarking
-}
-
-fn ipv6_is_blocked(a: Ipv6Addr) -> bool {
-    if a.is_loopback() || a.is_unspecified() {
-        return true;
-    }
-    // Both IPv4-mapped (::ffff:a.b.c.d) and the deprecated IPv4-compatible
-    // (::a.b.c.d) forms reach the same v4 target on stacks that still route
-    // them, and `to_ipv4` — unlike `to_ipv4_mapped` — covers both.
-    if let Some(v4) = a.to_ipv4() {
-        return ipv4_is_blocked(v4);
-    }
-    let s = a.segments();
-    // NAT64 well-known prefix 64:ff9b::/96 embeds a v4 destination in the low
-    // 32 bits, so classify that destination.
-    if s[0] == 0x0064 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0] {
-        let v4 = Ipv4Addr::from(((u32::from(s[6])) << 16) | u32::from(s[7]));
-        return ipv4_is_blocked(v4);
-    }
-    (s[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
-        || (s[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
-        || (s[0] & 0xffc0) == 0xfec0 // deprecated site-local fec0::/10
-}
-
-/// Refusal raised by [`guarded_dns_resolver`] when a hostname resolves to a
-/// non-routable address. Travels out through `reqwest`'s error chain, where
-/// [`blocked_address_in_chain`] recovers it and reports
-/// [`DidWebError::BlockedHost`] rather than a generic transport failure.
-#[derive(Debug)]
-struct BlockedAddress {
-    host: String,
-    addr: IpAddr,
-}
-
-impl fmt::Display for BlockedAddress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} resolves to non-routable {}", self.host, self.addr)
-    }
-}
-
-impl std::error::Error for BlockedAddress {}
-
-/// Recover a [`BlockedAddress`] from anywhere in an error's source chain.
+/// Recover the refusal raised by [`guarded_dns_resolver`] (a hostname that
+/// resolved to a non-routable address) from anywhere in an error's source
+/// chain, so it is reported as [`DidWebError::BlockedHost`] rather than as a
+/// generic transport failure.
 fn blocked_address_in_chain<'a>(
     err: &'a (dyn std::error::Error + 'static),
-) -> Option<&'a BlockedAddress> {
-    let mut next = Some(err);
-    while let Some(e) = next {
-        if let Some(blocked) = e.downcast_ref::<BlockedAddress>() {
-            return Some(blocked);
-        }
-        next = e.source();
+) -> Option<(&'a str, IpAddr)> {
+    match affinidi_net_guard::blocked_in_chain(err) {
+        Some(EgressError::BlockedAddress { host, addr, .. }) => Some((host.as_str(), *addr)),
+        _ => None,
     }
-    None
 }
 
 /// A DNS resolver that refuses to hand back a non-routable address.
@@ -424,32 +373,22 @@ pub fn guarded_dns_resolver() -> Arc<dyn reqwest::dns::Resolve> {
     Arc::new(GuardedResolver)
 }
 
+/// Delegates to `affinidi_net_guard::GuardedResolver` under
+/// `EgressPolicy::public_internet()`: it resolves the name, fails closed if
+/// *any* answer is non-routable, and returns only the vetted addresses. The
+/// resolver checks addresses only, never names, so this crate's name set is
+/// unaffected.
 #[derive(Debug, Clone, Copy)]
 struct GuardedResolver;
 
 impl reqwest::dns::Resolve for GuardedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        Box::pin(async move {
-            let host = name.as_str().to_owned();
-            // Port 0: reqwest substitutes the URL's port (or the scheme's
-            // default) over whatever we return.
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
-                .collect();
-
-            // Fail closed on the whole name, not per-address: a name with even
-            // one internal answer is not a name we are willing to fetch from.
-            if let Some(bad) = addrs.iter().find(|a| ip_is_blocked(a.ip())) {
-                return Err(Box::new(BlockedAddress {
-                    host,
-                    addr: bad.ip(),
-                })
-                    as Box<dyn std::error::Error + Send + Sync>);
-            }
-
-            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
-        })
+        static PUBLIC_ONLY: OnceLock<affinidi_net_guard::GuardedResolver> = OnceLock::new();
+        PUBLIC_ONLY
+            .get_or_init(|| {
+                affinidi_net_guard::GuardedResolver::new(EgressPolicy::public_internet())
+            })
+            .resolve(name)
     }
 }
 
