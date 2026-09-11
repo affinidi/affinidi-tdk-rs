@@ -8,6 +8,7 @@ members = [
   "crates/core/affinidi-secrets-resolver",
   "crates/core/affinidi-bbs",
   "crates/core/affinidi-task-utils",
+  "crates/core/affinidi-net-guard",
 
   # Identity: DID resolution, authentication
   "crates/identity/affinidi-did-common",
@@ -97,6 +98,7 @@ lto = true
 affinidi-secrets-resolver = { path = "crates/core/affinidi-secrets-resolver" }
 affinidi-task-utils = { path = "crates/core/affinidi-task-utils" }
 affinidi-rate-limit = { path = "crates/core/affinidi-rate-limit" }
+affinidi-net-guard = { path = "crates/core/affinidi-net-guard" }
 affinidi-did-resolver-cache-sdk = { path = "crates/identity/affinidi-did-resolver-cache-sdk" }
 affinidi-did-common = { path = "crates/identity/affinidi-did-common" }
 affinidi-crypto = { path = "crates/core/affinidi-crypto" }

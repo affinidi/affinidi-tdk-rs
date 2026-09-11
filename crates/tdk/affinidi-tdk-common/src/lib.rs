@@ -88,6 +88,7 @@ pub mod profiles;
 pub mod secrets;
 pub mod tasks;
 
+pub use affinidi_net_guard as net_guard;
 pub use affinidi_secrets_resolver as secrets_resolver;
 use tasks::authentication::AuthenticationCache;
 
@@ -158,6 +159,54 @@ const POOL_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15
 /// [`reqwest::Client`] cannot be constructed, or if non-empty `extra_roots`
 /// are supplied on Android (see *Platform support*).
 pub fn create_http_client(extra_roots: &[CertificateDer<'static>]) -> Result<Client, TDKError> {
+    let tls_config = platform_tls_config(extra_roots)?;
+    reqwest::ClientBuilder::new()
+        .use_rustls_tls()
+        .use_preconfigured_tls(tls_config)
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+        .user_agent(user_agent())
+        .build()
+        .map_err(|e| TDKError::Config(format!("HTTP client build failed: {e}")))
+}
+
+/// Build a [`GuardedClient`](affinidi_net_guard::GuardedClient) for URLs an
+/// attacker can influence (DID-document endpoints, redirect targets, anything
+/// derived from a DID), with the same TLS setup, pool idle timeout and user
+/// agent as [`create_http_client`].
+///
+/// On top of that client it enforces `policy` in both halves: the URL is
+/// vetted before a request is built (the only check an IP literal meets), and
+/// every address a name resolves to is vetted at connect time. It also uses
+/// no proxy, finite timeouts, no redirects, a capped body read and
+/// `https_only` unless the policy has dev loopback. See
+/// [`affinidi_net_guard`] (re-exported as [`net_guard`]).
+///
+/// # Errors
+///
+/// As [`create_http_client`].
+pub fn create_guarded_http_client(
+    extra_roots: &[CertificateDer<'static>],
+    policy: &affinidi_net_guard::EgressPolicy,
+) -> Result<affinidi_net_guard::GuardedClient, TDKError> {
+    let tls_config = platform_tls_config(extra_roots)?;
+    affinidi_net_guard::GuardedClientBuilder::new(policy.clone())
+        .tls_preconfigured(tls_config)
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+        .user_agent(user_agent())
+        .build()
+        .map_err(|e| TDKError::Config(format!("guarded HTTP client build failed: {e}")))
+}
+
+fn user_agent() -> String {
+    format!(
+        "Affinidi Trust Development Kit {}",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// The rustls configuration both client constructors share: the platform
+/// verifier, plus `extra_roots` where the platform allows it.
+fn platform_tls_config(extra_roots: &[CertificateDer<'static>]) -> Result<ClientConfig, TDKError> {
     static CRYPTO_INIT: OnceLock<()> = OnceLock::new();
     CRYPTO_INIT.get_or_init(|| {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -206,16 +255,7 @@ pub fn create_http_client(extra_roots: &[CertificateDer<'static>]) -> Result<Cli
                 .with_no_client_auth()
         }
     };
-    reqwest::ClientBuilder::new()
-        .use_rustls_tls()
-        .use_preconfigured_tls(tls_config)
-        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-        .user_agent(format!(
-            "Affinidi Trust Development Kit {}",
-            env!("CARGO_PKG_VERSION")
-        ))
-        .build()
-        .map_err(|e| TDKError::Config(format!("HTTP client build failed: {e}")))
+    Ok(tls_config)
 }
 
 impl TDKSharedState {

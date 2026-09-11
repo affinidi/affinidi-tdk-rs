@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-web"
-version = "0.1.4"
+version = "0.1.5"
 description = "Minimal did:web DID method resolver for the Affinidi TDK"
 repository.workspace = true
 edition.workspace = true
@@ -17,6 +17,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 affinidi-did-common = "0.4"
+# Address classification and the connect-time DNS resolver of the SSRF guard.
+# Named at the exact sibling version so the publish dry-run guard reports
+# `wait` until it is on crates.io, rather than registry drift.
+affinidi-net-guard = "0.1.0"
 percent-encoding = "2"
 reqwest = { version = "0.13", default-features = false, features = [
   "rustls",
@@ -26,9 +30,6 @@ reqwest = { version = "0.13", default-features = false, features = [
 ] }
 serde_json = "1"
 thiserror = "2"
-# `net` only: the SSRF guard resolves hostnames itself so it can refuse a name
-# that points at a non-routable address. reqwest already pulls tokio.
-tokio = { version = "1", default-features = false, features = ["net"] }
 tracing = "0.1"
 
 [dev-dependencies]

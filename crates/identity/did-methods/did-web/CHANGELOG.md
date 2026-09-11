@@ -2,6 +2,38 @@
 
 ## Changelog history
 
+## 11th September 2026
+
+### 0.1.5 — the SSRF guard moves to `affinidi-net-guard`
+
+- Address classification and the connect-time DNS resolver now come from the
+  new shared `affinidi-net-guard` 0.1.0 crate instead of private code here.
+  The public API is unchanged: `HostPolicy`, `DIDWeb::with_policy`,
+  `DIDWeb::with_client_and_policy` and `guarded_dns_resolver()` behave as in
+  0.1.4, and `BlockedHost` messages keep their wording.
+- **Names are unchanged.** did-web still refuses only `localhost`,
+  `*.localhost` and `*.local`. `affinidi-net-guard`'s default also refuses
+  `*.internal`, `*.home.arpa` and single-label names; since those can resolve
+  to real internal hosts, adopting that set is a behaviour change and is left
+  for a minor release.
+- **Addresses the shared classifier also refuses.** These were accepted by
+  0.1.4 and are now `BlockedHost`. None can host a working public HTTPS
+  endpoint, so no working deployment is affected, but a test that expected a
+  connect error for one of them now sees `BlockedHost` instead:
+  - IPv4 documentation (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`),
+    multicast (`224.0.0.0/4`) and reserved (`240.0.0.0/4`) space;
+  - IPv6 multicast (`ff00::/8`), documentation (`2001:db8::/32`, `3fff::/20`),
+    discard-only `100::/64`, SRv6 `5f00::/16`, and the non-global parts of
+    `2001::/23`;
+  - the IPv4-mapped, IPv4-compatible and NAT64 forms of those IPv4 ranges;
+  - 6to4 (`2002::/16`) and Teredo (`2001::/32`) addresses whose embedded IPv4
+    address is not globally routable, and local-use NAT64 (`64:ff9b:1::/48`)
+    addresses that embed a non-routable IPv4 address (such as
+    `64:ff9b:1::a9fe:a9fe`, which a local NAT64 gateway would translate to the
+    metadata address) or are not in the `/96` form.
+- The direct `tokio` dependency is dropped; the lookup happens in
+  `affinidi-net-guard`.
+
 ## 3rd September 2026
 
 ### 0.1.4 — SSRF hardening
