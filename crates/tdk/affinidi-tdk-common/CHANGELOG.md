@@ -1,5 +1,16 @@
 # Changelog — `affinidi-tdk-common`
 
+## Unreleased (0.6.11) — guarded HTTP client
+
+- Adds `create_guarded_http_client(extra_roots, &EgressPolicy)` next to
+  `create_http_client`. It returns an `affinidi_net_guard::GuardedClient` built
+  on the same platform TLS verifier, extra roots, pool idle timeout and user
+  agent, and enforces the egress policy for URLs an attacker can influence.
+- Re-exports `affinidi-net-guard` as `affinidi_tdk_common::net_guard`, so a
+  consumer can build an `EgressPolicy` without a direct dependency.
+- `create_http_client` is unchanged; its TLS setup moved into a private helper
+  that both constructors share. Additive, hence a patch.
+
 ## Unreleased (0.6.10) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

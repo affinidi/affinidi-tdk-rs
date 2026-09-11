@@ -9,6 +9,38 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
+### Added
+
+- **`affinidi-net-guard` 0.1.0: one egress guard for URLs an attacker can
+  influence.** **`affinidi-did-web` 0.1.5**, **`affinidi-tdk-common` 0.6.11**.
+
+  A DID names the host a resolver fetches from, and a DID document names the
+  endpoints a client dials, so each is a server-side request forgery primitive
+  unless something refuses internal targets. `affinidi-did-web` 0.1.4 had the
+  strongest guard in the stack, but it was private to a DID-method crate. It is
+  now a leaf crate under `crates/core/` with no `affinidi-*` dependency, so
+  DID-method crates and external clients can take it without a cycle
+  ([ADR 0006](docs/adr/0006-egress-guard-for-attacker-influenceable-urls.md)).
+
+  The crate enforces two halves, and both are needed. `EgressPolicy::vet` checks
+  the scheme, userinfo, port, allow-list, special-use names and IP literals;
+  `reqwest` never consults a resolver for a literal, so this is the only check a
+  literal meets. `GuardedResolver` checks every address a name resolves to,
+  fails the name on any blocked answer, and pins the connection to the vetted
+  addresses. `GuardedClient` runs both, with no proxy, finite timeouts, no
+  redirects by default and a capped body read.
+
+  `conformance/egress-vectors.v1.json` is the vector file the TypeScript and
+  Swift guards will share; the crate's tests run it, including DNS rebinding and
+  redirect cases against local TLS listeners.
+
+  `affinidi-did-web` now takes its address classification and resolver from the
+  new crate, with its API and name set unchanged. The shared classifier also
+  refuses some non-routable ranges that 0.1.4 accepted; its changelog lists
+  them. `affinidi-tdk-common` adds `create_guarded_http_client(extra_roots,
+  &policy)` on the existing platform TLS setup, and re-exports the crate as
+  `net_guard`.
+
 ### Changed
 
 - **`trust-tasks-rs` 0.19 → 0.20 across the messaging family (breaking).**
