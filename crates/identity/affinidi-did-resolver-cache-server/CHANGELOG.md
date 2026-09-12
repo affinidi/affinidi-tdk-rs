@@ -1,5 +1,22 @@
 # Affinidi DID Resolver Cache Server
 
+## Unreleased (0.9.13) — did:webvh host policy
+
+- Bumps `didwebvh-rs` 0.6 → 0.7 and requires `affinidi-did-resolver-cache-sdk`
+  0.8.37. did:webvh resolution through this server now refuses non-public
+  hosts, as did:web resolution already did (see the SDK's 0.8.37 entry).
+- The client that fetches `did.jsonl` and `did-witness.json` for `_did_log` /
+  `_did_witness_log` now matches the one `didwebvh-rs` builds:
+  - it ignores system proxy settings;
+  - it resolves names through `didwebvh_rs::resolve::guarded_dns_resolver()`,
+    which refuses a name when any resolved address is non-public;
+  - it still refuses redirects.
+
+  The fetch URLs come from `WebVHURL::get_fetch_url` under
+  `HostPolicy::PublicOnly`, instead of from `get_http_url`.
+- **Behaviour:** a deployment that can reach did:webvh hosts only through
+  `HTTP(S)_PROXY` can no longer resolve did:webvh DIDs or attach their logs.
+
 ## Unreleased (0.9.12) — dependency refresh
 
 - Bumps `tower-http` 0.6 → 0.7.

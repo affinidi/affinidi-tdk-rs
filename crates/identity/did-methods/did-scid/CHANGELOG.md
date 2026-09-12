@@ -1,5 +1,18 @@
 # did:scid
 
+## Unreleased (0.2.7) — `didwebvh-rs` 0.7
+
+- Bumps `didwebvh-rs` 0.6 → 0.7. Only the manifest changes.
+- **Behaviour:** `resolve` for a `did:scid:vh` DID now contacts public hosts
+  only. `didwebvh-rs` 0.7 refuses `localhost`, other special-use names, and
+  names that resolve to non-public addresses. A `src` such as `localhost:3000`
+  now fails with `DIDSCIDError::WebVHError` wrapping
+  `DIDWebVHError::BlockedHost`, and no request is made. `resolve` takes no host
+  policy argument, so this crate offers no opt-out.
+- `DIDSCIDError::WebVHError` wraps `didwebvh_rs::DIDWebVHError`, so that variant
+  now carries the 0.7 type. This is a patch bump per ADR 0003 point 3, as for
+  the `didwebvh-rs` 0.5 → 0.6 move.
+
 ## Unreleased (0.2.6) — retire did:cheqd resolution
 
 Part of [#760]. A `did:scid` whose `?src=` names a `did:cheqd` still parses, and

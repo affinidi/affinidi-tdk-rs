@@ -84,13 +84,16 @@ async fn read_text_limited(mut resp: reqwest::Response, limit: usize) -> Option<
 /// For did:webvh DIDs, fetch the raw DID log + witness file from the source
 /// HTTP endpoint so clients can independently verify the cryptographic chain.
 ///
-/// The target host is derived from the caller-supplied DID, so this client
-/// refuses redirects and caps the response body to avoid being used as an SSRF
-/// pivot / reflection oracle or memory-exhaustion vector.
+/// The target host is derived from the caller-supplied DID, so the URLs are
+/// built under `HostPolicy::PublicOnly` (the policy this server's resolver
+/// uses), the client refuses redirects and non-public DNS answers, and the
+/// response body is capped, to avoid being used as an SSRF pivot / reflection
+/// oracle or memory-exhaustion vector.
 pub(crate) async fn fetch_webvh_log(
     client: &reqwest::Client,
     did: &str,
 ) -> (Option<String>, Option<String>) {
+    let policy = didwebvh_rs::resolve::HostPolicy::PublicOnly;
     let parsed_url = match didwebvh_rs::url::WebVHURL::parse_did_url(did) {
         Ok(url) => url,
         Err(e) => {
@@ -99,7 +102,7 @@ pub(crate) async fn fetch_webvh_log(
         }
     };
 
-    let log_url = match parsed_url.get_http_url(Some("did.jsonl")) {
+    let log_url = match parsed_url.get_fetch_url("did.jsonl", policy) {
         Ok(url) => url,
         Err(e) => {
             warn!("Failed to construct log URL for WebVH DID: {e}");
@@ -122,7 +125,7 @@ pub(crate) async fn fetch_webvh_log(
     };
 
     let did_witness_log = if did_log.is_some() {
-        let witness_url = match parsed_url.get_http_url(Some("did-witness.json")) {
+        let witness_url = match parsed_url.get_fetch_url("did-witness.json", policy) {
             Ok(url) => url,
             Err(_) => return (did_log, None),
         };

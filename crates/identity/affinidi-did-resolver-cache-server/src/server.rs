@@ -92,11 +92,16 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
     let resolver = DIDCacheClient::new(cache_config).await?;
 
     // One shared HTTP client for did:webvh log fetches, built once so
-    // connections are pooled (was previously rebuilt per request). Refuses
-    // redirects to avoid SSRF pivots, matching the previous per-call config.
+    // connections are pooled. The DID names the host, so this client keeps the
+    // protections of didwebvh-rs's own client: redirects refused, system proxy
+    // settings ignored (a proxy resolves the name where the DNS guard cannot
+    // see it), and a DNS resolver that refuses a name resolving to any
+    // non-public address.
     let webvh_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .dns_resolver(didwebvh_rs::resolve::guarded_dns_resolver())
         .build()
         .map_err(|e| {
             DIDCacheError::ConfigError(format!("Failed to build WebVH HTTP client: {e}"))

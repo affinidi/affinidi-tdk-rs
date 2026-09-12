@@ -833,7 +833,9 @@ impl DIDCacheClient {
         resolvers
             .entry(MethodName::Web)
             .or_default()
-            .push_back(Box::new(network_resolvers::WebResolver::new()));
+            .push_back(Box::new(network_resolvers::WebResolver::with_policy(
+                config.host_policy,
+            )));
         #[cfg(feature = "did-jwk")]
         resolvers
             .entry(MethodName::Jwk)
@@ -843,7 +845,9 @@ impl DIDCacheClient {
         resolvers
             .entry(MethodName::Webvh)
             .or_default()
-            .push_back(Box::new(network_resolvers::WebvhResolver));
+            .push_back(Box::new(network_resolvers::WebvhResolver::with_policy(
+                config.host_policy,
+            )));
         #[cfg(feature = "did-cheqd")]
         resolvers
             .entry(MethodName::Cheqd)
