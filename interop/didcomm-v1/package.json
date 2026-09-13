@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "@credo-ts/askar": "^0.6.3",
-    "@credo-ts/core": "^0.6.3",
+    "@credo-ts/core": "^0.7.0",
     "@credo-ts/didcomm": "^0.6.3",
     "@credo-ts/node": "^0.6.3",
     "@openwallet-foundation/askar-nodejs": "^0.4.3"
