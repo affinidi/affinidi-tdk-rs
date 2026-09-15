@@ -1,5 +1,21 @@
 # Affinidi Messaging Mediator Setup
 
+## Unreleased (0.1.32) — `vta-sdk` 0.32 → 0.38
+
+`ProvisionSummary` gained `context` and `admin_scope`. The wizard's *offline*
+sealed-handoff path synthesises its own summary from the opened bundle, and
+both are set to `None` there because it has nothing to echo:
+`TemplateBootstrapConfig` records neither the target context nor the scope of
+the ACL entry the operator's `vta bootstrap provision-integration` wrote.
+Filling either in would put a claim in the VTA's mouth that nothing verified —
+the same error as reading `admin_scope` back from the request instead of the
+reply. The SDK specifies that a reader MUST treat `admin_scope: None` as
+`AdminScope::Context`, which is what a sealed mint is.
+
+The online path is unchanged: it carries the VTA's own summary through.
+
+900 tests green across the five mediator crates.
+
 ## Unreleased (0.1.31) — `aws-smithy-types` held below 1.7
 
 No behaviour change; a resolver bound only.
