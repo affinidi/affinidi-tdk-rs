@@ -1,5 +1,16 @@
 # Affinidi Messaging Mediator Processors
 
+## Unreleased (0.14.0) — TSP Rev 3: `mediator-common` 0.16
+
+No source change in this crate. It takes a minor for the same reason
+`mediator-config` does: it carries `mediator-common` types, and
+`ForwardQueueEntry::to_did` may now be empty under Rev 3 §5.3.3, which forbids
+an intermediary retaining a relayed endpoint-to-endpoint destination. A
+processor that read that field for a log line will now read `""`; nothing routes
+on it.
+
+Invisible to cargo-semver-checks, because no signature moves in either crate.
+
 ## Changelog history
 
 ## 5th May 2026
