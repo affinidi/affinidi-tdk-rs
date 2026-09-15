@@ -32,6 +32,29 @@ macro_rules! env_override_opt {
     };
 }
 
+/// Override a `Vec<String>` field from a comma-separated environment variable.
+macro_rules! env_override_list {
+    ($field:expr, $env_var:expr) => {
+        if let Ok(val) = std::env::var($env_var) {
+            $field = split_list(&val);
+        }
+    };
+}
+
+/// Split a comma-separated environment value into list entries.
+///
+/// Entries are trimmed and empties dropped, so `""` clears the list and
+/// `"a, b"` is the same as `"a,b"`. TOML gives these fields a real array, so
+/// the comma form exists only for the environment.
+fn split_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Apply environment variable overrides to the raw config. Env vars take
 /// priority over values in the TOML file.
 pub fn apply_env_overrides(config: &mut ConfigRaw) {
@@ -43,6 +66,7 @@ pub fn apply_env_overrides(config: &mut ConfigRaw) {
     env_override!(config.server.api_prefix, "API_PREFIX");
     env_override!(config.server.admin_did, "ADMIN_DID");
     env_override_opt!(config.server.did_web_self_hosted, "DID_WEB_SELF_HOSTED");
+    env_override_list!(config.server.local_endpoints, "LOCAL_ENDPOINTS");
 
     env_override!(config.database.functions_file, "DATABASE_FUNCTIONS_FILE");
     env_override!(config.database.database_url, "DATABASE_URL");
@@ -241,6 +265,18 @@ pub fn apply_env_overrides(config: &mut ConfigRaw) {
         config.processors.forwarding.consumer_group,
         "PROCESSOR_FORWARDING_CONSUMER_GROUP"
     );
+    env_override!(
+        config.processors.forwarding.max_hops,
+        "PROCESSOR_FORWARDING_MAX_HOPS"
+    );
+    env_override!(
+        config.processors.forwarding.relay_mode,
+        "PROCESSOR_FORWARDING_RELAY_MODE"
+    );
+    env_override!(
+        config.processors.forwarding.relay_trusted_mediators,
+        "PROCESSOR_FORWARDING_RELAY_TRUSTED_MEDIATORS"
+    );
 
     env_override!(
         config.processors.message_expiry_cleanup.enabled,
@@ -295,4 +331,33 @@ where
     }
 
     Ok(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_list;
+
+    #[test]
+    fn split_list_trims_entries_and_drops_empties() {
+        assert_eq!(
+            split_list("https://a.example.com, https://b.example.com:7037"),
+            vec![
+                "https://a.example.com".to_string(),
+                "https://b.example.com:7037".to_string(),
+            ]
+        );
+        assert_eq!(split_list("did:example:one"), vec!["did:example:one"]);
+        // A trailing separator is a typo, not an empty entry.
+        assert_eq!(split_list("did:example:one,"), vec!["did:example:one"]);
+    }
+
+    /// An empty value clears the list rather than producing one empty entry —
+    /// this is how an operator turns off a TOML-configured allowlist from the
+    /// environment.
+    #[test]
+    fn split_list_empty_value_clears_the_list() {
+        assert!(split_list("").is_empty());
+        assert!(split_list("  ").is_empty());
+        assert!(split_list(",,").is_empty());
+    }
 }

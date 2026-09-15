@@ -17,7 +17,11 @@
 //! host `localhost`, so [`MockDidWebServer::webvh_authority`] returns
 //! `localhost%3A<port>` for minting `did:webvh:…:localhost%3A<port>:…` DIDs.
 //! That path relies on `localhost` resolving to the loopback the server is
-//! bound on (the standard configuration).
+//! bound on (the standard configuration), and on the resolver allowing private
+//! hosts: `didwebvh-rs` 0.7 refuses `localhost` by default. Opt in with
+//! `ResolveOptions::default().with_host_policy(HostPolicy::AllowPrivate)`, or
+//! through the resolver cache with
+//! `DIDCacheConfigBuilder::default().with_host_policy(HostPolicy::AllowPrivate)`.
 //!
 //! ```
 //! use affinidi_tdk_test_support::did_web::{Fault, MockDidWebServer};
@@ -152,7 +156,8 @@ impl MockDidWebServer {
     }
 
     /// `localhost%3A<port>` — the authority to embed in a `did:webvh` DID so
-    /// its resolver fetches the log over `http://localhost:<port>/…`.
+    /// its resolver fetches the log over `http://localhost:<port>/…`. The
+    /// resolver must allow private hosts (see the module docs).
     pub fn webvh_authority(&self) -> String {
         format!("localhost%3A{}", self.addr.port())
     }

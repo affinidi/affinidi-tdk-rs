@@ -1903,6 +1903,9 @@ fn build_cargo_args(features: &[&str], needs_explicit: bool) -> Vec<String> {
     let mut args = vec![
         "build".to_string(),
         "--release".to_string(),
+        // Same reason as `build_install_args`: build what the lockfile
+        // resolved, not whatever is newest today.
+        "--locked".to_string(),
         "-p".to_string(),
         "affinidi-messaging-mediator".to_string(),
     ];
@@ -2031,6 +2034,14 @@ fn build_install_args(
         "install".to_string(),
         "--path".to_string(),
         "crates/messaging/affinidi-messaging-mediator".to_string(),
+        // `cargo install` re-resolves every dependency and ignores the
+        // workspace lockfile unless it is told not to. That is not a
+        // preference: an unlocked resolve is what took `aws-smithy-types`
+        // 1.7.0 and failed to compile `aws-smithy-json` inside the registry
+        // source, for operators who had changed nothing. The wizard runs this
+        // command itself, so an operator passing `--locked` to their own
+        // builds could not reach it.
+        "--locked".to_string(),
     ];
 
     if needs_explicit {

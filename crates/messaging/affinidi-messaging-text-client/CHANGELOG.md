@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.12.7) — dependency currency
+
+No behaviour change: `ratatui-image` 10 → 11.
+
 ## [0.12.6] - 2026-08-17
 
 ### Changed

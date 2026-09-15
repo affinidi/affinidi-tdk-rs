@@ -1098,7 +1098,7 @@ fn augment_did_web_doc_with_tsp_service(doc: &mut Document, did: &str) -> Option
         .iter()
         .find(|s| s.type_.iter().any(|t| t == "DIDCommMessaging"))
         .and_then(|s| s.service_endpoint.get_uri())?;
-    let endpoint = url::Url::parse(uri.trim_matches('"')).ok()?;
+    let endpoint = url::Url::parse(&uri).ok()?;
 
     let service = ServiceBuilder::new(tsp_type, Endpoint::Url(endpoint))
         .id(&format!("{did}#tsp"))

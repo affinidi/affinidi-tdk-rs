@@ -8,6 +8,7 @@ members = [
   "crates/core/affinidi-secrets-resolver",
   "crates/core/affinidi-bbs",
   "crates/core/affinidi-task-utils",
+  "crates/core/affinidi-net-guard",
 
   # Identity: DID resolution, authentication
   "crates/identity/affinidi-did-common",
@@ -86,6 +87,39 @@ rust-version = "1.95.0"
 [workspace.dependencies]
 tokio = "1"
 
+# Upper bound on `aws-smithy-types`, which nothing in this workspace calls.
+#
+# **This is here to constrain the resolver, not because anything uses it.**
+# `aws-smithy-types` 1.7.0 changed `Document::Object` from
+# `HashMap<String, Document>` to a new `DocumentObject`, and added a variant to
+# an enum that is `#[non_exhaustive]` — a breaking change shipped as a MINOR
+# bump. `aws-smithy-json` 0.63.0 declares `aws-smithy-types = "^1.6.1"`, which
+# admits 1.7.0 and then fails to compile against it, inside the registry source:
+#
+#   error[E0308]: expected `DocumentObject`, found `HashMap<String, Document>`
+#   error[E0004]: non-exhaustive patterns: `&_` not covered
+#
+# Cargo unifies `aws-smithy-types` to one version across the graph but keeps
+# both `aws-smithy-json` 0.63 and 0.64 (0.x minors are incompatible majors), so
+# the two coexist and only the 0.63 copy breaks. We have both because the newer
+# `aws-sdk-*` releases moved to json `^0.64.0` while `aws-config` 1.12.0 — its
+# newest release — still wants `^0.63.0`, and `aws-config` is what every AWS
+# feature here pulls.
+#
+# **This workspace ships no `Cargo.lock`** (it is in `.gitignore`), so there is
+# no lockfile to hold the working set and `--locked` has nothing to honour:
+# every clone resolves from scratch and every fresh resolve takes the break.
+# The manifest is the only place the constraint can live. A
+# `[workspace.dependencies]` entry alone constrains nothing, though — Cargo
+# honours a requirement only from a crate that *declares* the dependency, so
+# each crate whose subtree pulls `aws-config` names it below, under the same
+# feature.
+#
+# **Remove this the moment `aws-config` ships a release on json 0.64.** The
+# bound is `< 1.7` rather than `= 1.6.3` so patch releases in the working line
+# are still picked up; it is an exclusion of the break, not a freeze.
+aws-smithy-types = ">=1.6.1, <1.7"
+
 [profile.release]
 # Tell `rustc` to optimize for small code size.
 opt-level = "s"
@@ -97,7 +131,9 @@ lto = true
 affinidi-secrets-resolver = { path = "crates/core/affinidi-secrets-resolver" }
 affinidi-task-utils = { path = "crates/core/affinidi-task-utils" }
 affinidi-rate-limit = { path = "crates/core/affinidi-rate-limit" }
+affinidi-net-guard = { path = "crates/core/affinidi-net-guard" }
 affinidi-did-resolver-cache-sdk = { path = "crates/identity/affinidi-did-resolver-cache-sdk" }
+affinidi-did-resolver-traits = { path = "crates/identity/affinidi-did-resolver-traits" }
 affinidi-did-common = { path = "crates/identity/affinidi-did-common" }
 affinidi-crypto = { path = "crates/core/affinidi-crypto" }
 affinidi-encoding = { path = "crates/core/affinidi-encoding" }

@@ -41,21 +41,62 @@ jobs:
       RUSTUP_TOOLCHAIN: nightly
       CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
     steps:
-      - uses: actions/checkout@v4
+      # Restrict runner egress (SEC-3898): a fuzz build compiles and runs
+      # third-party crate build scripts; block every network destination except
+      # the ones this job legitimately needs, so a compromised dependency cannot
+      # exfiltrate. New-version supply-chain risk is separately closed by the
+      # committed fuzz Cargo.lock (SEC-3899); this is defense in depth.
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            objects.githubusercontent.com:443
+            codeload.github.com:443
+            release-assets.githubusercontent.com:443
+            crates.io:443
+            static.crates.io:443
+            index.crates.io:443
+            static.rust-lang.org:443
+            azure.archive.ubuntu.com:80
+            security.ubuntu.com:80
+            esm.ubuntu.com:443
+            motd.ubuntu.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+
+      # Actions SHA-pinned (SEC-3898): a mutable tag like @v4 can be repointed to
+      # malicious code; pin to the exact commit the tag names today.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install nightly toolchain
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@7c8d7d138f5c09cef361f8214cf96882cd029cdb # nightly
 
+      # Pin cargo-fuzz (SEC-3898): unpinned, this pulls the newest release on
+      # every run, which is both non-reproducible and a supply-chain intake.
       - name: Install cargo-fuzz
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2
         with:
-          tool: cargo-fuzz
+          tool: cargo-fuzz@0.13.2
 
       - name: System dependencies
         run: sudo apt-get update && sudo apt-get install -y libssl-dev
 
+      # Enforce the committed lockfile (SEC-3899). cargo-fuzz has no --locked
+      # passthrough, so gate here instead: the script requires every crates.io
+      # version and checksum to be exactly as committed — which is exactly when
+      # an unreviewed dependency version would otherwise be pulled — while
+      # letting the local path packages renumber, as they must whenever a
+      # fuzzed crate takes its mandatory version bump. The build then runs
+      # offline against the vetted graph.
+      - name: Verify fuzz lockfile pins the registry graph (pin gate)
+        run: ./scripts/check-fuzz-lock.sh "${{ matrix.dir }}"
+
       - name: Fuzz ${{ matrix.target }}
         working-directory: ${{ matrix.dir }}
+        env:
+          CARGO_NET_OFFLINE: "true"
         run: |
           # Longer pass on the nightly schedule, short smoke pass on PRs.
           if [ "${{ github.event_name }}" = "schedule" ]; then
@@ -70,7 +111,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fuzz-artifacts-${{ matrix.target }}
           path: ${{ matrix.dir }}/artifacts/

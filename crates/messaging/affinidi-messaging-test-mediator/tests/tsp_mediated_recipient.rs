@@ -59,6 +59,10 @@ async fn tsp_forward_follows_a_recipients_mediator_did() {
 
     let topology = TestTopology::builder()
         .mediators(2)
+        // The last hop is a direct delivery into Bob's mailbox, so both
+        // mediators need `local_direct_delivery_allowed`; the fixture defaults
+        // it off.
+        .configure_each(|b| b.local_direct_delivery(true, false))
         .spawn()
         .await
         .expect("spawn two-mediator topology");

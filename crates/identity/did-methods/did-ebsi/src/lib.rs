@@ -108,7 +108,10 @@ pub fn validate_ebsi_identifier(identifier: &str) -> Result<(), EbsiError> {
 /// Creates a random 16-byte subject identifier, prepends version byte 0x01,
 /// and base58btc-encodes with 'z' prefix.
 pub fn generate_ebsi_did() -> String {
-    use rand::Rng;
+    // `RngExt`, not `Rng`: rand 0.10 renamed the old `RngCore` to `Rng` and
+    // moved the sampling methods (`random`, `random_range`) onto `RngExt`.
+    // Same call, same distribution — only the trait that carries it moved.
+    use rand::RngExt;
     let mut rng = rand::rng();
     let mut bytes = vec![EBSI_VERSION_BYTE];
     let random: [u8; 16] = rng.random();

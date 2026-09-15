@@ -49,7 +49,11 @@ holding `undefined` and failing deep inside the KMS with `Cannot read properties
 of undefined (reading 'keyGetJwkSecret')`. That is why `run.mjs` exists and why
 `generate.mjs` must not be run directly. The same failure appears as
 `(reading 'storeOpen')` when `askar-nodejs` and `@credo-ts/askar` resolve
-different `askar-shared` copies — keep them on the same major (0.4.x).
+different `askar-shared` copies — keep them on the same major. That is why
+`@openwallet-foundation/askar-nodejs` moves with `@credo-ts/askar`: 0.7.0
+widened its peer to `^0.4.3 || ^0.5.0 || ^0.6.0`, so npm hoists the newest
+while `askar-nodejs` 0.4.3 keeps bundling its own 0.4.3, and the two copies
+are back.
 
 **Credo cannot unpack an envelope without a matching DID record.** Its
 `unpackMessage` starts by calling `extractOurRecipientKeyWithKeyId`, which
@@ -72,4 +76,6 @@ come from fixed seeds, so identities and verkeys are stable across runs, but the
 ciphertext changes every time (fresh CEKs and nonces). Re-run
 `cargo test -p affinidi-messaging-didcomm-v1` afterwards and commit both.
 
-Pinned versions at the time of writing: Credo **0.6.3**, askar **0.4.3**.
+The `generator` block in each fixture records which Credo and askar produced
+it, read from the installed packages rather than a literal — so it cannot
+keep claiming a version that is no longer installed.

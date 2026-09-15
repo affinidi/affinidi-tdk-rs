@@ -1,5 +1,32 @@
 # Affinidi Crypto Changelog
 
+## Unreleased (0.2.9) — RustCrypto digest 0.11 generation
+
+`sha2` 0.11, `hmac` 0.13, `aes` 0.9, `cbc` 0.2.
+
+No behaviour change and no public API change: these are private dependencies
+here, which is what lets each crate move on its own schedule. Verified by
+`cargo tree`/grep that no RustCrypto type appears in a public signature anywhere
+in the workspace.
+
+The API changes were renames, all in JOSE:
+
+- `cipher` 0.5 renamed the block traits: `BlockEncrypt`/`BlockDecrypt` →
+  `BlockCipherEncrypt`/`BlockCipherDecrypt` (AES-KW), and
+  `BlockEncryptMut`/`BlockDecryptMut` → `BlockModeEncrypt`/`BlockModeDecrypt`
+  (CBC content encryption). The `encrypt_block`/`decrypt_block` methods
+  themselves are unchanged.
+- The padded-vec helpers lost their `_mut` suffix: `encrypt_padded_vec_mut` →
+  `encrypt_padded_vec`.
+- `new_from_slice` moved from the `Mac` trait to `KeyInit`.
+- hybrid-array deprecated `Array::from_mut_slice` in favour of `TryFrom`. AES-KW
+  operates on a fixed `[u8; 16]`, so this now uses the infallible array
+  conversion and the length is checked at compile time rather than panicking at
+  runtime on a mismatch.
+
+76 tests green, including the AES-KW and CBC-HMAC round-trips that exercise
+every one of the above.
+
 ## Unreleased (0.2.8) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

@@ -69,7 +69,7 @@ are gated behind opt-in `secrets-*` features rather than shipped in every
 binary. Enable the ones a deployment needs, e.g.:
 
 ```bash
-cargo build --release --features secrets-aws,secrets-vault
+cargo build --release --locked --features secrets-aws,secrets-vault
 ```
 
 Configuring a backend whose feature wasn't compiled in fails fast at startup

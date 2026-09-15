@@ -12,11 +12,11 @@
 
 use std::collections::HashSet;
 
+use bls12_381_plus::ff::Field;
+use bls12_381_plus::group::Group;
 use bls12_381_plus::{
     G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective, Scalar, multi_miller_loop,
 };
-use ff::Field;
-use group::Group;
 use rand::{Rng, SeedableRng};
 
 use crate::ciphersuite::Ciphersuite;

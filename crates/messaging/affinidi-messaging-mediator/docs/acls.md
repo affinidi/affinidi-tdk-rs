@@ -229,6 +229,20 @@ deliberately identical (§2).
 └─ recipient's access list admits the sender?   else 403 authorization.access_list.denied
 ```
 
+The claimed sender is unverified in both protocols — the mediator holds no key
+for an envelope it is only carrying, so it reads the JWE `skid` (DIDComm) or the
+cleartext CESR sender field (TSP). `force_session_did_match` is what makes it
+trustworthy enough to feed the access-list lookup, by pinning it to the DID that
+authenticated. It is skipped for unauthenticated sessions, because an
+inter-mediator relay hop arrives anonymously and has no session DID to match
+against; on such a hop the claimed sender stays unverified.
+
+Every step above applies to both protocols. The one asymmetry is
+`local_direct_delivery_allow_anon`, which has no TSP analogue: it exists because
+a DIDComm envelope can be anon-packed with no sender at all, whereas a TSP
+envelope always names its sender in the clear, so there is no anonymous TSP case
+to admit or refuse.
+
 ### Forwarding
 
 ```
@@ -237,6 +251,37 @@ deliberately identical (§2).
 ├─ anonymous envelope → next hop has ANON_RECEIVE? else 403
 └─ access list check
 ```
+
+### Inter-mediator relay admission
+
+`processors.forwarding.relay_trusted_mediators` allowlists the peer mediators
+whose relays this mediator accepts. Empty means any peer (still ACL-gated).
+
+It applies wherever the relaying peer can actually be identified:
+
+| Protocol | Applies | Why |
+|----------|---------|-----|
+| DIDComm, `RelayMode::Rewrap` | yes | the re-wrap layer is addressed to this mediator, so authcrypt names its sender |
+| DIDComm, `RelayMode::Blind` | no | nothing is addressed to us; the peer is invisible |
+| TSP, routed/nested hop | yes | the hop is sealed to this mediator; unpacking verifies an Ed25519 signature *and* HPKE-Auth |
+| TSP, opaque pass-through | no | addressed to a local recipient, not to us — no peer to identify |
+
+TSP needs no `RelayMode` choice: a routed hop is re-wrap-like by construction.
+
+Two scoping rules matter. The check runs only on **anonymous** sessions, because
+that is how an inter-mediator hop arrives — an ordinary client's routed message
+(metadata privacy, TSP §5.5) is authenticated and must not be gated by a list of
+peer *mediators*. And it runs only on relay arms: `Direct` and `Control`
+addressed to this mediator are messages *to* it — Trust Tasks over TSP arrive
+that way — not relays through it.
+
+Where no peer can be identified, `security.enable_inter_mediator_relay` (which
+gates anonymous inbound at all) and `security.local_direct_delivery_allowed` are
+the levers.
+
+The end-to-end picture these gates sit inside — how a relay hop is built,
+routed and admitted across two mediators — is in
+[`multi-mediator.md`](./multi-mediator.md).
 
 ### Access-list evaluation
 

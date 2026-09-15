@@ -87,3 +87,30 @@ fn create_http_client_default_succeeds() {
     // would require sending a request, which we avoid in unit-style tests.
     drop(client);
 }
+
+/// `create_guarded_http_client` builds on the same TLS setup and carries the
+/// policy it was given, which refuses internal targets before any I/O.
+#[test]
+fn create_guarded_http_client_default_succeeds() {
+    use affinidi_tdk_common::net_guard::{EgressError, EgressPolicy};
+
+    let policy = EgressPolicy::public_internet();
+    let client = affinidi_tdk_common::create_guarded_http_client(&[], &policy)
+        .expect("guarded client builds with empty extras");
+    assert!(!client.policy().is_dev_loopback());
+    assert!(matches!(
+        client
+            .policy()
+            .vet("https://169.254.169.254/latest/meta-data/"),
+        Err(EgressError::BlockedAddress { .. })
+    ));
+    assert!(matches!(
+        client.policy().vet("https://localhost/"),
+        Err(EgressError::BlockedName(_))
+    ));
+    assert!(
+        client
+            .get(&policy.vet("https://example.com/").unwrap())
+            .is_ok()
+    );
+}

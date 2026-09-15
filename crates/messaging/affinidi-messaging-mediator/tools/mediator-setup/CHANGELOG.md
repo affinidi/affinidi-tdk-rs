@@ -1,5 +1,60 @@
 # Affinidi Messaging Mediator Setup
 
+## Unreleased (0.1.33) — every build this wizard emits or runs passes `--locked`
+
+The wizard runs `cargo install` itself and writes the `cargo build` and
+Dockerfile commands an operator uses afterwards. None of them passed
+`--locked`, so an operator who had learned to pass it on their own builds
+still got an unlocked resolve from the wizard — which is how a same-day
+`aws-smithy-types` release broke builds of a workspace nobody had touched.
+
+`--locked` is only meaningful now that the workspace commits `Cargo.lock`;
+before, there was nothing for it to honour, and passing it would have turned a
+working build into a hard error.
+
+Also: the generated Dockerfile's builder image was `rust:1.94-bookworm` while
+the workspace MSRV is 1.95.0, so every image the wizard wrote failed on its own
+toolchain. It now tracks `rust-toolchain.toml`, and
+`scripts/check-toolchain-sync.sh` covers `docker.rs` so it cannot drift again —
+that guard exists precisely because the toolchain has to be hand-carried into
+several files, and this was one it did not know about.
+
+## Unreleased (0.1.32) — `vta-sdk` 0.32 → 0.38
+
+`ProvisionSummary` gained `context` and `admin_scope`. The wizard's *offline*
+sealed-handoff path synthesises its own summary from the opened bundle, and
+both are set to `None` there because it has nothing to echo:
+`TemplateBootstrapConfig` records neither the target context nor the scope of
+the ACL entry the operator's `vta bootstrap provision-integration` wrote.
+Filling either in would put a claim in the VTA's mouth that nothing verified —
+the same error as reading `admin_scope` back from the request instead of the
+reply. The SDK specifies that a reader MUST treat `admin_scope: None` as
+`AdminScope::Context`, which is what a sealed mint is.
+
+The online path is unchanged: it carries the VTA's own summary through.
+
+900 tests green across the five mediator crates.
+
+## Unreleased (0.1.31) — `aws-smithy-types` held below 1.7
+
+No behaviour change; a resolver bound only.
+
+`aws-smithy-types` 1.7.0 replaced `Document::Object`'s payload and added a
+variant to a `#[non_exhaustive]` enum in a MINOR release, which
+`aws-smithy-json` 0.63.0 — what `aws-config` 1.12.0 still pulls — does not
+compile against. This workspace ships no `Cargo.lock`, so every clone resolved
+from scratch and took the break. The wizard's DEFAULT features include
+`secrets-aws`, so an operator met this without opting into anything
+AWS-shaped.
+
+`aws-smithy-types` is now a declared (optional) dependency under the same
+feature as `aws-config`, contributing the `>=1.6.1, <1.7` bound from
+`[workspace.dependencies]`. Remove it once `aws-config` ships on json 0.64.
+
+## Unreleased (0.1.30) — dependency currency
+
+No behaviour change: `serial_test` 3 → 4, a dev-dependency. 406 tests green.
+
 ## Unreleased (0.1.29) — setup completes against a DIDComm/TSP-only VTA
 
 **Bug fix: provisioning no longer aborts when the VTA advertises no REST URL.**

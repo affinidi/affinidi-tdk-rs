@@ -12,8 +12,8 @@
 
 use std::sync::LazyLock;
 
+use bls12_381_plus::elliptic_curve::hash2curve::ExpandMsgXmd;
 use bls12_381_plus::{G1Affine, G1Projective, Scalar};
-use elliptic_curve::hash2curve::ExpandMsgXmd;
 use sha2::Sha256;
 
 use crate::ciphersuite::Ciphersuite;
@@ -205,7 +205,7 @@ pub fn point_from_bytes(bytes: &[u8; 48]) -> Option<G1Projective> {
 
 #[cfg(test)]
 mod tests {
-    use group::Group; // for G1Projective::generator() in tests
+    use bls12_381_plus::group::Group; // for G1Projective::generator() in tests
 
     use super::*;
 

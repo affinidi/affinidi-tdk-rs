@@ -36,6 +36,22 @@ pub mod tasks;
 #[cfg(feature = "tsp")]
 pub mod tsp_identity;
 
+/// Install `jsonwebtoken`'s `aws_lc_rs` crypto provider as the process-wide
+/// default, idempotently.
+///
+/// This lives here, rather than in each consumer, because the provider is
+/// registered per `jsonwebtoken` *instance*: a consumer that calls
+/// `jsonwebtoken::…::install_default()` against its own copy of the crate
+/// installs nothing for the copy this mediator verifies tokens with. While the
+/// JWT key fields were public that mismatch was at least a compile error;
+/// now that `jsonwebtoken` is a private dependency (#770) it would be a silent
+/// runtime failure instead, so the installation has to be callable from here.
+///
+/// Errors from an already-installed provider are ignored.
+pub fn install_jwt_crypto_provider() {
+    let _ = jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER.install_default();
+}
+
 /// Shared application state available to all request handlers via Axum's state extraction.
 #[derive(Clone)]
 pub struct SharedData {

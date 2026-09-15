@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-crypto"
-version = "0.2.8"
+version = "0.2.9"
 description = "Cryptographic primitives and JWK types for Affinidi TDK"
 edition.workspace = true
 authors.workspace = true
@@ -45,9 +45,9 @@ p256 = { version = "0.14", features = ["ecdsa", "arithmetic", "ecdh"], optional 
 p384 = { version = "0.14", features = ["ecdsa", "arithmetic", "ecdh"], optional = true }
 p521 = { version = "0.14", features = ["arithmetic", "ecdh"], optional = true }
 # JOSE content-encryption / key-wrap primitives (`jose` feature).
-aes = { version = "0.8", optional = true }
-cbc = { version = "0.1", features = ["alloc"], optional = true }
-hmac = { version = "0.12", optional = true }
+aes = { version = "0.9", optional = true }
+cbc = { version = "0.2", features = ["alloc"], optional = true }
+hmac = { version = "0.13", optional = true }
 subtle = { version = "2", optional = true }
 ml-dsa = { version = "0.1.0", features = ["rand_core", "zeroize"], optional = true }
 slh-dsa = { version = "=0.2.0-rc.5", features = ["zeroize"], optional = true }
@@ -58,7 +58,7 @@ rand_10 = { package = "rand", version = "0.10", default-features = false, featur
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 thiserror = "2"
 x25519-dalek = { version = "3", features = ["static_secrets"] }
 zeroize = "1"

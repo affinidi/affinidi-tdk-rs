@@ -28,7 +28,7 @@ affinidi-did-resolver-cache-sdk = "0.8"
 | `did:pkh` | No | `did-pkh` (opt-in — pulls the `ssi-*` stack, see below) |
 | `did:webvh` | Yes | `did-methods` |
 | `did:scid` | Yes | `did-methods` |
-| `did:cheqd` | No | `did-cheqd` (opt-in — pulls a `ring` TLS backend, see below) |
+| `did:cheqd` | **Retired** | parses, but is no longer resolved — see below |
 | `did:ebsi` | No | `did-ebsi` (EBSI DID Registry API) |
 | `did:webs` | No | `affinidi-did-webs` (KERI-verified key state) |
 | `did:example` | No | `did_example` (must be manually loaded) |
@@ -45,7 +45,7 @@ affinidi-did-resolver-cache-sdk = "0.8"
 | `did-webs` | No | did:webs — did:web discovery with a KERI-verified key event log |
 | `network` | No | Enable network mode for remote cache server |
 | `did-webvh` | — | WebVH DID method support |
-| `did-cheqd` | No | Cheqd blockchain DID method support (opt-in, see TLS note) |
+| `did-cheqd` | No | Inert since 0.8.36 — retained so enabling it still builds |
 | `did-scid` | — | Self-Certifying Identifier DID method |
 | `did_example` | — | Example DID method for testing |
 
@@ -56,28 +56,32 @@ and `affinidi-did-jwk` in this workspace, not by the spruceid crates of the
 same names. Enabling them costs three small dependencies rather than the whole
 `ssi-*` stack. See each crate's README for scope and conformance.
 
-### `did-cheqd` and the rustls `ring` backend
+### `did:cheqd` resolution was retired in 0.8.36
 
-`did-cheqd` is **not** enabled by default. It pulls `did-resolver-cheqd`, whose
-gRPC client (`tonic 0.12`) hardcodes the `ring` backend on
-`tokio-rustls`/`rustls 0.23`. This SDK's `network` feature — and most downstream
-binaries (via `kube`, `reqwest`, `jsonwebtoken`, …) — select the `aws_lc_rs`
-backend instead. When both backends are compiled, `rustls` cannot auto-select
-one and panics at the first TLS call with:
+`did:cheqd` still **parses** — `DIDMethod::Cheqd` is unchanged in
+`affinidi-did-common` — but this SDK no longer **resolves** it. `CheqdResolver`
+still exists under the `did-cheqd` feature and now declines with an explanatory
+`ResolutionFailed`.
 
-```text
-no process-level CryptoProvider available
-```
+The implementation came from `did-resolver-cheqd`: a crate with no published
+source repository, a single release from 2025, pinning `ssi-dids-core 0.1`. It
+was off by default and enabled by nothing in this workspace, yet its presence as
+an optional dependency put eight advisories into `Cargo.lock` — seven
+unmaintained crates plus a live `h2` denial-of-service that had to be suppressed
+in CI to keep the build green. Removing it cleared all eight and dropped 122
+crates from the resolved graph. It also removed the `tonic 0.12` / rustls `ring`
+conflict that made this feature awkward to enable in the first place.
 
-If you enable `did-cheqd`, you accept the `ring` backend. Because installing a
-process-global `CryptoProvider` is the application's decision, your binary's
-`main` must do it before any TLS is used, e.g.:
+Nothing was removed from the public API: the feature, the resolver type and
+`ScidMethod::Cheqd` all remain, so code that named them still compiles.
+
+To resolve `did:cheqd`, append your own resolver — the chain is a public
+extension point for exactly this:
 
 ```rust,ignore
-rustls::crypto::aws_lc_rs::default_provider()
-    .install_default()
-    .expect("install default rustls CryptoProvider");
+client.append_resolver(MethodName::Cheqd, Box::new(MyCheqdResolver));
 ```
+
 
 ## Usage
 

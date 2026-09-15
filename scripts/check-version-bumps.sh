@@ -19,7 +19,10 @@
 # at a fresh version and the registry never goes incompatible.
 #
 # "Source" = anything under the crate dir EXCEPT tests/, benches/, examples/,
-# *.md and CHANGELOG* (test-/doc-only changes get no bump, per repo convention).
+# fuzz/, *.md and CHANGELOG* (test-/doc-only changes get no bump, per repo
+# convention). fuzz/ holds a detached, `publish = false` fuzz crate that never
+# reaches crates.io, so its lockfile or targets changing is not a source edit of
+# the parent crate.
 # `publish = false` crates are skipped — they never reach crates.io, so a stale
 # registry source is impossible for them.
 #
@@ -74,6 +77,7 @@ is_source() {
     tests/*|*/tests/*) return 1 ;;
     benches/*|*/benches/*) return 1 ;;
     examples/*|*/examples/*) return 1 ;;
+    fuzz/*|*/fuzz/*) return 1 ;;
     *.md) return 1 ;;
     CHANGELOG*|*/CHANGELOG*) return 1 ;;
     *) return 0 ;;

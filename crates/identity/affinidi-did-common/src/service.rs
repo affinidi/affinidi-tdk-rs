@@ -105,14 +105,8 @@ impl Endpoint {
         match self {
             Endpoint::Url(uri) => Some(uri.to_string()),
             Endpoint::Map(map) => match map {
-                Value::Array(array) => {
-                    if let Some(first) = array.first() {
-                        first.get("uri").map(|u| u.to_string())
-                    } else {
-                        None
-                    }
-                }
-                Value::Object(obj) => obj.get("uri").map(|u| u.to_string()),
+                Value::Array(array) => array.first().and_then(uri_of),
+                Value::Object(_) => uri_of(map),
                 _ => None,
             },
         }
@@ -122,27 +116,28 @@ impl Endpoint {
     pub fn get_uris(&self) -> Vec<String> {
         match self {
             Endpoint::Url(uri) => vec![uri.to_string()],
-            Endpoint::Map(map) => {
-                let mut uris = Vec::new();
-                match map {
-                    Value::Array(array) => {
-                        for sep in array {
-                            if let Some(uri) = sep.get("uri") {
-                                uris.push(uri.to_string());
-                            }
-                        }
-                    }
-                    Value::Object(obj) => {
-                        if let Some(uri) = obj.get("uri") {
-                            uris.push(uri.to_string());
-                        }
-                    }
-                    _ => {}
-                }
-                uris
-            }
+            Endpoint::Map(map) => match map {
+                Value::Array(array) => array.iter().filter_map(uri_of).collect(),
+                Value::Object(_) => uri_of(map).into_iter().collect(),
+                _ => Vec::new(),
+            },
         }
     }
+}
+/// The `uri` member of one service-endpoint object, as a **string**.
+///
+/// `Value::to_string()` is JSON serialisation, so on a `Value::String` it keeps the quotes —
+/// which is how `get_uri` came to return `https://example.com/` for the plain-URL form and
+/// `"\"https://example.com\""` for the map form of the same endpoint. A caller cannot tell
+/// which it got without knowing the shape it did not have to care about, and two callers in
+/// this workspace carried a `trim_matches('"')` to compensate while two others did not and
+/// returned a quoted URI.
+///
+/// `as_str` instead, which yields the value rather than its JSON encoding. A non-string
+/// `uri` is `None`: the specification says the member is a URI, and a number or an object
+/// there is not one — returning its JSON text would be inventing an endpoint.
+fn uri_of(entry: &Value) -> Option<String> {
+    entry.get("uri")?.as_str().map(str::to_string)
 }
 
 #[cfg(test)]
@@ -174,10 +169,15 @@ mod tests {
         assert_eq!(ep.get_uri().unwrap(), "https://example.com/");
     }
 
+    /// The map form yields the same string the plain-URL form does.
+    ///
+    /// It used to yield `"\"https://example.com\""` — `Value::to_string()` on a JSON string
+    /// keeps the quotes — so which of the two shapes a document happened to use decided
+    /// whether a caller got a usable URI. That was asserted here rather than fixed.
     #[test]
     fn get_uri_from_map_object() {
         let ep = Endpoint::Map(json!({"uri": "https://example.com"}));
-        assert_eq!(ep.get_uri().unwrap(), "\"https://example.com\"");
+        assert_eq!(ep.get_uri().unwrap(), "https://example.com");
     }
 
     #[test]
@@ -186,7 +186,34 @@ mod tests {
             {"uri": "https://first.example.com"},
             {"uri": "https://second.example.com"}
         ]));
-        assert_eq!(ep.get_uri().unwrap(), "\"https://first.example.com\"");
+        assert_eq!(ep.get_uri().unwrap(), "https://first.example.com");
+    }
+
+    /// A DIDComm service endpoint names its mediator by **DID**, not by URL, so this is the
+    /// shape that actually travels — and the one the quoting broke: `did:webvh:…` came back
+    /// as `"did:webvh:…"`, which resolves as nothing and reads like a malformed document.
+    #[test]
+    fn get_uri_from_a_didcomm_service_endpoint() {
+        let ep = Endpoint::Map(json!({
+            "uri": "did:webvh:QmTS3a:webvh.example:mediator",
+            "accept": ["didcomm/v2"],
+        }));
+        assert_eq!(
+            ep.get_uri().unwrap(),
+            "did:webvh:QmTS3a:webvh.example:mediator"
+        );
+    }
+
+    /// A `uri` that is not a string is not a URI. Returning its JSON text would hand the
+    /// caller an endpoint nobody wrote.
+    #[test]
+    fn get_uri_from_map_object_with_non_string_uri() {
+        assert!(Endpoint::Map(json!({"uri": 42})).get_uri().is_none());
+        assert!(
+            Endpoint::Map(json!({"uri": {"nested": "x"}}))
+                .get_uri()
+                .is_none()
+        );
     }
 
     #[test]
@@ -218,7 +245,7 @@ mod tests {
     #[test]
     fn get_uris_from_map_object() {
         let ep = Endpoint::Map(json!({"uri": "https://example.com"}));
-        assert_eq!(ep.get_uris(), vec!["\"https://example.com\""]);
+        assert_eq!(ep.get_uris(), vec!["https://example.com"]);
     }
 
     #[test]
@@ -227,10 +254,10 @@ mod tests {
             {"uri": "https://first.example.com"},
             {"uri": "https://second.example.com"}
         ]));
-        let uris = ep.get_uris();
-        assert_eq!(uris.len(), 2);
-        assert!(uris[0].contains("first.example.com"));
-        assert!(uris[1].contains("second.example.com"));
+        assert_eq!(
+            ep.get_uris(),
+            vec!["https://first.example.com", "https://second.example.com"]
+        );
     }
 
     #[test]

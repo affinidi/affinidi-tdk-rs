@@ -88,8 +88,8 @@ pub fn parse_trust_list_xml(xml: &str) -> Result<TrustServiceStatusList> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name_bytes = e.name().as_ref().to_vec();
-                let local = local_name_owned(&name_bytes);
+                let qname = e.name();
+                let local = local_name_owned(qname.as_ref());
                 path.push(local.clone());
                 text_buf.clear();
 
@@ -99,25 +99,27 @@ pub fn parse_trust_list_xml(xml: &str) -> Result<TrustServiceStatusList> {
                 }
             }
             Ok(Event::Text(e)) => {
-                // quick-xml 0.41 emits raw text between entity references; the
+                // quick-xml emits raw text between entity references; the
                 // references themselves arrive as separate `GeneralRef` events
-                // (see below), so accumulate rather than replace.
-                let text = e.decode().unwrap_or_default();
+                // (see below), so accumulate rather than replace. Since 0.42 the
+                // content is already `&str` — `decode()` is gone.
+                let text: &str = &e;
                 if in_x509_cert {
                     cert_base64.push_str(text.trim());
                 } else {
-                    text_buf.push_str(&text);
+                    text_buf.push_str(text);
                 }
             }
             Ok(Event::GeneralRef(e)) => {
                 // An entity reference inside element text (e.g. `&amp;` in an org
-                // name or URI). quick-xml 0.41 surfaces these as their own event;
-                // resolve predefined/numeric references and append so the value is
-                // reassembled exactly as 0.37's inline `unescape()` produced it.
-                let name = e.decode().unwrap_or_default();
+                // name or URI). quick-xml surfaces these as their own event since
+                // 0.41; resolve predefined/numeric references and append so the
+                // value is reassembled exactly as 0.37's inline `unescape()`
+                // produced it. `BytesRef` derefs to `str` since 0.42.
+                let name: &str = &e;
                 let resolved = quick_xml::escape::unescape(&format!("&{name};"))
                     .map(|c| c.into_owned())
-                    .unwrap_or_else(|_| name.into_owned());
+                    .unwrap_or_else(|_| name.to_string());
                 if in_x509_cert {
                     cert_base64.push_str(resolved.trim());
                 } else {
@@ -125,8 +127,8 @@ pub fn parse_trust_list_xml(xml: &str) -> Result<TrustServiceStatusList> {
                 }
             }
             Ok(Event::End(e)) => {
-                let name_bytes = e.name().as_ref().to_vec();
-                let local = local_name_owned(&name_bytes);
+                let qname = e.name();
+                let local = local_name_owned(qname.as_ref());
 
                 // Build path string for context matching
                 let path_str = path.join("/");
@@ -298,11 +300,10 @@ pub fn parse_trust_list_xml(xml: &str) -> Result<TrustServiceStatusList> {
 }
 
 /// Extract the local name from an XML element (strip namespace prefix).
-fn local_name_owned(name: &[u8]) -> String {
-    let s = std::str::from_utf8(name).unwrap_or("");
-    s.rsplit_once(':')
+fn local_name_owned(name: &str) -> String {
+    name.rsplit_once(':')
         .map(|(_, local)| local)
-        .unwrap_or(s)
+        .unwrap_or(name)
         .to_string()
 }
 

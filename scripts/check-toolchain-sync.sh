@@ -68,6 +68,26 @@ while IFS= read -r hit; do
   fi
 done < <(grep -rnE '^[[:space:]]*toolchain:[[:space:]]*"' .github/workflows/ || true)
 
+# --- generated Dockerfile builder image ------------------------------------
+# The mediator-setup wizard writes a Dockerfile for the operator, and its
+# `FROM rust:<x.y>-bookworm` tag is one more place the toolchain has to be
+# hand-carried. It had already drifted to 1.94 while the channel was 1.95,
+# which makes every image the wizard generates fail on the workspace MSRV.
+# Only major.minor is compared: the image tags are `rust:1.95`, not `1.95.0`.
+docker_src="crates/messaging/affinidi-messaging-mediator/tools/mediator-setup/src/docker.rs"
+channel_mm=$(printf '%s\n' "$channel" | cut -d. -f1,2)
+while IFS= read -r hit; do
+  [ -z "$hit" ] && continue
+  lineno=$(printf '%s\n' "$hit" | cut -d: -f1)
+  tag=$(printf '%s\n' "$hit" | sed -E 's/.*FROM rust:([0-9]+\.[0-9]+).*/\1/')
+  if [ "$tag" = "$channel_mm" ]; then
+    echo "  ${GREEN}ok${NC}   $docker_src:$lineno FROM rust:$tag"
+  else
+    echo "  ${RED}DIFF${NC} $docker_src:$lineno FROM rust:${RED}$tag${NC} (expected $channel_mm)"
+    fail=1
+  fi
+done < <(grep -nE 'FROM rust:[0-9]+\.[0-9]+' "$docker_src" || true)
+
 # --- workspace MSRV --------------------------------------------------------
 rustver_line=$(grep -nE '^[[:space:]]*rust-version[[:space:]]*=' Cargo.toml | head -1 || true)
 if [ -n "$rustver_line" ]; then

@@ -10,7 +10,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
-use hmac::{Hmac, Mac};
+// `new_from_slice` moved from `Mac` to `KeyInit` in the digest 0.11 generation.
+use hmac::{Hmac, KeyInit, Mac};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -232,8 +233,8 @@ impl VtaCachedBundle {
     }
 
     fn compute_hmac(&self, key: &[u8; 32]) -> String {
-        let mut mac =
-            <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC-SHA256 accepts any 32-byte key");
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(key)
+            .expect("HMAC-SHA256 accepts any 32-byte key");
         mac.update(&Self::hmac_input(
             self.fetched_at,
             self.ttl_secs,

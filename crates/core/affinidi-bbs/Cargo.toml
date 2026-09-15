@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-bbs"
 description = "BBS Signatures (IETF draft-irtf-cfrg-bbs-signatures) implementation over BLS12-381."
-version = "0.3.2"
+version = "0.3.3"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -17,10 +17,19 @@ name = "bbs_selective_disclosure"
 path = "examples/bbs_selective_disclosure.rs"
 
 [dependencies]
+# The curve stack comes from `bls12_381_plus`'s own re-exports
+# (`bls12_381_plus::{elliptic_curve, ff, group}`) rather than from separate
+# declarations here.
+#
+# This is not cosmetic. `bls12_381_plus` deliberately links BOTH RustCrypto
+# generations — its `groups` feature is `["group_013", "group"]` and cannot be
+# narrowed — and its public API (`G1Projective::hash`) takes the *0.13*
+# `ExpandMsg`. Declaring our own `elliptic-curve`/`ff`/`group` meant pinning a
+# generation by hand and hoping it matched the one its API expects; a bump on
+# either side would have produced a trait-mismatch error naming neither crate.
+# Taking the types from the crate whose functions consume them makes the match
+# structural. See #775.
 bls12_381_plus = { version = "0.8", features = ["alloc"] }
-elliptic-curve = { version = "0.13", features = ["hash2curve"] }
-ff = "0.13"
-group = "0.13"
 hex = "0.4"
 rand = "0.9"
 sha2 = "0.10"

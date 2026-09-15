@@ -1,7 +1,15 @@
 /target
 /artifacts
 /coverage
-Cargo.lock
+
+# Cargo.lock IS committed here on purpose (SEC-3899): pinning the fuzz crate's
+# dependency graph keeps nightly builds reproducible and blocks a malicious
+# newly-published version from being pulled unreviewed. Enforced by
+# `cargo fetch --locked` in fuzz.yaml. Update via a PR-reviewed bump.
+# The repo-root .gitignore ignores every Cargo.lock (lib workspace convention),
+# so re-include this fuzz crate's lock explicitly.
+!Cargo.lock
+
 # Live, mutable libFuzzer corpus — regenerated/accumulated locally, never
 # committed. Committed read-only seeds live in `seeds/` instead.
 /corpus

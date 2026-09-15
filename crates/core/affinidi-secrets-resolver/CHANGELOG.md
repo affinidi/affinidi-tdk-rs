@@ -1,5 +1,14 @@
 # Affinidi Secrets Manager
 
+## Unreleased (0.5.11) — `sha2` 0.11
+
+No behaviour change and no public API change: these are private dependencies
+here, which is what lets each crate move on its own schedule. Verified by
+`cargo tree`/grep that no RustCrypto type appears in a public signature anywhere
+in the workspace.
+
+Version bump only; no source change. 23 tests green.
+
 ## Unreleased (0.5.10) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

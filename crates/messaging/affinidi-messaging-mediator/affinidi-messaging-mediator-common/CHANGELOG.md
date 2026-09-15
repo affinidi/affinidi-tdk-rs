@@ -1,5 +1,186 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.45) — `aws-smithy-types` held below 1.7
+
+No behaviour change; a resolver bound only.
+
+`aws-smithy-types` 1.7.0 replaced `Document::Object`'s payload and added a
+variant to a `#[non_exhaustive]` enum in a MINOR release, which
+`aws-smithy-json` 0.63.0 — what `aws-config` 1.12.0 still pulls — does not
+compile against. This workspace ships no `Cargo.lock`, so every clone resolved
+from scratch and took the break — this crate's `secrets-aws` feature is one
+of the three subtrees that pulls it.
+
+`aws-smithy-types` is now a declared (optional) dependency under the same
+feature as `aws-config`, contributing the `>=1.6.1, <1.7` bound from
+`[workspace.dependencies]`. Remove it once `aws-config` ships on json 0.64.
+
+## Unreleased (0.15.44) — the `relay-ack` subprotocol: WebSocket relay that can't lie
+
+WebSocket relay between mediators now works, and is as safe as the REST path it
+sits beside. Both halves of that mattered.
+
+**Admission.** `deliver_via_websocket` opens the socket offering the
+`relay-ack` subprotocol (new module `tasks::forwarding::relay_ack`), which is
+how an anonymous upgrade identifies itself as an inter-mediator relay rather
+than a client. The mediator side of the admission decision is in
+affinidi-messaging-mediator 0.22.2.
+
+**Acknowledgement, which is the point.** A WebSocket write says only that the
+bytes left this process. Relaying over a bare socket would therefore ACK the
+`FORWARD_Q` entry for a message the peer *refused* — untrusted relay peer, ACL
+denial, detected loop — with the rejection surviving as nothing but a log line
+on the far side, while `deliver_via_rest` has always turned a non-2xx into a
+retry and eventually a `FORWARD_ABANDONED` plus a problem report to the
+original sender.
+
+So every relayed frame is now answered by a `RelayAck` that names the frame by
+`sha256` of its exact bytes (content-addressed, so neither side keeps ordering
+state and an ack can never be read as the answer to a different frame). A frame
+is reported delivered only on a positive ack; a negative ack, a missing one
+inside 30s, or a socket error fails the message and takes the existing retry /
+abandonment path. The two transports now have the same delivery semantics.
+
+**Compatibility is the subprotocol.** A peer that does not echo `relay-ack`
+gets no frames over the socket at all — the connection is closed and delivery
+falls back to REST, which is what carried this traffic before. There is no
+version of the exchange in which a frame is relayed without an acknowledgement
+path, so an older peer is unaffected.
+
+Two smaller consequences:
+
+- `PooledWebSocket` keeps the whole `WebSocketStream` rather than just the
+  write half — this side now reads too. There is no concurrent use to split
+  for: a frame is sent, then its ack awaited.
+- A rejection keeps the pooled connection (the peer answered; the socket is
+  fine) while a transport failure drops it. Both fail the message.
+
+The 0.15.43 WebSocket suppression window stays, and still does its job: it is
+what keeps a peer that *can't* negotiate `relay-ack` from costing a connect per
+message.
+
+## Unreleased (0.15.43) — stop re-probing a WebSocket the peer will never accept
+
+The forwarding processor prefers a pooled WebSocket over REST once an endpoint
+crosses `ws_threshold_msgs_per_10s` (default 1 msg/10s). Between two mediators
+running this implementation that upgrade cannot succeed: `deliver_via_websocket`
+connects with no `Authorization` header — a relay hop is anonymous, the relaying
+mediator holds no session on its peer — while the peer's WebSocket route
+requires a valid bearer token *and* the `LOCAL` capability. Every message above
+the threshold therefore paid a doomed connect before the REST fallback that was
+always going to carry it.
+
+`EndpointState` now records `ws_suppressed_until`. A failed WebSocket attempt
+suppresses the transport for that endpoint for five minutes; a successful one
+clears it. The cost of a peer that refuses upgrades drops to one connect per
+window, and because the window expires rather than latching, a peer that does
+accept anonymous upgrades is still picked up without a restart. The transition
+is logged once (`Falling back to REST and suppressing WebSocket`) instead of
+per message.
+
+No configuration change, and no change to what is delivered or in what order —
+REST was already carrying this traffic. See the mediator's
+`docs/multi-mediator.md` §7 for where this sits in a relay hop.
+
+## Unreleased (0.15.42) — `sha2` 0.11, `hmac` 0.13, `hkdf` 0.13, `aes-gcm` 0.11, `argon2` 0.6
+
+No behaviour change and no public API change: these are private dependencies
+here, which is what lets each crate move on its own schedule. Verified by
+`cargo tree`/grep that no RustCrypto type appears in a public signature anywhere
+in the workspace.
+
+One-line change: `new_from_slice` moved from the `Mac` trait to `KeyInit`.
+241 tests green.
+
+## Unreleased (0.15.41) — keyring 4: depend on keyring-core and pick the store explicitly
+
+`keyring` 3 → 4 is a restructure rather than a new major. v4 splits into
+`keyring-core` plus one crate per credential store, and its own docs say an
+application that wants to choose its stores should link to those directly rather
+than to the `keyring` facade. This crate is exactly that application, so it now
+depends on `keyring-core` plus `apple-native-keyring-store` (macOS) and
+`linux-keyutils-keyring-store` (Linux), and installs the store itself.
+
+**Behaviour is deliberately unchanged on both platforms**, which took some care:
+
+| | keyring 3 | now |
+|---|---|---|
+| macOS | `apple-native` → Keychain | `apple-native-keyring-store/keychain` |
+| Linux | `linux-native` → kernel keyutils | `linux-keyutils-keyring-store` |
+
+The trap avoided was the facade's `v1` compatibility shim, which looks like a
+drop-in — the API is identical — but selects **Secret Service** on Linux rather
+than keyutils. Secret Service needs a D-Bus session with an unlocked collection,
+which a headless mediator host does not have, so taking it would have moved the
+`secrets-keyring` backend onto a daemon that isn't running, failing at first
+secret access rather than at boot.
+
+- The store is installed once per process, latched in a `OnceLock` so a repeated
+  `open()` (config reload, tests) gets the same outcome including a failure.
+- Platforms other than macOS and Linux now fail at `open()` with an explicit
+  message instead of erroring later from `Entry` with nothing to say about why.
+- The call surface is otherwise unchanged: `Entry::new`, `get_password`,
+  `set_password`, `delete_credential`, `Error::NoEntry` all exist on
+  `keyring-core` with the same shapes.
+
+**Operational caveat, now documented in the module rather than left implicit:**
+keyutils keeps credentials in kernel memory, so on Linux secrets stored via
+`keyring://` **do not survive a reboot**. This is not a regression — `keyring 3`
+selected the same backend — but it makes `keyring://` a poor choice for a Linux
+mediator's operating secrets unless something re-seeds them at start. Use
+`vault://`, `k8s://` or a cloud secret manager for durable storage.
+
+Verification note: the macOS path is compiled and tested here (197 tests). The
+Linux path is **not** compiled locally — no Linux target is installed — so it
+rests on the store crate exposing the same `Store::new() -> Result<Arc<Self>>`
+shape as the macOS one, which was confirmed against its published source. CI
+builds Linux.
+## Unreleased (0.15.40) — kube 4, k8s-openapi 0.28, azure 1.0
+
+No behaviour change and no source change: four major-version dependency bumps
+that needed nothing but the version numbers.
+
+- **`kube` 3.1 → 4.2** and **`k8s-openapi` 0.27 → 0.28**, which move together.
+- **`azure_core`** and **`azure_identity`** 0.35 → **1.0**, and
+  **`azure_security_keyvault_secrets`** 0.14 → **1.0**.
+
+They bump this cleanly because both backends already keep their SDK types
+private: `K8sStore` and `AzureStore` hold only `String` fields plus a lazily
+constructed client, and neither `kube` nor `azure_*` appears in a public
+signature. That is the property `jsonwebtoken` lacked in the mediator (#770) —
+worth stating, because it is the reason one of these was a patch and the other
+was a breaking change.
+
+**`keyring` 3 → 4 is deliberately not here.** It is a migration rather than a
+bump: v4 splits into `keyring-core` plus separate store crates
+(`apple-native-keyring-store`, `linux-keyutils-keyring-store`,
+`dbus-secret-service-keyring-store`, …), and the `apple-native` / `linux-native`
+features this crate selects no longer exist. Dropping those features *compiles* —
+which is the trap — but leaves no credential store registered at all, a silent
+runtime failure on the `secrets-keyring` backend. Tracked separately.
+
+Coverage note, so the green suite is not read as more than it is: the 241 tests
+here include seven touching these two backends, but they are unit-level. Neither
+backend is integration-tested against a real cluster or vault, so the strongest
+evidence for these bumps is that they required no source change at all.
+
+## Unreleased (0.15.39) — dependency currency
+
+No behaviour change: `itertools` 0.14 → 0.15. 241 tests green.
+
+## Unreleased (0.15.38) — document where the relay allowlist applies
+
+Documentation only, alongside mediator 0.20.10 (issue #758).
+
+`ForwardingConfig::relay_trusted_mediators` said it was ignored outside
+`RelayMode::Rewrap`, which stopped being the whole story when the allowlist
+started applying to TSP relay hops. It now states which hops it governs per
+protocol and why: DIDComm only in `Rewrap` (the re-wrap layer is authcrypt-opened
+so the peer is named), TSP on every routed/nested hop (sealed to this mediator,
+so unpacking verifies both a signature and HPKE-Auth — no `RelayMode` to choose),
+and neither for TSP opaque pass-through, where nothing is addressed to us and
+there is no peer to identify.
+
 ## Unreleased (0.15.37) — every forwarding abandonment was silent to the sender
 
 **Bug fix: the forwarding-failure problem report is now authcrypted, so a

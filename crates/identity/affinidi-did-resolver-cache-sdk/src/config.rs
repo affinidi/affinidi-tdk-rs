@@ -21,6 +21,7 @@
 //! ```
 //!
 
+use affinidi_did_web::HostPolicy;
 #[cfg(feature = "network")]
 use std::time::Duration;
 use wasm_bindgen::prelude::*;
@@ -49,6 +50,7 @@ pub struct DIDCacheConfig {
     pub(crate) agent_names_over_websocket: bool,
     #[cfg(feature = "agent-names")]
     pub(crate) resolve_shortcuts: bool,
+    pub(crate) host_policy: HostPolicy,
 }
 
 /// DID Cache Config Builder to construct options required for the client.
@@ -59,6 +61,7 @@ pub struct DIDCacheConfig {
 /// - cache_ttl: The time-to-live in seconds for each item in the local cache (default: 300 (5 Minutes)).
 /// - network_timeout: The timeout for network requests in milliseconds (default: 5000 (5 seconds)).
 /// - network_cache_limit_count: The maximum number of items to store in the network cache (default: 100).
+/// - host_policy: Which hosts did:web and did:webvh resolution may contact (default: `PublicOnly`).
 pub struct DIDCacheConfigBuilder {
     #[cfg(feature = "network")]
     service_address: Option<String>,
@@ -78,6 +81,7 @@ pub struct DIDCacheConfigBuilder {
     agent_names_over_websocket: bool,
     #[cfg(feature = "agent-names")]
     resolve_shortcuts: bool,
+    host_policy: HostPolicy,
 }
 
 impl Default for DIDCacheConfigBuilder {
@@ -101,6 +105,7 @@ impl Default for DIDCacheConfigBuilder {
             agent_names_over_websocket: false,
             #[cfg(feature = "agent-names")]
             resolve_shortcuts: false,
+            host_policy: HostPolicy::PublicOnly,
         }
     }
 }
@@ -218,6 +223,25 @@ impl DIDCacheConfigBuilder {
         self
     }
 
+    /// Set which hosts `did:web` and `did:webvh` resolution may contact.
+    ///
+    /// Both methods name the host their document is fetched from, so whoever
+    /// supplies the DID chooses where this client sends HTTP requests.
+    /// [`HostPolicy::PublicOnly`] refuses loopback, private-network,
+    /// link-local and other non-public hosts, whether the DID names them
+    /// directly or a hostname resolves to one. [`HostPolicy::AllowPrivate`]
+    /// lifts that, for local development (`did:webvh:{SCID}:localhost%3A8000`)
+    /// and for deployments whose DID hosts are trusted and on a private network.
+    ///
+    /// Applies to the built-in did:web and did:webvh resolvers. A resolver
+    /// installed with [`set_resolver`](crate::DIDCacheClient::set_resolver)
+    /// carries its own policy.
+    /// Default: `PublicOnly`
+    pub fn with_host_policy(mut self, host_policy: HostPolicy) -> Self {
+        self.host_policy = host_policy;
+        self
+    }
+
     /// Build the [ClientConfig].
     pub fn build(self) -> DIDCacheConfig {
         DIDCacheConfig {
@@ -239,6 +263,7 @@ impl DIDCacheConfigBuilder {
             agent_names_over_websocket: self.agent_names_over_websocket,
             #[cfg(feature = "agent-names")]
             resolve_shortcuts: self.resolve_shortcuts,
+            host_policy: self.host_policy,
         }
     }
 }
@@ -254,6 +279,15 @@ mod tests {
         assert_eq!(config.cache_ttl, 300);
         assert_eq!(config.max_did_parts, 12);
         assert_eq!(config.max_did_size_in_bytes, 1_000);
+        assert_eq!(config.host_policy, HostPolicy::PublicOnly);
+    }
+
+    #[test]
+    fn builder_overrides_host_policy() {
+        let config = DIDCacheConfigBuilder::default()
+            .with_host_policy(HostPolicy::AllowPrivate)
+            .build();
+        assert_eq!(config.host_policy, HostPolicy::AllowPrivate);
     }
 
     #[test]

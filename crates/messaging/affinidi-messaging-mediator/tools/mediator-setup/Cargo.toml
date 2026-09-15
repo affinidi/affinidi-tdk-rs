@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-setup"
-version = "0.1.29"
+version = "0.1.33"
 description = "Interactive TUI setup wizard for Affinidi Messaging Mediator"
 edition.workspace = true
 authors.workspace = true
@@ -36,7 +36,7 @@ secrets-k8s = ["affinidi-messaging-mediator-common/secrets-k8s"]
 # "aws_parameter_store://<region>/<name>"` can publish the minted DID. Kept
 # separate from `secrets-aws` (AWS secret *storage*) so a build that only
 # stores secrets in AWS doesn't have to pull the SSM client, and vice versa.
-publish-aws = ["dep:aws-config", "dep:aws-sdk-ssm", "dep:aws-sdk-s3"]
+publish-aws = ["dep:aws-config", "dep:aws-sdk-ssm", "dep:aws-sdk-s3", "dep:aws-smithy-types"]
 
 [dependencies]
 # ── TUI Framework ────────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ affinidi-messaging-mediator-common = { path = "../../affinidi-messaging-mediator
 ] }
 
 # ── DID:webvh ────────────────────────────────────────────────────────────
-didwebvh-rs = "0.6"
+didwebvh-rs = "0.7"
 
 # ── VTA Integration ──────────────────────────────────────────────────────
 ## provision-client: orchestration layer that drives setup-key minting,
@@ -95,7 +95,7 @@ didwebvh-rs = "0.6"
 ##                   `sealed-transfer`), so this single feature covers the
 ##                   wizard's online VTA flow plus the sealed-handoff bundle
 ##                   handling in `sealed_handoff.rs`.
-vta-sdk = { version = "0.32.1", features = ["provision-client"] }
+vta-sdk = { version = "0.38", features = ["provision-client"] }
 
 # ── DID Resolution ───────────────────────────────────────────────────────
 ## Used to resolve the VTA's DID document and extract VTARest /
@@ -153,6 +153,12 @@ tracing = "0.1"
 ## uses `aws_parameter_store://`. Pinned to `1` to match the runtime crate's
 ## existing `aws-sdk-ssm` dependency.
 aws-config = { version = "1", optional = true }
+
+# Not called from this crate — a resolver bound, explained in the workspace
+# manifest. Named here because a `[workspace.dependencies]` entry constrains
+# nothing on its own: only a crate that declares the dependency contributes its
+# version requirement, and this is a subtree that pulls `aws-config`.
+aws-smithy-types = { workspace = true, optional = true }
 # `default-features = false` + the default set MINUS `rustls`.
 # The aws-sdk crates ship BOTH TLS stacks in their defaults:
 #   rustls               -> aws-smithy-runtime/tls-rustls
@@ -186,7 +192,7 @@ aws-sdk-s3 = { version = "1", optional = true, default-features = false, feature
 ## Additive — `cargo test` unions [dependencies] + [dev-dependencies]
 ## features, so this lands the `test-support` flag without affecting
 ## release builds.
-vta-sdk = { version = "0.32.1", features = ["test-support"] }
+vta-sdk = { version = "0.38", features = ["test-support"] }
 ## Used by setup_key persistence tests to create scoped temporary paths.
 tempfile = "3"
 ## Required by `bootstrap_headless` tests that mutate CWD via
@@ -194,7 +200,7 @@ tempfile = "3"
 ## default and the global CWD is shared, so the double-run detector
 ## could race against an unrelated test's artefacts. `#[serial]`
 ## forces affected tests to run one at a time.
-serial_test = "3"
+serial_test = "4"
 ## Sealed-handoff tests construct `ProducerAssertion` values with
 ## `producer_did` as a did:key — uses the `affinidi-crypto` dep
 ## already declared in `[dependencies]`.

@@ -8,24 +8,13 @@ use std::future::Future;
 use std::pin::Pin;
 
 use affinidi_did_common::{DID, DIDMethod};
-// `Document` is only named by the ssi-backed helper below, which is gated.
-#[cfg(feature = "did-cheqd")]
-use affinidi_did_common::Document;
 use affinidi_did_resolver_traits::{AsyncResolver, Resolution, ResolverError};
+pub use affinidi_did_web::HostPolicy;
 use tracing::error;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Convert an ssi `DIDResolver` result (typed output) into a `Document`.
-#[cfg(feature = "did-cheqd")]
-fn document_from_ssi_output(output: impl serde::Serialize) -> Result<Document, ResolverError> {
-    let value = serde_json::to_value(output)
-        .map_err(|e| ResolverError::InvalidDocument(format!("Serialization failed: {e}")))?;
-    serde_json::from_value(value)
-        .map_err(|e| ResolverError::InvalidDocument(format!("Invalid document shape: {e}")))
-}
 
 // ---------------------------------------------------------------------------
 // did:ethr
@@ -108,15 +97,28 @@ impl AsyncResolver for PkhResolver {
 /// instead of the spruceid `did-web` crate's `reqwest 0.11` / `rustls 0.21`
 /// stack — clearing the rustls-webpki advisories that previously came in
 /// transitively through this resolver.
+///
+/// A `did:web` value names the host to fetch from, so by default this refuses
+/// non-routable targets — see [`HostPolicy`]. A deployment whose did:web hosts
+/// really do live on an internal network (or a local test stack using
+/// `did:web:localhost%3A8080`) opts out with [`WebResolver::with_policy`] and
+/// installs it via [`crate::DIDCacheClient::set_resolver`].
 pub struct WebResolver {
     inner: affinidi_did_web::DIDWeb,
 }
 
 impl WebResolver {
-    /// Create a resolver with the default HTTP client.
+    /// Create a resolver with the default HTTP client, refusing non-routable
+    /// hosts.
     pub fn new() -> Self {
+        Self::with_policy(HostPolicy::PublicOnly)
+    }
+
+    /// Create a resolver with the default HTTP client under an explicit
+    /// [`HostPolicy`].
+    pub fn with_policy(policy: HostPolicy) -> Self {
         Self {
-            inner: affinidi_did_web::DIDWeb::new(),
+            inner: affinidi_did_web::DIDWeb::with_policy(policy),
         }
     }
 }
@@ -192,8 +194,52 @@ impl AsyncResolver for JwkResolver {
 // ---------------------------------------------------------------------------
 
 /// Resolver for `did:webvh` — Web Verifiable History DID method.
+///
+/// Like `did:web`, a `did:webvh` value names the host its log is fetched from,
+/// so by default this refuses non-public hosts — see [`HostPolicy`]. Special-use
+/// names such as `localhost` are refused before any request is made, and a
+/// name that resolves to a non-public address is refused at connect time. A
+/// local stack using `did:webvh:{SCID}:localhost%3A8000` opts out with
+/// [`WebvhResolver::with_policy`], or with
+/// [`DIDCacheConfigBuilder::with_host_policy`](crate::config::DIDCacheConfigBuilder::with_host_policy),
+/// which sets did:web and did:webvh together.
+///
+/// No HTTP client is handed to `didwebvh-rs`, so resolution uses the client it
+/// builds itself: redirects refused, system proxy settings ignored and, under
+/// [`HostPolicy::PublicOnly`], every resolved address vetted before connecting.
 #[cfg(feature = "did-webvh")]
-pub struct WebvhResolver;
+#[derive(Debug, Clone, Copy)]
+pub struct WebvhResolver {
+    policy: HostPolicy,
+}
+
+#[cfg(feature = "did-webvh")]
+impl WebvhResolver {
+    /// Create a resolver refusing non-public hosts.
+    pub fn new() -> Self {
+        Self::with_policy(HostPolicy::PublicOnly)
+    }
+
+    /// Create a resolver under an explicit [`HostPolicy`].
+    pub fn with_policy(policy: HostPolicy) -> Self {
+        Self { policy }
+    }
+
+    fn resolve_options(&self) -> didwebvh_rs::resolve::ResolveOptions {
+        let policy = match self.policy {
+            HostPolicy::AllowPrivate => didwebvh_rs::resolve::HostPolicy::AllowPrivate,
+            _ => didwebvh_rs::resolve::HostPolicy::PublicOnly,
+        };
+        didwebvh_rs::resolve::ResolveOptions::default().with_host_policy(policy)
+    }
+}
+
+#[cfg(feature = "did-webvh")]
+impl Default for WebvhResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[cfg(feature = "did-webvh")]
 impl AsyncResolver for WebvhResolver {
@@ -215,7 +261,8 @@ impl AsyncResolver for WebvhResolver {
             let mut method = didwebvh_rs::DIDWebVHState::default();
             let did_str = did.to_string();
 
-            Some(match method.resolve(&did_str, Default::default()).await {
+            let resolution = method.resolve(&did_str, self.resolve_options()).await;
+            Some(match resolution {
                 Ok((log_entry, _)) => {
                     let doc_value = log_entry.get_did_document().map_err(|e| {
                         ResolverError::InvalidDocument(format!(
@@ -228,6 +275,10 @@ impl AsyncResolver for WebvhResolver {
                         }),
                         Err(e) => Err(e),
                     }
+                }
+                Err(e @ didwebvh_rs::DIDWebVHError::BlockedHost(_)) => {
+                    tracing::warn!("did:webvh resolution refused by host policy: {e}");
+                    Err(ResolverError::ResolutionFailed(e.to_string()))
                 }
                 Err(e) => {
                     error!("did:webvh resolution error: {e:?}");
@@ -242,7 +293,18 @@ impl AsyncResolver for WebvhResolver {
 // did:cheqd (feature-gated)
 // ---------------------------------------------------------------------------
 
-/// Resolver for `did:cheqd` — Cheqd network DID method.
+/// Resolver for `did:cheqd` — retired in 0.8.36, kept so the type still exists.
+///
+/// It now declines every DID with a `ResolutionFailed` explaining why, rather
+/// than resolving. The implementation came from `did-resolver-cheqd`, a crate
+/// with no published source repository and a single 2025 release, which pinned
+/// `ssi-dids-core 0.1` and pulled eight advisories — including a live h2 DoS —
+/// into the lockfile even though the feature is off by default and nothing in
+/// this workspace enabled it.
+///
+/// `did:cheqd` still *parses* (see `affinidi-did-common`). To resolve it, append
+/// your own [`AsyncResolver`] for the method; the chain is a public extension
+/// point precisely so a method can live outside this crate.
 #[cfg(feature = "did-cheqd")]
 pub struct CheqdResolver;
 
@@ -261,29 +323,16 @@ impl AsyncResolver for CheqdResolver {
                 return None;
             }
 
-            let did_str = did.to_string();
-            use ssi_dids_core::DIDResolver;
-            let ssi_did = match ssi_dids_core::DID::new(&did_str) {
-                Ok(d) => d,
-                Err(e) => {
-                    return Some(Err(ResolverError::InvalidDocument(format!(
-                        "Invalid DID: {e}"
-                    ))));
-                }
-            };
-
-            Some(
-                match did_resolver_cheqd::DIDCheqd::default()
-                    .resolve(ssi_did)
-                    .await
-                {
-                    Ok(res) => document_from_ssi_output(res.document.into_document()),
-                    Err(e) => {
-                        error!("did:cheqd resolution error: {e:?}");
-                        Err(ResolverError::ResolutionFailed(e.to_string()))
-                    }
-                },
-            )
+            // Deliberately `Some(Err(..))`, not `None`: declining would fall
+            // through to "no resolver registered for DID method 'cheqd'", which
+            // reads like a configuration mistake. This says what actually
+            // happened and what to do about it.
+            error!("did:cheqd resolution is retired; refusing {did}");
+            Some(Err(ResolverError::ResolutionFailed(
+                "did:cheqd resolution was retired in affinidi-did-resolver-cache-sdk 0.8.36; \
+                 append your own AsyncResolver for the method if you need it"
+                    .to_string(),
+            )))
         })
     }
 }

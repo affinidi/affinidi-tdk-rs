@@ -1151,6 +1151,18 @@ fn provision_from_template_payload(payload: TemplateBootstrapPayload) -> Provisi
         secret_count: payload.secrets.len(),
         output_count: payload.config.outputs.len(),
         context_created: false,
+        // Both are `None` because this path has nothing to echo. The
+        // online summary carries what the VTA *said* it did; here the
+        // bundle was opened locally and `TemplateBootstrapConfig`
+        // records neither the target context nor the scope of the ACL
+        // entry the operator's `vta bootstrap provision-integration`
+        // wrote. Synthesising a value would put a claim in the VTA's
+        // mouth that nothing verified — the same error as reading
+        // `admin_scope` back from the request. The SDK specifies that a
+        // reader MUST treat `admin_scope: None` as
+        // `AdminScope::Context`, which is what a sealed mint is.
+        context: None,
+        admin_scope: None,
     };
     ProvisionResult {
         bundle_id_hex: String::new(),

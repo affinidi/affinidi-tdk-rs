@@ -115,6 +115,7 @@ Foundational primitives with no domain dependencies.
 | [`affinidi-secrets-resolver`](./crates/core/affinidi-secrets-resolver/) | DID secret management and key resolution |
 | [`affinidi-bbs`](./crates/core/affinidi-bbs/) | BBS Signatures (IETF draft) over BLS12-381 |
 | [`affinidi-task-utils`](./crates/core/affinidi-task-utils/) | Background-task supervision with restart-on-failure and an observable health registry |
+| [`affinidi-net-guard`](./crates/core/affinidi-net-guard/) | Egress guard for attacker-influenceable URLs: IP classification, URL vetting, a DNS-pinning resolver and a hardened HTTP client |
 
 ### [Identity & DID Resolution](./crates/identity/)
 

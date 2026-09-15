@@ -3,11 +3,16 @@ use crate::didcomm_compat::MetaEnvelope;
 #[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
 #[cfg(feature = "didcomm")]
-use crate::messages::protocols::routing::{relay_peer_trusted, rewrap_inner_attachment};
+use crate::messages::protocols::routing::rewrap_inner_attachment;
+// Shared by the DIDComm re-wrap peel and the TSP routed-relay peer allowlist.
+#[cfg(any(feature = "didcomm", feature = "tsp"))]
+use crate::messages::protocols::routing::relay_peer_trusted;
 use crate::{SharedData, common::session::Session};
 // Shared by both the DIDComm direct-delivery path and the TSP delivery path.
-#[cfg(feature = "didcomm")]
+#[cfg(any(feature = "didcomm", feature = "tsp"))]
 use crate::common::authz::Capability;
+#[cfg(feature = "tsp")]
+use crate::messages::protocols::trust_tasks;
 #[cfg(any(feature = "didcomm", feature = "tsp"))]
 use crate::{common::authz, messages::store::store_message};
 use affinidi_messaging_mediator_common::errors::MediatorError;
@@ -134,6 +139,48 @@ pub(crate) async fn handle_inbound_tsp(
 
     use affinidi_tsp::message::routed::{RouteStep, next_hop, pack_routed};
 
+    // Bind the cleartext envelope sender to the identity that authenticated,
+    // exactly as the DIDComm paths do. A TSP envelope names its sender in the
+    // clear and the mediator does not decrypt it here, so `meta.sender` is a
+    // claim; it is also what feeds the recipient's access-list lookup in
+    // `deliver_opaque`, so on an authenticated session it has to be pinned to
+    // the session DID or the access list is evaluated against an attacker-chosen
+    // VID. This is the TSP twin of the DIDComm direct-delivery bypass fixed in
+    // mediator 0.15.5.
+    //
+    // Checked on the OUTER envelope, before the receiver branch, so it covers
+    // relay and nested submissions too: whatever a client hands its mediator, it
+    // has to have authored the layer it handed over. Inner layers are exempt by
+    // construction — they are sealed to someone else and the client did not
+    // write their envelopes.
+    //
+    // Skipped for unauthenticated sessions, exactly as the DIDComm branches skip
+    // it: an inter-mediator relay hop is POSTed to `/inbound` with no
+    // Authorization header, lands on the anonymous `ANON-INBOUND` session whose
+    // DID is empty, and could only ever fail the comparison. The residual cost is
+    // the one named on the DIDComm side: on an anonymous relay hop the claimed
+    // sender stays unverified. That is inherent to relaying, not given away here.
+    //
+    // Which anonymous hops this leaves unverified, precisely — the two TSP
+    // branches differ and it matters:
+    //
+    //   * A hop addressed to *this mediator* (`receiver == mediator_did`, the
+    //     routed/nested relay below) is not affected. It gets unpacked, which
+    //     authenticates `meta.sender` cryptographically, and the peer allowlist
+    //     is applied to it there. Session binding is redundant for that branch.
+    //   * A hop that is opaque pass-through (`receiver != mediator_did`) has
+    //     nothing addressed to us to open, so its sender stays a bare claim.
+    //     This is the true analogue of DIDComm blind relay, and no allowlist can
+    //     apply to a peer we cannot identify.
+    //
+    // For that second case the levers are `local_direct_delivery_allowed` and
+    // `security.enable_inter_mediator_relay` — anonymous inbound is opt-in (that
+    // flag, or the legacy implicit `SEND_FORWARDED` in `global_acl_default`),
+    // which bounds the exposure to relay-enabled deployments.
+    if state.config.security.force_session_did_match && session.authenticated {
+        check_direct_delivery_session_match(session, Some(meta.sender.as_str()))?;
+    }
+
     // The message kind (Direct/Routed/Nested/Control) now lives in the ENCRYPTED
     // payload, not the cleartext envelope, so a keys-free relay can no longer
     // dispatch on it. Route on the cleartext *receiver* instead:
@@ -142,6 +189,46 @@ pub(crate) async fn handle_inbound_tsp(
     //   * receiver == this mediator → we hold the key, so unpack to learn the kind
     //     and act as the relay hop (Routed) / metadata-privacy intermediary (Nested).
     if meta.receiver != state.config.mediator_did {
+        // Direct delivery, and subject to the same two gates the DIDComm
+        // direct-delivery branch applies. `docs/acls.md` §6 documents this flow
+        // as "Direct delivery (DIDComm and TSP)" and has always promised both.
+        //
+        // The policy gate first: an operator who turns direct delivery off wants
+        // everything to arrive inside a routing envelope, so the relay layer can
+        // audit, scrub metadata, or inspect it. TSP ignoring this switch meant
+        // any TSP-capable sender walked straight past that control.
+        //
+        // Note there is no TSP analogue of `local_direct_delivery_allow_anon`:
+        // that hatch exists because a DIDComm envelope can be anon-packed with no
+        // sender at all, whereas a TSP envelope always names its sender in the
+        // clear. There is no anonymous TSP case to admit.
+        if !state.config.security.local_direct_delivery_allowed {
+            return Err(tsp_problem(
+                session,
+                71,
+                "direct_delivery.denied",
+                "Mediator is not accepting direct delivery of TSP messages. They must be \
+                 relayed through a routing envelope"
+                    .to_string(),
+                StatusCode::FORBIDDEN,
+            ));
+        }
+
+        // Then the sender's own SEND_MESSAGES, distinct from the session's: the
+        // WebSocket ingress gates only on LOCAL at upgrade, so without this a DID
+        // whose SEND_MESSAGES was revoked could still post TSP frames over a
+        // socket.
+        let from_acls = authz::effective_acls(state, &digest(meta.sender.as_bytes())).await?;
+        if authz::require_capability(&from_acls, Capability::SendMessages).is_err() {
+            return Err(tsp_problem(
+                session,
+                44,
+                "authorization.send",
+                "Sender DID is not authorized to send messages through this mediator".to_string(),
+                StatusCode::FORBIDDEN,
+            ));
+        }
+
         return deliver_tsp_local(state, session, raw).await;
     }
 
@@ -158,6 +245,65 @@ pub(crate) async fn handle_inbound_tsp(
                 StatusCode::BAD_REQUEST,
             )
         })?;
+
+    // Peer-mediator allowlist for the branches where we act as a *relay*.
+    //
+    // `meta.sender` is safe to authorise on here, and this is the one place in
+    // the TSP path where that is true. The `unpack` above verified an Ed25519
+    // signature over envelope‖ciphertext against the signing key resolved from
+    // `meta.sender`'s DID document, and opened the payload with HPKE **Auth**,
+    // which binds the sender's static key as well. Two independent proofs, so
+    // reaching this line means the peer really is who the envelope says.
+    //
+    // That is what the DIDComm side gets only in [`RelayMode::Rewrap`], where a
+    // layer addressed to this mediator can be authcrypt-opened. TSP routed relay
+    // is Rewrap-like by construction — every hop is sealed to the next and
+    // authenticated as the previous — so there is no mode to choose and no blind
+    // variant to except. The allowlist is simply always applicable here.
+    //
+    // Scoped to *inter-mediator* relay, which needs two conditions, and getting
+    // either wrong breaks something:
+    //
+    //   * A relay arm. `Direct` and `Control` addressed to this mediator are
+    //     messages *to* us, not relays through us — Trust Tasks over TSP arrive
+    //     that way — so a list of trusted peer mediators must not gate them.
+    //   * An anonymous session. This is the part that differs from DIDComm and
+    //     is easy to get wrong: on the DIDComm side only a peer mediator ever
+    //     produces a re-wrap layer, so peeling one is inter-mediator by
+    //     construction. A TSP *routed* message is not — an ordinary client sends
+    //     one through its own mediator for metadata privacy (§5.5), and that
+    //     client is not a peer mediator. Gating those on this list would refuse
+    //     every routed client the moment an operator populated it.
+    //
+    // An inter-mediator hop is POSTed to `/inbound` with no Authorization header
+    // (see the forwarding processor), so it lands on the anonymous session —
+    // which is exactly the traffic this allowlist exists to admit or refuse. An
+    // authenticated peer is a known account and is governed by its ACLs instead,
+    // the same as an authenticated peer using DIDComm blind relay.
+    //
+    // The opaque pass-through branch above (`receiver != mediator`) is the real
+    // analogue of blind relay: nothing there is addressed to us, so there is no
+    // layer to open and no peer identity to check. No allowlist can apply to a
+    // peer we cannot identify; `local_direct_delivery_allowed` and
+    // `security.enable_inter_mediator_relay` are the levers for that case.
+    if !session.authenticated
+        && matches!(
+            unpacked.message_type,
+            TspMessageType::Routed | TspMessageType::Nested
+        )
+        && !relay_peer_trusted(
+            &state.config.processors.forwarding.relay_trusted_mediators,
+            Some(meta.sender.as_str()),
+        )
+    {
+        return Err(tsp_problem(
+            session,
+            60,
+            "authorization.relay.untrusted_peer",
+            "Relaying peer is not in the trusted relay allowlist".to_string(),
+            StatusCode::FORBIDDEN,
+        ));
+    }
 
     match unpacked.message_type {
         // We are a relay hop: unwrap our routing layer and forward the onward
@@ -268,20 +414,119 @@ pub(crate) async fn handle_inbound_tsp(
             .await
         }
 
-        // Direct or Control addressed to the mediator itself: store it for the
-        // mediator's own pickup (the mediator is the addressed recipient). Direct
-        // and Control messages destined for *local accounts* never reach here —
-        // they took the `receiver != mediator` opaque pass-through above.
-        // End-to-end message types the mediator only carries: it stores them
-        // for the recipient and never opens them. `GenericControl` is control
-        // for the layer above TSP and `PaddingOnly` carries nothing at all, but
-        // both are addressed to the recipient rather than to us, so they take
-        // the same path as a Direct message.
-        TspMessageType::Direct
-        | TspMessageType::Control
-        | TspMessageType::GenericControl
-        | TspMessageType::PaddingOnly => deliver_tsp_local(state, session, raw).await,
+        // Direct or Control addressed to the mediator itself.
+        //
+        // Two kinds of traffic arrive here and they are not interchangeable. A
+        // **management Trust Task** is a request the mediator must *answer* —
+        // `account/update`, `acl/get`, `access-list/update` and friends. Anything
+        // else addressed to us is mail for the mediator's own account, which is
+        // stored for its pickup.
+        //
+        // Telling them apart on the payload rather than a binding type URI is
+        // deliberate: the client sends the bare Trust Task document (that is what
+        // `VtaClient`'s TSP arm packs — the task document, not a `{type,
+        // document}` wrapper), so there is no envelope tag to switch on. A
+        // document that parses as a Trust Task *and* names a type the mediator
+        // serves is unambiguous; everything else falls through unchanged.
+        //
+        // Direct and Control messages destined for *local accounts* never reach
+        // here — they took the `receiver != mediator` opaque pass-through above.
+        TspMessageType::Direct | TspMessageType::Control => {
+            if let Some(doc) = trust_tasks::parse_if_served(&unpacked.payload) {
+                return dispatch_tsp_trust_task(state, session, &meta.sender, doc).await;
+            }
+            deliver_tsp_local(state, session, raw).await
+        }
+        // Rev 3's two new end-to-end types, which the mediator only carries.
+        // `GenericControl` is control for the layer *above* TSP and
+        // `PaddingOnly` carries nothing at all — so neither can be a management
+        // Trust Task, and running the parse over them would be asking a question
+        // whose answer is always no. They store for the recipient like a Direct
+        // message and are never opened.
+        TspMessageType::GenericControl | TspMessageType::PaddingOnly => {
+            deliver_tsp_local(state, session, raw).await
+        }
     }
+}
+
+/// Answer a management Trust Task that arrived over TSP.
+///
+/// The mediator's management surface is one core
+/// ([`trust_tasks::consume`]) with a wrapper per transport; this is the TSP
+/// wrapper. It exists so a **TSP-only deployment is not a second-class one**:
+/// without it a client cannot set its own account ACL over any transport, since
+/// the DIDComm dispatcher (`MessageType::process`) is the only other way in and
+/// takes a DIDComm `Message`.
+///
+/// `sender_vid` is the envelope sender, which the caller has already proven:
+/// `direct::unpack` verified an Ed25519 signature over envelope‖ciphertext
+/// against the key resolved from that VID's DID document, and opened the payload
+/// with HPKE-Auth, which binds the sender's static key too. Two independent
+/// proofs — the same standing the DIDComm path gets from authcrypt, which is
+/// what lets the handlers authorise against it unchanged.
+///
+/// The reply is sealed back to the sender and delivered through the ordinary
+/// local-delivery path, so it reaches a connected client on its existing pickup
+/// socket. No second socket, and no new delivery mechanism.
+#[cfg(feature = "tsp")]
+async fn dispatch_tsp_trust_task(
+    state: &SharedData,
+    session: &Session,
+    sender_vid: &str,
+    doc: trust_tasks_rs::TrustTask<serde_json::Value>,
+) -> Result<InboundMessageResponse, MediatorError> {
+    let now_secs = state.clock.unix_secs();
+
+    // The sender VID is the framework identity; TSP VIDs carry no key fragment,
+    // so it is already the shape `consume` wants.
+    let Some(response) = trust_tasks::consume(doc, state, session, sender_vid, now_secs).await?
+    else {
+        // A ping identity mismatch emits nothing — same as the DIDComm path.
+        return Ok(InboundMessageResponse::Stored(
+            affinidi_messaging_sdk::messages::sending::InboundMessageList::default(),
+        ));
+    };
+
+    let identity = state.tsp_identity().await?;
+    let recipient = resolve_tsp_vid(state, sender_vid, &session.session_id).await?;
+
+    let payload = serde_json::to_vec(&response).map_err(|e| {
+        tsp_problem(
+            session,
+            37,
+            "message.tsp.trust_task.serialize",
+            format!("could not serialise the Trust Task response: {e}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )
+    })?;
+
+    // Rev 3 seals under HPKE-**Base**, so the sender's own X25519 secret no
+    // longer enters the KEM and `pack` no longer takes it. Sender authenticity
+    // is the ESSR sender field plus the outer Ed25519 signature instead. This
+    // call site arrived from main while this branch was in flight, which is why
+    // it still had the Rev 2 arity.
+    let packed = affinidi_tsp::message::direct::pack(
+        &payload,
+        affinidi_tsp::MessageType::Direct,
+        &identity.vid,
+        sender_vid,
+        &identity.signing_key,
+        &recipient.encryption_key,
+    )
+    .map_err(|e| {
+        tsp_problem(
+            session,
+            37,
+            "message.tsp.trust_task.seal",
+            format!("could not seal the Trust Task response: {e}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )
+    })?;
+
+    // Delivered as any other local message: `deliver_opaque` applies the
+    // recipient's own access-list against the mediator as sender, then stores +
+    // live-streams. A client that can reach us to ask can receive the answer.
+    deliver_opaque(state, session, sender_vid, &identity.vid, &packed.bytes).await
 }
 
 /// Deliver a TSP message to the local recipient named in *its own envelope*:
@@ -1086,17 +1331,18 @@ fn check_session_sender_match(
     ))
 }
 
-/// Ensure a direct-delivery envelope's claimed sender matches the session DID.
+/// Ensure an opaque envelope's claimed sender matches the session DID.
 ///
-/// The mediator holds no key for a directly-delivered envelope, so `from_did`
-/// here is whatever the JWE `skid` header claims — unverified. It is also the
-/// value that feeds the recipient's access-list lookup, so on an authenticated
-/// session it has to be pinned to the DID that authenticated.
+/// The mediator holds no key for the envelope it is being handed, so the sender
+/// here is only a claim — the JWE `skid` header for DIDComm direct delivery, the
+/// cleartext CESR sender field for TSP. In both cases it is also the value that
+/// feeds the recipient's access-list lookup, so on an authenticated session it
+/// has to be pinned to the DID that authenticated.
 ///
 /// Only the caller can decide whether the session is one that can be matched
 /// against: an anonymous inter-mediator relay hop has no session DID, and is
 /// exempted at the call site rather than here.
-#[cfg(feature = "didcomm")]
+#[cfg(any(feature = "didcomm", feature = "tsp"))]
 fn check_direct_delivery_session_match(
     session: &Session,
     claimed_sender: Option<&str>,

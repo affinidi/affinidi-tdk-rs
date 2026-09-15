@@ -6,7 +6,7 @@
  */
 
 use bls12_381_plus::G2Projective;
-use ff::Field;
+use bls12_381_plus::ff::Field;
 
 use crate::ciphersuite::Ciphersuite;
 use crate::error::{BbsError, Result};

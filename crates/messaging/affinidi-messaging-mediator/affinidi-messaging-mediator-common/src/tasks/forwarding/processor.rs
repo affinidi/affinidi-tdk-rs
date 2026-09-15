@@ -28,6 +28,9 @@ use std::{
 };
 use tokio::sync::{Mutex, RwLock};
 use tokio_tungstenite::tungstenite;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+use super::relay_ack::{RELAY_ACK_SUBPROTOCOL, RelayAck, frame_id};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -143,12 +146,36 @@ fn decode_tsp_forward(message: &str) -> Option<Vec<u8>> {
 /// still in active use is never dropped out from under a retry.
 const ENDPOINT_IDLE_TTL: Duration = Duration::from_secs(300);
 
+/// How long an endpoint is left on REST after a WebSocket attempt failed.
+///
+/// Long enough that a peer which cannot accept our WebSocket costs one failed
+/// connect per window instead of one per message; short enough that a peer
+/// which gains the capability (or recovers) is picked up without a restart.
+const WS_SUPPRESSION_WINDOW: Duration = Duration::from_secs(300);
+
 /// State for a connection to a remote mediator endpoint
 struct EndpointState {
     rate_tracker: EndpointRateTracker,
     last_activity: Instant,
     /// Consecutive failure count for backoff calculation
     consecutive_failures: u32,
+    /// Set when a WebSocket attempt to this endpoint failed; until it elapses,
+    /// delivery goes straight to REST.
+    ///
+    /// An inter-mediator hop is posted anonymously — the relaying mediator
+    /// holds no session on the peer — and this mediator's own WebSocket route
+    /// requires a bearer token, so a peer running this implementation refuses
+    /// the upgrade every time. Without this, crossing the rate threshold buys
+    /// a failed connect on *every* message before the REST fallback that was
+    /// always going to carry it.
+    ws_suppressed_until: Option<Instant>,
+}
+
+impl EndpointState {
+    /// Whether a WebSocket attempt is currently suppressed for this endpoint.
+    fn ws_suppressed(&self, now: Instant) -> bool {
+        self.ws_suppressed_until.is_some_and(|until| now < until)
+    }
 }
 
 /// Shared HTTP client to avoid creating one per request
@@ -176,15 +203,29 @@ impl HttpClientPool {
 
 /// A pooled WebSocket connection to a remote mediator
 struct PooledWebSocket {
-    /// Write half of the WebSocket stream
-    writer: futures_util::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
-        tungstenite::Message,
+    /// The relay socket, unsplit: every relayed frame is answered by a
+    /// [`RelayAck`] on the same connection, so this side both writes and reads
+    /// and there is no concurrent use to split for.
+    stream: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     /// When this connection was last used
     last_used: Instant,
+}
+
+/// Why a relayed frame did not come back acknowledged.
+///
+/// The distinction decides what happens to the *connection*: a rejection is the
+/// peer answering about one message and leaves the socket usable, while a
+/// transport failure means the socket itself is no longer trustworthy. Both
+/// fail the message, which is what keeps WebSocket relay as safe as REST.
+enum AckFailure {
+    /// The peer answered with a negative [`RelayAck`] — the analogue of a
+    /// non-2xx REST response.
+    Rejected(String),
+    /// The frame, or its answer, never made it: send error, closed socket,
+    /// or no ack inside the timeout.
+    Transport(String),
 }
 
 /// The forwarding processor that reads from FORWARD_Q and delivers to remote mediators
@@ -478,17 +519,20 @@ impl ForwardingProcessor {
                     rate_tracker: EndpointRateTracker::new(self.config.rate_window_seconds),
                     last_activity: Instant::now(),
                     consecutive_failures: 0,
+                    ws_suppressed_until: None,
                 });
 
+            let now = Instant::now();
             state.rate_tracker.record_and_rate(ready.len() as u32);
-            state.last_activity = Instant::now();
+            state.last_activity = now;
 
             let rate = state.rate_tracker.current_rate();
+            let suppressed = state.ws_suppressed(now);
             debug!(
-                "Endpoint {} rate: {:.2} msgs/10s (threshold: {})",
-                endpoint_url, rate, self.config.ws_threshold_msgs_per_10s
+                "Endpoint {} rate: {:.2} msgs/10s (threshold: {}, ws_suppressed: {})",
+                endpoint_url, rate, self.config.ws_threshold_msgs_per_10s, suppressed
             );
-            rate >= self.config.ws_threshold_msgs_per_10s as f64
+            rate >= self.config.ws_threshold_msgs_per_10s as f64 && !suppressed
         };
 
         // Deliver messages
@@ -783,19 +827,52 @@ impl ForwardingProcessor {
         let use_websocket = use_websocket && decode_tsp_forward(&msg.message).is_none();
         if use_websocket {
             match self.deliver_via_websocket(endpoint_url, msg).await {
-                Ok(()) => Ok(()),
+                Ok(()) => {
+                    self.set_ws_suppression(endpoint_url, None).await;
+                    Ok(())
+                }
                 Err(ws_err) => {
-                    // WebSocket failed — fall back to REST for this message
-                    debug!(
-                        "WebSocket delivery failed for {}, falling back to REST: {}",
-                        endpoint_url, ws_err
-                    );
+                    // WebSocket failed — fall back to REST for this message,
+                    // and stop attempting it for this endpoint for a while
+                    // (see `EndpointState::ws_suppressed_until`).
+                    let until = Instant::now() + WS_SUPPRESSION_WINDOW;
+                    let first = self.set_ws_suppression(endpoint_url, Some(until)).await;
+                    if first {
+                        warn!(
+                            "WebSocket delivery to {} failed ({}). Falling back to REST and \
+                             suppressing WebSocket for {}s.",
+                            endpoint_url,
+                            ws_err,
+                            WS_SUPPRESSION_WINDOW.as_secs()
+                        );
+                    } else {
+                        debug!(
+                            "WebSocket delivery failed for {}, falling back to REST: {}",
+                            endpoint_url, ws_err
+                        );
+                    }
                     self.deliver_via_rest(endpoint_url, msg).await
                 }
             }
         } else {
             self.deliver_via_rest(endpoint_url, msg).await
         }
+    }
+
+    /// Set (or clear) the WebSocket suppression window for an endpoint.
+    ///
+    /// Returns true when this call started a new suppression window, so the
+    /// caller can log the transition once rather than per message.
+    async fn set_ws_suppression(&self, endpoint_url: &str, until: Option<Instant>) -> bool {
+        let mut endpoints = self.endpoints.write().await;
+        let Some(state) = endpoints.get_mut(endpoint_url) else {
+            // Reaped between the transport decision and here; the next batch
+            // re-creates it unsuppressed, which is the safe direction.
+            return false;
+        };
+        let was_suppressed = state.ws_suppressed(Instant::now());
+        state.ws_suppressed_until = until;
+        until.is_some() && !was_suppressed
     }
 
     /// Deliver a message via REST POST to the remote mediator's inbound endpoint
@@ -842,36 +919,59 @@ impl ForwardingProcessor {
         }
     }
 
-    /// Deliver a message via WebSocket to the remote mediator.
+    /// How long to wait for a peer's [`RelayAck`] before giving up on the frame.
+    ///
+    /// Matches the REST client's request timeout, so a stalled peer costs the
+    /// same on either transport.
+    const RELAY_ACK_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Deliver a message via WebSocket to the remote mediator, and wait for the
+    /// peer's acknowledgement.
     ///
     /// Connections are pooled per endpoint URL and kept alive for the configured
     /// idle timeout. When the rate drops below the threshold, the idle cleanup
     /// task closes the connection.
     ///
-    /// If no pooled connection exists, a new one is established.
-    /// If sending on a pooled connection fails, the connection is removed from
-    /// the pool and an error is returned (caller falls back to REST).
+    /// **Delivery semantics are the REST path's.** A frame is only reported
+    /// delivered once the peer answers with a positive [`RelayAck`]; a negative
+    /// ack, a missing one, or a socket error is an `Err`, which the caller
+    /// retries and eventually abandons with a problem report to the sender —
+    /// exactly what a non-2xx does on `deliver_via_rest`. Without this a
+    /// WebSocket write would report success for a message the peer refused.
+    ///
+    /// A peer that does not negotiate the `relay-ack` subprotocol gets no
+    /// frames over the socket at all: the connection is closed and the error
+    /// sends this endpoint back to REST (and, via the suppression window, keeps
+    /// it there for a while).
     async fn deliver_via_websocket(
         &self,
         endpoint_url: &str,
         msg: &ForwardQueueEntry,
     ) -> Result<(), String> {
         let ws_url = Self::http_to_ws_url(endpoint_url);
+        let frame = msg.message.clone();
+        let id = frame_id(frame.as_bytes());
 
         let mut pool = self.ws_pool.lock().await;
 
-        // Try to send on existing connection
+        // Try the pooled connection first.
         if let Some(ws) = pool.get_mut(endpoint_url) {
-            let ws_msg = tungstenite::Message::Text(msg.message.clone().into());
-            match ws.writer.send(ws_msg).await {
+            match Self::send_and_await_ack(&mut ws.stream, &frame, &id).await {
                 Ok(()) => {
                     ws.last_used = Instant::now();
-                    debug!("Sent via pooled WebSocket to {}", endpoint_url);
+                    debug!("Relayed via pooled WebSocket to {} (acked)", endpoint_url);
                     return Ok(());
                 }
-                Err(e) => {
+                Err(AckFailure::Rejected(reason)) => {
+                    // The peer answered, and refused. The connection is fine;
+                    // the message is not. Keep the socket, fail the message —
+                    // retry/abandonment is the caller's job, as on REST.
+                    ws.last_used = Instant::now();
+                    return Err(reason);
+                }
+                Err(AckFailure::Transport(e)) => {
                     warn!(
-                        "Pooled WebSocket send failed for {}: {}. Reconnecting...",
+                        "Pooled WebSocket relay to {} failed: {}. Reconnecting...",
                         endpoint_url, e
                     );
                     pool.remove(endpoint_url);
@@ -879,38 +979,141 @@ impl ForwardingProcessor {
             }
         }
 
-        // No existing connection or it failed — establish a new one
+        // No usable connection — establish one, negotiating `relay-ack`.
         drop(pool); // Release the lock while connecting
 
-        let (ws_stream, _response) = tokio_tungstenite::connect_async(&ws_url)
+        let mut request = ws_url
+            .as_str()
+            .into_client_request()
+            .map_err(|e| format!("WebSocket request for {ws_url} is not valid: {e}"))?;
+        request.headers_mut().insert(
+            tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL,
+            tungstenite::http::HeaderValue::from_static(RELAY_ACK_SUBPROTOCOL),
+        );
+
+        let (mut stream, response) = tokio_tungstenite::connect_async(request)
             .await
             .map_err(|e| format!("WebSocket connect to {ws_url} failed: {e}"))?;
 
-        info!("WebSocket connected to {} (pool)", endpoint_url);
+        // The subprotocol IS the negotiation: a peer that doesn't echo it
+        // cannot acknowledge frames, so it must not be relayed to over this
+        // socket. (An anonymous relay upgrade is also only admitted by a peer
+        // that offers it, so in practice a non-echoing peer has refused the
+        // upgrade outright and we never reach here.)
+        let negotiated = response
+            .headers()
+            .get(tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        if negotiated != RELAY_ACK_SUBPROTOCOL {
+            let _ = stream.close(None).await;
+            return Err(format!(
+                "peer at {ws_url} did not negotiate the `{RELAY_ACK_SUBPROTOCOL}` subprotocol \
+                 (got {negotiated:?}); relaying over REST instead"
+            ));
+        }
 
-        let (mut writer, _reader) = ws_stream.split();
+        info!("WebSocket connected to {} (relay-ack, pool)", endpoint_url);
 
-        // Send the message on the fresh connection
-        let ws_msg = tungstenite::Message::Text(msg.message.clone().into());
-        writer
-            .send(ws_msg)
+        let outcome = Self::send_and_await_ack(&mut stream, &frame, &id).await;
+
+        // A transport failure means the socket is not worth keeping; a
+        // rejection is about the message and leaves the connection usable.
+        match outcome {
+            Ok(()) | Err(AckFailure::Rejected(_)) => {
+                let mut pool = self.ws_pool.lock().await;
+                pool.insert(
+                    endpoint_url.to_string(),
+                    PooledWebSocket {
+                        stream,
+                        last_used: Instant::now(),
+                    },
+                );
+            }
+            Err(AckFailure::Transport(_)) => {
+                let _ = stream.close(None).await;
+            }
+        }
+
+        match outcome {
+            Ok(()) => Ok(()),
+            Err(AckFailure::Rejected(reason)) => Err(reason),
+            Err(AckFailure::Transport(e)) => Err(e),
+        }
+    }
+
+    /// Write one relayed frame and wait for the peer's [`RelayAck`] for it.
+    ///
+    /// Frames that are not this frame's ack — a ping, a stray text frame, an
+    /// ack for something else — are skipped rather than mistaken for the
+    /// answer, until the ack arrives or [`RELAY_ACK_TIMEOUT`] elapses.
+    async fn send_and_await_ack(
+        stream: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        frame: &str,
+        id: &str,
+    ) -> Result<(), AckFailure> {
+        stream
+            .send(tungstenite::Message::Text(frame.to_string().into()))
             .await
-            .map_err(|e| format!("WebSocket send to {ws_url} failed: {e}"))?;
+            .map_err(|e| AckFailure::Transport(format!("WebSocket send failed: {e}")))?;
 
-        // Store the connection in the pool for reuse
-        // We drop the reader side — we're only using WebSocket for sending.
-        // The reader would need a background task to handle pings and detect
-        // remote close, but for simplicity we rely on send errors to detect stale connections.
-        let mut pool = self.ws_pool.lock().await;
-        pool.insert(
-            endpoint_url.to_string(),
-            PooledWebSocket {
-                writer,
-                last_used: Instant::now(),
-            },
-        );
+        let deadline = tokio::time::sleep(Self::RELAY_ACK_TIMEOUT);
+        tokio::pin!(deadline);
 
-        Ok(())
+        loop {
+            tokio::select! {
+                _ = &mut deadline => {
+                    return Err(AckFailure::Transport(format!(
+                        "no relay-ack within {}s",
+                        Self::RELAY_ACK_TIMEOUT.as_secs()
+                    )));
+                }
+                incoming = stream.next() => {
+                    match incoming {
+                        Some(Ok(tungstenite::Message::Text(text))) => {
+                            let Ok(ack) = serde_json::from_str::<RelayAck>(&text) else {
+                                debug!("Ignoring a non-ack text frame on the relay socket");
+                                continue;
+                            };
+                            if !ack.answers(id) {
+                                debug!("Ignoring a relay-ack for another frame ({})", ack.id);
+                                continue;
+                            }
+                            return if ack.ok {
+                                Ok(())
+                            } else {
+                                Err(AckFailure::Rejected(format!(
+                                    "peer refused the relayed message: {} (code {})",
+                                    ack.reason.as_deref().unwrap_or("no reason given"),
+                                    ack.code.map(|c| c.to_string()).unwrap_or_else(|| "-".into()),
+                                )))
+                            };
+                        }
+                        Some(Ok(tungstenite::Message::Close(frame))) => {
+                            return Err(AckFailure::Transport(format!(
+                                "peer closed the relay socket before acknowledging ({frame:?})"
+                            )));
+                        }
+                        // Ping/Pong/Binary on a relay socket are not ours to
+                        // interpret; tungstenite answers pings itself.
+                        Some(Ok(_)) => continue,
+                        Some(Err(e)) => {
+                            return Err(AckFailure::Transport(format!(
+                                "WebSocket error awaiting relay-ack: {e}"
+                            )));
+                        }
+                        None => {
+                            return Err(AckFailure::Transport(
+                                "relay socket ended before acknowledging".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Convert an HTTP(S) endpoint URL to a WebSocket URL
@@ -1236,5 +1439,44 @@ mod tests {
         let backoff = compute_backoff(u64::MAX / 2, 60000, 5);
         // Should be capped at max_backoff_ms
         assert_eq!(backoff, Duration::from_millis(60000));
+    }
+
+    // --- WebSocket suppression tests ---
+
+    fn endpoint_state(ws_suppressed_until: Option<Instant>) -> EndpointState {
+        EndpointState {
+            rate_tracker: EndpointRateTracker::new(300),
+            last_activity: Instant::now(),
+            consecutive_failures: 0,
+            ws_suppressed_until,
+        }
+    }
+
+    #[test]
+    fn ws_is_not_suppressed_by_default() {
+        assert!(!endpoint_state(None).ws_suppressed(Instant::now()));
+    }
+
+    #[test]
+    fn ws_is_suppressed_inside_the_window_and_free_after_it() {
+        let now = Instant::now();
+        let state = endpoint_state(Some(now + WS_SUPPRESSION_WINDOW));
+
+        assert!(state.ws_suppressed(now));
+        assert!(state.ws_suppressed(now + WS_SUPPRESSION_WINDOW - Duration::from_secs(1)));
+        // The window is half-open: at the deadline the endpoint is re-probed.
+        assert!(!state.ws_suppressed(now + WS_SUPPRESSION_WINDOW));
+        assert!(!state.ws_suppressed(now + WS_SUPPRESSION_WINDOW + Duration::from_secs(1)));
+    }
+
+    /// The suppression window must outlast the rate tracker's 10s window,
+    /// which is what put the endpoint on WebSocket in the first place —
+    /// otherwise a busy peer is re-probed on every batch and the suppression
+    /// buys nothing. (An endpoint quiet for `ENDPOINT_IDLE_TTL` is reaped
+    /// along with its suppression, which is the intended reset: the next
+    /// forward to a long-silent peer probes afresh.)
+    #[test]
+    fn ws_suppression_window_outlasts_the_rate_window() {
+        assert!(WS_SUPPRESSION_WINDOW > Duration::from_secs(10));
     }
 }

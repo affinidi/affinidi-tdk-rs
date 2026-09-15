@@ -1,5 +1,31 @@
 # Affinidi Messaging Mediator Config
 
+## Unreleased (0.2.2) — the four documented-but-unread environment overrides
+
+`conf/mediator.toml` documented `PROCESSOR_FORWARDING_RELAY_MODE` and
+`PROCESSOR_FORWARDING_RELAY_TRUSTED_MEDIATORS`, but `apply_env_overrides` read
+neither. A containerised deployment setting relay mode by environment was
+silently running the file's value — `blind`, the default — with no warning, and
+an operator's peer allowlist was silently empty (accept any peer). Both are
+relay *security* posture, so failing open and quietly is the wrong direction.
+
+Now applied, along with two more that were never wired: `max_hops` and
+`server.local_endpoints`.
+
+| Field | Environment variable |
+|---|---|
+| `server.local_endpoints` | `LOCAL_ENDPOINTS` (comma-separated) |
+| `processors.forwarding.max_hops` | `PROCESSOR_FORWARDING_MAX_HOPS` |
+| `processors.forwarding.relay_mode` | `PROCESSOR_FORWARDING_RELAY_MODE` |
+| `processors.forwarding.relay_trusted_mediators` | `PROCESSOR_FORWARDING_RELAY_TRUSTED_MEDIATORS` |
+
+`local_endpoints` is the first `Vec<String>` field to take an override, so
+`env_override_list!` splits on commas via a new `split_list` helper: entries are
+trimmed, empties dropped, and an empty value clears the list (which is how an
+operator turns off a TOML-configured allowlist from the environment).
+
+Additive: a deployment that sets none of these behaves exactly as before.
+
 ## 8th August 2026 (0.2.1)
 
 Adds the optional `[didcomm_v1]` section (`DidCommV1ConfigRaw`): `enabled` and

@@ -302,6 +302,47 @@ jobs:
             --features tsp \
             --tests
 
+  test-mediator-e2e-didcomm-v1:
+    # The same gap the `tsp` job above exists to close, for the other
+    # non-default protocol feature. `didcomm-v1` is not a default feature of
+    # `affinidi-messaging-test-mediator`, so every job above compiles
+    # `tests/credo_mediation_interop.rs` out entirely — that file is
+    # `#![cfg(feature = "didcomm-v1")]`, so it built to **zero tests** and the
+    # Credo coordinate-mediation / message-pickup conformance suite had never
+    # run in CI at all.
+    #
+    # That suite is the one replaying the requests Credo itself emits, and its
+    # own doc comment records that the distinction already cost one bug (Credo
+    # sends `routing/1.0/forward` with the `https://didcomm.org` prefix almost
+    # no specification example shows). Conformance to another implementation is
+    # exactly the kind of check that rots silently when nothing runs it.
+    name: test-mediator (didcomm-v1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test-mediator-e2e-didcomm-v1
+
+      - name: cargo test -p affinidi-messaging-test-mediator --features didcomm-v1 --tests
+        run: |
+          cargo test \
+            -p affinidi-messaging-test-mediator \
+            --features didcomm-v1 \
+            --tests
+
   didcomm-service-tsp:
     # `affinidi-messaging-didcomm-service` multiplexes TSP alongside DIDComm on
     # one websocket, behind its own `tsp` feature — off by default, and until

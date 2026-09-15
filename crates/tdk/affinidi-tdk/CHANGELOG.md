@@ -1,10 +1,45 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.14.0) — `trust-tasks-rs` 0.20
+
+- Bumps `trust-tasks-rs` 0.19 → 0.20. **No source change** — only manifests.
+  0.20 is additive for everything this crate uses: its one breaking change is a
+  `process-attestation` schema tightening (digest floor 16 → 43 base64url
+  characters, a category correction, a dropped duplicate member), and no crate
+  in this workspace references that spec.
+- **Moves because it is the path, not because its own code changed.** This crate
+  re-exports `affinidi-messaging-sdk`, so a consumer reaching a generated type
+  through the facade sees the same API change. Leaving it unbumped would publish
+  a move that never arrives — and the version guard cannot see it, because only
+  its manifest changed.
+
 All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
+
+## 0.12.0
+
+- Re-exports `affinidi-messaging-sdk` 0.22.0, whose move to `trust-tasks-rs`
+  0.18 is breaking for consumers: the SDK's public API carries generated types
+  (`TrustTasks::account_update` takes an `account::update::v0_1::MediatorAcl`),
+  so two `trust-tasks-rs` versions in one graph fail to compile rather than
+  warn. A consumer must move to 0.18 in the same change.
+
+## 0.11.0
+
+### Changed
+
+- `mdoc` feature now re-exports `affinidi-mdoc` 0.3, which moves to `coset` 0.4.
+- **Breaking for consumers of the `mdoc` feature.** `coset` sits in
+  `affinidi-mdoc`'s public API (`IssuerSigned::issuer_auth` is a
+  `coset::CoseSign1`), so a consumer that names those types moves in the same
+  change; two `coset` versions in one graph fail to compile rather than warn.
+  Minor rather than patch for that reason.
+- No source change in this crate. Bumped because the published manifest's
+  requirement is itself what changed: a consumer resolving `affinidi-tdk` 0.10.0
+  from crates.io stays pinned to `affinidi-mdoc` 0.2 and can never reach 0.3.
 
 ## 0.10.0
 

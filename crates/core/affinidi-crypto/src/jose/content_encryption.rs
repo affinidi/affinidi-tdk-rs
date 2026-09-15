@@ -6,8 +6,12 @@
 //! centralization; byte-level behaviour is locked by [`super::kat`].
 
 use aes::Aes256;
-use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use hmac::{Hmac, Mac};
+// cipher 0.5 renamed the block-mode traits: BlockEncryptMut/BlockDecryptMut
+// became BlockModeEncrypt/BlockModeDecrypt, and the padded-vec helpers lost
+// their `_mut` suffix.
+use cbc::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
+// `new_from_slice` moved from `Mac` to `KeyInit` in the digest 0.11 generation.
+use hmac::{Hmac, KeyInit, Mac};
 use rand_10::Rng;
 use sha2::Sha512;
 use subtle::ConstantTimeEq;
@@ -59,8 +63,7 @@ pub fn encrypt(
     // AES-256-CBC encrypt
     let enc_key_arr: [u8; 32] = enc_key.try_into().unwrap();
     let encryptor = Aes256CbcEnc::new(&enc_key_arr.into(), iv.into());
-    let ciphertext =
-        encryptor.encrypt_padded_vec_mut::<cbc::cipher::block_padding::NoPadding>(&padded);
+    let ciphertext = encryptor.encrypt_padded_vec::<cbc::cipher::block_padding::NoPadding>(&padded);
 
     // HMAC-SHA-512 over: AAD || IV || ciphertext || AAD_len_bits (big-endian u64)
     let aad_len_bits = (aad.len() as u64) * 8;
@@ -113,7 +116,7 @@ pub fn decrypt(
     let decryptor = Aes256CbcDec::new(&enc_key_arr.into(), iv.into());
     let buf = ciphertext.to_vec();
     let decrypted = decryptor
-        .decrypt_padded_vec_mut::<cbc::cipher::block_padding::NoPadding>(&buf)
+        .decrypt_padded_vec::<cbc::cipher::block_padding::NoPadding>(&buf)
         .map_err(|e| CryptoError::ContentEncryption(format!("AES-CBC decrypt failed: {e}")))?;
 
     // Remove PKCS7 padding

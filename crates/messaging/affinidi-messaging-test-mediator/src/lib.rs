@@ -111,8 +111,7 @@ use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secret
 use affinidi_tdk::dids::{
     DID, KeyType, OneOrMany, PeerKeyRole, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
 };
-use jsonwebtoken::{DecodingKey, EncodingKey};
-use ring::{rand::SystemRandom, signature::Ed25519KeyPair, signature::KeyPair};
+use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 use sha256::digest;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -297,6 +296,7 @@ pub struct TestMediatorBuilder {
     /// forwarding processor. `None` keeps `ForwardingConfig::default`, whose
     /// production values take ~31s to abandon an undeliverable forward.
     forwarding_retry_policy: Option<(u32, u64, u64)>,
+    forwarding_ws_threshold: Option<u64>,
     enable_message_expiry: bool,
     enable_streaming: bool,
     /// Additional DIDs to register as LOCAL accounts at startup. Tests
@@ -366,6 +366,7 @@ impl Default for TestMediatorBuilder {
             relay_mode: RelayMode::Blind,
             relay_trusted_mediators: Vec::new(),
             forwarding_retry_policy: None,
+            forwarding_ws_threshold: None,
             enable_message_expiry: false,
             enable_streaming: true,
             local_dids: Vec::new(),
@@ -494,6 +495,25 @@ impl TestMediatorBuilder {
             initial_backoff.as_millis() as u64,
             max_backoff.as_millis() as u64,
         ));
+        self
+    }
+
+    /// Messages-per-10s rate at or above which the forwarding processor
+    /// relays over a WebSocket instead of REST. `None` keeps the production
+    /// default of 1.
+    ///
+    /// Pass `0` to force the WebSocket transport on the very first relayed
+    /// message. Production's default effectively never engages it in a test:
+    /// the rate is measured over a 300-second window, so one message reads as
+    /// 0.03 msgs/10s and every short test relays over REST. Without this knob
+    /// the WebSocket relay path — subprotocol negotiation and the `relay-ack`
+    /// round trip — has no end-to-end coverage at all.
+    ///
+    /// Has no effect unless [`enable_forwarding`] is `true`.
+    ///
+    /// [`enable_forwarding`]: Self::enable_forwarding
+    pub fn forwarding_ws_threshold(mut self, msgs_per_10s: u64) -> Self {
+        self.forwarding_ws_threshold = Some(msgs_per_10s);
         self
     }
 
@@ -791,7 +811,7 @@ impl TestMediatorBuilder {
 
         // JWT signing key — Ed25519 PKCS8, same shape as the production
         // path's `JWT_SECRET` well-known.
-        let (jwt_encoding_key, jwt_decoding_key) = generate_jwt_keys()?;
+        let jwt_pkcs8 = generate_jwt_pkcs8()?;
 
         let secrets_backend =
             MediatorSecrets::new(Arc::new(SecretsMemoryStore::new("test-mediator-memory")));
@@ -799,8 +819,9 @@ impl TestMediatorBuilder {
         let mut security = affinidi_messaging_mediator::common::config::SecurityConfig::headless(
             secrets_resolver.clone(),
         );
-        security.jwt_encoding_key = jwt_encoding_key;
-        security.jwt_decoding_key = jwt_decoding_key;
+        security
+            .set_jwt_keys_from_pkcs8(jwt_pkcs8.as_ref())
+            .map_err(|e| TestMediatorError::JwtKey(format!("install jwt keys: {e}")))?;
         security.use_ssl = false;
         // Apply Option-typed overrides — `None` keeps the headless
         // default, so behavior for callers that don't touch these
@@ -856,6 +877,9 @@ impl TestMediatorBuilder {
             processors.forwarding.max_retries = max_retries;
             processors.forwarding.initial_backoff_ms = initial_backoff_ms;
             processors.forwarding.max_backoff_ms = max_backoff_ms;
+        }
+        if let Some(threshold) = self.forwarding_ws_threshold {
+            processors.forwarding.ws_threshold_msgs_per_10s = threshold;
         }
         processors.message_expiry_cleanup.enabled = self.enable_message_expiry;
 
@@ -1141,13 +1165,15 @@ impl std::fmt::Debug for TestMediatorHandle {
 /// this once at process start (or letting `TestMediator::spawn` call
 /// it for you) resolves the ambiguity.
 ///
-/// Also installs jsonwebtoken's `aws_lc_rs` provider for the same
-/// reason. Errors from already-installed providers are ignored.
+/// Also installs jsonwebtoken's `aws_lc_rs` provider for the same reason —
+/// delegated to the mediator, because that provider is registered per
+/// `jsonwebtoken` instance and it is the mediator's copy that verifies tokens.
+/// Errors from already-installed providers are ignored.
 pub fn install_default_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     }
-    let _ = jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER.install_default();
+    affinidi_messaging_mediator::install_jwt_crypto_provider();
 }
 
 // ─── Internals ───────────────────────────────────────────────────────────────
@@ -1296,18 +1322,10 @@ async fn register_local_dids(
 /// production code path (`security.rs::convert`) which loads PKCS8
 /// bytes from the secrets backend and derives the public key for
 /// verification.
-fn generate_jwt_keys() -> Result<(EncodingKey, DecodingKey), TestMediatorError> {
+fn generate_jwt_pkcs8() -> Result<ring::pkcs8::Document, TestMediatorError> {
     let rng = SystemRandom::new();
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng)
-        .map_err(|e| TestMediatorError::JwtKey(format!("ring pkcs8 generate: {e}")))?;
-    let pkcs8_bytes = pkcs8.as_ref();
-
-    let encoding_key = EncodingKey::from_ed_der(pkcs8_bytes);
-    let pair = Ed25519KeyPair::from_pkcs8(pkcs8_bytes)
-        .map_err(|e| TestMediatorError::JwtKey(format!("ring pkcs8 parse: {e}")))?;
-    let decoding_key = DecodingKey::from_ed_der(pair.public_key().as_ref());
-
-    Ok((encoding_key, decoding_key))
+    Ed25519KeyPair::generate_pkcs8(&rng)
+        .map_err(|e| TestMediatorError::JwtKey(format!("ring pkcs8 generate: {e}")))
 }
 
 // ─── Quick sanity test ──────────────────────────────────────────────────────
@@ -1316,10 +1334,20 @@ fn generate_jwt_keys() -> Result<(EncodingKey, DecodingKey), TestMediatorError> 
 mod tests {
     use super::*;
 
-    #[test]
-    fn jwt_keys_generate() {
-        let result = generate_jwt_keys();
-        assert!(result.is_ok(), "JWT key generation should succeed");
+    #[tokio::test]
+    async fn jwt_keys_generate() {
+        let pkcs8 = generate_jwt_pkcs8().expect("JWT key generation should succeed");
+
+        // The bytes have to be installable by the mediator, which is now the
+        // only thing that turns them into keys — generating a document the
+        // mediator then rejects would be a fixture that fails at spawn.
+        let (secrets, _task) = ThreadedSecretsResolver::new(None).await;
+        let mut security = affinidi_messaging_mediator::common::config::SecurityConfig::headless(
+            std::sync::Arc::new(secrets),
+        );
+        security
+            .set_jwt_keys_from_pkcs8(pkcs8.as_ref())
+            .expect("the mediator accepts a freshly generated PKCS#8 document");
     }
 
     #[test]

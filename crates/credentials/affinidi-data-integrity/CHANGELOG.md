@@ -1,5 +1,15 @@
 # Affinidi Data Integrity Changelog
 
+## Unreleased (0.7.11) — `sha2` 0.11, `hmac` 0.13
+
+No behaviour change and no public API change: these are private dependencies
+here, which is what lets each crate move on its own schedule. Verified by
+`cargo tree`/grep that no RustCrypto type appears in a public signature anywhere
+in the workspace.
+
+One-line change: `new_from_slice` moved from the `Mac` trait to `KeyInit`.
+92 tests green.
+
 ## 16th August 2026 (0.7.10)
 
 Adds the **`ecdsa-jcs-2019`** cryptosuite — ES256 (P-256) signatures over

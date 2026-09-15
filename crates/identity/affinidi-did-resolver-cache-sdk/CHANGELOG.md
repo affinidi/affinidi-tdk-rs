@@ -1,5 +1,129 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.37) — did:webvh host policy, one setting for did:web and did:webvh
+
+### Changed
+
+- **SECURITY / BEHAVIOUR (SSRF):** `did:webvh` resolution now refuses
+  non-public hosts by default, as `did:web` resolution has since 0.8.35. This
+  moves to `didwebvh-rs` 0.7, which:
+  - rejects `localhost`, `*.localhost`, `*.local`, `*.internal`, `home.arpa`
+    and single-label names before making any request;
+  - refuses, at connect time, a name that resolves to a loopback,
+    private-network, carrier-grade NAT, link-local or other non-public address;
+  - ignores system proxy settings in its default client.
+
+  Before, `did:webvh:{SCID}:localhost%3A<port>` was fetched over `http://`, and
+  any other name was fetched from whatever address it resolved to. A refused
+  DID now fails with `DIDCacheError::DIDError` naming `BlockedHost`.
+
+  This is breaking in effect for local stacks and for deployments whose
+  did:webvh hosts are on a private network. One setting opts both did:web and
+  did:webvh back in:
+
+  ```rust
+  use affinidi_did_resolver_cache_sdk::{
+      config::DIDCacheConfigBuilder, network_resolvers::HostPolicy,
+  };
+
+  let config = DIDCacheConfigBuilder::default()
+      .with_host_policy(HostPolicy::AllowPrivate)
+      .build();
+  ```
+
+- `DIDCacheClient::new` builds both its did:web and did:webvh resolvers from
+  the configured policy. The default is still `PublicOnly`, so did:web
+  behaviour does not change unless the setting is used.
+- `WebvhResolver` passes no HTTP client to `didwebvh-rs`, so the client that
+  crate builds is used. It refuses redirects, ignores proxies and vets resolved
+  addresses.
+- `WebvhResolver` is now a struct with a private field instead of a unit
+  struct. Code that used the value directly (`Box::new(WebvhResolver)`) must
+  call `WebvhResolver::new()` instead. No caller in this workspace did.
+- The `did-scid` feature now requires `did-scid` 0.2.7, which is built on
+  `didwebvh-rs` 0.7. `did:scid:vh` resolution therefore also contacts public
+  hosts only, and `with_host_policy` does not change that.
+
+### Added
+
+- `DIDCacheConfigBuilder::with_host_policy`.
+- `WebvhResolver::new`, `WebvhResolver::with_policy` and `Default`, mirroring
+  `WebResolver`.
+
+This is a patch bump per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md)
+point 3: `vta-sdk` pins `^0.8` through `[patch.crates-io]`.
+
+## Unreleased (0.8.36) — retire did:cheqd resolution, clearing eight advisories
+
+Closes [#760]. `did:cheqd` still **parses**; this SDK no longer **resolves** it.
+
+`did-resolver-cheqd` was an optional dependency behind the opt-in `did-cheqd`
+feature — off by default, enabled by nothing in this workspace, and compiled by
+no build. It still put eight advisories into `Cargo.lock`, because `cargo audit`
+reads the lockfile rather than the build graph:
+
+| Advisory | Crate | Reached via |
+|----------|-------|-------------|
+| RUSTSEC-2026-0258 (**vulnerability**, h2 DoS) | `h2 0.3.27` | `ssi-dids-core 0.1.3` → `reqwest 0.11` → `hyper 0.14` |
+| RUSTSEC-2025-0134 | `rustls-pemfile 1.0.4` / `2.2.0` | `reqwest 0.11`, and `tonic 0.12.3` |
+| RUSTSEC-2026-0248, RUSTSEC-2023-0126 | `im 15.1.0` | `linked-data 0.1.2` → `json-ld 0.21` |
+| RUSTSEC-2026-0251, RUSTSEC-2026-0255 | `sized-chunks 0.6.5` | `im` |
+| RUSTSEC-2026-0247 | `bitmaps 2.1.0` | `im` |
+| RUSTSEC-2026-0215 | `smallstr 0.3.1` | `json-syntax` |
+| RUSTSEC-2024-0370 | `proc-macro-error 1.0.4` | `linked-data-derive` |
+
+The upstream crate publishes **no source repository**, has a single release from
+2025, and pins `ssi-dids-core ^0.1` — so there was no version to move to and no
+repository to fork. It used ssi only as a type vocabulary; both call sites here
+serialised its document straight back out to JSON.
+
+**Result:** every one of the eight is gone. `h2` now resolves at 0.4.19, above
+the `>=0.4.16` fix, so the DoS is *fixed* rather than suppressed — its
+`auditIgnore` entry has been removed from CI along with three others that went
+with it. `cargo audit` drops from 1 vulnerability + 12 warnings to 0 + 1, and the
+resolved graph from 1064 crates to 942. The `tonic 0.12` / rustls `ring` conflict
+that made `did-cheqd` awkward to enable is gone with it.
+
+**Nothing was removed from the public API.** The `did-cheqd` feature remains
+(now empty), `CheqdResolver` remains and declines with an explanatory
+`ResolutionFailed`, and `DIDMethod::Cheqd` in `affinidi-did-common` is untouched.
+Code that named any of them still compiles, which is why this ships as a patch:
+under ADR 0003 a true minor would break the external `[patch.crates-io]`
+redirects (`vta-sdk 0.32.3` pins `^0.8`) and require sequencing releases in
+another repository first. Verified with `check-workspace-duplicates.sh`.
+
+To resolve `did:cheqd`, append your own resolver — the chain is a public
+extension point for exactly this:
+
+```rust,ignore
+client.append_resolver(MethodName::Cheqd, Box::new(MyCheqdResolver));
+```
+
+[#760]: https://github.com/affinidi/affinidi-tdk-rs/issues/760
+
+## 0.8.35
+
+### Changed
+
+- **SECURITY / BEHAVIOUR (SSRF):** `did:web` resolution now refuses a
+  non-routable target — loopback, RFC 1918 / unique-local, carrier-grade NAT,
+  link-local (`169.254.169.254`), `localhost`, `*.local` — both when the DID
+  names one literally and when the DID's hostname *resolves* to one. See
+  `affinidi-did-web` 0.1.4.
+
+  This is breaking in effect for deployments whose did:web hosts genuinely live
+  on an internal network. They opt back in explicitly:
+
+  ```rust
+  use affinidi_did_resolver_cache_sdk::resolver::network_resolvers::{HostPolicy, WebResolver};
+
+  client.set_resolver(MethodName::Web, Box::new(WebResolver::with_policy(HostPolicy::AllowPrivate)));
+  ```
+
+### Added
+
+- `WebResolver::with_policy` and the re-exported `HostPolicy`.
+
 ## 0.8.34
 
 ### Changed

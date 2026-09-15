@@ -1,8 +1,24 @@
 [advisories]
 version = 2
-ignore = [
-  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error (unmaintained) is a build-time-only transitive dep of the ssi-json-ld stack (ssi-dids-core -> linked-data-derive); no runtime exposure. Drops out once upstream ssi-* releases migrate off it." },
-]
+# Deliberately empty: no advisory is currently suppressed for the build graph.
+#
+# The sole entry here ignored RUSTSEC-2024-0370 (proc-macro-error) on the grounds
+# that it was a build-time-only transitive of the ssi-json-ld stack, and said it
+# would "drop out once upstream ssi-* releases migrate off it". Rather than wait
+# for upstream, cache-sdk 0.8.36 retired did:cheqd resolution and dropped
+# `did-resolver-cheqd`, which took the whole ssi-0.1 stack out of the graph — so
+# the entry stopped matching anything and cargo-deny began warning
+# `advisory-not-detected` about it.
+#
+# Keep it empty. A suppression list nobody trusts is a list nobody audits, and an
+# entry that matches nothing is indistinguishable from one that matters. If an
+# advisory genuinely has to be accepted, add it with a reason *and* the condition
+# that would clear it, and delete it the moment that condition is met.
+#
+# Note this governs the BUILD GRAPH. `cargo audit` reads Cargo.lock and has its
+# own list, `auditIgnore`, duplicated in .github/workflows/checks.yaml and
+# release.yaml — change those together.
+ignore = []
 
 [bans]
 multiple-versions = "allow"
@@ -68,6 +84,29 @@ exceptions = [
   { allow = [
     "MPL-2.0",
   ], crate = "option-ext" },
+  # `textwrap` 0.16.3 (via `affinidi-messaging-text-client`) pulls the ICU
+  # segmentation crates for line breaking, and ICU relicensed to Unicode-3.0.
+  # Not copyleft — Unicode-3.0 is the OSI-approved Unicode License v3, a
+  # permissive licence with an attribution clause covering the bundled data
+  # tables — so this is a per-crate exception rather than a global `allow`
+  # entry, for the same reason the `option-ext` note above gives: the global
+  # list is what stops a future dependency arriving under a licence nobody
+  # looked at.
+  #
+  # These four are the whole of it: the two `*_data` crates carry the data
+  # tables, the other two the code that reads them.
+  { allow = [
+    "Unicode-3.0",
+  ], crate = "icu_locale_fallback" },
+  { allow = [
+    "Unicode-3.0",
+  ], crate = "icu_locale_fallback_data" },
+  { allow = [
+    "Unicode-3.0",
+  ], crate = "icu_segmenter" },
+  { allow = [
+    "Unicode-3.0",
+  ], crate = "icu_segmenter_data" },
   { allow = [
     "MPL-2.0",
     "CDLA-Permissive-2.0",

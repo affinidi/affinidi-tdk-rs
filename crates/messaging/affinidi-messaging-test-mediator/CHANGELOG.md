@@ -19,6 +19,89 @@ environment.
 
 ## Unreleased (0.4.2) — a test user that is mediated the way production is
 
+## Unreleased (0.7.0) — `trust-tasks-rs` 0.20
+
+- Bumps `trust-tasks-rs` 0.19 → 0.20. **No source change** — only manifests.
+  0.20 is additive for everything this crate uses: its one breaking change is a
+  `process-attestation` schema tightening (digest floor 16 → 43 base64url
+  characters, a category correction, a dropped duplicate member), and no crate
+  in this workspace references that spec.
+- **Moves because it is the path, not because its own code changed.** This crate
+  re-exports `affinidi-messaging-sdk`, so a consumer reaching a generated type
+  through the facade sees the same API change. Leaving it unbumped would publish
+  a move that never arrives — and the version guard cannot see it, because only
+  its manifest changed.
+
+## Unreleased (0.5.2) — `forwarding_ws_threshold` so the relay socket can be tested
+
+`TestMediatorBuilder::forwarding_ws_threshold(msgs_per_10s)` sets the rate at
+or above which the forwarding processor relays over a WebSocket instead of
+REST. Pass `0` to force the socket on the first relayed message.
+
+Without it the WebSocket relay path had no end-to-end coverage and could not
+get any. The production default reads as 1 msg/10s, but the rate is measured
+over a 300-second window — `total / window * 10` — so a single relayed message
+scores 0.03 and every short test silently relays over REST. A test could
+therefore assert cross-mediator delivery, pass, and never once exercise the
+transport it looked like it was covering.
+
+New `tests/ws_relay_admission.rs` uses it for the two-mediator case, alongside
+three raw-socket tests of the receiving side: the anonymous upgrade is admitted
+and echoes `relay-ack`, an accepted frame is acked *and* really delivered, a
+refused frame comes back nacked with the mediator's error code, and a
+non-relay mediator refuses the upgrade outright.
+
+## Unreleased (0.5.1) — no longer depends on `jsonwebtoken`
+
+Support for mediator 0.22.0 (issue #770). The fixture used to build
+`EncodingKey`/`DecodingKey` itself and assign them into `SecurityConfig`; it now
+generates the Ed25519 PKCS#8 document and hands the bytes to
+`SecurityConfig::set_jwt_keys_from_pkcs8`.
+
+The `jsonwebtoken` dependency is **gone from this crate entirely**, which is the
+practical proof that it is now private to the mediator: there is no second copy
+left to mismatch. `install_default_crypto_provider` delegates to the mediator's
+`install_jwt_crypto_provider()` for the same reason — that provider is registered
+per `jsonwebtoken` instance, and it is the mediator's copy that verifies tokens.
+
+## Unreleased (0.5.0) — `trust-tasks-rs` 0.18
+
+- Follows `affinidi-messaging-sdk` 0.22.0 and `affinidi-messaging-mediator`
+  0.21.0 to `trust-tasks-rs` 0.18. No source change.
+
+## Unreleased (0.4.5) — support for the TSP relay peer allowlist
+
+Support for mediator 0.20.10 (issue #758). No API change; the fixture already
+exposed `relay_trusted_mediators` on `TestMediatorBuilder` and `configure_each`
+on `TestTopologyBuilder`, which is what the new `tsp_relay_peer_trust` suite
+drives.
+
+## Unreleased (0.4.4) — a fixture that can permit direct delivery
+
+Support for mediator 0.20.9, which makes TSP direct delivery honour
+`security.local_direct_delivery_allowed` (issue #757). The fixture defaults that
+flag **off** — matching the code default for an unset setting rather than the
+shipped `conf/mediator.toml`, which sets `"true"` — so 23 TSP tests that had been
+written against a path which ignored it now need it on.
+
+- **`TestEnvironment::spawn_with_direct_delivery()`** — the default mediator with
+  `local_direct_delivery_allowed = true`. Use it whenever the subject of a test
+  is what happens *after* a message is accepted (pickup, streaming, capability
+  discovery); without it such a test fails on the policy gate before reaching
+  what it is actually asserting.
+- **`spawn_with_tsp_auth` and `spawn_with_tsp_policy` now enable direct delivery
+  themselves.** Both exist to round-trip a TSP Direct message — pure-TSP
+  authentication and `send_to` protocol selection are only observable once a
+  message is accepted — so every caller needed it and none of them was testing
+  the policy.
+
+`TestEnvironment::spawn()` is unchanged and still defaults the flag off, which is
+what lets a test pin the refusal.
+
+## Unreleased (0.4.3) — a test user that is mediated the way production is
+
+- Requires `affinidi-tdk` 0.11 (was 0.10), which re-exports `affinidi-mdoc`
+  0.3 / `coset` 0.4. Declaration-only; no source change here.
 - New `TestEnvironment::add_tsp_mediated_user` / `TestTopology::add_tsp_mediated_user`:
   a user whose DID advertises a `TSPTransport` service **naming its mediator by
   DID**, which is what a real persona/agent document publishes. `add_user` is

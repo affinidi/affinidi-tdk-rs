@@ -168,7 +168,7 @@ pub async fn authentication_refresh(
         // clock below (not by jsonwebtoken) — see `clock_aware_validation`.
         let results = match jsonwebtoken::decode::<SessionClaims>(
             refresh_token,
-            &state.config.security.jwt_decoding_key,
+            state.config.security.jwt_decoding_key(),
             &clock_aware_validation(),
         ) {
             Ok(token) => token,
@@ -327,7 +327,7 @@ pub async fn authentication_refresh(
             &session_check.session_id,
             state.config.security.jwt_access_expiry,
             now,
-            &state.config.security.jwt_encoding_key,
+            state.config.security.jwt_encoding_key(),
         )?;
 
         // Generate a new refresh token (rotation — old one is now invalid)
@@ -338,7 +338,7 @@ pub async fn authentication_refresh(
             &session_check.session_id,
             refresh_expiry,
             now,
-            &state.config.security.jwt_encoding_key,
+            state.config.security.jwt_encoding_key(),
         )?;
 
         // Store the new refresh token hash

@@ -1,5 +1,36 @@
 # did:scid
 
+## Unreleased (0.2.7) — `didwebvh-rs` 0.7
+
+- Bumps `didwebvh-rs` 0.6 → 0.7. Only the manifest changes.
+- **Behaviour:** `resolve` for a `did:scid:vh` DID now contacts public hosts
+  only. `didwebvh-rs` 0.7 refuses `localhost`, other special-use names, and
+  names that resolve to non-public addresses. A `src` such as `localhost:3000`
+  now fails with `DIDSCIDError::WebVHError` wrapping
+  `DIDWebVHError::BlockedHost`, and no request is made. `resolve` takes no host
+  policy argument, so this crate offers no opt-out.
+- `DIDSCIDError::WebVHError` wraps `didwebvh_rs::DIDWebVHError`, so that variant
+  now carries the 0.7 type. This is a patch bump per ADR 0003 point 3, as for
+  the `didwebvh-rs` 0.5 → 0.6 move.
+
+## Unreleased (0.2.6) — retire did:cheqd resolution
+
+Part of [#760]. A `did:scid` whose `?src=` names a `did:cheqd` still parses, and
+`ScidMethod::Cheqd` is unchanged; `resolve` now returns an explanatory
+`CheqdError` instead of resolving.
+
+The implementation came from `did-resolver-cheqd`, which pinned `ssi-dids-core
+0.1` and — even unbuilt, behind an off-by-default feature — pulled eight
+advisories into `Cargo.lock`, including a live `h2` denial-of-service. The crate
+publishes no source repository and has a single 2025 release, so there was
+nothing to upgrade to and nothing to fork. See
+`affinidi-did-resolver-cache-sdk` 0.8.36 for the full accounting.
+
+Nothing was removed from the public API: the `did-cheqd` feature remains (now
+empty) and so does the enum variant, so code naming either still compiles.
+
+[#760]: https://github.com/affinidi/affinidi-tdk-rs/issues/760
+
 ## 0.2.5
 
 ### Changed

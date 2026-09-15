@@ -31,7 +31,7 @@
  */
 
 use bls12_381_plus::G1Projective;
-use elliptic_curve::hash2curve::ExpandMsgXmd;
+use bls12_381_plus::elliptic_curve::hash2curve::ExpandMsgXmd;
 use sha2::Sha256;
 
 use crate::ciphersuite::Ciphersuite;

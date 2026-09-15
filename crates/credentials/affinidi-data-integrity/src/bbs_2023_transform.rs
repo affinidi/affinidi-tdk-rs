@@ -30,7 +30,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use affinidi_bbs as bbs;
 use affinidi_rdf_encoding::jsonld::context::Context as JsonLdContext;
 use affinidi_rdf_encoding::{jsonld, nquads, rdfc1};
-use hmac::{Hmac, Mac};
+// `new_from_slice` moved from `Mac` to `KeyInit` in the digest 0.11 generation.
+use hmac::{Hmac, KeyInit, Mac};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 

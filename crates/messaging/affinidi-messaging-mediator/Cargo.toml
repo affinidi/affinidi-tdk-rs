@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.20.6"
+version = "0.24.3"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -106,31 +106,31 @@ secrets-k8s = ["affinidi-messaging-mediator-common/secrets-k8s"]
 ## AWS integration used by `did_web_self_hosted = "aws_parameter_store://..."`
 ## or `"s3://..."` (still loaded directly by the mediator, not via the secret
 ## store). Enabled automatically by `secrets-aws`.
-aws = ["dep:aws-config", "dep:aws-sdk-ssm", "dep:aws-sdk-s3"]
+aws = ["dep:aws-config", "dep:aws-sdk-ssm", "dep:aws-sdk-s3", "dep:aws-smithy-types"]
 
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
 # 0.18.61+: reconnect backoff no longer resets on a socket that is immediately
 # closed. Pinned tighter than the usual "0.18" because a mediator built against
 # an older SDK still amplifies duplicate-socket duels client-side.
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.21.0" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.24.0" }
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", optional = true }
 ## Optional: DIDComm v1 (Aries RFC 0019) implementation (activated by `didcomm-v1`)
 affinidi-messaging-didcomm-v1 = { path = "../affinidi-messaging-didcomm-v1", version = "0.2", optional = true }
 ## Trust Tasks framework core — consumes Trust Task documents (the messaging
 ## ping / account / acl / access-list tasks) carried over the binding envelope.
-trust-tasks-rs = { version = "0.17", optional = true }
+trust-tasks-rs = { version = "0.20", optional = true }
 ## Optional: JOSE key-agreement types for the didcomm compat layer (#327)
 affinidi-crypto = { version = "0.2", features = ["jose"], optional = true }
 ## Optional: Trust Spanning Protocol (activated by `tsp` feature)
-affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
+affinidi-tsp = { path = "../affinidi-tsp", version = "0.2", optional = true }
 ## Multibase/multicodec encoding helpers (needed by didcomm for key encoding)
 affinidi-encoding = { version = "0.1", optional = true }
 ## Shared types: DatabaseHandler, errors, config structs, secret storage.
 ## Backend features are enabled below via the mediator's own cargo features
 ## so operators only compile the backends their deployment needs.
-affinidi-messaging-mediator-common = { version = "0.15.37", path = "affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-common = { version = "0.15.44", path = "affinidi-messaging-mediator-common" }
 ## Raw TOML config schema — the `*ConfigRaw` types are defined here and the
 ## mediator re-exports them; the runtime `Config` + conversions stay local.
 affinidi-messaging-mediator-config = { version = "0.2.1", path = "affinidi-messaging-mediator-config" }
@@ -157,7 +157,7 @@ affinidi-task-utils = "0.1"
 ## a second `trust-tasks-rs` (0.2.57, from vta-sdk 0.21.6) in this workspace's
 ## lockfile long after everything else had moved to 0.9. A bounded range is a
 ## tax that comes due silently; prefer a caret and move it deliberately.
-vta-sdk = { version = "0.32.1", features = [
+vta-sdk = { version = "0.38", features = [
   "integration",
 ], optional = true }
 
@@ -188,12 +188,18 @@ redis = { version = "1.2", features = [
 fjall = { version = "3.1", optional = true }
 
 # ── DID Infrastructure ───────────────────────────────────────────────────
-didwebvh-rs = "0.6"
+didwebvh-rs = "0.7"
 
 # ── AWS Integration (optional, behind `aws` feature) ────────────────────
 ## Used for Secrets Manager (aws_secrets://), Parameter Store (aws_parameter_store://)
 ## To build without: --no-default-features --features didcomm
 aws-config = { version = "1", optional = true }
+
+# Not called from this crate — a resolver bound, explained in the workspace
+# manifest. Named here because a `[workspace.dependencies]` entry constrains
+# nothing on its own: only a crate that declares the dependency contributes its
+# version requirement, and this is a subtree that pulls `aws-config`.
+aws-smithy-types = { workspace = true, optional = true }
 # `default-features = false` + the default set MINUS `rustls`.
 # The aws-sdk crates ship BOTH TLS stacks in their defaults:
 #   rustls               -> aws-smithy-runtime/tls-rustls
@@ -222,7 +228,7 @@ aws-sdk-ssm = { version = "1", optional = true, default-features = false, featur
 aws-sdk-s3 = { version = "1", optional = true, default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
 
 # ── Cryptography & Security ─────────────────────────────────────────────
-jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 ring = { version = "0.17", features = ["std"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "tls12"] }
 ## Constant-time comparison for DID authorization checks
@@ -268,7 +274,7 @@ ahash = { version = "0.8", features = ["serde"] }
 dashmap = "6.2"
 chrono = "0.4"
 hostname = "0.4"
-itertools = "0.14"
+itertools = "0.15"
 num-format = "0.4"
 rand = "0.10"
 regex = "1"
@@ -289,7 +295,7 @@ uuid = { version = "1", features = ["v4", "fast-rng"] }
 ## Not available on MSVC; the cfg gate below falls back to the system
 ## allocator there.
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = { version = "0.6", optional = true }
+tikv-jemallocator = { version = "0.7", optional = true }
 
 [dev-dependencies]
 lazy_static = "1"

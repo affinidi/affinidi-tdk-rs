@@ -87,7 +87,7 @@ The wizard prints the exact build/run commands for your chosen
 features when it finishes. The default DIDComm + Redis build is:
 
 ```bash
-cargo run --release -p affinidi-messaging-mediator -- \
+cargo run --release --locked -p affinidi-messaging-mediator -- \
   -c conf/mediator.toml
 ```
 

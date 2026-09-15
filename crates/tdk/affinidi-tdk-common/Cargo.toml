@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-tdk-common"
 description = "Common utilities for Affinidi Trust Development Kit."
-version = "0.6.10"
+version = "0.6.11"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -21,6 +21,10 @@ affinidi-did-resolver-cache-sdk = "0.8"
 # registry-drift failure — see scripts/check-publish-dry-run.sh.
 affinidi-did-authentication = "0.3.11"
 affinidi-did-common = "0.4"
+# A public dependency: re-exported as `net_guard`, and
+# `create_guarded_http_client` takes and returns its types. Exact sibling
+# version for the same publish dry-run reason as above.
+affinidi-net-guard = "0.1.0"
 affinidi-secrets-resolver = "0.5"
 affinidi-data-integrity = "0.7"
 
