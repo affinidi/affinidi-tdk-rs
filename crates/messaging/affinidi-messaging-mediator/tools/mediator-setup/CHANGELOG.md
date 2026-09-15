@@ -1,5 +1,24 @@
 # Affinidi Messaging Mediator Setup
 
+## Unreleased (0.1.33) — every build this wizard emits or runs passes `--locked`
+
+The wizard runs `cargo install` itself and writes the `cargo build` and
+Dockerfile commands an operator uses afterwards. None of them passed
+`--locked`, so an operator who had learned to pass it on their own builds
+still got an unlocked resolve from the wizard — which is how a same-day
+`aws-smithy-types` release broke builds of a workspace nobody had touched.
+
+`--locked` is only meaningful now that the workspace commits `Cargo.lock`;
+before, there was nothing for it to honour, and passing it would have turned a
+working build into a hard error.
+
+Also: the generated Dockerfile's builder image was `rust:1.94-bookworm` while
+the workspace MSRV is 1.95.0, so every image the wizard wrote failed on its own
+toolchain. It now tracks `rust-toolchain.toml`, and
+`scripts/check-toolchain-sync.sh` covers `docker.rs` so it cannot drift again —
+that guard exists precisely because the toolchain has to be hand-carried into
+several files, and this was one it did not know about.
+
 ## Unreleased (0.1.32) — `vta-sdk` 0.32 → 0.38
 
 `ProvisionSummary` gained `context` and `admin_scope`. The wizard's *offline*

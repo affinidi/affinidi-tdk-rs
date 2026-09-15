@@ -2,7 +2,13 @@
 **/.vscode
 /target
 environments.json
-Cargo.lock
+# Cargo.lock is COMMITTED. This workspace ships binaries operators build from
+# source — the mediator and the mediator-setup wizard — and without a lockfile
+# `--locked` has nothing to honour, so every clone resolves from scratch and
+# inherits whatever upstream published that morning. That is how an
+# `aws-smithy-types` MINOR release broke every wizard build in September 2026.
+# The libraries published from here are unaffected: cargo ignores a dependency's
+# lockfile, so this constrains only builds of this repository.
 **/environments.json*
 
 docs/*
