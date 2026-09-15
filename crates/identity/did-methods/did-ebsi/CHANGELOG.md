@@ -1,5 +1,13 @@
 # did:ebsi
 
+## Unreleased (0.1.5) — `rand` 0.10
+
+No behaviour change: the identifier is still 16 bytes from the thread RNG.
+
+rand 0.10 renamed the old `RngCore` to `Rng` and moved the sampling methods
+onto a new `RngExt`, so `use rand::Rng` no longer brings `random()` into
+scope — the import changes, the call does not.
+
 ## Changelog history
 
 ## 19th July 2026

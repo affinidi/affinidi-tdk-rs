@@ -1,5 +1,11 @@
 # Affinidi Trust Lists Changelog
 
+## Unreleased (0.1.6) — `sha2` 0.11
+
+No behaviour change; the crate's only use is `Sha256::digest`, which is
+unchanged across the bump. Moves onto the same `sha2` line as the rest of the
+workspace's crypto crates.
+
 ## Unreleased (0.1.5) — quick-xml 0.42, x509-parser 0.18
 
 - **`quick-xml` 0.41 → 0.42**, which required a source migration. 0.42 makes
