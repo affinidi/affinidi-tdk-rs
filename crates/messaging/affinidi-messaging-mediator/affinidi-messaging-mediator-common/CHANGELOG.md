@@ -1,5 +1,20 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.15.45) — `aws-smithy-types` held below 1.7
+
+No behaviour change; a resolver bound only.
+
+`aws-smithy-types` 1.7.0 replaced `Document::Object`'s payload and added a
+variant to a `#[non_exhaustive]` enum in a MINOR release, which
+`aws-smithy-json` 0.63.0 — what `aws-config` 1.12.0 still pulls — does not
+compile against. This workspace ships no `Cargo.lock`, so every clone resolved
+from scratch and took the break — this crate's `secrets-aws` feature is one
+of the three subtrees that pulls it.
+
+`aws-smithy-types` is now a declared (optional) dependency under the same
+feature as `aws-config`, contributing the `>=1.6.1, <1.7` bound from
+`[workspace.dependencies]`. Remove it once `aws-config` ships on json 0.64.
+
 ## Unreleased (0.15.44) — the `relay-ack` subprotocol: WebSocket relay that can't lie
 
 WebSocket relay between mediators now works, and is as safe as the REST path it
