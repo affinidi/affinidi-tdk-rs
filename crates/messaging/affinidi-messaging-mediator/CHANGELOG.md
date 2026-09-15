@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.21.0) — TSP Rev 3: a uniform delivery refusal, and no DIDComm bridge
+## Unreleased (0.25.0) — TSP Rev 3: a uniform delivery refusal, and no DIDComm bridge
 
 **Breaking, deliberately.**
 

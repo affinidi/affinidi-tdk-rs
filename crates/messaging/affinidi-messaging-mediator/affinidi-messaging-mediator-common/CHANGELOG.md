@@ -1,5 +1,23 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.0) — TSP Rev 3: a relayed destination is not retained
+
+Breaking, by semantics rather than by signature — the kind this repository's
+own guidance says to call out anyway.
+
+`ForwardQueueEntry::to_did` may now be **empty**. Rev 3 §5.3.3 forbids an
+intermediary relaying an endpoint-to-endpoint message from storing `VID_a2` and
+`VID_b2` in persistent storage, and this queue is persistent. On that path the
+destination is carried only as `to_did_hash` and `endpoint_url`, which is all
+delivery needs. Nothing routes on `to_did`; anything that read it for a label
+must fall back.
+
+`decode_tsp_forward` now accepts the long count frame (`--E#####`, leading
+`0xFB`) as well as the short one (`-E##`, leading `0xF8`). Rev 3 widened the
+`-E` count to cover the ciphertext, which makes the long form reachable for any
+message over roughly 12 KB — so a forwarding path that recognised only the short
+form dropped exactly the large messages it exists to carry.
+
 ## Unreleased (0.15.45) — `aws-smithy-types` held below 1.7
 
 No behaviour change; a resolver bound only.

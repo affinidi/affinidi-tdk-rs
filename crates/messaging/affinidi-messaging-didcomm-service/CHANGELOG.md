@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.6.0) — TSP Rev 3 control messages
+## Unreleased (0.9.0) — TSP Rev 3 control messages
 
 - **Handles TSP control messages.** The service had no relationship lifecycle at
   all: invites, accepts and cancels arrived and were discarded as

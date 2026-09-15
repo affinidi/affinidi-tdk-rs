@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.5.0) — relationships for Rev 3's gating
+## Unreleased (0.8.0) — relationships for Rev 3's gating
 
 Rev 3 gates application messages on a relationship, so a test that just sends
 now needs one first. Three helpers, and which to use depends on what the test is

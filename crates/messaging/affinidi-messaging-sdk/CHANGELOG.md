@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.22.0) — TSP Rev 3
+## Unreleased (0.25.0) — TSP Rev 3
 
 Requires `affinidi-tsp` 0.2. **See that crate's changelog first: the wire format
 changed and there is no Rev 2 compatibility.** Everything here follows from it.
