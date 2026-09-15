@@ -26,7 +26,7 @@ docker run --name=redis-local --publish=6379:6379 --hostname=redis \
 The setup wizard generates all configuration, keys, and secrets in one step:
 
 ```bash
-cargo run --bin mediator-setup
+cargo run --locked --bin mediator-setup
 ```
 
 The interactive TUI guides you through:
@@ -55,10 +55,10 @@ After the wizard completes, it prints the exact build and run commands:
 
 ```bash
 # Default DIDComm build
-cargo build --release -p affinidi-messaging-mediator
+cargo build --release --locked -p affinidi-messaging-mediator
 
 # Run with generated config
-cargo run --release -p affinidi-messaging-mediator -- -c conf/mediator.toml
+cargo run --release --locked -p affinidi-messaging-mediator -- -c conf/mediator.toml
 ```
 
 ## Non-Interactive Setup (CI/CD)
@@ -67,10 +67,10 @@ For automated environments, use the `--non-interactive` flag:
 
 ```bash
 # Quick local development setup (all defaults)
-cargo run --bin mediator-setup -- --non-interactive
+cargo run --locked --bin mediator-setup -- --non-interactive
 
 # Production server with specific options
-cargo run --bin mediator-setup -- --non-interactive \
+cargo run --locked --bin mediator-setup -- --non-interactive \
   --deployment server \
   --did-method webvh \
   --public-url "mediator.example.com/mediator/v1" \
@@ -78,7 +78,7 @@ cargo run --bin mediator-setup -- --non-interactive \
   --database-url "redis://redis.internal:6379/"
 
 # Container deployment
-cargo run --bin mediator-setup -- --non-interactive \
+cargo run --locked --bin mediator-setup -- --non-interactive \
   --deployment container \
   --did-method peer \
   --secret-storage file
@@ -161,20 +161,20 @@ finishes — most operators don't need to memorise these.
 
 ```bash
 # Default — DIDComm + Redis, file:// or built-in keyring
-cargo build -p affinidi-messaging-mediator
+cargo build --locked -p affinidi-messaging-mediator
 
 # Embedded single-node deployment (Fjall + keyring)
-cargo build -p affinidi-messaging-mediator \
+cargo build --locked -p affinidi-messaging-mediator \
   --no-default-features \
   --features didcomm,fjall-backend,secrets-keyring
 
 # Multi-cluster with AWS Secrets Manager
-cargo build -p affinidi-messaging-mediator \
+cargo build --locked -p affinidi-messaging-mediator \
   --no-default-features \
   --features didcomm,redis-backend,secrets-aws
 
 # TSP-only build (still needs a storage backend)
-cargo build -p affinidi-messaging-mediator \
+cargo build --locked -p affinidi-messaging-mediator \
   --no-default-features \
   --features tsp,redis-backend
 ```
@@ -281,7 +281,7 @@ upgrade path.
 ### Picking a backend in the wizard
 
 ```sh
-cargo run --bin mediator-setup
+cargo run --locked --bin mediator-setup
 ```
 
 At the **Key Storage** step the wizard offers all seven backends:
@@ -399,7 +399,7 @@ Ensure the mediator is running, then:
 
 ```bash
 # Mediator administration
-cargo run --bin mediator_administration
+cargo run --locked --bin mediator_administration
 ```
 
 See [affinidi-messaging-helpers](../affinidi-messaging-helpers/) for additional
