@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased (0.24.2) — `aws-smithy-types` held below 1.7
+
+No behaviour change; a resolver bound only.
+
+`aws-smithy-types` 1.7.0 replaced `Document::Object`'s payload and added a
+variant to a `#[non_exhaustive]` enum in a MINOR release, which
+`aws-smithy-json` 0.63.0 — what `aws-config` 1.12.0 still pulls — does not
+compile against. This workspace ships no `Cargo.lock`, so every clone resolved
+from scratch and took the break — including this crate's `aws` and
+`secrets-aws` builds.
+
+`aws-smithy-types` is now a declared (optional) dependency under the same
+feature as `aws-config`, contributing the `>=1.6.1, <1.7` bound from
+`[workspace.dependencies]`. Remove it once `aws-config` ships on json 0.64.
+
 ## Unreleased (0.24.1) — `didwebvh-rs` 0.7
 
 - Bumps `didwebvh-rs` 0.6 → 0.7. There is no source change: this crate reads
