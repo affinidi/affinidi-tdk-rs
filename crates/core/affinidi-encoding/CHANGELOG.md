@@ -1,5 +1,27 @@
 # Affinidi Encoding Changelog
 
+## Unreleased (0.1.6) — the post-quantum code points are now pinned, not trusted
+
+No behaviour change: a test and a comment. Every value was already correct.
+
+The seven PQC constants were carried with a comment saying they came from the
+official table, and no record of when that was last true. All seven are `draft`
+status upstream, which means they may legitimately move — and a moved code point
+does not fail loudly. It produces `did:key`s and multikeys this workspace reads
+back perfectly and nobody else can resolve, found by an interop partner months
+later rather than by CI.
+
+`pqc_code_points_match_the_multicodec_registry` now asserts each value, each
+FIPS key length, and the `from_u64`/`to_u64` round trip, and names the revision
+checked: `table.csv` at `38e3bf3e38f613679d76ef2041d73a8060f8622a`, verified
+2026-09-15. All seven matched.
+
+`slh_dsa_has_no_private_code_point_to_hold` records the other half — the
+registry carries twelve `slhdsa-*-pub` rows and no `slhdsa-*-priv` of any
+parameter set, so SLH-DSA secrets stay memory-only. It exists to stop that gap
+being closed from this side by picking an unused number, which round-trips
+in-workspace and is unreadable everywhere else.
+
 ## 14th June 2026 (0.1.5)
 
 - **SEMVER:** `EncodingError` is now `#[non_exhaustive]` (ADR-0003), so new

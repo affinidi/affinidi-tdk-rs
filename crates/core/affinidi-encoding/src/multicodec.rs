@@ -37,6 +37,12 @@ pub const BLS12381_G2_PUB: u64 = 0xeb;
 //
 // SLH-DSA has no private-key codec registered; `Secret::from_multibase`
 // and `get_private_keymultibase` return an error for SLH-DSA keys.
+//
+// These seven are `draft` upstream and may legitimately move, so they are
+// pinned by `pqc_code_points_match_the_multicodec_registry` rather than
+// trusted. Last verified 2026-09-15 against `table.csv` at commit
+// 38e3bf3e38f613679d76ef2041d73a8060f8622a — change a value here and
+// re-state the revision there.
 pub const ML_DSA_44_PUB: u64 = 0x1210;
 pub const ML_DSA_44_PRIV_SEED: u64 = 0x131a;
 pub const ML_DSA_65_PUB: u64 = 0x1211;
@@ -316,6 +322,98 @@ mod tests {
         ] {
             let raw = codec.to_u64();
             assert_eq!(Codec::from_u64(raw), codec);
+        }
+    }
+
+    /// The post-quantum code points, pinned against the upstream registry.
+    ///
+    /// Verified 2026-09-15 against `multiformats/multicodec` `table.csv` at
+    /// commit `38e3bf3e38f613679d76ef2041d73a8060f8622a`. Every one of these
+    /// rows is `draft` status, which means upstream may legitimately move them
+    /// — and a code point that has moved does not fail loudly. It produces
+    /// `did:key`s and multikeys that this workspace reads back perfectly and no
+    /// other implementation can resolve, which is the kind of defect that is
+    /// found by an interop partner months later rather than by a test.
+    ///
+    /// So this test is a provenance record as much as an assertion: changing a
+    /// constant means changing the value *here* and re-stating which revision
+    /// of the table it was checked against.
+    ///
+    /// Registry names, for grepping upstream: `mldsa-44-pub`, `mldsa-65-pub`,
+    /// `mldsa-87-pub`, `mldsa-44-priv-seed`, `mldsa-65-priv-seed`,
+    /// `mldsa-87-priv-seed`, `slhdsa-sha2-128s-pub`.
+    #[test]
+    fn pqc_code_points_match_the_multicodec_registry() {
+        // ML-DSA public keys (FIPS 204).
+        assert_eq!(ML_DSA_44_PUB, 0x1210, "mldsa-44-pub");
+        assert_eq!(ML_DSA_65_PUB, 0x1211, "mldsa-65-pub");
+        assert_eq!(ML_DSA_87_PUB, 0x1212, "mldsa-87-pub");
+
+        // ML-DSA private keys. The registry has *two* families and we use the
+        // seed one deliberately: `-priv-seed` (0x131a-0x131c) is the 32-byte
+        // seed xi, not the expanded 2560/4032/4896-byte private key
+        // (0x1317-0x1319). Storing the seed is what lets a key be re-derived
+        // from a BIP-32/SLIP-0010 chain, so this choice is load-bearing for
+        // context-scoped key derivation and not merely a size optimisation.
+        assert_eq!(ML_DSA_44_PRIV_SEED, 0x131a, "mldsa-44-priv-seed");
+        assert_eq!(ML_DSA_65_PRIV_SEED, 0x131b, "mldsa-65-priv-seed");
+        assert_eq!(ML_DSA_87_PRIV_SEED, 0x131c, "mldsa-87-priv-seed");
+
+        // SLH-DSA (FIPS 205). Only the SHA2-128s parameter set is implemented.
+        assert_eq!(SLH_DSA_SHA2_128S_PUB, 0x1220, "slhdsa-sha2-128s-pub");
+
+        // Key lengths are the algorithms' own, and are the cheap check that
+        // catches a truncated key without any base64 reasoning.
+        assert_eq!(Codec::MlDsa44Pub.expected_key_length(), Some(1312));
+        assert_eq!(Codec::MlDsa65Pub.expected_key_length(), Some(1952));
+        assert_eq!(Codec::MlDsa87Pub.expected_key_length(), Some(2592));
+        assert_eq!(Codec::MlDsa44PrivSeed.expected_key_length(), Some(32));
+        assert_eq!(Codec::MlDsa65PrivSeed.expected_key_length(), Some(32));
+        assert_eq!(Codec::MlDsa87PrivSeed.expected_key_length(), Some(32));
+        assert_eq!(Codec::SlhDsaSha2_128sPub.expected_key_length(), Some(32));
+
+        // Every PQC codec we hold round-trips through the u64 conversion.
+        for codec in [
+            Codec::MlDsa44Pub,
+            Codec::MlDsa65Pub,
+            Codec::MlDsa87Pub,
+            Codec::MlDsa44PrivSeed,
+            Codec::MlDsa65PrivSeed,
+            Codec::MlDsa87PrivSeed,
+            Codec::SlhDsaSha2_128sPub,
+        ] {
+            assert_eq!(Codec::from_u64(codec.to_u64()), codec, "{codec:?}");
+        }
+    }
+
+    /// SLH-DSA has no registered private-key code point, and that is a fact
+    /// about the registry rather than a gap in this crate.
+    ///
+    /// Re-checked 2026-09-15 at the revision named above: the registry carries
+    /// twelve `slhdsa-*-pub` rows (0x1220-0x122b) and **no** `slhdsa-*-priv` of
+    /// any parameter set. `get_private_keymultibase` therefore refuses an
+    /// SLH-DSA secret rather than encoding one, and
+    /// `affinidi-secrets-resolver` keeps those keys memory-only.
+    ///
+    /// The failure mode this guards against is someone closing that gap from
+    /// this side by picking an unused number. A self-assigned code point
+    /// round-trips perfectly in-workspace and is unreadable everywhere else —
+    /// the same trap a neighbouring TSP implementation fell into with
+    /// private-use-area codecs. If a `slhdsa-*-priv` row is ever registered,
+    /// add the constant and delete this test; do not invent one.
+    #[test]
+    fn slh_dsa_has_no_private_code_point_to_hold() {
+        // The public codec exists...
+        assert!(Codec::SlhDsaSha2_128sPub.is_public());
+
+        // ...and every private codec we hold is an ML-DSA seed. If this list
+        // ever gains an SLH-DSA entry, the comment above is out of date.
+        for codec in [
+            Codec::MlDsa44PrivSeed,
+            Codec::MlDsa65PrivSeed,
+            Codec::MlDsa87PrivSeed,
+        ] {
+            assert!(!codec.is_public(), "{codec:?} must classify as private");
         }
     }
 }
