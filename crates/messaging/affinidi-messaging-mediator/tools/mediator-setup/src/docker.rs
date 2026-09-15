@@ -187,7 +187,9 @@ mod tests {
             !dockerfile.contains("--no-default-features"),
             "default config shouldn't override default features:\n{dockerfile}"
         );
-        assert!(dockerfile.contains("cargo build --release --locked -p affinidi-messaging-mediator"));
+        assert!(
+            dockerfile.contains("cargo build --release --locked -p affinidi-messaging-mediator")
+        );
         // The image must build what the lockfile resolved. `COPY . .` brings
         // Cargo.lock in, and the builder tag must not fall behind
         // rust-toolchain.toml or the workspace MSRV refuses the build.
