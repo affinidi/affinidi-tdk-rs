@@ -36,7 +36,13 @@ use futures_util::StreamExt;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn didcomm_transport_surfaces_inbound_tsp_frame() {
-    let env = TestEnvironment::spawn().await.expect("spawn test mediator");
+    // `spawn_with_direct_delivery`, not `spawn`: this test's subject is what the
+    // transport adapter does with an accepted TSP frame, and the fixture default
+    // for `local_direct_delivery_allowed` is `false` — so on the plain fixture
+    // the send below is refused at the policy gate and never reaches the adapter.
+    let env = TestEnvironment::spawn_with_direct_delivery()
+        .await
+        .expect("spawn test mediator");
     let service = env
         .mediator
         .add_user("service")

@@ -154,6 +154,20 @@ async fn inter_mediator_hop_with_an_empty_allowlist_is_accepted() {
     let alice = topology.add_user(0, "alice").await.expect("add alice on A");
     let bob = topology.add_user(1, "bob").await.expect("add bob on B");
 
+    // §7.2.2 gates application messages on an existing relationship, and this
+    // test's subject is the peer allowlist, not relationship forming. Without
+    // it bob's `unpack` discards the message as "no relationship with <alice>"
+    // — the specified behaviour, and indistinguishable here from the hop being
+    // refused, which is what the paired `..._is_refused` test asserts.
+    //
+    // `relate_directly` rather than `relate`: it seeds both sides without
+    // exchanging control messages, so the mailbox stays clean for the
+    // `fetched.success.first()` below.
+    topology
+        .relate_directly(&alice, &bob)
+        .await
+        .expect("seed the relationship §7.2.2 requires");
+
     let payload = b"hop from a trusted peer";
     topology
         .node(0)

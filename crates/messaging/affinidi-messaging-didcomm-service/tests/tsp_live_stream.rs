@@ -63,7 +63,15 @@ impl TspHandler for RecordingTspHandler {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tsp_frame_is_delivered_over_the_multiplexed_live_stream() {
-    let env = TestEnvironment::spawn().await.expect("spawn test mediator");
+    // `spawn_with_direct_delivery`, not `spawn`: the fixture default for
+    // `local_direct_delivery_allowed` is `false`, and this test's subject is
+    // what happens *after* a TSP frame is accepted. On the plain fixture the
+    // invite below is refused at the policy gate with
+    // `e.p.direct_delivery.denied` and the multiplexing under test is never
+    // exercised.
+    let env = TestEnvironment::spawn_with_direct_delivery()
+        .await
+        .expect("spawn test mediator");
 
     // Mint the service's identity on the mediator (registered LOCAL ALLOW_ALL).
     let service = env

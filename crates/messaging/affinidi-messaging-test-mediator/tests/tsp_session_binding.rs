@@ -160,9 +160,20 @@ async fn spoofed_sender_cannot_pass_the_recipients_access_list() {
         .await
         .expect_err("alice is not on bob's allowlist")
         .to_string();
+    // Only that she is refused, not why. Every delivery refusal is now
+    // identical (`e.p.delivery.refused`) because "not on the access list" is a
+    // fact about *Bob*, and answering it apart from "recipient unknown" lets a
+    // sender enumerate the mediator's accounts one refusal at a time.
+    //
+    // This still establishes what the second half needs — that Alice does not
+    // get in as herself — and `inbox_len == 0` below proves non-delivery rather
+    // than trusting the error string. Note the contrast with the
+    // `session_mismatch` assertion that follows: that one stays specific
+    // precisely because it describes the sender's own message rather than
+    // anything about the recipient.
     assert!(
-        honest.contains("access_list") || honest.contains("ACLs"),
-        "expected an access-list denial for the honest send, got: {honest}"
+        honest.contains("delivery.refused") || honest.contains("403"),
+        "expected a delivery refusal for the honest send, got: {honest}"
     );
 
     // And she cannot borrow Mallory's place on it.
