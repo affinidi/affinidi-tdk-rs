@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (0.24.3) — `vta-sdk` 0.32 → 0.38
+
+No source change in this crate. The bump matters for what it removes from the
+graph rather than what it adds.
+
+`vta-sdk` 0.32.4 depended on `affinidi-tdk` ^0.11 and `affinidi-messaging-sdk`
+^0.21, neither of which the workspace copies (0.14.0 and 0.24.0) satisfied, so
+`[patch.crates-io]` could not redirect them and cargo built the published
+copies **alongside** the local ones. The lockfile carried two `affinidi-tdk`,
+two `affinidi-messaging-sdk`, two `didwebvh-rs` and two `did-scid` nodes. This
+crate's own manifest already warned that a stale `vta-sdk` ceiling is how a
+second `trust-tasks-rs` got in; it had happened again, one layer over.
+
+0.38 wants `affinidi-tdk` 0.14, `affinidi-messaging-sdk` 0.24, `didwebvh-rs`
+0.7 and `trust-tasks-rs` 0.20.5 — what this workspace holds — so every patch
+now applies and each resolves to exactly one copy.
+
+Also carried: `persona/facet`, client-side verification of Trust-Task replies
+(0.35), the domain-separated opaque signing oracle (0.37), and did:webvh
+public-host-only resolution (0.38).
+
 ## Unreleased (0.24.2) — `aws-smithy-types` held below 1.7
 
 No behaviour change; a resolver bound only.
