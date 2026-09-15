@@ -97,7 +97,16 @@ pub trait TspHandler: Send + Sync + 'static {
     /// The default does nothing, so a handler that only cares about
     /// application messages is unaffected.
     ///
+    /// Present only under the `tsp` feature, because its signature names
+    /// `ControlMessage` — a type the SDK exposes only under *its* `tsp`
+    /// feature. The rest of this trait is deliberately ungated, matching how
+    /// the service treats the whole TSP surface: the API exists in every build
+    /// and only the frame routing is gated (`service/mediator.rs:207` discards
+    /// the handler when the feature is off). A control message cannot reach a
+    /// build that cannot decode one, so nothing is lost by its absence.
+    ///
     /// [`TspOps::accept_relationship`]: affinidi_messaging_sdk::protocols::tsp::TspOps::accept_relationship
+    #[cfg(feature = "tsp")]
     async fn handle_control(
         &self,
         _ctx: HandlerContext,

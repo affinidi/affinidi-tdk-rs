@@ -741,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-config"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "affinidi-messaging-mediator-common 0.16.0",
  "serde",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-processors"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "affinidi-messaging-mediator-common 0.16.0",
  "clap",

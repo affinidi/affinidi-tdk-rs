@@ -295,9 +295,9 @@ async fn forward_to_an_unregistered_key_is_refused() {
     let http = reqwest::Client::new();
     let endpoint = format!("{}inbound", mediator.endpoint());
 
-    // Guard against passing for the wrong reason: a mistyped URL would also
-    // 404, and this assertion is only meaningful if the route exists. A
-    // forward for a *registered* key must succeed at the same URL — proved by
+    // Guard against passing for the wrong reason: a mistyped URL would 404,
+    // and a route that does not exist refuses everything. A forward for a
+    // *registered* key must succeed at the same URL — proved by
     // `v1_wallet_registers_receives_and_collects` — so check the route answers
     // something other than 404 for a well-formed non-forward first.
     let probe = http
@@ -309,7 +309,7 @@ async fn forward_to_an_unregistered_key_is_refused() {
     assert_ne!(
         probe.status(),
         reqwest::StatusCode::NOT_FOUND,
-        "the /inbound route must exist, or the 404 below would be meaningless"
+        "the /inbound route must exist, or the refusal below would be meaningless"
     );
 
     let response = http
@@ -319,9 +319,19 @@ async fn forward_to_an_unregistered_key_is_refused() {
         .await
         .expect("POST forward");
 
+    // 403, not 404, and the difference is the point. Every delivery refusal
+    // this mediator makes is now identical — recipient unknown, recipient may
+    // not receive, access list denied — because each of those is a fact about
+    // *another* DID, and answering them apart lets a sender enumerate which
+    // DIDs the mediator serves and probe their access lists one refusal at a
+    // time. A 404 here would say "no such routing key" out loud.
+    //
+    // So this asserts the refusal *and* that it is the same refusal a
+    // registered-but-blocked key gets. Asserting only the status would pass
+    // again the moment someone reintroduced a distinct code for this case.
     assert_eq!(
         response.status(),
-        reqwest::StatusCode::NOT_FOUND,
+        reqwest::StatusCode::FORBIDDEN,
         "an unregistered routing key must not resolve to a mailbox"
     );
 }
