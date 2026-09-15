@@ -234,21 +234,17 @@ pub(crate) async fn handle_inbound_tsp(
 
     let identity = state.tsp_identity().await?;
     let sender = resolve_tsp_vid(state, &meta.sender, &session.session_id).await?;
-    let unpacked = affinidi_tsp::message::direct::unpack(
-        raw,
-        &identity.decryption_key,
-        &sender.encryption_key,
-        &sender.signing_key,
-    )
-    .map_err(|e| {
-        tsp_problem(
-            session,
-            37,
-            "message.tsp.unpack",
-            format!("couldn't unpack TSP layer addressed to mediator: {e}"),
-            StatusCode::BAD_REQUEST,
-        )
-    })?;
+    let unpacked =
+        affinidi_tsp::message::direct::unpack(raw, &identity.decryption_key, &sender.signing_key)
+            .map_err(|e| {
+            tsp_problem(
+                session,
+                37,
+                "message.tsp.unpack",
+                format!("couldn't unpack TSP layer addressed to mediator: {e}"),
+                StatusCode::BAD_REQUEST,
+            )
+        })?;
 
     // Peer-mediator allowlist for the branches where we act as a *relay*.
     //
@@ -336,7 +332,15 @@ pub(crate) async fn handle_inbound_tsp(
                     remaining,
                     inner,
                 } if remaining.is_empty() => {
-                    forward_to_next(state, session, &next, &meta.sender, &inner).await
+                    forward_to_next(
+                        state,
+                        session,
+                        &next,
+                        &meta.sender,
+                        &inner,
+                        Destination::Routing,
+                    )
+                    .await
                 }
                 // Intermediate hop: re-seal the onward route to the next hop,
                 // authenticating as this mediator, and forward.
@@ -352,7 +356,6 @@ pub(crate) async fn handle_inbound_tsp(
                         &identity.vid,
                         &next,
                         &identity.signing_key,
-                        &identity.decryption_key,
                         &next_vid.encryption_key,
                     )
                     .map_err(|e| {
@@ -365,7 +368,15 @@ pub(crate) async fn handle_inbound_tsp(
                         )
                     })?
                     .bytes;
-                    forward_to_next(state, session, &next, &identity.vid, &resealed).await
+                    forward_to_next(
+                        state,
+                        session,
+                        &next,
+                        &identity.vid,
+                        &resealed,
+                        Destination::Routing,
+                    )
+                    .await
                 }
                 // Empty route: `inner` is sealed to its own final recipient —
                 // deliver by its (TSP) envelope.
@@ -389,12 +400,16 @@ pub(crate) async fn handle_inbound_tsp(
                     StatusCode::BAD_REQUEST,
                 )
             })?;
+            // The inner receiver is the far endpoint's own VID — `VID_b2` in
+            // §5.3.3's notation — so it is used to route and then dropped,
+            // never written to the durable queue.
             forward_to_next(
                 state,
                 session,
                 &inner_meta.receiver,
                 &meta.sender,
                 &unpacked.payload,
+                Destination::EndpointToEndpoint,
             )
             .await
         }
@@ -413,10 +428,22 @@ pub(crate) async fn handle_inbound_tsp(
         // document}` wrapper), so there is no envelope tag to switch on. A
         // document that parses as a Trust Task *and* names a type the mediator
         // serves is unambiguous; everything else falls through unchanged.
+        //
+        // Direct and Control messages destined for *local accounts* never reach
+        // here — they took the `receiver != mediator` opaque pass-through above.
         TspMessageType::Direct | TspMessageType::Control => {
             if let Some(doc) = trust_tasks::parse_if_served(&unpacked.payload) {
                 return dispatch_tsp_trust_task(state, session, &meta.sender, doc).await;
             }
+            deliver_tsp_local(state, session, raw).await
+        }
+        // Rev 3's two new end-to-end types, which the mediator only carries.
+        // `GenericControl` is control for the layer *above* TSP and
+        // `PaddingOnly` carries nothing at all — so neither can be a management
+        // Trust Task, and running the parse over them would be asking a question
+        // whose answer is always no. They store for the recipient like a Direct
+        // message and are never opened.
+        TspMessageType::GenericControl | TspMessageType::PaddingOnly => {
             deliver_tsp_local(state, session, raw).await
         }
     }
@@ -473,13 +500,17 @@ async fn dispatch_tsp_trust_task(
         )
     })?;
 
+    // Rev 3 seals under HPKE-**Base**, so the sender's own X25519 secret no
+    // longer enters the KEM and `pack` no longer takes it. Sender authenticity
+    // is the ESSR sender field plus the outer Ed25519 signature instead. This
+    // call site arrived from main while this branch was in flight, which is why
+    // it still had the Rev 2 arity.
     let packed = affinidi_tsp::message::direct::pack(
         &payload,
         affinidi_tsp::MessageType::Direct,
         &identity.vid,
         sender_vid,
         &identity.signing_key,
-        &identity.decryption_key,
         &recipient.encryption_key,
     )
     .map_err(|e| {
@@ -550,33 +581,26 @@ async fn deliver_opaque(
         .delivery_decision(&to_hash, Some(&from_hash))
         .await?
     else {
-        return Err(tsp_problem(
+        return Err(crate::messages::delivery_refused(
             session,
-            58,
-            "direct_delivery.recipient.unknown",
-            "TSP recipient is not local to this mediator (remote forwarding not yet enabled)"
-                .to_string(),
-            StatusCode::NOT_FOUND,
+            None,
+            "recipient is not local to this mediator",
         ));
     };
 
     if authz::require_capability(&recipient.acls, Capability::ReceiveMessages).is_err() {
-        return Err(tsp_problem(
+        return Err(crate::messages::delivery_refused(
             session,
-            74,
-            "authorization.receive",
-            "Recipient DID is not authorized to receive messages through this mediator".to_string(),
-            StatusCode::FORBIDDEN,
+            None,
+            "recipient is not authorized to receive messages through this mediator",
         ));
     }
 
     if !recipient.access_list_allows {
-        return Err(tsp_problem(
+        return Err(crate::messages::delivery_refused(
             session,
-            73,
-            "authorization.access_list.denied",
-            "Delivery blocked due to ACLs (access_list denied)".to_string(),
-            StatusCode::FORBIDDEN,
+            None,
+            "delivery blocked by the recipient's access list",
         ));
     }
 
@@ -625,16 +649,44 @@ async fn forward_to_next(
     next: &str,
     from_vid: &str,
     bytes: &[u8],
+    destination: Destination,
 ) -> Result<InboundMessageResponse, MediatorError> {
     if state
         .database
         .account_exists(&digest(next.as_bytes()))
         .await?
     {
+        // Local delivery works entirely on hashes and persists no plaintext
+        // VID, so it satisfies §5.3.3 without needing to know which kind of
+        // destination this is.
         deliver_opaque(state, session, next, from_vid, bytes).await
     } else {
-        forward_tsp_remote(state, session, next, from_vid, bytes).await
+        forward_tsp_remote(state, session, next, from_vid, bytes, destination).await
     }
+}
+
+/// What kind of VID a forward is addressed to, which decides whether it may be
+/// written to the durable forward queue in plaintext.
+///
+/// Rev 3 §5.3.3 draws this line: an intermediary carrying an
+/// endpoint-to-endpoint message "SHOULD not process the endpoint-to-endpoint
+/// VIDs `VID_a2` and `VID_b2` and MUST NOT store `VID_a2` and `VID_b2` in any
+/// persistent storage". Processing them is unavoidable — the message cannot be
+/// routed onward without resolving the destination — but retaining them is not,
+/// and retention is the part the specification forbids outright.
+///
+/// The distinction is worth a type rather than a bool because it is invisible at
+/// the call site otherwise: all three forwarding paths look alike, and only one
+/// of them is carrying identifiers that belong to somebody else's relationship.
+#[cfg(feature = "tsp")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Destination {
+    /// A routing-layer VID — a route hop, or the destination's VID at its own
+    /// intermediary. This mediator is addressed by it and may retain it.
+    Routing,
+    /// The far endpoint's own VID, revealed by unwrapping a metadata-privacy
+    /// nesting. Not ours to keep.
+    EndpointToEndpoint,
 }
 
 /// Enqueue a relayed message for delivery to the next hop's **remote** TSP
@@ -650,6 +702,7 @@ async fn forward_tsp_remote(
     next: &str,
     from_vid: &str,
     bytes: &[u8],
+    destination: Destination,
 ) -> Result<InboundMessageResponse, MediatorError> {
     use affinidi_messaging_mediator_common::store::types::ForwardQueueEntry;
 
@@ -662,7 +715,14 @@ async fn forward_tsp_remote(
         to_did_hash: digest(next.as_bytes()),
         from_did_hash: digest(from_vid.as_bytes()),
         from_did: from_vid.to_string(),
-        to_did: next.to_string(),
+        // §5.3.3: an endpoint-to-endpoint VID is not written to the queue. The
+        // hash and the resolved endpoint above are all delivery uses; the
+        // plaintext only ever fed diagnostics and the abandonment report, and
+        // those fall back to the hash.
+        to_did: match destination {
+            Destination::Routing => next.to_string(),
+            Destination::EndpointToEndpoint => String::new(),
+        },
         endpoint_url: endpoint_url.clone(),
         received_at_ms: state.clock.unix_millis(),
         delay_milli: 0,
@@ -1030,16 +1090,10 @@ async fn handle_inbound_didcomm(
                         .delivery_decision(&to_hash, from_hash.as_deref())
                         .await?
                     else {
-                        return Err(MediatorError::problem(
-                            72,
-                            &session.session_id,
+                        return Err(crate::messages::delivery_refused(
+                            session,
                             None,
-                            ProblemReportSorter::Warning,
-                            ProblemReportScope::Message,
-                            "direct_delivery.recipient.unknown",
-                            "Direct Delivery Recipient is not known on this Mediator",
-                            vec![],
-                            StatusCode::FORBIDDEN,
+                            "direct-delivery recipient is not known on this mediator",
                         ));
                     };
 
@@ -1110,30 +1164,18 @@ async fn handle_inbound_didcomm(
                     if authz::require_capability(&recipient.acls, Capability::ReceiveMessages)
                         .is_err()
                     {
-                        return Err(MediatorError::problem(
-                            74,
-                            &session.session_id,
+                        return Err(crate::messages::delivery_refused(
+                            session,
                             None,
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.receive",
-                            "Recipient DID is not authorized to receive messages through this mediator",
-                            vec![],
-                            StatusCode::FORBIDDEN,
+                            "recipient is not authorized to receive messages through this mediator",
                         ));
                     }
 
                     if !recipient.access_list_allows {
-                        return Err(MediatorError::problem(
-                            73,
-                            &session.session_id,
+                        return Err(crate::messages::delivery_refused(
+                            session,
                             None,
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.access_list.denied",
-                            "Delivery blocked due to ACLs (access_list denied)",
-                            vec![],
-                            StatusCode::FORBIDDEN,
+                            "delivery blocked by the recipient's access list",
                         ));
                     }
 
@@ -1543,7 +1585,6 @@ mod tsp_tests {
             "did:example:alice",
             "did:example:bob",
             &alice.signing_key,
-            &alice.decryption_key,
             &bob.encryption_key,
         )
         .unwrap();

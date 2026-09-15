@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-tsp"
 description = "Trust Spanning Protocol (TSP) implementation for the Affinidi TDK"
-version = "0.1.16"
+version = "0.2.0"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -21,6 +21,11 @@ did-resolver = [
     "dep:tokio",
 ]
 messaging-core = ["dep:affinidi-messaging-core", "dep:async-trait"]
+## Post-quantum PKAE and signatures (Rev 3 §8.2/§8.3): the MLKEM768-X25519
+## hybrid KEM and ML-DSA-65. Off by default — the code point `1AAQ` is still
+## provisional (CESR issue #14) and the VID model does not yet carry keys of
+## these sizes; see `docs/tsp/post-quantum.md`.
+pq = ["dep:hpke", "dep:ml-dsa"]
 
 [dependencies]
 # Affinidi crates
@@ -37,12 +42,26 @@ ed25519-dalek = { version = "3", features = ["rand_core"] }
 x25519-dalek = { version = "3", features = ["static_secrets"] }
 hkdf = "0.13"
 sha2 = "0.11"
-## TSP mandates ChaCha20Poly1305 as the HPKE AEAD (spec Rev 2); see docs/tsp/interop.md.
+## TSP mandates ChaCha20Poly1305 as the HPKE AEAD (spec Rev 3 §8); see docs/tsp/interop.md.
 chacha20poly1305 = "0.11"
 rand_core = { version = "0.6", features = ["getrandom"] }
 rand_10 = { package = "rand", version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 zeroize = { version = "1", features = ["derive"] }
 blake2 = "0.11"
+
+# Post-quantum (optional, `pq`). Both are the crates the ToIP reference uses at
+# v0.10.0, which is what makes agreement with its published vectors meaningful.
+hpke = { version = "0.14", default-features = false, features = ["alloc", "mlkem", "x25519", "chacha", "hkdfsha2"], optional = true }
+ml-dsa = { version = "0.1", optional = true }
+## Libsodium sealed box (spec Rev 3 §8.3), for the deprecated PKAE scheme.
+## `salsa20` supplies HSalsa20 for the crypto_box key derivation and
+## `crypto_secretbox` the XSalsa20-Poly1305 that wraps the payload. Deliberately
+## NOT the RustCrypto `crypto_box` crate, which would be a drop-in but depends on
+## curve25519-dalek 4 and would reintroduce a second dalek generation into a
+## workspace that is on 5 — the same trap `affinidi-messaging-didcomm-v1`
+## documents against the same primitive.
+salsa20 = "0.10"
+crypto_secretbox = { version = "0.1", default-features = false, features = ["salsa20"] }
 
 # Encoding / serialization
 serde = { version = "1", features = ["derive"] }

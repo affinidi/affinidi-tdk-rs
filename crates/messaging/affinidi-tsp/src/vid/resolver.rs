@@ -19,6 +19,30 @@ use crate::vid::{ResolvedVid, is_did};
 pub trait VidResolver: Send + Sync {
     /// Resolve a VID to its public keys and endpoints.
     fn resolve(&self, vid: &str) -> Result<ResolvedVid, TspError>;
+
+    /// Re-resolve a VID, bypassing any cache.
+    ///
+    /// Rev 3 §7.4.2 requires an endpoint that resolves key state for itself to
+    /// return to the VID's provenance chain on a verification failure and after
+    /// a long silence — a cached answer would defeat both, since a cached value
+    /// is precisely what may have gone stale.
+    ///
+    /// The default forwards to [`VidResolver::resolve`], which is correct for a
+    /// resolver that holds no cache of its own. A caching resolver MUST
+    /// override it, or an endpoint relying on it will never observe a rotation.
+    fn refresh(&self, vid: &str) -> Result<ResolvedVid, TspError> {
+        self.resolve(vid)
+    }
+}
+
+impl<T: VidResolver + ?Sized> VidResolver for std::sync::Arc<T> {
+    fn resolve(&self, vid: &str) -> Result<ResolvedVid, TspError> {
+        (**self).resolve(vid)
+    }
+
+    fn refresh(&self, vid: &str) -> Result<ResolvedVid, TspError> {
+        (**self).refresh(vid)
+    }
 }
 
 /// A simple in-memory VID resolver for testing and local VIDs.
@@ -114,6 +138,24 @@ impl VidResolver for DelegatingVidResolver {
         }
 
         Err(TspError::VidNotFound(vid.to_string()))
+    }
+
+    fn refresh(&self, vid: &str) -> Result<ResolvedVid, TspError> {
+        // The memory store is a cache in front of the delegate, and a cached
+        // value is exactly what may have gone stale, so a refresh skips it and
+        // returns to the delegate — then replaces what memory held.
+        if is_did(vid)
+            && let Some(did_resolver) = &self.did_resolver
+        {
+            let resolved = did_resolver.refresh(vid)?;
+            self.memory.insert(resolved.clone());
+            return Ok(resolved);
+        }
+
+        // A VID with no delegate behind it — one registered locally, or a
+        // non-DID — has no provenance chain to return to. Its current value is
+        // the only value there is.
+        self.memory.resolve(vid)
     }
 }
 

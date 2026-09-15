@@ -34,9 +34,10 @@
 
 use base64::prelude::*;
 
-/// The leading byte of every TSP message: the first byte of the binary-CESR
-/// `-E` count code. DIDComm is JSON or compact JWS, so it starts with `{`
-/// (`0x7B`) or `ey…` — making this byte an unambiguous discriminator.
+/// The leading byte of a TSP message framed with a **short** `-E` count code:
+/// the first byte of the binary-CESR `-E##`. DIDComm is JSON or compact JWS, so
+/// it starts with `{` (`0x7B`) or `ey…` — making this byte unambiguous
+/// against it.
 ///
 /// Deliberately duplicated from `affinidi_tsp::TSP_MAGIC_BYTE` rather than
 /// imported: importing it would put this classifier back behind the `tsp`
@@ -44,6 +45,16 @@ use base64::prelude::*;
 /// [`tests::magic_byte_matches_affinidi_tsp`], which compiles only when the
 /// feature is on — so the two cannot drift without a test failing.
 pub const TSP_MAGIC_BYTE: u8 = 0xF8;
+
+/// The leading byte of a TSP message framed with a **long** `--E#####` count
+/// code — two DASH selectors rather than one.
+///
+/// Spec Rev 2 could never emit this: its `-E` count covered only the envelope
+/// header, a couple of dozen quadlets whatever the message size. Rev 3 widened
+/// the count to cover the ciphertext, so any message with more than 4095
+/// quadlets of content — roughly 12 KB — is framed long. A classifier that
+/// knows only [`TSP_MAGIC_BYTE`] silently misroutes those to the DIDComm path.
+pub const TSP_MAGIC_BYTE_LONG: u8 = 0xFB;
 
 /// Does `stored` look like a TSP frame?
 ///
@@ -56,12 +67,20 @@ pub const TSP_MAGIC_BYTE: u8 = 0xF8;
 /// can start with any other byte. DIDComm JSON and compact JWS are not valid
 /// base64url of a TSP frame, so they return `false`.
 ///
+/// Both framings are accepted — see [`TSP_MAGIC_BYTE_LONG`], which Rev 3 made
+/// reachable for messages over roughly 12 KB.
+///
 /// Available in every build. That is the point: see the module docs.
 #[must_use]
 pub fn looks_like_tsp(stored: &str) -> bool {
     BASE64_URL_SAFE_NO_PAD
         .decode(stored.as_bytes())
-        .is_ok_and(|bytes| bytes.first() == Some(&TSP_MAGIC_BYTE))
+        .is_ok_and(|bytes| {
+            matches!(
+                bytes.first(),
+                Some(&TSP_MAGIC_BYTE) | Some(&TSP_MAGIC_BYTE_LONG)
+            )
+        })
 }
 
 #[cfg(test)]
@@ -136,6 +155,33 @@ mod tests {
             assert_eq!(
                 looks_like_tsp(&frame),
                 affinidi_tsp::is_tsp(&decoded),
+                "classifiers disagree on a frame leading with {leading:#04x}"
+            );
+        }
+    }
+
+    /// Both framings classify as TSP. Rev 3 widened the `-E` count to cover the
+    /// ciphertext, which made the long form reachable for the first time — a
+    /// classifier that knows only the short byte drops exactly the large
+    /// messages, and silently, because misrouting to the DIDComm path looks
+    /// like an unparseable DIDComm frame rather than a lost TSP one.
+    #[test]
+    fn recognises_both_framings() {
+        assert!(looks_like_tsp(&qb64(TSP_MAGIC_BYTE)));
+        assert!(looks_like_tsp(&qb64(TSP_MAGIC_BYTE_LONG)));
+    }
+
+    /// The predicate is what has to agree with `affinidi_tsp`, not just the
+    /// constant. The two constants matched all along while the predicates had
+    /// diverged, which is how the long framing came to be dropped here.
+    #[test]
+    #[cfg(feature = "tsp")]
+    fn predicate_agrees_with_affinidi_tsp() {
+        for leading in 0u8..=255 {
+            let bytes = [leading, 0x41, 0x42, 0x43];
+            assert_eq!(
+                affinidi_tsp::is_tsp(&bytes),
+                looks_like_tsp(&BASE64_URL_SAFE_NO_PAD.encode(bytes)),
                 "classifiers disagree on a frame leading with {leading:#04x}"
             );
         }

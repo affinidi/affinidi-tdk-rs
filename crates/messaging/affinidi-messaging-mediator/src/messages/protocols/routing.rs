@@ -433,16 +433,10 @@ async fn deliver_forward(
     if next_envelope.from_did.is_none()
         && authz::require_capability(next_acls, Capability::AnonReceive).is_err()
     {
-        return Err(MediatorError::problem(
-            69,
-            &session.session_id,
+        return Err(crate::messages::delivery_refused(
+            session,
             Some(msg.id.to_string()),
-            ProblemReportSorter::Error,
-            ProblemReportScope::Protocol,
-            "authorization.receive_anon",
-            "Recipient isn't accepting anonymous messages",
-            vec![],
-            StatusCode::FORBIDDEN,
+            "recipient is not accepting anonymous messages",
         ));
     }
 
@@ -792,16 +786,10 @@ pub(crate) async fn process(
         // Check if the next hop is allowed to receive forwarded messages
         let next_acls = MediatorACLSet::from_u64(next_account.acls);
         if authz::require_capability(&next_acls, Capability::ReceiveForwarded).is_err() {
-            return Err(MediatorError::problem(
-                58,
-                &session.session_id,
+            return Err(crate::messages::delivery_refused(
+                session,
                 Some(msg.id.to_string()),
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "authorization.receive_forwarded",
-                "Recipient isn't accepting forwarded messages",
-                vec![],
-                StatusCode::FORBIDDEN,
+                "recipient is not accepting forwarded messages",
             ));
         }
 
@@ -853,16 +841,10 @@ pub(crate) async fn process(
                 from_account.did_hash, next_did_hash
             );
         } else {
-            return Err(MediatorError::problem(
-                73,
-                &session.session_id,
+            return Err(crate::messages::delivery_refused(
+                session,
                 Some(msg.id.to_string()),
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "authorization.access_list.denied",
-                "Delivery blocked due to ACLs (access_list denied)",
-                vec![],
-                StatusCode::FORBIDDEN,
+                "delivery blocked by the recipient's access list",
             ));
         }
 

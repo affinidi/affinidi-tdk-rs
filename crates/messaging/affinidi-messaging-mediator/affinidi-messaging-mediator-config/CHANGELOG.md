@@ -1,5 +1,17 @@
 # Affinidi Messaging Mediator Config
 
+## Unreleased (0.3.0) — TSP Rev 3: `mediator-common` 0.16
+
+No source change in this crate. It takes a minor because it carries
+`mediator-common` types in its public API, and `mediator-common` 0.16 changed
+what one of them means: `ForwardQueueEntry::to_did` may now be empty, since Rev 3
+§5.3.3 forbids retaining a relayed endpoint-to-endpoint destination.
+
+A break that arrives through a public dependency is invisible to
+cargo-semver-checks — no signature in either crate moves — so this is a minor by
+judgement rather than by tooling. See `affinidi-messaging-mediator-common`'s
+changelog for the change itself.
+
 ## Unreleased (0.2.2) — the four documented-but-unread environment overrides
 
 `conf/mediator.toml` documented `PROCESSOR_FORWARDING_RELAY_MODE` and

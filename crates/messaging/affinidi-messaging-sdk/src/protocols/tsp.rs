@@ -26,9 +26,15 @@ use std::sync::Arc;
 use affinidi_did_common::DocumentExt;
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_secrets_resolver::secrets::KeyType;
-use affinidi_tsp::message::control::{ControlMessage, ControlType};
+/// Re-exported so a caller can name a control message without depending on
+/// `affinidi-tsp` directly.
+pub use affinidi_tsp::message::control::ControlMessage;
+use affinidi_tsp::message::control::ControlType;
 use affinidi_tsp::message::direct;
-use affinidi_tsp::relationship::{InvalidTransition, RelationshipEvent, RelationshipState};
+/// Re-exported so callers can name the states a [`RelationshipStore`] holds
+/// without depending on `affinidi-tsp` directly.
+pub use affinidi_tsp::relationship::RelationshipState;
+use affinidi_tsp::relationship::{InvalidTransition, RelationshipEvent};
 use affinidi_tsp::{DidVidResolver, MessageType, MetaEnvelope};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use tokio::sync::RwLock;
@@ -145,6 +151,39 @@ pub struct PeerCapability {
 /// implementations so existing stores keep compiling, and durable stores can
 /// override them to persist capability alongside relationship state.
 ///
+/// The two digests that identify a relationship, one per uni-directional half
+/// (spec Rev 3 §7.2.1).
+///
+/// "Conceptually, this exchange creates two uni-directional relationships, one
+/// (from the requester) can be identified by the Digest, and the other (from
+/// the replier) can be identified by the Reply_Digest."
+///
+/// An endpoint needs both: a cancellation may name either half, and the invite
+/// race is broken by comparing our own outstanding invite's digest against the
+/// one that arrived.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ThreadDigests {
+    /// The digest of the invite this endpoint sent or received — the thread id
+    /// of the exchange that opened the relationship.
+    pub invite: Option<[u8; 32]>,
+    /// The digest of the accept that answered it, identifying the other half.
+    pub accept: Option<[u8; 32]>,
+}
+
+impl ThreadDigests {
+    /// Does `digest` name either half of this relationship?
+    ///
+    /// True when nothing is recorded: an endpoint that has not kept the digests
+    /// cannot contradict one, and refusing every cancellation would be worse
+    /// than accepting one it cannot check.
+    pub fn recognizes(&self, digest: &[u8; 32]) -> bool {
+        match (self.invite, self.accept) {
+            (None, None) => true,
+            (a, b) => [a, b].into_iter().flatten().any(|d| &d == digest),
+        }
+    }
+}
+
 /// The default implementation is [`InMemoryRelationshipStore`]; supply a
 /// durable one via
 /// [`crate::config::ATMConfigBuilder::with_relationship_store`].
@@ -183,6 +222,54 @@ pub trait RelationshipStore: Send + Sync {
     ) -> Result<(), ATMError> {
         Ok(())
     }
+
+    /// The thread digests recorded for the `(our_vid, their_vid)` pair.
+    ///
+    /// A store that does not keep them returns the default, which recognises
+    /// any digest and loses the Rev 3 §7.2.3 invite-race tiebreak — an endpoint
+    /// cannot decide which of two invites to keep without its own digest to
+    /// compare. Implement this to get the rule.
+    async fn thread_digests(
+        &self,
+        _our_vid: &str,
+        _their_vid: &str,
+    ) -> Result<ThreadDigests, ATMError> {
+        Ok(ThreadDigests::default())
+    }
+
+    /// Persist the thread digests for the `(our_vid, their_vid)` pair.
+    /// Default impl is a no-op.
+    async fn set_thread_digests(
+        &self,
+        _our_vid: &str,
+        _their_vid: &str,
+        _digests: ThreadDigests,
+    ) -> Result<(), ATMError> {
+        Ok(())
+    }
+
+    /// The `Reply_Path` an inviting peer supplied — the route its accept is to
+    /// travel back over (Rev 3 §7.2.4). Empty when the invite asked for a
+    /// direct reply.
+    ///
+    /// A store that does not keep it returns empty, and an accept then goes
+    /// direct. That is a conformance loss, not just a missing optimisation:
+    /// §7.2.4 says the responder MUST use the path, and going direct discloses
+    /// to the destination — and to observers — an endpoint the route existed to
+    /// keep out of view.
+    async fn reply_path(&self, _our_vid: &str, _their_vid: &str) -> Result<Vec<String>, ATMError> {
+        Ok(Vec::new())
+    }
+
+    /// Persist the `Reply_Path` from an invite. Default impl is a no-op.
+    async fn set_reply_path(
+        &self,
+        _our_vid: &str,
+        _their_vid: &str,
+        _path: Vec<String>,
+    ) -> Result<(), ATMError> {
+        Ok(())
+    }
 }
 
 /// Default, ephemeral [`RelationshipStore`] backed by an in-memory map.
@@ -197,6 +284,8 @@ pub trait RelationshipStore: Send + Sync {
 pub struct InMemoryRelationshipStore {
     inner: RwLock<HashMap<(String, String), RelationshipState>>,
     capabilities: RwLock<HashMap<(String, String), PeerCapability>>,
+    digests: RwLock<HashMap<(String, String), ThreadDigests>>,
+    reply_paths: RwLock<HashMap<(String, String), Vec<String>>>,
 }
 
 #[async_trait::async_trait]
@@ -220,6 +309,54 @@ impl RelationshipStore for InMemoryRelationshipStore {
     ) -> Result<(), ATMError> {
         let key = (our_vid.to_string(), their_vid.to_string());
         self.inner.write().await.insert(key, state);
+        Ok(())
+    }
+
+    async fn thread_digests(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+    ) -> Result<ThreadDigests, ATMError> {
+        let key = (our_vid.to_string(), their_vid.to_string());
+        Ok(self
+            .digests
+            .read()
+            .await
+            .get(&key)
+            .copied()
+            .unwrap_or_default())
+    }
+
+    async fn set_thread_digests(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        digests: ThreadDigests,
+    ) -> Result<(), ATMError> {
+        let key = (our_vid.to_string(), their_vid.to_string());
+        self.digests.write().await.insert(key, digests);
+        Ok(())
+    }
+
+    async fn reply_path(&self, our_vid: &str, their_vid: &str) -> Result<Vec<String>, ATMError> {
+        let key = (our_vid.to_string(), their_vid.to_string());
+        Ok(self
+            .reply_paths
+            .read()
+            .await
+            .get(&key)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn set_reply_path(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        path: Vec<String>,
+    ) -> Result<(), ATMError> {
+        let key = (our_vid.to_string(), their_vid.to_string());
+        self.reply_paths.write().await.insert(key, path);
         Ok(())
     }
 
@@ -427,6 +564,84 @@ async fn advance_state(
     Ok(next)
 }
 
+/// What an inbound control message did to relationship state, and what it asks
+/// of this endpoint next.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncomingControl {
+    /// The relationship state after applying the message.
+    pub state: RelationshipState,
+    /// The peer cancelled a relationship we held in both directions, so Rev 3
+    /// §7.3 asks us to answer with a cancellation of our own before forgetting
+    /// it. False for every other control message.
+    pub reply_expected: bool,
+    /// The `Reply_Path` an invite carried — the route its accept is to travel
+    /// back over (§7.2.4). Empty for a direct invite and for every other
+    /// control message.
+    ///
+    /// [`TspOps::accept_relationship`] uses the stored copy of this without
+    /// being asked; it is reported here so a caller can see the route rather
+    /// than having to infer it.
+    pub reply_path: Vec<String>,
+}
+
+/// What an inbound TSP frame turned out to be.
+///
+/// A receiver cannot tell a control message from an application one without
+/// opening it — the kind lives in the encrypted payload, not the envelope — so
+/// anything that must treat them differently needs to unpack once and be told,
+/// rather than guess and unpack twice.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum InboundTsp {
+    /// An application message for the upper layer.
+    Application {
+        /// The decrypted payload.
+        payload: Vec<u8>,
+        /// The sender's VID.
+        sender: String,
+    },
+    /// An upper-layer control message (`XCTL`).
+    ///
+    /// Carried exactly like an application message and opaque to TSP, but the
+    /// sender marked it as control for the layer above rather than as user
+    /// data, and that distinction is the only thing the separate type code
+    /// exists to convey. Handing it over as [`Self::Application`] would throw
+    /// away the one bit of information it carries.
+    UpperLayerControl {
+        /// The decrypted payload.
+        payload: Vec<u8>,
+        /// The sender's VID.
+        sender: String,
+    },
+    /// A padding-only message (`XPAD`), carrying nothing.
+    ///
+    /// §9.4: "The receiver SHOULD silently discard padding messages." It exists
+    /// to make traffic analysis harder — a message whose entire content is
+    /// filler, so an observer cannot tell a conversation's shape from the
+    /// pattern of what crosses the wire.
+    ///
+    /// Reported rather than swallowed inside the SDK because a caller that
+    /// fetched it still has to delete it from the mailbox, and one that cannot
+    /// see it would leave it there forever. "Silently" constrains what reaches
+    /// the application and what goes back to the sender, not whether the
+    /// receiving code is told it arrived.
+    Padding {
+        /// The sender's VID.
+        sender: String,
+    },
+    /// A relationship control message: an invite, an accept or a cancellation.
+    Control {
+        /// The decoded control payload. Boxed: a control message is several
+        /// times the size of an application one, and an unboxed variant would
+        /// make every inbound frame pay for it.
+        control: Box<ControlMessage>,
+        /// The sender's VID.
+        sender: String,
+        /// This message's `TSP_Digest` — the value an accept must echo back.
+        thread_digest: [u8; 32],
+    },
+}
+
 /// TSP protocol operations, obtained from [`crate::ATM::tsp`].
 pub struct TspOps<'a> {
     pub(crate) atm: &'a ATM,
@@ -477,7 +692,7 @@ impl TspOps<'_> {
         payload: &[u8],
     ) -> Result<Vec<u8>, ATMError> {
         let (from_did, _) = profile.dids()?;
-        let (signing_key, decryption_key) = self.profile_tsp_keys(from_did).await?;
+        let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
         let recipient = self.resolve_vid(to_did).await?;
 
         let packed = direct::pack(
@@ -486,7 +701,6 @@ impl TspOps<'_> {
             from_did,
             to_did,
             &signing_key,
-            &decryption_key,
             &recipient.encryption_key,
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack TSP message: {e}")))?;
@@ -531,13 +745,17 @@ impl TspOps<'_> {
         self.send_routed_opaque(profile, route, &inner).await
     }
 
-    /// Route an **already-packed** inner message through one or more relay hops.
+    /// Route an **already-packed** TSP message through one or more relay hops.
     ///
-    /// Like [`send_routed`], but `inner` is a pre-built message sealed to the final
-    /// recipient — which may be a **DIDComm** message (the TSP↔DIDComm bridge): a
-    /// TSP-routing mediator carries it opaquely to the recipient, who unpacks it
-    /// with their native protocol. `route` is the hop list ending at that
-    /// recipient (`route.last()`); the routing layer is sealed to `route[0]`.
+    /// Like [`send_routed`], but `inner` is a pre-built TSP message sealed to the
+    /// final recipient — a nested message, say, that the caller built itself.
+    /// `route` is the hop list ending at that recipient (`route.last()`); the
+    /// routing layer is sealed to `route[0]`.
+    ///
+    /// `inner` must be a TSP message. Spec Rev 3 §9.4 carries a routed inner raw
+    /// as an `Encoded_TSP_Message`, where Rev 2 wrapped it in a `B` var-data
+    /// field. That wrapper is what let this method carry an arbitrary
+    /// non-TSP blob — the TSP↔DIDComm bridge — and Rev 3 removes it.
     pub async fn send_routed_opaque(
         &self,
         profile: &Arc<ATMProfile>,
@@ -547,10 +765,23 @@ impl TspOps<'_> {
         if route.is_empty() {
             return Err(ATMError::MsgSendError("route must not be empty".into()));
         }
+
+        // A routed inner is carried raw under Rev 3 §9.4, so it must be a TSP
+        // message — which is always quadlet-aligned. Fail here, where the caller
+        // can see why, rather than deep in the CESR encoder.
+        if !inner.len().is_multiple_of(3) {
+            return Err(ATMError::MsgSendError(format!(
+                "a routed inner must be a TSP message and is therefore quadlet-aligned, but this \
+                 one is {} bytes; carrying an arbitrary non-TSP inner relied on the Rev 2 \
+                 var-data wrapper that Rev 3 removed",
+                inner.len()
+            )));
+        }
+
         let first_hop = &route[0];
 
         let (from_did, _) = profile.dids()?;
-        let (signing_key, encryption_key) = self.profile_tsp_keys(from_did).await?;
+        let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
         let first_vid = self.resolve_vid(first_hop).await?;
         let routed = affinidi_tsp::message::routed::pack_routed(
             inner,
@@ -558,7 +789,6 @@ impl TspOps<'_> {
             from_did,
             first_hop,
             &signing_key,
-            &encryption_key,
             &first_vid.encryption_key,
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack routed TSP message: {e}")))?;
@@ -587,10 +817,13 @@ impl TspOps<'_> {
 
     /// Wrap an **already-packed** inner message in a Nested envelope to `intermediary`.
     ///
-    /// Like [`send_nested`], but `inner` is a pre-built message sealed to its final
-    /// recipient — which may be a **DIDComm** message (the TSP↔DIDComm bridge): the
-    /// intermediary unwraps the Nested layer and forwards the opaque inner, blind to
-    /// its protocol.
+    /// Like [`send_nested`], but `inner` is a pre-built TSP message sealed to its
+    /// final recipient. The intermediary unwraps the Nested layer and forwards
+    /// the inner without opening it.
+    ///
+    /// `inner` must be a TSP message. Rev 3 §9.4 carries a nested inner raw as an
+    /// `Encoded_TSP_Message`; the Rev 2 var-data wrapper that let this carry an
+    /// arbitrary non-TSP blob — the TSP↔DIDComm bridge — is gone.
     pub async fn send_nested_opaque(
         &self,
         profile: &Arc<ATMProfile>,
@@ -598,7 +831,7 @@ impl TspOps<'_> {
         inner: &[u8],
     ) -> Result<(), ATMError> {
         let (from_did, _) = profile.dids()?;
-        let (signing_key, encryption_key) = self.profile_tsp_keys(from_did).await?;
+        let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
         let intermediary_vid = self.resolve_vid(intermediary).await?;
         let nested = affinidi_tsp::message::direct::pack(
             inner,
@@ -606,7 +839,6 @@ impl TspOps<'_> {
             from_did,
             intermediary,
             &signing_key,
-            &encryption_key,
             &intermediary_vid.encryption_key,
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack nested TSP message: {e}")))?;
@@ -641,7 +873,7 @@ impl TspOps<'_> {
             .ok_or_else(|| ATMError::MsgSendError("route must not be empty".into()))?;
 
         let (from_did, _) = profile.dids()?;
-        let (signing_key, decryption_key) = self.profile_tsp_keys(from_did).await?;
+        let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
 
         // Inner Direct message sealed end-to-end to the final recipient.
         let recipient = self.resolve_vid(to_did).await?;
@@ -651,7 +883,6 @@ impl TspOps<'_> {
             from_did,
             to_did,
             &signing_key,
-            &decryption_key,
             &recipient.encryption_key,
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack inner TSP message: {e}")))?;
@@ -664,7 +895,6 @@ impl TspOps<'_> {
             from_did,
             intermediary,
             &signing_key,
-            &decryption_key,
             &intermediary_vid.encryption_key,
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack nested TSP message: {e}")))?;
@@ -686,9 +916,9 @@ impl TspOps<'_> {
         profile: &Arc<ATMProfile>,
         to_did: &str,
         control: &affinidi_tsp::message::control::ControlMessage,
-    ) -> Result<(), ATMError> {
+    ) -> Result<[u8; 32], ATMError> {
         let (from_did, _) = profile.dids()?;
-        let (signing_key, encryption_key) = self.profile_tsp_keys(from_did).await?;
+        let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
         let to_vid = self.resolve_vid(to_did).await?;
         let packed = affinidi_tsp::message::direct::pack(
             &control.encode(),
@@ -696,12 +926,53 @@ impl TspOps<'_> {
             from_did,
             to_did,
             &signing_key,
-            &encryption_key,
             &to_vid.encryption_key,
         )
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack control TSP message: {e}")))?;
 
-        self.send_raw(profile, &packed.bytes).await
+        self.send_raw(profile, &packed.bytes).await?;
+        // The digest is the thread id of the exchange this message opens, and
+        // the caller records it: an invite's is what the Rev 3 §7.2.3 race
+        // tiebreak compares against, and what a cancellation later names.
+        Ok(packed.thread_digest)
+    }
+
+    /// Send a control message to `to_did` over `route` instead of directly.
+    ///
+    /// Used for the accept that answers an invite carrying a `Reply_Path`
+    /// (Rev 3 §7.2.4). The control message is sealed end-to-end to `to_did`
+    /// and carried opaquely by the intermediaries, so what they relay is
+    /// indistinguishable from any other routed message.
+    ///
+    /// `route` is the path as the inviter supplied it, and §5.3.3 has it ending
+    /// at the inviter's own VID rather than its intermediary's, so it is used
+    /// as given. §7.2.4 allows a responder to prepend hops of its own; this
+    /// does not, which is permitted — "the minimal required condition is that
+    /// the last intermediary in `B`'s hop list knows how to reach the first hop
+    /// in `A`'s list", and with no hops of its own that is B's own intermediary.
+    async fn send_control_routed(
+        &self,
+        profile: &Arc<ATMProfile>,
+        to_did: &str,
+        control: &affinidi_tsp::message::control::ControlMessage,
+        route: &[String],
+    ) -> Result<[u8; 32], ATMError> {
+        let (from_did, _) = profile.dids()?;
+        let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
+        let to_vid = self.resolve_vid(to_did).await?;
+        let inner = affinidi_tsp::message::direct::pack(
+            &control.encode(),
+            affinidi_tsp::MessageType::Control,
+            from_did,
+            to_did,
+            &signing_key,
+            &to_vid.encryption_key,
+        )
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't pack control TSP message: {e}")))?;
+
+        self.send_routed_opaque(profile, route, &inner.bytes)
+            .await?;
+        Ok(inner.thread_digest)
     }
 
     // ── Relationship management ───────────────────────────────────────────────
@@ -727,10 +998,305 @@ impl TspOps<'_> {
         let (our_did, _) = profile.dids()?;
         let store = self.relationship_store();
         let next = next_state(store, our_did, their_did, RelationshipEvent::SendInvite).await?;
-        self.send_control(profile, their_did, &ControlMessage::invite())
+        let digest = self
+            .send_control(profile, their_did, &ControlMessage::invite())
             .await?;
         store.set(our_did, their_did, next).await?;
+        store
+            .set_thread_digests(
+                our_did,
+                their_did,
+                ThreadDigests {
+                    invite: Some(digest),
+                    accept: None,
+                },
+            )
+            .await?;
         Ok(next)
+    }
+
+    /// Send a message under the **libsodium sealed box** (Rev 3 §8.3) instead of
+    /// HPKE-Base.
+    ///
+    /// For a peer that has not migrated. §8 keeps this scheme for
+    /// implementations that already had it and tells new ones otherwise —
+    /// "implementors SHOULD consider migrating to the HPKE option specified in
+    /// this document. We MAY remove this option in the future" — so [`send`] is
+    /// the default and this is a per-peer compatibility decision.
+    ///
+    /// Nothing has to be agreed in advance: the receiver reads the scheme off
+    /// the ciphertext field's code, and [`unpack`] accepts either.
+    ///
+    /// [`send`]: Self::send
+    /// [`unpack`]: Self::unpack
+    pub async fn send_sealed_box(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        payload: &[u8],
+    ) -> Result<(), ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let (signing_key, _) = self.profile_tsp_keys(our_did).await?;
+        let their_vid = self.resolve_vid(their_did).await?;
+
+        let packed = affinidi_tsp::message::direct::pack_sealed_box(
+            payload,
+            affinidi_tsp::MessageType::Direct,
+            our_did,
+            their_did,
+            &signing_key,
+            &their_vid.encryption_key,
+        )
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't pack a sealed-box message: {e}")))?;
+
+        self.send_raw(profile, &packed.bytes).await
+    }
+
+    /// Send an upper-layer control message (`XCTL`) carrying `payload`.
+    ///
+    /// Travels exactly like an application message and is gated the same way;
+    /// TSP does not interpret the payload either way. The difference is the
+    /// label: the receiver gets [`InboundTsp::UpperLayerControl`] rather than
+    /// [`InboundTsp::Application`], so a protocol layered on top of TSP can
+    /// keep its own signalling apart from user data without inventing a
+    /// convention inside the payload.
+    ///
+    /// Not to be confused with [`send_control`](Self::send_control), which
+    /// carries TSP's *own* relationship messages — invites, accepts and
+    /// cancellations.
+    pub async fn send_generic_control(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        payload: &[u8],
+    ) -> Result<(), ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let (signing_key, _) = self.profile_tsp_keys(our_did).await?;
+        let their_vid = self.resolve_vid(their_did).await?;
+
+        let packed = affinidi_tsp::message::direct::pack(
+            payload,
+            affinidi_tsp::MessageType::GenericControl,
+            our_did,
+            their_did,
+            &signing_key,
+            &their_vid.encryption_key,
+        )
+        .map_err(|e| {
+            ATMError::MsgSendError(format!("couldn't pack an upper-layer control message: {e}"))
+        })?;
+
+        self.send_raw(profile, &packed.bytes).await
+    }
+
+    /// Send a padding-only message (`XPAD`) — content-free traffic, sized by
+    /// `padding`.
+    ///
+    /// §11 notes that "timing, size, and frequency survive encryption, nesting,
+    /// and routing alike": an observer of a hop learns when a relationship is
+    /// busy even when it learns nothing else. A message with no content still
+    /// occupies all three, so these let an endpoint spend them deliberately
+    /// rather than leaking the shape of a real conversation.
+    ///
+    /// The other use is §7.4.3. An endpoint that rotated because its keys may
+    /// have been compromised sends one to each peer, because "a peer holding
+    /// stale key state will fail to verify it and will therefore obtain the new
+    /// key state, whereas a peer that receives nothing has no occasion to". It
+    /// is signed with the new keys, so an adversary holding the old ones cannot
+    /// produce it.
+    ///
+    /// The receiver discards it silently — [`InboundTsp::Padding`] — so nothing
+    /// reaches the peer's application and no reply comes back. A padding
+    /// message that provoked a response would defeat its own purpose.
+    pub async fn send_padding(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        padding: &affinidi_tsp::Padding,
+    ) -> Result<(), ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let (signing_key, _) = self.profile_tsp_keys(our_did).await?;
+        let their_vid = self.resolve_vid(their_did).await?;
+
+        let packed = affinidi_tsp::message::direct::pack_padding_message(
+            our_did,
+            their_did,
+            &signing_key,
+            &their_vid.encryption_key,
+            padding,
+        )
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't pack a padding message: {e}")))?;
+
+        self.send_raw(profile, &packed.bytes).await
+    }
+
+    /// Introduce a new VID over an existing relationship, opening a second one
+    /// beside it (Rev 3 §7.2.5, parallel relationship forming).
+    ///
+    /// `profile` and `their_did` are the relationship the introduction travels
+    /// over; `new_profile` is the VID being introduced, and its key signs the
+    /// introduction so the peer can check that whoever controls it agreed.
+    ///
+    /// The peer replies from a new VID of its own, to `new_profile`'s VID —
+    /// §7.2.5 puts the accept between the new pair rather than over the
+    /// original relationship — so the state this advances is the new pair's,
+    /// not the existing one's. The existing relationship is only the channel.
+    ///
+    /// Why do this rather than form a fresh relationship: the peer learns the
+    /// new identifier over a channel it already trusts, so there is no
+    /// out-of-band introduction to secure. §11 notes an out-of-band
+    /// introduction has no authenticity of its own and "a party able to
+    /// interfere with that channel could substitute a VID of its own".
+    pub async fn form_parallel_relationship(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        new_profile: &Arc<ATMProfile>,
+    ) -> Result<RelationshipState, ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let (new_did, _) = new_profile.dids()?;
+
+        let existing = self.relationship_store().get(our_did, their_did).await?;
+        if existing == RelationshipState::None {
+            return Err(ATMError::MsgSendError(format!(
+                "cannot introduce {new_did} to {their_did}: no relationship to introduce it over"
+            )));
+        }
+
+        let (signing_key, _) = self.profile_tsp_keys(our_did).await?;
+        let (new_signing_key, _) = self.profile_tsp_keys(new_did).await?;
+        let their_vid = self.resolve_vid(their_did).await?;
+
+        // The invite is pending between our new VID and the peer we sent it to.
+        //
+        // Not the pair it will end up forming: §7.2.5 has the peer pick VID_b1
+        // and reply `[VID_b1, VID_a1, …]`, and we cannot know VID_b1 until that
+        // reply arrives. `record_parallel_accept` moves the pending invite onto
+        // the real pair once the accept names it.
+        let store = self.relationship_store();
+        let next = next_state(store, new_did, their_did, RelationshipEvent::SendInvite).await?;
+
+        let packed = affinidi_tsp::message::direct::pack_referral_invite(
+            &ControlMessage::invite_referral(new_did),
+            our_did,
+            their_did,
+            &signing_key,
+            &new_signing_key,
+            &their_vid.encryption_key,
+        )
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't pack referral invite: {e}")))?;
+
+        self.send_raw(profile, &packed.bytes).await?;
+
+        store.set(new_did, their_did, next).await?;
+        store
+            .set_thread_digests(
+                new_did,
+                their_did,
+                ThreadDigests {
+                    invite: Some(packed.thread_digest),
+                    accept: None,
+                },
+            )
+            .await?;
+        Ok(next)
+    }
+
+    /// Record the accept that completes a parallel relationship (§7.2.5).
+    ///
+    /// The reply to an introduction comes from a VID that did not exist when the
+    /// introduction was sent — §7.2.5 has the peer pick `VID_b1` and reply
+    /// `[VID_b1, VID_a1, …]` — so the pending invite was filed against
+    /// `invited_peer`, the VID we sent the introduction to. This moves it onto
+    /// the pair the accept actually names and applies it.
+    ///
+    /// `new_profile` is the VID we introduced and `their_new_did` the sender of
+    /// the accept. The accept's echoed digest must match the introduction's, or
+    /// this rejects it: without that check any VID could answer an introduction
+    /// it never received, and the peer's choice of `VID_b1` is otherwise
+    /// unconstrained — there is nothing else here to tie the reply to the
+    /// exchange it claims to belong to.
+    pub async fn record_parallel_accept(
+        &self,
+        new_profile: &Arc<ATMProfile>,
+        their_new_did: &str,
+        invited_peer: &str,
+        accept: &ControlMessage,
+    ) -> Result<IncomingControl, ATMError> {
+        let (new_did, _) = new_profile.dids()?;
+        let store = self.relationship_store();
+
+        let pending = store.thread_digests(new_did, invited_peer).await?;
+        let expected = pending.invite.ok_or_else(|| {
+            ATMError::MsgReceiveError(format!(
+                "TSP accept from {their_new_did} rejected: {new_did} has no introduction \
+                 outstanding to {invited_peer}"
+            ))
+        })?;
+        if accept.reply != Some(expected) {
+            return Err(ATMError::MsgReceiveError(format!(
+                "TSP accept from {their_new_did} rejected: it does not echo the digest of the \
+                 introduction {new_did} sent to {invited_peer}"
+            )));
+        }
+
+        // Carry the pending invite over to the pair the accept names, so the
+        // ordinary accept handling below sees the state it expects.
+        if store.get(new_did, their_new_did).await? == RelationshipState::None {
+            store
+                .set(new_did, their_new_did, RelationshipState::Pending)
+                .await?;
+            store
+                .set_thread_digests(new_did, their_new_did, pending)
+                .await?;
+        }
+
+        self.record_incoming_control(new_profile, their_new_did, accept)
+            .await
+    }
+
+    /// Accept an introduction, completing a parallel relationship (§7.2.5).
+    ///
+    /// `new_profile` is our own new VID and `their_new_did` the VID the peer
+    /// introduced. §7.2.5 puts this accept between the new pair —
+    /// `[VID_b1, VID_a1, …]` — rather than over the relationship the invite
+    /// arrived on, so it is sent from `new_profile` and addressed to the
+    /// introduced VID.
+    ///
+    /// `invite_thread_digest` is the digest of the invite that carried the
+    /// introduction, from [`unpack_control`](Self::unpack_control).
+    pub async fn accept_parallel_relationship(
+        &self,
+        new_profile: &Arc<ATMProfile>,
+        their_new_did: &str,
+        invite_thread_digest: [u8; 32],
+    ) -> Result<RelationshipState, ATMError> {
+        let (new_did, _) = new_profile.dids()?;
+        let store = self.relationship_store();
+
+        // Record the introduction now. `record_incoming_control` could not:
+        // the invite arrived before this VID was chosen, so there was no pair
+        // to record it against. This is the first moment both halves exist.
+        if store.get(new_did, their_new_did).await? == RelationshipState::None {
+            store
+                .set(new_did, their_new_did, RelationshipState::InviteReceived)
+                .await?;
+            store
+                .set_thread_digests(
+                    new_did,
+                    their_new_did,
+                    ThreadDigests {
+                        invite: Some(invite_thread_digest),
+                        accept: None,
+                    },
+                )
+                .await?;
+        }
+
+        // From here it is an ordinary accept between the new pair, which is the
+        // whole of what §7.2.5 changes.
+        self.accept_relationship(new_profile, their_new_did, invite_thread_digest)
+            .await
     }
 
     /// Like [`form_relationship`](Self::form_relationship), but the invite
@@ -754,7 +1320,10 @@ impl TspOps<'_> {
         self.send_control(
             profile,
             their_did,
-            &ControlMessage::invite_routed(vec![our_mediator.to_string()]),
+            // §5.3.3: a hop list ends at the destination's own VID, not its
+            // intermediary's — so the path back to us is our mediator, then us.
+            // Rev 2 advertised only the mediator, which left the exit ambiguous.
+            &ControlMessage::invite_routed(vec![our_mediator.to_string(), our_did.to_string()]),
         )
         .await?;
         store.set(our_did, their_did, next).await?;
@@ -783,13 +1352,28 @@ impl TspOps<'_> {
         let (our_did, _) = profile.dids()?;
         let store = self.relationship_store();
         let next = next_state(store, our_did, their_did, RelationshipEvent::SendAccept).await?;
-        self.send_control(
-            profile,
-            their_did,
-            &ControlMessage::accept(invite_thread_digest),
-        )
-        .await?;
+        let accept = ControlMessage::accept(invite_thread_digest);
+
+        // §7.2.4: "If the `Reply_Path` is present, then `B` MUST use the routed
+        // path specified by `Reply_Path` to send the `TSP_RFA` message". Sending
+        // direct would disclose to the inviter, and to anyone watching, an
+        // endpoint the route exists to keep out of view — so the path is
+        // honoured here rather than left to the caller to remember.
+        let reply_path = store.reply_path(our_did, their_did).await?;
+        let digest = if reply_path.is_empty() {
+            self.send_control(profile, their_did, &accept).await?
+        } else {
+            self.send_control_routed(profile, their_did, &accept, &reply_path)
+                .await?
+        };
+
         store.set(our_did, their_did, next).await?;
+        // The accept's own digest identifies the other direction (§7.2.1).
+        let mut digests = store.thread_digests(our_did, their_did).await?;
+        digests.accept = Some(digest);
+        store
+            .set_thread_digests(our_did, their_did, digests)
+            .await?;
         // A completed relationship confirms the peer's agent speaks TSP.
         if next == RelationshipState::Bidirectional {
             self.learn_tsp_supported(our_did, their_did, CapabilitySource::Relationship)
@@ -853,14 +1437,158 @@ impl TspOps<'_> {
         profile: &Arc<ATMProfile>,
         peer_did: &str,
         control: &ControlMessage,
-    ) -> Result<RelationshipState, ATMError> {
+    ) -> Result<IncomingControl, ATMError> {
         let (our_did, _) = profile.dids()?;
         let event = match control.control_type {
             ControlType::RelationshipFormingInvite => RelationshipEvent::ReceiveInvite,
             ControlType::RelationshipFormingAccept => RelationshipEvent::ReceiveAccept,
             ControlType::RelationshipCancel => RelationshipEvent::ReceiveCancel,
         };
-        let new_state = advance_state(self.relationship_store(), our_did, peer_did, event).await?;
+
+        // §7.2.5: an invite may introduce a new VID, carrying that VID's own
+        // signature. Check it before anything else. Unverified, the referral is
+        // only a claim that the sender *wishes* to introduce the VID — it says
+        // nothing about whether that VID's controller agreed — and acting on
+        // one is how an endpoint gets talked into a relationship with an
+        // identifier nobody vouched for.
+        //
+        // The check needs the introduced VID's key, which means resolving it;
+        // that is why `affinidi-tsp` cannot do this itself and leaves it here.
+        if let Some(referral) = control.referral.as_ref() {
+            let introduced = self.resolve_vid(&referral.new_vid).await.map_err(|e| {
+                ATMError::MsgReceiveError(format!(
+                    "TSP referral from {peer_did} discarded: could not resolve the introduced \
+                     VID {}: {e}",
+                    referral.new_vid
+                ))
+            })?;
+            affinidi_tsp::message::direct::verify_referral(
+                // The SDK packs referrals under HPKE-Base, so that is the
+                // digest algorithm the signature covers.
+                affinidi_tsp::message::direct::PkaeScheme::HpkeBase,
+                control,
+                peer_did,
+                &introduced.signing_key,
+            )
+            .map_err(|e| {
+                ATMError::MsgReceiveError(format!(
+                    "TSP referral from {peer_did} discarded: {} did not sign the introduction: {e}",
+                    referral.new_vid
+                ))
+            })?;
+        }
+
+        let store = self.relationship_store();
+        let prior = store.get(our_did, peer_did).await?;
+
+        // A referral invite advances nothing here, and cannot.
+        //
+        // §7.2.5 has it arrive on one relationship while proposing another: the
+        // pair it forms is our *new* VID and the introduced one, and we have not
+        // chosen our new VID yet at this point — that is the decision the
+        // introduction asks us to make. Advancing the relationship it arrived on
+        // would be wrong twice over: that relationship is not the one being
+        // formed, and it is already established, so there is no invite for it to
+        // receive.
+        //
+        // So the introduction is recorded when it is acted on, by
+        // `accept_parallel_relationship`, which is the first moment both
+        // identities exist. Here it is only verified and reported.
+        if control.referral.is_some() {
+            return Ok(IncomingControl {
+                state: prior,
+                reply_expected: false,
+                reply_path: control.route.clone(),
+            });
+        }
+
+        let mut digests = store.thread_digests(our_did, peer_did).await?;
+
+        // Rev 3 §7.2.3, the invite race. Both endpoints may invite each other
+        // for the same VID pair at once. Both keep the invite whose digest is
+        // lexicographically lower and discard the other, so the two sides
+        // converge on one exchange and one thread id instead of each believing
+        // it opened the relationship.
+        if control.control_type == ControlType::RelationshipFormingInvite
+            && prior == RelationshipState::Pending
+            && let (Some(ours), Some(theirs)) = (digests.invite, control.digest)
+        {
+            if ours.as_slice() < theirs.as_slice() {
+                return Err(ATMError::MsgReceiveError(format!(
+                    "TSP invite from {peer_did} discarded: our own invite has the lower digest"
+                )));
+            }
+            // Theirs wins: adopt it in place of the invite we sent.
+            store
+                .set(our_did, peer_did, RelationshipState::InviteReceived)
+                .await?;
+            store
+                .set_thread_digests(
+                    our_did,
+                    peer_did,
+                    ThreadDigests {
+                        invite: Some(theirs),
+                        accept: None,
+                    },
+                )
+                .await?;
+            store
+                .set_reply_path(our_did, peer_did, control.route.clone())
+                .await?;
+            return Ok(IncomingControl {
+                state: RelationshipState::InviteReceived,
+                reply_expected: false,
+                reply_path: control.route.clone(),
+            });
+        }
+
+        // Rev 3 §7.3 gives a cancellation three cases, distinguished by what we
+        // hold. One naming a relationship we do not hold at all — or naming a
+        // digest that is not either half of the one we do hold — is ignored
+        // rather than answered, so it cannot be used to probe which
+        // relationships exist. The other two are handled by the caller, which
+        // reads `IncomingControl::reply_expected`.
+        if control.control_type == ControlType::RelationshipCancel {
+            if prior == RelationshipState::None {
+                return Err(ATMError::MsgReceiveError(format!(
+                    "TSP cancellation from {peer_did} discarded: no relationship with {our_did}"
+                )));
+            }
+            if let Some(named) = control.reply.as_ref()
+                && !digests.recognizes(named)
+            {
+                return Err(ATMError::MsgReceiveError(format!(
+                    "TSP cancellation from {peer_did} discarded: names an unrecognised relationship"
+                )));
+            }
+        }
+
+        let new_state = advance_state(store, our_did, peer_did, event).await?;
+
+        // Record the digests as the handshake produces them: the invite's
+        // identifies this direction, the accept's the other (§7.2.1).
+        match control.control_type {
+            ControlType::RelationshipFormingInvite => {
+                digests.invite = control.digest;
+                store.set_thread_digests(our_did, peer_did, digests).await?;
+                // §7.2.4: the accept MUST travel back over the path the invite
+                // supplied, so it is kept rather than left to the caller to
+                // notice — a responder that forgets it silently goes direct.
+                store
+                    .set_reply_path(our_did, peer_did, control.route.clone())
+                    .await?;
+            }
+            ControlType::RelationshipFormingAccept => {
+                digests.accept = control.digest;
+                store.set_thread_digests(our_did, peer_did, digests).await?;
+            }
+            ControlType::RelationshipCancel => {
+                store
+                    .set_thread_digests(our_did, peer_did, ThreadDigests::default())
+                    .await?;
+                store.set_reply_path(our_did, peer_did, Vec::new()).await?;
+            }
+        }
         // If the peer advertised its mediator in the control's route (a routed
         // invite/accept), cache it so `send_to` can route to this peer on a
         // different mediator. Learned once during the handshake; no-op under
@@ -877,7 +1605,21 @@ impl TspOps<'_> {
             self.learn_tsp_supported(our_did, peer_did, CapabilitySource::Relationship)
                 .await?;
         }
-        Ok(new_state)
+
+        // §7.3: a cancellation of a relationship we held in both directions is
+        // answered with a cancellation of our own before we forget it. Sending
+        // it is the caller's business, so report it rather than doing it here.
+        let reply_expected = control.control_type == ControlType::RelationshipCancel
+            && prior == RelationshipState::Bidirectional;
+
+        Ok(IncomingControl {
+            state: new_state,
+            reply_expected,
+            reply_path: match control.control_type {
+                ControlType::RelationshipFormingInvite => control.route.clone(),
+                _ => Vec::new(),
+            },
+        })
     }
 
     // ── Protocol selection / capability ───────────────────────────────────────
@@ -1208,28 +1950,136 @@ impl TspOps<'_> {
             )));
         }
 
-        let (_signing_key, decryption_key) = self.profile_tsp_keys(profile_did).await?;
-        let sender = self.resolve_vid(&meta.sender).await?;
+        let unpacked = self
+            .unpack_with_fresh_key_state(profile_did, &meta.sender, qb2)
+            .await?;
 
-        let unpacked = direct::unpack(
-            qb2,
-            &decryption_key,
-            &sender.encryption_key,
-            &sender.signing_key,
-        )
-        .map_err(|e| ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}")))?;
+        // Rev 3 §7.2.2: an application message from a VID we hold no
+        // relationship with is dropped. "It is not permissible that one
+        // endpoint which has learned a VID of the other simply starts with an
+        // application level message without first having an exchange of TSP
+        // control messages."
+        //
+        // Any recorded relationship admits one, not only a completed one:
+        // receiving an invite records the inbound half, and §3.6 lets a sender
+        // pack user data alongside its invite rather than wait a round trip.
+        if self.atm.inner.config.tsp_relationship_gating() {
+            let state = self
+                .relationship_store()
+                .get(profile_did, &unpacked.sender)
+                .await?;
+            if !state.admits_application_message() {
+                return Err(ATMError::MsgReceiveError(format!(
+                    "TSP message from {} discarded: no relationship with {profile_did}",
+                    unpacked.sender
+                )));
+            }
+        }
 
         // Observing an authenticated inbound TSP message confirms the sender's
         // agent speaks TSP (no-op unless a TSP policy is set).
         self.learn_tsp_supported(profile_did, &unpacked.sender, CapabilitySource::Observed)
             .await?;
 
+        // A padding message has no payload, and this signature has no way to
+        // say so: returning it would hand the caller an empty `Vec` that looks
+        // exactly like a real message the peer sent with no content. Refusing
+        // is the honest answer, and `unpack_message` is the API that can
+        // actually express the distinction.
+        if unpacked.message_type == affinidi_tsp::MessageType::PaddingOnly {
+            return Err(ATMError::MsgReceiveError(format!(
+                "TSP padding message from {} carries no payload; use unpack_message to \
+                 handle padding",
+                unpacked.sender
+            )));
+        }
+
         Ok((unpacked.payload, unpacked.sender))
+    }
+
+    /// Unpack a fetched TSP message and report which kind it is.
+    ///
+    /// For a caller that handles both — a service listener taking whatever
+    /// arrives on one socket — where [`unpack`](Self::unpack) and
+    /// [`unpack_control`](Self::unpack_control) each assume the kind in advance.
+    ///
+    /// An application message is subject to the Rev 3 §7.2.2 relationship gate;
+    /// a control message is not, since the exchange that forms a relationship
+    /// cannot itself require one.
+    pub async fn unpack_message(
+        &self,
+        profile: &Arc<ATMProfile>,
+        qb2: &[u8],
+    ) -> Result<InboundTsp, ATMError> {
+        let meta = MetaEnvelope::parse(qb2)
+            .map_err(|e| ATMError::MsgReceiveError(format!("couldn't parse TSP envelope: {e}")))?;
+
+        let (profile_did, _) = profile.dids()?;
+        if meta.receiver != profile_did {
+            return Err(ATMError::MsgReceiveError(format!(
+                "TSP message addressed to {}, not this profile ({profile_did})",
+                meta.receiver
+            )));
+        }
+
+        let unpacked = self
+            .unpack_with_fresh_key_state(profile_did, &meta.sender, qb2)
+            .await?;
+
+        self.learn_tsp_supported(profile_did, &unpacked.sender, CapabilitySource::Observed)
+            .await?;
+
+        if let Some(control) = unpacked.control {
+            return Ok(InboundTsp::Control {
+                control: Box::new(control),
+                sender: unpacked.sender,
+                thread_digest: unpacked.thread_digest,
+            });
+        }
+
+        // A padding message carries nothing, so it is neither gated nor
+        // delivered — §9.4 has the receiver discard it silently. It is still
+        // named, so the caller can clear it from the mailbox.
+        if unpacked.message_type == affinidi_tsp::MessageType::PaddingOnly {
+            return Ok(InboundTsp::Padding {
+                sender: unpacked.sender,
+            });
+        }
+
+        // §7.2.2, as in `unpack_bytes`: an application message from a VID we
+        // hold no relationship with is discarded.
+        if self.atm.inner.config.tsp_relationship_gating() {
+            let state = self
+                .relationship_store()
+                .get(profile_did, &unpacked.sender)
+                .await?;
+            if !state.admits_application_message() {
+                return Err(ATMError::MsgReceiveError(format!(
+                    "TSP message from {} discarded: no relationship with {profile_did}",
+                    unpacked.sender
+                )));
+            }
+        }
+
+        // `XCTL` and `XSCS` travel identically and are gated identically; only
+        // the label the sender attached differs, and it is preserved here.
+        if unpacked.message_type == affinidi_tsp::MessageType::GenericControl {
+            return Ok(InboundTsp::UpperLayerControl {
+                payload: unpacked.payload,
+                sender: unpacked.sender,
+            });
+        }
+
+        Ok(InboundTsp::Application {
+            payload: unpacked.payload,
+            sender: unpacked.sender,
+        })
     }
 
     /// Unpack a fetched TSP **control** message (raw qb2 bytes), returning the
     /// decoded [`ControlMessage`], the sender VID, and the message's TSP
-    /// **thread digest** (`SHA256` of its plaintext frame).
+    /// **thread digest** — the Rev 3 `TSP_Digest` carried in the message and
+    /// verified on unpack.
     ///
     /// For an invite, the returned `thread_digest` is the value to pass to
     /// [`TspOps::accept_relationship`] (and, later,
@@ -1250,15 +2100,9 @@ impl TspOps<'_> {
             )));
         }
 
-        let (_signing_key, decryption_key) = self.profile_tsp_keys(profile_did).await?;
-        let sender = self.resolve_vid(&meta.sender).await?;
-        let unpacked = direct::unpack(
-            qb2,
-            &decryption_key,
-            &sender.encryption_key,
-            &sender.signing_key,
-        )
-        .map_err(|e| ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}")))?;
+        let unpacked = self
+            .unpack_with_fresh_key_state(profile_did, &meta.sender, qb2)
+            .await?;
 
         let control = unpacked.control.ok_or_else(|| {
             ATMError::MsgReceiveError("TSP message is not a control message".into())
@@ -1460,6 +2304,128 @@ impl TspOps<'_> {
     // ── Internal helpers ────────────────────────────────────────────────────
 
     /// Resolve a DID-based VID to its TSP public keys + endpoints.
+    /// Force a re-resolution of `did`, returning to its provenance chain rather
+    /// than the cached document.
+    ///
+    /// Rev 3 §7.4.2 makes the cached value precisely what may have gone stale,
+    /// so the cache entry is evicted before resolving. Unlike the synchronous
+    /// resolver in `affinidi-tsp`, the SDK is async and can do the work rather
+    /// than only signalling that it is needed.
+    async fn refresh_vid(&self, did: &str) -> Result<affinidi_tsp::ResolvedVid, ATMError> {
+        self.atm.inner.tdk_common.did_resolver().remove(did).await;
+        self.resolve_vid(did).await
+    }
+
+    /// Re-resolve `did` unless its per-peer rate limit is in force.
+    ///
+    /// `Ok(None)` means the limit is in force and nothing was attempted; the
+    /// caller proceeds on the key state it already holds. §7.4.2 bounds this
+    /// because re-resolution can be provoked by a message that has not been
+    /// authenticated, and resolution is more expensive than the message
+    /// provoking it, so the cost would otherwise land on the peer's
+    /// infrastructure rather than on this endpoint.
+    async fn refresh_key_state(
+        &self,
+        did: &str,
+        now_ms: u64,
+    ) -> Result<Option<affinidi_tsp::ResolvedVid>, ATMError> {
+        let policy = self.atm.inner.config.tsp_key_state_policy();
+        if !self
+            .atm
+            .inner
+            .tsp_key_state
+            .may_resolve(did, policy.resolution_rate_limit, now_ms)
+        {
+            return Ok(None);
+        }
+        self.atm.inner.tsp_key_state.record_resolved(did, now_ms);
+        self.refresh_vid(did).await.map(Some)
+    }
+
+    /// Verify and decrypt `qb2` from `sender_vid`, applying the key-state
+    /// freshness rules of Rev 3 §7.4.2 on the way.
+    ///
+    /// Two occasions refresh the sender's key state, both only where this
+    /// endpoint resolves key state for itself and holds a relationship with the
+    /// sender:
+    ///
+    /// * a message arriving after a silence longer than the re-verification
+    ///   threshold is not acted on until the key state has been refreshed —
+    ///   the case that matters under compromise, since stale key state is
+    ///   internally consistent, so a message signed with a compromised key
+    ///   verifies and gives no warning;
+    /// * a verification failure is retried once after a refresh, since the
+    ///   failure may be a rotation not yet observed.
+    ///
+    /// Outside a relationship neither applies and a failure is discarded at
+    /// once, or anyone could make this endpoint resolve by sending it noise.
+    async fn unpack_with_fresh_key_state(
+        &self,
+        profile_did: &str,
+        sender_vid: &str,
+        qb2: &[u8],
+    ) -> Result<affinidi_tsp::message::direct::UnpackedMessage, ATMError> {
+        let (_signing_key, decryption_key) = self.profile_tsp_keys(profile_did).await?;
+        let policy = self.atm.inner.config.tsp_key_state_policy();
+        let now_ms = self.atm.inner.config.clock().unix_millis() as u64;
+
+        let established = self
+            .relationship_store()
+            .get(profile_did, sender_vid)
+            .await?
+            .admits_application_message();
+        let watching = policy.self_resolving && established;
+
+        let mut sender = self.resolve_vid(sender_vid).await?;
+
+        if watching
+            && self.atm.inner.tsp_key_state.silent_longer_than(
+                sender_vid,
+                policy.reverification_threshold,
+                now_ms,
+            )
+        {
+            match self.refresh_key_state(sender_vid, now_ms).await {
+                Ok(Some(fresh)) => sender = fresh,
+                // Rate-limited: this peer's allowance is spent, so proceed on
+                // the key state we hold.
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(ATMError::MsgReceiveError(format!(
+                        "key state for {sender_vid} could not be confirmed after a silence: {e}"
+                    )));
+                }
+            }
+        }
+
+        let unpacked = match direct::unpack(qb2, &decryption_key, &sender.signing_key) {
+            Ok(unpacked) => unpacked,
+            Err(first_error) => {
+                if !watching {
+                    return Err(ATMError::MsgReceiveError(format!(
+                        "couldn't unpack TSP message: {first_error}"
+                    )));
+                }
+                match self.refresh_key_state(sender_vid, now_ms).await {
+                    Ok(Some(fresh)) => direct::unpack(qb2, &decryption_key, &fresh.signing_key)
+                        .map_err(|e| {
+                            ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}"))
+                        })?,
+                    // No refresh was possible, so the original failure stands.
+                    _ => {
+                        return Err(ATMError::MsgReceiveError(format!(
+                            "couldn't unpack TSP message: {first_error}"
+                        )));
+                    }
+                }
+            }
+        };
+
+        // The message verified, so the key state behind it is confirmed now.
+        self.atm.inner.tsp_key_state.record_seen(sender_vid, now_ms);
+        Ok(unpacked)
+    }
+
     async fn resolve_vid(&self, did: &str) -> Result<affinidi_tsp::ResolvedVid, ATMError> {
         let resolver = DidVidResolver::new(self.atm.inner.tdk_common.did_resolver().clone());
         resolver
@@ -1667,6 +2633,7 @@ impl TspWebSocket {
 
 #[cfg(test)]
 mod tests {
+    use super::{ControlMessage, ThreadDigests};
     use affinidi_tsp::message::direct;
     use affinidi_tsp::{MessageType, PrivateVid};
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
@@ -1694,7 +2661,6 @@ mod tests {
             "did:example:alice",
             "did:example:bob",
             &alice.signing_key,
-            &alice.decryption_key,
             &bob.encryption_key,
         )
         .unwrap();
@@ -1705,13 +2671,7 @@ mod tests {
         let qb2 = BASE64_URL_SAFE_NO_PAD.decode(stored.as_bytes()).unwrap();
 
         // bob unpacks (as TspOps::unpack does, with direct::unpack).
-        let unpacked = direct::unpack(
-            &qb2,
-            &bob.decryption_key,
-            &alice.encryption_key,
-            &alice.verifying_key,
-        )
-        .unwrap();
+        let unpacked = direct::unpack(&qb2, &bob.decryption_key, &alice.verifying_key).unwrap();
         assert_eq!(unpacked.payload, b"secret payload");
         assert_eq!(unpacked.sender, "did:example:alice");
         assert_eq!(unpacked.receiver, "did:example:bob");
@@ -2064,5 +3024,263 @@ mod tests {
             ],
         };
         assert!(!disclosure_advertises_tsp(&d));
+    }
+
+    // ---- Rev 3 §7.2.2 / §7.3, at the SDK layer ----
+
+    /// §7.2.2 gates on *any* recorded relationship, not only a completed one.
+    /// An invite records the inbound half, and §3.6 lets a sender pack user
+    /// data alongside its invite rather than wait a round trip, so gating on
+    /// `Bidirectional` alone would drop messages the specification expects.
+    #[tokio::test]
+    async fn gating_admits_any_recorded_relationship() {
+        let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+
+        // A stranger is refused.
+        assert!(
+            !store
+                .get(BOB, ALICE)
+                .await
+                .unwrap()
+                .admits_application_message()
+        );
+
+        // Receiving an invite is enough.
+        advance_state(&store, BOB, ALICE, RelationshipEvent::ReceiveInvite)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .get(BOB, ALICE)
+                .await
+                .unwrap()
+                .admits_application_message()
+        );
+
+        // As is having sent one.
+        let store2: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+        advance_state(&store2, ALICE, BOB, RelationshipEvent::SendInvite)
+            .await
+            .unwrap();
+        assert!(
+            store2
+                .get(ALICE, BOB)
+                .await
+                .unwrap()
+                .admits_application_message()
+        );
+    }
+
+    /// §7.3: a cancellation removes a half-formed relationship, and the state
+    /// machine has a transition for it — an inviter may withdraw before being
+    /// answered.
+    #[tokio::test]
+    async fn a_cancellation_removes_a_half_formed_relationship() {
+        let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+
+        advance_state(&store, BOB, ALICE, RelationshipEvent::ReceiveInvite)
+            .await
+            .unwrap();
+        let next = advance_state(&store, BOB, ALICE, RelationshipEvent::ReceiveCancel)
+            .await
+            .unwrap();
+
+        assert_eq!(next, RelationshipState::None);
+        assert_eq!(
+            store.get(BOB, ALICE).await.unwrap(),
+            RelationshipState::None
+        );
+    }
+
+    /// §7.3: the reply expectation follows the state held *before* the
+    /// cancellation — bidirectional is answered, one-sided is not.
+    #[tokio::test]
+    async fn only_a_bidirectional_cancellation_expects_a_reply() {
+        for (prior, expected) in [
+            (RelationshipState::Bidirectional, true),
+            (RelationshipState::InviteReceived, false),
+            (RelationshipState::Pending, false),
+        ] {
+            let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+            store.set(BOB, ALICE, prior).await.unwrap();
+
+            let held = store.get(BOB, ALICE).await.unwrap();
+            let reply_expected = held == RelationshipState::Bidirectional;
+            assert_eq!(reply_expected, expected, "prior state {prior:?}");
+
+            advance_state(&store, BOB, ALICE, RelationshipEvent::ReceiveCancel)
+                .await
+                .unwrap();
+            assert_eq!(
+                store.get(BOB, ALICE).await.unwrap(),
+                RelationshipState::None
+            );
+        }
+    }
+
+    // ---- Rev 3 §7.2.1 / §7.2.3: thread digests and the invite race ----
+
+    /// §7.2.1: a relationship has two digests, one per uni-directional half,
+    /// and a cancellation may name either. A store that keeps neither cannot
+    /// contradict a digest, so it recognises any — refusing every cancellation
+    /// would be worse than accepting one it cannot check.
+    #[test]
+    fn thread_digests_recognize_either_half() {
+        let invite = [0x11u8; 32];
+        let accept = [0x22u8; 32];
+        let other = [0x33u8; 32];
+
+        let both = ThreadDigests {
+            invite: Some(invite),
+            accept: Some(accept),
+        };
+        assert!(both.recognizes(&invite));
+        assert!(both.recognizes(&accept));
+        assert!(!both.recognizes(&other));
+
+        let one = ThreadDigests {
+            invite: Some(invite),
+            accept: None,
+        };
+        assert!(one.recognizes(&invite));
+        assert!(!one.recognizes(&other));
+
+        // Nothing recorded: anything is recognised.
+        assert!(ThreadDigests::default().recognizes(&other));
+    }
+
+    #[tokio::test]
+    async fn the_store_round_trips_thread_digests() {
+        let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+        assert_eq!(
+            store.thread_digests(ALICE, BOB).await.unwrap(),
+            ThreadDigests::default()
+        );
+
+        let digests = ThreadDigests {
+            invite: Some([7u8; 32]),
+            accept: Some([9u8; 32]),
+        };
+        store.set_thread_digests(ALICE, BOB, digests).await.unwrap();
+        assert_eq!(store.thread_digests(ALICE, BOB).await.unwrap(), digests);
+
+        // Per pair, so the reverse direction is its own record.
+        assert_eq!(
+            store.thread_digests(BOB, ALICE).await.unwrap(),
+            ThreadDigests::default()
+        );
+    }
+
+    /// §7.2.3: both endpoints keep the invite whose digest is lexicographically
+    /// lower. The rule has to be symmetric — run from each side of the same
+    /// pair, the two must agree on which invite survives, or they end up with
+    /// two half-relationships and two thread ids.
+    #[test]
+    fn the_race_tiebreak_is_symmetric() {
+        let lower = [0x01u8; 32];
+        let higher = [0x02u8; 32];
+
+        // The endpoint holding the lower digest keeps its own.
+        let keeps_own = lower.as_slice() < higher.as_slice();
+        assert!(keeps_own);
+
+        // The endpoint holding the higher digest adopts the one that arrived.
+        let adopts_theirs = higher.as_slice() >= lower.as_slice();
+        assert!(adopts_theirs);
+
+        // Exactly one of the two keeps its own, whichever way round they are.
+        for (ours, theirs) in [(lower, higher), (higher, lower)] {
+            let we_keep_ours = ours.as_slice() < theirs.as_slice();
+            let they_keep_theirs = theirs.as_slice() < ours.as_slice();
+            assert_ne!(
+                we_keep_ours, they_keep_theirs,
+                "exactly one side keeps its own invite"
+            );
+        }
+    }
+
+    // ---- Rev 3 §7.2.4: relationship forming over a routed path ----
+
+    #[tokio::test]
+    async fn the_store_round_trips_a_reply_path() {
+        let store: Arc<dyn RelationshipStore> = Arc::new(InMemoryRelationshipStore::default());
+        assert!(store.reply_path(BOB, ALICE).await.unwrap().is_empty());
+
+        let path = vec!["did:example:m1".to_string(), ALICE.to_string()];
+        store
+            .set_reply_path(BOB, ALICE, path.clone())
+            .await
+            .unwrap();
+        assert_eq!(store.reply_path(BOB, ALICE).await.unwrap(), path);
+
+        // Per pair and per direction.
+        assert!(store.reply_path(ALICE, BOB).await.unwrap().is_empty());
+    }
+
+    /// §5.3.3: a hop list ends at the destination's own VID, not its
+    /// intermediary's. A reply path is a hop list, so an invite that asks for a
+    /// routed reply names the mediator *and* the inviter — Rev 2 advertised
+    /// only the mediator, which left the exit ambiguous.
+    #[test]
+    fn a_routed_invite_names_the_inviter_as_the_exit() {
+        let mediator = "did:example:mediator".to_string();
+        let inviter = "did:example:alice".to_string();
+        let control = ControlMessage::invite_routed(vec![mediator.clone(), inviter.clone()]);
+
+        assert_eq!(control.route, vec![mediator, inviter.clone()]);
+        assert_eq!(
+            control.route.last(),
+            Some(&inviter),
+            "the path must end at the inviter, so the exit delivers to it"
+        );
+    }
+
+    /// A reply path survives the invite's wire encoding: it is the `-J` field
+    /// of the `XRFI` payload, so it has to come back out of a packed message.
+    #[test]
+    fn a_reply_path_round_trips_through_the_wire() {
+        let alice = PrivateVid::generate("did:example:alice");
+        let bob = PrivateVid::generate("did:example:bob");
+        let path = vec![
+            "did:example:mediator".to_string(),
+            "did:example:alice".to_string(),
+        ];
+
+        let packed = direct::pack(
+            &ControlMessage::invite_routed(path.clone()).encode(),
+            MessageType::Control,
+            "did:example:alice",
+            "did:example:bob",
+            &alice.signing_key,
+            &bob.encryption_key,
+        )
+        .unwrap();
+
+        let unpacked =
+            direct::unpack(&packed.bytes, &bob.decryption_key, &alice.verifying_key).unwrap();
+        let control = unpacked.control.expect("an invite decodes to a control");
+        assert_eq!(control.route, path);
+    }
+
+    /// An invite with no reply path leaves the field empty, and the accept then
+    /// goes direct — the `-JAA` case.
+    #[test]
+    fn a_direct_invite_carries_no_reply_path() {
+        let alice = PrivateVid::generate("did:example:alice");
+        let bob = PrivateVid::generate("did:example:bob");
+
+        let packed = direct::pack(
+            &ControlMessage::invite().encode(),
+            MessageType::Control,
+            "did:example:alice",
+            "did:example:bob",
+            &alice.signing_key,
+            &bob.encryption_key,
+        )
+        .unwrap();
+
+        let unpacked =
+            direct::unpack(&packed.bytes, &bob.decryption_key, &alice.verifying_key).unwrap();
+        assert!(unpacked.control.unwrap().route.is_empty());
     }
 }

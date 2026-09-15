@@ -36,7 +36,13 @@ use futures_util::StreamExt;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn didcomm_transport_surfaces_inbound_tsp_frame() {
-    let env = TestEnvironment::spawn().await.expect("spawn test mediator");
+    // `spawn_with_direct_delivery`, not `spawn`: this test's subject is what the
+    // transport adapter does with an accepted TSP frame, and the fixture default
+    // for `local_direct_delivery_allowed` is `false` — so on the plain fixture
+    // the send below is refused at the policy gate and never reaches the adapter.
+    let env = TestEnvironment::spawn_with_direct_delivery()
+        .await
+        .expect("spawn test mediator");
     let service = env
         .mediator
         .add_user("service")
@@ -63,8 +69,16 @@ async fn didcomm_transport_surfaces_inbound_tsp_frame() {
     for secret in service.secrets.clone() {
         service_tdk.secrets_resolver().insert(secret).await;
     }
+    // Gating off. The service listener records inbound control messages and so
+    // gates normally, but this test bypasses it: `DidCommTransport` surfaces
+    // raw frames and has no relationship lifecycle of its own. Gating here
+    // would test the adapter's ability to run a handshake it does not have,
+    // rather than its ability to surface a frame, which is the subject.
     let service_atm = ATM::new(
-        ATMConfig::builder().build().expect("atm config"),
+        ATMConfig::builder()
+            .with_tsp_relationship_gating(false)
+            .build()
+            .expect("atm config"),
         service_tdk,
     )
     .await

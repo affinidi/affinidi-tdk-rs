@@ -96,6 +96,27 @@ impl VidResolver for DidVidResolver {
             .cloned()
             .ok_or_else(|| TspError::VidNotFound(vid.to_string()))
     }
+
+    /// Evict the cached key state and report that it cannot be re-resolved
+    /// here.
+    ///
+    /// DID resolution is asynchronous and this trait is not, so a synchronous
+    /// caller cannot return to the provenance chain itself. Failing closed is
+    /// the behaviour §7.4.2 asks for — "an endpoint SHOULD NOT act on a message
+    /// when it is unable to confirm the key state of the sending VID" — and
+    /// pretending to refresh by handing back the value we already hold would be
+    /// the one clearly wrong answer, since that value is what is in doubt.
+    ///
+    /// Eviction still does useful work: the next [`DidVidResolver::resolve_did`]
+    /// misses the cache and returns to the chain. An async caller should treat
+    /// this error as the signal to make that call.
+    fn refresh(&self, vid: &str) -> Result<ResolvedVid, TspError> {
+        self.cache.write().unwrap().remove(vid);
+        Err(TspError::Vid(format!(
+            "key state for {vid} was evicted and cannot be re-resolved synchronously; \
+             call resolve_did to return to the provenance chain"
+        )))
+    }
 }
 
 /// Build a [`ResolvedVid`] from a resolved DID [`Document`].

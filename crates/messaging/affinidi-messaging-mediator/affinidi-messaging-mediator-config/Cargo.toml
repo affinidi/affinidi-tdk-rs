@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-config"
-version = "0.2.2"
+version = "0.3.0"
 description = "Raw TOML configuration schema for the Affinidi Messaging Mediator (shared by the mediator and its setup tool)"
 edition.workspace = true
 authors.workspace = true
@@ -29,7 +29,7 @@ tracing = "0.1"
 # would force this lean crate to require an unpublished mediator-common just to
 # `cargo publish`. Keeping the raw DB schema here (it *is* config schema) lets
 # this crate build against any published 0.15.x.
-affinidi-messaging-mediator-common = { version = "0.15", path = "../affinidi-messaging-mediator-common", default-features = false }
+affinidi-messaging-mediator-common = { version = "0.16", path = "../affinidi-messaging-mediator-common", default-features = false }
 
 [dev-dependencies]
 # `check_tls` test writes temp cert/key files.

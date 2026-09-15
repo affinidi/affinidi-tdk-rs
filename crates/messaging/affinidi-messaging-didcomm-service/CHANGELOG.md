@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased (0.9.0) — TSP Rev 3 control messages
+
+- **Handles TSP control messages.** The service had no relationship lifecycle at
+  all: invites, accepts and cancels arrived and were discarded as
+  non-application traffic. Under Rev 3's §7.2.2 gating that is fatal rather than
+  merely lossy — no relationship can ever form, so every application message is
+  then refused, and the service goes from lossy to inert. Gating was turned off
+  while this was outstanding and is **on again** now that `handle_control` exists
+  to complete a handshake.
+- Requires `affinidi-tsp` 0.2 / `affinidi-messaging-sdk` 0.22 when built with
+  `--features tsp`.
+
+## Unreleased (0.5.0) — `trust-tasks-rs` 0.17
+
 ## Unreleased (0.8.0) — `trust-tasks-rs` 0.20
 
 - Bumps `trust-tasks-rs` 0.19 → 0.20. **No source change** — only manifests.

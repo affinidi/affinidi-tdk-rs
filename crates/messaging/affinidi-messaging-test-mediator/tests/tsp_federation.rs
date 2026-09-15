@@ -58,6 +58,15 @@ async fn tsp_message_federates_across_two_mediators() {
     let alice = topology.add_user(0, "alice").await.expect("add alice on A");
     let bob = topology.add_user(1, "bob").await.expect("add bob on B");
 
+    // §7.2.2 gates application messages on an existing relationship. The
+    // subject here is delivery across mediators, not relationship forming, so
+    // the relationship is seeded on every node — each side's SDK has its own
+    // store, and one alone would leave the other discarding.
+    topology
+        .relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
+
     let payload = b"hello bob, across two mediators, over TSP";
 
     // Route: alice -> mediator A (the routing-layer recipient, route[0]) ->

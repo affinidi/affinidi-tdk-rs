@@ -15,28 +15,42 @@ use crate::error::TspError;
 use crate::message::MessageType;
 use crate::message::envelope::Envelope;
 
-/// The leading byte of every TSP message: the first byte of the binary-CESR
-/// `-E` count code (`TSP_ETS_WRAPPER`), which is `0xF8`. The `-E` count code
-/// triplet is `f8 4X XX` — the `f8` comes from the `-` (DASH) selector packed
-/// with the `E` identifier. DIDComm — being JSON or compact-JWS — starts with
-/// `{` (`0x7B`) or `ey…` instead, so this byte is an unambiguous discriminator.
+/// The leading byte of a TSP message framed with a **short** `-E` count code
+/// (`-E##`), which is `0xF8`. The triplet is `f8 4X XX` — the `f8` comes from
+/// the `-` (DASH) selector packed with the `E` identifier.
 pub const TSP_MAGIC_BYTE: u8 = 0xF8;
+
+/// The leading byte of a TSP message framed with a **long** `-E` count code
+/// (`--E#####`), which is `0xFB` — two DASH selectors rather than one.
+///
+/// Rev 2 could never emit this: its `-E` count covered only the envelope
+/// header, which is a couple of dozen quadlets whatever the message size. Rev 3
+/// widened the count to cover the ciphertext, so any message with more than
+/// 4095 quadlets of content — roughly 12 KB — is framed long and starts `0xFB`.
+/// Ingress classifiers that only knew `0xF8` therefore start dropping large
+/// messages the moment Rev 3 is switched on.
+pub const TSP_MAGIC_BYTE_LONG: u8 = 0xFB;
 
 /// Cheap classifier: does `bytes` look like a TSP message?
 ///
 /// This is a pre-classifier for ingress routing, not a validator — it inspects
 /// only the leading byte. A caller routes `is_tsp(bytes)` input to the TSP
 /// handler, which then calls [`MetaEnvelope::parse`] (or a full unpack) to
-/// validate and reject anything malformed. Anything not starting with the TSP
-/// magic byte is definitely not a TSP message.
+/// validate and reject anything malformed.
+///
+/// Both framings are accepted. DIDComm — being JSON or compact-JWS — starts
+/// with `{` (`0x7B`) or `ey…`, so neither byte is ambiguous against it.
 pub fn is_tsp(bytes: &[u8]) -> bool {
-    bytes.first() == Some(&TSP_MAGIC_BYTE)
+    matches!(
+        bytes.first(),
+        Some(&TSP_MAGIC_BYTE) | Some(&TSP_MAGIC_BYTE_LONG)
+    )
 }
 
 /// Cleartext metadata of a TSP message, parsed without any keys.
 ///
 /// The TSP envelope carries the sender VID and receiver VID in the clear (they
-/// are bound to the ciphertext via the HPKE `info`, but readable). This lets a
+/// are bound to the ciphertext via the HPKE-Base AAD, but readable). This lets a
 /// relay route and account for a message without being able to decrypt it.
 ///
 /// Note: in the interop wire format the message *kind* (Direct/Nested/Routed/
@@ -85,7 +99,6 @@ mod tests {
 
     fn packed() -> direct::PackedMessage {
         let sign = SigningKey::generate(&mut rand_10::rng());
-        let sender_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recv_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         direct::pack(
             b"payload",
@@ -93,7 +106,6 @@ mod tests {
             "did:web:alice",
             "did:web:bob",
             &sign.to_bytes(),
-            &sender_enc.to_bytes(),
             &PublicKey::from(&recv_enc).to_bytes(),
         )
         .unwrap()
@@ -136,15 +148,13 @@ mod tests {
         // In the interop format the kind is encrypted, so a keys-free parse only
         // recovers addressing (and reports Direct as a placeholder kind).
         let sign = SigningKey::generate(&mut rand_10::rng());
-        let sender_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         let recv_enc = StaticSecret::random_from_rng(&mut rand_10::rng());
         let msg = direct::pack(
-            b"routing-layer",
+            b"routing-layer!!", // quadlet-aligned: a real inner is a packed message
             MessageType::Routed,
             "did:web:alice",
             "did:web:mediator",
             &sign.to_bytes(),
-            &sender_enc.to_bytes(),
             &PublicKey::from(&recv_enc).to_bytes(),
         )
         .unwrap();

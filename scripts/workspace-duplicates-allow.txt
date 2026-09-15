@@ -23,3 +23,40 @@
 # vta-sdk 0.19.14 shipped on didwebvh-rs 0.6, which requires
 # affinidi-did-common "0.4", so the registry copy at 0.3.9 no longer enters the
 # graph.
+#
+#
+# ---------------------------------------------------------------------------
+#
+# Re-added 2026-09-15 for TSP Rev 3, and the note above describes exactly how
+# it will be cleared — this is the same crossing for the fourth time, after
+# 0.20, 0.21 and 0.22, and the mediator's own Cargo.toml predicts it verbatim:
+# "under 0.x semver a minor bump breaks it, the registry node the patch exists
+# to delete comes back".
+#
+# Rev 3 makes affinidi-messaging-sdk 0.25 and affinidi-tdk 0.15. The published
+# vta-sdk 0.38 is built against 0.24 and 0.14, so `[patch.crates-io]` stops
+# applying to both and their registry copies re-enter the graph, dragging
+# affinidi-messaging-mediator-common 0.15.45 with them.
+#
+# This cannot be fixed from this repository. vta-sdk lives in the VTI
+# workspace, which depends back on this one, and the cycle only unwinds in one
+# order: release this crate, rebuild vta-sdk against 0.25/0.15, publish it,
+# then the patches apply again and these three entries go.
+#
+# What would clear it: vta-sdk >= 0.39 built against affinidi-messaging-sdk
+# 0.25 and affinidi-tdk 0.15, and the mediator's requirement moved to it.
+#
+# What it costs meanwhile: local edits to these three crates are not what the
+# `vta`-enabled mediator build compiles against, and two copies of their types
+# are in that subtree's graph. Rev 3's own crate, affinidi-tsp, is NOT among
+# them — nothing in the duplicated subtree depends on it — so the protocol
+# change itself is not being built twice.
+#
+# The standing fix remains the one the mediator's Cargo.toml argues for:
+# `affinidi-messaging-test-mediator` already takes this crate with
+# `default-features = false`, so gating `vta-sdk` off there ends the cycle
+# rather than re-timing it. That is a separate change and should not ride a
+# protocol release.
+affinidi-messaging-sdk
+affinidi-tdk
+affinidi-messaging-mediator-common

@@ -1,5 +1,16 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.15.0) — TSP Rev 3
+
+Breaking: the facade now re-exports `affinidi-tsp` 0.2, which speaks Trust
+Spanning Protocol Rev 3 and **cannot interoperate with a Rev 2 peer in either
+direction**. There is no compatibility mode to opt out of. Consumers enabling
+the `tsp` feature move with it, and the whole deployment moves together — a
+mixed fleet does not degrade, it goes silent.
+
+See `affinidi-tsp`'s changelog for the wire changes and `docs/tsp/` for the
+migration status.
+
 ## Unreleased (0.14.0) — `trust-tasks-rs` 0.20
 
 - Bumps `trust-tasks-rs` 0.19 → 0.20. **No source change** — only manifests.

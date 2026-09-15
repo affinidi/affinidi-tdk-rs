@@ -127,7 +127,7 @@ DIDComm-authenticated JWT session, and pure-TSP clients can authenticate over
 2. **Resolve your DID** and confirm a `TSPTransport` (or, for `did:peer`, `tsp`)
    service is present with your `/inbound` base as its endpoint.
 3. **Send a TSP message** — the end-to-end flows (Direct, routed relay,
-   TSP↔DIDComm bridge, remote forwarding) are exercised by the
+   remote forwarding) are exercised by the
    `affinidi-messaging-test-mediator` integration tests
    (`tests/tsp_delivery.rs`, `tests/tsp_federation.rs`), which are the runnable
    source of truth.

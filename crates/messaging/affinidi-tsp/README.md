@@ -30,9 +30,9 @@ Verifiable Identifiers (VIDs).
 
 | Operation | Algorithm |
 |---|---|
-| Authenticated encryption | HPKE-Auth (DHKEM(X25519) + HKDF-SHA256 + ChaCha20Poly1305) per [RFC 9180](https://www.rfc-editor.org/rfc/rfc9180) |
+| Authenticated encryption | HPKE-Base (DHKEM(X25519) + HKDF-SHA256 + ChaCha20Poly1305), the only PKAE mode TSP spec Rev 3 §8 mandates |
 | Signing | Ed25519 |
-| Message digest | BLAKE2s-256 |
+| Message digest | SHA2-256 for the `TSP_Digest` (Rev 3 §7.2.1); BLAKE2s-256 for opaque message ids |
 | Encoding | CESR (Composable Event Streaming Representation) |
 
 ## Quick Start

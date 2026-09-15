@@ -67,6 +67,13 @@ async fn tsp_websocket_flushes_and_deletes_queued_message() {
 
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // §7.2.2 gates application messages on an existing relationship. This
+    // test is about transport, not relationship forming, so the relationship
+    // is seeded rather than handshaken — which also keeps the mailbox clean
+    // for the assertions below.
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
 
     let payload = b"hello over the TSP websocket";
 
@@ -168,6 +175,13 @@ async fn tsp_websocket_sdk_consumer_flushes_and_deletes() {
 
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // §7.2.2 gates application messages on an existing relationship. This
+    // test is about transport, not relationship forming, so the relationship
+    // is seeded rather than handshaken — which also keeps the mailbox clean
+    // for the assertions below.
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
 
     let payload = b"hello over the SDK TSP websocket";
 
@@ -242,6 +256,13 @@ async fn tsp_websocket_delivers_messages_that_arrive_after_connect() {
 
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // §7.2.2 gates application messages on an existing relationship. This
+    // test is about transport, not relationship forming, so the relationship
+    // is seeded rather than handshaken — which also keeps the mailbox clean
+    // for the assertions below.
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
 
     // Bob connects FIRST, with an empty inbox — so nothing here can be
     // satisfied by the flush-on-connect drain.
@@ -333,6 +354,13 @@ async fn tsp_ack_mode_keeps_the_message_until_the_client_acks() {
 
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // §7.2.2 gates application messages on an existing relationship. This
+    // test is about transport, not relationship forming, so the relationship
+    // is seeded rather than handshaken — which also keeps the mailbox clean
+    // for the assertions below.
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
 
     let payload = b"a TSP message that must survive until acked";
     env.atm
@@ -404,6 +432,13 @@ async fn an_unacked_tsp_message_is_redelivered_on_reconnect() {
 
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // §7.2.2 gates application messages on an existing relationship. This
+    // test is about transport, not relationship forming, so the relationship
+    // is seeded rather than handshaken — which also keeps the mailbox clean
+    // for the assertions below.
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
 
     let payload = b"a TSP message the client never acknowledges";
     env.atm
@@ -478,6 +513,13 @@ async fn an_unacked_message_is_not_resent_within_the_same_connection() {
 
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // §7.2.2 gates application messages on an existing relationship. This
+    // test is about transport, not relationship forming, so the relationship
+    // is seeded rather than handshaken — which also keeps the mailbox clean
+    // for the assertions below.
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
 
     let mut ws = env
         .atm

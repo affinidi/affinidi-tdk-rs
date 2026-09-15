@@ -31,6 +31,13 @@ async fn tsp_frame_arriving_between_polls_is_not_dropped() {
 
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // §7.2.2 gates application messages on an existing relationship. This
+    // test is about transport, not relationship forming, so the relationship
+    // is seeded rather than handshaken — which also keeps the mailbox clean
+    // for the assertions below.
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
 
     // Bob listens on the message-pickup socket (live delivery on) — NOT the
     // raw-TSP socket.
@@ -115,6 +122,13 @@ async fn a_slow_consumer_does_not_lose_packed_frames() {
 
     let alice = env.add_user("alice").await.expect("add alice");
     let bob = env.add_user("bob").await.expect("add bob");
+    // §7.2.2 gates application messages on an existing relationship. This
+    // test is about transport, not relationship forming, so the relationship
+    // is seeded rather than handshaken — which also keeps the mailbox clean
+    // for the assertions below.
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
 
     env.atm
         .profile_enable_websocket(&bob.profile)
