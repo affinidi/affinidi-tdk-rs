@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-secrets-resolver"
-version = "0.5.11"
+version = "0.5.12"
 dependencies = [
  "affinidi-crypto",
  "affinidi-encoding",

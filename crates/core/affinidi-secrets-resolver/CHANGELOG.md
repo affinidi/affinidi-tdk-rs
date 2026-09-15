@@ -1,5 +1,26 @@
 # Affinidi Secrets Manager
 
+## Unreleased (0.5.12) — ML-DSA secrets can be written down
+
+`Secret::generate_ml_dsa_{44,65,87}` produced a secret whose `secret_material`
+was an empty string, so serialising one wrote `"privateKeyMultibase": ""` and
+reading it back failed in `Secret::from_multibase`. The seed was never
+corrupted — it was simply never written, and the loss only surfaced on the next
+process start. Since `private_bytes`, `public_bytes` and `key_type` are all
+`#[serde(skip)]`, that one field is the entire persisted form of a secret.
+
+The generators now populate it from the existing `get_private_keymultibase()`,
+whose ML-DSA arms were already correct and unreachable.
+`ml_dsa_secret_survives_a_serde_round_trip` covers all three parameter sets and
+asserts the key type as well, since it travels only as the multicodec prefix of
+that string.
+
+SLH-DSA is **deliberately unchanged and still memory-only**: FIPS 205 has no
+registered private-key multicodec, so there is no prefix to carry the algorithm
+and nothing to write that could be read back. `slh_dsa_secret_does_not_survive_a_serde_round_trip`
+pins that, so the resemblance to the ML-DSA defect does not invite someone to
+"fix" it by inventing a code point.
+
 ## Unreleased (0.5.11) — `sha2` 0.11
 
 No behaviour change and no public API change: these are private dependencies
