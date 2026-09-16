@@ -4,6 +4,27 @@ All notable changes to `affinidi-rate-limit` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-09-16
+
+A `429` now says which service refused it, when the service names itself.
+
+### Added
+
+- `RateLimiterState::with_source(name)` and `RateLimiterState::source()`. A
+  named limiter's refusal carries the ecosystem's attribution contract:
+  - `x-rate-limit-source: <name>` (`SOURCE_HEADER`);
+  - `Retry-After: <seconds>`, as before;
+  - a JSON body `{"error":"rate_limited","limiter":"<name>","message":"…",
+    "retryAfterSecs":N}` with `Content-Type: application/json`.
+
+  The names clients match on are `mediator`, `vta`, `vtc` and `did-host`.
+- `SOURCE_HEADER` and `RATE_LIMITED_ERROR` constants.
+
+### Unchanged
+
+- An unnamed limiter sends exactly the plain-text `429` it always did, with no
+  source header. Additive: a patch.
+
 ## [0.1.0] - 2026-07-20
 
 Initial release. Extracted from `affinidi-messaging-mediator`, where it had lived

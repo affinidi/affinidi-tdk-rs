@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.26.0"
+version = "0.26.1"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -259,7 +259,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 
 # ── Rate Limiting & Resilience ───────────────────────────────────────────
 ## Per-IP and per-DID rate limiting (in-memory, not distributed)
-affinidi-rate-limit = "0.1"
+affinidi-rate-limit = "0.1.1"
 governor = "0.10"
 
 # ── HTTP Client (for forwarding to remote mediators) ─────────────────────

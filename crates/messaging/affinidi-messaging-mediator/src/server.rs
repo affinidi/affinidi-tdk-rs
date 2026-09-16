@@ -3,7 +3,7 @@ use crate::{
     builder::{MediatorHandle, StartOpts, TlsMode, TracingMode},
     common::{
         config::{
-            Config,
+            Config, LimitsConfig,
             helpers::{join_api_path, preload_self_did},
             init,
         },
@@ -725,11 +725,7 @@ pub async fn serve_internal(
     // The `RATE_LIMITED_TOTAL` metric used to be emitted inside the limiter
     // itself. It now rides on the refusal callback, so the shared crate stays
     // free of any metrics dependency.
-    let rate_limiter = RateLimiterState::new(
-        config.limits.rate_limit_per_ip,
-        config.limits.rate_limit_burst,
-    )
-    .on_refused(|refusal| {
+    let rate_limiter = ip_rate_limiter(&config.limits).on_refused(|refusal| {
         if matches!(refusal, Refusal::RateLimited { .. }) {
             ::metrics::counter!(crate::common::metrics::names::RATE_LIMITED_TOTAL).increment(1);
         }
@@ -1139,5 +1135,106 @@ pub(crate) fn default_port_for(url: &Url) -> Option<u16> {
         "http" | "ws" => Some(80),
         "https" | "wss" => Some(443),
         _ => None,
+    }
+}
+
+/// The name the mediator's limiter puts in `x-rate-limit-source`. Clients match
+/// on it to tell the mediator's refusals from a VTA's (`vta`), a VTC's (`vtc`),
+/// a DID host's (`did-host`) or an unlabelled proxy's.
+pub const RATE_LIMIT_SOURCE: &str = "mediator";
+
+/// The per-IP limiter, labelled as the mediator's.
+///
+/// It wraps every application route — REST, the websocket upgrade (`/ws`) and
+/// DIDComm/TSP ingress (`/inbound`) — so this is the one place a mediator `429`
+/// is produced, and every one of them says who refused.
+fn ip_rate_limiter(limits: &LimitsConfig) -> RateLimiterState {
+    RateLimiterState::new(limits.rate_limit_per_ip, limits.rate_limit_burst)
+        .with_source(RATE_LIMIT_SOURCE)
+}
+
+#[cfg(test)]
+mod rate_limit_tests {
+    use super::*;
+    use affinidi_messaging_sdk::errors::{ATMError, HttpStatusError};
+    use axum::{body::Body, extract::ConnectInfo};
+    use http::{Request, StatusCode, header};
+    use tower::ServiceExt;
+
+    fn limits(per_second: u32, burst: u32) -> LimitsConfig {
+        LimitsConfig {
+            rate_limit_per_ip: per_second,
+            rate_limit_burst: burst,
+            ..LimitsConfig::default()
+        }
+    }
+
+    fn request(uri: &str) -> Request<Body> {
+        let mut request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([192, 0, 2, 7], 5000))));
+        request
+    }
+
+    /// A mediator `429` carries the attribution contract, and the SDK reads it
+    /// back as a typed rate-limit refusal naming the mediator. Both ends of the
+    /// contract in one test, so neither can drift from the other.
+    #[tokio::test]
+    async fn mediator_429_is_attributed_and_the_sdk_reads_it() {
+        let app = Router::new()
+            .route("/inbound", axum::routing::post(|| async { "accepted" }))
+            .route("/ws", get(|| async { "upgrade" }))
+            .layer(RateLimitLayer::new(ip_rate_limiter(&limits(1, 1))));
+
+        assert_eq!(
+            app.clone().oneshot(request("/ws")).await.unwrap().status(),
+            StatusCode::OK
+        );
+        let refused = app.oneshot(request("/ws")).await.unwrap();
+
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+        let source = refused.headers()["x-rate-limit-source"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(source, "mediator");
+        let retry_after = refused.headers()[header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let bytes = axum::body::to_bytes(refused.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "rate_limited");
+        assert_eq!(body["limiter"], "mediator");
+        assert_eq!(
+            body["retryAfterSecs"].as_u64().unwrap().to_string(),
+            retry_after
+        );
+
+        let err = ATMError::from(HttpStatusError::from_parts(
+            "WebSocket connection refused",
+            429,
+            Some(&source),
+            Some(&retry_after),
+            String::from_utf8(bytes.to_vec()).unwrap(),
+        ));
+        assert!(err.is_rate_limited());
+        let status = err.http_status().unwrap();
+        assert_eq!(status.rate_limit_source.as_deref(), Some(RATE_LIMIT_SOURCE));
+        assert_eq!(
+            status.retry_after_secs,
+            Some(retry_after.parse::<u64>().unwrap())
+        );
+    }
+
+    #[test]
+    fn the_limiter_is_labelled_even_when_disabled() {
+        assert_eq!(
+            ip_rate_limiter(&limits(0, 0)).source(),
+            Some(RATE_LIMIT_SOURCE)
+        );
     }
 }

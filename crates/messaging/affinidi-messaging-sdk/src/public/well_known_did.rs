@@ -1,4 +1,9 @@
-use crate::{ATM, errors::ATMError, messages::SuccessResponse, profiles::ATMProfile};
+use crate::{
+    ATM,
+    errors::{ATMError, HttpStatusError},
+    messages::SuccessResponse,
+    profiles::ATMProfile,
+};
 use tracing::{Instrument, Level, debug, span};
 
 impl ATM {
@@ -31,21 +36,12 @@ impl ATM {
                     ))
                 })?;
 
-            let status = res.status();
-            debug!("API response: status({})", status);
-            let body = res.text().await.map_err(|e| {
-                ATMError::TransportError(format!("Couldn't get string body: {e:?}"))
+            debug!("API response: status({})", res.status());
+            let body = HttpStatusError::check_response("get mediator well-known DID", res).await?;
+
+            let body = serde_json::from_str::<SuccessResponse<String>>(&body).map_err(|e| {
+                ATMError::TransportError(format!("Couldn't parse well-known DID response: {e}"))
             })?;
-
-            let body = serde_json::from_str::<SuccessResponse<String>>(&body)
-                .ok()
-                .unwrap();
-
-            if !status.is_success() {
-                return Err(ATMError::TransportError(format!(
-                    "Status not successful. status({status}), response({body:?})"
-                )));
-            }
 
             let did = if let Some(did) = body.data {
                 did

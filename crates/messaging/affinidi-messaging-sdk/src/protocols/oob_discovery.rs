@@ -6,7 +6,7 @@ Used to help discover 3rd party DID's while protecting your own privacy.
 
 use crate::{
     ATM,
-    errors::ATMError,
+    errors::{ATMError, HttpStatusError},
     messages::{GenericDataStruct, SuccessResponse},
     profiles::ATMProfile,
 };
@@ -95,19 +95,8 @@ impl OOBDiscovery {
                 ATMError::TransportError(format!("Could not send OOB Invitation request: {e:?}"))
             })?;
 
-        let status = res.status();
-        debug!("API response: status({})", status);
-
-        let body = res
-            .text()
-            .await
-            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))?;
-
-        if !status.is_success() {
-            return Err(ATMError::TransportError(format!(
-                "Status not successful. status({status}), response({body})"
-            )));
-        }
+        debug!("API response: status({})", res.status());
+        let body = HttpStatusError::check_response("create OOB invitation", res).await?;
 
         let body = serde_json::from_str::<SuccessResponse<OOBInviteResponse>>(&body)
             .ok()
@@ -139,19 +128,8 @@ impl OOBDiscovery {
                 ATMError::TransportError(format!("Could not send OOB Invitation request: {e:?}"))
             })?;
 
-        let status = res.status();
-        debug!("API response: status({})", status);
-
-        let body = res
-            .text()
-            .await
-            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))?;
-
-        if !status.is_success() {
-            return Err(ATMError::TransportError(format!(
-                "Status not successful. status({status}), response({body})"
-            )));
-        }
+        debug!("API response: status({})", res.status());
+        let body = HttpStatusError::check_response("retrieve OOB invitation", res).await?;
 
         let body = serde_json::from_str::<SuccessResponse<String>>(&body).map_err(|e| {
             ATMError::TransportError(format!("Couldn't parse OOB invitation response: {e}"))
@@ -228,19 +206,8 @@ impl OOBDiscovery {
                 ATMError::TransportError(format!("Could not delete OOB Invitation request: {e:?}"))
             })?;
 
-        let status = res.status();
-        debug!("API response: status({})", status);
-
-        let body = res
-            .text()
-            .await
-            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))?;
-
-        if !status.is_success() {
-            return Err(ATMError::TransportError(format!(
-                "Status not successful. status({status}), response({body})"
-            )));
-        }
+        debug!("API response: status({})", res.status());
+        let body = HttpStatusError::check_response("delete OOB invitation", res).await?;
 
         let body = serde_json::from_str::<SuccessResponse<String>>(&body)
             .ok()
