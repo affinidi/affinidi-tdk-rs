@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased (0.26.1) — inbound TSP control messages are recorded
+
+A **patch** rather than a minor: no signature moves, and nothing that worked
+before stops working. What changes is that something which never worked now
+does.
+
+`transport_adapter::tsp_to_inbound` used `unpack`, which returns
+`(payload, sender)` and cannot say what kind of message arrived. So a TSP
+control message — invite, accept, cancellation — was handed to the consumer as
+application data it could only fail to parse, and `record_incoming_control` was
+never called. No relationship was ever recorded, so §7.2.2 discarded every
+application message that followed: the endpoint went quiet, and since §7.2.2
+drops rather than refuses, it said nothing about why.
+
+Recording is the whole fix. `RelationshipState::admits_application_message` is
+true for **any** recorded relationship, not only a completed one, so nothing has
+to accept for traffic to flow.
+
+Also: padding and `XCTL` are handled by name instead of reaching the consumer as
+application data, and both are released from the mediator — "discard silently"
+(§9.4) means not answering the peer, not leaving the frame to be redelivered on
+every reconnect for ever.
+
+Deciding whether to *accept* an invite still belongs above this layer and is not
+yet surfaced; that needs `Inbound` to carry a message kind, which is a breaking
+change to `affinidi-messaging-core`.
+
 ## Unreleased (0.26.0) — `trust-tasks-rs` 0.21
 
 Breaking, and by public dependency rather than by anything in this crate's own
