@@ -21,6 +21,8 @@ use crate::errors::ATMError;
 use crate::messages::Folder;
 use crate::messages::compat::UnpackMetadata;
 use crate::protocols::message_pickup::InboundFrame;
+#[cfg(feature = "tsp")]
+use crate::protocols::tsp::InboundTsp;
 use crate::{ATM, profiles::ATMProfile};
 
 /// How long each inbound `live_stream_next` poll waits for a message before
@@ -271,10 +273,28 @@ async fn frame_to_inbound(
     }
 }
 
-/// Map an inbound TSP frame to the neutral [`Inbound`]. `atm.tsp().unpack`
+/// Map an inbound TSP frame to the neutral [`Inbound`]. `unpack_message`
 /// authenticates the sender (resolves + verifies the VID), so `sender` is the
 /// cryptographically-authenticated VID and `verified` is `true`. `protocol` is
 /// [`Protocol::TSP`] so the consumer routes it to its TSP handler.
+///
+/// # Why `unpack_message` and not `unpack`
+///
+/// `unpack` returns `(payload, sender)` and **cannot say what kind of message
+/// arrived**. The SDK says so itself where it refuses to return a padding
+/// message through that signature: "this signature has no way to say so …
+/// `unpack_message` is the API that can actually express the distinction."
+///
+/// Using it here meant a TSP **control** message — an invite, an accept, a
+/// cancellation — was unpacked as though it were application data and its frame
+/// contents handed to the consumer, which could only fail to parse them. Worse,
+/// nothing ever called `record_incoming_control`, so no relationship was ever
+/// recorded, so §7.2.2 discarded every application message that followed. The
+/// endpoint went silent and said nothing about why, which is the exact failure
+/// [`InboundKind`] documents.
+///
+/// So this recognises all four kinds, records control messages (framework
+/// behaviour), and leaves *answering* them to the consumer (policy).
 #[cfg(feature = "tsp")]
 async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> Option<Inbound> {
     // The mediator keys a stored TSP frame on `sha256(packed)` — the id the frame
@@ -289,10 +309,32 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
     // silently skipped and never answered. Mirrors the framework listener's
     // `dispatch_tsp` (the raw-TSP `connect_websocket` path yields already-decoded
     // qb2 and correctly uses `unpack_bytes`; this DIDComm-multiplexed path does not).
+    // `unpack_message` takes raw qb2; the pickup socket hands us the **qb64**
+    // stored string (base64url of qb2, i.e. `-E…` as text). Feeding the string
+    // straight in would push the ASCII `'-','E',…` bytes into the CESR parser
+    // and fail with "missing -E envelope wrapper" on every frame. `unpack` used
+    // to hide this by decoding internally; doing it here is the cost of an API
+    // that can name the message kind.
+    //
+    // Decoded once, outside the retry loop: a base64url failure is a property
+    // of the bytes and will not become true on a second attempt.
+    let qb2 = match atm.tsp().decode(packed) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                frame = %ack,
+                "inbound TSP frame is not valid base64url — releasing it",
+            );
+            release_frame(atm, profile, &ack).await;
+            return None;
+        }
+    };
+
     let mut backoff = TSP_UNPACK_INITIAL_BACKOFF;
     let mut attempt = 1;
-    let (payload, sender) = loop {
-        match atm.tsp().unpack(profile, packed).await {
+    let unpacked = loop {
+        match atm.tsp().unpack_message(profile, &qb2).await {
             Ok(v) => break v,
             Err(e) if is_transient_unpack_error(&e) && attempt < TSP_UNPACK_MAX_ATTEMPTS => {
                 // A resolver hiccup must not cost us the frame. Retry in-process
@@ -343,6 +385,84 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
             }
         }
     };
+    // Each kind is answered here or handed up; none may fall through to the
+    // application path, which is what the old `unpack` forced on all four.
+    //
+    // Exhaustive with no catch-all, and it compiles because `InboundTsp` is
+    // defined in *this* crate — `#[non_exhaustive]` binds other crates, not its
+    // own. So a kind added later is a compile error here rather than something
+    // that quietly takes the application path, which is the defect this
+    // function exists to fix.
+    let (payload, sender) = match unpacked {
+        InboundTsp::Application { payload, sender } => (payload, sender),
+
+        InboundTsp::Control {
+            control,
+            sender,
+            thread_digest,
+        } => {
+            // Record it. This is the whole fix: recording is what admits the
+            // application messages that follow, because
+            // `RelationshipState::admits_application_message` is true for any
+            // recorded relationship and not only a completed one (§7.2.2 with
+            // §3.6). Nothing has to *accept* for traffic to flow.
+            //
+            // Not surfaced to the consumer. Answering an invite is an
+            // authorization decision and belongs above this layer, but
+            // `Inbound` has no way to carry a message kind yet and gaining one
+            // is a breaking change to `affinidi-messaging-core` — see the note
+            // at the end of this function. Recording without answering is the
+            // half that is both urgent and non-breaking.
+            let _ = thread_digest;
+            match atm
+                .tsp()
+                .record_incoming_control(profile, &sender, &control)
+                .await
+            {
+                Ok(incoming) => tracing::debug!(
+                    sender = %sender,
+                    state = ?incoming.state,
+                    frame = %ack,
+                    "recorded an inbound TSP control message",
+                ),
+                Err(e) => tracing::debug!(
+                    error = %e,
+                    sender = %sender,
+                    frame = %ack,
+                    "inbound TSP control message not recorded — a protocol rule refused it \
+                     (a cancellation for a relationship we do not hold, or the losing side of \
+                     the §7.2.3 invite race)",
+                ),
+            }
+            release_frame(atm, profile, &ack).await;
+            return None;
+        }
+
+        InboundTsp::UpperLayerControl { sender, .. } => {
+            // `XCTL`: the sender marked it control for a layer above TSP. This
+            // adapter serves no such layer, so it is dropped — but dropped *by
+            // name*, not as unrecognised user data.
+            tracing::debug!(
+                sender = %sender,
+                frame = %ack,
+                "ignoring an upper-layer TSP control message (XCTL); this transport has no \
+                 upper layer to route it to",
+            );
+            release_frame(atm, profile, &ack).await;
+            return None;
+        }
+
+        InboundTsp::Padding { sender } => {
+            // §9.4: discard silently. "Silently" is about not answering the
+            // peer, not about leaving it in the mailbox — it still has to be
+            // released, which is why the SDK reports padding rather than
+            // swallowing it.
+            tracing::trace!(sender = %sender, frame = %ack, "discarding a TSP padding message");
+            release_frame(atm, profile, &ack).await;
+            return None;
+        }
+    };
+
     let received = ReceivedMessage {
         // TSP frames carry no DIDComm message id; the frame hash is a stable id.
         id: ack.clone(),
@@ -359,6 +479,24 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
         thread_id: None,
         ack: InboundAck(ack),
     })
+}
+
+/// Release a frame the delivery layer will never ack, because it never becomes
+/// an [`Inbound`].
+///
+/// The pickup stream polls with `auto_delete = false`, so the mediator still
+/// holds anything that returns `None` above. Left alone it is redelivered on
+/// every reconnect and every restart until the mediator's own expiry — which is
+/// how one padding message becomes a permanent boot-time loop.
+#[cfg(feature = "tsp")]
+async fn release_frame(atm: &ATM, profile: &Arc<ATMProfile>, ack: &str) {
+    if let Err(e) = atm.delete_message_background(profile, ack).await {
+        tracing::warn!(
+            error = %e,
+            frame = %ack,
+            "could not release a handled TSP frame — it will be redelivered",
+        );
+    }
 }
 
 /// Fallback when the `tsp` feature is off: an inbound TSP frame can't be
