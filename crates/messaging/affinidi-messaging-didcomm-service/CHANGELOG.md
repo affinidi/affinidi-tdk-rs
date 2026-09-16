@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (0.10.0) — `trust-tasks-rs` 0.21
+
+Dependency move only; no source change. Minor because the handler traits carry
+`trust_tasks_rs` types.
+
 ## Unreleased (0.9.0) — TSP Rev 3 control messages
 
 - **Handles TSP control messages.** The service had no relationship lifecycle at

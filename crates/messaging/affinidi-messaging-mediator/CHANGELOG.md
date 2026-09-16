@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (0.26.0) — `trust-tasks-rs` 0.21
+
+Dependency move only; no source change here. Minor for the same reason as
+`affinidi-messaging-sdk` 0.26.0 — `trust_tasks_rs` types reach this crate's
+public surface, so two versions in one graph is a type error rather than a
+duplicate.
+
 ## Unreleased (0.25.0) — TSP Rev 3: a uniform delivery refusal, and no DIDComm bridge
 
 **Breaking, deliberately.**

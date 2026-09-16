@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.9.0) — `trust-tasks-rs` 0.21
+
+Dependency move only. Minor rather than patch because this fixture hands
+`trust_tasks_rs` types to the tests that use it, so it cannot straddle two
+versions.
+
 ## Unreleased (0.8.0) — relationships for Rev 3's gating
 
 Rev 3 gates application messages on a relationship, so a test that just sends
