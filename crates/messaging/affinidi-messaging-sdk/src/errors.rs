@@ -34,6 +34,14 @@ pub enum ATMError {
     ConfigError(String),
     #[error("Authentication error: {0}")]
     AuthenticationError(String),
+    /// Authenticating to the mediator failed. The [`DIDAuthError`] is kept
+    /// whole — an HTTP status (a `429` and who sent it) is reachable through
+    /// [`ATMError::http_status`] / [`ATMError::is_rate_limited`], through the
+    /// retry loop's [`DIDAuthError::RetriesExhausted`] too. Every
+    /// `DIDAuthError` converts to this variant; boxed so it does not grow every
+    /// `Result<_, ATMError>`.
+    #[error("Authentication error: {0}")]
+    DIDAuth(Box<DIDAuthError>),
     #[error("ACL Denied error: {0}")]
     ACLDenied(String),
     #[error("ACL config error: {0}")]
@@ -59,10 +67,12 @@ pub enum ATMError {
 }
 
 impl ATMError {
-    /// The HTTP status error, when this failure is one.
+    /// The HTTP status error, when this failure is one — including an
+    /// authentication that failed on one ([`ATMError::DIDAuth`]).
     pub fn http_status(&self) -> Option<&HttpStatusError> {
         match self {
             ATMError::HttpStatus(err) => Some(err),
+            ATMError::DIDAuth(err) => err.http_status(),
             _ => None,
         }
     }
@@ -105,182 +115,45 @@ impl ATMError {
 
 /// An HTTP request the SDK made was answered with a non-success status.
 ///
-/// For a `429` the refusing service is named by the
-/// [`RATE_LIMIT_SOURCE_HEADER`](Self::RATE_LIMIT_SOURCE_HEADER) response header
-/// (`mediator`, `vta`, `vtc`, `did-host`) and the wait by `Retry-After`. A `429`
-/// without the header is **unattributed**: a proxy or load balancer in front of
-/// the service, or a service too old to label its limits. `rate_limit_source`
-/// is then `None`, and nothing here guesses.
-///
-/// `#[non_exhaustive]` so fields can be added without a breaking release. Build
-/// one with [`HttpStatusError::new`] or [`HttpStatusError::from_parts`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct HttpStatusError {
-    /// What the SDK was doing, e.g. `"send DIDComm message"`.
-    pub context: String,
-    /// The URL that was requested, when known.
-    pub url: Option<String>,
-    /// The HTTP status of the response.
-    pub status: u16,
-    /// The service whose limiter refused the request, from the
-    /// `x-rate-limit-source` header (or, failing that, the `limiter` field of a
-    /// `rate_limited` JSON body).
-    pub rate_limit_source: Option<String>,
-    /// Seconds to wait before retrying, from a delta-seconds `Retry-After`
-    /// header (or, failing that, `retryAfterSecs` in a `rate_limited` JSON
-    /// body). An HTTP-date `Retry-After` is not parsed and leaves this `None`.
-    pub retry_after_secs: Option<u64>,
-    /// The response body, as received.
-    pub body: String,
-}
+/// Defined in `affinidi-messaging-core` so that `affinidi-did-authentication`
+/// ([`DIDAuthError::HttpStatus`]) and `MessagingError::HttpStatus` carry the
+/// same type; re-exported here, at the path it was introduced under.
+pub use affinidi_messaging_core::HttpStatusError;
 
-impl HttpStatusError {
-    /// HTTP 429 Too Many Requests.
-    pub const TOO_MANY_REQUESTS: u16 = 429;
-    /// Response header naming the service whose rate limiter refused a request.
-    pub const RATE_LIMIT_SOURCE_HEADER: &'static str = "x-rate-limit-source";
-
-    /// A status error with nothing else recorded.
-    pub fn new(context: impl Into<String>, status: u16) -> Self {
-        Self {
-            context: context.into(),
-            url: None,
-            status,
-            rate_limit_source: None,
-            retry_after_secs: None,
-            body: String::new(),
-        }
-    }
-
-    /// Build from what an HTTP response carried: its status, the raw
-    /// `x-rate-limit-source` and `Retry-After` header values, and its body.
-    ///
-    /// Headers win. The body's `limiter` and `retryAfterSecs` are read only
-    /// when the body is the rate-limit contract's JSON (`"error":
-    /// "rate_limited"`), so an intermediary that strips headers but passes the
-    /// body through still attributes the refusal, and an arbitrary JSON body
-    /// cannot.
-    pub fn from_parts(
-        context: impl Into<String>,
-        status: u16,
-        rate_limit_source: Option<&str>,
-        retry_after: Option<&str>,
-        body: impl Into<String>,
-    ) -> Self {
-        let body = body.into();
-        let contract = serde_json::from_str::<serde_json::Value>(&body)
-            .ok()
-            .filter(|value| value.get("error").and_then(|e| e.as_str()) == Some("rate_limited"));
-
-        let rate_limit_source = rate_limit_source
-            .map(str::trim)
-            .filter(|source| !source.is_empty())
+/// Read an HTTP response the SDK received: its body on success, an
+/// [`ATMError::HttpStatus`] otherwise.
+pub(crate) async fn check_response(
+    context: &str,
+    response: reqwest::Response,
+) -> Result<String, ATMError> {
+    let status = response.status();
+    let url = response.url().to_string();
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
             .map(str::to_owned)
-            .or_else(|| {
-                contract
-                    .as_ref()
-                    .and_then(|c| c.get("limiter")?.as_str().map(str::to_owned))
-            });
-        let retry_after_secs = retry_after
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .or_else(|| {
-                contract
-                    .as_ref()
-                    .and_then(|c| c.get("retryAfterSecs")?.as_u64())
-            });
-
-        Self {
-            context: context.into(),
-            url: None,
-            status,
-            rate_limit_source,
-            retry_after_secs,
+    };
+    let source = header(HttpStatusError::RATE_LIMIT_SOURCE_HEADER);
+    let retry_after = header(reqwest::header::RETRY_AFTER.as_str());
+    let body = response.text().await.map_err(|e| {
+        ATMError::TransportError(format!("{context}: couldn't read response body: {e:?}"))
+    })?;
+    if status.is_success() {
+        return Ok(body);
+    }
+    Err(ATMError::from(
+        HttpStatusError::from_parts(
+            context,
+            status.as_u16(),
+            source.as_deref(),
+            retry_after.as_deref(),
             body,
-        }
-    }
-
-    /// Record the URL that was requested.
-    pub fn with_url(mut self, url: impl Into<String>) -> Self {
-        self.url = Some(url.into());
-        self
-    }
-
-    /// A rate limiter refused the request (HTTP 429). Retrying after
-    /// [`Self::retry_after_secs`] may succeed; nothing about the request itself
-    /// was wrong.
-    pub fn is_rate_limited(&self) -> bool {
-        self.status == Self::TOO_MANY_REQUESTS
-    }
-
-    /// `Retry-After` as a [`Duration`](std::time::Duration), when one was given.
-    pub fn retry_after(&self) -> Option<std::time::Duration> {
-        self.retry_after_secs.map(std::time::Duration::from_secs)
-    }
-
-    /// Read an HTTP response the SDK received: its body on success, an
-    /// [`ATMError::HttpStatus`] otherwise.
-    pub(crate) async fn check_response(
-        context: &str,
-        response: reqwest::Response,
-    ) -> Result<String, ATMError> {
-        let status = response.status();
-        let url = response.url().to_string();
-        let header = |name: &str| {
-            response
-                .headers()
-                .get(name)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_owned)
-        };
-        let source = header(Self::RATE_LIMIT_SOURCE_HEADER);
-        let retry_after = header(reqwest::header::RETRY_AFTER.as_str());
-        let body = response.text().await.map_err(|e| {
-            ATMError::TransportError(format!("{context}: couldn't read response body: {e:?}"))
-        })?;
-        if status.is_success() {
-            return Ok(body);
-        }
-        Err(ATMError::from(
-            Self::from_parts(
-                context,
-                status.as_u16(),
-                source.as_deref(),
-                retry_after.as_deref(),
-                body,
-            )
-            .with_url(url),
-        ))
-    }
+        )
+        .with_url(url),
+    ))
 }
-
-impl std::fmt::Display for HttpStatusError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: ", self.context)?;
-        if self.is_rate_limited() {
-            match &self.rate_limit_source {
-                Some(source) => write!(f, "rate-limited by {source} (HTTP 429")?,
-                None => write!(
-                    f,
-                    "rate-limited by an unattributed limiter, no {} header (HTTP 429",
-                    Self::RATE_LIMIT_SOURCE_HEADER
-                )?,
-            }
-            if let Some(secs) = self.retry_after_secs {
-                write!(f, ", retry after {secs}s")?;
-            }
-            write!(f, ")")?;
-        } else {
-            write!(f, "status({})", self.status)?;
-        }
-        if let Some(url) = &self.url {
-            write!(f, ", url({url})")?;
-        }
-        write!(f, ", body({})", self.body)
-    }
-}
-
-impl std::error::Error for HttpStatusError {}
 
 impl From<HttpStatusError> for ATMError {
     fn from(err: HttpStatusError) -> Self {
@@ -302,7 +175,7 @@ impl From<TDKError> for ATMError {
 
 impl From<DIDAuthError> for ATMError {
     fn from(err: DIDAuthError) -> Self {
-        ATMError::AuthenticationError(err.to_string())
+        ATMError::DIDAuth(Box::new(err))
     }
 }
 
@@ -430,7 +303,8 @@ mod tests {
         );
         assert!(err.is_rate_limited());
         assert_eq!(err.rate_limit_source, None);
-        assert_eq!(err.retry_after_secs, None);
+        // An HTTP-date `Retry-After` is parsed; this one is long past, so "now".
+        assert_eq!(err.retry_after_secs, Some(0));
         assert!(err.to_string().contains("unattributed"), "{err}");
     }
 
@@ -496,7 +370,7 @@ mod tests {
         )
         .await;
         let response = reqwest::Client::new().post(&url).send().await.unwrap();
-        let err = HttpStatusError::check_response("send DIDComm message", response)
+        let err = check_response("send DIDComm message", response)
             .await
             .unwrap_err();
         assert!(err.is_rate_limited());
@@ -512,12 +386,7 @@ mod tests {
         let url =
             serve_once("HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok").await;
         let response = reqwest::Client::new().post(&url).send().await.unwrap();
-        assert_eq!(
-            HttpStatusError::check_response("fetch", response)
-                .await
-                .unwrap(),
-            "ok"
-        );
+        assert_eq!(check_response("fetch", response).await.unwrap(), "ok");
     }
 
     #[test]

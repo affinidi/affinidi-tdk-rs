@@ -1,6 +1,6 @@
 use crate::{
     ATM,
-    errors::{ATMError, HttpStatusError},
+    errors::{ATMError, check_response},
     messages::SuccessResponse,
     profiles::ATMProfile,
 };
@@ -37,7 +37,7 @@ impl ATM {
                 })?;
 
             debug!("API response: status({})", res.status());
-            let body = HttpStatusError::check_response("get mediator well-known DID", res).await?;
+            let body = check_response("get mediator well-known DID", res).await?;
 
             let body = serde_json::from_str::<SuccessResponse<String>>(&body).map_err(|e| {
                 ATMError::TransportError(format!("Couldn't parse well-known DID response: {e}"))

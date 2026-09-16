@@ -1,5 +1,32 @@
 # Affinidi Messaging Core Changelog
 
+## Unreleased
+
+### 0.1.7 — `HttpStatusError`, and `MessagingError::HttpStatus`
+
+A transport's HTTP failure reached a `MessagingService` caller as
+`MessagingError::Transport(String)`, so a mediator `429` — and which service
+sent it, and when to retry — was text.
+
+- **Added `HttpStatusError`** (`affinidi_messaging_core::HttpStatusError`),
+  moved here from `affinidi-messaging-sdk` 0.26.2 unchanged in shape
+  (`#[non_exhaustive]`; `context`, `url`, `status`, `rate_limit_source`,
+  `retry_after_secs`, `body`; `new` / `from_parts` / `with_url` /
+  `is_rate_limited` / `retry_after`). It lives in this dependency-light crate so
+  `affinidi-did-authentication`, the SDK and `MessagingError` share one type —
+  the SDK depends on both of the others, so neither could depend on it. The SDK
+  re-exports it at its old path.
+- **Added `HttpStatusError::with_context`.**
+- **`Retry-After` as an HTTP-date is now parsed** (RFC 9110 §10.2.3), into
+  seconds from now; a date already past is `0`. Previously only delta-seconds
+  were read and an HTTP-date left `retry_after_secs` `None`.
+- **Added `MessagingError::HttpStatus(Box<HttpStatusError>)`**, with
+  `MessagingError::http_status()` / `is_rate_limited()` and
+  `From<HttpStatusError>`. Additive: `MessagingError` is `#[non_exhaustive]`.
+  Every other transport failure is still `MessagingError::Transport`.
+- New dependencies: `serde_json` (the rate-limit contract body) and `httpdate`
+  (already in any graph that makes an HTTP call, via hyper).
+
 ## 8th August 2026
 
 ### 0.1.6 — `Protocol::DIDCommV1`, and `Protocol` is now `#[non_exhaustive]`

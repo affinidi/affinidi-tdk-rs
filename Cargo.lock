@@ -148,12 +148,13 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-authentication"
-version = "0.3.12"
+version = "0.3.13"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-encoding",
+ "affinidi-messaging-core",
  "affinidi-messaging-didcomm",
  "affinidi-secrets-resolver",
  "base64 0.23.1",
@@ -473,11 +474,13 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "futures-util",
+ "httpdate",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
  "url",
@@ -819,7 +822,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.26.2"
+version = "0.26.3"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",

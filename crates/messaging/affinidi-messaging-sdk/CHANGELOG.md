@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased (0.26.3) — an authentication or transport-adapter `429` stays typed
+
+0.26.2 typed the SDK's own HTTP calls, but two paths still flattened a status
+to text: authenticating to the mediator (`DIDAuthError` became
+`ATMError::AuthenticationError(String)`) and `DidCommTransport`, which wrapped
+every ATM error as `MessagingError::Transport(String)` on its way through
+`MessagingService`.
+
+### Added
+
+- `ATMError::DIDAuth(Box<DIDAuthError>)`. Its Display is the same
+  `Authentication error: …` as `AuthenticationError`.
+- `ATMError::http_status()` / `is_rate_limited()` now also see an HTTP status
+  inside `ATMError::DIDAuth` — including behind the retry loop's
+  `DIDAuthError::RetriesExhausted`.
+
+### Changed
+
+- `HttpStatusError` moved to `affinidi-messaging-core` 0.1.7 and is re-exported
+  here as `affinidi_messaging_sdk::errors::HttpStatusError`; same fields and
+  methods. It now parses an HTTP-date `Retry-After` too (a past date is `0`).
+- **BEHAVIOUR:** `From<DIDAuthError> for ATMError` produces
+  `ATMError::DIDAuth`, not `ATMError::AuthenticationError(String)`. Nothing in
+  this workspace matched the old variant for these errors;
+  `AuthenticationError(String)` itself remains.
+- **BEHAVIOUR:** `TspAuthHandler` turns a non-success `/challenge` or
+  `/tsp/authenticate` response into `DIDAuthError::HttpStatus` (was
+  `DIDAuthError::Authentication(String)`).
+- **BEHAVIOUR:** `DidCommTransport::{send, ack, outbox_message_ids}` return
+  `MessagingError::HttpStatus` when the underlying `ATMError` carries an HTTP
+  status (a send, or the authentication in front of it); its `context` is
+  prefixed with what the adapter was doing (e.g. `didcomm forward+send failed:
+  send DIDComm message`). Any other failure is still
+  `MessagingError::Transport`.
+- Requires `affinidi-messaging-core` 0.1.7 and `affinidi-did-authentication`
+  0.3.13.
+
 ## Unreleased (0.26.2) — an HTTP status is data, and a `429` says who sent it
 
 A non-success HTTP response used to reach the caller as
