@@ -1,6 +1,30 @@
 # Changelog
 
 ## Unreleased (0.26.3) — an authentication or transport-adapter `429` stays typed
+### 0.26.4 — inbound TSP control messages reach the consumer
+
+`tsp_to_inbound` recorded a relationship control message and then dropped it,
+because `Inbound` had no way to carry a message kind. It now surfaces it with
+`InboundKind::RelationshipControl`, so a consumer can apply its own
+authorization policy — accept, refuse, or ignore — instead of the transport
+deciding by silence.
+
+Recording still happens first and is unconditional: it is what admits the
+application messages that follow (§7.2.2 with §3.6), and it grants nothing.
+
+A recording **failure** is still not surfaced. A message a protocol rule
+refused — a cancellation for a relationship we do not hold, or the losing side
+of the §7.2.3 invite race — has no relationship for a consumer to decide about,
+and answering it would reply to a message TSP has already discarded.
+
+**Behavioural change (R3.6), shipped as a patch.** A consumer subscribed to the
+inbound stream now sees frames it never saw before: `Protocol::TSP` messages
+with an empty payload and `kind = RelationshipControl`. A consumer that routes
+on `kind` (or on `is_relationship_control()`) is unaffected; one that assumes
+every TSP frame is a binding envelope will fail to parse it and should skip it,
+which is what `vta-sdk`'s TSP pump already does by design. The patch level is
+forced by the same redirect constraint as `affinidi-messaging-core` 0.1.8 —
+`vta-sdk` 0.40.0 requires `^0.26`.
 
 0.26.2 typed the SDK's own HTTP calls, but two paths still flattened a status
 to text: authenticating to the mediator (`DIDAuthError` became
