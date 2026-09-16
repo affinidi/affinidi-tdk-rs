@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Test: the Appendix A vectors re-pack byte for byte.** A new non-default
+  `test-vectors` feature adds `message::direct::insecure_deterministic`
+  (hidden from the docs): `pack_insecure_deterministic` takes the vector's
+  ephemeral material — `ikmE` for HPKE-Base, via RFC 9180 `DeriveKeyPair`, or
+  `skEm` for the sealed box — plus an `XPAD` nonce and a NULL ESSR sender
+  field, which the vectors use and every public packing function still never
+  writes. Reusing an ephemeral key destroys confidentiality, so the module is
+  for regenerating vectors and nothing else. This crate's tests enable the
+  feature through a dev-dependency on itself, and every vector except the
+  post-quantum one, which publishes no ephemeral material, now re-packs to
+  the published bytes.
 - **Test: the Appendix A vectors are the merged specification's.**
   `tests/vectors/rev3.json` moves from the pre-merge `YTSP-ABA` vectors to
   those of trustoverip/tswg-tsp-specification@`f5b8668`, at `YTSP-AAC`, which

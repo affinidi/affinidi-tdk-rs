@@ -26,6 +26,11 @@ messaging-core = ["dep:affinidi-messaging-core", "dep:async-trait"]
 ## provisional (CESR issue #14) and the VID model does not yet carry keys of
 ## these sizes; see `docs/tsp/post-quantum.md`.
 pq = ["dep:hpke", "dep:ml-dsa"]
+## Byte-reproducible packing with caller-fixed ephemeral keys and nonces, to
+## regenerate the specification's Appendix A vectors. Destroys confidentiality
+## if used for a real message — see `message::direct::insecure_deterministic`.
+## Never enable it outside tests; this crate enables it only for its own.
+test-vectors = []
 
 [dependencies]
 # Affinidi crates
@@ -75,6 +80,10 @@ tokio = { workspace = true, features = ["sync", "macros", "rt-multi-thread"], op
 async-trait = { version = "0.1", optional = true }
 
 [dev-dependencies]
+# Turns `test-vectors` on for this crate's own tests only, so the plain
+# `cargo test -p affinidi-tsp` runs the byte-exact vector re-packs. Dev
+# dependencies never reach a dependent's build.
+affinidi-tsp = { path = ".", default-features = false, features = ["test-vectors"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 hex = "0.4"
 
