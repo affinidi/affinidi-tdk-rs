@@ -102,11 +102,7 @@ pub(crate) async fn fetch_webvh_log(
 /// Split out from [`fetch_webvh_log`] so the caching policy can be tested
 /// without network access — the policy, not the HTTP call, is what decides how
 /// much load reaches the DID's host.
-async fn cached_webvh_log<F, Fut>(
-    cache: Option<&WebvhLogCache>,
-    did: &str,
-    fetch: F,
-) -> WebvhLogs
+async fn cached_webvh_log<F, Fut>(cache: Option<&WebvhLogCache>, did: &str, fetch: F) -> WebvhLogs
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = WebvhLogs>,
@@ -288,9 +284,17 @@ mod tests {
 
         for _ in 0..5 {
             let logs = cached_webvh_log(Some(&cache), did, fetch).await;
-            assert_eq!(logs.0.as_deref(), Some("log"), "cached value is served back");
+            assert_eq!(
+                logs.0.as_deref(),
+                Some("log"),
+                "cached value is served back"
+            );
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "only the first call fetches");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "only the first call fetches"
+        );
     }
 
     /// A failed fetch must not be cached: pinning a transient upstream error
@@ -307,7 +311,11 @@ mod tests {
         for _ in 0..3 {
             cached_webvh_log(Some(&cache), "did:webvh:scid:example.com", fetch).await;
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 3, "every call retries upstream");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "every call retries upstream"
+        );
     }
 
     /// `None` disables caching entirely, preserving the previous behaviour for
