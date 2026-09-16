@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Fix: `MAX_HOPS` is 64 (was 16).** The specification sets no maximum, and
+  17-hop routes packed by the ToIP reference, Go and Dart implementations were
+  refused on decode. The same bound applies when packing a route and when
+  decoding any hop list or reply path.
 - **Fix: an XSCS/XCTL body holding anything but exactly one Bytes primitive is
   refused.** It was read as its first primitive, silently dropping the rest of
   the `-A##` stream, and data after the stream was ignored. The body is now
