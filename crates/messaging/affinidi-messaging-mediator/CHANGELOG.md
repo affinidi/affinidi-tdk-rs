@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased (0.26.1) — a `429` says it came from the mediator
+
+The per-IP limiter's refusals now carry the ecosystem's rate-limit attribution
+contract (`affinidi-rate-limit` 0.1.1):
+
+- `x-rate-limit-source: mediator`;
+- `Retry-After: <seconds>`, as before;
+- a JSON body `{"error":"rate_limited","limiter":"mediator","message":"…",
+  "retryAfterSecs":N}` in place of the old plain-text body.
+
+The limiter wraps every application route: REST, the websocket upgrade (`/ws`)
+and DIDComm/TSP ingress (`/inbound`). So every `429` the mediator produces is
+labelled. The health, readiness, liveness, admin-status and metrics routes are
+outside it, as before. A client can now tell the mediator's limit from a VTA's,
+a DID host's or a proxy's. `affinidi-messaging-sdk` 0.26.2 reads it as
+`ATMError::HttpStatus` with `is_rate_limited()`.
+
+**BEHAVIOUR:** a `429` body is JSON, not text. A client showing the raw body
+will show the JSON.
+
+### Known gaps (unchanged by this release)
+
+- **`did_rate_limit_per_second` / `did_rate_limit_burst` enforce nothing.**
+  `DidRateLimiter` is built, garbage-collected and logged as "Per-DID rate
+  limiting enabled" when configured, but nothing calls `check`. No request and
+  no websocket frame is ever refused per DID. So there is no in-session refusal
+  to label, and no problem-report code for one. DIDComm's problem-report
+  registry has no rate-limit descriptor, and none is invented here. Enforcing it
+  needs a refusal signal on an established websocket, and that needs a spec
+  first.
+- `max_websocket_connections_per_did` is a concurrency cap, not a rate limit.
+  It closes the socket with `POLICY` ("per-DID connection limit reached"), as
+  before. The queue limits (`limits.queue.sender` / `limits.queue.recipient`)
+  still answer `503`.
+
 ## Unreleased (0.26.0) — `trust-tasks-rs` 0.21
 
 Dependency move only; no source change here. Minor for the same reason as

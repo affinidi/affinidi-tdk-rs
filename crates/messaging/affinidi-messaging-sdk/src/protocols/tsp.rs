@@ -1906,12 +1906,10 @@ impl TspOps<'_> {
             .await
             .map_err(|e| ATMError::TransportError(format!("Could not send TSP message: {e:?}")))?;
 
-        let status = res.status();
-        if !status.is_success() {
-            let body = res.text().await.unwrap_or_default();
-            return Err(ATMError::TransportError(format!(
-                "Mediator rejected TSP message: status({status}), body({body})"
-            )));
+        // An accepted message is not re-read: a body that fails to arrive after a
+        // 2xx must not turn a delivered message into an error the caller retries.
+        if !res.status().is_success() {
+            crate::errors::HttpStatusError::check_response("send TSP message", res).await?;
         }
         Ok(())
     }

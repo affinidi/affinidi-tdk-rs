@@ -51,6 +51,25 @@ let limiter = RateLimiterState::new(20, 50)
     });
 ```
 
+## Saying who refused
+
+A `429` can come from any hop between a client and the service it called, and
+each hop is tuned somewhere else. Name the service and its refusals say so:
+
+```rust
+let limiter = RateLimiterState::new(20, 50).with_source("mediator");
+```
+
+A refusal then carries `x-rate-limit-source: mediator`, `Retry-After: <seconds>`
+and a JSON body:
+
+```json
+{"error":"rate_limited","limiter":"mediator","message":"Rate limit exceeded. Please try again later.","retryAfterSecs":4}
+```
+
+Use the names clients match on: `mediator`, `vta`, `vtc`, `did-host`. An unnamed
+limiter sends a plain-text `429` with no source header.
+
 `Retry-After` is set from `governor`'s own estimate of when the next token
 arrives, rounded up to whole seconds with a floor of 1 — a `Retry-After: 0`
 would invite an immediate retry guaranteed to fail.

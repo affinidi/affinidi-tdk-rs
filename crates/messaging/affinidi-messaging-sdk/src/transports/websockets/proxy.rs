@@ -7,7 +7,7 @@
 
 use base64::Engine;
 
-use crate::errors::ATMError;
+use crate::errors::{ATMError, HttpStatusError};
 use std::env;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -16,8 +16,9 @@ use tokio::{
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, client_async_tls_with_config, connect_async,
     tungstenite::{
+        Error as WsError,
         client::IntoClientRequest,
-        http::{Response, Uri},
+        http::{Response, Uri, header::RETRY_AFTER},
     },
 };
 use tracing::debug;
@@ -209,23 +210,79 @@ where
         // (from the `rustls-tls-native-roots` feature) to handle TLS for wss:// URIs.
         let (ws, response) = client_async_tls_with_config(request, stream, None, None)
             .await
-            .map_err(|e| {
-                ATMError::TransportError(format!("WebSocket connection via proxy failed: {e}"))
-            })?;
+            .map_err(|e| upgrade_error("WebSocket connection via proxy", e))?;
 
         Ok((ws, response))
     } else {
         let (ws, response) = connect_async(request)
             .await
-            .map_err(|e| ATMError::TransportError(format!("WebSocket connection failed: {e}")))?;
+            .map_err(|e| upgrade_error("WebSocket connection", e))?;
 
         Ok((ws, response))
+    }
+}
+
+/// Map a failed websocket handshake to an [`ATMError`].
+///
+/// A server that answered the upgrade with an HTTP status — the mediator's
+/// per-IP limiter refusing it with a `429`, say — becomes
+/// [`ATMError::HttpStatus`], carrying the status, `x-rate-limit-source` and
+/// `Retry-After`. Anything else stays a [`ATMError::TransportError`].
+fn upgrade_error(context: &str, err: WsError) -> ATMError {
+    match err {
+        WsError::Http(response) => {
+            let header = |name: &str| {
+                response
+                    .headers()
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+            };
+            let body = response
+                .body()
+                .as_deref()
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+                .unwrap_or_default();
+            ATMError::from(HttpStatusError::from_parts(
+                format!("{context} refused"),
+                response.status().as_u16(),
+                header(HttpStatusError::RATE_LIMIT_SOURCE_HEADER),
+                header(RETRY_AFTER.as_str()),
+                body,
+            ))
+        }
+        other => ATMError::TransportError(format!("{context} failed: {other}")),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A refused upgrade keeps its status and attribution instead of becoming
+    /// a string.
+    #[test]
+    fn refused_upgrade_is_typed() {
+        let response = Response::builder()
+            .status(429)
+            .header("x-rate-limit-source", "mediator")
+            .header("retry-after", "3")
+            .body(Some(
+                br#"{"error":"rate_limited","limiter":"mediator","retryAfterSecs":3}"#.to_vec(),
+            ))
+            .unwrap();
+        let err = upgrade_error("WebSocket connection", WsError::Http(Box::new(response)));
+        assert!(err.is_rate_limited());
+        let status = err.http_status().unwrap();
+        assert_eq!(status.rate_limit_source.as_deref(), Some("mediator"));
+        assert_eq!(status.retry_after_secs, Some(3));
+    }
+
+    #[test]
+    fn other_handshake_failures_stay_transport_errors() {
+        let err = upgrade_error("WebSocket connection", WsError::ConnectionClosed);
+        assert!(matches!(err, ATMError::TransportError(_)));
+        assert!(!err.is_rate_limited());
+    }
     use std::env;
     use std::sync::Mutex;
 

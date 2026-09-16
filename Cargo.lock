@@ -527,7 +527,7 @@ dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-core",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.26.1",
+ "affinidi-messaging-sdk 0.26.2",
  "affinidi-messaging-test-mediator",
  "affinidi-secrets-resolver",
  "affinidi-tdk 0.16.0",
@@ -581,7 +581,7 @@ dependencies = [
  "affinidi-crypto",
  "affinidi-messaging-core",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.26.1",
+ "affinidi-messaging-sdk 0.26.2",
  "affinidi-tdk 0.16.0",
  "affinidi-tsp",
  "ahash",
@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -612,7 +612,7 @@ dependencies = [
  "affinidi-messaging-didcomm-v1",
  "affinidi-messaging-mediator-common 0.16.0",
  "affinidi-messaging-mediator-config",
- "affinidi-messaging-sdk 0.26.1",
+ "affinidi-messaging-sdk 0.26.2",
  "affinidi-rate-limit",
  "affinidi-secrets-resolver",
  "affinidi-task-utils",
@@ -755,7 +755,7 @@ dependencies = [
 name = "affinidi-messaging-mediator-monitor"
 version = "0.1.1"
 dependencies = [
- "affinidi-messaging-sdk 0.26.1",
+ "affinidi-messaging-sdk 0.26.2",
  "affinidi-secrets-resolver",
  "affinidi-tdk-common",
  "anyhow",
@@ -865,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.26.1"
+version = "0.26.2"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",
@@ -913,7 +913,7 @@ dependencies = [
  "affinidi-messaging-didcomm-v1",
  "affinidi-messaging-mediator",
  "affinidi-messaging-mediator-common 0.16.0",
- "affinidi-messaging-sdk 0.26.1",
+ "affinidi-messaging-sdk 0.26.2",
  "affinidi-secrets-resolver",
  "affinidi-tdk 0.16.0",
  "affinidi-tsp",
@@ -943,7 +943,7 @@ version = "0.12.7"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.26.1",
+ "affinidi-messaging-sdk 0.26.2",
  "affinidi-tdk 0.16.0",
  "ahash",
  "anyhow",
@@ -1031,11 +1031,12 @@ dependencies = [
 
 [[package]]
 name = "affinidi-rate-limit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "governor",
  "http 1.5.0",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tower",
@@ -1182,7 +1183,7 @@ dependencies = [
  "affinidi-mdoc",
  "affinidi-meeting-place",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.26.1",
+ "affinidi-messaging-sdk 0.26.2",
  "affinidi-oid4vc-core",
  "affinidi-openid4vci",
  "affinidi-openid4vp",

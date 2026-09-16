@@ -3,7 +3,10 @@ use std::sync::Arc;
 use tracing::{Instrument, Level, debug, span};
 
 use crate::{
-    ATM, delete_handler::DeletionHandlerCommands, errors::ATMError, messages::SuccessResponse,
+    ATM,
+    delete_handler::DeletionHandlerCommands,
+    errors::{ATMError, HttpStatusError},
+    messages::SuccessResponse,
     profiles::ATMProfile,
 };
 
@@ -93,19 +96,8 @@ impl ATM {
                 ATMError::TransportError(format!("Could not send delete_messages request: {e:?}"))
             })?;
 
-        let status = res.status();
-        debug!("API response: status({})", status);
-
-        let body = res
-            .text()
-            .await
-            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))?;
-
-        if !status.is_success() {
-            return Err(ATMError::TransportError(format!(
-                "Status not successful. status({status}), response({body})"
-            )));
-        }
+        debug!("API response: status({})", res.status());
+        let body = HttpStatusError::check_response("delete messages", res).await?;
 
         let body = serde_json::from_str::<SuccessResponse<DeleteMessageResponse>>(&body)
             .map_err(|e| {

@@ -1,5 +1,78 @@
 # Changelog
 
+## Unreleased (0.26.2) — an HTTP status is data, and a `429` says who sent it
+
+A non-success HTTP response used to reach the caller as
+`ATMError::TransportError(String)`, the status buried in text. A caller could
+not tell the mediator rate-limiting it from a proxy doing so, or either from a
+mediator fault, without parsing the message.
+
+### Added
+
+- `ATMError::HttpStatus(Box<HttpStatusError>)` (boxed so every
+  `Result<_, ATMError>` does not grow). `HttpStatusError` is
+  `#[non_exhaustive]` and carries `context`, `url`, `status`,
+  `rate_limit_source` (the `x-rate-limit-source` header), `retry_after_secs`
+  (a delta-seconds `Retry-After`) and `body`. Build one with `new` /
+  `from_parts` / `with_url`.
+- `ATMError::is_rate_limited()`, `ATMError::http_status()`,
+  `HttpStatusError::is_rate_limited()` and `HttpStatusError::retry_after()`.
+
+  ```rust
+  match atm.send_message(&profile, &packed, &msg_id, false, false).await {
+      Err(err) if err.is_rate_limited() => {
+          let status = err.http_status().unwrap();
+          // status.rate_limit_source: Some("mediator"), or None when a proxy
+          // (or a mediator older than 0.26.1) refused without labelling it.
+          // status.retry_after_secs: how long to wait.
+      }
+      _ => {}
+  }
+  ```
+
+  If the headers are missing but the body is the contract's
+  `{"error":"rate_limited",…}`, its `limiter` and `retryAfterSecs` are used.
+  No other body is read for attribution.
+
+### Changed
+
+- **BEHAVIOUR:** these failures are now `ATMError::HttpStatus` instead of
+  `ATMError::TransportError`:
+  - DIDComm send (`POST /inbound`) and TSP send (`TspOps::send_raw`);
+  - the websocket upgrade, when the mediator answers it with an HTTP status;
+  - `list_messages`, `fetch_messages`, `get_messages`, `delete_messages`;
+  - OOB invitation create / retrieve / delete, and the mediator's
+    `/.well-known/did`.
+
+  A `match` on `TransportError` stops matching these. `ATMError` is
+  `#[non_exhaustive]`, so nothing stops compiling; patch bump per ADR 0003.
+  The text still starts `Transport (HTTP(S)) error:` but otherwise differs,
+  e.g. `send DIDComm message: rate-limited by mediator (HTTP 429, retry after
+  4s), url(…), body(…)`.
+- The websocket reconnect waits at least as long as a refused upgrade's
+  `Retry-After` asked (within the existing 60s cap). A shorter wait is a
+  reconnect the limiter will refuse again.
+- `reqwest` is no longer optional. It was already in every build through
+  `affinidi-tdk-common`, whose client the SDK uses; the SDK now names its
+  response type. The `tsp` feature is unchanged.
+
+### Fixed
+
+- `well_known_did` parsed the body with `unwrap()` **before** checking the
+  status, so any non-JSON error body panicked. That included the mediator's
+  plain-text `429`. It now checks the status first and returns a parse failure
+  as an error.
+
+### Not typed yet
+
+- **Authentication.** `/authenticate/challenge`, `/authenticate` and
+  `/tsp/authenticate` go through `affinidi-did-authentication`, which reports a
+  status as `DIDAuthError::Authentication(String)`, which becomes
+  `ATMError::AuthenticationError(String)`. That crate's retry loop also swaps
+  the last error for "Maximum number of authentication retries reached", so the
+  status is lost twice. Fixing this needs a change to that crate.
+- **HTTP-date `Retry-After`** is not parsed. The mediator sends seconds.
+
 ## Unreleased (0.26.1) — inbound TSP control messages are recorded
 
 A **patch** rather than a minor: no signature moves, and nothing that worked

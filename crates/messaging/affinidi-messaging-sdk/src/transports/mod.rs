@@ -1,6 +1,6 @@
 use crate::{
     ATM,
-    errors::ATMError,
+    errors::{ATMError, HttpStatusError},
     messages::{GenericDataStruct, GetMessagesRequest, known::MessageType},
     profiles::ATMProfile,
 };
@@ -269,19 +269,8 @@ impl ATM {
             .await
             .map_err(|e| ATMError::TransportError(format!("Could not send message: {e:?}")))?;
 
-        let status = res.status();
-        debug!("API response: status({})", status);
-
-        let body = res
-            .text()
-            .await
-            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))?;
-
-        if !status.is_success() {
-            return Err(ATMError::TransportError(format!(
-                "API returned an error: status({status}), body({body})"
-            )));
-        }
+        debug!("API response: status({})", res.status());
+        let body = HttpStatusError::check_response("send DIDComm message", res).await?;
         debug!("body =\n{}", body);
         let http_response: Value = if return_response {
             serde_json::from_str(&body)

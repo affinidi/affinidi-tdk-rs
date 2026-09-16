@@ -18,6 +18,22 @@
  * Setting `per_second` to `0` disables limiting entirely, and the layer becomes
  * a pass-through.
  *
+ * # Saying who refused
+ *
+ * A `429` reaches an operator through several hops — a proxy, a mediator, a DID
+ * host, the service they were actually calling — and each is tuned in a
+ * different place. [`RateLimiterState::with_source`] names the service, and a
+ * refusal then carries the attribution contract a client can parse:
+ *
+ * - status `429 Too Many Requests`;
+ * - [`SOURCE_HEADER`]`: <source>` (`mediator`, `vta`, `vtc`, `did-host`, …);
+ * - `Retry-After: <seconds>`;
+ * - a JSON body
+ *   `{"error":"rate_limited","limiter":"<source>","message":"…","retryAfterSecs":N}`.
+ *
+ * Without a source the response is the unattributed plain-text `429` this crate
+ * has always sent.
+ *
  * # Two things that are easy to get wrong
  *
  * **The keyed state store must be swept.** `governor` never reclaims keys on its
@@ -38,6 +54,7 @@
 use std::{net::IpAddr, net::SocketAddr, num::NonZeroU32, sync::Arc, time::Duration};
 
 use axum::{
+    Json,
     body::Body,
     extract::ConnectInfo,
     response::{IntoResponse, Response},
@@ -47,7 +64,7 @@ use governor::{
     clock::{Clock, DefaultClock},
     state::keyed::DashMapStateStore,
 };
-use http::{HeaderValue, Request, StatusCode, header};
+use http::{HeaderName, HeaderValue, Request, StatusCode, header};
 use tokio_util::sync::CancellationToken;
 use tower::{Layer, Service};
 use tracing::{debug, warn};
@@ -60,6 +77,16 @@ pub type RefusalCallback = Arc<dyn Fn(&Refusal) + Send + Sync>;
 
 /// How often idle buckets are swept out of the keyed state store.
 pub const GC_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Response header naming the service whose limiter refused the request. Set on
+/// a `429` only when the limiter was given a name with
+/// [`RateLimiterState::with_source`].
+pub const SOURCE_HEADER: &str = "x-rate-limit-source";
+
+/// The `error` value of an attributed refusal's JSON body.
+pub const RATE_LIMITED_ERROR: &str = "rate_limited";
+
+const RATE_LIMITED_MESSAGE: &str = "Rate limit exceeded. Please try again later.";
 
 /// Why a request was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +104,7 @@ pub enum Refusal {
 pub struct RateLimiterState {
     limiter: Option<Arc<KeyedLimiter>>,
     on_refused: Option<RefusalCallback>,
+    source: Option<HeaderValue>,
 }
 
 impl std::fmt::Debug for RateLimiterState {
@@ -84,6 +112,7 @@ impl std::fmt::Debug for RateLimiterState {
         f.debug_struct("RateLimiterState")
             .field("enabled", &self.limiter.is_some())
             .field("has_callback", &self.on_refused.is_some())
+            .field("source", &self.source())
             .finish()
     }
 }
@@ -103,6 +132,7 @@ impl RateLimiterState {
                 Quota::per_second(per_second).allow_burst(burst),
             ))),
             on_refused: None,
+            source: None,
         }
     }
 
@@ -111,6 +141,7 @@ impl RateLimiterState {
         Self {
             limiter: None,
             on_refused: None,
+            source: None,
         }
     }
 
@@ -121,6 +152,28 @@ impl RateLimiterState {
     pub fn on_refused(mut self, f: impl Fn(&Refusal) + Send + Sync + 'static) -> Self {
         self.on_refused = Some(Arc::new(f));
         self
+    }
+
+    /// Name the service this limiter protects, so its refusals say who refused.
+    ///
+    /// A `429` then carries [`SOURCE_HEADER`] with this value and a JSON body
+    /// naming it as `limiter` (see the crate docs for the full contract). Use
+    /// the ecosystem's names — `mediator`, `vta`, `vtc`, `did-host` — which are
+    /// what clients match on.
+    ///
+    /// # Panics
+    ///
+    /// If `source` is not a valid header value (visible ASCII). It is a literal
+    /// naming the service, so this is a programming error that shows the first
+    /// time the service builds its limiter.
+    pub fn with_source(mut self, source: &'static str) -> Self {
+        self.source = Some(HeaderValue::from_static(source));
+        self
+    }
+
+    /// The name given with [`Self::with_source`], if any.
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_ref().and_then(|v| v.to_str().ok())
     }
 
     /// Is limiting active?
@@ -198,14 +251,27 @@ impl RateLimiterState {
         }
         match refusal {
             Refusal::RateLimited { retry_after_secs } => {
-                let mut response = (
-                    StatusCode::TOO_MANY_REQUESTS,
-                    "Rate limit exceeded. Please try again later.",
-                )
-                    .into_response();
-                if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
-                    response.headers_mut().insert(header::RETRY_AFTER, value);
+                let mut response = match self.source() {
+                    Some(limiter) => (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        Json(serde_json::json!({
+                            "error": RATE_LIMITED_ERROR,
+                            "limiter": limiter,
+                            "message": RATE_LIMITED_MESSAGE,
+                            "retryAfterSecs": retry_after_secs,
+                        })),
+                    )
+                        .into_response(),
+                    None => (StatusCode::TOO_MANY_REQUESTS, RATE_LIMITED_MESSAGE).into_response(),
+                };
+                if let Some(source) = &self.source {
+                    response
+                        .headers_mut()
+                        .insert(HeaderName::from_static(SOURCE_HEADER), source.clone());
                 }
+                response
+                    .headers_mut()
+                    .insert(header::RETRY_AFTER, HeaderValue::from(*retry_after_secs));
                 response
             }
             Refusal::NoClientIp => (
@@ -420,6 +486,95 @@ mod tests {
         let limiter = RateLimiterState::new(1, 1);
         let response = limiter.refuse(&Refusal::NoClientIp);
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    async fn body_json(response: Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// The attribution contract: a named limiter's `429` says who refused and
+    /// how long to wait, in the headers and in the body.
+    #[tokio::test]
+    async fn named_limiter_refusal_carries_the_attribution_contract() {
+        let limiter = RateLimiterState::new(1, 1).with_source("mediator");
+        assert_eq!(limiter.source(), Some("mediator"));
+        let response = limiter.refuse(&Refusal::RateLimited {
+            retry_after_secs: 4,
+        });
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers().get(SOURCE_HEADER).unwrap(), "mediator");
+        assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "4");
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        assert_eq!(
+            body_json(response).await,
+            serde_json::json!({
+                "error": "rate_limited",
+                "limiter": "mediator",
+                "message": "Rate limit exceeded. Please try again later.",
+                "retryAfterSecs": 4,
+            })
+        );
+    }
+
+    /// An unnamed limiter keeps the response it always sent. No source header:
+    /// claiming an attribution nobody configured would be a guess.
+    #[tokio::test]
+    async fn unnamed_limiter_refusal_is_unattributed() {
+        let limiter = RateLimiterState::new(1, 1);
+        assert_eq!(limiter.source(), None);
+        let response = limiter.refuse(&Refusal::RateLimited {
+            retry_after_secs: 2,
+        });
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().get(SOURCE_HEADER).is_none());
+        assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "2");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&bytes[..], RATE_LIMITED_MESSAGE.as_bytes());
+    }
+
+    /// Through the layer, as a service sees it: the second request from one IP
+    /// is refused with the contract, and an allowed request carries none of it.
+    #[tokio::test]
+    async fn layer_refusal_is_attributed_end_to_end() {
+        use tower::ServiceExt;
+
+        let app = axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(RateLimitLayer::new(
+                RateLimiterState::new(1, 1).with_source("mediator"),
+            ));
+        let request = || {
+            let mut request = Request::builder().uri("/").body(Body::empty()).unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 4000))));
+            request
+        };
+
+        let allowed = app.clone().oneshot(request()).await.unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        assert!(allowed.headers().get(SOURCE_HEADER).is_none());
+
+        let refused = app.oneshot(request()).await.unwrap();
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(refused.headers().get(SOURCE_HEADER).unwrap(), "mediator");
+        let retry_after: u64 = refused.headers()[header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(retry_after >= 1);
+        let body = body_json(refused).await;
+        assert_eq!(body["limiter"], "mediator");
+        assert_eq!(body["retryAfterSecs"], retry_after);
     }
 
     #[test]

@@ -840,6 +840,9 @@ impl WebSocketTransport {
             Err(e) => {
                 error!("Error creating websocket connection: {:?}", e);
                 self.backoff_delay();
+                if let Some(retry_after) = e.http_status().and_then(|s| s.retry_after_secs) {
+                    self.connect_delay = honour_retry_after(self.connect_delay, retry_after);
+                }
                 return None;
             }
         };
@@ -958,11 +961,21 @@ impl WebSocketTransport {
 
         let (web_socket, _) = super::proxy::connect_websocket(builder, &host, port)
             .await
-            .map_err(|e| {
-                ATMError::TransportError(format!(
+            .map_err(|e| match e {
+                // Keep a refused upgrade typed, so a caller can see it was
+                // rate-limited and by whom.
+                ATMError::HttpStatus(status) => {
+                    let mut status = *status;
+                    status.context = format!(
+                        "Profile '{}' → mediator {} websocket: {}",
+                        self.profile.inner.alias, mediator.did, status.context
+                    );
+                    ATMError::from(status.with_url(address.as_str()))
+                }
+                e => ATMError::TransportError(format!(
                     "Profile '{}' → mediator {} websocket {} ({}:{}): {}",
                     self.profile.inner.alias, mediator.did, address, host, port, e
-                ))
+                )),
             })?;
 
         debug!("Completed websocket connection");
@@ -1000,6 +1013,14 @@ fn escalate_delay(current: u8) -> u8 {
         d if d < 60 => (d * 2).min(60),
         _ => 60,
     }
+}
+
+/// Never reconnect sooner than a refusing server's `Retry-After` asked, within
+/// the backoff's 60s cap. A shorter wait is a reconnect the limiter is certain
+/// to refuse again, and each one spends another token of the client's quota.
+fn honour_retry_after(current: u8, retry_after_secs: u64) -> u8 {
+    let retry_after = u8::try_from(retry_after_secs.min(60)).unwrap_or(60);
+    current.max(retry_after)
 }
 
 /// Next `connect_delay` after the live socket went away.
@@ -1042,6 +1063,16 @@ fn deliver_packed(skip_unpack: bool, message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_after_is_a_floor_on_the_reconnect_delay() {
+        // Backoff already longer than the server asked: keep it.
+        assert_eq!(honour_retry_after(16, 4), 16);
+        // Backoff shorter: wait as long as the server asked.
+        assert_eq!(honour_retry_after(1, 4), 4);
+        // Capped with the backoff, so a hostile value cannot park the socket.
+        assert_eq!(honour_retry_after(1, u64::MAX), 60);
+    }
 
     /// The regression guard for the gating defect. This test compiles and runs
     /// in **every** feature configuration, so re-introducing a
