@@ -30,5 +30,8 @@ pub mod types;
 pub use error::MessagingError;
 pub use http_status::HttpStatusError;
 pub use traits::{IdentityResolver, MessagingProtocol, RelationshipManager};
-pub use transport::{ConnState, Inbound, InboundAck, MessageTransport, SendReceipt, TransportKind};
+pub use transport::{
+    ConnState, Inbound, InboundAck, InboundKind, MessageTransport, RelationshipRequest,
+    SendReceipt, TransportKind,
+};
 pub use types::{Protocol, ReceivedMessage, RelationshipState, ResolvedIdentity};

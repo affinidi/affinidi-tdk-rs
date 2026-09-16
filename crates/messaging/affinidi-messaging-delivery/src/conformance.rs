@@ -338,8 +338,8 @@ pub async fn assert_layer_receipt(wire: &dyn ConformanceWire) {
 
 /// A minimal inbound message for the demux/receipt cases.
 fn inbound(id: &str, thid: Option<&str>) -> Inbound {
-    Inbound {
-        message: ReceivedMessage {
+    Inbound::new(
+        ReceivedMessage {
             id: id.to_string(),
             sender: Some("did:example:alice".to_string()),
             recipient: "did:example:bob".to_string(),
@@ -348,9 +348,9 @@ fn inbound(id: &str, thid: Option<&str>) -> Inbound {
             verified: true,
             encrypted: true,
         },
-        thread_id: thid.map(str::to_string),
-        ack: InboundAck(format!("ack-{id}")),
-    }
+        thid.map(str::to_string),
+        InboundAck(format!("ack-{id}")),
+    )
 }
 
 // ── Reference wire (the always-available baseline) ───────────────────────────

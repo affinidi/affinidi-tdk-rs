@@ -87,6 +87,7 @@ pub struct InboundAck(pub String);
 /// of each `Inbound` to the layer is exactly-once from the transport's side;
 /// at-least-once and dedup are the layer's concern.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Inbound {
     /// The received, unpacked message (sender proven per `message.verified`).
     pub message: ReceivedMessage,
@@ -94,6 +95,112 @@ pub struct Inbound {
     pub thread_id: Option<String>,
     /// Handle to acknowledge this exact delivery once it is durably handled.
     pub ack: InboundAck,
+    /// What this message *is* — application data, or a request about the
+    /// relationship itself. See [`InboundKind`].
+    pub kind: InboundKind,
+}
+
+impl Inbound {
+    /// An application message — the overwhelmingly common case.
+    ///
+    /// A constructor rather than a struct literal because [`Inbound`] is
+    /// `#[non_exhaustive]`: the type has grown once and will again, and every
+    /// previous growth was a source break for every consumer.
+    pub fn new(message: ReceivedMessage, thread_id: Option<String>, ack: InboundAck) -> Self {
+        Self {
+            message,
+            thread_id,
+            ack,
+            kind: InboundKind::Application,
+        }
+    }
+
+    /// Mark what this message is. Chained onto [`Inbound::new`].
+    #[must_use]
+    pub fn with_kind(mut self, kind: InboundKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Whether this is a request about the relationship rather than traffic
+    /// over it — the messages a consumer must answer as *policy*, not route as
+    /// data.
+    pub fn is_relationship_control(&self) -> bool {
+        matches!(self.kind, InboundKind::RelationshipControl { .. })
+    }
+}
+
+/// What an [`Inbound`] turned out to be.
+///
+/// # Why a transport-level type has to say this
+///
+/// A protocol can carry two things that look identical to a wire and mean
+/// opposite things to the layer above: data *over* a relationship, and a
+/// request *about* one. TSP Rev 3 §7.2 is the case that forced this — an
+/// endpoint drops an application message from a VID it holds no relationship
+/// with, so the control exchange is a precondition of all traffic rather than
+/// an optional courtesy.
+///
+/// Without this field the two are indistinguishable by the time they reach a
+/// consumer, and the transport is left making an authorization decision it has
+/// no standing to make. The split is deliberate and worth stating:
+///
+/// * **Recording** an inbound control message is *framework* behaviour. It is
+///   what admits the messages that follow, it is not a grant of anything, and
+///   a transport that skipped it would make every later message vanish. The
+///   transport does this before the consumer ever sees the message.
+/// * **Answering** it — accept, refuse, ignore — is *policy*. It depends on an
+///   ACL the transport cannot see, so it belongs to the consumer.
+///
+/// The failure mode when this is got wrong is silence, which is why it earns a
+/// type rather than a convention: §7.2.2 says *drop*, so an endpoint that
+/// records nothing looks exactly like a transport that accepts connections and
+/// never replies. Nothing goes back to the peer and nothing appears in a log.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InboundKind {
+    /// Ordinary traffic for the consumer's protocol handler.
+    #[default]
+    Application,
+    /// A request about the relationship itself, already recorded by the
+    /// transport and awaiting the consumer's decision.
+    ///
+    /// Carries what answering requires, because the consumer cannot recover it
+    /// from the sender alone — both `accept_relationship` and
+    /// `cancel_relationship` need the digest, and nothing stores it.
+    RelationshipControl {
+        /// What the peer asked for.
+        request: RelationshipRequest,
+        /// The digest an answer must echo back (TSP `TSP_Digest`, §7.2.2).
+        thread_digest: [u8; 32],
+        /// The peer cancelled a relationship held in both directions, so §7.3
+        /// asks for a cancellation back before forgetting it. `false` for
+        /// everything else.
+        reply_expected: bool,
+        /// A VID this request introduces (TSP §7.2.5 referral), already
+        /// verified by the transport — an unverified referral never reaches a
+        /// consumer. `None` when the request introduces nobody.
+        ///
+        /// Worth a policy decision of its own: accepting an invite that
+        /// introduces a VID is agreeing to two things, not one.
+        introduces: Option<String>,
+    },
+}
+
+/// What a peer asked for about a relationship.
+///
+/// Deliberately smaller than any one protocol's control taxonomy: a referral
+/// is an attachment on an invite rather than a fourth kind, so it rides
+/// [`InboundKind::RelationshipControl::introduces`] instead of a variant here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RelationshipRequest {
+    /// The peer proposes a relationship (TSP `XRFI`).
+    Invite,
+    /// The peer accepted one we proposed (TSP `XRFA`).
+    Accept,
+    /// The peer is ending one (TSP `XRFD`).
+    Cancel,
 }
 
 /// A wire that can carry a packed message to a peer and surface inbound ones,
@@ -164,6 +271,7 @@ pub trait MessageTransport: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Protocol;
     use futures_util::stream;
     use std::sync::Arc;
 
@@ -193,6 +301,85 @@ mod tests {
         async fn ack(&self, _ack: InboundAck) -> Result<(), MessagingError> {
             Ok(())
         }
+    }
+
+    fn a_message() -> ReceivedMessage {
+        ReceivedMessage {
+            id: "frame-1".to_string(),
+            sender: Some("did:example:alice".to_string()),
+            recipient: "did:example:bob".to_string(),
+            payload: Vec::new(),
+            protocol: Protocol::TSP,
+            verified: true,
+            encrypted: true,
+        }
+    }
+
+    /// The default is application data, so a transport that says nothing about
+    /// kind cannot silently present a relationship request as traffic.
+    ///
+    /// The direction matters: defaulting the other way would make every
+    /// existing transport's messages look like control and route none of them.
+    #[test]
+    fn an_unmarked_message_is_application_data() {
+        let inbound = Inbound::new(a_message(), None, InboundAck("ack-1".into()));
+        assert_eq!(inbound.kind, InboundKind::Application);
+        assert!(!inbound.is_relationship_control());
+    }
+
+    /// A relationship request carries what answering it requires.
+    ///
+    /// Not a formality: `accept_relationship` and `cancel_relationship` both
+    /// need the thread digest, and nothing on the recorded relationship stores
+    /// it — so a consumer handed only the sender could decide what to do and
+    /// still have no way to say it.
+    #[test]
+    fn a_relationship_request_carries_what_answering_it_needs() {
+        let inbound = Inbound::new(a_message(), None, InboundAck("ack-2".into())).with_kind(
+            InboundKind::RelationshipControl {
+                request: RelationshipRequest::Invite,
+                thread_digest: [7u8; 32],
+                reply_expected: false,
+                introduces: None,
+            },
+        );
+
+        assert!(inbound.is_relationship_control());
+        let InboundKind::RelationshipControl {
+            request,
+            thread_digest,
+            ..
+        } = inbound.kind
+        else {
+            panic!("expected a relationship request, got {:?}", inbound.kind);
+        };
+        assert_eq!(request, RelationshipRequest::Invite);
+        assert_eq!(
+            thread_digest, [7u8; 32],
+            "the digest an accept must echo has to survive the trip to the consumer",
+        );
+    }
+
+    /// An invite that introduces a VID is distinguishable from one that does
+    /// not, because accepting it agrees to two things rather than one.
+    #[test]
+    fn a_referral_is_visible_to_the_consumer() {
+        let plain = InboundKind::RelationshipControl {
+            request: RelationshipRequest::Invite,
+            thread_digest: [0u8; 32],
+            reply_expected: false,
+            introduces: None,
+        };
+        let introducing = InboundKind::RelationshipControl {
+            request: RelationshipRequest::Invite,
+            thread_digest: [0u8; 32],
+            reply_expected: false,
+            introduces: Some("did:example:carol".to_string()),
+        };
+        assert_ne!(
+            plain, introducing,
+            "a referral must not be invisible beside an ordinary invite",
+        );
     }
 
     #[test]

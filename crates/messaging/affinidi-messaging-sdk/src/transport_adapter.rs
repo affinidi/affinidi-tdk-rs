@@ -12,7 +12,11 @@ use affinidi_messaging_core::{
     ConnState, Inbound, InboundAck, MessageTransport, MessagingError, Protocol, ReceivedMessage,
     SendReceipt, TransportKind,
 };
+#[cfg(feature = "tsp")]
+use affinidi_messaging_core::{InboundKind, RelationshipRequest};
 use affinidi_messaging_didcomm::Message;
+#[cfg(feature = "tsp")]
+use affinidi_tsp::message::control::ControlType;
 use futures_util::stream::{self, BoxStream};
 use sha256::digest;
 use tokio::sync::watch;
@@ -424,35 +428,74 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
             // recorded relationship and not only a completed one (§7.2.2 with
             // §3.6). Nothing has to *accept* for traffic to flow.
             //
-            // Not surfaced to the consumer. Answering an invite is an
-            // authorization decision and belongs above this layer, but
-            // `Inbound` has no way to carry a message kind yet and gaining one
-            // is a breaking change to `affinidi-messaging-core` — see the note
-            // at the end of this function. Recording without answering is the
-            // half that is both urgent and non-breaking.
-            let _ = thread_digest;
-            match atm
+            // Then surface it. Recording is framework behaviour; *answering*
+            // is policy, and depends on an ACL this layer cannot see.
+            //
+            // A refusal to record is not surfaced. It means a protocol rule
+            // rejected the message — a cancellation for a relationship we do
+            // not hold, or the losing side of the §7.2.3 invite race — so
+            // there is no relationship for a consumer to make a decision
+            // about, and handing it one to answer would invite a reply to a
+            // message TSP has already discarded.
+            let incoming = match atm
                 .tsp()
                 .record_incoming_control(profile, &sender, &control)
                 .await
             {
-                Ok(incoming) => tracing::debug!(
-                    sender = %sender,
-                    state = ?incoming.state,
-                    frame = %ack,
-                    "recorded an inbound TSP control message",
-                ),
-                Err(e) => tracing::debug!(
-                    error = %e,
-                    sender = %sender,
-                    frame = %ack,
-                    "inbound TSP control message not recorded — a protocol rule refused it \
-                     (a cancellation for a relationship we do not hold, or the losing side of \
-                     the §7.2.3 invite race)",
-                ),
-            }
-            release_frame(atm, profile, &ack).await;
-            return None;
+                Ok(incoming) => {
+                    tracing::debug!(
+                        sender = %sender,
+                        state = ?incoming.state,
+                        frame = %ack,
+                        "recorded an inbound TSP control message",
+                    );
+                    incoming
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        error = %e,
+                        sender = %sender,
+                        frame = %ack,
+                        "inbound TSP control message not recorded — a protocol rule refused it \
+                         (a cancellation for a relationship we do not hold, or the losing side \
+                         of the §7.2.3 invite race)",
+                    );
+                    release_frame(atm, profile, &ack).await;
+                    return None;
+                }
+            };
+
+            let request = match control.control_type {
+                ControlType::RelationshipFormingInvite => RelationshipRequest::Invite,
+                ControlType::RelationshipFormingAccept => RelationshipRequest::Accept,
+                ControlType::RelationshipCancel => RelationshipRequest::Cancel,
+            };
+            // `record_incoming_control` verifies a referral's signature before
+            // returning `Ok`, so reading it here cannot surface an unvouched-for
+            // VID to a consumer.
+            let introduces = control.referral.as_ref().map(|r| r.new_vid.clone());
+
+            // A control message carries no user data, and §3.6's
+            // user-data-alongside-an-invite is delivered by TSP as its own
+            // application message. An empty payload is therefore the honest
+            // representation rather than a placeholder.
+            let received = ReceivedMessage {
+                id: ack.clone(),
+                sender: Some(sender),
+                recipient: profile.inner.did.clone(),
+                payload: Vec::new(),
+                protocol: Protocol::TSP,
+                verified: true,
+                encrypted: true,
+            };
+            return Some(Inbound::new(received, None, InboundAck(ack)).with_kind(
+                InboundKind::RelationshipControl {
+                    request,
+                    thread_digest,
+                    reply_expected: incoming.reply_expected,
+                    introduces,
+                },
+            ));
         }
 
         InboundTsp::UpperLayerControl { sender, .. } => {
@@ -490,12 +533,8 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
         verified: true,
         encrypted: true,
     };
-    Some(Inbound {
-        message: received,
-        // TSP correlation is out of band, not the DIDComm `thid` demux.
-        thread_id: None,
-        ack: InboundAck(ack),
-    })
+    // TSP correlation is out of band, not the DIDComm `thid` demux.
+    Some(Inbound::new(received, None, InboundAck(ack)))
 }
 
 /// Release a frame the delivery layer will never ack, because it never becomes
@@ -574,11 +613,11 @@ fn to_inbound(message: Message, meta: &UnpackMetadata) -> Option<Inbound> {
         verified,
         encrypted: meta.encrypted,
     };
-    Some(Inbound {
-        message: received,
-        thread_id: message.thid.clone(),
-        ack: InboundAck(meta.sha256_hash.clone()),
-    })
+    Some(Inbound::new(
+        received,
+        message.thid.clone(),
+        InboundAck(meta.sha256_hash.clone()),
+    ))
 }
 
 /// The cryptographically-authenticated sender DID of an authcrypt message, or

@@ -1009,8 +1009,8 @@ mod tests {
     }
 
     fn inbound(id: &str, thid: Option<&str>, ack: &str) -> Inbound {
-        Inbound {
-            message: ReceivedMessage {
+        Inbound::new(
+            ReceivedMessage {
                 id: id.to_string(),
                 sender: Some("did:example:alice".to_string()),
                 recipient: "did:example:bob".to_string(),
@@ -1019,9 +1019,9 @@ mod tests {
                 verified: true,
                 encrypted: true,
             },
-            thread_id: thid.map(str::to_string),
-            ack: InboundAck(ack.to_string()),
-        }
+            thid.map(str::to_string),
+            InboundAck(ack.to_string()),
+        )
     }
 
     #[tokio::test]
