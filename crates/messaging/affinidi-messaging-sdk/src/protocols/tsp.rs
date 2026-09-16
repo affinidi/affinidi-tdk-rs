@@ -1909,7 +1909,7 @@ impl TspOps<'_> {
         // An accepted message is not re-read: a body that fails to arrive after a
         // 2xx must not turn a delivered message into an error the caller retries.
         if !res.status().is_success() {
-            crate::errors::HttpStatusError::check_response("send TSP message", res).await?;
+            crate::errors::check_response("send TSP message", res).await?;
         }
         Ok(())
     }

@@ -1,5 +1,46 @@
 # Affinidi DID Authentication
 
+## Unreleased (0.3.13) — an authentication `429` is typed, and survives the retry loop
+
+A non-success response from the authentication service (`/challenge`, the
+authenticate POST, `/refresh`) became `DIDAuthError::Authentication(String)`
+with only the status in the text; and when `authenticate`'s retry loop ran out it
+replaced whatever had happened with `AuthenticationAbort("Maximum number of
+authentication retries reached")`. A `429` — which service refused, and when to
+come back — was lost twice, and the loop retried straight back into the limiter.
+
+### Added
+
+- `DIDAuthError::HttpStatus(Box<HttpStatusError>)` for a non-success status
+  other than `401` (still `ACLDenied`). `HttpStatusError` is
+  `affinidi_messaging_core::HttpStatusError`, re-exported as
+  `affinidi_did_authentication::errors::HttpStatusError` — the same type the
+  messaging SDK and `MessagingError` carry.
+- `DIDAuthError::RetriesExhausted { attempts, last: Box<DIDAuthError> }`: the
+  retry loop gave up, with the last attempt's error kept (also its `source()`).
+- `DIDAuthError::http_status()` / `is_rate_limited()`, which look through
+  `RetriesExhausted` to the last attempt.
+- `MAX_RATE_LIMIT_WAIT` (5 s).
+
+Both variants are additive: `DIDAuthError` is `#[non_exhaustive]`.
+
+### Changed
+
+- **BEHAVIOUR:** a non-success, non-`401` HTTP status is
+  `DIDAuthError::HttpStatus`, not `DIDAuthError::Authentication(String)`.
+  Display still begins `Authentication failed: `.
+- **BEHAVIOUR:** when `DIDAuthentication::authenticate` runs out of retries it
+  returns `DIDAuthError::RetriesExhausted`, not `AuthenticationAbort`. Display
+  still begins `Authentication Aborted: Maximum number of authentication
+  retries reached`, followed by the attempt count and the last error.
+- **BEHAVIOUR:** after a `429` the loop waits at least `Retry-After` (never less
+  than its own backoff) before the next attempt. Rate-limit waits are budgeted
+  at `MAX_RATE_LIMIT_WAIT` across the call: a `Retry-After` that would exceed
+  it ends the loop immediately with `RetriesExhausted` carrying the `429`,
+  rather than being waited out — the TDK's authentication task allows the
+  whole call 10 s, and a longer wait would turn the `429` into a bare timeout.
+- New dependency: `affinidi-messaging-core` 0.1.7.
+
 ## Unreleased (0.3.12) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

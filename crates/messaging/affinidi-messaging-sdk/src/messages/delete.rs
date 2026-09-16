@@ -5,7 +5,7 @@ use tracing::{Instrument, Level, debug, span};
 use crate::{
     ATM,
     delete_handler::DeletionHandlerCommands,
-    errors::{ATMError, HttpStatusError},
+    errors::{ATMError, check_response},
     messages::SuccessResponse,
     profiles::ATMProfile,
 };
@@ -97,7 +97,7 @@ impl ATM {
             })?;
 
         debug!("API response: status({})", res.status());
-        let body = HttpStatusError::check_response("delete messages", res).await?;
+        let body = check_response("delete messages", res).await?;
 
         let body = serde_json::from_str::<SuccessResponse<DeleteMessageResponse>>(&body)
             .map_err(|e| {

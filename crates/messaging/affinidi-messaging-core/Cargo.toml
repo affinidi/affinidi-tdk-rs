@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-core"
 description = "Protocol-agnostic messaging traits for DIDComm and TSP"
-version = "0.1.6"
+version = "0.1.7"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -15,6 +15,11 @@ rust-version.workspace = true
 [dependencies]
 async-trait = "0.1"
 thiserror = "2"
+# `HttpStatusError`: the rate-limit contract body is JSON, and `Retry-After`
+# may be an HTTP-date. Both are small, and already in every graph that makes
+# an HTTP call (hyper depends on `httpdate`).
+httpdate = "1"
+serde_json = "1"
 url = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 # `MessageTransport::inbound` returns a `BoxStream`; `connection_state` returns a

@@ -174,6 +174,17 @@ where
     }
 }
 
+/// The body of a successful response; a non-success status becomes
+/// [`DIDAuthError::HttpStatus`], so a `429` keeps its source and `Retry-After`.
+async fn read_success(context: &str, response: reqwest::Response) -> Result<String, DIDAuthError> {
+    crate::errors::check_response(context, response)
+        .await
+        .map_err(|err| match err {
+            crate::errors::ATMError::HttpStatus(status) => DIDAuthError::HttpStatus(status),
+            other => DIDAuthError::Authentication(other.to_string()),
+        })
+}
+
 /// Derive the `/tsp/authenticate` URL from the `#auth` service's
 /// `.../authenticate` base URL.
 fn derive_tsp_url(endpoint: &str) -> Result<String, DIDAuthError> {
@@ -270,15 +281,9 @@ impl TspAuthHandler {
             .map_err(|e| {
                 DIDAuthError::Authentication(format!("couldn't request TSP challenge: {e}"))
             })?;
-        if !challenge_res.status().is_success() {
-            let status = challenge_res.status();
-            let body = challenge_res.text().await.unwrap_or_default();
-            return Err(DIDAuthError::Authentication(format!(
-                "TSP challenge request failed: status({status}), body({body})"
-            )));
-        }
-        let challenge: SuccessEnvelope<ChallengeData> =
-            challenge_res.json().await.map_err(|e| {
+        let challenge_body = read_success("TSP challenge request", challenge_res).await?;
+        let challenge: SuccessEnvelope<ChallengeData> = serde_json::from_str(&challenge_body)
+            .map_err(|e| {
                 DIDAuthError::Authentication(format!("couldn't parse TSP challenge response: {e}"))
             })?;
         let ChallengeData {
@@ -319,16 +324,13 @@ impl TspAuthHandler {
             .map_err(|e| {
                 DIDAuthError::Authentication(format!("couldn't POST TSP authentication: {e}"))
             })?;
-        if !auth_res.status().is_success() {
-            let status = auth_res.status();
-            let body = auth_res.text().await.unwrap_or_default();
-            return Err(DIDAuthError::Authentication(format!(
-                "TSP authentication failed: status({status}), body({body})"
-            )));
-        }
-        let tokens: SuccessEnvelope<TokensData> = auth_res.json().await.map_err(|e| {
-            DIDAuthError::Authentication(format!("couldn't parse TSP authentication response: {e}"))
-        })?;
+        let auth_body = read_success("TSP authentication", auth_res).await?;
+        let tokens: SuccessEnvelope<TokensData> =
+            serde_json::from_str(&auth_body).map_err(|e| {
+                DIDAuthError::Authentication(format!(
+                    "couldn't parse TSP authentication response: {e}"
+                ))
+            })?;
         let TokensData {
             access_token,
             access_expires_at,
@@ -383,6 +385,43 @@ mod tests {
             derive_tsp_url("https://host/atm/v1/authenticate").unwrap(),
             "https://host/atm/v1/tsp/authenticate"
         );
+    }
+
+    /// A `/tsp/authenticate` (or challenge) refusal keeps its status, source and
+    /// `Retry-After` instead of becoming an `Authentication(String)`.
+    #[tokio::test]
+    async fn a_refused_tsp_authentication_is_a_typed_http_status() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/tsp/authenticate", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let _ = socket.read(&mut request).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 429 Too Many Requests\r\n\
+                      x-rate-limit-source: mediator\r\n\
+                      retry-after: 3\r\n\
+                      content-length: 0\r\n\
+                      connection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            socket.shutdown().await.unwrap();
+        });
+        let response = reqwest::Client::new().post(&url).send().await.unwrap();
+        let err = read_success("TSP authentication", response)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DIDAuthError::HttpStatus(_)), "{err:?}");
+        assert!(err.is_rate_limited());
+        let status = err.http_status().unwrap();
+        assert_eq!(status.rate_limit_source.as_deref(), Some("mediator"));
+        assert_eq!(status.retry_after_secs, Some(3));
+        assert_eq!(status.url.as_deref(), Some(url.as_str()));
+        // And it reaches `ATMError` typed.
+        assert!(crate::errors::ATMError::from(err).is_rate_limited());
     }
 
     #[test]

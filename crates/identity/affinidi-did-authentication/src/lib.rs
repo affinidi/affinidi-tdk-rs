@@ -25,12 +25,12 @@ use affinidi_messaging_didcomm::message::{Message, pack};
 use affinidi_secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use chrono::DateTime;
-use errors::{DIDAuthError, Result};
+use errors::{DIDAuthError, HttpStatusError, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::time::SystemTime;
-use tracing::{Instrument, Level, debug, error, info, span, trace};
+use std::time::{Duration, SystemTime};
+use tracing::{Instrument, Level, debug, error, info, span, trace, warn};
 use uuid::Uuid;
 
 pub mod custom_auth;
@@ -299,8 +299,9 @@ impl DIDAuthentication {
         }
 
         // Authenticate using default logic
-        let mut retry_count = 0;
+        let mut retry_count: u32 = 0;
         let mut timer = 1;
+        let mut rate_limit_waited = Duration::ZERO;
         loop {
             match self
                 ._authenticate(
@@ -320,17 +321,31 @@ impl DIDAuthentication {
                 }
                 Err(err) => {
                     retry_count += 1;
-                    if retry_limit != -1 && retry_count >= retry_limit {
-                        return Err(DIDAuthError::AuthenticationAbort(
-                            "Maximum number of authentication retries reached".into(),
-                        ));
+                    // Keep the last attempt's error: a caller told only "retries
+                    // reached" cannot tell a rate limiter from a broken service.
+                    let exhausted = |last| DIDAuthError::RetriesExhausted {
+                        attempts: retry_count,
+                        last: Box::new(last),
+                    };
+                    // `-1` is unlimited; any other negative stops after one
+                    // attempt, as it always has.
+                    if retry_limit != -1 && i64::from(retry_count) >= i64::from(retry_limit) {
+                        return Err(exhausted(err));
                     }
 
+                    let Some(delay) = retry_delay(&err, timer, &mut rate_limit_waited) else {
+                        warn!(
+                            "DID ({}): Attempt #{}. Rate limited beyond the retry budget, giving up: {}",
+                            profile_did, retry_count, err
+                        );
+                        return Err(exhausted(err));
+                    };
+
                     error!(
-                        "DID ({}): Attempt #{}. Error authenticating: {:?} :: Sleeping for ({}) seconds",
-                        profile_did, retry_count, err, timer
+                        "DID ({}): Attempt #{}. Error authenticating: {:?} :: Sleeping for ({:?})",
+                        profile_did, retry_count, err, delay
                     );
-                    tokio::time::sleep(std::time::Duration::from_secs(timer)).await;
+                    tokio::time::sleep(delay).await;
                     if timer < 10 {
                         timer += 1;
                     }
@@ -720,6 +735,15 @@ where
         .map_err(|e| DIDAuthError::Authentication(format!("HTTP POST failed ({url}): {e:?}")))?;
 
     let response_status = response.status();
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+    let rate_limit_source = header(HttpStatusError::RATE_LIMIT_SOURCE_HEADER);
+    let retry_after = header(reqwest::header::RETRY_AFTER.as_str());
     let response_body = response
         .text()
         .await
@@ -731,9 +755,18 @@ where
         if response_status.as_u16() == 401 {
             return Err(DIDAuthError::ACLDenied("Authentication Denied".into()));
         } else {
-            return Err(DIDAuthError::Authentication(format!(
-                "Failed to get authentication response. url: {url}, status: {response_status}"
-            )));
+            // The status, and for a 429 who refused and when to come back, stay
+            // data: the retry loop honours `Retry-After`, and a caller can tell
+            // a rate limiter from a broken service.
+            return Err(HttpStatusError::from_parts(
+                "authentication request",
+                response_status.as_u16(),
+                rate_limit_source.as_deref(),
+                retry_after.as_deref(),
+                response_body,
+            )
+            .with_url(url)
+            .into());
         }
     }
 
@@ -827,6 +860,44 @@ where
         &[(pairing.recipient_kid, &pairing.recipient_pub)],
     )
     .map_err(|e| DIDAuthError::DIDComm(format!("pack failed: {e}")))
+}
+
+/// The most [`DIDAuthentication::authenticate`] spends waiting on rate limiters
+/// across all its retries — and so also the longest single `Retry-After` it
+/// will wait out.
+///
+/// Bounded because its callers are: the TDK's authentication task gives the
+/// whole call 10 s by default, and a wait that outlives the caller turns a
+/// precise "rate-limited by the mediator, retry in 30 s" into a bare timeout.
+/// Past the budget the loop stops and returns the `429` (inside
+/// [`DIDAuthError::RetriesExhausted`]) for the caller to act on.
+pub const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(5);
+
+/// How long to wait before the next attempt after `err`, or `None` to give up.
+///
+/// An ordinary failure waits the backoff `timer` (seconds). A rate-limited one
+/// (`429`) waits at least `Retry-After` — retrying sooner only spends another
+/// request against the same limiter — and that wait counts against
+/// [`MAX_RATE_LIMIT_WAIT`]: when it would take the running total
+/// (`rate_limit_waited`) past the budget, give up instead.
+fn retry_delay(
+    err: &DIDAuthError,
+    timer: u64,
+    rate_limit_waited: &mut Duration,
+) -> Option<Duration> {
+    let backoff = Duration::from_secs(timer);
+    let Some(status) = err.http_status().filter(|s| s.is_rate_limited()) else {
+        return Some(backoff);
+    };
+    let delay = status
+        .retry_after()
+        .map_or(backoff, |wait| wait.max(backoff));
+    let total = *rate_limit_waited + delay;
+    if total > MAX_RATE_LIMIT_WAIT {
+        return None;
+    }
+    *rate_limit_waited = total;
+    Some(delay)
 }
 
 /// Apply a caller's `force_refresh` to what [`refresh_check`] concluded.
@@ -1034,6 +1105,222 @@ mod tests {
                 refresh_decision(RefreshCheck::Refresh, force),
                 RefreshCheck::Refresh
             );
+        }
+    }
+
+    mod http_status {
+        use crate::errors::{DIDAuthError, HttpStatusError};
+        use crate::{DIDAuthentication, MAX_RATE_LIMIT_WAIT, retry_delay};
+        use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+        use affinidi_secrets_resolver::SimpleSecretsResolver;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        fn rate_limited(retry_after: Option<u64>) -> DIDAuthError {
+            HttpStatusError::from_parts(
+                "authentication request",
+                429,
+                Some("mediator"),
+                retry_after.map(|s| s.to_string()).as_deref(),
+                "",
+            )
+            .into()
+        }
+
+        /// Serve `response` to every request on a loopback port. Returns the
+        /// base URL and a count of requests served.
+        async fn serve(response: &'static str) -> (String, Arc<AtomicUsize>) {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let served = Arc::new(AtomicUsize::new(0));
+            let counter = served.clone();
+            tokio::spawn(async move {
+                while let Ok((mut socket, _)) = listener.accept().await {
+                    let mut request = [0u8; 8192];
+                    let _ = socket.read(&mut request).await;
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                }
+            });
+            (url, served)
+        }
+
+        async fn authenticate(endpoint: &str, retry_limit: i32) -> DIDAuthError {
+            let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+                .await
+                .unwrap();
+            let secrets = SimpleSecretsResolver::new(&[]).await;
+            DIDAuthentication::new()
+                .authenticate(
+                    "did:example:alice",
+                    endpoint,
+                    &resolver,
+                    &secrets,
+                    &reqwest::Client::new(),
+                    retry_limit,
+                )
+                .await
+                .unwrap_err()
+        }
+
+        #[test]
+        fn ordinary_failures_use_the_backoff() {
+            let mut waited = Duration::ZERO;
+            let err = DIDAuthError::Authentication("boom".into());
+            assert_eq!(
+                retry_delay(&err, 3, &mut waited),
+                Some(Duration::from_secs(3))
+            );
+            let err = DIDAuthError::from(HttpStatusError::new("x", 503));
+            assert_eq!(
+                retry_delay(&err, 1, &mut waited),
+                Some(Duration::from_secs(1))
+            );
+            assert_eq!(waited, Duration::ZERO);
+        }
+
+        /// A 429 waits at least `Retry-After`, never less than the backoff, and
+        /// the waits are budgeted.
+        #[test]
+        fn a_429_waits_retry_after_within_the_budget() {
+            let mut waited = Duration::ZERO;
+            assert_eq!(
+                retry_delay(&rate_limited(Some(3)), 1, &mut waited),
+                Some(Duration::from_secs(3))
+            );
+            assert_eq!(
+                retry_delay(&rate_limited(Some(0)), 2, &mut waited),
+                Some(Duration::from_secs(2))
+            );
+            assert_eq!(waited, MAX_RATE_LIMIT_WAIT);
+            // Budget spent: give up rather than retry into the limiter.
+            assert_eq!(retry_delay(&rate_limited(None), 1, &mut waited), None);
+            // One wait longer than the whole budget is not attempted at all.
+            assert_eq!(
+                retry_delay(&rate_limited(Some(30)), 1, &mut Duration::default()),
+                None
+            );
+        }
+
+        #[test]
+        fn http_status_is_seen_through_retries_exhausted() {
+            let err = DIDAuthError::RetriesExhausted {
+                attempts: 3,
+                last: Box::new(rate_limited(Some(2))),
+            };
+            assert!(err.is_rate_limited());
+            assert_eq!(
+                err.http_status().unwrap().rate_limit_source.as_deref(),
+                Some("mediator")
+            );
+            let text = err.to_string();
+            assert!(
+                text.contains("Maximum number of authentication retries reached (3 attempt(s))")
+                    && text.contains("rate-limited by mediator"),
+                "{text}"
+            );
+            assert!(!DIDAuthError::Authentication("x".into()).is_rate_limited());
+        }
+
+        /// The loop keeps the 429 (and who sent it) and waits `Retry-After`
+        /// between attempts, rather than reporting only "retries reached".
+        #[tokio::test]
+        async fn the_retry_loop_preserves_a_429_and_waits_retry_after() {
+            let (url, served) = serve(
+                "HTTP/1.1 429 Too Many Requests\r\n\
+                 x-rate-limit-source: mediator\r\n\
+                 retry-after: 2\r\n\
+                 content-type: application/json\r\n\
+                 content-length: 108\r\n\
+                 connection: close\r\n\r\n\
+                 {\"error\":\"rate_limited\",\"limiter\":\"mediator\",\"message\":\"Rate limit exceeded. Try later.\",\"retryAfterSecs\":2}",
+            )
+            .await;
+
+            let started = Instant::now();
+            let err = authenticate(&url, 2).await;
+            let elapsed = started.elapsed();
+
+            assert_eq!(served.load(Ordering::SeqCst), 2);
+            assert!(elapsed >= Duration::from_secs(2), "waited only {elapsed:?}");
+            let DIDAuthError::RetriesExhausted { attempts, last } = &err else {
+                panic!("expected RetriesExhausted, got {err:?}");
+            };
+            assert_eq!(*attempts, 2);
+            assert!(matches!(**last, DIDAuthError::HttpStatus(_)), "{last:?}");
+            assert!(err.is_rate_limited());
+            let status = err.http_status().unwrap();
+            assert_eq!(status.status, 429);
+            assert_eq!(status.rate_limit_source.as_deref(), Some("mediator"));
+            assert_eq!(status.retry_after_secs, Some(2));
+            assert_eq!(
+                status.url.as_deref(),
+                Some(format!("{url}/challenge").as_str())
+            );
+        }
+
+        /// A 429 asking for more than the budget ends the loop at once.
+        #[tokio::test]
+        async fn a_long_retry_after_is_returned_not_waited_out() {
+            let (url, served) = serve(
+                "HTTP/1.1 429 Too Many Requests\r\n\
+                 x-rate-limit-source: mediator\r\n\
+                 retry-after: 60\r\n\
+                 content-length: 0\r\n\
+                 connection: close\r\n\r\n",
+            )
+            .await;
+
+            let started = Instant::now();
+            let err = authenticate(&url, 5).await;
+            assert!(started.elapsed() < Duration::from_secs(1));
+            assert_eq!(served.load(Ordering::SeqCst), 1);
+            assert!(matches!(
+                err,
+                DIDAuthError::RetriesExhausted { attempts: 1, .. }
+            ));
+            assert_eq!(err.http_status().unwrap().retry_after_secs, Some(60));
+        }
+
+        /// A 429 with no source header (a proxy) is still typed, unattributed.
+        #[tokio::test]
+        async fn an_unlabelled_429_is_typed_and_unattributed() {
+            let (url, _) = serve(
+                "HTTP/1.1 429 Too Many Requests\r\ncontent-length: 4\r\nconnection: close\r\n\r\nslow",
+            )
+            .await;
+            let err = authenticate(&url, 1).await;
+            assert!(err.is_rate_limited());
+            let status = err.http_status().unwrap();
+            assert_eq!(status.rate_limit_source, None);
+            assert_eq!(status.retry_after_secs, None);
+            assert_eq!(status.body, "slow");
+        }
+
+        #[tokio::test]
+        async fn other_statuses_are_typed_and_not_rate_limited() {
+            let (url, _) = serve(
+                "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nconnection: close\r\n\r\nbusy",
+            )
+            .await;
+            let err = authenticate(&url, 1).await;
+            assert!(!err.is_rate_limited());
+            assert_eq!(err.http_status().unwrap().status, 503);
+        }
+
+        /// A 401 is still an ACL denial, returned without retrying.
+        #[tokio::test]
+        async fn a_401_is_still_acl_denied() {
+            let (url, served) = serve(
+                "HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .await;
+            let err = authenticate(&url, 3).await;
+            assert!(matches!(err, DIDAuthError::ACLDenied(_)), "{err:?}");
+            assert_eq!(served.load(Ordering::SeqCst), 1);
         }
     }
 

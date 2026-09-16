@@ -138,7 +138,7 @@ impl MessageTransport for DidCommTransport {
                 via: TransportKind::Didcomm,
                 hop_id: Some(hop_id),
             })
-            .map_err(|e| MessagingError::Transport(format!("didcomm forward+send failed: {e}")))
+            .map_err(|e| transport_error("didcomm forward+send failed", e))
     }
 
     fn connection_state(&self) -> watch::Receiver<ConnState> {
@@ -203,7 +203,7 @@ impl MessageTransport for DidCommTransport {
         self.atm
             .delete_message_background(&self.profile, &ack.0)
             .await
-            .map_err(|e| MessagingError::Transport(format!("ack (delete) failed: {e}")))
+            .map_err(|e| transport_error("ack (delete) failed", e))
     }
 
     async fn outbox_message_ids(&self) -> Result<Option<Vec<String>>, MessagingError> {
@@ -215,8 +215,25 @@ impl MessageTransport for DidCommTransport {
             .atm
             .list_messages(&self.profile, Folder::Outbox)
             .await
-            .map_err(|e| MessagingError::Transport(format!("list outbox failed: {e}")))?;
+            .map_err(|e| transport_error("list outbox failed", e))?;
         Ok(Some(list.into_iter().map(|m| m.msg_id).collect()))
+    }
+}
+
+/// Carry an ATM failure across the [`MessageTransport`] boundary.
+///
+/// An HTTP status — the mediator's `429` on the send, or on the authentication
+/// in front of it — becomes [`MessagingError::HttpStatus`], so the status, the
+/// refusing service and `Retry-After` survive through `MessagingService` rather
+/// than being flattened into text. `what` is prefixed onto its context.
+/// Everything else stays [`MessagingError::Transport`], as before.
+fn transport_error(what: &str, err: ATMError) -> MessagingError {
+    match err.http_status() {
+        Some(status) => {
+            let context = format!("{what}: {}", status.context);
+            MessagingError::from(status.clone().with_context(context))
+        }
+        None => MessagingError::Transport(format!("{what}: {err}")),
     }
 }
 
@@ -589,6 +606,73 @@ fn authenticated_sender(message: &Message, meta: &UnpackMetadata) -> Option<Stri
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A mediator 429 on the send keeps its type across the transport boundary.
+    #[test]
+    fn a_send_http_status_survives_as_a_typed_messaging_error() {
+        use crate::errors::HttpStatusError;
+        let err = transport_error(
+            "didcomm forward+send failed",
+            ATMError::from(HttpStatusError::from_parts(
+                "send DIDComm message",
+                429,
+                Some("mediator"),
+                Some("4"),
+                "",
+            )),
+        );
+        assert!(err.is_rate_limited(), "{err:?}");
+        let status = err.http_status().unwrap();
+        assert_eq!(status.rate_limit_source.as_deref(), Some("mediator"));
+        assert_eq!(status.retry_after_secs, Some(4));
+        assert_eq!(
+            status.context,
+            "didcomm forward+send failed: send DIDComm message"
+        );
+    }
+
+    /// So does one from the authentication in front of the send, including
+    /// after the retry loop gave up.
+    #[test]
+    fn an_authentication_http_status_survives_as_a_typed_messaging_error() {
+        use affinidi_did_authentication::errors::DIDAuthError;
+        let auth = DIDAuthError::RetriesExhausted {
+            attempts: 3,
+            last: Box::new(DIDAuthError::from(
+                crate::errors::HttpStatusError::from_parts(
+                    "authentication request",
+                    429,
+                    Some("mediator"),
+                    Some("2"),
+                    "",
+                ),
+            )),
+        };
+        let atm = ATMError::from(auth);
+        assert!(matches!(atm, ATMError::DIDAuth(_)));
+        assert!(atm.is_rate_limited());
+        assert!(
+            atm.to_string().starts_with("Authentication error: "),
+            "{atm}"
+        );
+
+        let err = transport_error("didcomm forward+send failed", atm);
+        assert!(err.is_rate_limited(), "{err:?}");
+        assert_eq!(err.http_status().unwrap().retry_after_secs, Some(2));
+    }
+
+    #[test]
+    fn other_failures_stay_transport_strings() {
+        let err = transport_error(
+            "ack (delete) failed",
+            ATMError::TransportError("socket closed".into()),
+        );
+        let MessagingError::Transport(text) = &err else {
+            panic!("expected Transport, got {err:?}");
+        };
+        assert!(text.starts_with("ack (delete) failed: "), "{text}");
+        assert!(err.http_status().is_none());
+    }
 
     #[test]
     fn only_a_dead_profile_ends_the_inbound_stream() {

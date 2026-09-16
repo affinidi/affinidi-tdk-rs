@@ -4,7 +4,7 @@ use tracing::{Instrument, Level, debug, span};
 
 use crate::{
     ATM,
-    errors::{ATMError, HttpStatusError},
+    errors::{ATMError, check_response},
     messages::{DeleteMessageRequest, SuccessResponse},
     profiles::ATMProfile,
 };
@@ -92,7 +92,7 @@ impl ATM {
                 })?;
 
             debug!("API response: status({})", res.status());
-            let body = HttpStatusError::check_response("fetch messages", res).await?;
+            let body = check_response("fetch messages", res).await?;
 
             let body = serde_json::from_str::<SuccessResponse<GetMessagesResponse>>(&body)
                 .ok()
