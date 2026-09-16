@@ -1,6 +1,8 @@
 use crate::{
     SharedData,
     common::authz::{self, Capability},
+    common::did_rate_limiter,
+    common::metrics::names::RATE_LIMITED_TOTAL,
     common::session::{Session, SessionClaims},
 };
 use affinidi_messaging_mediator_common::errors::ErrorResponse;
@@ -50,6 +52,12 @@ pub enum AuthError {
     ExpiredToken,
     InternalServerError(String),
     Blocked,
+    /// The authenticated DID has spent its per-DID rate limit
+    /// (`limits.did_rate_limit_per_second` / `did_rate_limit_burst`). Answered
+    /// with a `429` carrying the rate-limit attribution contract.
+    RateLimited {
+        retry_after_secs: u64,
+    },
 }
 
 impl Display for AuthError {
@@ -63,12 +71,21 @@ impl Display for AuthError {
                 write!(f, "Internal Server Error: {message}")
             }
             AuthError::Blocked => write!(f, "ACL Blocked"),
+            AuthError::RateLimited { retry_after_secs } => {
+                write!(
+                    f,
+                    "Per-DID rate limit exceeded; retry after {retry_after_secs}s"
+                )
+            }
         }
     }
 }
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
+        if let AuthError::RateLimited { retry_after_secs } = self {
+            return did_rate_limiter::refusal_response(retry_after_secs);
+        }
         let status = match self {
             AuthError::WrongCredentials => StatusCode::UNAUTHORIZED,
             AuthError::MissingCredentials => StatusCode::UNAUTHORIZED,
@@ -76,6 +93,7 @@ impl IntoResponse for AuthError {
             AuthError::ExpiredToken => StatusCode::UNAUTHORIZED,
             AuthError::InternalServerError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AuthError::Blocked => StatusCode::UNAUTHORIZED,
+            AuthError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
         };
         let body = Json(json!(ErrorResponse {
             session_id: "UNAUTHORIZED".into(),
@@ -195,6 +213,26 @@ pub(crate) async fn authenticate_token(
     if authz::require_capability(&saved_session.acls, Capability::NotBlocked).is_err() {
         info!("DID({}) is blocked from connecting", did);
         return Err(AuthError::Blocked);
+    }
+
+    // Per-DID rate limit. Charged only here, after the token, the session
+    // record and the blocked check have all passed: charging any earlier would
+    // let a forged token naming a victim DID spend that DID's quota. Every
+    // authenticated HTTP route (and the `/ws` upgrade) comes through this
+    // function, so this is the one place the limit is enforced. Frames on an
+    // established WebSocket are not charged — see `did_rate_limiter`.
+    if let Err(limited) = state.did_rate_limiter.try_acquire(&did_hash) {
+        metrics::counter!(RATE_LIMITED_TOTAL, "scope" => did_rate_limiter::PER_DID_SCOPE)
+            .increment(1);
+        warn!(
+            session_id,
+            did_hash,
+            retry_after_secs = limited.retry_after_secs,
+            "Per-DID rate limit exceeded"
+        );
+        return Err(AuthError::RateLimited {
+            retry_after_secs: limited.retry_after_secs,
+        });
     }
 
     // Update the expires at time

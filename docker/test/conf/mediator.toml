@@ -433,6 +433,20 @@ oob_invite_ttl = "86400"
 
 ### Env: LIMIT_DID_RATE_LIMIT_PER_SECOND
 ### Requests per second per authenticated DID (0 = disabled).
+### Charged once per authenticated HTTP request, after the JWT is validated:
+### /inbound (DIDComm and TSP), /outbound, /fetch, /list, /delete, /whoami, /oob,
+### /admin/status and the /ws upgrade. A refusal is a 429 with
+### `x-rate-limit-source: mediator`, `Retry-After`, and a JSON body whose
+### `scope` is "did" (the per-IP limiter's 429 has no `scope`). Counted in
+### `rate_limited_total{scope="did"}`.
+### NOT METERED: messages sent over an already-established WebSocket. Only the
+### upgrade is charged; an in-session refusal has no HTTP status to carry it and
+### DIDComm defines no rate-limit problem report, so none is sent. A client that
+### sends over its socket is bounded by the upgrade rate and the queue limits,
+### not by this key.
+### Never charged: the mediator's own DID, the configured admin_did, and
+### anonymous inter-mediator relay traffic (it carries no DID; the per-IP limit
+### still applies).
 ### Scale: enable (set > 0) to throttle an abusive *authenticated* client a
 ### per-IP limit can't catch (e.g. one DID behind many IPs); leave 0 if per-IP
 ### limits suffice. Commented out = default (0/disabled).

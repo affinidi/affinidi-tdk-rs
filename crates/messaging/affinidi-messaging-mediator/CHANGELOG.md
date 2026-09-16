@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased (0.26.2) — `did_rate_limit_per_second` is enforced
+
+`limits.did_rate_limit_per_second` / `did_rate_limit_burst` were parsed, built
+into a `DidRateLimiter`, garbage-collected and announced at startup as "Per-DID
+rate limiting enabled" — and refused nothing, because nothing called the
+limiter. They now do what the configuration says.
+
+- **Where it is charged.** Once per authenticated HTTP request, in
+  `authenticate_token`, after the JWT, the session record and the blocked check
+  have passed. That is every route that authenticates a caller: `/inbound`
+  (DIDComm and TSP), `/outbound`, `/fetch`, `/list`, `/delete`, `/whoami`,
+  `/oob`, `/admin/status` and the `/ws` upgrade. Charging after validation is
+  deliberate: charging before it would let a forged token naming a victim DID
+  spend that DID's quota.
+- **The refusal** is the same `429` contract as the per-IP limiter's:
+  `x-rate-limit-source: mediator`, `Retry-After: <secs>`, and
+  `{"error":"rate_limited","limiter":"mediator","scope":"did","message":…,
+  "retryAfterSecs":N}`. `limiter` names the refusing *service*, as before,
+  because `affinidi-messaging-sdk` falls back to it when a proxy strips the
+  header; the added `scope` member says which of the mediator's limiters
+  refused. `affinidi-messaging-sdk` reads it as `ATMError::HttpStatus` with
+  `is_rate_limited()`. New `AuthError::RateLimited { retry_after_secs }`
+  (`AuthError` is `#[non_exhaustive]`).
+- **`0` still disables it**, and is still the default.
+- **Never charged:** the mediator's own DID and the configured `admin_did`
+  (throttling the operator's management plane is how an incident response locks
+  itself out), and anonymous sessions — the inter-mediator relay session and
+  the DIDComm v1 anonymous-forward session. Those carry no DID; an
+  inter-mediator hop is always posted anonymously, so forwarded traffic is never
+  keyed on a peer mediator's DID, and a forward a client submits is charged to
+  that client, the authenticated sender. The per-IP limit still applies to all
+  of them.
+- **Metrics.** `rate_limited_total` now carries a `scope` label: `ip` for the
+  per-IP limiter, `did` for this one. A query that sums the metric is
+  unaffected; one that matches the series without labels is not.
+- **Startup log** now says what is metered and what is not.
+- `DidRateLimiter` gains `try_acquire` (the decision plus a `Retry-After` hint),
+  `with_exempt_did_hashes`, `is_enabled` and a `Debug` impl;
+  `did_rate_limiter::refusal_response` builds the `429`. `check` is unchanged.
+
+### Known gap: frames on an established WebSocket are not metered
+
+The `/ws` upgrade is charged; the messages a socket then carries are not. A
+client that sends over its socket is bounded by how often it can re-upgrade and
+by the queue limits, not by `did_rate_limit_per_second`. This is left open
+rather than guessed at: an in-session refusal has no HTTP status to carry it,
+DIDComm's problem-report registry has no rate-limit descriptor (and none is
+invented here — reusing `limits.queue.sender` would tell the client the wrong
+thing), and closing the socket would drop a frame the client already believes it
+sent. Choosing the signal is a protocol decision. `conf/mediator.toml` says so
+next to the key.
+
 ## Unreleased (0.26.1) — a `429` says it came from the mediator
 
 The per-IP limiter's refusals now carry the ecosystem's rate-limit attribution
@@ -23,6 +75,7 @@ will show the JSON.
 ### Known gaps (unchanged by this release)
 
 - **`did_rate_limit_per_second` / `did_rate_limit_burst` enforce nothing.**
+  *(Fixed in 0.26.2 for HTTP requests.)*
   `DidRateLimiter` is built, garbage-collected and logged as "Per-DID rate
   limiting enabled" when configured, but nothing calls `check`. No request and
   no websocket frame is ever refused per DID. So there is no in-session refusal
