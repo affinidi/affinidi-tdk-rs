@@ -1,5 +1,11 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.16.0) — `trust-tasks-rs` 0.21
+
+The facade re-exports the messaging family, so it moves with it. A re-export
+makes the re-exported crate's version part of this crate's public API — which
+is precisely why this is a minor and not a patch.
+
 ## Unreleased (0.15.0) — TSP Rev 3
 
 Breaking: the facade now re-exports `affinidi-tsp` 0.2, which speaks Trust

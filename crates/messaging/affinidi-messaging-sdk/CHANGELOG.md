@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased (0.26.0) — `trust-tasks-rs` 0.21
+
+Breaking, and by public dependency rather than by anything in this crate's own
+source. `trust_tasks_rs` types appear in this SDK's public API — `MediatorAcl`
+on `account_update` is the one a consumer hits first — so a consumer resolving
+0.20 beside this crate's 0.21 gets `expected MediatorAcl, found a different
+MediatorAcl`, at every such call site.
+
+That class of break is invisible to cargo-semver-checks: no signature in this
+crate moves. It takes a minor because of what a consumer observes, not because
+a tool reported it.
+
+`trust-tasks` 0.21.0 is the release carrying the TSP binding's move to
+`affinidi-tsp` 0.2 (Rev 3). Nothing downstream can take Rev 3 while this family
+still pins 0.20.
+
 ## Unreleased (0.25.0) — TSP Rev 3
 
 Requires `affinidi-tsp` 0.2. **See that crate's changelog first: the wire format
