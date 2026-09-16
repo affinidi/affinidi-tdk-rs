@@ -39,17 +39,120 @@ use axum::{
 use governor::{
     Quota, RateLimiter,
     clock::{Clock, DefaultClock},
-    state::keyed::DashMapStateStore,
+    nanos::Nanos,
+    state::{
+        StateStore,
+        keyed::{DashMapStateStore, ShrinkableKeyedStateStore},
+    },
 };
 use http::{HeaderName, HeaderValue, StatusCode, header};
-use std::{collections::HashSet, num::NonZeroU32, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    num::NonZeroU32,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-type KeyedLimiter = RateLimiter<String, DashMapStateStore<String>, DefaultClock>;
+/// A `governor` DashMap state store shared behind an `Arc`.
+///
+/// `governor`'s `RateLimiter::keyed` owns its state store privately and exposes
+/// only `len` / `retain_recent` / `shrink_to_fit` — enough to *sweep* the map
+/// but not to ask whether a given key is already present. The distinct-DID cap
+/// ([`MAX_TRACKED_DIDS`]) needs exactly that question: a DID already being
+/// tracked must always be admitted to its bucket (never refused by the cap),
+/// while a brand-new DID is what the cap gates. So the limiter is built over a
+/// store we also hold an `Arc` to, and membership / length are read straight
+/// from it.
+///
+/// `DashMapStateStore<K>` is a type alias for `DashMap<K, InMemoryState>`, so
+/// the trait impls below are pure delegation.
+#[derive(Clone)]
+struct SharedDashMapStore(Arc<DashMapStateStore<String>>);
+
+impl StateStore for SharedDashMapStore {
+    type Key = String;
+
+    fn measure_and_replace<T, F, E>(&self, key: &Self::Key, f: F) -> Result<T, E>
+    where
+        F: Fn(Option<Nanos>) -> Result<(T, Nanos), E>,
+    {
+        self.0.measure_and_replace(key, f)
+    }
+}
+
+impl ShrinkableKeyedStateStore<String> for SharedDashMapStore {
+    fn retain_recent(&self, drop_below: Nanos) {
+        self.0.retain_recent(drop_below);
+    }
+
+    fn shrink_to_fit(&self) {
+        self.0.shrink_to_fit();
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+type KeyedLimiter = RateLimiter<String, SharedDashMapStore, DefaultClock>;
 
 /// How often to sweep fully-replenished buckets out of the keyed state store.
 const GC_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Hard cap on the number of *distinct* DIDs tracked at once.
+///
+/// `governor` bounds the request rate *within* each key's bucket but never the
+/// *number* of keys — and [`spawn_gc`](DidRateLimiter::spawn_gc) only reclaims
+/// buckets that have fully replenished, on a 60s tick. Between sweeps, an
+/// adversary cycling through many distinct *authenticated* DIDs faster than
+/// they replenish would grow the `DashMap` without bound: one `String` key plus
+/// a bucket per DID, memory O(requests) rather than O(distinct live clients)
+/// (CWE-770). The cap makes the worst case O(`MAX_TRACKED_DIDS`) instead.
+///
+/// Mitigating context, stated but not relied on alone: every DID reaching this
+/// limiter has already passed JWT validation, and the per-IP Tower limiter has
+/// already run — so driving this path at volume means minting authenticated
+/// tokens for distinct DIDs across many source IPs. The cap is the backstop for
+/// exactly that.
+///
+/// 100_000 is deliberately generous. A single mediator fronts one operator's
+/// client fleet — realistically thousands, at most low tens of thousands of
+/// distinct client DIDs active within any 60s GC window — so a legitimate
+/// steady state sits comfortably below the cap and is never refused by it,
+/// while the ceiling still bounds a flood to a small, fixed `DashMap` (each
+/// entry is a short hash string plus a few words of bucket state, so the whole
+/// map is on the order of tens of MB at the cap). It is a module constant
+/// rather than a config knob because the existing `LimitsConfigRaw` schema is a
+/// struct-literal-constructed type in a separate crate: threading one more
+/// field through it, its `TryFrom`, and every test literal is a large,
+/// cross-crate change for a value operators have no reason to tune.
+const MAX_TRACKED_DIDS: usize = 100_000;
+
+/// `Retry-After` hint (seconds) on a *capacity* refusal — the cap is full, as
+/// opposed to a per-DID quota refusal. Tied to the GC interval: by the next
+/// sweep, fully-replenished buckets have been reclaimed and space is free
+/// again. Advisory; the inline reclaim on the refusal path often frees space
+/// sooner.
+const CAPACITY_RETRY_AFTER_SECS: u64 = GC_INTERVAL.as_secs();
+
+/// Minimum spacing between *inline* reclaim passes on the refusal path.
+///
+/// The refusal path may run `retain_recent`, an O(tracked) scan, to make room
+/// before failing closed. Running that unconditionally on every full-map
+/// request would make the cap itself a CPU-exhaustion lever (fixing unbounded
+/// memory by adding unbounded CPU). Throttling it to at most one pass per
+/// window keeps the refusal path O(1) amortised while still reclaiming promptly;
+/// the periodic [`GC_INTERVAL`] sweep is the unconditional backstop.
+const INLINE_RECLAIM_MIN_INTERVAL: Duration = Duration::from_millis(100);
 
 /// The `scope` a per-DID refusal names, in its JSON body and as the
 /// `rate_limited_total` metric label. The per-IP limiter's label is `ip`.
@@ -66,17 +169,67 @@ pub struct DidRateLimited {
     pub retry_after_secs: u64,
 }
 
+/// The live limiter, present only when limiting is enabled. Bundles the
+/// `governor` limiter with the shared handle to its state store (for the
+/// distinct-DID cap) and the cap itself, so the three can never drift apart.
+#[derive(Clone)]
+struct Active {
+    limiter: Arc<KeyedLimiter>,
+    store: SharedDashMapStore,
+    max_tracked: usize,
+    /// Monotonic reference for the inline-reclaim throttle. Backdated by
+    /// [`INLINE_RECLAIM_MIN_INTERVAL`] at construction so the first reclaim
+    /// after the map fills fires immediately rather than waiting out a window.
+    epoch: Instant,
+    /// Milliseconds (since `epoch`) of the last inline reclaim, `0` until the
+    /// first. Shared so all clones throttle against one another.
+    last_reclaim_ms: Arc<AtomicU64>,
+}
+
+impl Active {
+    /// Number of distinct DIDs currently tracked.
+    fn tracked(&self) -> usize {
+        self.store.0.len()
+    }
+
+    /// Is this DID already tracked? An already-tracked DID is exempt from the
+    /// cap — it is charged against its existing bucket, never refused for
+    /// capacity.
+    fn is_tracked(&self, did_hash: &str) -> bool {
+        self.store.0.contains_key(did_hash)
+    }
+
+    /// Reclaim fully-replenished buckets, at most once per
+    /// [`INLINE_RECLAIM_MIN_INTERVAL`]. A no-op if another reclaim ran within
+    /// the window, which is what keeps the refusal path from amplifying an
+    /// O(tracked) scan across every request in a flood.
+    fn throttled_reclaim(&self) {
+        let now_ms = self.epoch.elapsed().as_millis() as u64;
+        let last = self.last_reclaim_ms.load(Ordering::Relaxed);
+        let window_ms = INLINE_RECLAIM_MIN_INTERVAL.as_millis() as u64;
+        if now_ms.saturating_sub(last) >= window_ms
+            && self
+                .last_reclaim_ms
+                .compare_exchange(last, now_ms, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        {
+            self.limiter.retain_recent();
+        }
+    }
+}
+
 /// Application-level rate limiter keyed by DID hash.
 #[derive(Clone)]
 pub struct DidRateLimiter {
-    limiter: Option<Arc<KeyedLimiter>>,
+    active: Option<Active>,
     exempt: Arc<HashSet<String>>,
 }
 
 impl std::fmt::Debug for DidRateLimiter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DidRateLimiter")
-            .field("enabled", &self.limiter.is_some())
+            .field("enabled", &self.active.is_some())
+            .field("tracked", &self.active.as_ref().map_or(0, |a| a.tracked()))
             .field("exempt", &self.exempt.len())
             .finish()
     }
@@ -88,16 +241,37 @@ impl DidRateLimiter {
     /// If `per_second` is 0, rate limiting is disabled and `check()` always
     /// returns `true`. `burst == 0` is treated as 1.
     pub fn new(per_second: u32, burst: u32) -> Self {
+        Self::with_capacity(per_second, burst, MAX_TRACKED_DIDS)
+    }
+
+    /// As [`Self::new`], but with an explicit distinct-DID cap. The public
+    /// constructor always uses [`MAX_TRACKED_DIDS`]; tests use a small cap so
+    /// the admission-control path can be exercised without inserting 100k keys.
+    fn with_capacity(per_second: u32, burst: u32, max_tracked: usize) -> Self {
         let Some(per_second) = NonZeroU32::new(per_second) else {
             return Self {
-                limiter: None,
+                active: None,
                 exempt: Arc::default(),
             };
         };
         let burst = NonZeroU32::new(burst).unwrap_or(NonZeroU32::MIN);
         let quota = Quota::per_second(per_second).allow_burst(burst);
+        // Build the limiter over a store we keep an `Arc` to, so the cap can
+        // read membership/length from the exact map the limiter mutates.
+        let store = SharedDashMapStore(Arc::new(DashMapStateStore::default()));
+        let limiter = RateLimiter::new(quota, store.clone(), DefaultClock::default());
         Self {
-            limiter: Some(Arc::new(RateLimiter::keyed(quota))),
+            active: Some(Active {
+                limiter: Arc::new(limiter),
+                store,
+                // A cap of 0 would refuse every DID; clamp so a misconfigured
+                // caller degrades to "track one" rather than "deny all".
+                max_tracked: max_tracked.max(1),
+                epoch: Instant::now()
+                    .checked_sub(INLINE_RECLAIM_MIN_INTERVAL)
+                    .unwrap_or_else(Instant::now),
+                last_reclaim_ms: Arc::new(AtomicU64::new(0)),
+            }),
             exempt: Arc::default(),
         }
     }
@@ -116,7 +290,7 @@ impl DidRateLimiter {
 
     /// Is limiting active?
     pub fn is_enabled(&self) -> bool {
-        self.limiter.is_some()
+        self.active.is_some()
     }
 
     /// Charge one request against `did_hash`'s bucket.
@@ -126,13 +300,39 @@ impl DidRateLimiter {
     /// request to, and sharing one bucket across all of them would let one
     /// relaying peer starve the rest.
     pub fn try_acquire(&self, did_hash: &str) -> Result<(), DidRateLimited> {
-        let Some(limiter) = &self.limiter else {
+        let Some(active) = &self.active else {
             return Ok(());
         };
         if did_hash.is_empty() || self.exempt.contains(did_hash) {
             return Ok(());
         }
-        limiter
+
+        // Admission control (CWE-770). `governor` never caps the number of
+        // distinct keys, so a flood of one-shot authenticated DIDs would grow
+        // the map without bound between GC sweeps. Only the *insertion of a new
+        // key* is gated here: a DID already being tracked always falls through
+        // to its bucket below, so a legitimate steady-state fleet under the cap
+        // is never refused and no in-window DID is evicted by this path.
+        if !active.is_tracked(did_hash) && active.tracked() >= active.max_tracked {
+            // Try to make room before refusing: reclaim any fully-replenished
+            // buckets (what the periodic GC does), throttled so this can't
+            // amplify an O(tracked) scan across a flood — see
+            // `throttled_reclaim`. A burst of one-shot DIDs replenishes fast, so
+            // one pass often frees space at once.
+            active.throttled_reclaim();
+            if !active.is_tracked(did_hash) && active.tracked() >= active.max_tracked {
+                // Still full: fail closed for the new DID rather than grow
+                // unbounded. Same 429 contract as a quota refusal. (A small,
+                // bounded overshoot is possible if many *new* DIDs race here at
+                // once — acceptable; the invariant is "bounded", not "exact".)
+                return Err(DidRateLimited {
+                    retry_after_secs: CAPACITY_RETRY_AFTER_SECS,
+                });
+            }
+        }
+
+        active
+            .limiter
             .check_key(&did_hash.to_owned())
             .map_err(|not_until| {
                 // governor reports the instant the next token is available;
@@ -165,7 +365,7 @@ impl DidRateLimiter {
     ///
     /// No-op when rate limiting is disabled (the default: `per_second == 0`).
     pub fn spawn_gc(&self, shutdown: CancellationToken) {
-        let Some(limiter) = self.limiter.clone() else {
+        let Some(limiter) = self.active.as_ref().map(|a| a.limiter.clone()) else {
             return;
         };
         tokio::spawn(async move {
@@ -261,6 +461,73 @@ mod tests {
 
         // Different DID should still be allowed
         assert!(limiter.check("did:example:bbb"));
+    }
+
+    /// The distinct-DID cap refuses a *new* DID once the store is full, but an
+    /// already-tracked DID keeps flowing — the cap gates key insertion, not use.
+    ///
+    /// Rate is generous (burst 5) so nothing is refused for exceeding its quota;
+    /// the only refusal here is the capacity one. `per_second = 1` keeps buckets
+    /// from fully replenishing within the test, so the inline reclaim on the
+    /// refusal path finds nothing to drop and the map stays full.
+    #[test]
+    fn cap_fails_closed_for_a_new_did_when_full() {
+        let limiter = DidRateLimiter::with_capacity(1, 5, 2);
+
+        // Fill the two slots.
+        assert!(limiter.check("did:example:aaa"));
+        assert!(limiter.check("did:example:bbb"));
+
+        // A third, new DID is refused for capacity — not quota.
+        let refused = limiter.try_acquire("did:example:ccc").unwrap_err();
+        assert_eq!(refused.retry_after_secs, CAPACITY_RETRY_AFTER_SECS);
+        assert!(!limiter.check("did:example:ccc"));
+
+        // An already-tracked DID still has quota and is never refused by the
+        // cap, even though the store is full.
+        assert!(limiter.check("did:example:aaa"));
+    }
+
+    /// Disabled mode (`per_second == 0`) has no store and therefore no cap:
+    /// unlimited distinct DIDs all pass.
+    #[test]
+    fn disabled_mode_ignores_the_cap() {
+        let limiter = DidRateLimiter::new(0, 10);
+        assert!(!limiter.is_enabled());
+        for i in 0..(MAX_TRACKED_DIDS as u64 / 10 + 5) {
+            assert!(limiter.check(&format!("did:example:{i}")));
+        }
+    }
+
+    /// A fleet of distinct DIDs comfortably under the cap is never refused by
+    /// it — the steady-state case.
+    #[test]
+    fn a_fleet_under_the_cap_is_never_refused() {
+        let limiter = DidRateLimiter::with_capacity(1000, 1000, 200);
+        for i in 0..150 {
+            assert!(
+                limiter.check(&format!("did:example:{i}")),
+                "DID {i} (under the cap) must be admitted"
+            );
+        }
+    }
+
+    /// Once buckets replenish, GC (here the inline reclaim on the refusal path)
+    /// reclaims their slots and new DIDs are admitted again — the cap is a live
+    /// ceiling, not a permanent one.
+    #[test]
+    fn gc_reclaims_capacity_for_new_dids() {
+        // burst 1 at 1000/s: a charged bucket fully replenishes in ~1ms.
+        let limiter = DidRateLimiter::with_capacity(1000, 1, 2);
+        assert!(limiter.check("did:example:aaa"));
+        assert!(limiter.check("did:example:bbb"));
+
+        // Let both buckets fully replenish so they become reclaimable.
+        std::thread::sleep(Duration::from_millis(50));
+
+        // A new DID now succeeds: the refusal-path reclaim drops the two
+        // replenished buckets, freeing a slot.
+        assert!(limiter.check("did:example:ccc"));
     }
 
     #[test]

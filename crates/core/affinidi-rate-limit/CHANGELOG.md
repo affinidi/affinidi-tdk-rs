@@ -4,6 +4,26 @@ All notable changes to `affinidi-rate-limit` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-09-16
+
+Bound the number of distinct source IPs the limiter tracks, closing an
+unbounded-memory path (CWE-770).
+
+### Security
+
+- The keyed state store is keyed on unauthenticated, client-chosen IPs and
+  `governor` never caps the *number* of keys — only the periodic GC reclaims
+  fully-replenished buckets. Between sweeps a client rotating addresses (an
+  IPv6 /64, say) could grow the map without bound, before any authentication.
+  A hard cap (`MAX_TRACKED_IPS`, 250_000) now bounds it: when the store is full
+  and a *new* IP arrives, the limiter first attempts a throttled reclaim of
+  replenished buckets and, if still full, fails that new IP closed with the
+  usual `429` contract rather than growing the map. An IP already tracked is
+  never refused for capacity or evicted mid-window by this path, and disabled
+  mode (`per_second == 0`) is unaffected. The inline reclaim is throttled to at
+  most one pass per 100ms so the admission check itself can't be turned into a
+  CPU-exhaustion lever. No public API change.
+
 ## [0.1.1] - 2026-09-16
 
 A `429` now says which service refused it, when the service names itself.

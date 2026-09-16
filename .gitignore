@@ -1,6 +1,9 @@
 **/.DS_Store
 **/.vscode
 /target
+# Alternate CARGO_TARGET_DIR used when running clippy alongside a build so the
+# two don't thrash one cache. A build artefact dir — never committed.
+/target-clippy
 environments.json
 # Cargo.lock is COMMITTED. This workspace ships binaries operators build from
 # source — the mediator and the mediator-setup wizard — and without a lockfile

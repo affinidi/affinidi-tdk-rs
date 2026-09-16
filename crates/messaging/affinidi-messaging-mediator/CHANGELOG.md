@@ -40,6 +40,22 @@ limiter. They now do what the configuration says.
   `with_exempt_did_hashes`, `is_enabled` and a `Debug` impl;
   `did_rate_limiter::refusal_response` builds the `429`. `check` is unchanged.
 
+### Bounded distinct-DID tracking (CWE-770)
+
+`governor` caps the request rate *within* each DID's bucket but never the
+*number* of distinct DIDs, and the GC only reclaims fully-replenished buckets
+every 60s. Between sweeps, an adversary cycling through many distinct
+*authenticated* DIDs faster than they replenish could grow the keyed `DashMap`
+without bound. `DidRateLimiter` now caps distinct tracked DIDs at
+`MAX_TRACKED_DIDS` (100_000): when the store is full and a *new* DID arrives it
+first attempts a throttled reclaim of replenished buckets and, if still full,
+fails that new DID closed with the same `429` contract rather than growing the
+map. A DID already tracked is never refused for capacity or evicted mid-window,
+and disabled mode (`did_rate_limit_per_second == 0`) is unaffected. The inline
+reclaim is throttled (≤ one pass per 100ms) so the admission check can't itself
+become a CPU-exhaustion lever. The shared per-IP limiter
+(`affinidi-rate-limit` 0.1.2) gained the same bound.
+
 ### Known gap: frames on an established WebSocket are not metered
 
 The `/ws` upgrade is charged; the messages a socket then carries are not. A
