@@ -1,6 +1,45 @@
 # Affinidi Messaging Core Changelog
 
 ## Unreleased
+### 0.1.8 — an `Inbound` says whether it is traffic or a request about the relationship
+
+`Inbound` gains `kind: InboundKind`, distinguishing application data from a
+request *about* the relationship carrying it (TSP Rev 3 §7.2 — an invite,
+accept or cancel). `Inbound` becomes `#[non_exhaustive]` and is built through
+`Inbound::new(..).with_kind(..)`.
+
+Why a transport-level type has to say this: §7.2.2 makes an endpoint drop an
+application message from a VID it holds no relationship with, so the control
+exchange is a precondition of all traffic. Without the field a transport is
+left making an authorization decision it has no standing to make — **recording**
+an inbound control message is framework behaviour and admits everything that
+follows, while **answering** it depends on an ACL the transport cannot see.
+
+`InboundKind::RelationshipControl` carries `thread_digest` because
+`accept_relationship` and `cancel_relationship` both require it and nothing on
+the recorded relationship stores it — without it a consumer can decide what to
+do and have no way to say it. It carries `introduces` for a §7.2.5 referral,
+read only after the signature is verified.
+
+`InboundKind` defaults to `Application`: defaulting the other way would make
+every existing transport's messages look like control and route none of them.
+
+**Semver note (R3.6).** This is breaking for any consumer that constructs or
+exhaustively destructures `Inbound`, and it ships as a **patch** for the same
+reason 0.1.6 did — and the reason is now load-bearing rather than theoretical.
+`affinidi-messaging-core` is redirected through the workspace
+`[patch.crates-io]`, and the external `vta-sdk` 0.40.0 requires `^0.1`. A minor
+bump would stop the redirect applying and pull the registry copy back into the
+graph — precisely the duplicate PR #811 had just removed, at the end of a
+four-release cycle.
+
+The blast radius was checked rather than assumed. `vta-sdk` 0.40.0 is the only
+external consumer in the graph; it holds `Inbound` as `BoxStream<'static,
+Inbound>` and reads fields, constructing none and destructuring none, so
+neither the new field nor `#[non_exhaustive]` reaches it. Its TSP pump already
+skips a frame that is not a binding envelope — its own comment names "TSP
+control frames" as a case — so the control messages now surfaced are skipped
+there exactly as they were never delivered before.
 
 ### 0.1.7 — `HttpStatusError`, and `MessagingError::HttpStatus`
 

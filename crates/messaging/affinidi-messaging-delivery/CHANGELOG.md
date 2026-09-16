@@ -1,5 +1,13 @@
 # Changelog
 
+## 16th September 2026
+
+### 0.1.15 — build `Inbound` through its constructor
+
+`Inbound` is `#[non_exhaustive]` as of `affinidi-messaging-core` 0.1.8, so the
+conformance harness and the service tests construct it with `Inbound::new`
+rather than a struct literal. No behavioural change.
+
 ## [0.1.14] - 2026-08-16
 
 **A message no consumer received is no longer acked.** An ack is a delete at the
