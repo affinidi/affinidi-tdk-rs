@@ -117,6 +117,18 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
         None
     };
 
+    // Raw did:webvh logs are fetched on every resolution, cache hit included,
+    // so without this a hot DID keeps hitting its own host and can be
+    // rate-limited by it. Disabled (`None`) unless a TTL is configured.
+    let webvh_log_cache = (config.webvh_log_expire > 0).then(|| {
+        Arc::new(
+            moka::future::Cache::builder()
+                .max_capacity(config.cache_capacity_count as u64)
+                .time_to_live(Duration::from_secs(config.webvh_log_expire as u64))
+                .build(),
+        )
+    });
+
     // Create the shared application State
     let shared_state = SharedData {
         service_start_timestamp: chrono::Utc::now(),
@@ -125,6 +137,7 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
         resolve_timeout: config.resolve_timeout,
         max_did_size: config.max_did_size,
         webvh_client,
+        webvh_log_cache,
         agent_name_resolver,
         agent_name_permits: Arc::new(Semaphore::new(config.agent_name_concurrency)),
     };

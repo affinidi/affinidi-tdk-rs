@@ -1,4 +1,4 @@
-use crate::{SharedData, config::Config};
+use crate::{SharedData, WebvhLogCache, WebvhLogs, config::Config};
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, ResolveResponse, errors::DIDCacheError};
 use axum::{Json, Router, extract::State, response::IntoResponse, routing::get};
 use std::future::Future;
@@ -90,6 +90,45 @@ async fn read_text_limited(mut resp: reqwest::Response, limit: usize) -> Option<
 /// response body is capped, to avoid being used as an SSRF pivot / reflection
 /// oracle or memory-exhaustion vector.
 pub(crate) async fn fetch_webvh_log(
+    client: &reqwest::Client,
+    cache: Option<&WebvhLogCache>,
+    did: &str,
+) -> WebvhLogs {
+    cached_webvh_log(cache, did, || fetch_webvh_log_uncached(client, did)).await
+}
+
+/// Caching wrapper around an upstream log fetch.
+///
+/// Split out from [`fetch_webvh_log`] so the caching policy can be tested
+/// without network access — the policy, not the HTTP call, is what decides how
+/// much load reaches the DID's host.
+async fn cached_webvh_log<F, Fut>(
+    cache: Option<&WebvhLogCache>,
+    did: &str,
+    fetch: F,
+) -> WebvhLogs
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = WebvhLogs>,
+{
+    if let Some(cache) = cache
+        && let Some(hit) = cache.get(did).await
+    {
+        return hit;
+    }
+    let logs = fetch().await;
+    // Only cache a successful log fetch: caching `None` would pin a transient
+    // upstream failure (or a rate-limited response) for the whole TTL and turn
+    // a blip into sustained unavailability.
+    if let Some(cache) = cache
+        && logs.0.is_some()
+    {
+        cache.insert(did.to_string(), logs.clone()).await;
+    }
+    logs
+}
+
+async fn fetch_webvh_log_uncached(
     client: &reqwest::Client,
     did: &str,
 ) -> (Option<String>, Option<String>) {
@@ -194,6 +233,7 @@ pub async fn health_checker_handler(State(state): State<SharedData>) -> impl Int
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[tokio::test]
     async fn apply_timeout_trips_on_hung_resolution() {
@@ -225,5 +265,80 @@ mod tests {
         assert!(did_within_size_limit("did:key:zABC", 1024));
         assert!(did_within_size_limit(&"d".repeat(1024), 1024)); // exactly at limit
         assert!(!did_within_size_limit(&"d".repeat(1025), 1024)); // one over
+    }
+
+    fn test_log_cache() -> WebvhLogCache {
+        moka::future::Cache::builder()
+            .max_capacity(16)
+            .time_to_live(Duration::from_secs(60))
+            .build()
+    }
+
+    /// The whole point of the cache: a repeat resolution of a hot DID must not
+    /// reach the DID's own host, which is what rate-limits the client.
+    #[tokio::test]
+    async fn cache_hit_costs_no_upstream_fetch() {
+        let cache = test_log_cache();
+        let calls = AtomicUsize::new(0);
+        let did = "did:webvh:scid:example.com";
+        let fetch = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            (Some("log".to_string()), None)
+        };
+
+        for _ in 0..5 {
+            let logs = cached_webvh_log(Some(&cache), did, fetch).await;
+            assert_eq!(logs.0.as_deref(), Some("log"), "cached value is served back");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "only the first call fetches");
+    }
+
+    /// A failed fetch must not be cached: pinning a transient upstream error
+    /// (or a 429) for the whole TTL would turn a blip into sustained outage.
+    #[tokio::test]
+    async fn failed_fetch_is_not_cached() {
+        let cache = test_log_cache();
+        let calls = AtomicUsize::new(0);
+        let fetch = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            (None, None)
+        };
+
+        for _ in 0..3 {
+            cached_webvh_log(Some(&cache), "did:webvh:scid:example.com", fetch).await;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 3, "every call retries upstream");
+    }
+
+    /// `None` disables caching entirely, preserving the previous behaviour for
+    /// operators who need a newly-published log entry visible immediately.
+    #[tokio::test]
+    async fn disabled_cache_always_fetches() {
+        let calls = AtomicUsize::new(0);
+        let fetch = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            (Some("log".to_string()), None)
+        };
+
+        for _ in 0..3 {
+            cached_webvh_log(None, "did:webvh:scid:example.com", fetch).await;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    /// Distinct DIDs must not share an entry.
+    #[tokio::test]
+    async fn cache_is_keyed_by_did() {
+        let cache = test_log_cache();
+        let a = cached_webvh_log(Some(&cache), "did:webvh:scid:a.example", || async {
+            (Some("a".to_string()), None)
+        })
+        .await;
+        let b = cached_webvh_log(Some(&cache), "did:webvh:scid:b.example", || async {
+            (Some("b".to_string()), None)
+        })
+        .await;
+        assert_eq!(a.0.as_deref(), Some("a"));
+        assert_eq!(b.0.as_deref(), Some("b"));
     }
 }

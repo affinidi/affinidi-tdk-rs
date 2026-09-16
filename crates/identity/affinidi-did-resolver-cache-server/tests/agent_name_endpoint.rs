@@ -39,6 +39,7 @@ async fn app_with_permits(enable_agent_names: bool, permits: usize) -> axum::Rou
         resolve_timeout: Duration::from_secs(5),
         max_did_size: 1024,
         webvh_client: reqwest::Client::new(),
+        webvh_log_cache: None,
         agent_name_resolver: if enable_agent_names {
             Some(Arc::new(agent_names::HttpRedirectResolver::new()))
         } else {
@@ -153,6 +154,7 @@ async fn sheds_lookups_once_the_fetch_ceiling_is_reached() {
         resolve_timeout: Duration::from_secs(5),
         max_did_size: 1024,
         webvh_client: reqwest::Client::new(),
+        webvh_log_cache: None,
         agent_name_resolver: Some(Arc::new(agent_names::HttpRedirectResolver::new())),
         agent_name_permits: permits.clone(),
     };

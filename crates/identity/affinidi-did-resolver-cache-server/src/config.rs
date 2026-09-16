@@ -17,6 +17,20 @@ struct CacheConfig {
     pub capacity_count: String,
     #[serde(default)]
     pub expire: String,
+    /// TTL in seconds for cached raw `did:webvh` logs. `0` disables the cache,
+    /// which re-fetches `did.jsonl` on every resolution.
+    #[serde(default = "default_webvh_log_expire")]
+    pub webvh_log_expire: String,
+}
+
+/// Default TTL for the raw `did:webvh` log cache.
+///
+/// Defaults to `0` (disabled) so behaviour is unchanged unless explicitly
+/// enabled: caching these files trades upstream load against how quickly a
+/// freshly-published log entry becomes visible, and that is the operator's
+/// call to make.
+fn default_webvh_log_expire() -> String {
+    "0".into()
 }
 
 impl Default for CacheConfig {
@@ -24,6 +38,7 @@ impl Default for CacheConfig {
         CacheConfig {
             capacity_count: "1000".into(),
             expire: "300".into(),
+            webvh_log_expire: default_webvh_log_expire(),
         }
     }
 }
@@ -130,6 +145,8 @@ pub struct Config {
     pub max_did_size: usize,
     pub cache_capacity_count: u32,
     pub cache_expire: u32,
+    /// TTL in seconds for cached raw `did:webvh` logs; `0` disables the cache.
+    pub webvh_log_expire: u32,
 }
 
 impl fmt::Debug for Config {
@@ -154,6 +171,14 @@ impl fmt::Debug for Config {
             .field("max_did_size", &format!("{} bytes", self.max_did_size))
             .field("cache_capacity_count", &self.cache_capacity_count)
             .field("cache_expire", &format!("{} seconds", self.cache_expire))
+            .field(
+                "webvh_log_expire",
+                &if self.webvh_log_expire == 0 {
+                    "disabled".to_string()
+                } else {
+                    format!("{} seconds", self.webvh_log_expire)
+                },
+            )
             .finish()
     }
 }
@@ -177,6 +202,7 @@ impl Default for Config {
                 .parse()
                 .unwrap_or(1000),
             cache_expire: CacheConfig::default().expire.parse().unwrap_or(300),
+            webvh_log_expire: 0,
         }
     }
 }
@@ -218,6 +244,7 @@ impl TryFrom<ConfigRaw> for Config {
             max_did_size: raw.max_did_size.parse().unwrap_or(1024),
             cache_capacity_count: raw.cache.capacity_count.parse().unwrap_or(1000),
             cache_expire: raw.cache.expire.parse().unwrap_or(300),
+            webvh_log_expire: raw.cache.webvh_log_expire.parse().unwrap_or(0),
         })
     }
 }

@@ -40,7 +40,7 @@ pub async fn resolver_handler(
 
             // For WebVH DIDs, include the raw log so clients can verify
             let (did_log, did_witness_log) = if doc.method == DIDMethod::WEBVH {
-                fetch_webvh_log(&state.webvh_client, &did).await
+                fetch_webvh_log(&state.webvh_client, state.webvh_log_cache.as_deref(), &did).await
             } else {
                 (None, None)
             };
