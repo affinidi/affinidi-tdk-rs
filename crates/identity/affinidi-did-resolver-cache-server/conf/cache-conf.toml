@@ -63,6 +63,18 @@ capacity_count = "${CACHE_CAPACITY_COUNT:1000}"
 ### Default: 300 (5 minutes)
 expire = "${EXPIRE:300}"
 
+### webvh_log_expire: TTL in seconds for cached raw did:webvh logs
+### (did.jsonl / did-witness.json). 0 disables the cache.
+### Default: 0 (disabled)
+###
+### These files are otherwise re-fetched from the DID's own host on EVERY
+### resolution, including cache hits, so a hot did:webvh DID generates
+### continuous upstream traffic and can be rate-limited by its host.
+### Caching them makes a document cache hit cost zero upstream requests, at
+### the cost of taking up to this long to observe a newly-published log entry.
+### Set to 0 when tests must observe DID document updates immediately.
+webvh_log_expire = "${WEBVH_LOG_EXPIRE:0}"
+
 # Sustained requests per second per client IP. 0 disables rate limiting.
 #
 # ⚠ RAISE OR DISABLE THIS BEHIND A LOAD BALANCER OR NAT. The limiter keys on the

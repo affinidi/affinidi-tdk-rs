@@ -17,6 +17,18 @@ pub mod server;
 pub mod session;
 pub mod statistics;
 
+/// Cached `did:webvh` side-files for one DID: `(did.jsonl, did-witness.json)`.
+pub type WebvhLogs = (Option<String>, Option<String>);
+
+/// Cache of raw `did:webvh` logs, keyed by DID.
+///
+/// The DID *document* cache does not cover these files: every resolution — cache
+/// hit included — otherwise re-fetches `did.jsonl` (and `did-witness.json`) from
+/// the DID's own host, so a hot DID keeps generating upstream traffic and can be
+/// rate-limited by its host. Caching them here makes a document cache hit cost
+/// zero upstream requests.
+pub type WebvhLogCache = moka::future::Cache<String, WebvhLogs>;
+
 #[derive(Clone)]
 pub struct SharedData {
     pub service_start_timestamp: DateTime<Utc>,
@@ -31,6 +43,9 @@ pub struct SharedData {
     /// Shared HTTP client for did:webvh log fetches, built once at startup so
     /// connections are pooled instead of a fresh client per request.
     pub webvh_client: reqwest::Client,
+    /// Cache of raw `did:webvh` logs. `None` disables it, restoring the
+    /// fetch-on-every-resolution behaviour.
+    pub webvh_log_cache: Option<Arc<WebvhLogCache>>,
     /// Present only when `enable_agent_names` is set. `None` means the feature
     /// is off and the route is not registered.
     pub agent_name_resolver: Option<Arc<agent_names::HttpRedirectResolver>>,
