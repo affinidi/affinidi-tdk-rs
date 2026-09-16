@@ -204,6 +204,11 @@ impl TspAgent {
 
         self.store
             .transition_relationship(our_vid, their_vid, RelationshipEvent::SendAccept)?;
+        // The accept's own digest identifies the other half. The inviter
+        // records it on receipt; the accepter must too, or a cancellation that
+        // names this half (§7.2.1 allows either) is refused as unrecognised.
+        self.store
+            .set_reply_thread_digest(our_vid, their_vid, packed.thread_digest);
 
         Ok(packed)
     }
@@ -1122,6 +1127,37 @@ mod tests {
 
         let cancel = alice
             .send_relationship_cancel("did:example:alice", "did:example:bob")
+            .unwrap();
+        let got = bob.receive("did:example:bob", &cancel.bytes).unwrap();
+
+        assert_eq!(got.outcome, ControlOutcome::ReplyToCancellation);
+        assert_eq!(
+            bob.relationship_state("did:example:bob", "did:example:alice"),
+            RelationshipState::None
+        );
+    }
+
+    /// §7.2.1: a cancellation may name either half. The accepter recognises
+    /// one naming its own accept's digest, not only the invite's.
+    #[test]
+    fn the_accepter_recognises_a_cancellation_naming_its_accept() {
+        let (alice, bob) = two_strangers();
+
+        let invite = alice
+            .send_relationship_invite("did:example:alice", "did:example:bob")
+            .unwrap();
+        bob.receive("did:example:bob", &invite.bytes).unwrap();
+        let accept = bob
+            .send_relationship_accept("did:example:bob", "did:example:alice")
+            .unwrap();
+        alice.receive("did:example:alice", &accept.bytes).unwrap();
+
+        let cancel = alice
+            .pack_control(
+                "did:example:alice",
+                "did:example:bob",
+                &ControlMessage::cancel(accept.thread_digest),
+            )
             .unwrap();
         let got = bob.receive("did:example:bob", &cancel.bytes).unwrap();
 
