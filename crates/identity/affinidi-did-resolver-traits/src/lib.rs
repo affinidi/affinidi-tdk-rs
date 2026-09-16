@@ -23,7 +23,7 @@ use std::pin::Pin;
 mod error;
 mod resolvers;
 
-pub use error::ResolverError;
+pub use error::{NetworkFetchError, ResolverError};
 pub use resolvers::{KeyResolver, PeerResolver};
 
 use affinidi_did_common::{DID, DIDMethod, Document};

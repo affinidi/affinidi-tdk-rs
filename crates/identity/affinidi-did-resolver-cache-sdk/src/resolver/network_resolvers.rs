@@ -8,13 +8,46 @@ use std::future::Future;
 use std::pin::Pin;
 
 use affinidi_did_common::{DID, DIDMethod};
-use affinidi_did_resolver_traits::{AsyncResolver, Resolution, ResolverError};
+use affinidi_did_resolver_traits::{AsyncResolver, NetworkFetchError, Resolution, ResolverError};
 pub use affinidi_did_web::HostPolicy;
 use tracing::error;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Keep the HTTP status of a failed did:webvh fetch as data rather than text.
+///
+/// `didwebvh-rs` reports a failure to read or decode the body with the `200` it
+/// had already received. That status did not cause the failure, so it is not
+/// recorded: `status` means "the host answered with this unsuccessful status".
+#[cfg(any(feature = "did-webvh", feature = "did-scid"))]
+fn webvh_network_error(url: String, status_code: Option<u16>, message: String) -> ResolverError {
+    let mut fetch = NetworkFetchError::new(message);
+    if !url.is_empty() {
+        fetch = fetch.with_url(url);
+    }
+    if let Some(status) = status_code.filter(|status| !(200..300).contains(status)) {
+        fetch = fetch.with_status(status);
+    }
+    ResolverError::NetworkFetch(fetch)
+}
+
+fn did_web_error(err: affinidi_did_web::DidWebError) -> ResolverError {
+    match err {
+        affinidi_did_web::DidWebError::ResolutionFailed { status, url, .. } => {
+            ResolverError::NetworkFetch(
+                NetworkFetchError::new(format!("HTTP {status}"))
+                    .with_url(url)
+                    .with_status(status),
+            )
+        }
+        affinidi_did_web::DidWebError::Http(message) => {
+            ResolverError::NetworkFetch(NetworkFetchError::new(message))
+        }
+        other => ResolverError::ResolutionFailed(other.to_string()),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // did:ethr
@@ -148,7 +181,7 @@ impl AsyncResolver for WebResolver {
                 Ok(doc) => Ok(doc),
                 Err(e) => {
                     error!("did:web resolution error: {e:?}");
-                    Err(ResolverError::ResolutionFailed(e.to_string()))
+                    Err(did_web_error(e))
                 }
             })
         })
@@ -280,6 +313,16 @@ impl AsyncResolver for WebvhResolver {
                     tracing::warn!("did:webvh resolution refused by host policy: {e}");
                     Err(ResolverError::ResolutionFailed(e.to_string()))
                 }
+                Err(didwebvh_rs::DIDWebVHError::NetworkError {
+                    url,
+                    status_code,
+                    message,
+                }) => {
+                    error!(
+                        "did:webvh resolution fetch failed: url={url} status={status_code:?} {message}"
+                    );
+                    Err(webvh_network_error(url, status_code, message))
+                }
                 Err(e) => {
                     error!("did:webvh resolution error: {e:?}");
                     Err(ResolverError::ResolutionFailed(e.to_string()))
@@ -362,10 +405,28 @@ impl AsyncResolver for ScidResolver {
 
             let did_str = did.to_string();
 
-            Some(did_scid::resolve(&did_str, None, None).await.map_err(|e| {
-                error!("did:scid resolution error: {e:?}");
-                ResolverError::ResolutionFailed(e.to_string())
-            }))
+            Some(
+                did_scid::resolve(&did_str, None, None)
+                    .await
+                    .map_err(|e| match e {
+                        did_scid::errors::DIDSCIDError::WebVHError(
+                            didwebvh_rs::DIDWebVHError::NetworkError {
+                                url,
+                                status_code,
+                                message,
+                            },
+                        ) => {
+                            error!(
+                                "did:scid resolution fetch failed: url={url} status={status_code:?} {message}"
+                            );
+                            webvh_network_error(url, status_code, message)
+                        }
+                        other => {
+                            error!("did:scid resolution error: {other:?}");
+                            ResolverError::ResolutionFailed(other.to_string())
+                        }
+                    }),
+            )
         })
     }
 }
@@ -466,5 +527,50 @@ impl AsyncResolver for WebsResolver {
                 ResolverError::ResolutionFailed(e.to_string())
             }))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn did_web_http_status_is_kept() {
+        let error = did_web_error(affinidi_did_web::DidWebError::ResolutionFailed {
+            status: 429,
+            url: "https://example.com/.well-known/did.json".to_string(),
+        });
+        let ResolverError::NetworkFetch(fetch) = error else {
+            panic!("expected NetworkFetch, got {error:?}");
+        };
+        assert!(fetch.is_rate_limited());
+        assert_eq!(
+            fetch.url.as_deref(),
+            Some("https://example.com/.well-known/did.json")
+        );
+    }
+
+    #[test]
+    fn did_web_invalid_did_is_not_a_fetch_failure() {
+        let error = did_web_error(affinidi_did_web::DidWebError::InvalidDid("bad".into()));
+        assert!(
+            matches!(error, ResolverError::ResolutionFailed(_)),
+            "{error:?}"
+        );
+    }
+
+    #[cfg(any(feature = "did-webvh", feature = "did-scid"))]
+    #[test]
+    fn webvh_body_failure_after_200_records_no_status() {
+        let error = webvh_network_error(
+            "https://example.com/.well-known/did.jsonl".to_string(),
+            Some(200),
+            "Failed to read response body".to_string(),
+        );
+        let ResolverError::NetworkFetch(fetch) = error else {
+            panic!("expected NetworkFetch, got {error:?}");
+        };
+        assert_eq!(fetch.status, None);
+        assert_eq!(fetch.message, "Failed to read response body");
     }
 }

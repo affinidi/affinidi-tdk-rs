@@ -24,10 +24,9 @@
 //!    cache, with an unconditional TTL, makes that structurally impossible.
 
 use agent_names::{AgentName, AgentNameError, AgentNameResolver, verify_also_known_as};
-use tokio::sync::watch;
 use tracing::{debug, warn};
 
-use crate::{DIDCacheClient, DidShortcut, ResolveResponse, errors::DIDCacheError};
+use crate::{DIDCacheClient, DidShortcut, ResolveResponse, errors::DIDCacheError, single_flight};
 
 /// How many claimed names to check before giving up establishing a shortcut.
 ///
@@ -248,8 +247,8 @@ impl DIDCacheClient {
     ///
     /// Mirrors the document cache's single-flight in
     /// `DIDCacheClient::resolve_uncached`: one caller becomes the leader and
-    /// does the work, the rest wait on a `watch` channel and then re-read the
-    /// mapping cache.
+    /// does the work, the rest wait for it and then re-read the mapping cache,
+    /// or receive its error.
     ///
     /// Without this, N concurrent first-time lookups of one name make N
     /// outbound HTTP requests. That matters more than the equivalent for DIDs,
@@ -261,65 +260,39 @@ impl DIDCacheClient {
         name_hash: [u64; 2],
     ) -> Result<String, DIDCacheError> {
         loop {
-            // Decide our role under the lock; no `.await` is held across it.
-            enum Role {
-                Leader(watch::Sender<()>),
-                Follower(watch::Receiver<()>),
-            }
-            let role = {
-                let mut map = self
-                    .agent_name_inflight
-                    .lock()
-                    .expect("agent name inflight mutex not poisoned");
-                if let Some(rx) = map.get(&name_hash) {
-                    Role::Follower(rx.clone())
-                } else {
-                    let (tx, rx) = watch::channel(());
-                    map.insert(name_hash, rx);
-                    Role::Leader(tx)
-                }
-            };
-
-            match role {
-                Role::Follower(mut rx) => {
-                    // The leader drops its sender when done, which closes the
-                    // channel and resolves `changed()`.
-                    let _ = rx.changed().await;
+            match single_flight::claim(&self.agent_name_inflight, name_hash) {
+                single_flight::Role::Follower(receiver) => {
+                    let failure = single_flight::follow(receiver).await;
                     if let Some(did) = self.agent_name_cache.get(&name_hash).await {
                         debug!("agent name '{name}' resolved by another caller");
                         return Ok(did);
                     }
-                    // The leader errored and cached nothing. Loop and try to
-                    // become the leader ourselves.
+                    if let Some(error) = failure {
+                        return Err(error);
+                    }
+                    // The leader was cancelled before finishing. Loop and try
+                    // to become the leader ourselves.
                     continue;
                 }
-                Role::Leader(tx) => {
+                single_flight::Role::Leader(leadership) => {
                     // A prior leader may have populated the mapping between our
                     // cache miss and our acquiring leadership.
                     if let Some(did) = self.agent_name_cache.get(&name_hash).await {
-                        self.release_name_leadership(name_hash, tx);
                         return Ok(did);
                     }
 
                     let result = self.resolve_name_to_did(name).await;
-                    if let Ok(ref did) = result {
-                        self.agent_name_cache.insert(name_hash, did.clone()).await;
+                    match &result {
+                        Ok(did) => {
+                            self.agent_name_cache.insert(name_hash, did.clone()).await;
+                            drop(leadership);
+                        }
+                        Err(error) => leadership.fail(error),
                     }
-                    // Release leadership and wake followers regardless of
-                    // outcome — an early return here would hang every waiter.
-                    self.release_name_leadership(name_hash, tx);
                     return result;
                 }
             }
         }
-    }
-
-    fn release_name_leadership(&self, name_hash: [u64; 2], tx: watch::Sender<()>) {
-        self.agent_name_inflight
-            .lock()
-            .expect("agent name inflight mutex not poisoned")
-            .remove(&name_hash);
-        drop(tx);
     }
 
     /// Walk the registered backends until one resolves the name.

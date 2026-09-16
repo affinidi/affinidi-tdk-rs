@@ -2,6 +2,20 @@
 
 ## Changelog history
 
+## 16th September 2026
+
+### 0.1.4 — typed network fetch failures
+
+- Added `ResolverError::NetworkFetch(NetworkFetchError)`. A resolver whose
+  fetch fails reports the URL and the HTTP status as data instead of a string,
+  so a caller can tell a host that rate-limited it (HTTP 429,
+  `NetworkFetchError::is_rate_limited`) from a DID that is invalid.
+- `NetworkFetchError` is `#[non_exhaustive]` and built with `new`,
+  `with_url` and `with_status`; a `Retry-After` field can be added later
+  without a breaking release.
+- Additive: `ResolverError` has been `#[non_exhaustive]` since 0.1.2, so a
+  new variant breaks no `match`. Patch bump per ADR 0003.
+
 ## 19th July 2026
 
 ### 0.1.3 — affinidi-did-common 0.4

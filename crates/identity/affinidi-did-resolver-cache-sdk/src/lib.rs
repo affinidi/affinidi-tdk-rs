@@ -33,7 +33,6 @@ pub use affinidi_task_utils::{ComponentHealth, ComponentState};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::{fmt, time::Duration};
-use tokio::sync::watch;
 #[cfg(feature = "network")]
 use tokio::sync::{Mutex, mpsc};
 use tracing::debug;
@@ -49,6 +48,7 @@ pub mod errors;
 #[cfg(feature = "network")]
 pub mod networking;
 mod resolver;
+mod single_flight;
 
 // Re-export resolver traits and network resolver implementations
 pub use affinidi_did_resolver_traits::{
@@ -364,12 +364,11 @@ pub struct DIDCacheClient {
     /// them apart means a hash collision between the two can never make one
     /// wait on the other.
     #[cfg(feature = "agent-names")]
-    agent_name_inflight: Arc<StdMutex<HashMap<[u64; 2], watch::Receiver<()>>>>,
+    agent_name_inflight: Arc<single_flight::InflightMap>,
     /// Single-flight map: concurrent cache misses for the same DID hash share
-    /// one underlying resolution. The leader holds the `watch::Sender`; the
-    /// stored `Receiver` is cloned by followers, who wake when the leader drops
-    /// it and then read the freshly-cached document.
-    inflight: Arc<StdMutex<HashMap<[u64; 2], watch::Receiver<()>>>>,
+    /// one underlying resolution — its document on success, its error on
+    /// failure. See `single_flight`.
+    inflight: Arc<single_flight::InflightMap>,
 }
 
 impl Clone for DIDCacheClient {
@@ -608,8 +607,9 @@ impl DIDCacheClient {
 
     /// Resolve a DID that wasn't in the cache, with single-flight dedup: when
     /// several callers miss on the same DID at once, exactly one performs the
-    /// underlying resolution and the rest wait and read the cached result. On
-    /// success the document is inserted into the cache.
+    /// underlying resolution and the rest wait for its outcome. On success the
+    /// document is inserted into the cache and the waiters read it from there;
+    /// on failure the waiters receive the same error, which is not cached.
     async fn resolve_uncached(
         &self,
         did: &str,
@@ -618,27 +618,9 @@ impl DIDCacheClient {
         hash: [u64; 2],
     ) -> Result<ResolveResponse, DIDCacheError> {
         loop {
-            // Decide our role under the lock. No `.await` is held across it.
-            enum Role {
-                Leader(watch::Sender<()>),
-                Follower(watch::Receiver<()>),
-            }
-            let role = {
-                let mut map = self.inflight.lock().expect("inflight mutex not poisoned");
-                if let Some(rx) = map.get(&hash) {
-                    Role::Follower(rx.clone())
-                } else {
-                    let (tx, rx) = watch::channel(());
-                    map.insert(hash, rx);
-                    Role::Leader(tx)
-                }
-            };
-
-            match role {
-                Role::Follower(mut rx) => {
-                    // Wait for the leader to finish (it drops the sender, which
-                    // closes the channel and resolves `changed()` with an Err).
-                    let _ = rx.changed().await;
+            match single_flight::claim(&self.inflight, hash) {
+                single_flight::Role::Follower(receiver) => {
+                    let failure = single_flight::follow(receiver).await;
                     if let Some(doc) = self.cache.get(&hash).await {
                         return Ok(ResolveResponse {
                             did: did.to_string(),
@@ -649,19 +631,17 @@ impl DIDCacheClient {
                             shortcut: None,
                         });
                     }
-                    // Leader didn't populate the cache (it errored). Loop and
-                    // try to become the leader ourselves.
+                    if let Some(error) = failure {
+                        return Err(error);
+                    }
+                    // The leader was cancelled before finishing. Loop and try
+                    // to become the leader ourselves.
                     continue;
                 }
-                Role::Leader(tx) => {
+                single_flight::Role::Leader(leadership) => {
                     // A prior leader may have populated the cache between our
                     // miss check and acquiring leadership.
                     if let Some(doc) = self.cache.get(&hash).await {
-                        self.inflight
-                            .lock()
-                            .expect("inflight mutex not poisoned")
-                            .remove(&hash);
-                        drop(tx);
                         return Ok(ResolveResponse {
                             did: did.to_string(),
                             method: method.clone(),
@@ -673,16 +653,14 @@ impl DIDCacheClient {
                     }
 
                     let result = self.resolve_once(did, parsed_did, method, hash).await;
-                    if let Ok(ref doc) = result {
-                        debug!("DID cached: {}", did);
-                        self.cache.insert(hash, doc.clone()).await;
+                    match &result {
+                        Ok(doc) => {
+                            debug!("DID cached: {}", did);
+                            self.cache.insert(hash, doc.clone()).await;
+                            drop(leadership);
+                        }
+                        Err(error) => leadership.fail(error),
                     }
-                    // Release leadership and wake followers regardless of outcome.
-                    self.inflight
-                        .lock()
-                        .expect("inflight mutex not poisoned")
-                        .remove(&hash);
-                    drop(tx);
 
                     return result.map(|doc| ResolveResponse {
                         did: did.to_string(),
@@ -1501,6 +1479,40 @@ mod tests {
             1,
             "10 concurrent misses for one DID must trigger exactly one resolution"
         );
+    }
+
+    /// A caller that times out cancels the leader mid-resolution. The next
+    /// resolution of that DID must still run — before leadership was released
+    /// on drop, the stale in-flight entry left every later caller spinning on a
+    /// closed channel without ever yielding.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_leader_does_not_wedge_later_resolutions() {
+        let did = "did:web:example.com";
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut client = basic_local_client().await;
+        client.set_resolver(
+            MethodName::Web,
+            Box::new(CountingResolver {
+                calls: calls.clone(),
+                delay: Duration::from_millis(200),
+                doc: Document::new(did).unwrap(),
+            }),
+        );
+
+        let cancelled = tokio::time::timeout(Duration::from_millis(20), client.resolve(did)).await;
+        assert!(cancelled.is_err(), "the first resolution is cancelled");
+
+        let later = {
+            let client = client.clone();
+            tokio::spawn(async move { client.resolve(did).await })
+        };
+        let response = tokio::time::timeout(Duration::from_secs(5), later)
+            .await
+            .expect("a resolution after a cancelled leader completes")
+            .unwrap()
+            .expect("resolve succeeds");
+        assert_eq!(response.doc.id.as_str(), did);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[cfg(feature = "network")]

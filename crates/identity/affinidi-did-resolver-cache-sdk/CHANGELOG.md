@@ -1,5 +1,67 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.38) — a rate-limited DID host is typed, and does not multiply
+
+### Added
+
+- `DIDCacheError::NetworkFetch(NetworkFetchError)` (re-exported as
+  `errors::NetworkFetchError`). A did:web, did:webvh or did:scid (vh)
+  resolution whose fetch fails now carries the URL and the HTTP status:
+
+  ```rust
+  match client.resolve(did).await {
+      Err(DIDCacheError::NetworkFetch(fetch)) if fetch.is_rate_limited() => {
+          // HTTP 429 from the DID host: back off, the DID is not at fault.
+      }
+      Err(DIDCacheError::NetworkFetch(fetch)) => { /* fetch.status, fetch.url */ }
+      Err(other) => { /* invalid DID, bad document, ... */ }
+      Ok(response) => { /* ... */ }
+  }
+  ```
+
+  Its `Display` names the host: `DID host https://…/did.jsonl rate-limited
+  resolution (HTTP 429)`.
+
+- `DIDCacheError` is now `Clone`.
+
+### Changed
+
+- **BEHAVIOUR:** those fetch failures used to arrive as
+  `DIDCacheError::DIDError(String)`, indistinguishable from an invalid DID.
+  Code matching `DIDError` to detect them must match `NetworkFetch` instead,
+  and code parsing the old message text (`NetworkError: HTTP 429 (url: …)`)
+  will not find it. Every other resolver failure is still `DIDError`, with an
+  unchanged message. `status` is recorded only for an unsuccessful response: a
+  body that failed to read after `200 OK` has `status: None`.
+- **Concurrent resolutions of a failing DID now make one fetch.** The
+  single-flight coalesced successes only: when the leader failed, each waiter
+  became the next leader and fetched again, so N callers resolving a DID whose
+  host answered 429 sent it N sequential requests. Waiters now receive the
+  leader's error. It is not cached — the next resolution after the in-flight
+  one fetches again. The same applies to agent-name lookups.
+- **Fixed: a cancelled resolution no longer wedges its DID.** Leadership was
+  released only when the leader returned. A caller that timed out
+  (`tokio::time::timeout(…, client.resolve(did))`) left the in-flight entry
+  behind with a closed channel, and every later resolution of that DID spun on
+  it without yielding. Leadership is now released on drop.
+- The `did-scid` feature also enables the optional `didwebvh-rs` dependency,
+  which `did-scid` already pulled in, to read the typed error it wraps.
+- Requires `affinidi-did-resolver-traits` 0.1.4.
+
+### Not yet typed
+
+- `Retry-After`: neither `didwebvh-rs` 0.7 nor `affinidi-did-web` keeps
+  response headers, so the host's value is not available. `NetworkFetchError`
+  is `#[non_exhaustive]` so it can gain the field without a breaking release.
+- Network mode: the cache server relays a resolution error to the client as
+  text, which arrives as `DIDCacheError::TransportError(String)`. Carrying
+  `NetworkFetch` across it needs a websocket protocol change.
+- did:webs and did:ebsi flatten the HTTP status into their own error strings
+  and still arrive as `DIDError`.
+
+Patch bump per ADR 0003: both enums are `#[non_exhaustive]`, so the new
+variants break no `match`.
+
 ## Unreleased (0.8.37) — did:webvh host policy, one setting for did:web and did:webvh
 
 ### Changed

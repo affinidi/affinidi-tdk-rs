@@ -1,18 +1,36 @@
 //! Error types for the DID Cache Client SDK
 use std::string::FromUtf8Error;
 
+pub use affinidi_did_resolver_traits::NetworkFetchError;
 use thiserror::Error;
 use wasm_bindgen::JsValue;
 
 /// DIDCacheError is the error type for the DID Cache Client SDK.
 ///
 /// This error type is used for all errors that can occur in the DID Cache Client SDK.
-#[derive(Error, Debug)]
+///
+/// `Clone` so that one failed resolution can be handed to every caller that
+/// was waiting on it (see `DIDCacheClient::resolve`).
+#[derive(Error, Debug, Clone)]
 #[non_exhaustive]
 pub enum DIDCacheError {
     /// There was an error in resolving the DID.
     #[error("DID error: {0}")]
     DIDError(String),
+    /// Resolving the DID needed a network fetch, and the fetch failed.
+    ///
+    /// Distinct from [`DIDCacheError::DIDError`]: this is a statement about
+    /// the host serving the DID, not about the DID. Match on the
+    /// [`NetworkFetchError`] to tell a rate-limited resolution
+    /// ([`NetworkFetchError::is_rate_limited`], HTTP 429) from any other HTTP
+    /// status or from a request that got no response at all.
+    ///
+    /// Produced for did:web, did:webvh and did:scid (vh) resolved locally. A
+    /// client in network mode receives the cache server's error as a
+    /// [`DIDCacheError::TransportError`] string instead, because the websocket
+    /// protocol carries errors as text.
+    #[error("{0}")]
+    NetworkFetch(NetworkFetchError),
     /// Unsupported DID Method
     #[error("Unsupported DID method: {0}")]
     UnsupportedMethod(String),
@@ -66,6 +84,19 @@ mod tests {
     fn did_error_display() {
         let err = DIDCacheError::DIDError("bad did".to_string());
         assert_eq!(err.to_string(), "DID error: bad did");
+    }
+
+    #[test]
+    fn network_fetch_rate_limited_display() {
+        let err = DIDCacheError::NetworkFetch(
+            NetworkFetchError::new("HTTP 429")
+                .with_url("https://example.com/.well-known/did.jsonl")
+                .with_status(429),
+        );
+        assert_eq!(
+            err.to_string(),
+            "DID host https://example.com/.well-known/did.jsonl rate-limited resolution (HTTP 429)"
+        );
     }
 
     #[test]
