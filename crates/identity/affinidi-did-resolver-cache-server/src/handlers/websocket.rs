@@ -14,14 +14,18 @@ use tokio::select;
 use tracing::{Instrument, debug, info, span, warn};
 
 use crate::{
-    SharedData,
+    SharedData, WebvhLogCache,
     handlers::{did_within_size_limit, fetch_webvh_log, resolve_with_timeout},
 };
 
 /// Build a WSResponse, fetching the raw DID log for WebVH DIDs.
-async fn build_response(client: &reqwest::Client, response: ResolveResponse) -> WSResponseType {
+async fn build_response(
+    client: &reqwest::Client,
+    cache: Option<&WebvhLogCache>,
+    response: ResolveResponse,
+) -> WSResponseType {
     let (did_log, did_witness_log) = if response.method == DIDMethod::WEBVH {
-        fetch_webvh_log(client, &response.did).await
+        fetch_webvh_log(client, cache, response.cache_hit, &response.did).await
     } else {
         (None, None)
     };
@@ -163,7 +167,13 @@ async fn resolve_agent_name_and_respond(
                 stats.increment_did_method_success(response.method.clone());
             }
             let (did_log, did_witness_log) = if response.method == DIDMethod::WEBVH {
-                fetch_webvh_log(&state.webvh_client, &response.did).await
+                fetch_webvh_log(
+                    &state.webvh_client,
+                    state.webvh_log_cache.as_deref(),
+                    response.cache_hit,
+                    &response.did,
+                )
+                .await
             } else {
                 (None, None)
             };
@@ -208,7 +218,12 @@ async fn resolve_and_respond(socket: &mut WebSocket, state: &SharedData, did: St
                 "resolved DID: ({}) cache_hit?({})",
                 response.did, response.cache_hit
             );
-            let message = build_response(&state.webvh_client, response).await;
+            let message = build_response(
+                &state.webvh_client,
+                state.webvh_log_cache.as_deref(),
+                response,
+            )
+            .await;
             send_response(socket, &message).await
         }
         Err(e) => {
