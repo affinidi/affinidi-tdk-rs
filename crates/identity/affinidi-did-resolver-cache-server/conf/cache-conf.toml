@@ -73,6 +73,15 @@ expire = "${EXPIRE:300}"
 ### Caching them makes a document cache hit cost zero upstream requests, at
 ### the cost of taking up to this long to observe a newly-published log entry.
 ### Set to 0 when tests must observe DID document updates immediately.
+###
+### A cached log is only served alongside a document that was itself a cache
+### hit; a document cache miss always re-fetches the log fresh, so the log and
+### the document it is attached to never disagree. For that reason keep this
+### <= `expire` (the document TTL): a larger value buys nothing (a document
+### refresh already refreshes the log) and the server clamps it to `expire`.
+###
+### The cache is bounded by ENTRY COUNT (`capacity_count`), not by bytes; a log
+### is capped at 1 MiB on fetch, so worst-case memory is ~capacity_count MiB.
 webvh_log_expire = "${WEBVH_LOG_EXPIRE:0}"
 
 # Sustained requests per second per client IP. 0 disables rate limiting.

@@ -92,9 +92,13 @@ async fn read_text_limited(mut resp: reqwest::Response, limit: usize) -> Option<
 pub(crate) async fn fetch_webvh_log(
     client: &reqwest::Client,
     cache: Option<&WebvhLogCache>,
+    doc_cache_hit: bool,
     did: &str,
 ) -> WebvhLogs {
-    cached_webvh_log(cache, did, || fetch_webvh_log_uncached(client, did)).await
+    cached_webvh_log(cache, did, doc_cache_hit, || {
+        fetch_webvh_log_uncached(client, did)
+    })
+    .await
 }
 
 /// Caching wrapper around an upstream log fetch.
@@ -102,26 +106,62 @@ pub(crate) async fn fetch_webvh_log(
 /// Split out from [`fetch_webvh_log`] so the caching policy can be tested
 /// without network access — the policy, not the HTTP call, is what decides how
 /// much load reaches the DID's host.
-async fn cached_webvh_log<F, Fut>(cache: Option<&WebvhLogCache>, did: &str, fetch: F) -> WebvhLogs
+///
+/// Two properties this enforces:
+///
+/// * **The log tracks the document.** `doc_cache_hit` is whether the DID
+///   *document* was served from the resolver's own cache. On a document cache
+///   *miss* the server has just resolved a fresh `did:webvh` document — which
+///   for webvh means replaying a freshly-fetched log — so a stale cached raw
+///   log would disagree with the returned document and a verifying client would
+///   reject the pair. On a miss we therefore drop any cached log and refetch,
+///   keeping the two in step; only on a document cache *hit* is a cached log
+///   served. (Because a miss refreshes the log, a log TTL longer than the
+///   document TTL buys nothing — the server clamps it, see `server.rs`.)
+/// * **A failed fetch is never cached.** Caching `None` would pin a transient
+///   upstream failure (or a rate-limited response) for the whole TTL and turn a
+///   blip into sustained unavailability.
+///
+/// The upstream fetch is single-flighted through moka's `try_get_with`, so N
+/// concurrent resolutions of the same cold DID — the exact stampede a cache
+/// exists to prevent, and which for a brand-new hot DID are all document cache
+/// misses — collapse into one request against the DID's host instead of N.
+async fn cached_webvh_log<F, Fut>(
+    cache: Option<&WebvhLogCache>,
+    did: &str,
+    doc_cache_hit: bool,
+    fetch: F,
+) -> WebvhLogs
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = WebvhLogs>,
 {
-    if let Some(cache) = cache
-        && let Some(hit) = cache.get(did).await
-    {
-        return hit;
+    // No cache configured: preserve the fetch-on-every-resolution behaviour.
+    let Some(cache) = cache else {
+        return fetch().await;
+    };
+
+    // Document cache miss: the freshly-resolved document must be paired with a
+    // freshly-fetched log, never a possibly-stale cached one. Drop any cached
+    // entry first; the fetch below is still single-flighted, so a cold hot-DID
+    // (every concurrent resolution a miss) collapses to one upstream request.
+    if !doc_cache_hit {
+        cache.invalidate(did).await;
     }
-    let logs = fetch().await;
-    // Only cache a successful log fetch: caching `None` would pin a transient
-    // upstream failure (or a rate-limited response) for the whole TTL and turn
-    // a blip into sustained unavailability.
-    if let Some(cache) = cache
-        && logs.0.is_some()
-    {
-        cache.insert(did.to_string(), logs.clone()).await;
-    }
-    logs
+
+    // Single-flight the fetch and never cache a failure: `try_get_with` runs the
+    // init closure once for concurrent callers of the same key and stores
+    // nothing when it returns `Err`, so a failed/`None` fetch leaves the cache
+    // untouched. Map that `Err` back to the uncached fetch result.
+    cache
+        .try_get_with(did.to_string(), async {
+            match fetch().await {
+                logs @ (Some(_), _) => Ok(logs),
+                failed => Err(failed),
+            }
+        })
+        .await
+        .unwrap_or_else(|failed| (*failed).clone())
 }
 
 async fn fetch_webvh_log_uncached(
@@ -283,7 +323,7 @@ mod tests {
         };
 
         for _ in 0..5 {
-            let logs = cached_webvh_log(Some(&cache), did, fetch).await;
+            let logs = cached_webvh_log(Some(&cache), did, true, fetch).await;
             assert_eq!(
                 logs.0.as_deref(),
                 Some("log"),
@@ -309,7 +349,7 @@ mod tests {
         };
 
         for _ in 0..3 {
-            cached_webvh_log(Some(&cache), "did:webvh:scid:example.com", fetch).await;
+            cached_webvh_log(Some(&cache), "did:webvh:scid:example.com", true, fetch).await;
         }
         assert_eq!(
             calls.load(Ordering::SeqCst),
@@ -329,7 +369,7 @@ mod tests {
         };
 
         for _ in 0..3 {
-            cached_webvh_log(None, "did:webvh:scid:example.com", fetch).await;
+            cached_webvh_log(None, "did:webvh:scid:example.com", true, fetch).await;
         }
         assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
@@ -338,15 +378,99 @@ mod tests {
     #[tokio::test]
     async fn cache_is_keyed_by_did() {
         let cache = test_log_cache();
-        let a = cached_webvh_log(Some(&cache), "did:webvh:scid:a.example", || async {
+        let a = cached_webvh_log(Some(&cache), "did:webvh:scid:a.example", true, || async {
             (Some("a".to_string()), None)
         })
         .await;
-        let b = cached_webvh_log(Some(&cache), "did:webvh:scid:b.example", || async {
+        let b = cached_webvh_log(Some(&cache), "did:webvh:scid:b.example", true, || async {
             (Some("b".to_string()), None)
         })
         .await;
         assert_eq!(a.0.as_deref(), Some("a"));
         assert_eq!(b.0.as_deref(), Some("b"));
+    }
+
+    /// A document cache *miss* must never serve a stale cached log: the freshly
+    /// resolved document and its attached `_did_log` have to agree, so a miss
+    /// drops any cached entry, refetches, and refreshes the cache.
+    #[tokio::test]
+    async fn doc_cache_miss_bypasses_stale_log() {
+        let cache = test_log_cache();
+        // Seed a stale log the way an earlier resolution would have.
+        cache
+            .insert(
+                "did:webvh:scid:example.com".to_string(),
+                (Some("stale".to_string()), None),
+            )
+            .await;
+
+        let calls = AtomicUsize::new(0);
+        let fresh = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            (Some("fresh".to_string()), None)
+        };
+
+        // Document was a cache MISS: must fetch fresh, not serve "stale".
+        let logs = cached_webvh_log(Some(&cache), "did:webvh:scid:example.com", false, fresh).await;
+        assert_eq!(
+            logs.0.as_deref(),
+            Some("fresh"),
+            "miss serves the fresh log"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "miss fetches upstream");
+
+        // ...and the cache was refreshed, so a subsequent document cache HIT now
+        // serves the fresh log without another fetch.
+        let hit = cached_webvh_log(Some(&cache), "did:webvh:scid:example.com", true, fresh).await;
+        assert_eq!(
+            hit.0.as_deref(),
+            Some("fresh"),
+            "the miss refreshed the entry"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the later hit is served from cache"
+        );
+    }
+
+    /// Single-flight: concurrent cold resolutions of the same DID — a brand-new
+    /// hot DID, so all document cache misses — must collapse into exactly one
+    /// upstream fetch, not a stampede against the DID's host.
+    #[tokio::test]
+    async fn concurrent_misses_fetch_once() {
+        let cache = test_log_cache();
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let did = "did:webvh:scid:hot.example";
+
+        let resolve = |calls: std::sync::Arc<AtomicUsize>| {
+            let cache = &cache;
+            async move {
+                cached_webvh_log(Some(cache), did, false, || async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    // Yield so the other resolutions reach `try_get_with` while
+                    // this fetch is still in flight, exercising the coalescing.
+                    tokio::task::yield_now().await;
+                    (Some("log".to_string()), None)
+                })
+                .await
+            }
+        };
+
+        let (a, b, c, d) = tokio::join!(
+            resolve(calls.clone()),
+            resolve(calls.clone()),
+            resolve(calls.clone()),
+            resolve(calls.clone()),
+        );
+
+        for logs in [&a, &b, &c, &d] {
+            assert_eq!(logs.0.as_deref(), Some("log"), "every caller gets the log");
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "concurrent misses coalesce into one upstream fetch"
+        );
     }
 }

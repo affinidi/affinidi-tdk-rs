@@ -15,7 +15,22 @@
   newly-published log entry immediately.
 - Only successful fetches are cached: a failed or rate-limited upstream
   response is never cached, so a transient blip cannot be pinned for the whole
-  TTL. The cache is keyed by DID and bounded by `cache.capacity_count`.
+  TTL. The cache is keyed by DID and bounded by entry count
+  (`cache.capacity_count`), not by bytes; each log is capped at 1 MiB on fetch.
+- The cached log tracks the document: a cached log is served only alongside a
+  DID *document* that was itself a cache hit. On a document cache miss the
+  server has just resolved a fresh `did:webvh` document (a freshly-replayed
+  log), so it refetches the raw log and refreshes the cache rather than serving
+  a possibly-stale entry — otherwise the returned document and its attached
+  `_did_log` could disagree and a verifying client would reject the pair.
+- The upstream log fetch is single-flighted (moka `try_get_with`): N concurrent
+  resolutions of the same cold DID — for a brand-new hot DID, all document
+  cache misses — collapse into one request against the DID's host instead of a
+  stampede.
+- `webvh_log_expire` is clamped to `cache.expire` (the document TTL). A cached
+  log is only served with a still-cached document, and a document refresh
+  already refreshes the log, so a larger value buys nothing; keep it
+  `<= cache.expire`.
 
 ## Unreleased (0.9.13) — did:webvh host policy
 

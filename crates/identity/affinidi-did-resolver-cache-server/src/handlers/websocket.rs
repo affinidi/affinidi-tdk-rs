@@ -25,7 +25,7 @@ async fn build_response(
     response: ResolveResponse,
 ) -> WSResponseType {
     let (did_log, did_witness_log) = if response.method == DIDMethod::WEBVH {
-        fetch_webvh_log(client, cache, &response.did).await
+        fetch_webvh_log(client, cache, response.cache_hit, &response.did).await
     } else {
         (None, None)
     };
@@ -170,6 +170,7 @@ async fn resolve_agent_name_and_respond(
                 fetch_webvh_log(
                     &state.webvh_client,
                     state.webvh_log_cache.as_deref(),
+                    response.cache_hit,
                     &response.did,
                 )
                 .await
