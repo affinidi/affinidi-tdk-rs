@@ -30,8 +30,14 @@ use crate::error::TspError;
 use crate::message::MessageType;
 use crate::message::direct::{self, PackedMessage, UnpackedMessage};
 
-/// Maximum number of hops in a route, bounding both memory and forwarding loops.
-pub const MAX_HOPS: usize = 16;
+/// Maximum number of hops in a route or reply path, bounding both memory and
+/// forwarding loops.
+///
+/// The specification sets no maximum, so any bound is a local choice that caps
+/// interoperability. 64 is well beyond any practical route and matches the other
+/// affinidi TSP implementations; it was 16, which refused 17-hop routes that the
+/// ToIP reference, Go and Dart implementations pack and open.
+pub const MAX_HOPS: usize = 64;
 
 /// Pack a routed message addressed to `first_hop`, carrying `remaining_route`
 /// (the hops to visit after `first_hop`, in order) and the opaque `inner`
@@ -193,6 +199,27 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// A route at the limit packs and opens with its hops intact; 17 hops was
+    /// refused when the limit was 16.
+    #[test]
+    fn a_route_at_max_hops_round_trips() {
+        let alice = party("did:web:alice");
+        let hop1 = party("did:web:hop1");
+        let route: Vec<String> = (0..MAX_HOPS).map(|i| format!("did:web:h{i}")).collect();
+        let packed = pack_routed(
+            b"abc",
+            &route,
+            &alice.vid,
+            &hop1.vid,
+            &alice.sign_sk,
+            &hop1.enc_pk,
+        )
+        .unwrap();
+        let opened = direct::unpack(&packed.bytes, &hop1.enc_sk, &alice.sign_pk).unwrap();
+        assert_eq!(opened.message_type, MessageType::Routed);
+        assert_eq!(opened.hops, route);
     }
 
     #[test]
