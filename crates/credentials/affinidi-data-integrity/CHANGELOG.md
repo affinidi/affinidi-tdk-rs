@@ -1,5 +1,41 @@
 # Affinidi Data Integrity Changelog
 
+## Unreleased — verify proofs that carry a `nonce`
+
+**Fixes rejection of valid proofs from any producer that sets `nonce`.**
+
+`DataIntegrityProof` had no `nonce` field, so serde dropped a producer's `nonce`
+on deserialize. `verify` then re-hashed the proof configuration without it — but
+every cryptosuite hashes the proof configuration, and the producer signed one
+that included it. The two sides hashed different bytes, and a valid proof failed
+as `signature invalid`.
+
+`nonce` is a proof property defined by VC Data Integrity §2.1, so this was not
+one unusual producer: `affinidi-ssi-dart` sets it on every proof it emits, which
+meant no Dart-signed proof could be verified here at all. It went unnoticed
+because this crate's own signer never sets `nonce`, so every self-produced proof
+round-tripped cleanly.
+
+`nonce` is now preserved and, through the `..proof.clone()` that builds the
+verification config, included in the hash — so it is bound by the signature, not
+merely tolerated. `tests/interop_verify.rs` pins that against a proof signed by
+`affinidi-ssi-dart`: it fails on the previous code with `signature invalid`, and
+also asserts that an altered or stripped `nonce` is rejected.
+
+No change to signed output: this crate's signer still sets `nonce: None`, and
+`skip_serializing_if` keeps it absent, so `tests/fixtures.rs` passes byte for
+byte. Not a breaking change — `DataIntegrityProof` is `#[non_exhaustive]`, so no
+downstream crate can have been constructing it with a struct literal.
+
+**Deliberately not added:** `expires`, `challenge` and `domain` are dropped the
+same way, but unlike `nonce` each carries verification semantics — expiry, and a
+match against an expected challenge or domain — and `VerifyOptions` has no way
+to express the latter today. Proofs carrying them currently fail by accident.
+Adding the fields without enforcing them would turn that accidental rejection
+into acceptance: an expired proof would verify, and a proof bound to one
+challenge or domain would verify against any. They need their semantics
+implemented alongside, not before.
+
 ## Unreleased (0.7.11) — `sha2` 0.11, `hmac` 0.13
 
 No behaviour change and no public API change: these are private dependencies

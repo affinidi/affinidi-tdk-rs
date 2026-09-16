@@ -131,6 +131,21 @@ pub struct DataIntegrityProof {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proof_value: Option<String>,
 
+    /// The proof's `nonce` (VC Data Integrity §2.1), an optional value the
+    /// proof creator supplies to reduce linkability between signatures.
+    ///
+    /// It carries no verification semantics of its own, but it is part of the
+    /// proof configuration, and every cryptosuite hashes the proof
+    /// configuration. Without this field serde dropped a producer's `nonce` on
+    /// deserialize, so [`verify`](Self::verify) re-hashed a configuration the
+    /// producer never signed and rejected a valid proof as
+    /// `signature invalid`. Producers that set one — `affinidi-ssi-dart` does on
+    /// every proof — could not be verified here at all.
+    ///
+    /// This crate's own signer does not set it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+
     #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
     pub context: Option<Vec<String>>,
 }
@@ -157,6 +172,7 @@ impl DataIntegrityProof {
             proof_purpose,
             proof_value,
             context,
+            nonce: None,
         }
     }
 
@@ -305,6 +321,7 @@ where
     debug!("Document (JCS): {}", jcs);
 
     let mut proof_options = DataIntegrityProof {
+        nonce: None,
         type_: "DataIntegrityProof".to_string(),
         cryptosuite: crypto_suite,
         created: Some(created),
@@ -364,6 +381,7 @@ where
     };
 
     let mut proof_options = DataIntegrityProof {
+        nonce: None,
         type_: "DataIntegrityProof".to_string(),
         cryptosuite: crypto_suite,
         created: Some(created),
