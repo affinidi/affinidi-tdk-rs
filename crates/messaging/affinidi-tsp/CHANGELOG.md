@@ -8,6 +8,11 @@
   held to the form the specification's vectors and the ToIP reference use: an
   `-A##` stream that ends the payload frame and holds one Bytes primitive. See
   [tswg-tsp-specification#77](https://github.com/trustoverip/tswg-tsp-specification/issues/77).
+- **Fix: the accepting endpoint recognises a cancellation that names its own
+  accept.** `send_relationship_accept` now records the accept's digest, which
+  identifies the other half of the relationship (§7.2.1). A peer that names
+  that half, as the Go and Dart implementations do, was refused as naming
+  "an unrecognised relationship".
 
 ## Unreleased (0.2.0) — Trust Spanning Protocol specification Rev 3
 
