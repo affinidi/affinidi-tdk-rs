@@ -157,7 +157,7 @@ affinidi-task-utils = "0.1"
 ## a second `trust-tasks-rs` (0.2.57, from vta-sdk 0.21.6) in this workspace's
 ## lockfile long after everything else had moved to 0.9. A bounded range is a
 ## tax that comes due silently; prefer a caret and move it deliberately.
-vta-sdk = { version = "0.38", features = [
+vta-sdk = { version = "0.40", features = [
   "integration",
 ], optional = true }
 
