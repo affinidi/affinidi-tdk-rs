@@ -7,7 +7,7 @@
 //! Wire format:
 //! ```text
 //! -E<count>                       one frame; count covers everything below
-//!   YTSP <version>                  `YTSP-ABA`
+//!   YTSP <version>                  `YTSP-AAC`
 //!   <var-data B> sender-VID
 //!   <var-data B> receiver-VID       `4BAA` when absent
 //!   <var-data F> enc ‖ ct         HPKE-Base ciphertext, AEAD tag inside ct
@@ -436,6 +436,32 @@ fn derive_said(
     scheme.digest(&input)
 }
 
+/// The inputs packing otherwise draws or decides for itself.
+///
+/// Every public packing function uses [`FixedInputs::FRESH`]: fresh ephemeral
+/// keys, fresh nonces, and the ESSR sender VID carried. Only the
+/// `test-vectors` feature's [`insecure_deterministic`] module constructs
+/// anything else, to reproduce the specification's vectors byte for byte.
+#[derive(Debug, Clone, Copy)]
+struct FixedInputs {
+    /// Under HPKE-Base, `ikmE` (RFC 9180 `DeriveKeyPair` input); under the
+    /// sealed box, the ephemeral X25519 secret `skEm`.
+    ephemeral: Option<[u8; 32]>,
+    /// An `XPAD` message's nonce.
+    pad_nonce: Option<[u8; NONCE_LEN]>,
+    /// Write the NULL VID `4BAA` in the ESSR sender field, as §8 permits under
+    /// HPKE-Base and the vectors do, rather than the sender VID.
+    null_payload_sender: bool,
+}
+
+impl FixedInputs {
+    const FRESH: FixedInputs = FixedInputs {
+        ephemeral: None,
+        pad_nonce: None,
+        null_payload_sender: false,
+    };
+}
+
 /// Build the CESR payload frame that is encrypted (the HPKE plaintext), and
 /// return it with the message's thread digest.
 ///
@@ -449,6 +475,7 @@ fn derive_said(
 /// Accept  -Z<n> XRFA  sndr  Digest  Reply_Digest              pad
 /// Cancel  -Z<n> XRFD  sndr  Digest                            pad
 /// ```
+#[cfg(any(test, feature = "pq"))]
 #[allow(clippy::too_many_arguments)]
 fn encode_payload_frame(
     scheme: PkaeScheme,
@@ -460,8 +487,38 @@ fn encode_payload_frame(
     referral_signing_key: Option<&[u8; 32]>,
     padding: &Padding,
 ) -> Result<(Vec<u8>, [u8; DIGEST_LEN]), TspError> {
+    encode_payload_frame_with(
+        scheme,
+        body,
+        kind,
+        hops,
+        sender_vid,
+        envelope_fields,
+        referral_signing_key,
+        padding,
+        &FixedInputs::FRESH,
+    )
+}
+
+/// [`encode_payload_frame`] with the nonce and sender field taken from `fixed`.
+#[allow(clippy::too_many_arguments)]
+fn encode_payload_frame_with(
+    scheme: PkaeScheme,
+    body: &[u8],
+    kind: MessageType,
+    hops: &[String],
+    sender_vid: &str,
+    envelope_fields: &[u8],
+    referral_signing_key: Option<&[u8; 32]>,
+    padding: &Padding,
+    fixed: &FixedInputs,
+) -> Result<(Vec<u8>, [u8; DIGEST_LEN]), TspError> {
     let mut sender_field = Vec::new();
-    encode_sender_field(sender_vid, &mut sender_field);
+    if fixed.null_payload_sender {
+        wire::encode_variable_data(wire::TSP_VID, &[], &mut sender_field);
+    } else {
+        encode_sender_field(sender_vid, &mut sender_field);
+    }
 
     let mut frame_body = Vec::new();
     let mut said: Option<[u8; DIGEST_LEN]> = None;
@@ -531,11 +588,10 @@ fn encode_payload_frame(
             // A fresh nonce per message. Without it two padding messages
             // between the same pair would be identical on the wire, which would
             // make them recognisable as padding — the opposite of the point.
-            wire::encode_fixed_data(
-                wire::TSP_NONCE,
-                &crate::message::control::generate_nonce(),
-                &mut frame_body,
-            );
+            let nonce = fixed
+                .pad_nonce
+                .unwrap_or_else(crate::message::control::generate_nonce);
+            wire::encode_fixed_data(wire::TSP_NONCE, &nonce, &mut frame_body);
             padding_at = Some(frame_body.len());
             encode_padding(&[], &mut frame_body);
         }
@@ -1379,12 +1435,43 @@ fn pack_inner(
     confidential: bool,
     scheme: PkaeScheme,
 ) -> Result<PackedMessage, TspError> {
+    pack_inner_with(
+        body,
+        message_type,
+        hops,
+        sender_vid,
+        receiver_vid,
+        sender_signing_key,
+        receiver_encryption_key,
+        referral_signing_key,
+        padding,
+        confidential,
+        scheme,
+        &FixedInputs::FRESH,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pack_inner_with(
+    body: &[u8],
+    message_type: MessageType,
+    hops: &[String],
+    sender_vid: &str,
+    receiver_vid: &str,
+    sender_signing_key: &[u8; 32],
+    receiver_encryption_key: &[u8; 32],
+    referral_signing_key: Option<&[u8; 32]>,
+    padding: &Padding,
+    confidential: bool,
+    scheme: PkaeScheme,
+    fixed: &FixedInputs,
+) -> Result<PackedMessage, TspError> {
     // 1. Envelope fields. These are the HPKE-Base AAD.
     let envelope = Envelope::new(message_type, sender_vid, receiver_vid);
     let envelope_fields = envelope.encode_fields()?;
 
     // 2. Plaintext payload frame, and the thread digest it carries.
-    let (payload_frame, thread_digest) = encode_payload_frame(
+    let (payload_frame, thread_digest) = encode_payload_frame_with(
         scheme,
         body,
         message_type,
@@ -1393,6 +1480,7 @@ fn pack_inner(
         &envelope_fields,
         referral_signing_key,
         padding,
+        fixed,
     )?;
 
     // 3. Either seal the payload, or carry it in the clear.
@@ -1408,12 +1496,21 @@ fn pack_inner(
             PkaeScheme::HpkeBase => {
                 // `aad` binds the ciphertext to the version and both VIDs;
                 // `info` is the fixed protocol code.
-                let sealed = hpke::seal(
-                    &payload_frame,
-                    &envelope_fields,
-                    receiver_encryption_key,
-                    wire::TSP_INFO,
-                )?;
+                let sealed = match &fixed.ephemeral {
+                    None => hpke::seal(
+                        &payload_frame,
+                        &envelope_fields,
+                        receiver_encryption_key,
+                        wire::TSP_INFO,
+                    )?,
+                    Some(ikm_e) => hpke::seal_with_ikm_e(
+                        &payload_frame,
+                        &envelope_fields,
+                        receiver_encryption_key,
+                        wire::TSP_INFO,
+                        ikm_e,
+                    )?,
+                };
 
                 // Ciphertext field: `enc ‖ ct`, with the AEAD tag inside `ct`.
                 // Rev 2 put `enc` at the end.
@@ -1425,9 +1522,14 @@ fn pack_inner(
             // A sealed box takes no associated data — there is nowhere to bind
             // the envelope — which is why §8 requires the sender VID inside the
             // payload instead. The field is `ephemeral_pk ‖ MAC ‖ ct`.
-            PkaeScheme::SealedBox => {
-                crate::crypto::sealed_box::seal(&payload_frame, receiver_encryption_key)?
-            }
+            PkaeScheme::SealedBox => match &fixed.ephemeral {
+                None => crate::crypto::sealed_box::seal(&payload_frame, receiver_encryption_key)?,
+                Some(sk_em) => crate::crypto::sealed_box::seal_with_ephemeral(
+                    &payload_frame,
+                    receiver_encryption_key,
+                    sk_em,
+                )?,
+            },
         };
 
         let mut field = Vec::new();
@@ -1446,6 +1548,167 @@ fn pack_inner(
         bytes: wire_bytes,
         thread_digest,
     })
+}
+
+/// Byte-reproducible packing, for regenerating the specification's test
+/// vectors. **Never use it to send a message.**
+///
+/// Behind the non-default `test-vectors` feature and hidden from the docs.
+///
+/// # Why this is unsafe outside a test
+///
+/// Both PKAE schemes get their confidentiality from an ephemeral X25519 key
+/// that is fresh for every message. Fixing it — which is the only way to make
+/// the output reproducible — breaks that:
+///
+/// * **HPKE-Base.** The key and the AEAD nonce derive from the ephemeral key
+///   and the recipient's key alone. Two messages to one recipient under the
+///   same `ikm_e` use the same ChaCha20 key *and* nonce, so XORing their
+///   ciphertexts yields the XOR of their plaintexts, and the Poly1305 key is
+///   reused too, which lets an observer forge.
+/// * **Sealed box.** The same holds for XSalsa20-Poly1305, and the shared
+///   ephemeral public key, which travels in the clear, links every such message
+///   to one sender: the anonymity the scheme exists for is gone.
+///
+/// And `ikm_e` or `skEm` taken from a published vector is public, so anyone can
+/// open a message packed with it.
+///
+/// The specification's Appendix A publishes exactly this material (`ikmE`,
+/// `skEm`) so an implementation can prove it produces the vector's bytes, not
+/// only that it opens them. That is the only use this module has.
+#[cfg(feature = "test-vectors")]
+#[doc(hidden)]
+pub mod insecure_deterministic {
+    use super::{FixedInputs, NONCE_LEN, PackedMessage, Padding, PkaeScheme};
+    use crate::error::TspError;
+    use crate::message::MessageType;
+
+    /// How the payload is protected, with the ephemeral material each scheme
+    /// takes. The pairing is fixed by the type, so an `ikmE` cannot be handed to
+    /// the sealed box or the reverse.
+    #[derive(Debug, Clone, Copy)]
+    pub enum Protection {
+        /// HPKE-Base, with the ephemeral key `DeriveKeyPair(ikm_e)` (RFC 9180
+        /// §7.1.3) — Appendix A's `ikmE`.
+        HpkeBase {
+            /// The `DeriveKeyPair` input.
+            ikm_e: [u8; 32],
+        },
+        /// The libsodium sealed box, with this ephemeral X25519 secret —
+        /// Appendix A's `skEm`.
+        SealedBox {
+            /// The ephemeral secret key.
+            ephemeral_secret: [u8; 32],
+        },
+        /// Signed only (§3.5). Ed25519 is deterministic, so there is nothing
+        /// to fix; offered here so every vector goes through one entry point.
+        SignedOnly,
+    }
+
+    /// What the ESSR sender field carries.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum PayloadSender {
+        /// The sender VID — what every public packing function writes.
+        #[default]
+        Present,
+        /// The NULL VID `4BAA`. §8 permits it under HPKE-Base, where the AAD
+        /// binds the sender, and the Appendix A vectors use it. Refused under
+        /// the sealed box, which has no AAD and so needs the field.
+        Null,
+    }
+
+    /// Everything a vector fixes besides its keys and payload.
+    #[derive(Debug, Clone, Default)]
+    pub struct Options<'a> {
+        /// The ESSR sender field.
+        pub payload_sender: PayloadSender,
+        /// The padding field.
+        pub padding: Padding,
+        /// The route of a [`MessageType::Routed`] message; empty otherwise.
+        pub hops: &'a [String],
+        /// The nonce of a [`MessageType::PaddingOnly`] message. An invite's
+        /// nonce is already the caller's, in [`ControlMessage::nonce`].
+        ///
+        /// [`ControlMessage::nonce`]: crate::message::control::ControlMessage::nonce
+        pub pad_nonce: Option<[u8; NONCE_LEN]>,
+        /// The introduced VID's signing key, for a referral invite.
+        pub referral_signing_key: Option<&'a [u8; 32]>,
+    }
+
+    /// Pack a message whose every byte is determined by the arguments. See the
+    /// module documentation for why this must never carry a real message.
+    ///
+    /// `body` is what the public functions take: application bytes, an
+    /// encoded [`ControlMessage`](crate::message::control::ControlMessage), or
+    /// the raw inner message of a nested or routed message.
+    /// `receiver_encryption_key` is ignored under [`Protection::SignedOnly`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn pack_insecure_deterministic(
+        body: &[u8],
+        message_type: MessageType,
+        sender_vid: &str,
+        receiver_vid: &str,
+        sender_signing_key: &[u8; 32],
+        receiver_encryption_key: &[u8; 32],
+        protection: Protection,
+        options: &Options<'_>,
+    ) -> Result<PackedMessage, TspError> {
+        let (scheme, confidential, ephemeral) = match protection {
+            Protection::HpkeBase { ikm_e } => (PkaeScheme::HpkeBase, true, Some(ikm_e)),
+            Protection::SealedBox { ephemeral_secret } => {
+                (PkaeScheme::SealedBox, true, Some(ephemeral_secret))
+            }
+            Protection::SignedOnly => (PkaeScheme::HpkeBase, false, None),
+        };
+        if !confidential && matches!(message_type, MessageType::Nested | MessageType::Routed) {
+            return Err(TspError::InvalidMessage(
+                "a nested or routed message must be confidential".into(),
+            ));
+        }
+        if scheme == PkaeScheme::SealedBox && options.payload_sender == PayloadSender::Null {
+            return Err(TspError::InvalidMessage(
+                "the sealed box has no AAD, so its payload must name the sender".into(),
+            ));
+        }
+        match (message_type, options.hops.len()) {
+            (MessageType::Routed, 0) => {
+                return Err(TspError::InvalidMessage(
+                    "a routed message requires at least one hop".into(),
+                ));
+            }
+            (MessageType::Routed, n) if n > crate::message::routed::MAX_HOPS => {
+                return Err(TspError::InvalidMessage(format!(
+                    "route has {n} hops, exceeds maximum of {}",
+                    crate::message::routed::MAX_HOPS
+                )));
+            }
+            (MessageType::Routed, _) | (_, 0) => {}
+            _ => {
+                return Err(TspError::InvalidMessage(
+                    "only a routed message carries hops".into(),
+                ));
+            }
+        }
+
+        super::pack_inner_with(
+            body,
+            message_type,
+            options.hops,
+            sender_vid,
+            receiver_vid,
+            sender_signing_key,
+            receiver_encryption_key,
+            options.referral_signing_key,
+            &options.padding,
+            confidential,
+            scheme,
+            &FixedInputs {
+                ephemeral,
+                pad_nonce: options.pad_nonce,
+                null_payload_sender: options.payload_sender == PayloadSender::Null,
+            },
+        )
+    }
 }
 
 /// Pack a direct TSP message between two endpoints whose VIDs declare

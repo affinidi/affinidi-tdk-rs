@@ -190,40 +190,31 @@ pub const TSP_INFO: &[u8] = b"YTSP-";
 ///
 /// # Two components, not three
 ///
-/// The marker is one character of MAJOR and two of MINOR. The published §9.1
-/// text reads the three characters as MAJOR, MINOR, PATCH instead, and gives
-/// the current version as `YTSP-ABA`; we do not follow it, deliberately.
+/// The marker is one character of MAJOR and two of MINOR (§9.1). An earlier
+/// draft of Rev 3 read the three characters as MAJOR, MINOR, PATCH instead and
+/// gave the version as `YTSP-ABA`; the merged specification settled on
+/// MAJOR.MINOR and `YTSP-AAC`, which is what this crate had already moved to.
 ///
 /// PATCH has no role in a wire version. Semver defines it as a
 /// backward-compatible bug fix — a change that by definition cannot alter what
 /// goes over the wire — so a receiver can never act on it, and six bits of
-/// every envelope would carry something no peer can use. Semver versions code;
-/// a library implementing TSP has two versions, its own and the protocol's, and
-/// they are not the same number.
+/// every envelope would carry something no peer can use.
 ///
-/// The two readings also disagree about the value, which is how the split shows
+/// The two readings disagree about the value, which is how the split showed
 /// itself. The trailing 12 bits are identical on the wire; only their
 /// interpretation differs:
 ///
 /// ```text
-/// marker                MAJOR   trailing 12 bits   MAJOR.MINOR   MAJOR.MINOR.PATCH
-/// AAB  (Rev 2)              0                  1           0.1               0.0.1
-/// ABA  (published Rev 3)    0                 64          0.64               0.1.0
-/// AAC  (here)               0                  2           0.2               0.0.2
+/// marker                   MAJOR   trailing 12 bits   MAJOR.MINOR   MAJOR.MINOR.PATCH
+/// AAB  (Rev 2)                 0                  1           0.1               0.0.1
+/// ABA  (pre-merge Rev 3)       0                 64          0.64               0.1.0
+/// AAC  (merged Rev 3)          0                  2           0.2               0.0.2
 /// ```
 ///
-/// Rev 2 was 1 and `ABA` reads as 64 — a jump that is an artifact of splitting
-/// the field, not a version anyone chose. Raised on the spec PR by Sam Smith,
-/// whose reading this follows; ours anticipates the resolution rather than
-/// waiting for it, on the grounds that `AAC` is where it lands if the argument
-/// holds.
-///
-/// Nothing about interoperating depends on the choice. Only MAJOR gates
-/// processability, MAJOR is the same first character under both readings, and
-/// neither the reference implementation nor this one refuses a message on
-/// MINOR — the reference discards MINOR entirely. The published Appendix A
-/// vectors carry `ABA` and still verify here, because a message's digest and
-/// signature cover the version bytes *it* carries, not ours.
+/// Only MAJOR gates processability, and neither the reference implementation
+/// nor this one refuses a message on MINOR, so a message a pre-merge peer
+/// packed under `ABA` still reads here: its digest and signature cover the
+/// version bytes *it* carries, not ours.
 pub const TSP_VERSION: (u16, u16) = (0, 2);
 
 /// MINOR occupies the whole 12-bit count of the version code.
@@ -656,6 +647,14 @@ mod tests {
         encode_version(&mut buf);
         let mut pos = 0;
         assert_eq!(decode_version(&buf, &mut pos).unwrap(), (0, 2));
+
+        // A different MINOR is carried, not refused: `YTSP-ABA`, the
+        // pre-merge Rev 3 marker, reads as MAJOR 0, MINOR 64.
+        let mut aba = Vec::new();
+        aba.extend_from_slice(&YTSP);
+        encode_count(0, 64, &mut aba);
+        let mut pos = 0;
+        assert_eq!(decode_version(&aba, &mut pos).unwrap(), (0, 64));
 
         // A YTSP marker with a different MAJOR is TSP, but unprocessable.
         let mut other = Vec::new();
