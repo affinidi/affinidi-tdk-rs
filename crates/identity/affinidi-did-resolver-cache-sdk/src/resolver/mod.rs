@@ -7,6 +7,7 @@ use crate::{DIDCacheClient, MethodName, errors::DIDCacheError};
 ))]
 use affinidi_did_common::DIDMethod;
 use affinidi_did_common::{DID, Document};
+use affinidi_did_resolver_traits::ResolverError;
 
 impl DIDCacheClient {
     /// Resolves a DID to a DID Document by looking up the method's resolver chain.
@@ -20,7 +21,10 @@ impl DIDCacheClient {
         if let Some(chain) = self.resolvers.get(&method_name) {
             for resolver in chain.iter() {
                 if let Some(result) = resolver.resolve(did).await {
-                    return result.map_err(|e| DIDCacheError::DIDError(e.to_string()));
+                    return result.map_err(|e| match e {
+                        ResolverError::NetworkFetch(fetch) => DIDCacheError::NetworkFetch(fetch),
+                        other => DIDCacheError::DIDError(other.to_string()),
+                    });
                 }
             }
         }

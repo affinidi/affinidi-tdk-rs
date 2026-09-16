@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.37"
+version = "0.8.38"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -46,7 +46,9 @@ did-cheqd = []
 did-webvh = ["dep:didwebvh-rs"]
 # Agent names: human-memorable "/@" shortcuts resolvable via `resolve_any()`.
 agent-names = ["dep:agent-names"]
-did-scid = ["dep:did-scid"]
+# `didwebvh-rs` is already in the graph through `did-scid`; naming it lets the
+# resolver read the typed network error that `did-scid` wraps.
+did-scid = ["dep:did-scid", "dep:didwebvh-rs"]
 did-ebsi = ["dep:did-ebsi"]
 # did:webs — did:web discovery with a KERI-verified key event log.
 did-webs = ["dep:affinidi-did-webs"]
@@ -54,7 +56,8 @@ did-webs = ["dep:affinidi-did-webs"]
 [dependencies]
 # Affinidi Crates
 affinidi-did-common = "0.4"
-affinidi-did-resolver-traits = { version = "0.1", path = "../affinidi-did-resolver-traits" }
+# 0.1.4 introduced `ResolverError::NetworkFetch`, which this crate matches on.
+affinidi-did-resolver-traits = { version = "0.1.4", path = "../affinidi-did-resolver-traits" }
 # Shared background-task supervision (network mode only)
 affinidi-task-utils = { version = "0.1", optional = true }
 did-example = { version = "0.5", optional = true }
