@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-rate-limit"
-version = "0.1.1"
+version = "0.1.2"
 description = "Per-IP request rate limiting middleware for axum services in the Affinidi TDK"
 repository.workspace = true
 edition.workspace = true

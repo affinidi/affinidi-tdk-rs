@@ -613,14 +613,13 @@ pub async fn serve_internal(
         ..Default::default()
     });
 
-    let did_rate_limiter = DidRateLimiter::new(
-        config.limits.did_rate_limit_per_second,
-        config.limits.did_rate_limit_burst,
-    );
+    let did_rate_limiter = did_rate_limiter(&config);
     did_rate_limiter.spawn_gc(shutdown_token.clone());
-    if config.limits.did_rate_limit_per_second > 0 {
+    if did_rate_limiter.is_enabled() {
         info!(
-            "Per-DID rate limiting enabled: {} req/s per DID, burst: {}",
+            "Per-DID rate limiting enabled: {} req/s per DID, burst: {}. Charged per \
+             authenticated HTTP request (including the /ws upgrade); messages on an \
+             established WebSocket are not metered. The mediator and admin DIDs are exempt.",
             config.limits.did_rate_limit_per_second, config.limits.did_rate_limit_burst,
         );
     }
@@ -727,7 +726,8 @@ pub async fn serve_internal(
     // free of any metrics dependency.
     let rate_limiter = ip_rate_limiter(&config.limits).on_refused(|refusal| {
         if matches!(refusal, Refusal::RateLimited { .. }) {
-            ::metrics::counter!(crate::common::metrics::names::RATE_LIMITED_TOTAL).increment(1);
+            ::metrics::counter!(crate::common::metrics::names::RATE_LIMITED_TOTAL, "scope" => "ip")
+                .increment(1);
         }
     });
     rate_limiter.spawn_gc(shutdown_token.clone());
@@ -1151,6 +1151,28 @@ pub const RATE_LIMIT_SOURCE: &str = "mediator";
 fn ip_rate_limiter(limits: &LimitsConfig) -> RateLimiterState {
     RateLimiterState::new(limits.rate_limit_per_ip, limits.rate_limit_burst)
         .with_source(RATE_LIMIT_SOURCE)
+}
+
+/// The per-DID limiter, exempting the mediator's own DID and the configured
+/// admin DID.
+///
+/// Forwarded traffic needs no exemption here: an inter-mediator hop is posted
+/// anonymously, and anonymous sessions are never charged (they carry no DID).
+/// A forward a *client* submits is charged to that client, which is the
+/// authenticated sender.
+fn did_rate_limiter(config: &Config) -> DidRateLimiter {
+    DidRateLimiter::new(
+        config.limits.did_rate_limit_per_second,
+        config.limits.did_rate_limit_burst,
+    )
+    .with_exempt_did_hashes([
+        config.mediator_did_hash.clone(),
+        if config.admin_did.is_empty() {
+            String::new()
+        } else {
+            sha256::digest(&config.admin_did)
+        },
+    ])
 }
 
 #[cfg(test)]

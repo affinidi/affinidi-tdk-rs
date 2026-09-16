@@ -341,6 +341,9 @@ pub struct TestMediatorBuilder {
     jwt_refresh_expiry_secs: Option<u64>,
     /// Override for `LimitsConfig.max_websocket_connections_per_did`.
     max_websocket_connections_per_did: Option<usize>,
+    /// Override for `LimitsConfig.did_rate_limit_per_second` /
+    /// `did_rate_limit_burst`.
+    did_rate_limit: Option<(u32, u32)>,
     /// Stable admin identity for the mediator. `None` mints the
     /// historical opaque `did:key:z6Mk{uuid}` shape with no usable
     /// secrets — suitable for tests that don't authenticate as admin.
@@ -385,6 +388,7 @@ impl Default for TestMediatorBuilder {
             jwt_access_expiry_secs: None,
             jwt_refresh_expiry_secs: None,
             max_websocket_connections_per_did: None,
+            did_rate_limit: None,
             clock: None,
             admin_identity: None,
             #[cfg(feature = "fjall-backend")]
@@ -609,6 +613,15 @@ impl TestMediatorBuilder {
     /// production default (100). Set small to exercise the cap in tests.
     pub fn max_websocket_connections_per_did(mut self, max: usize) -> Self {
         self.max_websocket_connections_per_did = Some(max);
+        self
+    }
+
+    /// Override `LimitsConfig.did_rate_limit_per_second` and
+    /// `did_rate_limit_burst` — the per-DID limit charged on every
+    /// authenticated HTTP request. Defaults to the production default
+    /// (`0` = disabled). Set small to exercise the `429` in tests.
+    pub fn did_rate_limit(mut self, per_second: u32, burst: u32) -> Self {
+        self.did_rate_limit = Some((per_second, burst));
         self
     }
 
@@ -861,6 +874,10 @@ impl TestMediatorBuilder {
         let mut limits = affinidi_messaging_mediator::common::config::LimitsConfig::default();
         if let Some(max) = self.max_websocket_connections_per_did {
             limits.max_websocket_connections_per_did = max;
+        }
+        if let Some((per_second, burst)) = self.did_rate_limit {
+            limits.did_rate_limit_per_second = per_second;
+            limits.did_rate_limit_burst = burst;
         }
 
         // Disable processors that aren't useful in most tests.

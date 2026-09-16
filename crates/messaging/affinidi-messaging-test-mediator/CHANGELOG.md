@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.9.1) — `TestMediatorBuilder::did_rate_limit`
+
+`did_rate_limit(per_second, burst)` sets `limits.did_rate_limit_per_second` and
+`did_rate_limit_burst`, which the mediator now enforces (mediator 0.26.2). The
+default stays the production default, `0` (disabled). Additive.
+
 ## Unreleased (0.9.0) — `trust-tasks-rs` 0.21
 
 Dependency move only. Minor rather than patch because this fixture hands

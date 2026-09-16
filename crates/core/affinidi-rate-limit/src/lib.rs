@@ -51,7 +51,16 @@
  * `into_make_service_with_connect_info::<SocketAddr>()`.
  */
 
-use std::{net::IpAddr, net::SocketAddr, num::NonZeroU32, sync::Arc, time::Duration};
+use std::{
+    net::IpAddr,
+    net::SocketAddr,
+    num::NonZeroU32,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use axum::{
     Json,
@@ -62,14 +71,62 @@ use axum::{
 use governor::{
     Quota, RateLimiter,
     clock::{Clock, DefaultClock},
-    state::keyed::DashMapStateStore,
+    nanos::Nanos,
+    state::{
+        StateStore,
+        keyed::{DashMapStateStore, ShrinkableKeyedStateStore},
+    },
 };
 use http::{HeaderName, HeaderValue, Request, StatusCode, header};
 use tokio_util::sync::CancellationToken;
 use tower::{Layer, Service};
 use tracing::{debug, warn};
 
-type KeyedLimiter = RateLimiter<IpAddr, DashMapStateStore<IpAddr>, DefaultClock>;
+/// A `governor` DashMap state store shared behind an `Arc`.
+///
+/// `governor`'s `RateLimiter::keyed` owns its store privately, exposing only
+/// `len` / `retain_recent` / `shrink_to_fit` — enough to *sweep* the map but
+/// not to ask whether a key is already present. The distinct-IP cap
+/// ([`MAX_TRACKED_IPS`]) needs exactly that: an IP already tracked must always
+/// be admitted to its bucket (never refused for capacity), while a brand-new IP
+/// is what the cap gates. So the limiter is built over a store we also hold an
+/// `Arc` to, and membership / length are read straight from it.
+///
+/// `DashMapStateStore<K>` is a type alias for `DashMap<K, InMemoryState>`, so
+/// the trait impls below are pure delegation.
+#[derive(Clone)]
+struct SharedDashMapStore(Arc<DashMapStateStore<IpAddr>>);
+
+impl StateStore for SharedDashMapStore {
+    type Key = IpAddr;
+
+    fn measure_and_replace<T, F, E>(&self, key: &Self::Key, f: F) -> Result<T, E>
+    where
+        F: Fn(Option<Nanos>) -> Result<(T, Nanos), E>,
+    {
+        self.0.measure_and_replace(key, f)
+    }
+}
+
+impl ShrinkableKeyedStateStore<IpAddr> for SharedDashMapStore {
+    fn retain_recent(&self, drop_below: Nanos) {
+        self.0.retain_recent(drop_below);
+    }
+
+    fn shrink_to_fit(&self) {
+        self.0.shrink_to_fit();
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+type KeyedLimiter = RateLimiter<IpAddr, SharedDashMapStore, DefaultClock>;
 
 /// Observer invoked when a request is refused. See
 /// [`RateLimiterState::on_refused`].
@@ -77,6 +134,45 @@ pub type RefusalCallback = Arc<dyn Fn(&Refusal) + Send + Sync>;
 
 /// How often idle buckets are swept out of the keyed state store.
 pub const GC_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Hard cap on the number of *distinct* source IPs tracked at once.
+///
+/// `governor` bounds the rate *within* each key's bucket but never the *number*
+/// of keys, and [`spawn_gc`](RateLimiterState::spawn_gc) only reclaims fully
+/// replenished buckets on a 60s tick. The store is keyed on unauthenticated,
+/// client-chosen input reachable *before* any authentication — a client
+/// rotating through an IPv6 /64 inserts an entry per request — so without a cap
+/// this is an unbounded memory-growth path an unauthenticated attacker can
+/// drive at line rate (CWE-770). The cap bounds the worst case to
+/// O(`MAX_TRACKED_IPS`).
+///
+/// 250_000 is deliberately generous: a legitimate deployment — even a large
+/// mediator or DID host — sees at most thousands to low tens of thousands of
+/// distinct client IPs within a 60s GC window, so steady state sits far below
+/// the cap and is never refused by it, while the ceiling still bounds the map
+/// to roughly tens of MB (an `IpAddr` plus a few words of bucket state per
+/// entry). When the cap is hit, a *new* IP fails closed — the same `429` a
+/// quota refusal returns — rather than growing the map; an IP already tracked
+/// is unaffected. It is a constant rather than a config knob because it is a
+/// safety backstop, not a tuning parameter, and operators size the real limit
+/// via `per_second` / `burst`.
+const MAX_TRACKED_IPS: usize = 250_000;
+
+/// `Retry-After` (seconds) on a *capacity* refusal (the cap is full), as
+/// opposed to a per-IP quota refusal. Tied to the GC interval: the next sweep
+/// reclaims replenished buckets and frees space. Advisory — the throttled
+/// inline reclaim on the refusal path often frees space sooner.
+const CAPACITY_RETRY_AFTER_SECS: u64 = GC_INTERVAL.as_secs();
+
+/// Minimum spacing between *inline* reclaim passes on the refusal path.
+///
+/// The refusal path may run `retain_recent` (an O(tracked) scan) to make room
+/// before failing closed. Running it unconditionally on every full-map request
+/// — on this *pre-authentication* path especially — would make the cap a
+/// CPU-exhaustion lever (fixing unbounded memory with unbounded CPU). Throttling
+/// it to at most one pass per window keeps the refusal path O(1) amortised; the
+/// periodic [`GC_INTERVAL`] sweep is the unconditional backstop.
+const INLINE_RECLAIM_MIN_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Response header naming the service whose limiter refused the request. Set on
 /// a `429` only when the limiter was given a name with
@@ -99,10 +195,59 @@ pub enum Refusal {
     NoClientIp,
 }
 
+/// The live limiter, present only when limiting is enabled. Bundles the
+/// `governor` limiter with the shared handle to its state store (for the
+/// distinct-IP cap), the cap, and the inline-reclaim throttle state, so they
+/// can never drift apart.
+#[derive(Clone)]
+struct Active {
+    limiter: Arc<KeyedLimiter>,
+    store: SharedDashMapStore,
+    max_tracked: usize,
+    /// Monotonic reference for the inline-reclaim throttle. Backdated by
+    /// [`INLINE_RECLAIM_MIN_INTERVAL`] at construction so the first reclaim
+    /// after the map fills fires immediately rather than waiting out a window.
+    epoch: Instant,
+    /// Milliseconds (since `epoch`) of the last inline reclaim, `0` until the
+    /// first. Shared so all clones throttle against one another.
+    last_reclaim_ms: Arc<AtomicU64>,
+}
+
+impl Active {
+    /// Number of distinct IPs currently tracked.
+    fn tracked(&self) -> usize {
+        self.store.0.len()
+    }
+
+    /// Is this IP already tracked? An already-tracked IP is exempt from the cap
+    /// — charged against its existing bucket, never refused for capacity.
+    fn is_tracked(&self, ip: &IpAddr) -> bool {
+        self.store.0.contains_key(ip)
+    }
+
+    /// Reclaim fully-replenished buckets, at most once per
+    /// [`INLINE_RECLAIM_MIN_INTERVAL`]. A no-op if another reclaim ran within
+    /// the window — this keeps the refusal path from amplifying an O(tracked)
+    /// scan across every request in a flood.
+    fn throttled_reclaim(&self) {
+        let now_ms = self.epoch.elapsed().as_millis() as u64;
+        let last = self.last_reclaim_ms.load(Ordering::Relaxed);
+        let window_ms = INLINE_RECLAIM_MIN_INTERVAL.as_millis() as u64;
+        if now_ms.saturating_sub(last) >= window_ms
+            && self
+                .last_reclaim_ms
+                .compare_exchange(last, now_ms, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        {
+            self.limiter.retain_recent();
+        }
+    }
+}
+
 /// Shared limiter state, cheap to clone.
 #[derive(Clone)]
 pub struct RateLimiterState {
-    limiter: Option<Arc<KeyedLimiter>>,
+    active: Option<Active>,
     on_refused: Option<RefusalCallback>,
     source: Option<HeaderValue>,
 }
@@ -110,7 +255,7 @@ pub struct RateLimiterState {
 impl std::fmt::Debug for RateLimiterState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RateLimiterState")
-            .field("enabled", &self.limiter.is_some())
+            .field("enabled", &self.active.is_some())
             .field("has_callback", &self.on_refused.is_some())
             .field("source", &self.source())
             .finish()
@@ -123,14 +268,37 @@ impl RateLimiterState {
     ///
     /// `per_second == 0` disables limiting; `burst == 0` is treated as 1.
     pub fn new(per_second: u32, burst: u32) -> Self {
+        Self::with_capacity(per_second, burst, MAX_TRACKED_IPS)
+    }
+
+    /// As [`Self::new`], but with an explicit distinct-IP cap. The public
+    /// constructor always uses [`MAX_TRACKED_IPS`]; tests use a small cap so the
+    /// admission-control path can be exercised without inserting 250k keys.
+    fn with_capacity(per_second: u32, burst: u32, max_tracked: usize) -> Self {
         let Some(per_second) = NonZeroU32::new(per_second) else {
             return Self::disabled();
         };
         let burst = NonZeroU32::new(burst).unwrap_or(NonZeroU32::MIN);
+        // Build the limiter over a store we keep an `Arc` to, so the cap can
+        // read membership/length from the exact map the limiter mutates.
+        let store = SharedDashMapStore(Arc::new(DashMapStateStore::default()));
+        let limiter = RateLimiter::new(
+            Quota::per_second(per_second).allow_burst(burst),
+            store.clone(),
+            DefaultClock::default(),
+        );
         Self {
-            limiter: Some(Arc::new(RateLimiter::keyed(
-                Quota::per_second(per_second).allow_burst(burst),
-            ))),
+            active: Some(Active {
+                limiter: Arc::new(limiter),
+                store,
+                // A cap of 0 would refuse every IP; clamp so a misconfigured
+                // caller degrades to "track one" rather than "deny all".
+                max_tracked: max_tracked.max(1),
+                epoch: Instant::now()
+                    .checked_sub(INLINE_RECLAIM_MIN_INTERVAL)
+                    .unwrap_or_else(Instant::now),
+                last_reclaim_ms: Arc::new(AtomicU64::new(0)),
+            }),
             on_refused: None,
             source: None,
         }
@@ -139,7 +307,7 @@ impl RateLimiterState {
     /// A pass-through limiter that refuses nothing.
     pub fn disabled() -> Self {
         Self {
-            limiter: None,
+            active: None,
             on_refused: None,
             source: None,
         }
@@ -178,12 +346,12 @@ impl RateLimiterState {
 
     /// Is limiting active?
     pub fn is_enabled(&self) -> bool {
-        self.limiter.is_some()
+        self.active.is_some()
     }
 
     /// Live bucket count, or 0 when disabled. Mainly useful in tests.
     pub fn tracked_keys(&self) -> usize {
-        self.limiter.as_ref().map_or(0, |l| l.len())
+        self.active.as_ref().map_or(0, |a| a.tracked())
     }
 
     /// Charge one request against `ip`'s bucket.
@@ -191,10 +359,31 @@ impl RateLimiterState {
     /// This is the whole decision, separated from the middleware so it can be
     /// exercised directly.
     pub fn check(&self, ip: IpAddr) -> Result<(), Refusal> {
-        let Some(limiter) = &self.limiter else {
+        let Some(active) = &self.active else {
             return Ok(());
         };
-        match limiter.check_key(&ip) {
+
+        // Admission control (CWE-770). The store is keyed on unauthenticated,
+        // client-chosen IPs, so without a ceiling a client rotating addresses
+        // (an IPv6 /64, say) grows it without bound between GC sweeps. Only the
+        // *insertion of a new key* is gated: an IP already tracked falls through
+        // to its bucket below, so a legitimate steady-state set of clients under
+        // the cap is never refused and no in-window IP is evicted by this path.
+        if !active.is_tracked(&ip) && active.tracked() >= active.max_tracked {
+            // Try to make room before refusing: reclaim fully-replenished
+            // buckets, throttled so this pre-auth path can't amplify an
+            // O(tracked) scan across a flood (see `throttled_reclaim`).
+            active.throttled_reclaim();
+            if !active.is_tracked(&ip) && active.tracked() >= active.max_tracked {
+                // Still full: fail closed for the new IP rather than grow
+                // unbounded. Same 429 contract as a quota refusal.
+                return Err(Refusal::RateLimited {
+                    retry_after_secs: CAPACITY_RETRY_AFTER_SECS,
+                });
+            }
+        }
+
+        match active.limiter.check_key(&ip) {
             Ok(()) => Ok(()),
             Err(not_until) => {
                 // governor reports the instant the next token is available;
@@ -218,7 +407,7 @@ impl RateLimiterState {
     ///
     /// No-op when limiting is disabled — there is no map to sweep.
     pub fn spawn_gc(&self, shutdown: CancellationToken) {
-        let Some(limiter) = self.limiter.clone() else {
+        let Some(limiter) = self.active.as_ref().map(|a| a.limiter.clone()) else {
             return;
         };
         tokio::spawn(async move {
@@ -403,6 +592,77 @@ mod tests {
             limiter.check(quiet).is_ok(),
             "a different IP must have its own bucket"
         );
+    }
+
+    /// The distinct-IP cap refuses a *new* IP once the store is full, but an
+    /// already-tracked IP keeps flowing — the cap gates key insertion, not use.
+    ///
+    /// `per_second = 1`, burst 5: nothing is refused for its quota within the
+    /// test, and the two filled buckets don't replenish, so the store stays
+    /// full and the only refusal is the capacity one.
+    #[test]
+    fn cap_fails_closed_for_a_new_ip_when_full() {
+        let limiter = RateLimiterState::with_capacity(1, 5, 2);
+
+        assert!(limiter.check(ip("1.1.1.1")).is_ok());
+        assert!(limiter.check(ip("2.2.2.2")).is_ok());
+        assert_eq!(limiter.tracked_keys(), 2);
+
+        // A third, new IP is refused for capacity, not quota.
+        match limiter.check(ip("3.3.3.3")) {
+            Err(Refusal::RateLimited { retry_after_secs }) => {
+                assert_eq!(retry_after_secs, CAPACITY_RETRY_AFTER_SECS);
+            }
+            other => panic!("expected a capacity refusal, got {other:?}"),
+        }
+
+        // An already-tracked IP still has quota and is never refused by the cap.
+        assert!(limiter.check(ip("1.1.1.1")).is_ok());
+    }
+
+    /// Disabled mode (`per_second == 0`) has no store and therefore no cap.
+    #[test]
+    fn disabled_mode_ignores_the_cap() {
+        let limiter = RateLimiterState::new(0, 0);
+        assert!(!limiter.is_enabled());
+        for i in 0..2000u32 {
+            let octet = i.to_be_bytes();
+            assert!(
+                limiter
+                    .check(IpAddr::from([octet[0], octet[1], octet[2], octet[3]]))
+                    .is_ok()
+            );
+        }
+    }
+
+    /// A set of distinct IPs comfortably under the cap is never refused by it.
+    #[test]
+    fn a_client_set_under_the_cap_is_never_refused() {
+        let limiter = RateLimiterState::with_capacity(1000, 1000, 200);
+        for i in 0..150u32 {
+            let o = i.to_be_bytes();
+            assert!(
+                limiter.check(IpAddr::from([10, o[1], o[2], o[3]])).is_ok(),
+                "IP {i} (under the cap) must be admitted"
+            );
+        }
+    }
+
+    /// Once buckets replenish, the refusal-path reclaim frees their slots and
+    /// new IPs are admitted again — the cap is a live ceiling, not permanent.
+    #[test]
+    fn reclaim_frees_capacity_for_new_ips() {
+        // burst 1 at 1000/s: a charged bucket fully replenishes in ~1ms.
+        let limiter = RateLimiterState::with_capacity(1000, 1, 2);
+        assert!(limiter.check(ip("1.1.1.1")).is_ok());
+        assert!(limiter.check(ip("2.2.2.2")).is_ok());
+
+        // Let both buckets fully replenish so they become reclaimable.
+        std::thread::sleep(Duration::from_millis(50));
+
+        // A new IP now succeeds: the throttled reclaim (first pass fires
+        // immediately, epoch is backdated) drops the two replenished buckets.
+        assert!(limiter.check(ip("3.3.3.3")).is_ok());
     }
 
     #[test]
