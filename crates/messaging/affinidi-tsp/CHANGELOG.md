@@ -1,5 +1,14 @@
 # Affinidi TSP Changelog
 
+## Unreleased
+
+- **Fix: an XSCS/XCTL body holding anything but exactly one Bytes primitive is
+  refused.** It was read as its first primitive, silently dropping the rest of
+  the `-A##` stream, and data after the stream was ignored. The body is now
+  held to the form the specification's vectors and the ToIP reference use: an
+  `-A##` stream that ends the payload frame and holds one Bytes primitive. See
+  [tswg-tsp-specification#77](https://github.com/trustoverip/tswg-tsp-specification/issues/77).
+
 ## Unreleased (0.2.0) — Trust Spanning Protocol specification Rev 3
 
 Carries the 0.1.16 dependency move below as well: this branch merged it in,

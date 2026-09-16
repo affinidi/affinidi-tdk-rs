@@ -710,6 +710,30 @@ fn hops_to_strings(hop_bytes: Vec<Vec<u8>>) -> Result<Vec<String>, TspError> {
         })
         .collect()
 }
+/// Decodes an XSCS/XCTL body: a `-A##` stream that ends the payload frame and
+/// holds exactly one Bytes primitive, the form the specification's vectors and
+/// the ToIP reference use. Anything else — an `-H##` group, a second primitive,
+/// data after the stream — is refused rather than truncated to the first
+/// primitive (<https://github.com/trustoverip/tswg-tsp-specification/issues/77>).
+fn decode_app_stream(frame: &[u8], pos: &mut usize, frame_end: usize) -> Result<Vec<u8>, TspError> {
+    let stream_quadlets = wire::decode_count(wire::TSP_GENERIC_STREAM, frame, pos)
+        .ok_or_else(|| TspError::InvalidMessage("missing -A payload stream".into()))?;
+    let stream_end = (stream_quadlets as usize)
+        .checked_mul(3)
+        .and_then(|len| pos.checked_add(len))
+        .filter(|end| *end == frame_end)
+        .ok_or_else(|| {
+            TspError::InvalidMessage("-A stream does not end the payload frame".into())
+        })?;
+    let body = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, pos)
+        .ok_or_else(|| TspError::InvalidMessage("missing payload body".into()))?;
+    if *pos != stream_end {
+        return Err(TspError::InvalidMessage(
+            "-A stream must hold exactly one Bytes primitive".into(),
+        ));
+    }
+    Ok(body)
+}
 
 /// Decode a CESR payload frame.
 ///
@@ -759,22 +783,7 @@ fn decode_payload_frame(
     if type_code == payload_marker::DIRECT {
         let _pad = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
             .ok_or_else(|| TspError::InvalidMessage("missing padding field".into()))?;
-        let stream_quadlets = wire::decode_count(wire::TSP_GENERIC_STREAM, frame, &mut pos)
-            .ok_or_else(|| TspError::InvalidMessage("missing -A payload stream".into()))?;
-        let stream_end = (stream_quadlets as usize)
-            .checked_mul(3)
-            .and_then(|len| pos.checked_add(len))
-            .filter(|end| *end <= frame_end)
-            .ok_or_else(|| {
-                TspError::InvalidMessage("-A stream overruns the payload frame".into())
-            })?;
-        let body = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
-            .ok_or_else(|| TspError::InvalidMessage("missing payload body".into()))?;
-        if pos > stream_end {
-            return Err(TspError::InvalidMessage(
-                "payload body overruns the -A stream".into(),
-            ));
-        }
+        let body = decode_app_stream(frame, &mut pos, frame_end)?;
         Ok(DecodedFrame {
             kind: MessageType::Direct,
             hops: Vec::new(),
@@ -785,22 +794,7 @@ fn decode_payload_frame(
     } else if type_code == payload_marker::GENERIC_CONTROL {
         let _pad = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
             .ok_or_else(|| TspError::InvalidMessage("missing padding field".into()))?;
-        let stream_quadlets = wire::decode_count(wire::TSP_GENERIC_STREAM, frame, &mut pos)
-            .ok_or_else(|| TspError::InvalidMessage("missing -A payload stream".into()))?;
-        let stream_end = (stream_quadlets as usize)
-            .checked_mul(3)
-            .and_then(|len| pos.checked_add(len))
-            .filter(|end| *end <= frame_end)
-            .ok_or_else(|| {
-                TspError::InvalidMessage("-A stream overruns the payload frame".into())
-            })?;
-        let body = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
-            .ok_or_else(|| TspError::InvalidMessage("missing payload body".into()))?;
-        if pos > stream_end {
-            return Err(TspError::InvalidMessage(
-                "payload body overruns the -A stream".into(),
-            ));
-        }
+        let body = decode_app_stream(frame, &mut pos, frame_end)?;
         Ok(DecodedFrame {
             kind: MessageType::GenericControl,
             hops: Vec::new(),
@@ -1828,6 +1822,50 @@ mod tests {
     use crate::PrivateVid;
     use ed25519_dalek::SigningKey;
     use x25519_dalek::{PublicKey, StaticSecret};
+
+    /// An XSCS/XCTL body is exactly one Bytes primitive (spec issue #77): an
+    /// `-H##` group, a second primitive, or data after the stream is refused,
+    /// never truncated to the first primitive.
+    #[test]
+    fn app_stream_is_exactly_one_bytes_primitive() {
+        let prim = |b: &[u8]| {
+            let mut v = Vec::new();
+            wire::encode_variable_data(wire::TSP_PLAINTEXT, b, &mut v);
+            v
+        };
+        let framed = |stream: &[u8], trailing: &[u8]| {
+            let mut v = Vec::new();
+            wire::encode_count(wire::TSP_GENERIC_STREAM, (stream.len() / 3) as u32, &mut v);
+            v.extend_from_slice(stream);
+            v.extend_from_slice(trailing);
+            v
+        };
+        let decode = |f: &[u8]| decode_app_stream(f, &mut 0, f.len());
+
+        assert_eq!(
+            decode(&framed(&prim(b"hello world"), &[])).unwrap(),
+            b"hello world"
+        );
+
+        let json = prim(br#"{"hello":"world"}"#);
+        let mut h_group = Vec::new();
+        wire::encode_count(
+            wire::cesr_int("H") as u16,
+            (json.len() / 3) as u32,
+            &mut h_group,
+        );
+        h_group.extend_from_slice(&json);
+        assert!(decode(&framed(&h_group, &[])).is_err(), "-H group");
+
+        let two = [prim(b"one"), prim(b"two")].concat();
+        assert!(decode(&framed(&two, &[])).is_err(), "two primitives");
+
+        let one = prim(b"one");
+        assert!(
+            decode(&framed(&one, &prim(b"x"))).is_err(),
+            "data after the stream"
+        );
+    }
 
     struct TestKeys {
         sender_sign_sk: [u8; 32],
