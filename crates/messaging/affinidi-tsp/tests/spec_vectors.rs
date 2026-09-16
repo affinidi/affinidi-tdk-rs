@@ -20,9 +20,10 @@
 //! qb2 binary domain this crate works in, so decoding is plain base64url and no
 //! CESR-aware conversion is involved.
 //!
-//! Fixture: `tests/vectors/rev3.json`, lifted verbatim from spec commit
-//! `c80b0e4`. The private keys in it are published in the specification and must
-//! never be used for anything else.
+//! Fixture: `tests/vectors/rev3.json`, lifted verbatim from the merged
+//! specification, commit `f5b8668`, where the version is `YTSP-AAC`. The private
+//! keys in it are published in the specification and must never be used for
+//! anything else.
 
 use affinidi_tsp::MessageType;
 use affinidi_tsp::message::control::ControlType;
@@ -331,6 +332,27 @@ fn every_vector_has_a_self_consistent_length() {
     }
 }
 
+/// Every vector is at the merged specification's version, `YTSP-AAC` — the
+/// marker this crate emits.
+///
+/// The fixture was `YTSP-ABA` before the merge, and those vectors verified
+/// here too, because MINOR does not gate processing. That tolerance is exactly
+/// why this is worth asserting: a stale fixture would otherwise pass unnoticed.
+#[test]
+fn every_vector_is_at_the_merged_version() {
+    let v = Vectors::load();
+    let mut ours = Vec::new();
+    affinidi_tsp::message::wire::encode_version(&mut ours);
+    for (name, vector) in v.json["vectors"].as_object().expect("vectors") {
+        let message = vector["message"].as_str().expect("message");
+        assert!(
+            message[4..].starts_with("YTSP-AAC"),
+            "{name}: expected YTSP-AAC after the frame code"
+        );
+        assert_eq!(qb64(message)[3..9], ours[..], "{name}: version bytes");
+    }
+}
+
 /// The nested message: an `XHOP` payload with an empty hop list carrying a
 /// complete inner message, which is then unpacked with the inner pair's keys.
 ///
@@ -553,7 +575,7 @@ mod post_quantum {
             assert_eq!(qb64(&v.id(id, "pkE")).len(), hpke_pq::PK_LEN, "{id}.pkE");
             assert_eq!(qb64(&v.id(id, "skE")).len(), hpke_pq::SK_LEN, "{id}.skE");
             assert_eq!(v.id(id, "sigKeyType"), "MlDsa65");
-            assert_eq!(v.id(id, "encKeyType"), "X25519MlKem768");
+            assert_eq!(v.id(id, "encKeyType"), "MLKEM768-X25519");
         }
     }
 

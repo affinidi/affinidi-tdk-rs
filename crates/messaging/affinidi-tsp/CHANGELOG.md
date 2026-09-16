@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Test: the Appendix A vectors are the merged specification's.**
+  `tests/vectors/rev3.json` moves from the pre-merge `YTSP-ABA` vectors to
+  those of trustoverip/tswg-tsp-specification@`f5b8668`, at `YTSP-AAC`, which
+  changed every message and the control vectors' SAIDs. Checked value by value
+  against tsp_sdk 0.11.0's own `test_vectors/rev3.json`. No library change:
+  the crate already emitted `AAC`, and still reads `ABA` since MINOR does not
+  gate processing.
 - **Fix: `MAX_HOPS` is 64 (was 16).** The specification sets no maximum, and
   17-hop routes packed by the ToIP reference, Go and Dart implementations were
   refused on decode. The same bound applies when packing a route and when

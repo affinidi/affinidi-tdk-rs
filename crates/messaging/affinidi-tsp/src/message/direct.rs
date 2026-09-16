@@ -7,7 +7,7 @@
 //! Wire format:
 //! ```text
 //! -E<count>                       one frame; count covers everything below
-//!   YTSP <version>                  `YTSP-ABA`
+//!   YTSP <version>                  `YTSP-AAC`
 //!   <var-data B> sender-VID
 //!   <var-data B> receiver-VID       `4BAA` when absent
 //!   <var-data F> enc ‖ ct         HPKE-Base ciphertext, AEAD tag inside ct
