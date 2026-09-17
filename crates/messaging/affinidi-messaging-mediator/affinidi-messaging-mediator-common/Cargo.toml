@@ -54,6 +54,8 @@ server = [
   "dep:tokio-tungstenite",
   "dep:futures-util",
   "dep:tokio-stream",
+  # egress guard for the forwarding client (SSRF / open-relay defence)
+  "dep:affinidi-net-guard",
 ]
 
 # ── Storage backends ────────────────────────────────────────────────
@@ -192,6 +194,11 @@ reqwest = { version = "0.13", default-features = false, features = [
   "rustls",
   "json",
 ], optional = true }
+# Egress guard: the forwarding client vets every next-hop endpoint (address
+# class + scheme) and resolves names through a fail-closed guarded resolver, so
+# an attacker-advertised service endpoint cannot pivot the mediator into an
+# SSRF/open-relay against internal/metadata/loopback targets.
+affinidi-net-guard = { version = "0.1.0", optional = true }
 # `connect` is explicit because this is the one declaration in the workspace
 # with `default-features = false`. In 0.29 `rustls-tls-native-roots` reached
 # `connect_async` transitively; in 0.30 it maps to `__rustls-tls`, which brings

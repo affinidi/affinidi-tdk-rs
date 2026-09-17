@@ -212,10 +212,14 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
         }
         Err(e) => {
             all_ok = false;
+            // /readyz is unauthenticated: never echo the backend error, which
+            // can carry Redis host:port / connection detail. Static message in
+            // the body, detail to the operator log (mirrors secrets_backend).
+            warn!(error = %e, "Redis readiness check failed");
             checks.push(serde_json::json!({
                 "name": "redis",
                 "status": "fail",
-                "message": format!("Redis check failed: {e}")
+                "message": "Redis check failed"
             }));
         }
     }
@@ -245,10 +249,13 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
         }
         Err(e) => {
             all_ok = false;
+            // Unauthenticated probe: queue backend errors carry host:port /
+            // connection detail. Static body message, detail to operator log.
+            warn!(error = %e, "Forward-queue readiness check failed");
             checks.push(serde_json::json!({
                 "name": "forward_queue",
                 "status": "fail",
-                "message": format!("Queue check failed: {e}")
+                "message": "Queue check failed"
             }));
         }
     }
@@ -307,10 +314,13 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
             // still serve traffic from in-memory keys — but it's worth
             // surfacing because it usually indicates an HMAC mismatch
             // (admin key was rotated externally) or a corrupt entry.
+            // Unauthenticated probe: keep the detail (which can carry a
+            // secrets-backend path) out of the body; log it for operators.
+            warn!(error = %e, "Could not read VTA cache during readiness probe");
             checks.push(serde_json::json!({
                 "name": "vta_cache",
                 "status": "warn",
-                "message": format!("Could not read VTA cache: {e}"),
+                "message": "Could not read VTA cache",
             }));
             None
         }
@@ -333,12 +343,18 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
                 degraded = true;
             }
         }
+        // Unauthenticated probe: a component's `last_error` can carry internal
+        // paths / backend detail. Expose only a boolean in the body; log the
+        // detail for operators (mirrors the secrets_backend treatment).
+        if let Some(err) = h.last_error.as_deref() {
+            warn!(component = %h.name, error = %err, "Supervised component reported an error");
+        }
         components.push(serde_json::json!({
             "name": h.name,
             "state": h.state,
             "load_bearing": h.load_bearing,
             "restarts": h.restarts,
-            "last_error": h.last_error,
+            "has_error": h.last_error.is_some(),
         }));
     }
     // Stable order so dashboards diffing the payload don't see churn.
