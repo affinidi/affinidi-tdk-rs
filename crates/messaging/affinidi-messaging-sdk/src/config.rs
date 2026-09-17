@@ -195,6 +195,13 @@ pub struct ATMConfig {
     /// that sense — an intermediary relaying for others — sets it false.
     #[cfg(feature = "tsp")]
     pub(crate) tsp_relationship_gating: bool,
+    /// Optional counter incremented each time an inbound TSP application message
+    /// is dropped by the §7.2.2 relationship gate (design note
+    /// `tsp-relationship-recovery.md`, D8). A rising count is the "a peer lost
+    /// its relationship state" alarm — the one event that was otherwise
+    /// invisible except in a single log line. `None` (default) counts nothing.
+    #[cfg(feature = "tsp")]
+    pub(crate) relationship_drop_counter: Option<Arc<std::sync::atomic::AtomicU64>>,
     /// How this endpoint keeps a peer's TSP key state fresh (spec Rev 3
     /// §7.4.2). Defaults to resolving for itself, with a day's
     /// re-verification threshold and a minute's resolution rate limit.
@@ -273,6 +280,15 @@ impl ATMConfig {
         self.tsp_relationship_gating
     }
 
+    /// Record one §7.2.2 relationship-gate drop against the configured counter,
+    /// if any (design note `tsp-relationship-recovery.md`, D8).
+    #[cfg(feature = "tsp")]
+    pub(crate) fn record_relationship_drop(&self) {
+        if let Some(counter) = &self.relationship_drop_counter {
+            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     /// How this endpoint keeps a peer's TSP key state fresh (Rev 3 §7.4.2).
     #[cfg(feature = "tsp")]
     pub(crate) fn tsp_key_state_policy(&self) -> affinidi_tsp::KeyStatePolicy {
@@ -327,6 +343,8 @@ pub struct ATMConfigBuilder {
     #[cfg(feature = "tsp")]
     tsp_relationship_gating: bool,
     #[cfg(feature = "tsp")]
+    relationship_drop_counter: Option<Arc<std::sync::atomic::AtomicU64>>,
+    #[cfg(feature = "tsp")]
     tsp_key_state_policy: affinidi_tsp::KeyStatePolicy,
 }
 
@@ -354,6 +372,8 @@ impl Default for ATMConfigBuilder {
             tsp_capability_ttl: None,
             #[cfg(feature = "tsp")]
             tsp_relationship_gating: true,
+            #[cfg(feature = "tsp")]
+            relationship_drop_counter: None,
             #[cfg(feature = "tsp")]
             tsp_key_state_policy: affinidi_tsp::KeyStatePolicy::default(),
         }
@@ -585,6 +605,20 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// Provide a counter to increment on every §7.2.2 relationship-gate drop of
+    /// an inbound TSP application message (design note
+    /// `tsp-relationship-recovery.md`, D8). The consumer reads it into its
+    /// telemetry sink; a rising count means peers are arriving whose relationship
+    /// this endpoint has lost — the alarm the original incident lacked.
+    #[cfg(feature = "tsp")]
+    pub fn with_relationship_drop_counter(
+        mut self,
+        counter: Arc<std::sync::atomic::AtomicU64>,
+    ) -> Self {
+        self.relationship_drop_counter = Some(counter);
+        self
+    }
+
     /// How this endpoint keeps a peer's TSP key state fresh (Rev 3 §7.4.2):
     /// whether it resolves key state for itself, how long a silence must be
     /// before a peer's VID is re-resolved, and how often any one peer may be
@@ -672,6 +706,8 @@ impl ATMConfigBuilder {
             tsp_capability_ttl: self.tsp_capability_ttl,
             #[cfg(feature = "tsp")]
             tsp_relationship_gating: self.tsp_relationship_gating,
+            #[cfg(feature = "tsp")]
+            relationship_drop_counter: self.relationship_drop_counter,
             #[cfg(feature = "tsp")]
             tsp_key_state_policy: self.tsp_key_state_policy,
         })
@@ -788,5 +824,26 @@ mod tests {
             !retained.purge_policy_rejected_messages(),
             "opting out retains policy-rejected messages"
         );
+    }
+
+    /// D8: a configured counter records each §7.2.2 drop; with none configured,
+    /// recording is a no-op that never panics.
+    #[cfg(feature = "tsp")]
+    #[test]
+    fn relationship_drop_counter_records_when_configured() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let counter = Arc::new(AtomicU64::new(0));
+        let config = ATMConfig::builder()
+            .with_relationship_drop_counter(counter.clone())
+            .build()
+            .unwrap();
+        config.record_relationship_drop();
+        config.record_relationship_drop();
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
+
+        // No counter configured: recording is a harmless no-op.
+        let none = ATMConfig::builder().build().unwrap();
+        none.record_relationship_drop();
     }
 }
