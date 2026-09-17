@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Relationship re-establishment (recovery).** `RelationshipState::transition`
+  now accepts `ReceiveInvite` from the established states instead of raising
+  `InvalidTransition`: `Bidirectional + ReceiveInvite → InviteReceived` (a peer
+  that lost its half re-invites, and the side that kept the relationship
+  re-accepts to repair it), and a re-sent invite while `InviteReceived` is
+  idempotent. There is no new control message — a re-invite over a live
+  relationship *is* the reconcile signal. Strictly more permissive: a transition
+  that used to error now succeeds. See the design note
+  `tsp-relationship-recovery.md` (D2).
+
 - **Test: the Appendix A vectors re-pack byte for byte.** A new non-default
   `test-vectors` feature adds `message::direct::insecure_deterministic`
   (hidden from the docs): `pack_insecure_deterministic` takes the vector's
