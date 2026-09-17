@@ -58,12 +58,6 @@ server = [
   "dep:affinidi-net-guard",
 ]
 
-# Relax the forwarding egress guard to admit loopback + plaintext http/ws, for
-# development and the integration-test harness (which runs mediators on
-# 127.0.0.1). NOT a default, and never enabled by a production build — a release
-# mediator forwards only to public, globally-routable https/wss next hops.
-dev-loopback = ["server", "affinidi-net-guard/dev-loopback"]
-
 # ── Storage backends ────────────────────────────────────────────────
 ## `RedisStore` — multi-mediator clusters and the standalone-binary
 ## horizontal-scaling story. Implies `server` (the trait + types live
@@ -105,7 +99,14 @@ secrets-k8s = ["server", "dep:kube", "dep:k8s-openapi"]
 ## expiry/TTL/session tests. NON-DEFAULT and never enabled by the mediator
 ## binary, so the advanceable clock can't reach a production build. Test
 ## harnesses (e.g. affinidi-messaging-test-mediator) opt in.
-test-clock = []
+##
+## It is also the fixture-mode marker that relaxes the forwarding egress guard
+## to admit loopback + plaintext http/ws (`affinidi-net-guard/dev-loopback`), so
+## the harness can forward between mediators on 127.0.0.1. Reusing the existing
+## test-only feature — rather than a new one — keeps `test-mediator` (a published
+## crate) resolving against the released mediator-common with no new feature
+## request. Never on in a production build, so the guard stays fail-closed there.
+test-clock = ["affinidi-net-guard/dev-loopback"]
 
 [dependencies]
 # ── Always-on: lean types module deps ───────────────────────────────

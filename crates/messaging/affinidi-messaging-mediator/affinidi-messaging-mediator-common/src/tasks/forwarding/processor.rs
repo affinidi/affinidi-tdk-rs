@@ -209,18 +209,18 @@ impl HttpClientPool {
         // tracked as a follow-up; the secure default is fail-closed.
         #[allow(unused_mut)]
         let mut policy = EgressPolicy::public_internet();
-        // Development / integration-test builds only (`dev-loopback` feature,
+        // Integration-test builds only (`test-clock`, the fixture-mode marker —
         // never a default and never a production build): admit loopback +
         // plaintext http/ws so the test harness can forward between mediators on
         // 127.0.0.1. A release mediator keeps the fail-closed policy above.
-        #[cfg(feature = "dev-loopback")]
+        #[cfg(feature = "test-clock")]
         {
             policy = policy.with_dev_loopback(
                 affinidi_net_guard::DevLoopback::acknowledge_ssrf_protection_disabled_for_loopback(
                 ),
             );
             warn!(
-                "forwarding egress guard: dev-loopback ENABLED — loopback/plaintext next hops permitted (NOT for production)"
+                "forwarding egress guard: loopback/plaintext next hops permitted (test-clock build — NOT for production)"
             );
         }
         let client = reqwest::Client::builder()

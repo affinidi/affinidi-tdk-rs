@@ -40,10 +40,6 @@ affinidi-messaging-mediator = { version = "0.26", path = "../affinidi-messaging-
 # `TestMediatorBuilder::clock` for fast expiry/TTL tests.
 affinidi-messaging-mediator-common = { version = "0.16", path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common", features = [
   "test-clock",
-  # This fixture runs mediators on 127.0.0.1 and forwards between them, so the
-  # forwarding egress guard must admit loopback/plaintext. Test-only; a
-  # production mediator never enables this.
-  "dev-loopback",
 ] }
 
 # ── Optional: Fjall on-disk backend support (gated on `fjall-backend`) ──
