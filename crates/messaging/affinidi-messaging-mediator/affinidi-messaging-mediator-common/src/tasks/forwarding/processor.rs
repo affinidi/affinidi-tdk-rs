@@ -207,7 +207,22 @@ impl HttpClientPool {
         // only, no special-use names. Deployments running an internal mediator
         // mesh (private-range peers) need an operator-configured allow-list —
         // tracked as a follow-up; the secure default is fail-closed.
-        let policy = EgressPolicy::public_internet();
+        #[allow(unused_mut)]
+        let mut policy = EgressPolicy::public_internet();
+        // Development / integration-test builds only (`dev-loopback` feature,
+        // never a default and never a production build): admit loopback +
+        // plaintext http/ws so the test harness can forward between mediators on
+        // 127.0.0.1. A release mediator keeps the fail-closed policy above.
+        #[cfg(feature = "dev-loopback")]
+        {
+            policy = policy.with_dev_loopback(
+                affinidi_net_guard::DevLoopback::acknowledge_ssrf_protection_disabled_for_loopback(
+                ),
+            );
+            warn!(
+                "forwarding egress guard: dev-loopback ENABLED — loopback/plaintext next hops permitted (NOT for production)"
+            );
+        }
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .danger_accept_invalid_certs(accept_invalid_certs)

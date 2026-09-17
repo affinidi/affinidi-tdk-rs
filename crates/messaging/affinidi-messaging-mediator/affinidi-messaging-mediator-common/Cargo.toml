@@ -58,6 +58,12 @@ server = [
   "dep:affinidi-net-guard",
 ]
 
+# Relax the forwarding egress guard to admit loopback + plaintext http/ws, for
+# development and the integration-test harness (which runs mediators on
+# 127.0.0.1). NOT a default, and never enabled by a production build — a release
+# mediator forwards only to public, globally-routable https/wss next hops.
+dev-loopback = ["server", "affinidi-net-guard/dev-loopback"]
+
 # ── Storage backends ────────────────────────────────────────────────
 ## `RedisStore` — multi-mediator clusters and the standalone-binary
 ## horizontal-scaling story. Implies `server` (the trait + types live

@@ -24,6 +24,10 @@ outbound client in the workspace already uses:
   hands to a custom resolver. Applied on both `deliver_via_rest` and
   `deliver_via_websocket`.
 
+A new **non-default `dev-loopback` feature** relaxes the guard to admit loopback
+and plaintext http/ws, for development and the integration-test harness (which
+runs mediators on `127.0.0.1`). It is never enabled by a production build.
+
 A deployment running an internal mediator mesh (private-range peers) will need
 an operator-configured allow-list (`affinidi-net-guard` supports
 `with_allow_list` / `allow_cidrs`). Residual: the WebSocket path's URL vet
