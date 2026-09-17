@@ -198,9 +198,25 @@ struct HttpClientPool {
 
 impl HttpClientPool {
     fn new(accept_invalid_certs: bool) -> Result<Self, String> {
+        // `danger_accept_invalid_certs` is honoured ONLY in dev/test builds
+        // (`test-clock`, where a local peer may present a self-signed cert). A
+        // production mediator always validates TLS on the forwarding client —
+        // disabling it would let a MITM on a public forwarding hop intercept
+        // relayed traffic even behind the egress guard. So the config flag is
+        // forced to `false` in a release build.
+        #[cfg(not(feature = "test-clock"))]
+        let accept_invalid_certs = {
+            if accept_invalid_certs {
+                warn!(
+                    "ignoring danger_accept_invalid_certs: TLS validation is enforced on the \
+                     forwarding client in non-test builds"
+                );
+            }
+            false
+        };
         if accept_invalid_certs {
             warn!(
-                "HTTP client configured to accept invalid TLS certificates — NOT safe for production"
+                "forwarding HTTP client accepts invalid TLS certificates (test-clock build — NOT for production)"
             );
         }
         // Public-internet posture: https/wss only, globally-routable addresses
@@ -1003,7 +1019,7 @@ impl ForwardingProcessor {
         // public, globally-routable wss target before dialing — same guarantee
         // the REST path gets, so the WebSocket transport cannot be used to reach
         // a metadata/RFC1918/loopback/link-local literal or a plaintext ws host.
-        self.http_pool.policy.vet(&ws_url).map_err(|e| {
+        let vetted = self.http_pool.policy.vet(&ws_url).map_err(|e| {
             format!("Refusing to relay via WebSocket to {ws_url}: blocked by egress policy: {e}")
         })?;
 
@@ -1039,6 +1055,15 @@ impl ForwardingProcessor {
 
         // No usable connection — establish one, negotiating `relay-ack`.
         drop(pool); // Release the lock while connecting
+
+        // DNS-rebinding guard for the WS path: the URL vet above blocks
+        // IP-literal internal targets, but `tokio_tungstenite` resolves the
+        // *name* itself at connect, so a name pointing at an internal address
+        // would still be dialed. Resolve it here first and refuse if it maps to
+        // a non-routable address. (A narrow resolve-then-connect TOCTOU race
+        // remains — far harder to win than a static internal-resolving name —
+        // and the REST path closes it fully via the guarded resolver.)
+        Self::refuse_ws_if_resolves_nonpublic(&vetted).await?;
 
         let mut request = ws_url
             .as_str()
@@ -1172,6 +1197,38 @@ impl ForwardingProcessor {
                 }
             }
         }
+    }
+
+    /// Refuse a WebSocket dial whose host is a DNS name that resolves to a
+    /// non-globally-routable address — the DNS-rebinding guard for the WS path.
+    /// IP-literal hosts are already address-class-checked by `policy.vet()`, so
+    /// only names are resolved here.
+    async fn refuse_ws_if_resolves_nonpublic(
+        vetted: &affinidi_net_guard::VettedUrl,
+    ) -> Result<(), String> {
+        let url = vetted.as_url();
+        let name = match url.host() {
+            Some(url::Host::Domain(name)) => name.to_string(),
+            // An IP-literal host already passed the address-class vet.
+            _ => return Ok(()),
+        };
+        let port = url.port_or_known_default().unwrap_or(443);
+        let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((name.as_str(), port))
+            .await
+            .map_err(|e| format!("WebSocket host {name} did not resolve: {e}"))?
+            .collect();
+        if addrs.is_empty() {
+            return Err(format!("WebSocket host {name} resolved to no addresses"));
+        }
+        for addr in &addrs {
+            if !affinidi_net_guard::is_globally_routable(addr.ip()) {
+                return Err(format!(
+                    "Refusing WebSocket relay to {name}: it resolves to a non-routable address ({})",
+                    addr.ip()
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Convert an HTTP(S) endpoint URL to a WebSocket URL
