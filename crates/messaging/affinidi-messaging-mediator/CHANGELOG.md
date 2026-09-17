@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased (0.26.3) — the TSP relay path is capability-gated, and `/readyz` stops leaking
+
+Two security fixes from the SEC-4045 review.
+
+- **TSP routed-relay requires `SEND_FORWARDED` (T1 sub-fix).** The DIDComm
+  `routing/2.0/forward` path refuses to relay for a sender that lacks the
+  `SEND_FORWARDED` capability; the TSP routed/nested relay path
+  (`handle_inbound_tsp` → `forward_to_next` → `forward_tsp_remote`) reached the
+  same enqueue sink with no such check, so an authenticated DID whose
+  `SEND_FORWARDED` was never granted (or was revoked) could still drive a relay.
+  The authenticated TSP relay arms now run
+  `authz::require_capability(&from_acls, Capability::SendForwarded)`, authorised
+  on the envelope sender's own ACLs — matching the DIDComm 403. (The egress
+  guard for the forwarding client itself is in
+  `affinidi-messaging-mediator-common` 0.16.1.)
+- **`/readyz` no longer folds backend error detail into the public body (T3).**
+  The unauthenticated readiness probe echoed `format!("… {e}")` for the Redis,
+  forward-queue and VTA-cache checks and each component's `last_error` verbatim —
+  host:port and internal paths to any scanner that can reach the LB probe. It
+  now emits a static per-check message and a `has_error` boolean, with the detail
+  logged at `warn` for operators, the same treatment the secrets-backend probe
+  already used.
+
 ## Unreleased (0.26.2) — `did_rate_limit_per_second` is enforced
 
 `limits.did_rate_limit_per_second` / `did_rate_limit_burst` were parsed, built

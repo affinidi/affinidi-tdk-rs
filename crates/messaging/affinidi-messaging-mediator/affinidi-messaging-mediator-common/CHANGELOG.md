@@ -1,5 +1,37 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.1) — the forwarding client goes through the egress guard
+
+The forwarding processor delivers routed messages to the next-hop mediator, and
+its destination comes from a DID-document service endpoint the sender controls.
+It built a bare `reqwest` client and a raw `tokio_tungstenite` dialer with no
+address-class vetting, so an attacker-advertised endpoint
+(`169.254.169.254`, RFC1918, loopback, CGNAT, link-local, or plaintext) was
+POSTed or dialed verbatim — an SSRF-with-body from inside the mediator's network
+and an open-relay amplifier (SEC-4045 T1).
+
+Both transports now run on `affinidi-net-guard`, the same guard every other
+outbound client in the workspace already uses:
+
+- The client resolves names through a **fail-closed guarded resolver** (any
+  answer that is not globally routable fails the whole name, so a public name
+  that resolves to a private address is refused at connect — DNS-rebinding is
+  closed), refuses redirects (`Policy::none()`) and ignores ambient proxy env
+  (`no_proxy()`).
+- Each delivery additionally **vets the target URL** under
+  `EgressPolicy::public_internet()` before dialing — https/wss only, globally
+  routable only. This is the half that sees IP literals, which `reqwest` never
+  hands to a custom resolver. Applied on both `deliver_via_rest` and
+  `deliver_via_websocket`.
+
+A deployment running an internal mediator mesh (private-range peers) will need
+an operator-configured allow-list (`affinidi-net-guard` supports
+`with_allow_list` / `allow_cidrs`). Residual: the WebSocket path's URL vet
+blocks every IP-literal target; a public name that resolves to an internal
+address is still a residual on the WS transport only, because
+`tokio_tungstenite` re-resolves internally — the REST path closes it via the
+guarded resolver.
+
 ## Unreleased (0.16.0) — TSP Rev 3: a relayed destination is not retained
 
 Breaking, by semantics rather than by signature — the kind this repository's

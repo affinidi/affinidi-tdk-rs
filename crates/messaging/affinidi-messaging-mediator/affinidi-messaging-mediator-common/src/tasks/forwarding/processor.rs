@@ -917,10 +917,9 @@ impl ForwardingProcessor {
         // is not a public, globally-routable https target before issuing the
         // request. This is the check that sees IP literals (metadata/RFC1918/
         // loopback/link-local), which the client's DNS resolver never sees.
-        self.http_pool
-            .policy
-            .vet(&inbound_url)
-            .map_err(|e| format!("Refusing to forward to {inbound_url}: blocked by egress policy: {e}"))?;
+        self.http_pool.policy.vet(&inbound_url).map_err(|e| {
+            format!("Refusing to forward to {inbound_url}: blocked by egress policy: {e}")
+        })?;
 
         // A TSP forward is queued as base64url(qb2) text; send the decoded raw qb2
         // so the remote mediator's ingress recognises the TSP magic byte. A DIDComm
@@ -989,10 +988,9 @@ impl ForwardingProcessor {
         // public, globally-routable wss target before dialing — same guarantee
         // the REST path gets, so the WebSocket transport cannot be used to reach
         // a metadata/RFC1918/loopback/link-local literal or a plaintext ws host.
-        self.http_pool
-            .policy
-            .vet(&ws_url)
-            .map_err(|e| format!("Refusing to relay via WebSocket to {ws_url}: blocked by egress policy: {e}"))?;
+        self.http_pool.policy.vet(&ws_url).map_err(|e| {
+            format!("Refusing to relay via WebSocket to {ws_url}: blocked by egress policy: {e}")
+        })?;
 
         let frame = msg.message.clone();
         let id = frame_id(frame.as_bytes());
