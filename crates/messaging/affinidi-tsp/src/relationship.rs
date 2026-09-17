@@ -14,6 +14,11 @@
 //!  ▼
 //! Bidirectional
 //! ```
+//!
+//! Re-establishment (`tsp-relationship-recovery.md`, D2): a peer that lost its
+//! half re-sends an RFI over a relationship the other side still holds. That
+//! side takes `Bidirectional ──[receive RFI]──► InviteReceived` and re-accepts,
+//! repairing the peer's half. A re-sent RFI while `InviteReceived` is idempotent.
 
 use serde::{Deserialize, Serialize};
 
@@ -98,6 +103,14 @@ impl RelationshipState {
             (RelationshipState::InviteReceived, RelationshipEvent::SendCancel) => {
                 Ok(RelationshipState::None)
             }
+            // A re-sent invite while we are still deciding. Idempotent: the peer
+            // retransmitted its RFI (a lost accept, a slow link), so we stay
+            // awaiting our decision. `handle_control` overwrites the recorded
+            // thread digest to the latest invite, so the accept we eventually
+            // send answers the invite the peer still remembers.
+            (RelationshipState::InviteReceived, RelationshipEvent::ReceiveInvite) => {
+                Ok(RelationshipState::InviteReceived)
+            }
             // The inviter withdrew before we answered. §7.3 removes the
             // relationship in this direction; §7.4 covers the mirror case,
             // where we are the one declining.
@@ -111,6 +124,27 @@ impl RelationshipState {
             }
             (RelationshipState::Bidirectional, RelationshipEvent::ReceiveCancel) => {
                 Ok(RelationshipState::None)
+            }
+            // Re-establishment (design note `tsp-relationship-recovery.md`, D2).
+            // We hold the relationship as complete, but the peer has sent a fresh
+            // RFI — the only reason it would is that it lost its half (restart
+            // with an ephemeral store, cache eviction, redeploy) and is rebuilding
+            // the exchange. There is no separate "re-establish" control message in
+            // TSP; a re-invite over a live relationship *is* the signal.
+            //
+            // We drop back to `InviteReceived` and re-accept: our accept (an RFA)
+            // is what repairs the peer's lost inbound half, so there is no shorter
+            // path back to `Bidirectional`. The window is safe — `can_send()` is
+            // briefly false, but our sends were being dropped by the peer's §7.2.2
+            // gate anyway, and `admits_application_message()` stays true, so a
+            // payload the peer bundles with its invite (§3.6) is still accepted.
+            //
+            // The invite is authenticated (it passed unpack + signature verify),
+            // so only the real peer can trigger this. Rate-limiting inbound
+            // invites so a flood cannot repeatedly reset a live relationship is a
+            // layer up (design note D7), not the FSM's job.
+            (RelationshipState::Bidirectional, RelationshipEvent::ReceiveInvite) => {
+                Ok(RelationshipState::InviteReceived)
             }
 
             // Invalid transition
@@ -228,5 +262,53 @@ mod tests {
     #[test]
     fn default_is_none() {
         assert_eq!(RelationshipState::default(), RelationshipState::None);
+    }
+
+    // ---- D2: re-establishment (tsp-relationship-recovery.md) ----
+
+    /// The reconcile edge: the side that still holds the relationship receives a
+    /// fresh RFI from a peer that lost its half, and drops back to
+    /// `InviteReceived` so it can re-accept. This is the transition that used to
+    /// be `InvalidTransition` and deadlocked recovery.
+    #[test]
+    fn receiving_an_invite_while_bidirectional_reopens_for_reaccept() {
+        let state = RelationshipState::Bidirectional;
+        let state = state.transition(RelationshipEvent::ReceiveInvite).unwrap();
+        assert_eq!(state, RelationshipState::InviteReceived);
+        // Cannot send until we re-accept, but still admits the peer's bundled
+        // §3.6 payload.
+        assert!(!state.can_send());
+        assert!(state.admits_application_message());
+
+        // Re-accepting completes the repair.
+        let state = state.transition(RelationshipEvent::SendAccept).unwrap();
+        assert_eq!(state, RelationshipState::Bidirectional);
+        assert!(state.can_send());
+    }
+
+    /// A retransmitted RFI while we are still deciding is idempotent.
+    #[test]
+    fn receiving_a_repeat_invite_while_invite_received_is_idempotent() {
+        let state = RelationshipState::InviteReceived;
+        let state = state.transition(RelationshipEvent::ReceiveInvite).unwrap();
+        assert_eq!(state, RelationshipState::InviteReceived);
+    }
+
+    /// Re-establishment must not open a shortcut past accept: receiving an
+    /// invite never lands directly in `Bidirectional`.
+    #[test]
+    fn reestablish_still_requires_an_accept() {
+        for start in [
+            RelationshipState::Bidirectional,
+            RelationshipState::InviteReceived,
+            RelationshipState::None,
+        ] {
+            let next = start.transition(RelationshipEvent::ReceiveInvite).unwrap();
+            assert_ne!(
+                next,
+                RelationshipState::Bidirectional,
+                "receiving an invite from {start:?} skipped the accept"
+            );
+        }
     }
 }

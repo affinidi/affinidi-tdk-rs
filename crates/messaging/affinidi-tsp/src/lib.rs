@@ -1084,6 +1084,138 @@ mod tests {
         }
     }
 
+    /// Drive Alice and Bob to a live `Bidirectional` relationship in both
+    /// directions. Returns the two agents; Alice was the original inviter.
+    fn establish(alice: &TspAgent, bob: &TspAgent) {
+        let invite = alice
+            .send_relationship_invite("did:example:alice", "did:example:bob")
+            .unwrap();
+        bob.receive("did:example:bob", &invite.bytes).unwrap();
+        let accept = bob
+            .send_relationship_accept("did:example:bob", "did:example:alice")
+            .unwrap();
+        alice.receive("did:example:alice", &accept.bytes).unwrap();
+        assert_eq!(
+            alice.relationship_state("did:example:alice", "did:example:bob"),
+            RelationshipState::Bidirectional
+        );
+        assert_eq!(
+            bob.relationship_state("did:example:bob", "did:example:alice"),
+            RelationshipState::Bidirectional
+        );
+    }
+
+    /// D2 (`tsp-relationship-recovery.md`): the reconcile handshake, end to end
+    /// with real crypto.
+    ///
+    /// The asymmetric-loss case the FSM could not previously handle: the sender
+    /// lost its half (restart with an ephemeral store), the receiver still holds
+    /// the relationship. The sender re-invites; the receiver takes the new
+    /// `Bidirectional ──[receive RFI]──► InviteReceived` edge and re-accepts,
+    /// and application traffic flows again — with no operator action.
+    #[test]
+    fn a_lost_half_is_recovered_by_re_inviting_the_peer_that_kept_it() {
+        let (alice, bob) = two_strangers();
+        establish(&alice, &bob);
+
+        // Bob restarts onto an ephemeral store: his half is wiped. Alice still
+        // holds `Bidirectional`. This is exactly the state that made every
+        // message Bob sent get dropped at Alice's §7.2.2 gate — except here Bob
+        // cannot even send, because `can_send()` is false on `None`.
+        bob.store.set_relationship_state(
+            "did:example:bob",
+            "did:example:alice",
+            RelationshipState::None,
+        );
+        bob.store
+            .clear_thread_digest("did:example:bob", "did:example:alice");
+        assert!(
+            bob.send("did:example:bob", "did:example:alice", b"blocked")
+                .is_err(),
+            "a wiped half must refuse to send until re-established"
+        );
+
+        // Recovery: Bob (who knows locally he has no relationship) re-invites.
+        let reinvite = bob
+            .send_relationship_invite("did:example:bob", "did:example:alice")
+            .unwrap();
+
+        // Alice receives an RFI over a relationship she believes is live. Before
+        // D2 this returned `InvalidTransition` and recovery deadlocked; now she
+        // reopens to re-accept.
+        alice.receive("did:example:alice", &reinvite.bytes).unwrap();
+        assert_eq!(
+            alice.relationship_state("did:example:alice", "did:example:bob"),
+            RelationshipState::InviteReceived
+        );
+
+        let reaccept = alice
+            .send_relationship_accept("did:example:alice", "did:example:bob")
+            .unwrap();
+        bob.receive("did:example:bob", &reaccept.bytes).unwrap();
+
+        // Both halves live again.
+        assert_eq!(
+            alice.relationship_state("did:example:alice", "did:example:bob"),
+            RelationshipState::Bidirectional
+        );
+        assert_eq!(
+            bob.relationship_state("did:example:bob", "did:example:alice"),
+            RelationshipState::Bidirectional
+        );
+
+        // And traffic flows both ways — the whole point of recovery.
+        let from_bob = bob
+            .send("did:example:bob", "did:example:alice", b"recovered")
+            .unwrap();
+        let got = alice.receive("did:example:alice", &from_bob.bytes).unwrap();
+        assert_eq!(got.payload, b"recovered");
+
+        let from_alice = alice
+            .send("did:example:alice", "did:example:bob", b"and back")
+            .unwrap();
+        let got = bob.receive("did:example:bob", &from_alice.bytes).unwrap();
+        assert_eq!(got.payload, b"and back");
+    }
+
+    /// The reconcile can carry its payload in the same round trip: §3.6 lets the
+    /// re-inviter bundle application data with its RFI, and the peer that kept
+    /// the relationship accepts it immediately on reopening — recovery costs one
+    /// round trip, not an invite/accept/resend three.
+    #[test]
+    fn a_reconcile_invite_delivers_its_bundled_payload_immediately() {
+        let (alice, bob) = two_strangers();
+        establish(&alice, &bob);
+
+        // Bob loses his half.
+        bob.store.set_relationship_state(
+            "did:example:bob",
+            "did:example:alice",
+            RelationshipState::None,
+        );
+        bob.store
+            .clear_thread_digest("did:example:bob", "did:example:alice");
+
+        // Bob re-invites, then — per §3.6 — sends the payload straight after,
+        // without waiting for Alice's accept.
+        let reinvite = bob
+            .send_relationship_invite("did:example:bob", "did:example:alice")
+            .unwrap();
+        let bundled = bob
+            .pack_message(
+                "did:example:bob",
+                "did:example:alice",
+                b"data with the invite",
+                MessageType::Direct,
+            )
+            .unwrap();
+
+        // Alice reopens on the invite, then admits the payload that follows it.
+        alice.receive("did:example:alice", &reinvite.bytes).unwrap();
+        let got = alice.receive("did:example:alice", &bundled.bytes).unwrap();
+        assert_eq!(got.payload, b"data with the invite");
+    }
+
     /// §7.3: a cancellation naming a relationship the receiver does not hold is
     /// ignored rather than answered, so it cannot be used to probe which
     /// relationships exist.

@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### 0.26.5 — TSP relationship recovery
+
+Rev 3 §7.2.2 has an endpoint silently drop application traffic from a VID it
+holds no relationship with, so a restart onto the ephemeral relationship store —
+or a peer losing its half — makes an established peer's messages vanish until a
+re-handshake, with no visible error. This adds the recovery mechanism, as
+additive, pure, tested decision cores (design note `tsp-relationship-recovery.md`):
+
+- **Durable store (D1):** `PersistentRelationshipStore<B: RelationshipKv>`, a
+  durable `RelationshipStore` over a three-method byte backend; one
+  length-prefixed key per facet per pair. `ThreadDigests` gains
+  `Serialize`/`Deserialize`. A consumer supplies only a `RelationshipKv` adapter
+  over the store it already runs.
+- **Recovery-aware send (D3):** `SendReadiness` + `readiness_for` +
+  `TspOps::send_reestablishing` — re-establish (invite, then §3.6-bundle the
+  payload) before sending when our own half is missing.
+- **Bounded recovery (D4):** `BackoffPolicy` (capped exponential + `full_jitter`)
+  and single-flight `RecoveryState`/`RecoveryAction` for timeout-driven recovery,
+  bounded so a down peer is not re-invited forever; `TspOps::reset_relationship`
+  for the stale-local-half case.
+- **Idle eviction (D5):** `EvictionPolicy` (7-day default) +
+  `PersistentRelationshipStore::{touch, last_active}`.
+
+All additive; no existing signatures change. The behavioural half — the
+`affinidi-tsp` reconcile transition these compose with — ships in that crate.
+
 ## Unreleased (0.26.3) — an authentication or transport-adapter `429` stays typed
 ### 0.26.4 — inbound TSP control messages reach the consumer
 
