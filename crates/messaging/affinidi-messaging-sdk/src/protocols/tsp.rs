@@ -2740,6 +2740,9 @@ impl TspOps<'_> {
                 .get(profile_did, &unpacked.sender)
                 .await?;
             if !state.admits_application_message() {
+                // D8: the alarm the original incident lacked — a peer arriving
+                // with a relationship this endpoint has lost.
+                self.atm.inner.config.record_relationship_drop();
                 return Err(ATMError::MsgReceiveError(format!(
                     "TSP message from {} discarded: no relationship with {profile_did}",
                     unpacked.sender
@@ -2825,6 +2828,7 @@ impl TspOps<'_> {
                 .get(profile_did, &unpacked.sender)
                 .await?;
             if !state.admits_application_message() {
+                self.atm.inner.config.record_relationship_drop(); // D8
                 return Err(ATMError::MsgReceiveError(format!(
                     "TSP message from {} discarded: no relationship with {profile_did}",
                     unpacked.sender

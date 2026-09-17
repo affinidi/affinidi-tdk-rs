@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### 0.26.7 — §7.2.2 drop counter (D8)
+
+Observability for the relationship gate (design note
+`tsp-relationship-recovery.md`, D8). `ATMConfigBuilder::with_relationship_drop_counter`
+injects an `Arc<AtomicU64>` that the gate increments each time it drops an
+inbound TSP application message from a VID it holds no relationship with (at both
+`unpack_bytes` and `unpack_message`). A rising count is the "a peer arrived whose
+relationship we lost" alarm — the one event that was previously invisible except
+in a single error-level log line. Additive; no counter configured is a no-op.
+
 ### 0.26.6 — TSP relationship recovery runtime (D6–D9)
 
 The runtime layer over the D1–D5 recovery cores (design note
