@@ -1,6 +1,6 @@
 # Affinidi TSP Changelog
 
-## Unreleased
+## Unreleased (0.2.1) — relationship re-establishment (recovery)
 
 - **Relationship re-establishment (recovery).** `RelationshipState::transition`
   now accepts `ReceiveInvite` from the established states instead of raising
