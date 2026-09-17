@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### 0.26.6 — TSP relationship recovery runtime (D6–D9)
+
+The runtime layer over the D1–D5 recovery cores (design note
+`tsp-relationship-recovery.md`), all additive:
+
+- **Eviction sweep + enumeration (D6/D9).** `RelationshipKv` gains
+  `scan_prefix` (default: yields nothing, so a non-scanning backend degrades to
+  no eviction rather than a compile error).
+  `PersistentRelationshipStore::evict_idle` sweeps relationships idle past an
+  `EvictionPolicy` and `forget`s the whole record; `established_relationships`
+  lists the `Bidirectional` pairs a proactive startup reconcile (D9) re-asserts.
+- **Single-flight coordinator (D6) + metrics (D8).** `RecoveryCoordinator` holds
+  one `RecoveryState` per peer behind a lock, driven by a `BackoffPolicy` and an
+  injected clock: `begin` gives one caller `Start` and coalesces the rest to
+  `InFlight`; `settle_success`/`settle_failure` advance it; `metrics()` reports
+  `RecoveryMetrics { attempts, successes, give_ups }`.
+- **Inbound-invite rate limiting (D7).** `InviteRateLimiter` — one accepted
+  invite per interval per peer, so an authenticated peer cannot flood invites to
+  keep a live relationship perpetually mid-handshake (D2 made accepting one
+  cheap).
+
 ### 0.26.5 — TSP relationship recovery
 
 Rev 3 §7.2.2 has an endpoint silently drop application traffic from a VID it

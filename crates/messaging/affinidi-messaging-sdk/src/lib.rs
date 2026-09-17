@@ -185,10 +185,11 @@ use crate::protocols::tsp::TspOps;
 /// durable store or select one via the config builder.
 #[cfg(feature = "tsp")]
 pub use crate::protocols::tsp::{
-    BackoffPolicy, CapabilitySource, EvictionPolicy, InMemoryRelationshipStore, PeerCapability,
-    PersistentRelationshipStore, RecoveryAction, RecoveryState, RelationshipKv, RelationshipStore,
-    SendProtocol, SendReadiness, TSP_DISCOVER_FEATURE_URI, ThreadDigests, TspPolicy, TspSupport,
-    TspWebSocket, full_jitter, readiness_for,
+    BackoffPolicy, CapabilitySource, EvictionPolicy, InMemoryRelationshipStore, InviteRateLimiter,
+    PeerCapability, PersistentRelationshipStore, RecoveryAction, RecoveryCoordinator,
+    RecoveryMetrics, RecoveryState, RelationshipKv, RelationshipStore, SendProtocol, SendReadiness,
+    TSP_DISCOVER_FEATURE_URI, ThreadDigests, TspPolicy, TspSupport, TspWebSocket, full_jitter,
+    readiness_for,
 };
 /// Re-export of the pure-TSP authentication handler so a TSP-only client can
 /// register it on the TDK in place of the built-in DIDComm auth flow.

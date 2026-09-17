@@ -408,6 +408,17 @@ pub trait RelationshipKv: Send + Sync {
     async fn put(&self, key: &[u8], value: &[u8]) -> Result<(), ATMError>;
     /// Remove `key` if present. An absent key is not an error.
     async fn delete(&self, key: &[u8]) -> Result<(), ATMError>;
+
+    /// Return every `(key, value)` whose key starts with `prefix`.
+    ///
+    /// Used by the idle-eviction sweep (D5/D6) and the proactive startup
+    /// reconcile (D9), both of which enumerate stored relationships. The default
+    /// yields nothing, so those degrade to no-ops on a backend that cannot scan
+    /// rather than failing to compile; a durable backend (fjall, sled, SQL)
+    /// implements it over its native prefix iteration.
+    async fn scan_prefix(&self, _prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, ATMError> {
+        Ok(Vec::new())
+    }
 }
 
 // Key layout: `PREFIX ‖ facet ‖ len(our_vid) as u32-BE ‖ our_vid ‖ their_vid`.
@@ -430,6 +441,36 @@ fn rel_key(facet: u8, our_vid: &str, their_vid: &str) -> Vec<u8> {
     key.extend_from_slice(our_vid.as_bytes());
     key.extend_from_slice(their_vid.as_bytes());
     key
+}
+
+/// The key prefix that scans every pair stored under one facet — `rel_key`
+/// truncated before the pair, for [`RelationshipKv::scan_prefix`].
+fn rel_facet_prefix(facet: u8) -> Vec<u8> {
+    let mut prefix = Vec::with_capacity(REL_KEY_PREFIX.len() + 1);
+    prefix.extend_from_slice(REL_KEY_PREFIX);
+    prefix.push(facet);
+    prefix
+}
+
+/// Recover `(our_vid, their_vid)` from a `rel_key` of the given `facet`, or
+/// `None` if the key is not one (wrong prefix/facet, truncated, or not UTF-8).
+/// The inverse of [`rel_key`]; the `u32` length prefix is what makes the split
+/// unambiguous.
+fn decode_rel_key(facet: u8, key: &[u8]) -> Option<(String, String)> {
+    let head = REL_KEY_PREFIX.len() + 1 + 4;
+    if key.len() < head || !key.starts_with(REL_KEY_PREFIX) || key[REL_KEY_PREFIX.len()] != facet {
+        return None;
+    }
+    let len_at = REL_KEY_PREFIX.len() + 1;
+    let our_len = u32::from_be_bytes(key[len_at..len_at + 4].try_into().ok()?) as usize;
+    let our_start = len_at + 4;
+    let our_end = our_start.checked_add(our_len)?;
+    if our_end > key.len() {
+        return None;
+    }
+    let our = String::from_utf8(key[our_start..our_end].to_vec()).ok()?;
+    let their = String::from_utf8(key[our_end..].to_vec()).ok()?;
+    Some((our, their))
 }
 
 /// A durable [`RelationshipStore`] backed by any [`RelationshipKv`].
@@ -506,6 +547,85 @@ impl<B: RelationshipKv> PersistentRelationshipStore<B> {
     ) -> Result<Option<u64>, ATMError> {
         self.load(&rel_key(FACET_LAST_ACTIVE, our_vid, their_vid))
             .await
+    }
+
+    /// Remove every facet of the relationship with `their_vid` — the whole
+    /// record, not just its state. Used by the eviction sweep, and available for
+    /// a hard local teardown.
+    pub async fn forget(&self, our_vid: &str, their_vid: &str) -> Result<(), ATMError> {
+        for facet in [
+            FACET_STATE,
+            FACET_DIGESTS,
+            FACET_REPLY_PATH,
+            FACET_CAPABILITY,
+            FACET_LAST_ACTIVE,
+        ] {
+            self.backend
+                .delete(&rel_key(facet, our_vid, their_vid))
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Evict every relationship idle beyond `policy` as of `now_ms` — the D5
+    /// sweep (design note D6). Scans the last-active facet, and for each pair past
+    /// the TTL removes the whole record. Returns the pairs evicted.
+    ///
+    /// Purely local: evicting a relationship the peer kept is safe — the next
+    /// send reads `None`, re-invites, and D2's reconcile has the peer re-accept.
+    /// A pair that was never `touch`ed has no last-active entry and so is never
+    /// swept by age; that is deliberate, since "never active" is not the same as
+    /// "idle since epoch". Requires a [`RelationshipKv::scan_prefix`]; on a
+    /// backend without one it evicts nothing.
+    pub async fn evict_idle(
+        &self,
+        now_ms: u64,
+        policy: &EvictionPolicy,
+    ) -> Result<Vec<(String, String)>, ATMError> {
+        let entries = self
+            .backend
+            .scan_prefix(&rel_facet_prefix(FACET_LAST_ACTIVE))
+            .await?;
+        let mut evicted = Vec::new();
+        for (key, value) in entries {
+            let Some((our, their)) = decode_rel_key(FACET_LAST_ACTIVE, &key) else {
+                continue;
+            };
+            // A record that will not decode cannot be aged; leave it rather than
+            // guess an age and evict a live relationship.
+            let Ok(last_active_ms) = serde_json::from_slice::<u64>(&value) else {
+                continue;
+            };
+            if policy.is_idle(last_active_ms, now_ms) {
+                self.forget(&our, &their).await?;
+                evicted.push((our, their));
+            }
+        }
+        Ok(evicted)
+    }
+
+    /// The `(our_vid, their_vid)` pairs currently `Bidirectional` — the
+    /// candidates for a proactive startup reconcile (design note D9), which
+    /// re-asserts them before real traffic can fail rather than waiting for a
+    /// timeout. Requires a [`RelationshipKv::scan_prefix`]; returns empty without
+    /// one.
+    pub async fn established_relationships(&self) -> Result<Vec<(String, String)>, ATMError> {
+        let entries = self
+            .backend
+            .scan_prefix(&rel_facet_prefix(FACET_STATE))
+            .await?;
+        let mut out = Vec::new();
+        for (key, value) in entries {
+            let Some((our, their)) = decode_rel_key(FACET_STATE, &key) else {
+                continue;
+            };
+            if serde_json::from_slice::<RelationshipState>(&value).ok()
+                == Some(RelationshipState::Bidirectional)
+            {
+                out.push((our, their));
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -983,6 +1103,152 @@ impl EvictionPolicy {
     /// age.
     pub fn is_idle(&self, last_active_ms: u64, now_ms: u64) -> bool {
         now_ms.saturating_sub(last_active_ms) >= self.ttl.as_millis() as u64
+    }
+}
+
+/// A snapshot of a [`RecoveryCoordinator`]'s counters (design note D8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RecoveryMetrics {
+    /// Recovery attempts started (each a `Start` from [`RecoveryCoordinator::begin`]).
+    pub attempts: u64,
+    /// Attempts that ended in a recovered relationship.
+    pub successes: u64,
+    /// Peers given up on after exhausting the backoff — the alarm signal that a
+    /// peer is durably unreachable, not merely mid-recovery.
+    pub give_ups: u64,
+}
+
+/// Async single-flight recovery coordinator (design note D6).
+///
+/// Holds one [`RecoveryState`] per `(our, their)` pair behind a lock, driven by
+/// a [`BackoffPolicy`] and a caller-supplied clock, and keeps the [`RecoveryMetrics`]
+/// counters (D8). It turns the pure D4 decision into the thing a runtime calls:
+/// on a round-trip timeout the runtime calls [`begin`](Self::begin); on
+/// `Start` it runs one recovery ([`TspOps::reset_relationship`] →
+/// [`TspOps::send_reestablishing`]) and reports the outcome with
+/// [`settle_success`](Self::settle_success) / [`settle_failure`](Self::settle_failure).
+/// A second timeout for the same peer while one is in flight gets `InFlight` and
+/// coalesces — no invite storm against a single peer.
+pub struct RecoveryCoordinator {
+    policy: BackoffPolicy,
+    states: tokio::sync::Mutex<HashMap<(String, String), RecoveryState>>,
+    attempts: std::sync::atomic::AtomicU64,
+    successes: std::sync::atomic::AtomicU64,
+    give_ups: std::sync::atomic::AtomicU64,
+}
+
+impl RecoveryCoordinator {
+    /// A coordinator with the given backoff policy and no peers tracked yet.
+    pub fn new(policy: BackoffPolicy) -> Self {
+        Self {
+            policy,
+            states: tokio::sync::Mutex::new(HashMap::new()),
+            attempts: std::sync::atomic::AtomicU64::new(0),
+            successes: std::sync::atomic::AtomicU64::new(0),
+            give_ups: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Decide whether to (re)establish the relationship with `their` from `our`
+    /// now — see [`RecoveryAction`]. `Start` marks an attempt in flight (and
+    /// counts it); a racing caller gets `InFlight`.
+    pub async fn begin(&self, our: &str, their: &str, now_ms: u64) -> RecoveryAction {
+        use std::sync::atomic::Ordering::Relaxed;
+        let key = (our.to_string(), their.to_string());
+        let mut states = self.states.lock().await;
+        let action = states.entry(key).or_default().begin(now_ms, &self.policy);
+        match action {
+            RecoveryAction::Start => {
+                self.attempts.fetch_add(1, Relaxed);
+            }
+            RecoveryAction::GiveUp => {
+                self.give_ups.fetch_add(1, Relaxed);
+            }
+            _ => {}
+        }
+        action
+    }
+
+    /// Report that a started attempt recovered the relationship: clears the
+    /// peer's backoff so a later loss starts fresh.
+    pub async fn settle_success(&self, our: &str, their: &str) {
+        let key = (our.to_string(), their.to_string());
+        if let Some(state) = self.states.lock().await.get_mut(&key) {
+            state.succeed();
+        }
+        self.successes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Report that a started attempt failed: hold the peer off for `delay` before
+    /// the next `Start`.
+    pub async fn settle_failure(&self, our: &str, their: &str, now_ms: u64, delay: Duration) {
+        let key = (our.to_string(), their.to_string());
+        self.states
+            .lock()
+            .await
+            .entry(key)
+            .or_default()
+            .fail(now_ms, delay);
+    }
+
+    /// The delay to wait before retrying `attempt` (0-based), jittered — a
+    /// convenience over [`BackoffPolicy::capped_delay`] + [`full_jitter`] using
+    /// this coordinator's policy. `None` once attempts are exhausted.
+    pub fn retry_delay(&self, attempt: u32, jitter_frac: f64) -> Option<Duration> {
+        self.policy
+            .capped_delay(attempt)
+            .map(|d| full_jitter(d, jitter_frac))
+    }
+
+    /// A snapshot of the recovery counters (design note D8).
+    pub fn metrics(&self) -> RecoveryMetrics {
+        use std::sync::atomic::Ordering::Relaxed;
+        RecoveryMetrics {
+            attempts: self.attempts.load(Relaxed),
+            successes: self.successes.load(Relaxed),
+            give_ups: self.give_ups.load(Relaxed),
+        }
+    }
+}
+
+/// Per-peer inbound-invite rate limiter (design note D7).
+///
+/// D2 makes accepting an invite cheap and makes a re-invite reset a live
+/// relationship to `InviteReceived`; this bounds how often one peer can make us
+/// do that, so an authenticated peer cannot flood invites to keep a relationship
+/// perpetually mid-handshake. It is *not* admission control (that stays the
+/// application's decision on the invite) and it does not gate control messages
+/// the FSM needs — only how often a *fresh* invite from an already-known peer is
+/// acted on. Pure and clock-injected.
+pub struct InviteRateLimiter {
+    min_interval: Duration,
+    last_accepted_ms: tokio::sync::Mutex<HashMap<(String, String), u64>>,
+}
+
+impl InviteRateLimiter {
+    /// Accept at most one invite per `min_interval` from a given peer.
+    pub fn new(min_interval: Duration) -> Self {
+        Self {
+            min_interval,
+            last_accepted_ms: tokio::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// May we act on an invite from `their` to `our` at `now_ms`? Records the
+    /// time and returns `true` when allowed; returns `false` (without updating)
+    /// when the previous accept was under `min_interval` ago.
+    pub async fn allow(&self, our: &str, their: &str, now_ms: u64) -> bool {
+        let key = (our.to_string(), their.to_string());
+        let mut map = self.last_accepted_ms.lock().await;
+        let interval = self.min_interval.as_millis() as u64;
+        match map.get(&key) {
+            Some(&last) if now_ms.saturating_sub(last) < interval => false,
+            _ => {
+                map.insert(key, now_ms);
+                true
+            }
+        }
     }
 }
 
@@ -3198,11 +3464,12 @@ mod tests {
     // `affinidi-messaging-test-mediator`.
 
     use super::{
-        BackoffPolicy, CapabilitySource, EvictionPolicy, InMemoryRelationshipStore, PeerCapability,
-        PersistentRelationshipStore, ProtocolChoice, RecoveryAction, RecoveryState,
-        RelationshipEvent, RelationshipKv, RelationshipState, RelationshipStore, SendReadiness,
-        TSP_DISCOVER_FEATURE_URI, TspPolicy, TspSupport, advance_state, classify_protocol,
-        disclosure_advertises_tsp, full_jitter, next_state, readiness_for, readiness_for_pair,
+        BackoffPolicy, CapabilitySource, EvictionPolicy, InMemoryRelationshipStore,
+        InviteRateLimiter, PeerCapability, PersistentRelationshipStore, ProtocolChoice,
+        RecoveryAction, RecoveryCoordinator, RecoveryState, RelationshipEvent, RelationshipKv,
+        RelationshipState, RelationshipStore, SendReadiness, TSP_DISCOVER_FEATURE_URI, TspPolicy,
+        TspSupport, advance_state, classify_protocol, disclosure_advertises_tsp, full_jitter,
+        next_state, readiness_for, readiness_for_pair,
     };
     use crate::errors::ATMError;
     use crate::protocols::discover_features::{
@@ -3815,6 +4082,16 @@ mod tests {
             self.0.lock().await.remove(key);
             Ok(())
         }
+        async fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, ATMError> {
+            Ok(self
+                .0
+                .lock()
+                .await
+                .iter()
+                .filter(|(k, _)| k.starts_with(prefix))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect())
+        }
     }
 
     const A: &str = ALICE;
@@ -4199,5 +4476,185 @@ mod tests {
         let last = store.last_active(A, B).await.unwrap().unwrap();
         assert!(!policy.is_idle(last, last + 59_000));
         assert!(policy.is_idle(last, last + 60_000));
+    }
+
+    // ---- D6: eviction sweep + single-flight coordinator (tsp-relationship-recovery.md) ----
+
+    const C: &str = "did:example:carol";
+
+    /// The sweep forgets only pairs past the TTL, leaving the rest — and it can
+    /// decode `(our, their)` back out of the scanned keys (the length-prefix
+    /// round-trip).
+    #[tokio::test]
+    async fn evict_idle_sweeps_only_idle_pairs() {
+        let store = PersistentRelationshipStore::new(SharedMemKv::default());
+        let ttl = Duration::from_secs(60);
+
+        // An old pair and a fresh one, both established.
+        for (their, active_at) in [(B, 0u64), (C, 100_000u64)] {
+            store
+                .set(A, their, RelationshipState::Bidirectional)
+                .await
+                .unwrap();
+            store.touch(A, their, active_at).await.unwrap();
+        }
+
+        // At now = 100_000, B is 100 s idle (past 60 s), C was just touched.
+        let evicted = store
+            .evict_idle(100_000, &EvictionPolicy { ttl })
+            .await
+            .unwrap();
+        assert_eq!(evicted, vec![(A.to_string(), B.to_string())]);
+
+        // B is gone (all facets), C survives.
+        assert_eq!(store.get(A, B).await.unwrap(), RelationshipState::None);
+        assert_eq!(store.last_active(A, B).await.unwrap(), None);
+        assert_eq!(
+            store.get(A, C).await.unwrap(),
+            RelationshipState::Bidirectional
+        );
+    }
+
+    /// A pair never `touch`ed has no last-active entry and is never age-swept.
+    #[tokio::test]
+    async fn evict_idle_ignores_never_touched_pairs() {
+        let store = PersistentRelationshipStore::new(SharedMemKv::default());
+        store
+            .set(A, B, RelationshipState::Bidirectional)
+            .await
+            .unwrap();
+        let evicted = store
+            .evict_idle(
+                u64::MAX,
+                &EvictionPolicy {
+                    ttl: Duration::from_secs(1),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(evicted.is_empty());
+        assert_eq!(
+            store.get(A, B).await.unwrap(),
+            RelationshipState::Bidirectional
+        );
+    }
+
+    /// `forget` removes every facet of one pair.
+    #[tokio::test]
+    async fn forget_removes_the_whole_record() {
+        let store = PersistentRelationshipStore::new(SharedMemKv::default());
+        store
+            .set(A, B, RelationshipState::Bidirectional)
+            .await
+            .unwrap();
+        store
+            .set_thread_digests(
+                A,
+                B,
+                ThreadDigests {
+                    invite: Some([1u8; 32]),
+                    accept: None,
+                },
+            )
+            .await
+            .unwrap();
+        store.touch(A, B, 5).await.unwrap();
+
+        store.forget(A, B).await.unwrap();
+        assert_eq!(store.get(A, B).await.unwrap(), RelationshipState::None);
+        assert_eq!(
+            store.thread_digests(A, B).await.unwrap(),
+            ThreadDigests::default()
+        );
+        assert_eq!(store.last_active(A, B).await.unwrap(), None);
+    }
+
+    /// The coordinator is single-flight per peer, backs off after a failure,
+    /// resets on success, and counts what happened (D8 metrics).
+    #[tokio::test]
+    async fn recovery_coordinator_single_flight_backoff_and_metrics() {
+        let coord = RecoveryCoordinator::new(BackoffPolicy {
+            base: Duration::from_secs(1),
+            max: Duration::from_secs(10),
+            max_attempts: 3,
+        });
+
+        assert_eq!(coord.begin(A, B, 0).await, RecoveryAction::Start);
+        // Concurrent begin for the same peer coalesces.
+        assert_eq!(coord.begin(A, B, 0).await, RecoveryAction::InFlight);
+        // A different peer is independent.
+        assert_eq!(coord.begin(A, C, 0).await, RecoveryAction::Start);
+
+        coord.settle_failure(A, B, 0, Duration::from_secs(1)).await;
+        match coord.begin(A, B, 500).await {
+            RecoveryAction::Backoff(d) => assert_eq!(d, Duration::from_millis(500)),
+            other => panic!("expected Backoff, got {other:?}"),
+        }
+        assert_eq!(coord.begin(A, B, 1000).await, RecoveryAction::Start);
+        coord.settle_success(A, B).await;
+        // After success the peer starts fresh.
+        assert_eq!(coord.begin(A, B, 2000).await, RecoveryAction::Start);
+
+        let m = coord.metrics();
+        assert_eq!(m.successes, 1);
+        assert!(m.attempts >= 3);
+    }
+
+    /// Attempts are bounded: past the cap the coordinator returns `GiveUp` and
+    /// counts it (the D8 alarm that a peer is durably unreachable).
+    #[tokio::test]
+    async fn recovery_coordinator_gives_up_and_counts() {
+        let coord = RecoveryCoordinator::new(BackoffPolicy {
+            base: Duration::from_secs(1),
+            max: Duration::from_secs(10),
+            max_attempts: 1,
+        });
+        assert_eq!(coord.begin(A, B, 0).await, RecoveryAction::Start);
+        coord.settle_failure(A, B, 0, Duration::ZERO).await;
+        assert_eq!(coord.begin(A, B, 1_000_000).await, RecoveryAction::GiveUp);
+        assert_eq!(coord.metrics().give_ups, 1);
+    }
+
+    // ---- D9: proactive reconcile candidates ----
+
+    /// Only `Bidirectional` relationships are offered for a startup reconcile —
+    /// a half-open handshake is already in flight and must not be restarted.
+    #[tokio::test]
+    async fn established_relationships_lists_bidirectional_only() {
+        let store = PersistentRelationshipStore::new(SharedMemKv::default());
+        store
+            .set(A, B, RelationshipState::Bidirectional)
+            .await
+            .unwrap();
+        store.set(A, C, RelationshipState::Pending).await.unwrap();
+        store
+            .set(A, "did:example:dave", RelationshipState::Bidirectional)
+            .await
+            .unwrap();
+
+        let mut got = store.established_relationships().await.unwrap();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                (A.to_string(), B.to_string()), // did:example:bob
+                (A.to_string(), "did:example:dave".to_string()),
+            ]
+        );
+    }
+
+    // ---- D7: inbound-invite rate limiting ----
+
+    /// One accepted invite per `min_interval` per peer; a flood in between is
+    /// refused without moving the clock forward.
+    #[tokio::test]
+    async fn invite_rate_limiter_enforces_min_interval() {
+        let limiter = InviteRateLimiter::new(Duration::from_secs(10));
+        assert!(limiter.allow(A, B, 0).await); // first invite
+        assert!(!limiter.allow(A, B, 5_000).await); // 5 s later — too soon
+        assert!(!limiter.allow(A, B, 9_999).await); // still under 10 s
+        assert!(limiter.allow(A, B, 10_000).await); // exactly 10 s — allowed
+        // A different peer is tracked independently.
+        assert!(limiter.allow(A, C, 5_000).await);
     }
 }
