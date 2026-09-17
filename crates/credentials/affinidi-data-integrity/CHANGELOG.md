@@ -1,6 +1,44 @@
 # Affinidi Data Integrity Changelog
 
-## Unreleased — verify proofs that carry a `nonce`
+## Unreleased
+
+### A key with no cryptosuite is refused by name
+
+**Fixes a refusal that named an algorithm the caller never chose.**
+
+Signing with an ML-DSA-65 or ML-DSA-87 key reported:
+
+    KeyTypeMismatch { expected: Ed25519, actual: MlDsa65, suite: EddsaJcs2022 }
+
+The caller never asked for an Ed25519 suite. `Signer::cryptosuite()`'s default is
+`default_for_key_type(..).unwrap_or(EddsaJcs2022)`, so a key type with no suite
+compiled in arrives carrying an Ed25519 suite the library invented — and the
+validation then blamed the caller for it, naming an algorithm that appears
+nowhere in their configuration.
+
+The real fact is that **no Data Integrity cryptosuite exists for ML-DSA-65 or
+-87**: W3C Quantum-Resistant Cryptosuites v1.0 defines suites for ML-DSA-44 only.
+That is a property of the standard, not a defect to work around, and the refusal
+now says so — including that the key remains usable for other signing, just not
+for a Data Integrity proof.
+
+Worth noting this was never a *silent* fallback: no proof was ever emitted
+claiming the wrong suite, because `validate_key_type` catches it. The defect was
+entirely in what the error said.
+
+A caller who explicitly passes a suite and hands it an incompatible key still
+gets `KeyTypeMismatch` — that diagnosis is correct for that case, and a test
+pins it so this fix cannot swallow it.
+
+**Semver note.** A patch, deliberately. `didwebvh-rs` requires `^0.7.7` and
+`vta-sdk` requires `^0.7`, both from the registry where they cannot be edited, so
+a minor bump would stop those requirements resolving to this copy and put two
+`affinidi-data-integrity` versions in the graph — the trap
+`affinidi-messaging-core` 0.1.8 documents. The behaviour change is confined to
+which error variant is returned in a case that previously produced a misleading
+one.
+
+### Verify proofs that carry a `nonce`
 
 **Fixes rejection of valid proofs from any producer that sets `nonce`.**
 

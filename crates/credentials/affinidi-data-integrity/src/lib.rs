@@ -190,17 +190,51 @@ impl DataIntegrityProof {
     where
         S: Serialize,
     {
+        let caller_chose_the_suite = options.cryptosuite.is_some();
         let crypto_suite = options.cryptosuite.unwrap_or_else(|| signer.cryptosuite());
         crypto_suite
             .validate_key_type(signer.key_type())
-            .map_err(|_| DataIntegrityError::KeyTypeMismatch {
-                expected: crypto_suite
-                    .compatible_key_types()
-                    .first()
-                    .copied()
-                    .unwrap_or(affinidi_secrets_resolver::secrets::KeyType::Unknown),
-                actual: signer.key_type(),
-                suite: crypto_suite,
+            .map_err(|_| {
+                // Two different failures reach here, and reporting them the
+                // same way sends the caller after the wrong thing.
+                //
+                // `Signer::cryptosuite()`'s default is
+                // `default_for_key_type(..).unwrap_or(EddsaJcs2022)`, so a key
+                // type with no suite compiled in arrives carrying an Ed25519
+                // suite the caller never asked for. Reporting that as
+                // `KeyTypeMismatch { expected: Ed25519, .. }` blames them for
+                // the library's own invention, and names an algorithm that
+                // appears nowhere in their configuration.
+                //
+                // The honest message for that case is that no cryptosuite
+                // exists for the key — which for ML-DSA-65/87 is a fact about
+                // W3C Quantum-Resistant Cryptosuites v1.0, which defines only
+                // the ML-DSA-44 variants, not a defect to be worked around. It
+                // is reachable: a VTA can mint an ML-DSA-65 key.
+                if !caller_chose_the_suite
+                    && CryptoSuite::default_for_key_type(signer.key_type()).is_none()
+                {
+                    return DataIntegrityError::UnsupportedCryptoSuite {
+                        name: format!(
+                            "no Data Integrity cryptosuite is available for {:?}; W3C \
+                             Quantum-Resistant Cryptosuites v1.0 defines suites for ML-DSA-44 \
+                             only, so a credential proof needs an ML-DSA-44 key (the key is \
+                             usable for other signing, just not for a Data Integrity proof)",
+                            signer.key_type(),
+                        ),
+                    };
+                }
+                // A genuine mismatch: the caller named a suite and handed it a
+                // key it cannot use.
+                DataIntegrityError::KeyTypeMismatch {
+                    expected: crypto_suite
+                        .compatible_key_types()
+                        .first()
+                        .copied()
+                        .unwrap_or(affinidi_secrets_resolver::secrets::KeyType::Unknown),
+                    actual: signer.key_type(),
+                    suite: crypto_suite,
+                }
             })?;
 
         let created_str = options
