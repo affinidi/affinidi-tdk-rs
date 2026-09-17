@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use affinidi_did_common::DocumentExt;
 use affinidi_secrets_resolver::SecretsResolver;
@@ -161,7 +162,11 @@ pub struct PeerCapability {
 /// An endpoint needs both: a cancellation may name either half, and the invite
 /// race is broken by comparing our own outstanding invite's digest against the
 /// one that arrived.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+///
+/// `Serialize`/`Deserialize` so a durable [`RelationshipStore`] (e.g.
+/// [`PersistentRelationshipStore`]) can persist it — losing the digests across a
+/// restart forfeits the §7.2.3 invite-race tiebreak and §7.2.1 cancel matching.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ThreadDigests {
     /// The digest of the invite this endpoint sent or received — the thread id
     /// of the exchange that opened the relationship.
@@ -381,6 +386,206 @@ impl RelationshipStore for InMemoryRelationshipStore {
     }
 }
 
+/// A minimal key/value backend a [`PersistentRelationshipStore`] serialises
+/// relationship records into.
+///
+/// Implement it over whatever durable store a service already runs — the VTA's
+/// encrypted fjall keyspace, sled, redb, a SQL table — and the pair-record
+/// encoding, the defaults for absent facets and the (de)serialisation all stay
+/// in [`PersistentRelationshipStore`], so a consumer writes three trivial
+/// methods rather than another copy of the store logic (design note
+/// `tsp-relationship-recovery.md`, D1 — "implement it once, not five times").
+///
+/// Keys are opaque byte strings the store constructs; a backend must return them
+/// byte-for-byte and yield `None` for an absent key. Values are already-encoded
+/// bytes. The durability boundary is here: a `put` that returns `Ok(())` must
+/// survive a process restart, or the store it backs is not durable.
+#[async_trait::async_trait]
+pub trait RelationshipKv: Send + Sync {
+    /// Fetch the bytes stored under `key`, or `None` if absent.
+    async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ATMError>;
+    /// Durably store `value` under `key`, replacing any existing value.
+    async fn put(&self, key: &[u8], value: &[u8]) -> Result<(), ATMError>;
+    /// Remove `key` if present. An absent key is not an error.
+    async fn delete(&self, key: &[u8]) -> Result<(), ATMError>;
+}
+
+// Key layout: `PREFIX ‖ facet ‖ len(our_vid) as u32-BE ‖ our_vid ‖ their_vid`.
+// The length prefix on `our_vid` makes the boundary unambiguous without relying
+// on a separator that a DID might contain, so no two distinct pairs — or the
+// same pair under different facets — can ever collide on a key.
+const REL_KEY_PREFIX: &[u8] = b"tsp-rel/v1/";
+const FACET_STATE: u8 = 1;
+const FACET_DIGESTS: u8 = 2;
+const FACET_REPLY_PATH: u8 = 3;
+const FACET_CAPABILITY: u8 = 4;
+const FACET_LAST_ACTIVE: u8 = 5;
+
+fn rel_key(facet: u8, our_vid: &str, their_vid: &str) -> Vec<u8> {
+    let mut key =
+        Vec::with_capacity(REL_KEY_PREFIX.len() + 1 + 4 + our_vid.len() + their_vid.len());
+    key.extend_from_slice(REL_KEY_PREFIX);
+    key.push(facet);
+    key.extend_from_slice(&(our_vid.len() as u32).to_be_bytes());
+    key.extend_from_slice(our_vid.as_bytes());
+    key.extend_from_slice(their_vid.as_bytes());
+    key
+}
+
+/// A durable [`RelationshipStore`] backed by any [`RelationshipKv`].
+///
+/// State survives a process restart. The failure this fixes: a Rev 3 §7.2.2
+/// gate silently dropping every peer's application traffic after a restart wiped
+/// an [`InMemoryRelationshipStore`], because the peers still hold the
+/// relationship the restarted endpoint forgot (design note
+/// `tsp-relationship-recovery.md`, D1). Inject it with
+/// [`crate::config::ATMConfigBuilder::with_relationship_store`] in place of the
+/// ephemeral default.
+///
+/// Each facet the trait keeps — state, thread digests, reply path, capability —
+/// is stored under its own key per `(our_vid, their_vid)` pair, mirroring
+/// [`InMemoryRelationshipStore`]'s independent maps. Setters therefore never
+/// read-modify-write a shared record and cannot lose one field to a concurrent
+/// write of another.
+pub struct PersistentRelationshipStore<B: RelationshipKv> {
+    backend: B,
+}
+
+impl<B: RelationshipKv> PersistentRelationshipStore<B> {
+    /// Wrap a durable backend. The store is empty only if the backend is; an
+    /// existing backend is re-opened with its relationships intact.
+    pub fn new(backend: B) -> Self {
+        Self { backend }
+    }
+
+    /// The underlying backend, for a consumer that shares it with other state.
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
+    async fn load<T: serde::de::DeserializeOwned>(
+        &self,
+        key: &[u8],
+    ) -> Result<Option<T>, ATMError> {
+        match self.backend.get(key).await? {
+            Some(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|e| {
+                ATMError::SDKError(format!("relationship store: decoding a stored record: {e}"))
+            }),
+            None => Ok(None),
+        }
+    }
+
+    async fn save<T: serde::Serialize>(&self, key: &[u8], value: &T) -> Result<(), ATMError> {
+        let bytes = serde_json::to_vec(value).map_err(|e| {
+            ATMError::SDKError(format!("relationship store: encoding a record: {e}"))
+        })?;
+        self.backend.put(key, &bytes).await
+    }
+
+    /// Record that the relationship with `their_vid` was active at `now_ms`
+    /// (design note `tsp-relationship-recovery.md`, D5). A caller stamps this on a
+    /// **successful round-trip**, not on a send attempt — a broken relationship
+    /// must age out, not refresh itself on every failed retry.
+    ///
+    /// This is a `PersistentRelationshipStore` extension, not a
+    /// [`RelationshipStore`] trait method: idle eviction needs a timestamp, but
+    /// the ephemeral store has nothing to evict, so only the durable store
+    /// carries it (the C3 decision in the design note).
+    pub async fn touch(&self, our_vid: &str, their_vid: &str, now_ms: u64) -> Result<(), ATMError> {
+        self.save(&rel_key(FACET_LAST_ACTIVE, our_vid, their_vid), &now_ms)
+            .await
+    }
+
+    /// When the relationship with `their_vid` was last [`touch`](Self::touch)ed, or
+    /// `None` if it never was. Feed it to [`EvictionPolicy::is_idle`] to decide
+    /// eviction.
+    pub async fn last_active(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+    ) -> Result<Option<u64>, ATMError> {
+        self.load(&rel_key(FACET_LAST_ACTIVE, our_vid, their_vid))
+            .await
+    }
+}
+
+#[async_trait::async_trait]
+impl<B: RelationshipKv> RelationshipStore for PersistentRelationshipStore<B> {
+    async fn get(&self, our_vid: &str, their_vid: &str) -> Result<RelationshipState, ATMError> {
+        Ok(self
+            .load(&rel_key(FACET_STATE, our_vid, their_vid))
+            .await?
+            .unwrap_or(RelationshipState::None))
+    }
+
+    async fn set(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        state: RelationshipState,
+    ) -> Result<(), ATMError> {
+        self.save(&rel_key(FACET_STATE, our_vid, their_vid), &state)
+            .await
+    }
+
+    async fn thread_digests(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+    ) -> Result<ThreadDigests, ATMError> {
+        Ok(self
+            .load(&rel_key(FACET_DIGESTS, our_vid, their_vid))
+            .await?
+            .unwrap_or_default())
+    }
+
+    async fn set_thread_digests(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        digests: ThreadDigests,
+    ) -> Result<(), ATMError> {
+        self.save(&rel_key(FACET_DIGESTS, our_vid, their_vid), &digests)
+            .await
+    }
+
+    async fn reply_path(&self, our_vid: &str, their_vid: &str) -> Result<Vec<String>, ATMError> {
+        Ok(self
+            .load(&rel_key(FACET_REPLY_PATH, our_vid, their_vid))
+            .await?
+            .unwrap_or_default())
+    }
+
+    async fn set_reply_path(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        path: Vec<String>,
+    ) -> Result<(), ATMError> {
+        self.save(&rel_key(FACET_REPLY_PATH, our_vid, their_vid), &path)
+            .await
+    }
+
+    async fn get_capability(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+    ) -> Result<Option<PeerCapability>, ATMError> {
+        self.load(&rel_key(FACET_CAPABILITY, our_vid, their_vid))
+            .await
+    }
+
+    async fn set_capability(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        capability: PeerCapability,
+    ) -> Result<(), ATMError> {
+        self.save(&rel_key(FACET_CAPABILITY, our_vid, their_vid), &capability)
+            .await
+    }
+}
+
 impl ATM {
     /// Send `message` to `to`, automatically choosing TSP or DIDComm per the
     /// configured [`TspPolicy`] (see [`TspOps::select_protocol`]).
@@ -562,6 +767,223 @@ async fn advance_state(
     let next = next_state(store, our_vid, their_vid, event).await?;
     store.set(our_vid, their_vid, next).await?;
     Ok(next)
+}
+
+/// What sending an application message to a peer requires first, decided from
+/// the relationship state this endpoint holds (design note
+/// `tsp-relationship-recovery.md`, D3).
+///
+/// This is the *local* half of recovery — it acts on the state we hold, which
+/// is unambiguous. Detecting that a peer lost *its* half while we still hold
+/// [`Bidirectional`](RelationshipState::Bidirectional) is a different problem:
+/// §7.2.2 has the peer drop our message silently, so the only signal is a
+/// round-trip timeout, which also means "peer down". That is timeout-driven and
+/// belongs to the send/outbox layer (design note D4/C2), not to a decision read
+/// off local state, so it is deliberately not represented here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendReadiness {
+    /// [`Bidirectional`](RelationshipState::Bidirectional): send the payload
+    /// directly.
+    Ready,
+    /// [`None`](RelationshipState::None): no relationship on record — establish
+    /// one first. Send an invite; the payload may follow it immediately (§3.6)
+    /// rather than wait a round trip, because the invite puts the peer in
+    /// [`InviteReceived`](RelationshipState::InviteReceived), which admits it.
+    /// This is the recovery path when our own half was lost (a restart onto an
+    /// ephemeral store) or never existed.
+    Reestablish,
+    /// [`Pending`](RelationshipState::Pending) or
+    /// [`InviteReceived`](RelationshipState::InviteReceived): a handshake is
+    /// already in flight, so §3.6 admits an application message to the peer now —
+    /// a peer we invited sits in `InviteReceived`, and a peer that invited us
+    /// sits in `Pending`; neither is `None`, so both admit the payload. It can
+    /// go without a fresh invite; the relationship completes when the accept
+    /// lands.
+    HandshakeInFlight,
+}
+
+/// Decide what a send needs from the relationship `state`. Pure and total over
+/// the four states, so a new state cannot silently fall through to "send
+/// anyway".
+pub fn readiness_for(state: RelationshipState) -> SendReadiness {
+    match state {
+        RelationshipState::Bidirectional => SendReadiness::Ready,
+        RelationshipState::None => SendReadiness::Reestablish,
+        RelationshipState::Pending | RelationshipState::InviteReceived => {
+            SendReadiness::HandshakeInFlight
+        }
+    }
+}
+
+/// [`readiness_for`] the state currently held for the `(our_vid, their_vid)`
+/// pair in `store`. Reads local state only — no network — so it composes with a
+/// durable [`RelationshipStore`]: after a restart the readiness reflects what
+/// the store recovered, which is the whole point of persisting it.
+async fn readiness_for_pair(
+    store: &Arc<dyn RelationshipStore>,
+    our_vid: &str,
+    their_vid: &str,
+) -> Result<SendReadiness, ATMError> {
+    Ok(readiness_for(store.get(our_vid, their_vid).await?))
+}
+
+/// Backoff schedule for re-establishment retries (design note
+/// `tsp-relationship-recovery.md`, D4).
+///
+/// A mediator or VTA restart makes *every* peer time out at once, so retries
+/// are spread — jittered exponential backoff — and **bounded**: §7.2.2's drop is
+/// silent, so a round-trip timeout cannot distinguish "the peer lost our
+/// relationship" from "the peer is down" (C2), and a peer that is genuinely down
+/// must not be re-invited forever.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackoffPolicy {
+    /// Delay before the first retry.
+    pub base: Duration,
+    /// Ceiling any single delay is capped at.
+    pub max: Duration,
+    /// Give up after this many attempts. `0` disables recovery entirely.
+    pub max_attempts: u32,
+}
+
+impl Default for BackoffPolicy {
+    fn default() -> Self {
+        Self {
+            base: Duration::from_secs(1),
+            max: Duration::from_secs(60),
+            max_attempts: 6,
+        }
+    }
+}
+
+impl BackoffPolicy {
+    /// The capped exponential delay for a 0-based `attempt` — `base · 2^attempt`,
+    /// saturating, capped at `max` — or `None` once `attempt >= max_attempts`,
+    /// which is the signal to give up. Deterministic; apply [`full_jitter`] on
+    /// top for the actual wait so a fleet of peers does not retry in lockstep.
+    pub fn capped_delay(&self, attempt: u32) -> Option<Duration> {
+        if attempt >= self.max_attempts {
+            return None;
+        }
+        let factor = 1u64.checked_shl(attempt).unwrap_or(u64::MAX);
+        let millis = (self.base.as_millis() as u64).saturating_mul(factor);
+        Some(Duration::from_millis(millis).min(self.max))
+    }
+}
+
+/// Full jitter (AWS's "Exponential Backoff and Jitter"): spread a retry
+/// uniformly over `[0, delay)` by scaling with `frac ∈ [0, 1)`. The caller
+/// supplies `frac` from its own RNG, so this stays pure and testable; `frac` is
+/// clamped, so an out-of-range value cannot produce a negative or longer wait.
+pub fn full_jitter(delay: Duration, frac: f64) -> Duration {
+    Duration::from_secs_f64(delay.as_secs_f64() * frac.clamp(0.0, 1.0))
+}
+
+/// What to do about a peer whose send timed out (design note D4). Single-flight
+/// per peer, bounded by a [`BackoffPolicy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryAction {
+    /// No attempt is in flight and one is due — start re-establishing now.
+    Start,
+    /// An attempt is already in flight for this peer; coalesce onto it rather
+    /// than launch a second (an invite storm against one peer is the failure
+    /// this prevents).
+    InFlight,
+    /// Not yet eligible; re-check after this delay.
+    Backoff(Duration),
+    /// Attempts exhausted — surface an error and stop retrying this peer.
+    GiveUp,
+}
+
+/// Per-peer re-establishment bookkeeping (design note D4).
+///
+/// Pure and clock-injected (`now_ms`), so a coordinator can hold one behind a
+/// lock per `(our, their)` pair without pulling wall-clock time or an RNG into
+/// the decision — the same shape as the rest of this module's tested cores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RecoveryState {
+    attempts: u32,
+    in_flight: bool,
+    next_eligible_ms: u64,
+}
+
+impl RecoveryState {
+    /// A fresh tracker: eligible immediately, nothing in flight.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Decide what to do now, and mark an attempt in flight when the answer is
+    /// [`RecoveryAction::Start`] — so two callers racing on the same peer get
+    /// one `Start` and one `InFlight`, which is the single-flight guarantee.
+    pub fn begin(&mut self, now_ms: u64, policy: &BackoffPolicy) -> RecoveryAction {
+        if self.in_flight {
+            return RecoveryAction::InFlight;
+        }
+        if self.attempts >= policy.max_attempts {
+            return RecoveryAction::GiveUp;
+        }
+        if now_ms < self.next_eligible_ms {
+            return RecoveryAction::Backoff(Duration::from_millis(self.next_eligible_ms - now_ms));
+        }
+        self.in_flight = true;
+        RecoveryAction::Start
+    }
+
+    /// A started attempt failed: clear the in-flight flag, count it, and hold the
+    /// peer off until `now_ms + delay` (the caller passes the already-jittered
+    /// [`BackoffPolicy::capped_delay`]).
+    pub fn fail(&mut self, now_ms: u64, delay: Duration) {
+        self.in_flight = false;
+        self.attempts = self.attempts.saturating_add(1);
+        self.next_eligible_ms = now_ms.saturating_add(delay.as_millis() as u64);
+    }
+
+    /// The relationship recovered: forget everything, so the peer is treated as
+    /// healthy again and a later loss starts a fresh backoff rather than
+    /// inheriting an exhausted one.
+    pub fn succeed(&mut self) {
+        *self = Self::new();
+    }
+
+    /// Attempts spent so far (for observability — the drop/recovery metrics of
+    /// design note D8).
+    pub fn attempts(&self) -> u32 {
+        self.attempts
+    }
+}
+
+/// Idle-eviction policy for relationships (design note
+/// `tsp-relationship-recovery.md`, D5) — the original proposal's "if not used
+/// for a period of time, remove it".
+///
+/// Eviction is purely local and needs no coordination with the peer: if we evict
+/// a relationship the peer kept, the next send reads `None`
+/// ([`SendReadiness::Reestablish`]) and re-invites, and D2's reconcile transition
+/// lets the peer accept the re-invite it did not strictly need. The only cost of
+/// an over-eager eviction is one extra handshake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvictionPolicy {
+    /// Evict a relationship untouched for at least this long.
+    pub ttl: Duration,
+}
+
+impl Default for EvictionPolicy {
+    /// Seven days — the interval from the original proposal.
+    fn default() -> Self {
+        Self {
+            ttl: Duration::from_secs(7 * 24 * 60 * 60),
+        }
+    }
+}
+
+impl EvictionPolicy {
+    /// Whether a relationship last touched at `last_active_ms` is idle as of
+    /// `now_ms` — i.e. eligible for eviction. Saturating, so a clock that appears
+    /// to move backwards reads as "not idle" rather than underflowing to a huge
+    /// age.
+    pub fn is_idle(&self, last_active_ms: u64, now_ms: u64) -> bool {
+        now_ms.saturating_sub(last_active_ms) >= self.ttl.as_millis() as u64
+    }
 }
 
 /// What an inbound control message did to relationship state, and what it asks
@@ -1421,6 +1843,91 @@ impl TspOps<'_> {
     ) -> Result<RelationshipState, ATMError> {
         let (our_did, _) = profile.dids()?;
         self.relationship_store().get(our_did, their_did).await
+    }
+
+    /// What a send to `their_did` would need first, read from the current
+    /// relationship — see [`SendReadiness`] (design note
+    /// `tsp-relationship-recovery.md`, D3). A caller can branch on this itself;
+    /// [`send_reestablishing`](Self::send_reestablishing) is the ready-made send
+    /// that acts on it.
+    pub async fn send_readiness(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+    ) -> Result<SendReadiness, ATMError> {
+        let (our_did, _) = profile.dids()?;
+        readiness_for_pair(self.relationship_store(), our_did, their_did).await
+    }
+
+    /// Send `payload` to `their_did` over `route`, (re)establishing the
+    /// relationship first when this endpoint has lost or never had it — the
+    /// recovery-aware send (design note `tsp-relationship-recovery.md`, D3).
+    ///
+    /// This is what a service calls instead of [`send_routed`](Self::send_routed)
+    /// so that a peer restart cannot turn its traffic into silent §7.2.2 drops:
+    ///
+    /// - [`Ready`](SendReadiness::Ready): the relationship is live — send
+    ///   directly.
+    /// - [`HandshakeInFlight`](SendReadiness::HandshakeInFlight): an invite is
+    ///   already outstanding in one direction; §3.6 lets the payload follow it,
+    ///   so send directly without a second invite.
+    /// - [`Reestablish`](SendReadiness::Reestablish): no relationship on record —
+    ///   send an invite ([`form_relationship_routed`](Self::form_relationship_routed)),
+    ///   then the payload immediately after (§3.6). The peer records the invite,
+    ///   which admits the payload that follows, so recovery costs one round trip
+    ///   rather than invite → wait-for-accept → send.
+    ///
+    /// It handles the case where *our* half was lost or never formed. It does
+    /// **not** handle the peer having lost *its* half while we still read
+    /// `Bidirectional`: that shows up only as a round-trip timeout (§7.2.2's drop
+    /// is silent) and is the send/outbox layer's job to detect and retry
+    /// (design note D4). Here `Ready` sends once and returns.
+    pub async fn send_reestablishing(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        route: &[String],
+        payload: &[u8],
+    ) -> Result<(), ATMError> {
+        if self.send_readiness(profile, their_did).await? == SendReadiness::Reestablish {
+            // Sends the invite and moves us to `Pending`; the payload below rides
+            // after it (§3.6) rather than waiting for the accept.
+            self.form_relationship_routed(profile, their_did).await?;
+        }
+        self.send_routed(profile, route, payload).await
+    }
+
+    /// Force the local relationship with `their_did` back to `None`, clearing its
+    /// thread digests — the "stale local half" reset (design note
+    /// `tsp-relationship-recovery.md`, D4).
+    ///
+    /// Use it when a send over a relationship we read as `Bidirectional` times
+    /// out with no reply. §7.2.2's drop is silent, so a round-trip timeout is the
+    /// only sign the *peer* may have lost its half while we still hold ours; and
+    /// re-inviting needs `SendInvite`, which is valid only from `None`. After
+    /// this, [`send_reestablishing`](Self::send_reestablishing) sees
+    /// [`SendReadiness::Reestablish`] and re-invites.
+    ///
+    /// Safe against a false positive (the timeout was merely the network): if the
+    /// peer *did* keep the relationship, our fresh invite arrives over its live
+    /// one and D2's reconcile transition (`Bidirectional` + `ReceiveInvite` →
+    /// `InviteReceived`) has it re-accept rather than error. So an unnecessary
+    /// reset self-heals — which is what lets D4 act on an ambiguous timeout at
+    /// all.
+    pub async fn reset_relationship(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+    ) -> Result<(), ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let store = self.relationship_store();
+        store
+            .set(our_did, their_did, RelationshipState::None)
+            .await?;
+        store
+            .set_thread_digests(our_did, their_did, ThreadDigests::default())
+            .await?;
+        Ok(())
     }
 
     /// Advance the relationship FSM for a **received** control message from
@@ -2691,16 +3198,18 @@ mod tests {
     // `affinidi-messaging-test-mediator`.
 
     use super::{
-        CapabilitySource, InMemoryRelationshipStore, PeerCapability, ProtocolChoice,
-        RelationshipEvent, RelationshipState, RelationshipStore, TSP_DISCOVER_FEATURE_URI,
-        TspPolicy, TspSupport, advance_state, classify_protocol, disclosure_advertises_tsp,
-        next_state,
+        BackoffPolicy, CapabilitySource, EvictionPolicy, InMemoryRelationshipStore, PeerCapability,
+        PersistentRelationshipStore, ProtocolChoice, RecoveryAction, RecoveryState,
+        RelationshipEvent, RelationshipKv, RelationshipState, RelationshipStore, SendReadiness,
+        TSP_DISCOVER_FEATURE_URI, TspPolicy, TspSupport, advance_state, classify_protocol,
+        disclosure_advertises_tsp, full_jitter, next_state, readiness_for, readiness_for_pair,
     };
     use crate::errors::ATMError;
     use crate::protocols::discover_features::{
         Disclosure, DiscoverFeaturesDisclosure, FeatureType,
     };
     use std::sync::Arc;
+    use std::time::Duration;
 
     const ALICE: &str = "did:example:alice";
     const BOB: &str = "did:example:bob";
@@ -3280,5 +3789,415 @@ mod tests {
         let unpacked =
             direct::unpack(&packed.bytes, &bob.decryption_key, &alice.verifying_key).unwrap();
         assert!(unpacked.control.unwrap().route.is_empty());
+    }
+
+    // ---- D1: durable relationship store (tsp-relationship-recovery.md) ----
+
+    /// A shareable in-memory [`RelationshipKv`] standing in for a real durable
+    /// backend. Cloning shares the same map, so dropping a store and building a
+    /// new one over a clone models a process restart against the same on-disk
+    /// store — without a real backend the test would only re-prove the map.
+    #[derive(Clone, Default)]
+    struct SharedMemKv(
+        std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<Vec<u8>, Vec<u8>>>>,
+    );
+
+    #[async_trait::async_trait]
+    impl RelationshipKv for SharedMemKv {
+        async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ATMError> {
+            Ok(self.0.lock().await.get(key).cloned())
+        }
+        async fn put(&self, key: &[u8], value: &[u8]) -> Result<(), ATMError> {
+            self.0.lock().await.insert(key.to_vec(), value.to_vec());
+            Ok(())
+        }
+        async fn delete(&self, key: &[u8]) -> Result<(), ATMError> {
+            self.0.lock().await.remove(key);
+            Ok(())
+        }
+    }
+
+    const A: &str = ALICE;
+    const B: &str = BOB;
+
+    /// Every facet the trait keeps round-trips through the durable store.
+    #[tokio::test]
+    async fn persistent_store_round_trips_all_facets() {
+        let store = PersistentRelationshipStore::new(SharedMemKv::default());
+
+        store
+            .set(A, B, RelationshipState::Bidirectional)
+            .await
+            .unwrap();
+        let digests = ThreadDigests {
+            invite: Some([7u8; 32]),
+            accept: Some([9u8; 32]),
+        };
+        store.set_thread_digests(A, B, digests).await.unwrap();
+        store
+            .set_reply_path(A, B, vec!["did:example:mediator".to_string()])
+            .await
+            .unwrap();
+        let cap = PeerCapability {
+            tsp: TspSupport::Supported,
+            source: CapabilitySource::Relationship,
+            learned_at_unix: 1234,
+            mediator: Some("did:example:mediator".to_string()),
+        };
+        store.set_capability(A, B, cap.clone()).await.unwrap();
+
+        assert_eq!(
+            store.get(A, B).await.unwrap(),
+            RelationshipState::Bidirectional
+        );
+        assert_eq!(store.thread_digests(A, B).await.unwrap(), digests);
+        assert_eq!(
+            store.reply_path(A, B).await.unwrap(),
+            vec!["did:example:mediator"]
+        );
+        assert_eq!(store.get_capability(A, B).await.unwrap(), Some(cap));
+    }
+
+    /// The whole point of D1: an established relationship survives a restart. A
+    /// new store built over the same backend still holds `Bidirectional` — so
+    /// the peer's next application message is admitted, not dropped at the
+    /// §7.2.2 gate.
+    #[tokio::test]
+    async fn persistent_store_survives_a_restart() {
+        let backend = SharedMemKv::default();
+
+        // First "process": drive the relationship to complete and record its
+        // digests, then drop the store.
+        {
+            let store = PersistentRelationshipStore::new(backend.clone());
+            store
+                .set(A, B, RelationshipState::Bidirectional)
+                .await
+                .unwrap();
+            store
+                .set_thread_digests(
+                    A,
+                    B,
+                    ThreadDigests {
+                        invite: Some([1u8; 32]),
+                        accept: Some([2u8; 32]),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        // Restart: a fresh store over the same on-disk backend.
+        let restarted = PersistentRelationshipStore::new(backend);
+        assert_eq!(
+            restarted.get(A, B).await.unwrap(),
+            RelationshipState::Bidirectional,
+            "a durable store must not forget the relationship across a restart"
+        );
+        assert!(
+            restarted
+                .get(A, B)
+                .await
+                .unwrap()
+                .admits_application_message(),
+            "the peer's traffic must still be admitted after the restart"
+        );
+        assert_eq!(
+            restarted.thread_digests(A, B).await.unwrap().invite,
+            Some([1u8; 32]),
+            "digests must survive too, or the §7.2.3 tiebreak is lost after a restart"
+        );
+    }
+
+    /// An unknown pair reads as the neutral defaults — never an error.
+    #[tokio::test]
+    async fn persistent_store_defaults_for_an_unknown_pair() {
+        let store = PersistentRelationshipStore::new(SharedMemKv::default());
+        assert_eq!(store.get(A, B).await.unwrap(), RelationshipState::None);
+        assert_eq!(
+            store.thread_digests(A, B).await.unwrap(),
+            ThreadDigests::default()
+        );
+        assert!(store.reply_path(A, B).await.unwrap().is_empty());
+        assert_eq!(store.get_capability(A, B).await.unwrap(), None);
+    }
+
+    /// Length-prefixed keys keep pairs and facets from colliding even when the
+    /// DIDs share substrings across the `our`/`their` boundary — `("a","bc")`
+    /// must not read `("ab","c")`'s state.
+    #[tokio::test]
+    async fn persistent_store_keys_do_not_collide() {
+        let store = PersistentRelationshipStore::new(SharedMemKv::default());
+        store
+            .set("a", "bc", RelationshipState::Bidirectional)
+            .await
+            .unwrap();
+        store
+            .set("ab", "c", RelationshipState::Pending)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get("a", "bc").await.unwrap(),
+            RelationshipState::Bidirectional
+        );
+        assert_eq!(
+            store.get("ab", "c").await.unwrap(),
+            RelationshipState::Pending
+        );
+        // A facet is likewise scoped: setting a capability must not shadow state.
+        assert_eq!(
+            store.get("a", "bc").await.unwrap(),
+            RelationshipState::Bidirectional
+        );
+    }
+
+    /// It is a drop-in for the ephemeral default: usable behind
+    /// `Arc<dyn RelationshipStore>`, the type `with_relationship_store` takes.
+    #[tokio::test]
+    async fn persistent_store_is_a_dyn_relationship_store() {
+        let store: Arc<dyn RelationshipStore> =
+            Arc::new(PersistentRelationshipStore::new(SharedMemKv::default()));
+        store
+            .set(A, B, RelationshipState::InviteReceived)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get(A, B).await.unwrap(),
+            RelationshipState::InviteReceived
+        );
+    }
+
+    // ---- D3: recovery-aware send readiness (tsp-relationship-recovery.md) ----
+
+    /// The pure decision is total and correct over every state.
+    #[test]
+    fn readiness_for_maps_every_state() {
+        assert_eq!(
+            readiness_for(RelationshipState::Bidirectional),
+            SendReadiness::Ready
+        );
+        assert_eq!(
+            readiness_for(RelationshipState::None),
+            SendReadiness::Reestablish
+        );
+        assert_eq!(
+            readiness_for(RelationshipState::Pending),
+            SendReadiness::HandshakeInFlight
+        );
+        assert_eq!(
+            readiness_for(RelationshipState::InviteReceived),
+            SendReadiness::HandshakeInFlight
+        );
+    }
+
+    /// Only `None` asks to re-establish — a handshake already in flight must not
+    /// be restarted, and a live relationship must not re-invite.
+    #[test]
+    fn only_a_missing_relationship_triggers_reestablish() {
+        for state in [
+            RelationshipState::Bidirectional,
+            RelationshipState::Pending,
+            RelationshipState::InviteReceived,
+        ] {
+            assert_ne!(
+                readiness_for(state),
+                SendReadiness::Reestablish,
+                "{state:?} must not re-invite"
+            );
+        }
+    }
+
+    /// D1 × D3: readiness is read off the store, so a durable store makes a send
+    /// after a restart take the `Ready` path — no needless re-invite — while a
+    /// pair the store never knew takes `Reestablish`.
+    #[tokio::test]
+    async fn readiness_follows_the_durable_store_across_a_restart() {
+        let backend = SharedMemKv::default();
+        {
+            let store: Arc<dyn RelationshipStore> =
+                Arc::new(PersistentRelationshipStore::new(backend.clone()));
+            store
+                .set(A, B, RelationshipState::Bidirectional)
+                .await
+                .unwrap();
+        }
+
+        // Restart: a fresh store over the same backend.
+        let store: Arc<dyn RelationshipStore> = Arc::new(PersistentRelationshipStore::new(backend));
+
+        // The recovered relationship sends directly — the whole reason to persist.
+        assert_eq!(
+            readiness_for_pair(&store, A, B).await.unwrap(),
+            SendReadiness::Ready
+        );
+        // A peer we have no record of re-establishes before sending.
+        assert_eq!(
+            readiness_for_pair(&store, A, "did:example:carol")
+                .await
+                .unwrap(),
+            SendReadiness::Reestablish
+        );
+    }
+
+    // ---- D4: bounded, jittered, single-flight recovery (tsp-relationship-recovery.md) ----
+
+    /// The delay grows exponentially from `base`, is capped at `max`, and stops
+    /// (`None`) once attempts are exhausted.
+    #[test]
+    fn backoff_is_exponential_capped_and_bounded() {
+        let policy = BackoffPolicy {
+            base: Duration::from_secs(1),
+            max: Duration::from_secs(10),
+            max_attempts: 6,
+        };
+        assert_eq!(policy.capped_delay(0), Some(Duration::from_secs(1)));
+        assert_eq!(policy.capped_delay(1), Some(Duration::from_secs(2)));
+        assert_eq!(policy.capped_delay(2), Some(Duration::from_secs(4)));
+        // 2^3 = 8 s, still under the cap.
+        assert_eq!(policy.capped_delay(3), Some(Duration::from_secs(8)));
+        // 2^4 = 16 s → capped at 10 s.
+        assert_eq!(policy.capped_delay(4), Some(Duration::from_secs(10)));
+        assert_eq!(policy.capped_delay(5), Some(Duration::from_secs(10)));
+        // Exhausted.
+        assert_eq!(policy.capped_delay(6), None);
+        assert_eq!(policy.capped_delay(99), None);
+    }
+
+    /// A huge attempt count cannot overflow the shift or the multiply.
+    #[test]
+    fn backoff_saturates_rather_than_overflows() {
+        let policy = BackoffPolicy {
+            base: Duration::from_secs(1),
+            max: Duration::from_secs(30),
+            max_attempts: 1000,
+        };
+        // 2^500 would overflow; it saturates and caps instead of panicking.
+        assert_eq!(policy.capped_delay(500), Some(Duration::from_secs(30)));
+    }
+
+    /// Full jitter maps `frac ∈ [0,1)` onto `[0, delay)`, and clamps out-of-range
+    /// input so it can never lengthen the wait or go negative.
+    #[test]
+    fn full_jitter_spreads_within_bounds() {
+        let d = Duration::from_secs(8);
+        assert_eq!(full_jitter(d, 0.0), Duration::ZERO);
+        assert_eq!(full_jitter(d, 0.5), Duration::from_secs(4));
+        assert_eq!(full_jitter(d, 1.0), d);
+        // Out of range clamps, never exceeds `delay` or goes negative.
+        assert_eq!(full_jitter(d, 2.0), d);
+        assert_eq!(full_jitter(d, -1.0), Duration::ZERO);
+    }
+
+    /// Single-flight: a fresh peer starts, a concurrent begin coalesces, and a
+    /// failure holds the peer off for the backoff before the next start.
+    #[test]
+    fn recovery_is_single_flight_then_backs_off() {
+        let policy = BackoffPolicy {
+            base: Duration::from_secs(1),
+            max: Duration::from_secs(10),
+            max_attempts: 3,
+        };
+        let mut st = RecoveryState::new();
+
+        // First timeout for this peer → start an attempt.
+        assert_eq!(st.begin(0, &policy), RecoveryAction::Start);
+        // A second caller while it is in flight coalesces, not a second invite.
+        assert_eq!(st.begin(0, &policy), RecoveryAction::InFlight);
+
+        // The attempt fails; hold off for the (jittered) backoff.
+        st.fail(0, Duration::from_secs(2));
+        match st.begin(1_000, &policy) {
+            RecoveryAction::Backoff(d) => assert_eq!(d, Duration::from_secs(1)),
+            other => panic!("expected Backoff, got {other:?}"),
+        }
+        // Once eligible, it starts again.
+        assert_eq!(st.begin(2_000, &policy), RecoveryAction::Start);
+    }
+
+    /// Attempts are bounded: after `max_attempts` failures the peer is given up,
+    /// so a genuinely-down peer is not re-invited forever (C2).
+    #[test]
+    fn recovery_gives_up_after_max_attempts() {
+        let policy = BackoffPolicy {
+            base: Duration::from_secs(1),
+            max: Duration::from_secs(10),
+            max_attempts: 2,
+        };
+        let mut st = RecoveryState::new();
+
+        assert_eq!(st.begin(0, &policy), RecoveryAction::Start);
+        st.fail(0, Duration::ZERO);
+        assert_eq!(st.begin(0, &policy), RecoveryAction::Start);
+        st.fail(0, Duration::ZERO);
+        // Two attempts spent → give up, no matter how much time passes.
+        assert_eq!(st.begin(1_000_000, &policy), RecoveryAction::GiveUp);
+        assert_eq!(st.attempts(), 2);
+    }
+
+    /// A success clears the backoff, so a later loss starts fresh rather than
+    /// inheriting an exhausted counter.
+    #[test]
+    fn recovery_success_resets_the_backoff() {
+        let policy = BackoffPolicy {
+            base: Duration::from_secs(1),
+            max: Duration::from_secs(10),
+            max_attempts: 2,
+        };
+        let mut st = RecoveryState::new();
+        st.begin(0, &policy);
+        st.fail(0, Duration::from_secs(5));
+        st.begin(5_000, &policy); // second (final) attempt
+        st.succeed();
+        // Fresh again: eligible immediately, no attempts spent.
+        assert_eq!(st.attempts(), 0);
+        assert_eq!(st.begin(5_001, &policy), RecoveryAction::Start);
+    }
+
+    // ---- D5: idle eviction (tsp-relationship-recovery.md) ----
+
+    /// The default TTL is the seven days of the original proposal, and `is_idle`
+    /// is a saturating age comparison across the boundary.
+    #[test]
+    fn eviction_is_idle_past_the_ttl() {
+        let policy = EvictionPolicy::default();
+        assert_eq!(policy.ttl, Duration::from_secs(7 * 24 * 60 * 60));
+
+        let day_ms = 24 * 60 * 60 * 1000u64;
+        // Touched now, checked six days later — still active.
+        assert!(!policy.is_idle(0, 6 * day_ms));
+        // Exactly seven days — idle (>= boundary).
+        assert!(policy.is_idle(0, 7 * day_ms));
+        // Eight days — idle.
+        assert!(policy.is_idle(0, 8 * day_ms));
+        // A backwards clock reads as not-idle rather than underflowing to a huge
+        // age that would evict a just-touched relationship.
+        assert!(!policy.is_idle(10 * day_ms, day_ms));
+    }
+
+    /// `touch` / `last_active` round-trip through the durable store and survive a
+    /// restart, so the idle clock is not reset by a bounce (which would stop
+    /// anything from ever ageing out).
+    #[tokio::test]
+    async fn last_active_persists_across_a_restart() {
+        let backend = SharedMemKv::default();
+        {
+            let store = PersistentRelationshipStore::new(backend.clone());
+            assert_eq!(store.last_active(A, B).await.unwrap(), None);
+            store.touch(A, B, 1_700_000_000_000).await.unwrap();
+        }
+        // Restart over the same backend.
+        let store = PersistentRelationshipStore::new(backend);
+        assert_eq!(
+            store.last_active(A, B).await.unwrap(),
+            Some(1_700_000_000_000)
+        );
+
+        // And it drives the eviction decision.
+        let policy = EvictionPolicy {
+            ttl: Duration::from_secs(60),
+        };
+        let last = store.last_active(A, B).await.unwrap().unwrap();
+        assert!(!policy.is_idle(last, last + 59_000));
+        assert!(policy.is_idle(last, last + 60_000));
     }
 }
