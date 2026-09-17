@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (0.11.0) — TSP relationship persistence + ensure
+
+Lets a facade consumer form and persist TSP relationships, which the framework
+otherwise could not reach because it builds the ATM internally (design note
+`tsp-relationship-recovery.md` in the VTI repo). Both use only the 0.26.5 SDK
+already depended on:
+
+- **`ListenerConfig::with_relationship_store(Arc<dyn RelationshipStore>)`** (and
+  a `relationship_store` field) — injected into that listener's ATM at build, so
+  relationships survive a restart instead of being dropped from an ephemeral
+  in-memory store (after which §7.2.2 discards a peer's traffic until it
+  re-handshakes). A consumer supplies a `PersistentRelationshipStore` over its
+  own `RelationshipKv` backend.
+- **`DIDCommService::tsp_ensure_relationship(listener_id, peer_did)`** — forms a
+  relationship if absent, **idempotent by state read** (skips when one already
+  admits application messages, so it is safe to call at every reconnect and does
+  not raise an invalid `SendInvite` once a durable store makes reconnect start
+  non-`None`). The invite is routed (§7.2.4). Both are `#[cfg(feature = "tsp")]`.
+
 ## Unreleased (0.10.0) — `trust-tasks-rs` 0.21
 
 Dependency move only; no source change. Minor because the handler traits carry

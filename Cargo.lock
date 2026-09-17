@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-service"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-core",

@@ -393,6 +393,56 @@ impl AffinidiMessageService {
         Ok(())
     }
 
+    /// Ensure a TSP relationship exists from `listener_id` to `peer_did`,
+    /// forming one if absent (spec Rev 3 §7.2.2).
+    ///
+    /// An application send ([`send_tsp`](Self::send_tsp)) to a peer this endpoint
+    /// holds no relationship with is dropped by the peer's §7.2.2 gate. Call this
+    /// first — for an ephemeral node, at every (re)connect — so the peer admits
+    /// the traffic that follows. It is **idempotent by state read**: when a
+    /// relationship already admits application messages it returns `Ok(())`
+    /// without sending, which matters once a durable
+    /// [`relationship_store`](crate::ListenerConfig::with_relationship_store)
+    /// makes a reconnect start from a non-`None` state — an unconditional
+    /// re-invite would otherwise be an invalid `SendInvite` transition.
+    ///
+    /// The invite is **routed** (§7.2.4): `form_relationship_routed` carries a
+    /// `Reply_Path` through the profile's mediator, so the peer's accept routes
+    /// back. Kept separate from [`send_tsp`](Self::send_tsp), which stays a pure
+    /// application send.
+    #[cfg(feature = "tsp")]
+    pub async fn tsp_ensure_relationship(
+        &self,
+        listener_id: &str,
+        peer_did: &str,
+    ) -> Result<(), DIDCommServiceError> {
+        let conn = {
+            let listeners = self.listeners.read().await;
+            let handle = listeners
+                .get(listener_id)
+                .ok_or_else(|| DIDCommServiceError::ListenerNotFound(listener_id.to_string()))?;
+            handle
+                .connection_rx
+                .borrow()
+                .clone()
+                .ok_or_else(|| DIDCommServiceError::NotConnected(listener_id.to_string()))?
+        };
+
+        let state = conn
+            .atm
+            .tsp()
+            .relationship_state(&conn.profile, peer_did)
+            .await?;
+        if state.admits_application_message() {
+            return Ok(());
+        }
+        conn.atm
+            .tsp()
+            .form_relationship_routed(&conn.profile, peer_did)
+            .await?;
+        Ok(())
+    }
+
     /// Like [`send_message`](Self::send_message), but retries on
     /// [`NotConnected`](DIDCommServiceError::NotConnected) errors using
     /// exponential backoff.
@@ -585,6 +635,8 @@ mod tests {
             auto_delete: true,
             tdk_config: None,
             protocols: Protocols::default(),
+            #[cfg(feature = "tsp")]
+            relationship_store: None,
         };
 
         let result = service.add_listener(config).await;
