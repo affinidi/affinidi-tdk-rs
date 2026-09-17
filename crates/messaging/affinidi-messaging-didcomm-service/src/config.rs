@@ -66,6 +66,13 @@ pub struct ListenerConfig {
     /// Which protocols this listener handles on its socket. Defaults to
     /// [`Protocols::DIDCOMM_ONLY`].
     pub protocols: Protocols,
+    /// Optional durable relationship store for this listener's ATM (spec Rev 3
+    /// §7.2.2). `None` (the default) uses the SDK's ephemeral in-memory store,
+    /// wiped on restart — after which the framework drops a peer's traffic until
+    /// each re-handshakes. Inject a `PersistentRelationshipStore` (over a
+    /// `RelationshipKv` backend) to persist relationships across restarts.
+    #[cfg(feature = "tsp")]
+    pub relationship_store: Option<std::sync::Arc<dyn affinidi_messaging_sdk::RelationshipStore>>,
 }
 
 impl std::fmt::Debug for ListenerConfig {
@@ -95,6 +102,18 @@ impl ListenerConfig {
             ..Default::default()
         }
     }
+
+    /// Persist this listener's TSP relationships across restarts by injecting a
+    /// durable [`affinidi_messaging_sdk::RelationshipStore`] (spec Rev 3 §7.2.2).
+    /// Without it the listener uses the SDK's ephemeral in-memory store.
+    #[cfg(feature = "tsp")]
+    pub fn with_relationship_store(
+        mut self,
+        store: std::sync::Arc<dyn affinidi_messaging_sdk::RelationshipStore>,
+    ) -> Self {
+        self.relationship_store = Some(store);
+        self
+    }
 }
 
 impl Default for ListenerConfig {
@@ -108,6 +127,8 @@ impl Default for ListenerConfig {
             auto_delete: true,
             tdk_config: None,
             protocols: Protocols::default(),
+            #[cfg(feature = "tsp")]
+            relationship_store: None,
         }
     }
 }
@@ -162,6 +183,18 @@ mod tests {
         assert_eq!(Protocols::default(), Protocols::DIDCOMM_ONLY);
         assert!(Protocols::default().didcomm);
         assert!(!Protocols::default().tsp);
+    }
+
+    #[cfg(feature = "tsp")]
+    #[test]
+    fn with_relationship_store_sets_the_field() {
+        use affinidi_messaging_sdk::InMemoryRelationshipStore;
+        // Default: no store (ephemeral).
+        assert!(ListenerConfig::default().relationship_store.is_none());
+        // Injected: present.
+        let lc = ListenerConfig::default()
+            .with_relationship_store(std::sync::Arc::new(InMemoryRelationshipStore::default()));
+        assert!(lc.relationship_store.is_some());
     }
 
     #[test]

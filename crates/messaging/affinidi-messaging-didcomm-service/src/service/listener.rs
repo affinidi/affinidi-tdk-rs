@@ -147,9 +147,17 @@ impl Listener {
         // the framework now records inbound control messages — see
         // `dispatch_tsp_frame` — so it can hold the relationships the gate
         // checks for.
-        let atm_config = ATMConfigBuilder::default()
-            .build()
-            .map_err(StartupError::Config)?;
+        //
+        // A `relationship_store` on the listener config makes those relationships
+        // durable across a restart; without one the ATM's ephemeral default is
+        // used, and a bounce drops every peer's traffic until each re-handshakes.
+        let atm_builder = ATMConfigBuilder::default();
+        #[cfg(feature = "tsp")]
+        let atm_builder = match self.config.relationship_store.clone() {
+            Some(store) => atm_builder.with_relationship_store(store),
+            None => atm_builder,
+        };
+        let atm_config = atm_builder.build().map_err(StartupError::Config)?;
 
         let atm = ATM::new(atm_config, shared_state)
             .await
