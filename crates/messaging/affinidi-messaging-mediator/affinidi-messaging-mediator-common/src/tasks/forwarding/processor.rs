@@ -19,6 +19,7 @@ use crate::store::{MediatorStore, types::ForwardQueueEntry};
 use crate::tasks::forwarding::config::ForwardingConfig;
 use crate::tasks::forwarding::packer::SystemMessagePacker;
 use crate::time::{unix_timestamp_millis, unix_timestamp_secs};
+use affinidi_net_guard::{EgressPolicy, guarded_dns_resolver};
 use futures_util::{SinkExt, StreamExt};
 use sha256::digest;
 use std::{
@@ -178,9 +179,21 @@ impl EndpointState {
     }
 }
 
-/// Shared HTTP client to avoid creating one per request
+/// Shared HTTP client to avoid creating one per request.
+///
+/// The client is built on the [`affinidi_net_guard`] egress guard: names are
+/// resolved through a fail-closed guarded resolver (any answer that is not
+/// globally routable fails the whole name, closing DNS-rebinding) and redirects
+/// are refused (a 3xx must not pivot the resolver onto an internal address).
+/// The `policy` is retained so each delivery can additionally *vet* the target
+/// URL up front — that is the half of the guard that sees IP literals, which
+/// reqwest's custom resolver never gets to see (it is bypassed for literal
+/// hosts). Together they stop an attacker-advertised service endpoint
+/// (`169.254.169.254`, RFC1918, loopback, link-local, or plaintext http/ws)
+/// from turning the mediator's forwarding client into an SSRF / open relay.
 struct HttpClientPool {
     client: reqwest::Client,
+    policy: EgressPolicy,
 }
 
 impl HttpClientPool {
@@ -190,14 +203,42 @@ impl HttpClientPool {
                 "HTTP client configured to accept invalid TLS certificates — NOT safe for production"
             );
         }
+        // Public-internet posture: https/wss only, globally-routable addresses
+        // only, no special-use names. Deployments running an internal mediator
+        // mesh (private-range peers) need an operator-configured allow-list —
+        // tracked as a follow-up; the secure default is fail-closed.
+        #[allow(unused_mut)]
+        let mut policy = EgressPolicy::public_internet();
+        // Integration-test builds only (`test-clock`, the fixture-mode marker —
+        // never a default and never a production build): admit loopback +
+        // plaintext http/ws so the test harness can forward between mediators on
+        // 127.0.0.1. A release mediator keeps the fail-closed policy above.
+        #[cfg(feature = "test-clock")]
+        {
+            policy = policy.with_dev_loopback(
+                affinidi_net_guard::DevLoopback::acknowledge_ssrf_protection_disabled_for_loopback(
+                ),
+            );
+            warn!(
+                "forwarding egress guard: loopback/plaintext next hops permitted (test-clock build — NOT for production)"
+            );
+        }
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .danger_accept_invalid_certs(accept_invalid_certs)
             .pool_max_idle_per_host(10)
             .pool_idle_timeout(Duration::from_secs(90))
+            // Following a redirect lets the remote host pivot the resolver onto
+            // an arbitrary internal address (SSRF), so refuse.
+            .redirect(reqwest::redirect::Policy::none())
+            // Never honour ambient proxy env — it would route around the guard.
+            .no_proxy()
+            // Fail-closed DNS: refuse any name that resolves to a non-routable
+            // address, and connect only to the vetted addresses (no rebind).
+            .dns_resolver(guarded_dns_resolver(policy.clone()))
             .build()
             .map_err(|e| format!("HTTP client error: {e}"))?;
-        Ok(Self { client })
+        Ok(Self { client, policy })
     }
 }
 
@@ -887,6 +928,14 @@ impl ForwardingProcessor {
             format!("{endpoint_url}/inbound")
         };
 
+        // Egress guard (literal + scheme half): refuse a next-hop endpoint that
+        // is not a public, globally-routable https target before issuing the
+        // request. This is the check that sees IP literals (metadata/RFC1918/
+        // loopback/link-local), which the client's DNS resolver never sees.
+        self.http_pool.policy.vet(&inbound_url).map_err(|e| {
+            format!("Refusing to forward to {inbound_url}: blocked by egress policy: {e}")
+        })?;
+
         // A TSP forward is queued as base64url(qb2) text; send the decoded raw qb2
         // so the remote mediator's ingress recognises the TSP magic byte. A DIDComm
         // message is sent as-is. (DIDComm forwarding is unchanged.)
@@ -949,6 +998,15 @@ impl ForwardingProcessor {
         msg: &ForwardQueueEntry,
     ) -> Result<(), String> {
         let ws_url = Self::http_to_ws_url(endpoint_url);
+
+        // Egress guard (literal + scheme half): refuse a next-hop that is not a
+        // public, globally-routable wss target before dialing — same guarantee
+        // the REST path gets, so the WebSocket transport cannot be used to reach
+        // a metadata/RFC1918/loopback/link-local literal or a plaintext ws host.
+        self.http_pool.policy.vet(&ws_url).map_err(|e| {
+            format!("Refusing to relay via WebSocket to {ws_url}: blocked by egress policy: {e}")
+        })?;
+
         let frame = msg.message.clone();
         let id = frame_id(frame.as_bytes());
 

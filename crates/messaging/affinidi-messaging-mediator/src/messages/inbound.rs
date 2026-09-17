@@ -305,6 +305,41 @@ pub(crate) async fn handle_inbound_tsp(
         ));
     }
 
+    // SEND_FORWARDED gate for the relay arms — the TSP twin of the DIDComm
+    // `routing/2.0/forward` capability check in `resolve_forward_sender`.
+    //
+    // A Routed/Nested message asks the mediator to forward on the sender's
+    // behalf (the same operation as a DIDComm forward), and reaches the same
+    // remote sink — `forward_tsp_remote` → `forward_queue_enqueue`. The DIDComm
+    // path refuses that with 403 unless the sender holds SEND_FORWARDED; the TSP
+    // path did not, so an authenticated account whose SEND_FORWARDED was never
+    // granted (or was revoked) could still drive the relay. Authorise on the
+    // envelope sender's own ACLs (as the SEND_MESSAGES direct-delivery gate above
+    // does), not the session's — the WS ingress only gates LOCAL at upgrade.
+    //
+    // Anonymous relay hops are already admitted/refused by the peer allowlist
+    // above and by `enable_inter_mediator_relay`; this gate is for authenticated
+    // senders, whose `meta.sender` is bound to the session DID when
+    // `force_session_did_match` is on.
+    if session.authenticated
+        && matches!(
+            unpacked.message_type,
+            TspMessageType::Routed | TspMessageType::Nested
+        )
+    {
+        let from_acls = authz::effective_acls(state, &digest(meta.sender.as_bytes())).await?;
+        if authz::require_capability(&from_acls, Capability::SendForwarded).is_err() {
+            return Err(tsp_problem(
+                session,
+                44,
+                "authorization.send_forwarded",
+                "Sender DID is not authorized to forward (relay) messages through this mediator"
+                    .to_string(),
+                StatusCode::FORBIDDEN,
+            ));
+        }
+    }
+
     match unpacked.message_type {
         // We are a relay hop: unwrap our routing layer and forward the onward
         // message, re-sealing as this mediator unless we are the last hop (the

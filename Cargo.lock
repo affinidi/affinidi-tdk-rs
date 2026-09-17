@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-data-integrity"
-version = "0.7.11"
+version = "0.7.12"
 dependencies = [
  "affinidi-bbs",
  "affinidi-crypto",
@@ -605,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator"
-version = "0.26.2"
+version = "0.26.3"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -678,9 +678,10 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-common"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "aes-gcm",
+ "affinidi-net-guard",
  "ahash",
  "apple-native-keyring-store",
  "argon2 0.6.0",
