@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.2.0 — the outbox can be emptied
+
+**BREAKING: `OutboxStore` gains a required `remove`.** Every implementor must
+add it. In this workspace that is `InMemoryOutboxStore`; outside it, at least
+`vti-common`'s `VtiOutboxStore`.
+
+The trait had no way to remove anything. `put` upserted, state moved
+`Queued → Sent → Delivered | Unconfirmed | Failed`, and there it stopped — so an
+outbox keyspace grew for the life of the deployment, and `due()` re-read and
+re-decoded every entry ever written on every tick. The cost of draining rose
+with everything that had already drained successfully.
+
+`remove` is required rather than defaulted on purpose: a default would have to
+be a silent no-op, which is the behaviour being fixed, kept alive under a name
+that reads like it works.
+
+Also added, both additive:
+
+- `OutboxStore::terminal_before(cutoff_ms)` — terminal entries created at or
+  before the cutoff. Defaulted to none, because enumerating by age is
+  store-specific; **a store that does not override it never reaps.**
+- `reap::{reap_terminal, reap_loop, TERMINAL_RETENTION, ReapReport}` — removes
+  terminal entries older than the retention window (7 days, matching the
+  mediator's own `message_expiry_seconds`, since a duplicate cannot arrive from
+  a message the mediator has already expired).
+
+Terminal entries are kept for the window rather than removed on settle because
+`idempotency_key` is what makes at-least-once retry safe: deleting the record
+the moment an entry settles means a retry arriving afterwards reads as new work.
+Only terminal entries are ever eligible — a `Queued` entry is unfinished work
+and a `Sent` one is still awaiting evidence, and age does not make either
+disposable.
+
+
 ## 16th September 2026
 
 ### 0.1.15 — build `Inbound` through its constructor

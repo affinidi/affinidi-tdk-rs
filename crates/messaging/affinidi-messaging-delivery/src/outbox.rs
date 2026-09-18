@@ -190,6 +190,35 @@ pub trait OutboxStore: Send + Sync {
     async fn awaiting_confirmation(&self) -> Result<Vec<OutboxEntry>, OutboxError> {
         Ok(Vec::new())
     }
+
+    /// Delete an entry outright.
+    ///
+    /// The trait had no way to remove anything: entries were upserted by `put`
+    /// and only ever changed *state*, so an outbox keyspace grew for the life
+    /// of the deployment and `due()` re-read and re-decoded every entry ever
+    /// written, on every tick. A queue that cannot be emptied is not a queue.
+    ///
+    /// Required, not defaulted, because a default would have to be a silent
+    /// no-op — which is exactly the behaviour being fixed, kept alive under a
+    /// name that reads like it works.
+    async fn remove(&self, idempotency_key: &str) -> Result<(), OutboxError>;
+
+    /// Terminal entries created at or before `cutoff_ms`, oldest first — the
+    /// input to [`reap_terminal`](crate::reap::reap_terminal).
+    ///
+    /// Age is measured from `created_at_ms` rather than from when the entry
+    /// settled, because there is no settled-at field and adding one would need
+    /// a migration for entries already on disk. Creation time is the more
+    /// conservative basis anyway: it can only make an entry look *older*, so a
+    /// reap keyed on it never keeps a terminal entry longer than intended.
+    ///
+    /// Defaulted to none: enumerating by settle time is store-specific, and a
+    /// store that cannot do it efficiently should keep working rather than fail
+    /// to compile. **A store that does not override this never reaps**, so a
+    /// durable one SHOULD.
+    async fn terminal_before(&self, _cutoff_ms: u64) -> Result<Vec<OutboxEntry>, OutboxError> {
+        Ok(Vec::new())
+    }
 }
 
 /// A non-durable [`OutboxStore`] backed by a `HashMap`. For tests and ephemeral
@@ -261,6 +290,22 @@ impl OutboxStore for InMemoryOutboxStore {
                 .then_with(|| a.idempotency_key.cmp(&b.idempotency_key))
         });
         Ok(due)
+    }
+
+    async fn remove(&self, idempotency_key: &str) -> Result<(), OutboxError> {
+        self.lock()?.remove(idempotency_key);
+        Ok(())
+    }
+
+    async fn terminal_before(&self, cutoff_ms: u64) -> Result<Vec<OutboxEntry>, OutboxError> {
+        let mut out: Vec<OutboxEntry> = self
+            .lock()?
+            .values()
+            .filter(|e| e.state.is_terminal() && e.created_at_ms <= cutoff_ms)
+            .cloned()
+            .collect();
+        out.sort_by_key(|e| e.created_at_ms);
+        Ok(out)
     }
 
     async fn awaiting_confirmation(&self) -> Result<Vec<OutboxEntry>, OutboxError> {

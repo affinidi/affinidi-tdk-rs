@@ -26,6 +26,9 @@ pub mod confirm;
 pub mod conformance;
 pub mod drain;
 pub mod outbox;
+/// Removing outbox entries that are finished with — the trait had no way to
+/// remove anything, so a keyspace grew for the life of the deployment.
+pub mod reap;
 pub mod receipt;
 pub mod service;
 
