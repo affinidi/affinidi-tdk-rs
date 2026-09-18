@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased (0.26.5) — `DELETE /purge/{folder}`
+
+Lets a DID empty one of its own queues in a single call. Clearing a queue
+otherwise meant paging it (`/list` is capped at 100 with no cursor) and deleting
+by id 100 at a time, every batch separately authenticated — the recovery path a
+node needs precisely when it is already being rate-limited, which is to say
+precisely when it cannot use it. `purge_folder` existed in every store the whole
+time, reachable only as a side effect of deleting the account.
+
+Scoped strictly to the caller: the DID comes from the authenticated session,
+never the request, so there is no way to purge another DID's queue. Same
+`Capability::Local` gate as `/delete`, since emptying a queue is a superset of
+deleting from it. Destructive and unrecoverable, so the count and bytes are
+logged at `info`.
+
+
 ## Unreleased (0.26.4) — `vta-sdk` 0.43
 
 Moves the `vta-sdk` pin from `0.40` to `0.43`, which is where the
