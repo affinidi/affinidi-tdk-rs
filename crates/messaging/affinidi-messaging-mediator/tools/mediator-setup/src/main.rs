@@ -1,3 +1,28 @@
+/// Serialises every test that reads or writes the process-wide current
+/// directory.
+///
+/// `CwdGuard` (here and in `bootstrap_headless`) calls
+/// `std::env::set_current_dir`, which is **process-global** — but tests run in
+/// parallel threads, so a guard in one test silently relocates every other
+/// test's notion of "." while it is held. `config_writer`'s
+/// `test_all_secret_storage_refs` reads `current_dir()` to build its expected
+/// value, so it could observe a temp dir mid-swap and compare a canonicalised
+/// `/private/var/...` against a `/var/...` the generator resolved a moment
+/// earlier.
+///
+/// The race has been latent: it depends entirely on how the harness happens to
+/// interleave the threads, and adding one unrelated test to the binary was
+/// enough to make it fire. Every CWD-touching test takes this lock, so the
+/// interleaving stops mattering.
+#[cfg(test)]
+pub(crate) fn cwd_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // A poisoned lock means some other CWD test panicked. The directory is
+    // restored on drop regardless, so continuing is correct — refusing here
+    // would turn one failure into a cascade of unrelated ones.
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 mod admin_monitor_profile;
 mod app;
 mod bootstrap_headless;
@@ -836,30 +861,50 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
     }
 }
 
-/// Project a [`vta_sdk::provision_integration::payload::DidKeyMaterial`]
+/// Project a [`vta_sdk::sealed_transfer::template_bootstrap::DidKeyMaterialV2`]
 /// onto the `Secret` shape the mediator-common secrets store expects.
 ///
-/// Emits two entries — the signing key and the key-agreement key —
-/// keyed by their full DID-URL verification-method ids. The private
-/// bytes move through `Secret::from_multibase`, which decodes the
-/// multibase string and populates the secret's internal zeroized
-/// buffers.
+/// Emits the signing key, the key-agreement key, **and every additional
+/// signing key the VTA minted**, each keyed by its full DID-URL
+/// verification-method id. The private bytes move through
+/// `Secret::from_multibase`, which decodes the multibase string, detects the
+/// key type from its multicodec, and populates the secret's zeroized buffers.
+///
+/// The additional keys are empty for a v1 template, which is what the mediator
+/// uses today. Handling them anyway is not speculative: they are published in
+/// the DID document as verification methods, so a mediator that stored only the
+/// first two would advertise a key it cannot use — and the failure surfaces at
+/// a peer as an unverifiable signature, a long way from here.
 fn did_key_material_to_secrets(
-    material: &vta_sdk::provision_integration::payload::DidKeyMaterial,
+    material: &vta_sdk::sealed_transfer::template_bootstrap::DidKeyMaterialV2,
 ) -> anyhow::Result<Vec<affinidi_secrets_resolver::secrets::Secret>> {
     use affinidi_secrets_resolver::secrets::Secret;
 
-    let signing = Secret::from_multibase(
-        &material.signing_key.private_key_multibase,
-        Some(&material.signing_key.key_id),
-    )
-    .map_err(|e| anyhow::anyhow!("decode signing private key: {e}"))?;
-    let ka = Secret::from_multibase(
-        &material.ka_key.private_key_multibase,
-        Some(&material.ka_key.key_id),
-    )
-    .map_err(|e| anyhow::anyhow!("decode key-agreement private key: {e}"))?;
-    Ok(vec![signing, ka])
+    let decode = |slot: &str, key_id: &str, private: &str| {
+        Secret::from_multibase(private, Some(key_id))
+            .map_err(|e| anyhow::anyhow!("decode {slot} private key ({key_id}): {e}"))
+    };
+
+    let mut secrets = vec![
+        decode(
+            &material.signing_key.slot,
+            &material.signing_key.key_id,
+            &material.signing_key.private_key_multibase,
+        )?,
+        decode(
+            &material.ka_key.slot,
+            &material.ka_key.key_id,
+            &material.ka_key.private_key_multibase,
+        )?,
+    ];
+    for extra in &material.additional_signing_keys {
+        secrets.push(decode(
+            &extra.slot,
+            &extra.key_id,
+            &extra.private_key_multibase,
+        )?);
+    }
+    Ok(secrets)
 }
 
 /// Convert a flat `Vec<SecretEntry>` (the `ContextProvisionBundle`
@@ -908,26 +953,31 @@ fn build_did_secrets_bundle(
     session: &vta::VtaSession,
 ) -> Option<vta_sdk::did_secrets::DidSecretsBundle> {
     use vta_sdk::did_secrets::{DidSecretsBundle, SecretEntry};
-    use vta_sdk::keys::KeyType;
 
     if let Some(provision) = session.as_full_provision() {
-        // TemplateBootstrap path — `DidKeyMaterial` is a typed
-        // (signing, ka) pair keyed by DID. Pin the discriminants to
-        // match the `didcomm-mediator` template's renderer contract:
-        // signing_key is always Ed25519, ka_key is always X25519.
+        // TemplateBootstrap path. Every key the VTA minted for this DID, each
+        // typed by what the bundle *says* it is rather than by what this code
+        // assumes.
+        //
+        // Both halves of that changed. The discriminants used to be pinned to
+        // `Ed25519` / `X25519` literals "to match the didcomm-mediator
+        // template's renderer contract" — true while a template could not ask
+        // for anything else, and a mislabel the moment one can. `SlotKeyPair`
+        // now carries the algorithm the VTA actually minted, so read it.
+        //
+        // And the additional signing keys are projected too. They are published
+        // in the DID document as verification methods, so storing only the pair
+        // would advertise a key the mediator cannot sign with — surfacing at a
+        // peer as an unverifiable signature, far from here. Empty for a v1
+        // template, which is what the mediator uses today.
         let material = provision.integration_key()?;
-        let secrets = vec![
-            SecretEntry {
-                key_id: material.signing_key.key_id.clone(),
-                key_type: KeyType::Ed25519,
-                private_key_multibase: material.signing_key.private_key_multibase.clone(),
-            },
-            SecretEntry {
-                key_id: material.ka_key.key_id.clone(),
-                key_type: KeyType::X25519,
-                private_key_multibase: material.ka_key.private_key_multibase.clone(),
-            },
-        ];
+        let entry = |k: &vta_sdk::sealed_transfer::template_bootstrap::SlotKeyPair| SecretEntry {
+            key_id: k.key_id.clone(),
+            key_type: k.key_type.clone(),
+            private_key_multibase: k.private_key_multibase.clone(),
+        };
+        let mut secrets = vec![entry(&material.signing_key), entry(&material.ka_key)];
+        secrets.extend(material.additional_signing_keys.iter().map(entry));
         return Some(DidSecretsBundle {
             did: provision.integration_did()?.to_string(),
             secrets,
@@ -1305,7 +1355,7 @@ async fn mint_did_material(
         }
         DID_VTA => {
             // VTA-managed DID: two reply shapes carry it.
-            // - `Full(ProvisionResult)` — fresh template render
+            // - `Full(ProvisionResultV2)` — fresh template render
             //   (online / offline-mint paths, FullSetup intent).
             // - `ContextExport(ContextProvisionBundle)` — re-export
             //   of already-provisioned material (offline-export path,
@@ -2429,8 +2479,8 @@ mod cache_bundle_tests {
         // pair. Must land as two SecretEntries with the correct
         // discriminants (Ed25519 for signing, X25519 for key-agreement)
         // and the raw multibase passthrough.
-        let provision = vta_sdk::provision_client::test_helpers::sample_provision_result(
-            /*rolled_over=*/ true,
+        let provision = vta_sdk::provision_client::test_helpers::sample_provision_result_v2(
+            /*rolled_over=*/ true, /*pq=*/ false,
         );
         let session = VtaSession::full(
             "prod-mediator".into(),
@@ -2450,6 +2500,44 @@ mod cache_bundle_tests {
         // string verbatim.
         assert_eq!(bundle.secrets[0].private_key_multibase, "zPrivateSample");
         assert_eq!(bundle.secrets[1].private_key_multibase, "zKaPrivate");
+    }
+
+    /// **A post-quantum signing key the VTA minted must reach the mediator's
+    /// secrets store.**
+    ///
+    /// The mediator's own template is v1, so this cannot happen yet — but the
+    /// key would be *published in the DID document* as a verification method
+    /// either way. A mediator that stored only the first two keys would
+    /// advertise one it cannot sign with, and that failure surfaces at a peer as
+    /// an unverifiable signature, a long way from this code.
+    ///
+    /// Pinned now rather than when a v2 mediator template appears, because at
+    /// that point nothing here would fail — it would just quietly drop a key.
+    #[test]
+    fn an_additional_signing_key_is_projected_alongside_the_pair() {
+        let provision = vta_sdk::provision_client::test_helpers::sample_provision_result_v2(
+            /*rolled_over=*/ true, /*pq=*/ true,
+        );
+        let session = VtaSession::full(
+            "prod-mediator".into(),
+            "did:webvh:vta.example.com".into(),
+            Some("https://vta.example.com".into()),
+            None,
+            provision,
+        );
+
+        let bundle = build_did_secrets_bundle(&session).expect("bundle projected");
+        assert_eq!(
+            bundle.secrets.len(),
+            3,
+            "signing + key-agreement + the post-quantum key the VTA minted, got {:?}",
+            bundle.secrets.iter().map(|s| &s.key_id).collect::<Vec<_>>()
+        );
+        assert!(
+            bundle.secrets.iter().any(|s| s.key_id.ends_with("#key-2")),
+            "the additional key must be stored under the id the DID document publishes: {:?}",
+            bundle.secrets.iter().map(|s| &s.key_id).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -2552,10 +2640,14 @@ mod generate_and_write_tests {
         _tmp: tempfile::TempDir,
         path: std::path::PathBuf,
         prev: std::path::PathBuf,
+        // Held for the guard's lifetime — see `crate::cwd_lock`. Declared last
+        // so it is dropped after the directory is restored.
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl CwdGuard {
         fn new() -> Self {
+            let lock = crate::cwd_lock();
             let tmp = tempfile::tempdir().unwrap();
             let prev = std::env::current_dir().unwrap();
             let path = tmp.path().to_path_buf();
@@ -2564,6 +2656,7 @@ mod generate_and_write_tests {
                 _tmp: tmp,
                 path,
                 prev,
+                _lock: lock,
             }
         }
         fn dir(&self) -> &std::path::Path {

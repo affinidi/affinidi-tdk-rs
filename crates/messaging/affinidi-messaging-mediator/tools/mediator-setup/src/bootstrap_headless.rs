@@ -549,10 +549,14 @@ mod tests {
         _tmp: tempfile::TempDir,
         path: std::path::PathBuf,
         prev: std::path::PathBuf,
+        // Held for the guard's lifetime — see `crate::cwd_lock`. Declared last
+        // so it is dropped after the directory is restored.
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl CwdGuard {
         fn new() -> Self {
+            let lock = crate::cwd_lock();
             let tmp = tempfile::tempdir().unwrap();
             let prev = std::env::current_dir().unwrap();
             let path = tmp.path().to_path_buf();
@@ -561,6 +565,7 @@ mod tests {
                 _tmp: tmp,
                 path,
                 prev,
+                _lock: lock,
             }
         }
         fn dir(&self) -> &std::path::Path {

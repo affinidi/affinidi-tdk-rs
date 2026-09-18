@@ -18,14 +18,14 @@
 
 use vta_sdk::context_provision::ContextProvisionBundle;
 use vta_sdk::provision_client::{
-    AdminCredentialReply, ProvisionResult, VtaIntent as SdkVtaIntent, VtaReply as SdkVtaReply,
+    AdminCredentialReply, ProvisionResultV2, VtaIntent as SdkVtaIntent, VtaReply as SdkVtaReply,
 };
 
 /// What the operator wants the VTA to do during setup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VtaIntent {
     /// VTA mints the mediator's integration DID via a template render,
-    /// rolls over an admin DID, and returns a [`ProvisionResult`] with
+    /// rolls over an admin DID, and returns a [`ProvisionResultV2`] with
     /// keys, `did.jsonl`, authorization VC, and VTA trust bundle.
     FullSetup,
     /// Mediator brings its own integration DID (from the Did step); the
@@ -83,7 +83,7 @@ pub enum VtaReply {
     /// integration DID, (optionally) rolled over an admin DID, and
     /// returned the complete trust bundle. Produced by FullSetup
     /// (online or offline-mint).
-    Full(Box<ProvisionResult>),
+    Full(Box<ProvisionResultV2>),
     /// Admin-credential-only reply. The mediator keeps its own
     /// integration DID; the VTA supplied an admin identity the mediator
     /// authenticates as against the VTA's admin APIs.

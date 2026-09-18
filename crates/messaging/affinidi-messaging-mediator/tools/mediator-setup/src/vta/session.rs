@@ -7,7 +7,7 @@
 //! produced the result.
 
 use vta_sdk::context_provision::ContextProvisionBundle;
-use vta_sdk::provision_client::{AdminCredentialReply, ProvisionResult};
+use vta_sdk::provision_client::{AdminCredentialReply, ProvisionResultV2};
 
 use super::intent::VtaReply;
 
@@ -48,7 +48,7 @@ impl VtaSession {
         vta_did: String,
         rest_url: Option<String>,
         mediator_did: Option<String>,
-        provision: ProvisionResult,
+        provision: ProvisionResultV2,
     ) -> Self {
         Self {
             context_id,
@@ -100,7 +100,7 @@ impl VtaSession {
 
     /// Long-term admin DID the mediator authenticates as. For a
     /// [`VtaReply::Full`] reply this is the rolled-over DID from the
-    /// `ProvisionResult`; for `AdminOnly` it's the DID the VTA supplied
+    /// `ProvisionResultV2`; for `AdminOnly` it's the DID the VTA supplied
     /// directly; for `ContextExport` it's the (auto-minted) admin DID
     /// the VTA shipped inside the [`ContextProvisionBundle`].
     pub fn admin_did(&self) -> &str {
@@ -138,11 +138,11 @@ impl VtaSession {
         }
     }
 
-    /// Borrow the full [`ProvisionResult`] when the reply is
+    /// Borrow the full [`ProvisionResultV2`] when the reply is
     /// [`VtaReply::Full`]. Returns `None` for `AdminOnly` and
     /// `ContextExport` — those carry their own shapes; see
     /// [`Self::as_context_export`] for the ContextExport accessor.
-    pub fn as_full_provision(&self) -> Option<&ProvisionResult> {
+    pub fn as_full_provision(&self) -> Option<&ProvisionResultV2> {
         match &self.reply {
             VtaReply::Full(p) => Some(p),
             VtaReply::AdminOnly(_) | VtaReply::ContextExport(_) => None,
