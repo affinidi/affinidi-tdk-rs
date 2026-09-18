@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### 0.26.9 — `purge_queue`
+
+`ATM::purge_queue(profile, folder)` empties one of the calling profile's own
+queues at the mediator in a single call (`DELETE /purge/{folder}`), with
+`PurgeQueueResponse { count, bytes }`.
+
+Deleting by id is the right tool while a queue is healthy. It stops being one
+when a queue is *stuck*: `/list` is capped at 100 with no cursor, `/fetch` pages,
+and every batch is separately authenticated — so clearing a large backlog costs
+exactly the request volume that gets a node rate-limited, which is usually how
+the backlog started.
+
+The queue that strands a deployment is often a **peer's send queue** rather than
+this node's inbox: a message is held against the sender's account until the
+recipient deletes it, so a receiver whose deletes are failing fills the send
+queue of everyone talking to it, up to `queued_send_messages_hard` (1000 by
+default), after which that peer cannot send at all. This is how such a peer gets
+itself back.
+
+Purging destroys messages — they are not returned to their senders. Additive.
+
 ### 0.26.8 — background deletions batch, and their failures are no longer silent
 
 The deletion handler sent one `DELETE` per message and discarded the result
