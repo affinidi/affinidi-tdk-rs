@@ -1,39 +1,46 @@
 # Changelog
 
-## 0.2.0 — the outbox can be emptied
+## 0.1.16 — the outbox can be emptied
 
-**BREAKING: `OutboxStore` gains a required `remove`.** Every implementor must
-add it. In this workspace that is `InMemoryOutboxStore`; outside it, at least
-`vti-common`'s `VtiOutboxStore`.
-
-The trait had no way to remove anything. `put` upserted, state moved
+`OutboxStore` had no way to remove anything. `put` upserted, state moved
 `Queued → Sent → Delivered | Unconfirmed | Failed`, and there it stopped — so an
 outbox keyspace grew for the life of the deployment, and `due()` re-read and
 re-decoded every entry ever written on every tick. The cost of draining rose
 with everything that had already drained successfully.
 
-`remove` is required rather than defaulted on purpose: a default would have to
-be a silent no-op, which is the behaviour being fixed, kept alive under a name
-that reads like it works.
+Two additions, both defaulted so that a store which implements neither keeps its
+previous behaviour exactly — this is **not** a breaking change:
 
-Also added, both additive:
-
+- `OutboxStore::remove_if_terminal(key) -> bool` — deletes **only if** the entry
+  is still terminal, atomically, and says whether it did. Conditional rather
+  than a plain `remove` because the reaper works from a snapshot, and an entry
+  can be re-queued between the read and the delete (CWE-367); a general delete
+  would remove live work on a stale read. Re-reading first narrows that window
+  without closing it, so the condition is evaluated where the delete happens,
+  under whatever the store uses to make `put` atomic. Default: removes nothing.
 - `OutboxStore::terminal_before(cutoff_ms)` — terminal entries created at or
-  before the cutoff. Defaulted to none, because enumerating by age is
-  store-specific; **a store that does not override it never reaps.**
-- `reap::{reap_terminal, reap_loop, TERMINAL_RETENTION, ReapReport}` — removes
-  terminal entries older than the retention window (7 days, matching the
-  mediator's own `message_expiry_seconds`, since a duplicate cannot arrive from
-  a message the mediator has already expired).
+  before the cutoff. Default: none.
 
-Terminal entries are kept for the window rather than removed on settle because
-`idempotency_key` is what makes at-least-once retry safe: deleting the record
-the moment an entry settles means a retry arriving afterwards reads as new work.
-Only terminal entries are ever eligible — a `Queued` entry is unfinished work
-and a `Sent` one is still awaiting evidence, and age does not make either
+A store opts into reaping by implementing both. Implementing `terminal_before`
+without `remove_if_terminal` is the one incoherent pair, and it is visible
+rather than silent: `ReapReport::skipped` counts entries the store offered and
+then declined to remove.
+
+Also `reap::{reap_terminal, reap_loop, TERMINAL_RETENTION, ReapReport}`. Terminal
+entries are kept for the retention window (7 days, matching the mediator's own
+`message_expiry_seconds` — a duplicate cannot arrive from a message the mediator
+has already expired) rather than dropped on settle, because `idempotency_key` is
+what makes at-least-once retry safe: delete it as soon as an entry settles and a
+retry arriving afterwards reads as new work.
+
+Only terminal entries are ever eligible. A `Queued` entry is unfinished work and
+a `Sent` one is still awaiting evidence, and age does not make either
 disposable.
 
-
+`reap_loop` skips a pass and logs when the system clock cannot be read, rather
+than defaulting the cutoff to 0: the cutoff decides which records are destroyed,
+and a silent fallback means that decision gets made on a bad reading with
+nothing to show for it.
 ## 16th September 2026
 
 ### 0.1.15 — build `Inbound` through its constructor

@@ -39,6 +39,18 @@ pub struct ReapReport {
     /// Entries whose removal failed. They stay, and the next pass retries them
     /// — a reap that cannot delete must not report success.
     pub failed: usize,
+    /// Entries the store offered and then declined to remove, because they were
+    /// no longer terminal when the delete ran.
+    ///
+    /// Normally zero. A non-zero count is either the race working as intended —
+    /// an entry re-queued between the snapshot and the delete, correctly left
+    /// alone — or a store that implements
+    /// [`terminal_before`](crate::outbox::OutboxStore::terminal_before) but not
+    /// [`remove_if_terminal`](crate::outbox::OutboxStore::remove_if_terminal),
+    /// in which case it equals the offered count on every pass and the queue
+    /// never shrinks. That is what makes the incoherent pair visible instead of
+    /// silent.
+    pub skipped: usize,
 }
 
 /// Remove terminal entries older than `retention`.
@@ -55,14 +67,20 @@ pub async fn reap_terminal(
     let mut report = ReapReport::default();
 
     for entry in store.terminal_before(cutoff).await? {
-        // Re-checked rather than trusted: `terminal_before` is implemented per
-        // store, and a store that got its filter wrong would otherwise have
-        // this delete undelivered work on its behalf.
+        // A first pass on the snapshot, which catches a store whose
+        // `terminal_before` filter is simply wrong. It cannot catch a *stale*
+        // snapshot — the entry may have been re-queued since — which is why the
+        // delete below is conditional and evaluates the same test atomically at
+        // the store. Both, not either: this one gives the wrong-filter case a
+        // clear skip, and that one closes the race.
         if !entry.state.is_terminal() || entry.created_at_ms > cutoff {
             continue;
         }
-        match store.remove(&entry.idempotency_key).await {
-            Ok(()) => report.reaped += 1,
+        match store.remove_if_terminal(&entry.idempotency_key).await {
+            Ok(true) => report.reaped += 1,
+            // Still present but no longer terminal: re-queued between the
+            // snapshot and now. Leaving it is the point.
+            Ok(false) => report.skipped += 1,
             Err(e) => {
                 tracing::warn!(
                     key = %entry.idempotency_key,
@@ -74,10 +92,11 @@ pub async fn reap_terminal(
         }
     }
 
-    if report.reaped > 0 || report.failed > 0 {
+    if report.reaped > 0 || report.failed > 0 || report.skipped > 0 {
         tracing::debug!(
             reaped = report.reaped,
             failed = report.failed,
+            skipped = report.skipped,
             "outbox reap pass"
         );
     }
@@ -93,10 +112,22 @@ pub async fn reap_loop(store: Arc<dyn OutboxStore>, interval: Duration, retentio
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        // A clock that cannot be read skips the pass and says so. Defaulting to
+        // 0 was worse than it looked: it is silent, and silence is the failure
+        // mode — a cutoff derived from a wrong clock decides which records are
+        // destroyed, and an operator has no way to know the decision was made
+        // on a bad reading. Skipping loses nothing; the next tick retries.
+        let now_ms = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(d) => d.as_millis() as u64,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "outbox reap: system clock is before the unix epoch — skipping this pass \
+                     rather than reaping against a cutoff derived from an unreadable clock"
+                );
+                continue;
+            }
+        };
         if let Err(e) = reap_terminal(store.as_ref(), now_ms, retention).await {
             tracing::warn!(error = %e, "outbox reap failed; retrying next tick");
         }
@@ -133,7 +164,8 @@ mod tests {
             report,
             ReapReport {
                 reaped: 1,
-                failed: 0
+                failed: 0,
+                skipped: 0
             }
         );
         assert!(store.get("old").await.unwrap().is_none());
@@ -193,5 +225,96 @@ mod tests {
             .unwrap();
 
         assert_eq!(report.reaped, 3);
+    }
+
+    /// The TOCTOU the conditional delete exists for: an entry re-queued between
+    /// the snapshot and the delete must survive. `reap_terminal` is handed a
+    /// stale view on purpose here — the entry was terminal when listed and is
+    /// `Queued` by the time the delete runs, which is exactly the interleaving
+    /// a concurrent `put` produces.
+    #[tokio::test]
+    async fn an_entry_requeued_after_the_snapshot_is_not_reaped() {
+        let store = InMemoryOutboxStore::new();
+        store
+            .put(entry("e", OutboxState::Delivered, 0))
+            .await
+            .unwrap();
+
+        // What the reaper would have seen.
+        let snapshot = store.terminal_before(8 * DAY_MS).await.unwrap();
+        assert_eq!(snapshot.len(), 1, "it was terminal when listed");
+
+        // …and then a retry re-queues it.
+        store.put(entry("e", OutboxState::Queued, 0)).await.unwrap();
+
+        let report = reap_terminal(&store, 8 * DAY_MS, TERMINAL_RETENTION)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            report.reaped, 0,
+            "live work must not be deleted on a stale read"
+        );
+        assert!(store.get("e").await.unwrap().is_some());
+    }
+
+    /// The store-level primitive on its own: it refuses a non-terminal entry,
+    /// which is what makes the reaper safe rather than merely careful.
+    #[tokio::test]
+    async fn remove_if_terminal_refuses_live_work() {
+        let store = InMemoryOutboxStore::new();
+        store.put(entry("q", OutboxState::Queued, 0)).await.unwrap();
+        store
+            .put(entry("d", OutboxState::Delivered, 0))
+            .await
+            .unwrap();
+
+        assert!(!store.remove_if_terminal("q").await.unwrap());
+        assert!(store.remove_if_terminal("d").await.unwrap());
+        assert!(
+            !store.remove_if_terminal("gone").await.unwrap(),
+            "absent is not removed"
+        );
+        assert!(store.get("q").await.unwrap().is_some());
+    }
+
+    /// A store that lists terminal entries but never removes them would
+    /// otherwise loop silently. The count is the signal.
+    #[tokio::test]
+    async fn a_store_that_declines_to_remove_is_counted_not_silent() {
+        struct ListsButNeverRemoves(InMemoryOutboxStore);
+
+        #[async_trait::async_trait]
+        impl OutboxStore for ListsButNeverRemoves {
+            async fn put(&self, entry: OutboxEntry) -> Result<(), OutboxError> {
+                self.0.put(entry).await
+            }
+            async fn get(&self, k: &str) -> Result<Option<OutboxEntry>, OutboxError> {
+                self.0.get(k).await
+            }
+            async fn due(&self, now_ms: u64) -> Result<Vec<OutboxEntry>, OutboxError> {
+                self.0.due(now_ms).await
+            }
+            async fn terminal_before(&self, c: u64) -> Result<Vec<OutboxEntry>, OutboxError> {
+                self.0.terminal_before(c).await
+            }
+            // `remove_if_terminal` left at its default.
+        }
+
+        let store = ListsButNeverRemoves(InMemoryOutboxStore::new());
+        store
+            .put(entry("d", OutboxState::Delivered, 0))
+            .await
+            .unwrap();
+
+        let report = reap_terminal(&store, 8 * DAY_MS, TERMINAL_RETENTION)
+            .await
+            .unwrap();
+
+        assert_eq!(report.reaped, 0);
+        assert_eq!(
+            report.skipped, 1,
+            "the incoherent pair is visible, not silent"
+        );
     }
 }
