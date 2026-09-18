@@ -190,6 +190,56 @@ pub trait OutboxStore: Send + Sync {
     async fn awaiting_confirmation(&self) -> Result<Vec<OutboxEntry>, OutboxError> {
         Ok(Vec::new())
     }
+
+    /// Delete an entry **only if it is still terminal**, atomically. Returns
+    /// whether it was removed.
+    ///
+    /// The trait had no way to remove anything: entries were upserted by `put`
+    /// and only ever changed *state*, so an outbox keyspace grew for the life
+    /// of the deployment and `due()` re-read and re-decoded every entry ever
+    /// written, on every tick. A queue that cannot be emptied is not a queue.
+    ///
+    /// # Why conditional, and why atomic
+    ///
+    /// A plain `remove(key)` would be a check-then-act race (CWE-367). The
+    /// reaper reads a snapshot with [`terminal_before`](Self::terminal_before)
+    /// and deletes from it, and an entry can be re-queued by `put` in between —
+    /// a retry of an `Unconfirmed` send, say. A reaper holding a general delete
+    /// would then remove live work on the strength of a stale read, which is
+    /// losing a message rather than tidying up after one.
+    ///
+    /// Re-reading before deleting narrows that window but does not close it.
+    /// The condition has to be evaluated where the delete happens, under
+    /// whatever the store uses to make `put` atomic, so this is the primitive
+    /// rather than a `remove` the caller is trusted to guard.
+    ///
+    /// Defaulted to `Ok(false)` — "removed nothing" — to match
+    /// [`terminal_before`](Self::terminal_before): a store opts into reaping by
+    /// implementing both, and one that implements neither keeps its previous
+    /// behaviour exactly. Implementing `terminal_before` *without* this is the
+    /// one incoherent combination, and it is visible rather than silent:
+    /// [`ReapReport::skipped`](crate::reap::ReapReport::skipped) counts entries
+    /// the store offered and then declined to remove.
+    async fn remove_if_terminal(&self, _idempotency_key: &str) -> Result<bool, OutboxError> {
+        Ok(false)
+    }
+
+    /// Terminal entries created at or before `cutoff_ms`, oldest first — the
+    /// input to [`reap_terminal`](crate::reap::reap_terminal).
+    ///
+    /// Age is measured from `created_at_ms` rather than from when the entry
+    /// settled, because there is no settled-at field and adding one would need
+    /// a migration for entries already on disk. Creation time is the more
+    /// conservative basis anyway: it can only make an entry look *older*, so a
+    /// reap keyed on it never keeps a terminal entry longer than intended.
+    ///
+    /// Defaulted to none: enumerating by settle time is store-specific, and a
+    /// store that cannot do it efficiently should keep working rather than fail
+    /// to compile. **A store that does not override this never reaps**, so a
+    /// durable one SHOULD.
+    async fn terminal_before(&self, _cutoff_ms: u64) -> Result<Vec<OutboxEntry>, OutboxError> {
+        Ok(Vec::new())
+    }
 }
 
 /// A non-durable [`OutboxStore`] backed by a `HashMap`. For tests and ephemeral
@@ -261,6 +311,30 @@ impl OutboxStore for InMemoryOutboxStore {
                 .then_with(|| a.idempotency_key.cmp(&b.idempotency_key))
         });
         Ok(due)
+    }
+
+    async fn remove_if_terminal(&self, idempotency_key: &str) -> Result<bool, OutboxError> {
+        // One lock for the test and the delete: taking them separately is the
+        // race this method exists to avoid.
+        let mut entries = self.lock()?;
+        match entries.get(idempotency_key) {
+            Some(e) if e.state.is_terminal() => {
+                entries.remove(idempotency_key);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn terminal_before(&self, cutoff_ms: u64) -> Result<Vec<OutboxEntry>, OutboxError> {
+        let mut out: Vec<OutboxEntry> = self
+            .lock()?
+            .values()
+            .filter(|e| e.state.is_terminal() && e.created_at_ms <= cutoff_ms)
+            .cloned()
+            .collect();
+        out.sort_by_key(|e| e.created_at_ms);
+        Ok(out)
     }
 
     async fn awaiting_confirmation(&self) -> Result<Vec<OutboxEntry>, OutboxError> {
