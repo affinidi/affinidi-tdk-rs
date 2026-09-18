@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### 0.26.8 — background deletions batch, and their failures are no longer silent
+
+The deletion handler sent one `DELETE` per message and discarded the result
+(`let _ = atm.delete_messages_direct(...)`). Both halves hurt, and they compound:
+one request per message means each carries its own authentication and counts
+against the mediator's per-IP budget, so the deletes that would drain a backlog
+are what tip it into rate-limiting them — and with the outcome thrown away, a 429
+left no trace and was never retried, so the message stayed on the mediator to be
+redelivered and queued for deletion again.
+
+Who that hurts is not the node doing it: a message is held against the
+**sender's** account until the **recipient** deletes it, so a receiver whose
+deletes are quietly failing fills the send queue of every peer talking to it.
+
+Now everything already queued for one profile goes in a single `DELETE` (capped
+at the mediator's own limit of 100), a refusal is retried with backoff honouring
+`Retry-After`, and giving up is logged at error naming the count. Per-id
+refusals inside a successful response are surfaced too. Internal only — no API
+change.
+
 ### 0.26.7 — §7.2.2 drop counter (D8)
 
 Observability for the relationship gate (design note
