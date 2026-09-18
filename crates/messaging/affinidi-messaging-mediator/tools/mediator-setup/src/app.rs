@@ -2937,7 +2937,7 @@ impl WizardApp {
                                 // `vta bootstrap provision-integration` and
                                 // returns a TemplateBootstrap sealed bundle
                                 // that the wizard projects onto a full
-                                // `ProvisionResult`.
+                                // `ProvisionResultV2`.
                                 self.config.use_vta = true;
                                 self.config.vta_mode = VTA_MODE_SEALED.into();
                                 self.apply_vta_defaults();
@@ -6365,7 +6365,7 @@ mod tests {
             rest_url: Some("https://vta.example.com".into()),
             mediator_did: Some("did:webvh:mediator.vta.example.com".into()),
             reply: vta_sdk::provision_client::VtaReply::Full(Box::new(
-                vta_sdk::provision_client::test_helpers::sample_provision_result(true),
+                vta_sdk::provision_client::test_helpers::sample_provision_result_v2(true, false),
             )),
         });
         assert_eq!(app.vta_phase(), Some(&ConnectPhase::Connected));
@@ -6912,7 +6912,7 @@ mod tests {
             rest_url: Some("https://vta.example.com".into()),
             mediator_did: Some("did:webvh:mediator.vta.example.com".into()),
             reply: vta_sdk::provision_client::VtaReply::Full(Box::new(
-                vta_sdk::provision_client::test_helpers::sample_provision_result(true),
+                vta_sdk::provision_client::test_helpers::sample_provision_result_v2(true, false),
             )),
         });
         app

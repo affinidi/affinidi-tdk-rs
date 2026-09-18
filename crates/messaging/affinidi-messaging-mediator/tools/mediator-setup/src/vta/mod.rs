@@ -40,5 +40,5 @@ pub use state::{ConnectPhase, FallbackOptions, OfflineReason, RecoveryOptions, V
 // call sites that need them. ──────────────────────────────────────────
 pub use vta_sdk::provision_client::{
     AttemptResult, AttemptResultKind, DiagCheck, DiagEntry, DiagStatus, EphemeralSetupKey,
-    Protocol, ProvisionResult, ResolvedVta, VtaEvent, pending_list,
+    Protocol, ProvisionResultV2, ResolvedVta, VtaEvent, pending_list,
 };

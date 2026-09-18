@@ -43,7 +43,7 @@ use vta_sdk::sealed_transfer::{
 };
 
 use crate::consts::{DEFAULT_MEDIATOR_TEMPLATE, DEFAULT_VTA_ADMIN_TEMPLATE, DEFAULT_VTA_CONTEXT};
-use crate::vta::{ProvisionResult, VtaIntent, VtaSession};
+use crate::vta::{ProvisionResultV2, VtaIntent, VtaSession};
 
 /// Default validity on a wizard-issued VP for the **offline** path
 /// (sealed handoff). The request file is shuttled between hosts by
@@ -1110,17 +1110,20 @@ fn decode_nonce_b64url(s: &str) -> Result<[u8; 16], String> {
         .map_err(|_| "VP nonce must be 16 bytes".to_string())
 }
 
-/// Build a [`ProvisionResult`] from a sealed-handoff
+/// Build a [`ProvisionResultV2`] from a sealed-handoff
 /// [`TemplateBootstrapPayload`]. The offline path opens the bundle
 /// locally and has no VTA-supplied [`ProvisionSummary`] — synthesise
 /// one from the payload itself so downstream code (which always
-/// reads through [`ProvisionResult`] accessors) stays uniform with
+/// reads through [`ProvisionResultV2`] accessors) stays uniform with
 /// the online path.
 ///
 /// `bundle_id_hex` / `digest` are left empty: the offline path
 /// tracks both on [`SealedHandoffState`] (nonce + SHA-256 of armored
 /// ciphertext) and downstream code has no current consumer for them.
-fn provision_from_template_payload(payload: TemplateBootstrapPayload) -> ProvisionResult {
+fn provision_from_template_payload(payload: TemplateBootstrapPayload) -> ProvisionResultV2 {
+    use vta_sdk::sealed_transfer::template_bootstrap::{
+        DidKeyMaterialV2, TemplateBootstrapPayloadV2,
+    };
     let integration_did = payload
         .config
         .did_document
@@ -1164,7 +1167,21 @@ fn provision_from_template_payload(payload: TemplateBootstrapPayload) -> Provisi
         context: None,
         admin_scope: None,
     };
-    ProvisionResult {
+    // Lift the opened V1 payload into the shape every consumer now reads. The
+    // mediator's template is v1, so `additional_signing_keys` is always empty
+    // here — but going through the same lift the online runner uses means the
+    // offline path cannot drift from it, and a v2 mediator template would need
+    // no change at this line.
+    let payload = TemplateBootstrapPayloadV2 {
+        authorization: payload.authorization,
+        secrets: payload
+            .secrets
+            .iter()
+            .map(|(did, material)| (did.clone(), DidKeyMaterialV2::from_v1(material)))
+            .collect(),
+        config: payload.config,
+    };
+    ProvisionResultV2 {
         bundle_id_hex: String::new(),
         digest: String::new(),
         summary,

@@ -1479,6 +1479,10 @@ storage = "keyring://affinidi-mediator"
         // The file:// backend resolves its (default, relative) path against
         // the CWD into a three-slash absolute URL (#350), so compute the
         // expected value the same way rather than hard-coding it.
+        // Same lock the `CwdGuard`s take: this reads the process-wide current
+        // directory, which another test would otherwise be free to relocate
+        // between this line and `generate_toml`'s own resolution below.
+        let _cwd = crate::cwd_lock();
         let file_backend = format!(
             "file://{}",
             std::env::current_dir()

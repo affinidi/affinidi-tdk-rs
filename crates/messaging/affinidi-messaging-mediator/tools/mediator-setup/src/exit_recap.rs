@@ -208,7 +208,7 @@ mod tests {
             "did:webvh:vta.example.com".into(),
             Some("https://vta.example.com".into()),
             Some("did:webvh:mediator.vta.example.com".into()),
-            vta_sdk::provision_client::test_helpers::sample_provision_result(true),
+            vta_sdk::provision_client::test_helpers::sample_provision_result_v2(true, false),
         )
     }
 

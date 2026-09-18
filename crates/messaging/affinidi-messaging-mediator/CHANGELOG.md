@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.26.4) — `vta-sdk` 0.43
+
+Moves the `vta-sdk` pin from `0.40` to `0.43`, which is where the
+post-quantum provisioning chain lands: a VTA can now mint a signing key beyond
+the classical pair, and the sealed bundle carries it.
+
+No mediator behaviour changes. The pin had been two minors behind, so this also
+picks up everything in 0.41–0.42.
+
 ## Unreleased (0.26.3) — the TSP relay path is capability-gated, and `/readyz` stops leaking
 
 Two security fixes from the SEC-4045 review.
