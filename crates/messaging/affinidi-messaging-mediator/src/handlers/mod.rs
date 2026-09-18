@@ -22,6 +22,7 @@ pub mod message_delete;
 pub mod message_inbound;
 pub mod message_list;
 pub mod message_outbound;
+pub mod message_purge;
 #[cfg(feature = "didcomm")]
 pub(crate) mod oob_discovery;
 pub mod websocket;
@@ -43,6 +44,14 @@ pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router 
         )
         // Delete/remove messages stored in ATM
         .route("/delete", delete(message_delete::message_delete_handler))
+        // Empty one of the caller's own queues in a single call. The paged
+        // `/list` + `/delete` route is unusable exactly when it is needed —
+        // when the node is already being rate-limited — and `purge_folder`
+        // existed in every store, reachable only by deleting the account.
+        .route(
+            "/purge/{folder}",
+            delete(message_purge::message_purge_handler),
+        )
         // Websocket endpoint for ATM clients
         .route("/ws", get(websocket::websocket_handler))
         // Helps to test if you are who you think you are

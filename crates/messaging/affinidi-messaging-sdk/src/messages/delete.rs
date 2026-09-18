@@ -10,7 +10,7 @@ use crate::{
     profiles::ATMProfile,
 };
 
-use super::{DeleteMessageRequest, DeleteMessageResponse};
+use super::{DeleteMessageRequest, DeleteMessageResponse, Folder, PurgeQueueResponse};
 
 const MAX_DELETED_MESSAGES: usize = 100;
 
@@ -125,5 +125,83 @@ impl ATM {
 
         Ok(list)
     }.instrument(_span).await
+    }
+}
+
+impl ATM {
+    /// Empty one of this profile's own queues at the mediator in a single call.
+    ///
+    /// # When you want this instead of deleting by id
+    ///
+    /// Deleting by id is the right tool while a queue is healthy. It stops
+    /// being one when a queue is *stuck*: `/list` is capped at 100 with no
+    /// cursor, `/fetch` pages, and every batch is separately authenticated —
+    /// so clearing a large backlog costs exactly the kind of request volume
+    /// that gets a node rate-limited, which is usually how the backlog started.
+    ///
+    /// The queue that strands a deployment is often not this node's inbox but a
+    /// **peer's send queue**: a message is held against the sender's account
+    /// until the recipient deletes it, so a receiver whose deletes are failing
+    /// fills the send queue of everyone talking to it, up to
+    /// `queued_send_messages_hard` (1000 by default), after which that peer
+    /// cannot send at all. This is how such a peer gets itself back.
+    ///
+    /// # This destroys messages
+    ///
+    /// Purged messages are gone — not returned to their senders, not
+    /// recoverable. On [`Folder::Inbox`] that is undelivered mail addressed to
+    /// you. Prefer deleting by id whenever the queue is small enough to page.
+    ///
+    /// Scoped to the calling DID: there is no way to purge another DID's queue.
+    pub async fn purge_queue(
+        &self,
+        profile: &Arc<ATMProfile>,
+        folder: Folder,
+    ) -> Result<PurgeQueueResponse, ATMError> {
+        let _span = span!(Level::DEBUG, "purge_queue", ?folder);
+
+        async move {
+            let (profile_did, mediator_did) = profile.dids()?;
+            let tokens = self
+                .get_tdk()
+                .authentication()
+                .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
+                .await?;
+
+            let Some(mediator_url) = profile.get_mediator_rest_endpoint() else {
+                return Err(ATMError::TransportError(
+                    "No mediator URL found".to_string(),
+                ));
+            };
+
+            let res = self
+                .inner
+                .tdk_common
+                .client()
+                .delete([&mediator_url, "/purge/", &folder.to_string()].concat())
+                .header("Authorization", format!("Bearer {}", tokens.access_token))
+                .timeout(self.inner.config.request_timeout)
+                .send()
+                .await
+                .map_err(|e| {
+                    ATMError::TransportError(format!("Could not send purge_queue request: {e:?}"))
+                })?;
+
+            let body = check_response("purge queue", res).await?;
+            let body = serde_json::from_str::<SuccessResponse<PurgeQueueResponse>>(&body).map_err(
+                |e| {
+                    ATMError::TransportError(format!("Could not parse purge_queue response: {e:?}"))
+                },
+            )?;
+
+            let purged = body.data.ok_or_else(|| {
+                ATMError::TransportError("Purge response carried no data".to_string())
+            })?;
+
+            debug!(count = purged.count, bytes = purged.bytes, "purged queue");
+            Ok(purged)
+        }
+        .instrument(_span)
+        .await
     }
 }

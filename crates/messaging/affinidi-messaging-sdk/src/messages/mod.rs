@@ -83,6 +83,20 @@ pub struct DeleteMessageRequest {
 }
 impl GenericDataStruct for DeleteMessageRequest {}
 
+/// Response from purging a queue.
+/// - count: how many messages were removed
+/// - bytes: how much they occupied
+///
+/// Both are reported because a purge is destructive and unrecoverable — the
+/// messages are gone, not returned to their senders — so the caller should be
+/// able to record what it destroyed.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct PurgeQueueResponse {
+    pub count: usize,
+    pub bytes: usize,
+}
+impl GenericDataStruct for PurgeQueueResponse {}
+
 /// Get messages Request struct
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GetMessagesRequest {
@@ -94,3 +108,35 @@ impl GenericDataStruct for GetMessagesRequest {}
 #[derive(Serialize, Deserialize)]
 pub struct EmptyResponse;
 impl GenericDataStruct for EmptyResponse {}
+
+#[cfg(test)]
+mod purge_response_tests {
+    use super::*;
+
+    /// The route is `/purge/{folder}` and `Folder` is `rename_all =
+    /// "lowercase"`, so the path segment the SDK builds from `Display` and the
+    /// one axum deserialises must be the same string. They are produced by two
+    /// different impls, so nothing but a test ties them together — and a
+    /// mismatch would be a 404 on the one call a wedged node makes to recover.
+    #[test]
+    fn a_folders_path_segment_round_trips() {
+        for folder in [Folder::Inbox, Folder::Outbox] {
+            let segment = folder.to_string();
+            let parsed: Folder =
+                serde_json::from_value(serde_json::Value::String(segment.clone())).unwrap();
+            assert_eq!(parsed, folder, "`{segment}` did not parse back");
+        }
+        assert_eq!(Folder::Inbox.to_string(), "inbox");
+        assert_eq!(Folder::Outbox.to_string(), "outbox");
+    }
+
+    /// A purge reports what it destroyed; the fields are the record that those
+    /// messages existed.
+    #[test]
+    fn a_purge_response_carries_the_count_and_bytes() {
+        let decoded: PurgeQueueResponse =
+            serde_json::from_str(r#"{"count":1000,"bytes":4096}"#).unwrap();
+        assert_eq!(decoded.count, 1000);
+        assert_eq!(decoded.bytes, 4096);
+    }
+}
