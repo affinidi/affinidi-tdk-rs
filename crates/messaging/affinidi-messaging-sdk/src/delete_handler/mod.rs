@@ -16,6 +16,7 @@ use crate::{
 };
 use affinidi_task_utils::{CancellationToken, TaskSupervisor};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::{
     select,
     sync::{
@@ -24,7 +25,116 @@ use tokio::{
     },
     task::JoinHandle,
 };
-use tracing::{Instrument, Level, debug, span};
+use tracing::{Instrument, Level, debug, error, span, warn};
+
+/// Most ids to put in one `DELETE`. The mediator refuses more than
+/// `limits.deleted_messages` (100) and `delete_messages_direct` rejects the
+/// call client-side at the same number, so this is that ceiling, not a guess.
+const MAX_DELETE_BATCH: usize = 100;
+
+/// Attempts for one batch before giving up on it.
+///
+/// Small on purpose: a delete that keeps failing is not lost work. The message
+/// is still on the mediator, will be redelivered, and will be queued for
+/// deletion again — so the cost of giving up is a slower drain, while the cost
+/// of retrying forever is a handler that never processes anything else.
+const DELETE_MAX_ATTEMPTS: u32 = 4;
+
+/// Base backoff, doubled per attempt, when the mediator gives no `Retry-After`.
+const DELETE_RETRY_BASE: Duration = Duration::from_millis(500);
+
+/// Take everything already queued for `profile`, starting with `first_id`.
+///
+/// Returns the batch, plus any command pulled off that did not belong to it —
+/// a different profile's deletion, or `Exit`. The channel has no pushback, so a
+/// command taken cannot be returned to it; handing it back here is what keeps
+/// it from being dropped.
+///
+/// `try_recv` only, never `recv`: a batch is whatever is *already* waiting. A
+/// lone deletion must not sit here until a second one happens to arrive.
+fn take_batch(
+    profile: &Arc<ATMProfile>,
+    first_id: String,
+    from_sdk: &mut Receiver<DeletionHandlerCommands>,
+) -> (Vec<String>, Option<DeletionHandlerCommands>) {
+    let mut ids = vec![first_id];
+    while ids.len() < MAX_DELETE_BATCH {
+        match from_sdk.try_recv() {
+            Ok(DeletionHandlerCommands::DeleteMessage(next, id)) if Arc::ptr_eq(&next, profile) => {
+                ids.push(id);
+            }
+            Ok(other) => return (ids, Some(other)),
+            Err(_) => break,
+        }
+    }
+    (ids, None)
+}
+
+/// Delete `ids` for `profile`, retrying a refusal rather than dropping it in
+/// silence.
+///
+/// # Why the outcome is no longer discarded
+///
+/// This was `let _ = atm.delete_messages_direct(...)`. A failure — a 429 above
+/// all — vanished, and with it the only signal that the mediator was not
+/// letting go of anything. That matters more than an ordinary dropped error,
+/// because of who it hurts: a message stays queued against the **sender's**
+/// account until the *recipient* deletes it, so a receiver whose deletes are
+/// quietly failing fills up the send queue of every peer talking to it. That is
+/// how a DID hosting control plane hit its 1000-message send cap and stopped
+/// being able to reply at all, while the logs of the node actually at fault
+/// said nothing.
+async fn delete_batch(atm: &ATM, profile: &Arc<ATMProfile>, ids: Vec<String>) {
+    let count = ids.len();
+    let request = DeleteMessageRequest { message_ids: ids };
+
+    for attempt in 1..=DELETE_MAX_ATTEMPTS {
+        match atm.delete_messages_direct(profile, &request).await {
+            Ok(response) => {
+                if !response.errors.is_empty() {
+                    // Per-id refusals: the request succeeded, some ids did not.
+                    // Named because an id the mediator will never accept is a
+                    // message that will be redelivered for as long as it lives.
+                    warn!(
+                        deleted = response.success.len(),
+                        failed = response.errors.len(),
+                        "deletion handler: the mediator refused some ids: {:?}",
+                        response.errors
+                    );
+                }
+                return;
+            }
+            Err(e) if attempt < DELETE_MAX_ATTEMPTS => {
+                // Honour the mediator's own wait when it gave one — guessing
+                // shorter is what turns a rate limit into a tight loop against
+                // it.
+                let wait = e
+                    .http_status()
+                    .and_then(|s| s.retry_after())
+                    .unwrap_or(DELETE_RETRY_BASE * (1 << (attempt - 1)));
+                warn!(
+                    count,
+                    attempt,
+                    rate_limited = e.is_rate_limited(),
+                    "deletion handler: batch delete failed ({e}) — retrying in {wait:?}"
+                );
+                tokio::time::sleep(wait).await;
+            }
+            Err(e) => {
+                // Loud: while this is failing, every message in the batch stays
+                // on the mediator and counts against its sender's queue.
+                error!(
+                    count,
+                    attempts = DELETE_MAX_ATTEMPTS,
+                    rate_limited = e.is_rate_limited(),
+                    "deletion handler: giving up on a batch delete ({e}). These messages stay \
+                     queued at the mediator and count against the sender's queue until they are \
+                     redelivered and deleted on a later pass"
+                );
+            }
+        }
+    }
+}
 
 pub enum DeletionHandlerCommands {
     DeleteMessage(Arc<ATMProfile>, String),
@@ -93,7 +203,22 @@ impl ATM {
             let atm = ATM {
                 inner: shared_state,
             };
+            // Carries a command `try_recv` pulled off while batching but that
+            // did not belong to the batch.
+            let mut deferred: Option<DeletionHandlerCommands> = None;
             loop {
+                if let Some(cmd) = deferred.take() {
+                    match cmd {
+                        DeletionHandlerCommands::DeleteMessage(profile, id) => {
+                            delete_batch(&atm, &profile, vec![id]).await;
+                            continue;
+                        }
+                        DeletionHandlerCommands::Exit => {
+                            shutdown.cancel();
+                            break;
+                        }
+                    }
+                }
                 select! {
                     _ = shutdown.cancelled() => {
                         break;
@@ -101,7 +226,19 @@ impl ATM {
                     value = from_sdk.recv() => {
                         match value {
                             Some(DeletionHandlerCommands::DeleteMessage(profile, message_id)) => {
-                                let _ = atm.delete_messages_direct(&profile, &DeleteMessageRequest { message_ids: vec![message_id.clone()] }).await;
+                                // Take everything already queued for this same
+                                // profile, not just the one message that woke
+                                // us. One request per message is what made a
+                                // backlog unclearable: each carries its own
+                                // authentication and counts against the
+                                // mediator's per-IP budget, so the deletes that
+                                // would drain a queue are exactly what tips it
+                                // into rate-limiting it — and every `DELETE`
+                                // refused is a message left on the mediator,
+                                // redelivered, and queued for deletion again.
+                                let (ids, next) = take_batch(&profile, message_id, from_sdk);
+                                deferred = next;
+                                delete_batch(&atm, &profile, ids).await;
                             }
                             Some(DeletionHandlerCommands::Exit) | None => {
                                 // Intentional stop: cancel so the supervisor
@@ -186,5 +323,130 @@ mod tests {
                 .is_some_and(|e| e.contains("panicked")),
             "the panic must be recorded as the last error"
         );
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use crate::profiles::ATMProfileInner;
+    use tokio::sync::mpsc;
+
+    fn profile(did: &str) -> Arc<ATMProfile> {
+        Arc::new(ATMProfile {
+            inner: Arc::new(ATMProfileInner {
+                did: did.to_string(),
+                alias: did.to_string(),
+                mediator: Arc::new(None),
+            }),
+        })
+    }
+
+    /// The point of the change: everything already queued for one profile goes
+    /// in a single `DELETE`. One request per message is what made a backlog
+    /// unclearable — each carries its own authentication and counts against the
+    /// mediator's per-IP budget, so the deletes that would drain a queue are
+    /// what tip it into refusing them.
+    #[tokio::test]
+    async fn queued_deletions_for_one_profile_coalesce() {
+        let p = profile("did:example:a");
+        let (tx, mut rx) = mpsc::channel(16);
+        for i in 1..=4 {
+            tx.send(DeletionHandlerCommands::DeleteMessage(
+                p.clone(),
+                format!("msg-{i}"),
+            ))
+            .await
+            .unwrap();
+        }
+        // The loop has already taken the first one off when it calls this.
+        let first = match rx.recv().await.unwrap() {
+            DeletionHandlerCommands::DeleteMessage(_, id) => id,
+            DeletionHandlerCommands::Exit => unreachable!(),
+        };
+
+        let (ids, deferred) = take_batch(&p, first, &mut rx);
+
+        assert_eq!(ids, vec!["msg-1", "msg-2", "msg-3", "msg-4"]);
+        assert!(deferred.is_none());
+    }
+
+    /// A second profile's deletion must not be swallowed. The channel has no
+    /// pushback, so a command taken off cannot be put back — handing it to the
+    /// caller is the only thing standing between it and silent loss.
+    #[tokio::test]
+    async fn a_different_profile_ends_the_batch_and_is_handed_back() {
+        let a = profile("did:example:a");
+        let b = profile("did:example:b");
+        let (tx, mut rx) = mpsc::channel(16);
+        tx.send(DeletionHandlerCommands::DeleteMessage(
+            b.clone(),
+            "b-1".into(),
+        ))
+        .await
+        .unwrap();
+
+        let (ids, deferred) = take_batch(&a, "a-1".into(), &mut rx);
+
+        assert_eq!(ids, vec!["a-1"], "b's id must not join a's batch");
+        match deferred {
+            Some(DeletionHandlerCommands::DeleteMessage(p, id)) => {
+                assert!(Arc::ptr_eq(&p, &b));
+                assert_eq!(id, "b-1");
+            }
+            _ => panic!("b's deletion was dropped"),
+        }
+    }
+
+    /// `Exit` is handed back for the same reason, or a shutdown requested while
+    /// a batch was forming would be lost and the handler would run on.
+    #[tokio::test]
+    async fn exit_is_handed_back_rather_than_dropped() {
+        let a = profile("did:example:a");
+        let (tx, mut rx) = mpsc::channel(4);
+        tx.send(DeletionHandlerCommands::Exit).await.unwrap();
+
+        let (ids, deferred) = take_batch(&a, "a-1".into(), &mut rx);
+
+        assert_eq!(ids, vec!["a-1"]);
+        assert!(matches!(deferred, Some(DeletionHandlerCommands::Exit)));
+    }
+
+    /// The mediator refuses more than 100 ids and `delete_messages_direct`
+    /// rejects the call client-side at the same number, so a batch that grew
+    /// past it would fail as a whole — turning a busy queue into no deletions
+    /// at all.
+    #[tokio::test]
+    async fn a_batch_stops_at_the_mediators_limit() {
+        let p = profile("did:example:a");
+        let (tx, mut rx) = mpsc::channel(MAX_DELETE_BATCH * 2);
+        for i in 0..MAX_DELETE_BATCH * 2 {
+            tx.send(DeletionHandlerCommands::DeleteMessage(
+                p.clone(),
+                format!("msg-{i}"),
+            ))
+            .await
+            .unwrap();
+        }
+
+        let (ids, deferred) = take_batch(&p, "first".into(), &mut rx);
+
+        assert_eq!(ids.len(), MAX_DELETE_BATCH);
+        assert!(
+            deferred.is_none(),
+            "the remainder stays queued for the next pass"
+        );
+    }
+
+    /// A single deletion must go out now, not wait for company.
+    #[tokio::test]
+    async fn a_lone_deletion_does_not_wait_for_a_batch_to_fill() {
+        let p = profile("did:example:a");
+        let (_tx, mut rx) = mpsc::channel(4);
+
+        let (ids, deferred) = take_batch(&p, "only".into(), &mut rx);
+
+        assert_eq!(ids, vec!["only"]);
+        assert!(deferred.is_none());
     }
 }
