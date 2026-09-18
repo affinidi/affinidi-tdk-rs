@@ -1,5 +1,34 @@
 # Affinidi Data Integrity Changelog
 
+## Unreleased (0.7.13) — the post-quantum tests never ran
+
+`cargo test -p affinidi-data-integrity` did not compile the ML-DSA tests, and
+had not since they were written. `default = []`, so `ml-dsa` is off and
+`Secret::generate_ml_dsa_44` does not exist.
+
+Under a workspace-wide build it was worse than a compile error: something else in
+the graph unified `affinidi-secrets-resolver/ml-dsa` on, so the key type existed
+while **this** crate's `ml-dsa` — which gates `default_for_key_type`'s ML-DSA-44
+arm — stayed off. `ml_dsa_44_still_signs` then failed against a library behaving
+correctly for how it had been built.
+
+Two things that hid inside it:
+
+- `an_ml_dsa_65_key_is_refused_by_naming_the_missing_suite` **passed for the
+  wrong reason**. With the -44 arm cfg'd out, ML-DSA-44 had no suite either, so
+  the test proved nothing about the -44/-65 distinction it exists to draw.
+- `--lib` ran **51** tests; it now runs **61**. Ten ML-DSA unit tests were never
+  executing in the configuration everyone runs.
+
+Fixed with a dev-dependency on this crate itself enabling `ml-dsa`, so
+test/bench/example builds always have it. No change to what the crate ships —
+dev-dependencies do not reach the published manifest, and the published source
+is byte-identical to 0.7.12.
+
+`required-features = ["ml-dsa"]` on the test target was the other candidate and
+is not enough alone: CI runs the default feature set, so the test would *skip*,
+turning a visible failure into a test nobody executes.
+
 ## Unreleased
 
 ### A key with no cryptosuite is refused by name

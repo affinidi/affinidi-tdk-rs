@@ -120,10 +120,11 @@ dependencies = [
 
 [[package]]
 name = "affinidi-data-integrity"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "affinidi-bbs",
  "affinidi-crypto",
+ "affinidi-data-integrity",
  "affinidi-did-common",
  "affinidi-rdf-encoding",
  "affinidi-secrets-resolver",
