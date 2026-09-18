@@ -124,6 +124,7 @@ version = "0.7.12"
 dependencies = [
  "affinidi-bbs",
  "affinidi-crypto",
+ "affinidi-data-integrity",
  "affinidi-did-common",
  "affinidi-rdf-encoding",
  "affinidi-secrets-resolver",
