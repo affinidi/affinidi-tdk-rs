@@ -1,5 +1,24 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.2) — forwarding client: TLS-validation hard-gate + WS rebinding guard
+
+Two follow-on hardenings to the forwarding egress guard (SEC-4045 T1 residuals).
+
+- **`danger_accept_invalid_certs` is honoured only in dev/test builds.** A
+  production mediator (no `test-clock` feature) now forces TLS certificate
+  validation on the forwarding client regardless of the config flag — disabling
+  it would let a MITM on a public forwarding hop intercept relayed traffic even
+  behind the egress guard. The flag still works in the test fixture, where a
+  local peer may present a self-signed cert.
+- **WebSocket path: DNS-rebinding guard.** The REST forwarding path already
+  resolves through a fail-closed guarded resolver, but the WebSocket dialer
+  (`tokio_tungstenite`) resolves the name itself, so a name pointing at an
+  internal address could be dialed. The WS path now resolves the target up front
+  and refuses to connect if it maps to a non-globally-routable address, matching
+  the REST guarantee for a static internal-resolving name. (A narrow
+  resolve-then-connect TOCTOU race remains on the WS path; the REST path closes
+  it fully.)
+
 ## Unreleased (0.16.1) — the forwarding client goes through the egress guard
 
 The forwarding processor delivers routed messages to the next-hop mediator, and
