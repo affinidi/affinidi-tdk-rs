@@ -16,7 +16,11 @@
 # associative arrays).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# `pwd -P` — resolve symlinks. `cargo metadata` always reports fully resolved
+# manifest paths, so a plain `pwd` reached through a symlinked checkout (on
+# macOS, anything under /tmp) yields a prefix that never matches and every
+# path comparison below silently misses. See the guard at the crate list.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT"
 
 if [ -t 1 ]; then

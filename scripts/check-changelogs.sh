@@ -34,7 +34,11 @@ set -euo pipefail
 
 BASE="${1:-origin/main}"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# `pwd -P` — resolve symlinks. `cargo metadata` always reports fully resolved
+# manifest paths, so a plain `pwd` reached through a symlinked checkout (on
+# macOS, anything under /tmp) yields a prefix that never matches and every
+# path comparison below silently misses. See the guard at the crate list.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT"
 
 if [ -t 1 ]; then
@@ -64,6 +68,24 @@ crates=$(cargo metadata --format-version 1 --no-deps 2>/dev/null \
       | select(.publish == null or .publish == ["crates.io"])
       | "\(.name)\t\(.manifest_path)"' \
   | sed "s|\t$ROOT/|\t|; s|/Cargo.toml\$||")
+
+# A crate dir that is still absolute means the `$ROOT/` strip above did not
+# take, and every path comparison below would then match nothing — the guard
+# passing while checking precisely zero crates. That is the failure mode this
+# whole script exists to prevent, so refuse rather than report success.
+# Tested with awk, not `grep -E '(^|\t)/'`: POSIX ERE has no `\t` escape, so GNU
+# grep reads that as a literal `t` and the pattern becomes `(^|t)/` — which
+# matches an innocent `crates/trust/...` and fails the guard on every run. (BSD
+# grep and ugrep do treat it as a tab, so it passes locally and fails in CI.)
+# awk's -F'\t' is a real tab on every awk, and anchoring on the last field is
+# what we actually mean.
+if printf '%s\n' "$crates" | awk -F'\t' 'NF && $NF ~ /^\// { bad = 1 } END { exit !bad }'; then
+  echo "${RED}error:${NC} crate paths did not resolve against ROOT ($ROOT)." >&2
+  echo "The strip of \`cargo metadata\`'s manifest paths produced absolute dirs, so" >&2
+  echo "nothing would be checked. Run this script from the repository itself rather" >&2
+  echo "than through a symlink to it." >&2
+  exit 2
+fi
 
 fail=0
 found=0
