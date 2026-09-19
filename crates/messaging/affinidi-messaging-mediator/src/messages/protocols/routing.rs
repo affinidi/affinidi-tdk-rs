@@ -186,8 +186,65 @@ fn queue_at_capacity(queued: u32, incoming: usize, limit: i32, ephemeral: bool) 
     limit != -1 && !ephemeral && queued + incoming as u32 >= limit as u32
 }
 
+/// Reject the forward when the sender already has too many messages queued
+/// **for this one recipient**.
+///
+/// This is the gate that catches a sender flooding a peer. The per-DID totals
+/// below cannot: a community holding one uncollected membership card for each
+/// of two hundred members presents identically to a sender aiming two hundred
+/// messages at one victim, so capping the total silences the community because
+/// *its members* went offline. That is the failure this function exists to
+/// stop — it moves only when one relationship is genuinely over-full.
+///
+/// Inert when the backend does not track per-pair counts (the trait default
+/// returns 0) or when the limit is `-1`. `ephemeral` forwards (live-stream
+/// only) bypass queue accounting entirely, as with the other gates.
+async fn validate_peer_queue_limit(
+    msg: &Message,
+    from_did_hash: &str,
+    next_did_hash: &str,
+    attachment_count: usize,
+    ephemeral: bool,
+    state: &SharedData,
+    session: &Session,
+) -> Result<(), MediatorError> {
+    let limit = state.config.limits.queued_send_messages_per_peer;
+    if limit == -1 || ephemeral {
+        return Ok(());
+    }
+    let queued = state
+        .database
+        .peer_queue_count(from_did_hash, next_did_hash)
+        .await?;
+    if queue_at_capacity(queued, attachment_count, limit, ephemeral) {
+        warn!(
+            "Sender DID ({}) has too many messages waiting for recipient ({})",
+            session.did_hash, next_did_hash
+        );
+        return Err(MediatorError::problem(
+            95,
+            &session.session_id,
+            Some(msg.id.to_string()),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "limits.queue.peer",
+            "Too many messages already waiting for this recipient",
+            vec![],
+            StatusCode::SERVICE_UNAVAILABLE,
+        ));
+    }
+    Ok(())
+}
+
 /// Reject the forward when the sender already has too many messages queued.
 /// `ephemeral` forwards (live-stream only) bypass the queue accounting.
+///
+/// A **coarse ceiling only** — see [`validate_peer_queue_limit`], which is the
+/// gate that distinguishes flooding from fan-out. This one cannot, so its
+/// default sits high enough not to catch legitimate fan-out. It is deliberately
+/// not the mediator's storage bound either: every queued message is counted in
+/// exactly one recipient's inbox, so the per-recipient caps already bound total
+/// storage on their own.
 fn validate_sender_queue_limit(
     msg: &Message,
     from_account: &Account,
@@ -849,6 +906,19 @@ pub(crate) async fn process(
         }
 
         // Check queue + attachment + forward-task-queue limits before accepting.
+        // Per-relationship first: when a sender is genuinely flooding one peer,
+        // both this and the coarse sender total would fire, and `limits.queue.peer`
+        // is the one that tells the operator which relationship is at fault.
+        validate_peer_queue_limit(
+            msg,
+            &from_account.did_hash,
+            &next_did_hash,
+            attachments.len(),
+            ephemeral,
+            state,
+            session,
+        )
+        .await?;
         validate_sender_queue_limit(msg, &from_account, attachments.len(), ephemeral, state, session)?;
         validate_recipient_queue_limit(
             msg,

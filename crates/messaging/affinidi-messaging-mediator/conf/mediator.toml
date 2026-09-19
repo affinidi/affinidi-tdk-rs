@@ -366,17 +366,35 @@ message_expiry_seconds = "604800"
 ### higher = more memory per message and per queued copy.
 message_size = "1048576"
 
+### Env: LIMIT_QUEUED_SEND_MESSAGES_PER_PEER
+### How many messages one sender may have queued for one SPECIFIC recipient
+### (-1 = no limit). This is the gate that catches a sender flooding a peer.
+### Scale: raise for senders that legitimately burst at a single recipient;
+### the per-DID totals below cannot distinguish that from fan-out, so this is
+### the limit to tune, not those.
+queued_send_messages_per_peer = "50"
+
 ### Env: LIMIT_QUEUED_SEND_MESSAGES_SOFT
-### Default outbound queue limit per DID (-1 = no limit).
-### Scale: the default ceiling a DID gets; raise for senders that burst while a
-### recipient is offline. `soft` is the default, `hard` (below) is the max.
-queued_send_messages_soft = "200"
+### Default outbound queue limit per DID, summed across ALL recipients
+### (-1 = no limit).
+### A coarse ceiling only. It cannot tell a community holding one uncollected
+### card for each of 200 members from a sender aiming 200 messages at one
+### victim, so it is deliberately set well above normal fan-out and
+### `queued_send_messages_per_peer` above does the real work. It is also not
+### the storage bound: every queued message is counted in exactly one
+### recipient's inbox, so the receive limits bound total storage on their own.
+### `soft` is the default, `hard` (below) is the max a non-admin may set.
+queued_send_messages_soft = "2000"
 
 ### Env: LIMIT_QUEUED_SEND_MESSAGES_HARD
 ### Maximum outbound queue limit settable by non-admin (-1 = no limit).
-### Scale: per-DID outbound ceiling; raise for high-throughput senders. Bounds
-### worst-case backend storage per DID (this x message_size).
-queued_send_messages_hard = "1000"
+### Scale: per-DID outbound ceiling; raise for high-throughput senders. MUST be
+### >= queued_send_messages_soft, which is the default every account starts on —
+### a hard below soft means the default exceeds the maximum an account may set.
+### Headroom here is what lets a large community raise its own limit: with soft
+### at 2000, a community with more than 2000 members awaiting collection needs
+### to.
+queued_send_messages_hard = "10000"
 
 ### Env: LIMIT_QUEUED_RECEIVE_MESSAGES_SOFT
 ### Default inbound queue limit per DID (-1 = no limit).

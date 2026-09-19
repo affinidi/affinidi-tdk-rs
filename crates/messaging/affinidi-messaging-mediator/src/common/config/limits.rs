@@ -16,6 +16,11 @@ pub struct LimitsConfig {
     pub local_max_acl: usize,
     pub message_expiry_seconds: u64,
     pub message_size: usize,
+    /// Per-relationship outbound cap: how many messages one sender may have
+    /// queued for one *specific* recipient. This is the gate that catches
+    /// flooding; `queued_send_messages_soft` below is a coarse ceiling that
+    /// cannot tell flooding from fan-out. `-1` disables it.
+    pub queued_send_messages_per_peer: i32,
     pub queued_send_messages_soft: i32,
     pub queued_send_messages_hard: i32,
     pub queued_receive_messages_soft: i32,
@@ -59,8 +64,9 @@ impl Default for LimitsConfig {
             local_max_acl: 1_000,
             message_expiry_seconds: 604_800,
             message_size: 1_048_576,
-            queued_send_messages_soft: 200,
-            queued_send_messages_hard: 1_000,
+            queued_send_messages_per_peer: 50,
+            queued_send_messages_soft: 2_000,
+            queued_send_messages_hard: 10_000,
             queued_receive_messages_soft: 200,
             queued_receive_messages_hard: 1_000,
             to_keys_per_recipient: 100,
@@ -151,13 +157,20 @@ impl std::convert::TryFrom<LimitsConfigRaw> for LimitsConfig {
                 warn_default("message_size", "1048576");
                 1_048_576
             }),
+            queued_send_messages_per_peer: raw
+                .queued_send_messages_per_peer
+                .parse()
+                .unwrap_or_else(|_| {
+                    warn_default("queued_send_messages_per_peer", "50");
+                    50
+                }),
             queued_send_messages_soft: raw.queued_send_messages_soft.parse().unwrap_or_else(|_| {
-                warn_default("queued_send_messages_soft", "200");
-                200
+                warn_default("queued_send_messages_soft", "2000");
+                2_000
             }),
             queued_send_messages_hard: raw.queued_send_messages_hard.parse().unwrap_or_else(|_| {
-                warn_default("queued_send_messages_hard", "1000");
-                1_000
+                warn_default("queued_send_messages_hard", "10000");
+                10_000
             }),
             queued_receive_messages_soft: raw.queued_receive_messages_soft.parse().unwrap_or_else(
                 |_| {
@@ -246,8 +259,15 @@ mod tests {
         assert_eq!(limits.local_max_acl, 1_000);
         assert_eq!(limits.message_expiry_seconds, 604_800);
         assert_eq!(limits.message_size, 1_048_576);
-        assert_eq!(limits.queued_send_messages_soft, 200);
-        assert_eq!(limits.queued_send_messages_hard, 1_000);
+        assert_eq!(limits.queued_send_messages_per_peer, 50);
+        // The send total is a coarse ceiling, not the flooding gate — see
+        // `validate_peer_queue_limit`. It sits well above realistic fan-out so
+        // that a sender is not silenced because its recipients went offline.
+        assert_eq!(limits.queued_send_messages_soft, 2_000);
+        // `hard` is the maximum an account may set for itself, so it must stay
+        // at or above `soft`, which is the default every account starts on.
+        assert_eq!(limits.queued_send_messages_hard, 10_000);
+        assert!(limits.queued_send_messages_hard >= limits.queued_send_messages_soft);
         assert_eq!(limits.queued_receive_messages_soft, 200);
         assert_eq!(limits.queued_receive_messages_hard, 1_000);
         assert_eq!(limits.to_keys_per_recipient, 100);
@@ -274,6 +294,7 @@ mod tests {
             local_max_acl: "500".to_string(),
             message_expiry_seconds: "3600".to_string(),
             message_size: "2048".to_string(),
+            queued_send_messages_per_peer: "50".to_string(),
             queued_send_messages_soft: "150".to_string(),
             queued_send_messages_hard: "800".to_string(),
             queued_receive_messages_soft: "150".to_string(),
@@ -333,6 +354,7 @@ mod tests {
             local_max_acl: "1000".to_string(),
             message_expiry_seconds: "10080".to_string(),
             message_size: "1048576".to_string(),
+            queued_send_messages_per_peer: "50".to_string(),
             queued_send_messages_soft: "100".to_string(),
             queued_send_messages_hard: "1000".to_string(),
             queued_receive_messages_soft: "100".to_string(),

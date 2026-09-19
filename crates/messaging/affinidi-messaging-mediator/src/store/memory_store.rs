@@ -202,6 +202,10 @@ struct MemoryState {
 
     // ─── Accounts / ACLs / Admins / Access lists ────────────────────
     accounts: HashMap<String, AccountRecord>,
+    /// `(from_hash, to_hash) -> messages queued for that one peer`. The entry
+    /// is removed when it reaches zero, so this holds only pairs with messages
+    /// actually in flight. Mirrors the fjall `peer_queue` partition.
+    peer_queue: HashMap<(String, String), u32>,
     known_dids: Vec<String>, // ordered for cursor pagination
     access_lists: HashMap<String, Vec<String>>, // ordered for cursor pagination
     admins: HashSet<String>,
@@ -450,6 +454,12 @@ impl MediatorStore for MemoryStore {
             let sender = state.accounts.entry(from.clone()).or_default();
             sender.send_queue_count = sender.send_queue_count.saturating_add(1);
             sender.send_queue_bytes = sender.send_queue_bytes.saturating_add(bytes as u64);
+            // Per-relationship depth.
+            let pair = state
+                .peer_queue
+                .entry((from.clone(), to_did_hash.to_string()))
+                .or_insert(0);
+            *pair = pair.saturating_add(1);
         }
 
         // Recipient's account counter
@@ -529,6 +539,17 @@ impl MediatorStore for MemoryStore {
                 sender.send_queue_count = sender.send_queue_count.saturating_sub(1);
                 sender.send_queue_bytes =
                     sender.send_queue_bytes.saturating_sub(record.bytes as u64);
+            }
+        }
+        // Per-relationship depth, dropped at zero so the map does not retain a
+        // row for every pair the sender has ever used.
+        if let Some(from) = record.from_did_hash.as_ref() {
+            let key = (from.clone(), record.to_did_hash.clone());
+            if let Some(count) = state.peer_queue.get_mut(&key) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    state.peer_queue.remove(&key);
+                }
             }
         }
 
@@ -800,6 +821,15 @@ impl MediatorStore for MemoryStore {
             }
         }
         Ok(())
+    }
+
+    async fn peer_queue_count(&self, from_hash: &str, to_hash: &str) -> Result<u32, MediatorError> {
+        let state = self.state.lock().await;
+        Ok(state
+            .peer_queue
+            .get(&(from_hash.to_string(), to_hash.to_string()))
+            .copied()
+            .unwrap_or(0))
     }
 
     async fn inbox_status(&self, did_hash: &str) -> Result<InboxStatusReply, MediatorError> {
@@ -1745,6 +1775,66 @@ impl MediatorStore for MemoryStore {
 mod tests {
     use super::*;
     use affinidi_messaging_mediator_common::store::SessionState;
+
+    /// Parity with `fjall_store`: the two backends must agree on per-relationship
+    /// accounting, or the gate built on it behaves differently depending on
+    /// which backend a deployment runs. Mirrors
+    /// `peer_queue_counts_are_per_relationship_not_per_sender` and the
+    /// drop-at-zero assertion there.
+    #[tokio::test]
+    async fn peer_queue_counts_are_per_relationship_and_drop_at_zero() {
+        let store = MemoryStore::new();
+        let community = sha256::digest("community");
+
+        // Fan-out: one message each to 250 members.
+        let mut ids = Vec::new();
+        for i in 0..250 {
+            let member = sha256::digest(format!("member-{i}"));
+            ids.push((
+                member.clone(),
+                store
+                    .store_message("s", &format!("card-{i}"), &member, Some(&community), 0, 0)
+                    .await
+                    .expect("store"),
+            ));
+        }
+        for (member, _) in &ids {
+            assert_eq!(
+                store
+                    .peer_queue_count(&community, member)
+                    .await
+                    .expect("peer count"),
+                1,
+                "fan-out must not accumulate against any one relationship"
+            );
+        }
+
+        // Collection drives the count back to zero and drops the entry.
+        for (member, id) in &ids {
+            store
+                .delete_message(
+                    id,
+                    DeletionAuthority::Owner {
+                        did_hash: member.clone(),
+                    },
+                )
+                .await
+                .expect("delete");
+        }
+        for (member, _) in &ids {
+            assert_eq!(
+                store
+                    .peer_queue_count(&community, member)
+                    .await
+                    .expect("peer count"),
+                0
+            );
+        }
+        assert!(
+            store.state.lock().await.peer_queue.is_empty(),
+            "entries must be removed at zero, not left as 0"
+        );
+    }
 
     #[tokio::test]
     async fn lifecycle_round_trip() {

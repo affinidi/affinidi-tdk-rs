@@ -16,6 +16,8 @@ pub struct LimitsConfigRaw {
     pub local_max_acl: String,
     pub message_expiry_seconds: String,
     pub message_size: String,
+    #[serde(default = "default_queued_send_messages_per_peer")]
+    pub queued_send_messages_per_peer: String,
     pub queued_send_messages_soft: String,
     pub queued_send_messages_hard: String,
     pub queued_receive_messages_soft: String,
@@ -41,6 +43,14 @@ pub struct LimitsConfigRaw {
     pub ws_send_buffer: String,
     #[serde(default = "default_pubsub_buffer")]
     pub pubsub_buffer: String,
+}
+
+/// 50 — the per-relationship outbound cap. A sender may hold this many
+/// messages for any one recipient; beyond that it is flooding that peer, not
+/// serving it. Defaulted (rather than required) so an existing `mediator.toml`
+/// keeps loading without an edit.
+fn default_queued_send_messages_per_peer() -> String {
+    "50".to_string()
 }
 
 fn default_rate_limit_per_ip() -> String {

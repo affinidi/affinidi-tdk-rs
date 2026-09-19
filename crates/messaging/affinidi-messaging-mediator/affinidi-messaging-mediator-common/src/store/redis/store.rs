@@ -414,6 +414,28 @@ impl MediatorStore for RedisStore {
         self.delete_folder_stream(&session, did_hash, &folder).await
     }
 
+    async fn peer_queue_count(&self, from_hash: &str, to_hash: &str) -> Result<u32, MediatorError> {
+        // `PEER_Q:<from>` is a hash of `<to> -> count`, maintained by the
+        // `store_message` / `delete_message` Lua functions. A missing key or
+        // field means nothing is queued for that pair.
+        let mut conn = self.get_connection().await?;
+        let queued: Option<i64> = redis::cmd("HGET")
+            .arg(format!("PEER_Q:{from_hash}"))
+            .arg(to_hash)
+            .query_async(&mut conn)
+            .await
+            .map_err(|err| {
+                MediatorError::DatabaseError(
+                    14,
+                    from_hash.into(),
+                    format!("peer_queue_count HGET failed: {err}"),
+                )
+            })?;
+        // Clamp: a negative value would mean the counter drifted below zero,
+        // and reporting it as a huge unsigned number would wedge the gate shut.
+        Ok(queued.unwrap_or(0).max(0) as u32)
+    }
+
     async fn inbox_status(&self, did_hash: &str) -> Result<InboxStatusReply, MediatorError> {
         // Calls the `get_status_reply` Lua function and parses the
         // response into an `InboxStatusReply`. The legacy code path
