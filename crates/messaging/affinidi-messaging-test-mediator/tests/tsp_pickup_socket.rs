@@ -21,7 +21,7 @@
 use std::time::Duration;
 
 use affinidi_messaging_sdk::protocols::message_pickup::InboundFrame;
-use affinidi_messaging_test_mediator::TestEnvironment;
+use affinidi_messaging_test_mediator::{TestEnvironment, TestMediator};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tsp_frame_arriving_between_polls_is_not_dropped() {
@@ -116,7 +116,24 @@ async fn tsp_frame_arriving_between_polls_is_not_dropped() {
 async fn a_slow_consumer_does_not_lose_packed_frames() {
     const FRAMES: usize = 130;
 
-    let env = TestEnvironment::spawn_with_direct_delivery()
+    // The per-relationship queue gate is disabled here, and the exemption is
+    // the point rather than a convenience. This test's subject is the pickup
+    // socket's buffering: it must push past `fetch_cache_limit_count` (100)
+    // from one sender to one idle recipient to prove no frame is discarded.
+    // That is, by construction, exactly the shape the gate exists to refuse —
+    // with the default of 50 the send is rejected at frame 49 and the
+    // transport behaviour under test is never reached.
+    //
+    // Disabling it keeps the two concerns separate: `limits.queue.peer` is
+    // covered by `direct_delivery_queue_limits.rs`, and this file stays about
+    // frames surviving a slow consumer.
+    let mediator = TestMediator::builder()
+        .local_direct_delivery(true, false)
+        .queue_send_limit_per_peer(-1)
+        .spawn()
+        .await
+        .expect("spawn mediator with the per-relationship gate disabled");
+    let env = TestEnvironment::new(mediator)
         .await
         .expect("spawn test environment");
 
