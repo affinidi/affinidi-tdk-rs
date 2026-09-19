@@ -6,6 +6,7 @@
 //! the mediator's `trust_tasks` consumer → response → the SDK's typed reply — over
 //! a real in-process HTTP mediator (memory backend, no Redis).
 
+use affinidi_messaging_mediator::common::config::limits::LimitsConfig;
 use affinidi_messaging_test_mediator::TestEnvironment;
 
 #[tokio::test]
@@ -152,7 +153,15 @@ async fn account_update_queue_limits_self_applies_caps_and_persists() {
         Some(42)
     );
 
-    // A standard account's request above the hard maximum (1000) is capped.
+    // A standard account's request above the hard maximum is capped.
+    //
+    // The maximum is read from the mediator's own default config rather than
+    // written here as a literal: this assertion previously pinned 1000, and
+    // silently became a no-op assertion about an *accepted* value the moment
+    // the default moved. Asking for `hard + 1` keeps the request above the cap
+    // whatever the cap becomes.
+    // `i64` to match the wire type; the config carries it as `i32`.
+    let hard = i64::from(LimitsConfig::default().queued_send_messages_hard);
     let capped = env
         .atm
         .trust_tasks()
@@ -163,7 +172,7 @@ async fn account_update_queue_limits_self_applies_caps_and_persists() {
             None,
             Some(
                 QueueLimits::builder()
-                    .send_queue_limit(Some(5000))
+                    .send_queue_limit(Some(hard + 1))
                     .try_into()
                     .expect("QueueLimits has no required member"),
             ),
@@ -172,7 +181,7 @@ async fn account_update_queue_limits_self_applies_caps_and_persists() {
         .expect("over-limit request is accepted but capped");
     assert_eq!(
         capped.queue_limits.and_then(|q| q.send_queue_limit),
-        Some(1000),
+        Some(hard),
         "a standard account is capped at the hard maximum"
     );
 }
