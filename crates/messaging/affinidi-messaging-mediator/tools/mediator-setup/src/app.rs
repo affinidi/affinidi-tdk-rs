@@ -2755,7 +2755,7 @@ impl WizardApp {
             WizardStep::Security => {
                 if self.security_phase == Some(SecurityPhase::CorsPolicy) {
                     match self.selection_index {
-                        0 => "Leaves `cors_allow_origin` unset. Browsers carrying an `Origin` header are refused on both the REST API and the WebSocket upgrade. Native clients (no Origin) are unaffected. This is the mediator's default.".into(),
+                        0 => "Leaves `cors_allow_origin` unset. Any client carrying an `Origin` header is refused on both the REST API and the WebSocket upgrade; a client sending no Origin is admitted. Note this is about the header, not about being a browser \u{2014} React Native's WebSocket sends an Origin, so a mobile wallet is refused here too and needs option 2 or 3. This is the mediator's default.".into(),
                         1 => "Emits `cors_allow_origin = \"*\"`. The mediator echoes `Access-Control-Allow-Origin: *` and never sets credentials. Safe here because every endpoint requires a bearer token — a wildcard does not enable CSRF.".into(),
                         2 => "Emits `cors_allow_origin = \"<your list>\"`. The next screen collects a comma-separated allowlist. Each request Origin must match an entry exactly, or fall under a `*.subdomain` wildcard; the matched origin is echoed back.".into(),
                         _ => String::new(),

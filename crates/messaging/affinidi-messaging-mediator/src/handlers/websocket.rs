@@ -206,14 +206,26 @@ pub async fn websocket_handler(
     ws: WebSocketUpgrade,
 ) -> Response {
     // 0. Defence-in-depth Origin check. WebSocket upgrades aren't
-    //    subject to CORS, but browsers send an `Origin` header — refuse
-    //    cross-origin browsers outside the configured allowlist. Native
-    //    clients send no Origin and pass straight through.
+    //    subject to CORS, but a client that announces an `Origin` is
+    //    refused unless the policy admits it.
+    //
+    //    This used to say "native clients send no Origin and pass
+    //    straight through", which is true of the Rust SDK and false of
+    //    the case that matters: **React Native's WebSocket sends an
+    //    `Origin` derived from the URL**, so a mobile wallet is refused
+    //    under the default (`CorsOriginPolicy::None`) exactly as a
+    //    browser would be. "Native" is not the distinction — sending an
+    //    Origin header is.
     let origin = headers.get(ORIGIN);
     if !ws_origin_allowed(&state.config.security.cors_origins, origin) {
         warn!(
             ?origin,
-            "WebSocket upgrade rejected: Origin not permitted by CORS policy"
+            policy = ?state.config.security.cors_origins,
+            "WebSocket upgrade rejected: Origin not permitted by CORS policy. \
+             A client sending no Origin is admitted; one sending an unlisted \
+             Origin is not, and React Native's WebSocket does send one. To \
+             admit it, add the origin to `[security] cors_allow_origin` — see \
+             docs/cors-and-origin.md."
         );
         return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
     }
@@ -1619,9 +1631,15 @@ mod tests {
     }
 
     #[test]
-    fn origin_check_allows_header_less_native_clients() {
-        // Native clients (SDK) send no Origin — must always pass,
-        // regardless of policy, since the JWT is their gate.
+    fn origin_check_admits_a_request_with_no_origin_header() {
+        // Sending no Origin is the thing that passes, under every policy —
+        // for such a client the JWT is the gate.
+        //
+        // Named for the header rather than for "native clients", which is what
+        // this test used to say. The rename is the point: the old name, and the
+        // identical wording in the reference config and the setup wizard, let a
+        // reader conclude that a non-browser client could not be refused. See
+        // `origin_check_refuses_a_react_native_client_under_the_default`.
         assert!(ws_origin_allowed(&CorsOriginPolicy::None, None));
         assert!(ws_origin_allowed(&CorsOriginPolicy::Any, None));
         assert!(ws_origin_allowed(
@@ -1631,13 +1649,36 @@ mod tests {
     }
 
     #[test]
-    fn origin_check_none_policy_rejects_browser_origins() {
+    fn origin_check_none_policy_refuses_any_origin_header() {
         let origin = hv("https://evil.example");
         assert!(!ws_origin_allowed(&CorsOriginPolicy::None, Some(&origin)));
     }
 
+    /// The KR-05 / VTI-05 regression, named so it cannot be mistaken for a
+    /// browser-only concern.
+    ///
+    /// React Native's WebSocket sends an `Origin` derived from the connection
+    /// URL, so a mobile wallet is refused by the default policy exactly as a
+    /// browser is. Nothing about the check distinguishes the two, and the
+    /// documentation claiming otherwise is what cost an integrator a day.
     #[test]
-    fn origin_check_any_policy_allows_browser_origins() {
+    fn origin_check_refuses_a_react_native_client_under_the_default() {
+        // What a React Native dev bundle typically presents.
+        let rn_origin = hv("http://localhost:8081");
+        assert!(
+            !ws_origin_allowed(&CorsOriginPolicy::None, Some(&rn_origin)),
+            "a client sending an Origin is refused under the default, \
+             whether or not it is a browser"
+        );
+        // ...and is admitted once the operator allowlists it.
+        assert!(ws_origin_allowed(
+            &CorsOriginPolicy::List(vec![exact("http://localhost:8081")]),
+            Some(&rn_origin)
+        ));
+    }
+
+    #[test]
+    fn origin_check_any_policy_admits_any_origin_header() {
         let origin = hv("https://anything.example");
         assert!(ws_origin_allowed(&CorsOriginPolicy::Any, Some(&origin)));
     }
