@@ -1,5 +1,15 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.4) — `MediatorStore::peer_queue_count`
+
+Adds the per-relationship queue depth a sender holds for one specific
+recipient, and implements it for the Redis store over the `PEER_Q:<from>` hash
+the Lua functions now maintain. The mediator's forward gate reads it to tell
+flooding from fan-out, which a per-DID total cannot do.
+
+Additive: the method carries a default returning `Ok(0)`, so an existing
+implementor keeps compiling and simply leaves the gate built on it inert.
+
 ## Unreleased (0.16.3) — problem reports interpolate every placeholder
 
 `ProblemReport::interpolation` — which renders the comment for `Display`, and so

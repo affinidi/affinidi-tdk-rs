@@ -250,6 +250,33 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// Build the Message Pickup 3.0 status reply for one DID.
     async fn inbox_status(&self, did_hash: &str) -> Result<InboxStatusReply, MediatorError>;
 
+    /// How many messages `from_hash` currently has queued **for `to_hash`
+    /// specifically** — the per-relationship counterpart to the per-DID
+    /// totals on [`Account`].
+    ///
+    /// This exists because a per-DID send total cannot tell fan-out from
+    /// flooding. A community sending one membership card each to two hundred
+    /// members, none of whom have collected yet, is indistinguishable from a
+    /// sender aiming two hundred messages at a single victim — and capping the
+    /// total punishes the first case, silencing a sender because *somebody
+    /// else* went offline. The pair count separates them: flooding one peer
+    /// moves it, fanning out to many peers does not.
+    ///
+    /// The count covers messages actually queued, so it falls as the recipient
+    /// collects and the entries are deleted.
+    ///
+    /// The default returns `Ok(0)`, which leaves any gate built on it inert.
+    /// A backend without per-pair tracking therefore behaves exactly as it did
+    /// before this method existed, and is still covered by the recipient-total
+    /// and sender-total gates. Overriding it is what turns the gate on.
+    async fn peer_queue_count(
+        &self,
+        _from_hash: &str,
+        _to_hash: &str,
+    ) -> Result<u32, MediatorError> {
+        Ok(0)
+    }
+
     // ─── Sessions ────────────────────────────────────────────────────────────
 
     /// Upsert a session record with an explicit TTL.

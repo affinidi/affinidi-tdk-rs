@@ -188,6 +188,15 @@ const PARTITION_FORWARD_PENDING: &str = "forward_pending";
 const PARTITION_GLOBALS: &str = "globals";
 const PARTITION_STREAMING_CLIENTS: &str = "streaming_clients";
 const PARTITION_AUDIT_LOG: &str = "audit_log";
+/// Separator between the two hashes in a `peer_queue` key. `0xFF` is not a
+/// valid UTF-8 byte, so it cannot occur inside either hash and the split is
+/// unambiguous regardless of hash length.
+const PEER_QUEUE_SEP: u8 = 0xFF;
+
+/// `<from_hash> 0xFF <to_hash>` -> `u32` messages queued for that one peer.
+/// Additive partition: a database written before it existed simply has none,
+/// and `peer_queue_count` reads 0 until traffic repopulates it.
+const PARTITION_PEER_QUEUE: &str = "peer_queue";
 
 /// Fjall-backed [`MediatorStore`].
 ///
@@ -219,6 +228,10 @@ pub struct FjallStore {
     globals: Keyspace,
     streaming_clients: Keyspace,
     audit_log: Keyspace,
+    /// Per-relationship queue depth. Keyed `<from_hash> 0xFF <to_hash>`; the
+    /// row is removed when it reaches zero, so the partition holds only pairs
+    /// with messages actually in flight.
+    peer_queue: Keyspace,
 
     // ─── In-process state ───────────────────────────────────────────
     /// Serializes writes across multiple partitions so composite ops
@@ -453,7 +466,57 @@ const DEFAULT_CB_RECOVERY_SECS: u64 = 10;
 /// returns `Ok(None)`); only an actual I/O error counts as a failure.
 const CB_PROBE_KEY: &[u8] = b"__circuit_breaker_probe__";
 
+/// Build the `peer_queue` key for one (sender, recipient) pair.
+fn peer_queue_key(from_hash: &str, to_hash: &str) -> Vec<u8> {
+    let mut k = Vec::with_capacity(from_hash.len() + 1 + to_hash.len());
+    k.extend_from_slice(from_hash.as_bytes());
+    k.push(PEER_QUEUE_SEP);
+    k.extend_from_slice(to_hash.as_bytes());
+    k
+}
+
 impl FjallStore {
+    /// Stage the per-pair count change for one message onto `batch`.
+    ///
+    /// `delta` is `+1` when a message is queued and `-1` when one leaves the
+    /// queue. A count that reaches zero has its row **removed** rather than
+    /// written as `0`: the partition then holds only pairs with messages
+    /// actually in flight, so a sender that has ever messaged ten thousand
+    /// peers does not keep ten thousand rows forever.
+    fn stage_peer_queue_delta(
+        &self,
+        batch: &mut fjall::OwnedWriteBatch,
+        from_hash: &str,
+        to_hash: &str,
+        delta: i64,
+    ) -> Result<(), MediatorError> {
+        let key = peer_queue_key(from_hash, to_hash);
+        let current = self.read_peer_queue(from_hash, to_hash)?;
+        let next = if delta >= 0 {
+            current.saturating_add(delta as u32)
+        } else {
+            current.saturating_sub(delta.unsigned_abs() as u32)
+        };
+        if next == 0 {
+            batch.remove(&self.peer_queue, key);
+        } else {
+            batch.insert(&self.peer_queue, key, next.to_be_bytes().to_vec());
+        }
+        Ok(())
+    }
+
+    /// Read one pair's queue depth. A missing row means zero.
+    fn read_peer_queue(&self, from_hash: &str, to_hash: &str) -> Result<u32, MediatorError> {
+        match self
+            .peer_queue
+            .get(peer_queue_key(from_hash, to_hash))
+            .map_err(|e| Self::db_err("peer_queue.get", e))?
+        {
+            Some(v) if v.len() == 4 => Ok(u32::from_be_bytes([v[0], v[1], v[2], v[3]])),
+            _ => Ok(0),
+        }
+    }
+
     /// Open or create a Fjall-backed store at the given directory path.
     /// The directory is created if it doesn't exist; existing data is
     /// recovered.
@@ -567,6 +630,7 @@ impl FjallStore {
             forward_pending: open_partition(PARTITION_FORWARD_PENDING)?,
             globals: open_partition(PARTITION_GLOBALS)?,
             streaming_clients: open_partition(PARTITION_STREAMING_CLIENTS)?,
+            peer_queue: open_partition(PARTITION_PEER_QUEUE)?,
             audit_log,
             db,
             path,
@@ -906,6 +970,11 @@ impl MediatorStore for FjallStore {
         if let Some((key, acc)) = sender_account_pair {
             batch.insert(&self.accounts, key, Self::encode(&acc)?);
         }
+        // Per-relationship depth, in the same batch as the account totals so
+        // the two cannot diverge on a crash between them.
+        if from != "ANONYMOUS" {
+            self.stage_peer_queue_delta(&mut batch, &from, to_did_hash, 1)?;
+        }
         if expires_at > 0 {
             batch.insert(
                 &self.expiry,
@@ -993,6 +1062,9 @@ impl MediatorStore for FjallStore {
         }
 
         let mut batch = self.db.batch();
+        if let Some(from) = &stored.from_did_hash {
+            self.stage_peer_queue_delta(&mut batch, from, &stored.to_did_hash, -1)?;
+        }
         batch.remove(&self.messages, message_hash.as_bytes());
         batch.remove(
             &self.inbox,
@@ -1351,6 +1423,10 @@ impl MediatorStore for FjallStore {
             .commit()
             .map_err(|e| Self::db_err("delete_folder_stream:commit", e))?;
         Ok(())
+    }
+
+    async fn peer_queue_count(&self, from_hash: &str, to_hash: &str) -> Result<u32, MediatorError> {
+        self.read_peer_queue(from_hash, to_hash)
     }
 
     async fn inbox_status(&self, did_hash: &str) -> Result<InboxStatusReply, MediatorError> {
@@ -3240,6 +3316,140 @@ mod tests {
             .expect("get")
             .expect("message must persist across open");
         assert_eq!(got.msg.as_deref(), Some("persistent"));
+    }
+
+    /// The KR-29 / VTI-29 regression: a sender fanning out to many recipients
+    /// must not look like a sender flooding one.
+    ///
+    /// The per-DID send total cannot tell the two apart, which is how a
+    /// community sending one membership card each to its members went silent
+    /// once enough of them had not yet collected. The per-relationship count
+    /// separates them: here one sender holds a message for each of 250
+    /// recipients — five times the per-peer limit — and every pair reads 1.
+    #[tokio::test]
+    async fn peer_queue_counts_are_per_relationship_not_per_sender() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        let community = hash("community");
+
+        for i in 0..250 {
+            let member = hash(&format!("member-{i}"));
+            store
+                .store_message("s", &format!("card-{i}"), &member, Some(&community), 0, 0)
+                .await
+                .expect("store");
+        }
+
+        for i in 0..250 {
+            let member = hash(&format!("member-{i}"));
+            assert_eq!(
+                store
+                    .peer_queue_count(&community, &member)
+                    .await
+                    .expect("peer count"),
+                1,
+                "fan-out must not accumulate against any one relationship"
+            );
+        }
+
+        // ...while the per-DID total, the number the old gate read, is far
+        // above the 200 that used to silence the sender.
+        let acc = store
+            .account_get(&community)
+            .await
+            .expect("account")
+            .expect("exists");
+        assert_eq!(acc.send_queue_count, 250);
+    }
+
+    /// Flooding one peer *does* move the per-relationship count — the case the
+    /// gate is meant to catch.
+    #[tokio::test]
+    async fn peer_queue_count_tracks_a_single_relationship() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        let sender = hash("sender");
+        let victim = hash("victim");
+        let bystander = hash("bystander");
+
+        for i in 0..60 {
+            store
+                .store_message("s", &format!("flood-{i}"), &victim, Some(&sender), 0, 0)
+                .await
+                .expect("store");
+        }
+        assert_eq!(
+            store
+                .peer_queue_count(&sender, &victim)
+                .await
+                .expect("peer count"),
+            60
+        );
+        // A different relationship from the same sender is untouched.
+        assert_eq!(
+            store
+                .peer_queue_count(&sender, &bystander)
+                .await
+                .expect("peer count"),
+            0
+        );
+    }
+
+    /// The count falls as the recipient collects, and the row is removed at
+    /// zero rather than left behind as a `0` — otherwise a sender that had once
+    /// messaged many peers would keep a row for each of them forever.
+    #[tokio::test]
+    async fn peer_queue_count_falls_on_collection_and_drops_the_row_at_zero() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        let sender = hash("sender");
+        let recipient = hash("recipient");
+
+        let mut ids = Vec::new();
+        for i in 0..3 {
+            ids.push(
+                store
+                    .store_message("s", &format!("m-{i}"), &recipient, Some(&sender), 0, 0)
+                    .await
+                    .expect("store"),
+            );
+        }
+        assert_eq!(
+            store
+                .peer_queue_count(&sender, &recipient)
+                .await
+                .expect("peer count"),
+            3
+        );
+
+        for (collected, id) in ids.iter().enumerate() {
+            store
+                .delete_message(
+                    id,
+                    DeletionAuthority::Owner {
+                        did_hash: recipient.clone(),
+                    },
+                )
+                .await
+                .expect("delete");
+            assert_eq!(
+                store
+                    .peer_queue_count(&sender, &recipient)
+                    .await
+                    .expect("peer count"),
+                (3 - collected - 1) as u32
+            );
+        }
+
+        // Zero is represented by the absence of the row, not a stored `0`.
+        assert!(
+            store
+                .peer_queue
+                .get(peer_queue_key(&sender, &recipient))
+                .expect("raw get")
+                .is_none(),
+            "the row must be removed at zero, not written as 0"
+        );
     }
 
     #[tokio::test]

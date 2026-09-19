@@ -1,5 +1,13 @@
 # Affinidi Messaging Mediator Config
 
+## Unreleased (0.4.0) — `queued_send_messages_per_peer`
+
+Adds the per-relationship outbound limit to `[limits]`. It carries a
+`#[serde(default)]`, so an existing `mediator.toml` keeps loading unchanged.
+
+Breaking: `LimitsConfigRaw` gains a public field, so a struct-literal
+construction of it must name the new one.
+
 ## Unreleased (0.3.0) — TSP Rev 3: `mediator-common` 0.16
 
 No source change in this crate. It takes a minor because it carries

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased (0.9.2) — `mediator` 0.27
+
+Follows the mediator's per-relationship forward gate. No source change here
+beyond the pin: the harness builds a mediator whose `queued_send_messages_soft`
+default is now 2000 rather than 200, and which refuses a forward on
+`queued_send_messages_per_peer` (default 50) instead.
+
+A test that relied on the old behaviour — filling a sender's queue to 200 across
+*different* recipients to provoke a refusal — will no longer see one. Aim the
+messages at a single recipient to trip the per-peer gate.
+
 ## Unreleased (0.9.1) — `TestMediatorBuilder::did_rate_limit`
 
 `did_rate_limit(per_second, burst)` sets `limits.did_rate_limit_per_second` and

@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased (0.27.0) — forwards are gated per relationship
+
+A sender was refused with `limits.queue.sender` once its per-DID send total
+reached `queued_send_messages_soft` (default 200), counted across every
+recipient at once. That total cannot tell a community holding one uncollected
+membership card for each of 200 members from a sender aiming 200 messages at one
+victim — and capping it punishes the first, so a community went silent to
+*everyone* because enough of its members had not yet collected. An unresponsive
+recipient degraded the sender globally, which is the wrong blast radius.
+
+The gate that refuses a forward is now per-relationship: how many messages this
+sender has queued for *this* recipient, against the new
+`queued_send_messages_per_peer` (default 50), reported as `limits.queue.peer`.
+Flooding one peer moves it; fanning out to many peers does not.
+
+The per-DID send total remains as a coarse ceiling, raised 200 to 2000, and
+`queued_send_messages_hard` 1000 to 10000 so the default no longer exceeds the
+maximum an account may set for itself. Raising it is safe rather than a
+relaxation: every queued message is counted in exactly one recipient's inbox, so
+the receive limits already bound total storage on their own. The send total was
+never a storage bound — only an abuse heuristic, and the wrong one.
+
+**Operators on Redis must reload `atm-functions.lua`.** Until they do,
+`peer_queue_count` reads 0 and the new gate is inert; the recipient-total and
+sender-total gates still apply, so this fails safe rather than open.
+
+Breaking: `LimitsConfig` gains a public field.
+
 ## Unreleased (0.26.5) — `DELETE /purge/{folder}`
 
 Lets a DID empty one of its own queues in a single call. Clearing a queue
