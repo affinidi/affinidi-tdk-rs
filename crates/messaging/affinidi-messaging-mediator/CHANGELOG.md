@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased (0.28.2) — the Origin rule, stated correctly
+
+No behaviour change. The `Origin` check is unchanged and the default stays
+closed; what changes is that the documentation no longer contradicts it.
+
+`conf/mediator.toml`, the setup wizard and this crate's own code comment all
+said native clients send no Origin and are unaffected. Each sentence was true
+and the set of them misled, because a reader substitutes "native" for "sends no
+Origin" and those are not the same set. **React Native's WebSocket sends an
+Origin derived from the URL**, so a mobile wallet is refused by the default
+policy exactly as a browser is — and an integrator hitting it had three
+documents telling them it could not be happening.
+
+The rule is the header, not the client class: a request with no `Origin` is
+admitted; one carrying an `Origin` the policy does not admit is refused, on REST
+and on the WebSocket upgrade alike.
+
+The refusal now names `[security] cors_allow_origin` and the new
+`docs/cors-and-origin.md` in the operator-facing log. The response body to the
+caller is unchanged.
+
+Two tests were renamed for the same reason — `origin_check_allows_header_less_native_clients`
+became `origin_check_admits_a_request_with_no_origin_header` — and
+`origin_check_refuses_a_react_native_client_under_the_default` pins the case
+that was missed.
+
 ## Unreleased (0.28.1) — a dropped live notification now says so
 
 When a client's send queue was full, or the global byte budget exhausted, the

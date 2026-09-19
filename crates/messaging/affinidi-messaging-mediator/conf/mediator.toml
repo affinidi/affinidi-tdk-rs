@@ -227,9 +227,19 @@ jwt_refresh_expiry = "86400"
 ###     exposure. `allow_credentials` is never set.
 ###
 ### The mediator also applies this allowlist as a defence-in-depth
-### `Origin` check on the WebSocket upgrade (/ws): browser upgrades
-### from non-allowlisted origins are refused (header-less native
-### clients are unaffected — for them the JWT is the gate).
+### `Origin` check on the WebSocket upgrade (/ws): an upgrade carrying a
+### non-allowlisted Origin is refused. A client sending NO Origin is
+### admitted — for it the JWT is the gate.
+###
+### The distinction is the header, not whether the client is a browser.
+### This note used to say "header-less native clients are unaffected",
+### which reads as "native clients are unaffected" and is false for the
+### case that matters: REACT NATIVE'S WEBSOCKET SENDS AN ORIGIN derived
+### from the URL, so a mobile wallet is refused by the default policy
+### exactly as a browser would be, with
+### `WebSocket upgrade rejected: Origin not permitted by CORS policy`.
+### If you are deploying for a mobile wallet, you must set this — see
+### docs/cors-and-origin.md.
 ###
 ### Operational note: with the browser WebSocket auth path the JWT
 ### travels in the `Sec-WebSocket-Protocol` request header. Over wss://
