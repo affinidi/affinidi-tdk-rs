@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased (0.28.1) — a dropped live notification now says so
+
+When a client's send queue was full, or the global byte budget exhausted, the
+live notification was dropped. Nothing durable was lost — the message stays in
+the recipient's inbox — and the drop was already counted. But nothing was said
+on the wire, so a client that only *listens* never learned there was anything
+to collect, and did not collect it. The drop was never the bug; the silence was.
+
+The streaming task now raises a per-connection resync flag when it drops a
+notification, and the socket handler sends a message-pickup 3.0 `status`
+carrying the live `message_count` as soon as the socket is moving again. A
+client already understands that message — it is the same one it receives for a
+`status-request` — so the recovery needs no new protocol on the client side. In
+TSP mode, where a notification is only ever a wake-up, the resync *is* the
+drain and no separate signal is sent.
+
+A flag rather than another queued frame, because the drop happens exactly when
+there is no room to queue one. Repeated drops for a congested client collapse
+into a single signal: the client's answer to any number of them is the same
+single drain, and a congested socket is the worst place to add traffic.
+
+New counter `ws_live_resync_sent_total`. It deliberately does not match
+`ws_live_delivery_dropped_total` one for one — drops climbing while resyncs
+stay flat is the alertable shape, not the drops themselves.
+
+Additive: no configuration or API change.
+
 ## Unreleased (0.28.0) — the queue gates reach direct delivery
 
 The three queue-depth gates lived in `protocols::routing`, which exists only in

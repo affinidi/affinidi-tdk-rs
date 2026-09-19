@@ -1,4 +1,4 @@
-use crate::common::metrics::names::ACTIVE_WEBSOCKET_CONNECTIONS;
+use crate::common::metrics::names::{ACTIVE_WEBSOCKET_CONNECTIONS, WS_LIVE_RESYNC_SENT};
 #[cfg(feature = "didcomm")]
 use crate::didcomm_compat;
 #[cfg(feature = "tsp")]
@@ -534,6 +534,17 @@ async fn handle_socket(
         let (tx, mut rx): (Sender<QueuedCommand>, Receiver<QueuedCommand>) =
             mpsc::channel(WS_CHANNEL_SLOTS);
 
+        // Raised by the streaming task when a live notification for this DID
+        // had to be dropped (send queue full, or the global byte budget
+        // exhausted). Nothing durable is lost — the message stays in the inbox
+        // — but a client that only listens would never learn it is there.
+        //
+        // A flag rather than another queued frame, because the drop happens
+        // exactly when there is no room to queue one. It is read below, after
+        // every wake-up, so the signal goes out as soon as the socket is
+        // moving again.
+        let live_resync = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
         // A relay socket is push-only and must never be registered with the
         // streaming task. It has no DID, so it would register under the empty
         // did_hash — claiming that stream for an anonymous peer and pointing
@@ -551,6 +562,7 @@ async fn handle_socket(
                     channel: tx,
                     session_id: session.session_id.clone(),
                     did: session.did.clone(),
+                    resync: live_resync.clone(),
                 },
             };
             match streaming.channel.send(start).await {
@@ -910,6 +922,47 @@ async fn handle_socket(
                     }
                 }
             }
+
+            // A live notification was dropped while this socket was congested.
+            // `swap` rather than load-then-clear: many drops collapse into one
+            // signal, and clearing before the send means a drop landing during
+            // it raises the flag again rather than being folded into a signal
+            // already on its way out.
+            if live_resync.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                metrics::counter!(WS_LIVE_RESYNC_SENT).increment(1);
+                #[cfg(feature = "tsp")]
+                if tsp_mode {
+                    // A TSP notification is only ever a wake-up, so the resync
+                    // *is* the drain — there is no separate signal to send.
+                    if drain_tsp_inbox(&state, &session, &mut socket, tsp_ack_mode, &mut tsp_inflight)
+                        .await
+                        .is_break()
+                    {
+                        close_reason = (close_code::GOING_AWAY, "client disconnected");
+                        break;
+                    }
+                    continue;
+                }
+                match _package_status(&state, &session).await {
+                    Ok(packed) => {
+                        if let Err(e) = socket.send(Message::Text(packed.into())).await {
+                            warn!("Failed to send resync status to WebSocket client: {e}");
+                        } else {
+                            debug!(
+                                did_hash = %session.did_hash,
+                                "sent message-pickup status after a dropped live notification"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        // Leave the flag down: a failure to *build* the status
+                        // will fail identically next time, and re-raising it
+                        // would spin. The client still recovers on its next
+                        // poll; this is the enhancement failing, not delivery.
+                        warn!("Couldn't build resync status for {}: {e}", session.did_hash);
+                    }
+                }
+            }
         }
 
         // Remove this websocket and associated info from the streaming task.
@@ -1234,6 +1287,49 @@ async fn _package_problem_report(
             47,
             session.session_id.clone(),
             format!("Couldn't pack DIDComm message. Reason: {err}"),
+        )
+    })?;
+
+    Ok(packed)
+}
+
+/// Build a packed message-pickup 3.0 `status` for this session's client.
+///
+/// Sent after a dropped live notification: `message_count` is read live from
+/// the recipient's inbox, so the client is told what is actually waiting rather
+/// than that *something* was missed. A client already understands this message
+/// — it is the same one it gets for a `status-request` — so the resync needs no
+/// new protocol on the client side.
+async fn _package_status(state: &SharedData, session: &Session) -> Result<String, MediatorError> {
+    let status = state.database.inbox_status(&session.did_hash).await?;
+
+    let msg = DidcommMessage::build(
+        Uuid::new_v4().to_string(),
+        "https://didcomm.org/messagepickup/3.0/status".to_string(),
+        json!({
+            "recipient_did": session.did,
+            "message_count": status.message_count,
+            "live_delivery": true,
+        }),
+    )
+    .from(state.config.mediator_did.clone())
+    .to(session.did.to_string())
+    .created_time(state.clock.unix_secs())
+    .finalize();
+
+    let (packed, _) = didcomm_compat::pack_encrypted(
+        &msg,
+        &session.did,
+        Some(&state.config.mediator_did),
+        &state.did_resolver,
+        &*state.config.security.mediator_secrets,
+    )
+    .await
+    .map_err(|err| {
+        MediatorError::MessagePackError(
+            47,
+            session.session_id.clone(),
+            format!("Couldn't pack resync status. Reason: {err}"),
         )
     })?;
 

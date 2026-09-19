@@ -93,6 +93,16 @@ pub mod names {
     /// next poll or on reconnect. A rising rate means slow WebSocket consumers,
     /// or a `ws_send_buffer` sized too small for the live-delivery fan-out.
     pub const WS_LIVE_DELIVERY_DROPPED: &str = "ws_live_delivery_dropped_total";
+    /// counter: Message-pickup `status` messages pushed to a client because a
+    /// live notification for it had been dropped.
+    ///
+    /// Pairs with [`WS_LIVE_DELIVERY_DROPPED`], and the two do not match one
+    /// for one by design: repeated drops for the same congested client collapse
+    /// into a single signal, since the client's answer to any number of them is
+    /// the same single drain. A drop count that climbs while this stays flat
+    /// means the resync is not going out — that is the alertable shape, not the
+    /// drops themselves.
+    pub const WS_LIVE_RESYNC_SENT: &str = "ws_live_resync_sent_total";
     /// gauge: Bytes currently free in the global WebSocket send-buffer pool.
     pub const WS_SEND_BUFFER_AVAILABLE_BYTES: &str = "ws_send_buffer_available_bytes";
     /// counter: Old WebSocket sessions displaced by a newer duplicate for the same DID
