@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased (0.28.1) — a dropped live notification now says so
+
+When a client's send queue was full, or the global byte budget exhausted, the
+live notification was dropped. Nothing durable was lost — the message stays in
+the recipient's inbox — and the drop was already counted. But nothing was said
+on the wire, so a client that only *listens* never learned there was anything
+to collect, and did not collect it. The drop was never the bug; the silence was.
+
+The streaming task now raises a per-connection resync flag when it drops a
+notification, and the socket handler sends a message-pickup 3.0 `status`
+carrying the live `message_count` as soon as the socket is moving again. A
+client already understands that message — it is the same one it receives for a
+`status-request` — so the recovery needs no new protocol on the client side. In
+TSP mode, where a notification is only ever a wake-up, the resync *is* the
+drain and no separate signal is sent.
+
+A flag rather than another queued frame, because the drop happens exactly when
+there is no room to queue one. Repeated drops for a congested client collapse
+into a single signal: the client's answer to any number of them is the same
+single drain, and a congested socket is the worst place to add traffic.
+
+Sending the signal is not free — an inbox read, a DID resolution and a
+`pack_encrypted` — and the party deciding how often it happens is the congested
+client, by choosing how slowly to read. A per-socket floor of 5s bounds that.
+While the floor holds, the flag stays **raised** rather than being cleared, so a
+deferred signal is delayed and never lost.
+
+New counters `ws_live_resync_sent_total` and `ws_live_resync_suppressed_total`.
+They deliberately do not match `ws_live_delivery_dropped_total` one for one:
+drops coalesce, and a further signal is held back until the floor passes. A flat
+sent-count beside climbing drops is therefore *correct* under sustained
+congestion — drops climbing while **both** stay flat is the shape that means the
+signal is not going out at all.
+
+Additive: no configuration or API change.
+
 ## Unreleased (0.28.0) — the queue gates reach direct delivery
 
 The three queue-depth gates lived in `protocols::routing`, which exists only in

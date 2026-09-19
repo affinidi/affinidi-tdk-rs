@@ -46,6 +46,7 @@ use ahash::AHashMap as HashMap;
 use dashmap::DashSet;
 use std::{
     sync::Arc,
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 use tokio::{
@@ -91,6 +92,19 @@ struct ClientEntry {
     active: bool,
     /// When this client registered — used to detect rapid replacement churn.
     registered_at: Instant,
+    /// Raised when a live notification for this client was dropped, and
+    /// lowered by the socket handler once it has told the client to drain.
+    ///
+    /// A dropped notification loses nothing durable — the message stays in the
+    /// inbox — but a client that only *listens* never learns it is there, and
+    /// so never collects it. The flag is the missing half: the drop stays
+    /// silent on the wire, the fact of it does not.
+    ///
+    /// It is a flag rather than a queued frame because the drop happens
+    /// precisely when there is no room to queue anything. Many drops collapse
+    /// into one signal, which is the right shape: the client's response to any
+    /// number of them is the same single drain.
+    resync: Arc<AtomicBool>,
     /// Consecutive in-churn-window replacements this DID's slot has seen.
     /// Carried across replacements and reset by any registration that arrives
     /// outside the window. Drives the duel damper in `_handle_registration`.
@@ -107,6 +121,10 @@ pub enum StreamingUpdateState {
         channel: mpsc::Sender<QueuedCommand>,
         session_id: String,
         did: String,
+        /// Set by this task when a live notification for the DID had to be
+        /// dropped, and observed by the socket handler that owns the
+        /// connection. See [`ClientEntry::resync`].
+        resync: Arc<AtomicBool>,
     },
     /// Enable live delivery for the socket owned by `session_id`.
     ///
@@ -229,6 +247,36 @@ fn try_queue_message(
         return false;
     }
     true
+}
+
+/// Push one live notification to a registered client, raising its resync flag
+/// if the push could not be queued.
+///
+/// The two halves belong together: a drop loses nothing durable — the message
+/// is in the recipient's inbox — but a client that only *listens* has no way to
+/// learn it is there, so a drop that does not raise the flag is a message the
+/// client never collects. Keeping them in one place is what stops a future
+/// caller doing the first without the second.
+///
+/// Returns whether the notification was queued.
+fn deliver_live(
+    entry: &ClientEntry,
+    budget: &WsSendBudget,
+    did_hash: &str,
+    message: String,
+) -> bool {
+    if try_queue_message(&entry.tx, budget, did_hash, message) {
+        debug!("Sent message to client ({did_hash})");
+        return true;
+    }
+    // Repeated drops collapse into one signal, which is the right shape: the
+    // client's answer to any number of them is the same single drain.
+    entry.resync.store(true, Ordering::Relaxed);
+    debug!(
+        did_hash = %did_hash,
+        "live notification dropped; resync raised for the socket handler"
+    );
+    false
 }
 
 /// Used to update the streaming state.
@@ -454,15 +502,10 @@ impl StreamingTask {
                         {
                             error!("Error deregistering dead client ({did_hash}): {e}");
                         }
-                    } else if try_queue_message(
-                        &entry.tx,
-                        &self.send_budget,
-                        &did_hash,
+                    } else {
                         // Moved, not cloned: the body already exists in the
                         // broadcast ring slot, and `payload` is owned here.
-                        message,
-                    ) {
-                        debug!("Sent message to client ({did_hash})");
+                        deliver_live(entry, &self.send_budget, &did_hash, message);
                     }
                 } else {
                     debug!("pub/sub msg received for did_hash({did_hash}) but it is not active");
@@ -607,6 +650,7 @@ impl StreamingTask {
             channel: client_tx,
             session_id: new_session_id,
             did,
+            resync: client_resync,
         } = &value.state
         else {
             // Only `Register` updates reach this helper.
@@ -765,6 +809,7 @@ impl StreamingTask {
                 session_id: new_session_id.to_string(),
                 active: false,
                 registered_at: Instant::now(),
+                resync: client_resync.clone(),
                 churn_streak,
             },
         );
@@ -944,6 +989,7 @@ mod tests {
                 session_id: session_id.to_string(),
                 active,
                 registered_at: Instant::now(),
+                resync: Arc::new(AtomicBool::new(false)),
                 churn_streak: 0,
             },
         );
@@ -958,6 +1004,88 @@ mod tests {
     /// whoever holds the slot. The healthy socket stays connected and simply
     /// stops receiving pushes — the same silent stop-delivering failure as the
     /// `Deregister` bug, invisible from both ends.
+    /// A live notification that cannot be queued raises the client's resync
+    /// flag — the KR-30 / VTI-30 regression.
+    ///
+    /// The drop itself was never the bug: the message stays in the recipient's
+    /// inbox and the counter for it already existed. The bug was that a client
+    /// which only listens is told nothing, so it never collects what it was
+    /// never informed about. This asserts the telling.
+    #[tokio::test]
+    async fn a_dropped_live_notification_raises_resync() {
+        let (tx, _rx) = mpsc::channel::<QueuedCommand>(1);
+        let resync = Arc::new(AtomicBool::new(false));
+        let entry = ClientEntry {
+            tx: tx.clone(),
+            session_id: "S".to_string(),
+            active: true,
+            registered_at: Instant::now(),
+            resync: resync.clone(),
+            churn_streak: 0,
+        };
+        let budget = WsSendBudget::new(1_000_000);
+
+        // First push fits the single slot.
+        assert!(deliver_live(&entry, &budget, "did-hash", "one".to_string()));
+        assert!(
+            !resync.load(Ordering::Relaxed),
+            "a delivered notification must not ask the client to resync"
+        );
+
+        // Nothing is reading `_rx`, so the slot stays taken and the next push
+        // is dropped — the slow-consumer case.
+        assert!(!deliver_live(
+            &entry,
+            &budget,
+            "did-hash",
+            "two".to_string()
+        ));
+        assert!(
+            resync.load(Ordering::Relaxed),
+            "a dropped notification must raise resync, or the client never learns"
+        );
+    }
+
+    /// Repeated drops collapse into one signal rather than queueing one signal
+    /// per drop. The client's response to any number of them is the same single
+    /// drain, and a congested socket is the worst place to add traffic.
+    #[tokio::test]
+    async fn repeated_drops_collapse_into_one_signal() {
+        let (tx, _rx) = mpsc::channel::<QueuedCommand>(1);
+        let resync = Arc::new(AtomicBool::new(false));
+        let entry = ClientEntry {
+            tx,
+            session_id: "S".to_string(),
+            active: true,
+            registered_at: Instant::now(),
+            resync: resync.clone(),
+            churn_streak: 0,
+        };
+        let budget = WsSendBudget::new(1_000_000);
+
+        assert!(deliver_live(
+            &entry,
+            &budget,
+            "did-hash",
+            "fills".to_string()
+        ));
+        for i in 0..5 {
+            assert!(!deliver_live(
+                &entry,
+                &budget,
+                "did-hash",
+                format!("drop-{i}")
+            ));
+        }
+
+        // The handler takes the signal exactly once; it does not find five.
+        assert!(resync.swap(false, Ordering::Relaxed), "signal is pending");
+        assert!(
+            !resync.swap(false, Ordering::Relaxed),
+            "five drops leave one signal, not five"
+        );
+    }
+
     #[tokio::test]
     async fn a_stale_sessions_stop_does_not_deactivate_the_current_socket() {
         let database: Arc<dyn MediatorStore> = Arc::new(MemoryStore::new());
@@ -1145,6 +1273,7 @@ mod tests {
                 session_id: "A".to_string(),
                 active: true,
                 registered_at: Instant::now(),
+                resync: Arc::new(AtomicBool::new(false)),
                 churn_streak: 0,
             },
         );
@@ -1157,6 +1286,7 @@ mod tests {
                 channel: b_tx.clone(),
                 session_id: "B".to_string(),
                 did: did.to_string(),
+                resync: Arc::new(AtomicBool::new(false)),
             },
         };
 
@@ -1236,6 +1366,7 @@ mod tests {
                 session_id: "A".to_string(),
                 active: false,
                 registered_at: Instant::now(),
+                resync: Arc::new(AtomicBool::new(false)),
                 churn_streak: 0,
             },
         );
@@ -1288,6 +1419,7 @@ mod tests {
                 session_id: "A".to_string(),
                 active: true,
                 registered_at: Instant::now(),
+                resync: Arc::new(AtomicBool::new(false)),
                 churn_streak: 0,
             },
         );
@@ -1334,6 +1466,7 @@ mod tests {
                 channel: b_tx.clone(),
                 session_id: "B".to_string(),
                 did: did.to_string(),
+                resync: Arc::new(AtomicBool::new(false)),
             },
         };
 
@@ -1373,6 +1506,7 @@ mod tests {
                 channel: tx,
                 session_id: session.to_string(),
                 did: did.to_string(),
+                resync: Arc::new(AtomicBool::new(false)),
             },
         };
 
@@ -1468,6 +1602,7 @@ mod tests {
                 session_id: "ghost".to_string(),
                 active: true,
                 registered_at: Instant::now(),
+                resync: Arc::new(AtomicBool::new(false)),
                 churn_streak: CHURN_REFUSE_STREAK * 10,
             },
         );
@@ -1479,6 +1614,7 @@ mod tests {
                 channel: tx,
                 session_id: "live".to_string(),
                 did: did.to_string(),
+                resync: Arc::new(AtomicBool::new(false)),
             },
         };
         task._handle_registration(&database, &mut clients, &replay_in_progress, &update)
