@@ -4,6 +4,7 @@
 use core::fmt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 #[derive(Serialize, Debug, Deserialize, PartialEq)]
 pub struct ProblemReport {
@@ -89,33 +90,40 @@ impl ProblemReport {
         }
     }
 
+    /// Render `comment` with its `{1}`, `{2}`, … placeholders replaced by the
+    /// corresponding entry of `args` (1-based). A placeholder with no argument
+    /// behind it renders as `?`.
+    ///
+    /// # Why this is a whole-string substitution
+    ///
+    /// It used to split the comment on spaces and replace a token only when the
+    /// *entire* token was a placeholder (`^\{(\d*)\}$`). Any placeholder with
+    /// punctuation attached therefore survived verbatim — and the codebase is
+    /// full of those. `"Message ({1}) not found"` reached the logs of every
+    /// service that failed a delete as literally `Message ({1}) not found`,
+    /// naming no message; `"Invalid limit ({1}). Maximum of {2} messages"`
+    /// interpolated the limit but not the value that broke it. A report that
+    /// cannot name what it is about is the one thing a problem report exists to
+    /// do.
     pub fn interpolation(&self) -> String {
-        let mut output: Vec<String> = Vec::new();
-        let re = Regex::new(r"^\{(\d*)\}$").unwrap();
-        for part in self.comment.split(" ") {
-            match re.captures(part) {
-                Some(cap) => {
-                    if let Some(num) = cap.get(1) {
-                        if let Ok(idx) = num.as_str().parse::<usize>() {
-                            if let Some(arg) = self.args.get(idx - 1) {
-                                output.push(arg.to_string());
-                            } else {
-                                output.push("?".to_string());
-                            }
-                        } else {
-                            output.push("?".to_string());
-                        }
-                    } else {
-                        output.push("?".to_string())
-                    }
-                }
-                _ => {
-                    output.push(part.to_string());
-                }
-            }
-        }
+        // `{}` with no digits is accepted (and renders `?`) to preserve the
+        // previous behaviour for a malformed comment.
+        static RE: OnceLock<Regex> = OnceLock::new();
+        let re = RE.get_or_init(|| Regex::new(r"\{(\d*)\}").expect("static pattern is valid"));
 
-        output.join(" ")
+        re.replace_all(&self.comment, |cap: &regex::Captures| {
+            // 1-based, so `{0}` has no argument and is as malformed as `{}`.
+            // `checked_sub` rather than `idx - 1`, which underflows on `{0}`.
+            cap[1]
+                .parse::<usize>()
+                .ok()
+                .and_then(|idx| idx.checked_sub(1))
+                .and_then(|idx| self.args.get(idx))
+                .map(String::as_str)
+                .unwrap_or("?")
+                .to_string()
+        })
+        .into_owned()
     }
 }
 
@@ -153,6 +161,68 @@ mod tests {
             problem_report.interpolation(),
             "authentication for Alice failed due to invalid signature ?".to_string()
         );
+    }
+
+    /// The regression this file exists to prevent: a placeholder wrapped in
+    /// punctuation. `"Message ({1}) not found"` is the mediator's own
+    /// delete-not-found comment, and it reached service logs uninterpolated —
+    /// naming no message — because the old token-wise match required the
+    /// placeholder to be a whole space-delimited word.
+    #[test]
+    fn interpolates_a_placeholder_with_punctuation_around_it() {
+        let report = ProblemReport {
+            code: "w.m.database.message.delete.not_found".to_string(),
+            comment: "Message ({1}) not found".to_string(),
+            args: vec!["5c514fa1acd4ca01".to_string()],
+            escalate_to: None,
+        };
+        assert_eq!(
+            report.interpolation(),
+            "Message (5c514fa1acd4ca01) not found"
+        );
+    }
+
+    /// Several placeholders in one token, and one that trails punctuation —
+    /// the shape of the mediator's limit messages.
+    #[test]
+    fn interpolates_every_placeholder_in_a_token() {
+        let report = ProblemReport {
+            code: "e.p.api.message_delete.limit".to_string(),
+            comment: "Invalid limit ({1}). Maximum of {2} messages per transaction".to_string(),
+            args: vec!["250".to_string(), "100".to_string()],
+            escalate_to: None,
+        };
+        assert_eq!(
+            report.interpolation(),
+            "Invalid limit (250). Maximum of 100 messages per transaction"
+        );
+    }
+
+    /// `{0}` is 1-based nonsense and used to underflow `idx - 1`; `{}` has no
+    /// index at all. Both render `?` rather than panicking.
+    #[test]
+    fn malformed_placeholders_render_a_question_mark() {
+        let report = ProblemReport {
+            code: "e.test.x".to_string(),
+            comment: "a {0} b {} c {9}".to_string(),
+            args: vec!["only".to_string()],
+            escalate_to: None,
+        };
+        assert_eq!(report.interpolation(), "a ? b ? c ?");
+    }
+
+    /// Whitespace is preserved exactly: the old implementation rebuilt the
+    /// string by joining on a single space, so a tab or newline in a comment
+    /// survived only by accident of being inside a token.
+    #[test]
+    fn preserves_whitespace_verbatim() {
+        let report = ProblemReport {
+            code: "e.test.x".to_string(),
+            comment: "line one: {1}\n\tline two: {2}".to_string(),
+            args: vec!["a".to_string(), "b".to_string()],
+            escalate_to: None,
+        };
+        assert_eq!(report.interpolation(), "line one: a\n\tline two: b");
     }
 
     #[test]

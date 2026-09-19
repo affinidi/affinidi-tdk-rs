@@ -1,5 +1,27 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.3) — problem reports interpolate every placeholder
+
+`ProblemReport::interpolation` — which renders the comment for `Display`, and so
+for every log line and every error string a client receives — split the comment
+on spaces and substituted a token only when the *whole* token was a placeholder.
+Any placeholder with punctuation attached survived verbatim, and most of them
+have some:
+
+- `Message ({1}) not found` reached the logs of every service that failed a
+  delete exactly like that, naming no message.
+- `Invalid limit ({1}). Maximum of {2} messages` interpolated the maximum but
+  not the value that broke it.
+
+It is now a substitution over the whole string, so `{n}` is replaced wherever it
+appears. A placeholder with no argument behind it still renders `?`; `{0}` does
+too, rather than underflowing `idx - 1` as it used to. Whitespace is preserved
+exactly instead of being rebuilt by joining on single spaces.
+
+The serialized report is unchanged — `comment` and `args` still go over the wire
+templated and separate, per the DIDComm problem-report spec. Only the rendered
+form changes.
+
 ## Unreleased (0.16.2) — forwarding client: TLS-validation hard-gate + WS rebinding guard
 
 Two follow-on hardenings to the forwarding egress guard (SEC-4045 T1 residuals).
