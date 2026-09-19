@@ -99,10 +99,22 @@ pub mod names {
     /// Pairs with [`WS_LIVE_DELIVERY_DROPPED`], and the two do not match one
     /// for one by design: repeated drops for the same congested client collapse
     /// into a single signal, since the client's answer to any number of them is
-    /// the same single drain. A drop count that climbs while this stays flat
-    /// means the resync is not going out — that is the alertable shape, not the
-    /// drops themselves.
+    /// the same single drain, and a further one is suppressed until
+    /// `MIN_RESYNC_INTERVAL` has passed.
+    ///
+    /// So a flat count beside climbing drops is **not** on its own a fault — a
+    /// sustained-congestion client produces exactly that. Read it with
+    /// [`WS_LIVE_RESYNC_SUPPRESSED`]: drops climbing while *both* stay flat is
+    /// the shape that means the signal is not going out at all.
     pub const WS_LIVE_RESYNC_SENT: &str = "ws_live_resync_sent_total";
+    /// counter: Resync signals held back because the per-socket minimum
+    /// interval had not elapsed.
+    ///
+    /// Not an error: the signal stays raised and goes out on the next wake-up
+    /// past the floor. It exists so that "suppressed by design" can be told
+    /// apart from "never generated", which is the distinction an alert on
+    /// [`WS_LIVE_RESYNC_SENT`] alone cannot make.
+    pub const WS_LIVE_RESYNC_SUPPRESSED: &str = "ws_live_resync_suppressed_total";
     /// gauge: Bytes currently free in the global WebSocket send-buffer pool.
     pub const WS_SEND_BUFFER_AVAILABLE_BYTES: &str = "ws_send_buffer_available_bytes";
     /// counter: Old WebSocket sessions displaced by a newer duplicate for the same DID

@@ -1,4 +1,6 @@
-use crate::common::metrics::names::{ACTIVE_WEBSOCKET_CONNECTIONS, WS_LIVE_RESYNC_SENT};
+use crate::common::metrics::names::{
+    ACTIVE_WEBSOCKET_CONNECTIONS, WS_LIVE_RESYNC_SENT, WS_LIVE_RESYNC_SUPPRESSED,
+};
 #[cfg(feature = "didcomm")]
 use crate::didcomm_compat;
 #[cfg(feature = "tsp")]
@@ -50,7 +52,7 @@ use serde_json::json;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::{
     select,
     sync::mpsc::{self, Receiver, Sender},
@@ -134,6 +136,34 @@ where
 /// a non-allowlisted origin is refused even if it somehow holds a valid
 /// token. Native clients send no `Origin` header and are always allowed
 /// — for them the JWT is the only (and sufficient) gate.
+/// Shortest gap between two resync `status` messages on one socket.
+///
+/// Sending one is not free — it costs an inbox read, a DID resolution and a
+/// `pack_encrypted` — and the party that decides how often it happens is the
+/// congested client, by choosing how slowly to read. Without a floor, a client
+/// that alternates between stalling and briefly draining makes the mediator pay
+/// that cost at a cadence it picks, on a task pool shared with every other
+/// connection.
+///
+/// It is also the right behaviour with no attacker involved, and for the reason
+/// the drops already coalesce: the client's answer to any number of dropped
+/// notifications is one drain, so a second `status` before it has acted on the
+/// first tells it nothing it does not already know, on the one socket already
+/// known to be congested.
+///
+/// Well under the 30s ping interval, so a deferred signal is never waiting long
+/// for a wake-up to carry it.
+const MIN_RESYNC_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Whether a raised resync flag may be acted on yet.
+///
+/// Separated out so the rule is testable: the socket loop it lives in cannot be
+/// driven from a unit test, and "is the flag set" and "has the floor elapsed"
+/// are exactly the pair that is easy to get wrong together.
+fn resync_due(raised: bool, since_last: Duration) -> bool {
+    raised && since_last >= MIN_RESYNC_INTERVAL
+}
+
 fn ws_origin_allowed(policy: &CorsOriginPolicy, origin: Option<&HeaderValue>) -> bool {
     match origin {
         // No Origin ⇒ not a browser cross-origin context (native client).
@@ -544,6 +574,9 @@ async fn handle_socket(
         // every wake-up, so the signal goes out as soon as the socket is
         // moving again.
         let live_resync = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // Starts in the past so the first drop is signalled immediately; the
+        // floor exists to bound a *repeating* cost, not to delay the first one.
+        let mut last_resync_sent = Instant::now() - MIN_RESYNC_INTERVAL;
 
         // A relay socket is push-only and must never be registered with the
         // streaming task. It has no DID, so it would register under the empty
@@ -928,7 +961,22 @@ async fn handle_socket(
             // signal, and clearing before the send means a drop landing during
             // it raises the flag again rather than being folded into a signal
             // already on its way out.
-            if live_resync.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            //
+            // The flag is *read*, not swapped, until the floor has elapsed:
+            // clearing it early is how a deferred signal gets lost, so it stays
+            // raised and the next wake-up past the floor carries it. That is
+            // also why the suppressed count is a separate metric — under
+            // sustained congestion a flat resync count is correct, not a fault.
+            let raised = live_resync.load(std::sync::atomic::Ordering::Relaxed);
+            if raised && !resync_due(raised, last_resync_sent.elapsed()) {
+                metrics::counter!(WS_LIVE_RESYNC_SUPPRESSED).increment(1);
+            }
+            if resync_due(raised, last_resync_sent.elapsed()) {
+                // Cleared before the send, so a drop landing during it raises
+                // the flag again rather than being folded into a signal already
+                // on its way out.
+                live_resync.store(false, std::sync::atomic::Ordering::Relaxed);
+                last_resync_sent = Instant::now();
                 metrics::counter!(WS_LIVE_RESYNC_SENT).increment(1);
                 #[cfg(feature = "tsp")]
                 if tsp_mode {
@@ -1466,7 +1514,8 @@ mod close_report_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        CorsOriginPolicy, app_subprotocols, extract_bearer_subprotocol, ws_origin_allowed,
+        CorsOriginPolicy, MIN_RESYNC_INTERVAL, app_subprotocols, extract_bearer_subprotocol,
+        resync_due, ws_origin_allowed,
     };
     use crate::common::config::OriginMatcher;
     use http::HeaderValue;
@@ -1547,6 +1596,26 @@ mod tests {
         // Comma-separated bearer entry must be excluded, app protocols kept.
         let protos = [hv("didcomm/v2, bearer.secret.jwt.here")];
         assert_eq!(app_subprotocols(protos.iter()), vec!["didcomm/v2"]);
+    }
+
+    /// The resync floor, which exists because sending the signal is not free:
+    /// an inbox read, a DID resolution and a `pack_encrypted` per send, at a
+    /// cadence the congested client chooses by how slowly it reads.
+    #[test]
+    fn resync_is_due_only_when_raised_and_past_the_floor() {
+        use std::time::Duration;
+
+        // Not raised: never due, however long it has been.
+        assert!(!resync_due(false, Duration::from_secs(3600)));
+        // Raised but inside the floor: held back, not sent.
+        assert!(!resync_due(true, Duration::ZERO));
+        assert!(!resync_due(
+            true,
+            MIN_RESYNC_INTERVAL - Duration::from_millis(1)
+        ));
+        // Raised and at or past the floor: due.
+        assert!(resync_due(true, MIN_RESYNC_INTERVAL));
+        assert!(resync_due(true, MIN_RESYNC_INTERVAL * 2));
     }
 
     #[test]

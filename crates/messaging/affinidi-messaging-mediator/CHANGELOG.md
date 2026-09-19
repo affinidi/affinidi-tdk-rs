@@ -21,9 +21,18 @@ there is no room to queue one. Repeated drops for a congested client collapse
 into a single signal: the client's answer to any number of them is the same
 single drain, and a congested socket is the worst place to add traffic.
 
-New counter `ws_live_resync_sent_total`. It deliberately does not match
-`ws_live_delivery_dropped_total` one for one — drops climbing while resyncs
-stay flat is the alertable shape, not the drops themselves.
+Sending the signal is not free — an inbox read, a DID resolution and a
+`pack_encrypted` — and the party deciding how often it happens is the congested
+client, by choosing how slowly to read. A per-socket floor of 5s bounds that.
+While the floor holds, the flag stays **raised** rather than being cleared, so a
+deferred signal is delayed and never lost.
+
+New counters `ws_live_resync_sent_total` and `ws_live_resync_suppressed_total`.
+They deliberately do not match `ws_live_delivery_dropped_total` one for one:
+drops coalesce, and a further signal is held back until the floor passes. A flat
+sent-count beside climbing drops is therefore *correct* under sustained
+congestion — drops climbing while **both** stay flat is the shape that means the
+signal is not going out at all.
 
 Additive: no configuration or API change.
 
