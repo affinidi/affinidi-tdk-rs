@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### 0.26.10 — the deletion handler stops re-deleting redelivered messages
+
+0.26.8 stopped discarding the mediator's answer to a background delete, and what
+it surfaced was a flood of warnings on every service that had just connected:
+
+```
+WARN deletion_handler: the mediator refused some ids:
+  [("5c514f…", "…code: w.m.database.message.delete.not_found… 404")] deleted=1 failed=1
+```
+
+Nothing new was broken. The duplicate deletes had always been there; 0.26.8 was
+simply the first build that said so.
+
+**Where the duplicate comes from.** Live delivery is deliberately at-least-once.
+The mediator re-pushes a recipient's whole undelivered inbox when a socket
+enables live delivery, and again when a duplicate socket displaces an existing
+session — fetched `DoNotDelete`, on the stated understanding that a client which
+already had a message "simply sees it again and deletes it as usual". With
+auto-delete on receipt, "as usual" is a second `DELETE` for an id the mediator
+has already dropped, which it answers `not_found`. This is why every one of
+those warnings landed within milliseconds of a connect.
+
+Three changes:
+
+- **Ids are de-duplicated within a batch.** `deleted=1 failed=1` on a single
+  request was one id sent twice: two deliveries of one message, queued twice,
+  coalesced into one `DELETE`, the second occurrence refused.
+- **Ids deleted in the last 60 seconds are not deleted again.** The redelivered
+  copy usually arrives in the *next* batch, where within-batch de-duplication
+  cannot see it. The cache is per `(profile, id)` and bounded at 4096 entries.
+  Suppression is short by design: a message id is `sha256` of the stored body,
+  so an entry that never expired could in principle strand a byte-identical
+  message — expiry makes that self-healing.
+- **`not_found` is reported at `debug`, not `warn`.** It means the message is
+  already gone, which is the expected answer here; the mediator itself logs it
+  at debug as "may already be deleted". A `permission_denied` or a database
+  error still warns, and now it can be seen — those are ids the mediator will
+  never accept, i.e. messages redelivered for as long as they live.
+
+Deletion is still at-least-once end to end: a suppressed delete costs nothing,
+since an un-deleted message is redelivered and queued again. Behaviour-only; no
+API change.
+
 ### 0.26.9 — `purge_queue`
 
 `ATM::purge_queue(profile, folder)` empties one of the calling profile's own
