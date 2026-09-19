@@ -1,5 +1,77 @@
 # Changelog
 
+## Unreleased (0.28.4) — a queue can be watched before it becomes an outage
+
+The only queue a deployment could see was the forwarding one
+(`forward_queue_length`). A per-DID inbox or outbox backing up was invisible
+until it crossed a limit and the mediator started refusing traffic, so the
+first signal of a stuck queue was an outage. Every queue-depth gate added in
+0.27.0 and 0.28.0 was enforceable and unobservable at the same time.
+
+The statistics task now also runs a queue survey each cycle and publishes:
+
+- `queue_depth_messages` / `queue_depth_bytes` (label: `folder`);
+- `queue_oldest_age_seconds` (label: `folder`);
+- `queue_max_saturation_ratio` (label: `folder`), where 1.0 is the depth at
+  which an account starts being refused — the one gauge here that moves
+  *before* anything breaks;
+- `queue_accounts_surveyed` and `queue_survey_truncated`;
+- `queue_limit_refusals_total` (label: `gate` = `peer|sender|recipient`),
+  counted where the three gates refuse in `messages::queue_limits`.
+
+**Age is the point.** Depth cannot tell a busy queue from a stuck one — a deep
+queue that is draining is healthy and looks identical on a depth gauge. Age
+separates them, and a value climbing toward `message_expiry_seconds` means
+nothing is collecting and only expiry will clear the queue.
+
+Two limits on the age gauge, both deliberate and both documented on the metric
+rather than left to be discovered. It covers the deepest queues probed that
+cycle (capped at 32 per folder), so a shallow but very old queue can be missed
+while deeper ones exist. And the outbox series is blind to anonymous senders,
+because an outbox entry is only allocated when the sender is known — anonymous
+traffic appears in the inbox series alone. Read the pair, not either half.
+
+Bounded by construction: at most 10,000 account records per survey, paged
+through the existing cursor, and at most 32 age probes per folder. Account
+records already carry the depth counters, so the depth half costs one paged
+walk and no per-queue reads at all. A survey that hits the account cap sets
+`queue_survey_truncated`, because for a metric whose job is to catch an
+unwatched queue, under-reporting silently would be the worst available failure.
+
+Age is read from the inbox/outbox streams, which are arrival-ordered in every
+backend, and **not** from the expiry index. `expires_at` is
+`min(client_expires_time, now + TTL)` and that clamp is upper-bound only, so a
+short client-supplied expiry passes through and sorts below a genuinely old
+message carrying the default. The minimum of that index is the
+newest-but-shortest-lived message, not the oldest, and a client sending
+short-expiry traffic would have pinned the gauge near "healthy" indefinitely.
+Arrival order cannot be reordered by a client; expiry order can.
+
+### The Redis stored functions are checked against the build
+
+`load_scripts` already fails loudly if `FUNCTION LOAD` is rejected, so "did the
+library load" was answered. What was not answered is loading the *wrong* one.
+Function names are stable across releases and only the bodies change, so an
+older `atm-functions.lua` loads perfectly, every call still succeeds, and the
+mediator runs indefinitely with a capability it believes it has. 0.27.0's
+per-relationship accounting is the worked example: a library predating it never
+writes `PEER_Q`, so `peer_queue_count` reads 0 for every relationship for ever
+and `limits.queue.peer` never fires, with nothing logged.
+
+Startup now compares the file at `database.functions_file` against the copy
+compiled into the binary and publishes `redis_functions_match_build`. A
+mismatch logs at `error` with both digests and the path. It **reports rather
+than refuses** — a node that will not boot over a config mismatch turns an
+observability gap into an outage, which is the wrong trade for a check that
+exists to make a silent problem visible.
+
+Presence checks and function-name listings were both considered and rejected:
+they report healthy for exactly the case that matters.
+
+Additive: no configuration change, no API change, no behaviour change on any
+message path. `tasks::statistics::statistics` gains two parameters (a clock and
+`SurveyDefaults`), which affects embedded callers that spawn it themselves.
+
 ## Unreleased (0.28.3) — the send stream was trimmed at the receive limit
 
 On the Redis backend the `store_message` Lua applies one `queue_maxlen`
@@ -34,6 +106,7 @@ that loads cleanly and defines every function by the same name. A new test
 compares the two copies byte for byte, because any check short of that (does it
 load? does it define the right functions?) passes on exactly this drift.
 
+
 ## Unreleased (0.28.2) — the Origin rule, stated correctly
 
 No behaviour change. The `Origin` check is unchanged and the default stays
@@ -59,6 +132,7 @@ Two tests were renamed for the same reason — `origin_check_allows_header_less_
 became `origin_check_admits_a_request_with_no_origin_header` — and
 `origin_check_refuses_a_react_native_client_under_the_default` pins the case
 that was missed.
+
 
 ## Unreleased (0.28.1) — a dropped live notification now says so
 

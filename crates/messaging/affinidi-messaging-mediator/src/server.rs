@@ -18,7 +18,8 @@ use crate::{
         readiness_handler,
     },
     tasks::{
-        statistics::statistics, supervisor::TaskSupervisor, websocket_streaming::StreamingTask,
+        queue_survey::SurveyDefaults, statistics::statistics, supervisor::TaskSupervisor,
+        websocket_streaming::StreamingTask,
     },
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
@@ -335,6 +336,12 @@ pub async fn serve_internal(
                     "Loading LUA scripts into the database from file: {}",
                     functions_file
                 );
+                // Before loading, not after: the interesting failure is a file
+                // from another release, which loads perfectly and then does
+                // less than this build expects. Reporting it first means the
+                // warning sits directly above the "Loaded LUA scripts"
+                // success line it qualifies.
+                crate::common::lua_integrity::check_and_report(functions_file);
                 store.load_scripts(functions_file).await.map_err(|e| {
                     error!("Failed to load LUA scripts: {e}");
                     e
@@ -389,10 +396,24 @@ pub async fn serve_internal(
     {
         let store = store.clone();
         let tags = config.tags.clone();
+        let stats_clock = clock.clone();
+        // Defaults the queue survey measures an account against when it has
+        // set no limit of its own — the same fallback the gates themselves
+        // apply in `messages::queue_limits`, so saturation reaching 1.0 means
+        // the account is at the depth where it starts being refused.
+        let queue_defaults = SurveyDefaults {
+            send_soft: config.limits.queued_send_messages_soft,
+            receive_soft: config.limits.queued_receive_messages_soft,
+        };
         supervisor.spawn("statistics", false, move || {
             let store = store.clone();
             let tags = tags.clone();
-            async move { statistics(store, tags).await.map_err(|e| e.to_string()) }
+            let clock = stats_clock.clone();
+            async move {
+                statistics(store, tags, clock, queue_defaults)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
         });
     }
 

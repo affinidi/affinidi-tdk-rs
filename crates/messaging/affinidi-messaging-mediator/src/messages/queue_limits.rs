@@ -26,7 +26,24 @@ use http::StatusCode;
 use tracing::warn;
 
 use crate::SharedData;
+use crate::common::metrics::names;
 use crate::common::session::Session;
+
+/// Gate label for [`names::QUEUE_LIMIT_REFUSALS_TOTAL`]. Three fixed values,
+/// so the label is cardinality-safe: it never carries a DID.
+const GATE_PEER: &str = "peer";
+const GATE_SENDER: &str = "sender";
+const GATE_RECIPIENT: &str = "recipient";
+
+/// Count one refusal by the gate that made it.
+///
+/// Counted here rather than at the call sites so that a gate cannot be added
+/// later and refuse silently — every `return Err` below goes through this.
+/// Without it a refusal left only a `warn!`, which is legible to somebody
+/// already reading logs for the DID in question and to nobody else.
+fn count_refusal(gate: &'static str) {
+    metrics::counter!(names::QUEUE_LIMIT_REFUSALS_TOTAL, "gate" => gate).increment(1);
+}
 
 /// Whether adding `incoming` messages to a queue already holding `queued`
 /// would meet or exceed `limit`. `-1` means "unlimited"; `ephemeral`
@@ -66,6 +83,7 @@ pub(crate) async fn validate_peer_queue_limit(
         .peer_queue_count(from_did_hash, next_did_hash)
         .await?;
     if queue_at_capacity(queued, attachment_count, limit, ephemeral) {
+        count_refusal(GATE_PEER);
         warn!(
             "Sender DID ({}) has too many messages waiting for recipient ({})",
             session.did_hash, next_did_hash
@@ -111,6 +129,7 @@ pub(crate) fn validate_sender_queue_limit(
         send_limit,
         ephemeral,
     ) {
+        count_refusal(GATE_SENDER);
         warn!(
             "Sender DID ({}) has too many messages waiting to be delivered",
             session.did_hash
@@ -150,6 +169,7 @@ pub(crate) fn validate_recipient_queue_limit(
         recv_limit,
         ephemeral,
     ) {
+        count_refusal(GATE_RECIPIENT);
         warn!(
             "Next DID ({}) has too many messages waiting to be delivered",
             next_did_hash
