@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased (0.28.3) — the send stream was trimmed at the receive limit
+
+On the Redis backend the `store_message` Lua applies one `queue_maxlen`
+argument to **both** `RECEIVE_Q` and `SEND_Q`, and the mediator passed
+`queued_receive_messages_hard` as that argument. The send stream was therefore
+bounded by the receive limit.
+
+That was latent while the send soft limit was 200, far below the 1000 trim.
+0.28.0 raised send soft to 2000 and send hard to 10000 and did not move the
+trim, making it reachable in ordinary use. A trim removes the stream entry and
+nothing decrements `SEND_QUEUE_COUNT` or `PEER_Q` — only `delete_message` does —
+so past roughly 1000 queued messages a sender was refused by counters for
+messages it could no longer list (`list_messages` reads the stream) or purge
+(`DELETE /purge/{folder}` walks it), recovering only when the 7-day message
+TTL expired. The same shape as a stuck queue, arriving by a second route.
+
+`MAXLEN` is now derived — `LimitsConfig::queue_stream_maxlen()` — as the larger
+of the two hard limits plus one, or 0 (no trimming) if either is unlimited.
+Deriving it rather than configuring it is the point: the bound moves whenever a
+limit does, so this cannot be walked past again by changing one number and not
+the other. Trimming is a backstop against state the gates should have
+prevented, never a bound on traffic they allow.
+
+Redis only — the fjall and memory backends ignore `queue_maxlen`. No Lua change
+and no `FUNCTION LOAD` needed for this fix.
+
+**Also syncs `docker/test/conf/atm-functions.lua`**, which 0.28.0 left on the
+pre-`PEER_Q` version. Anything running that config had `peer_queue_count`
+reading 0 and the `limits.queue.peer` gate permanently inert — the headline fix
+of that release, absent, with nothing failing, since the stale copy is valid Lua
+that loads cleanly and defines every function by the same name. A new test
+compares the two copies byte for byte, because any check short of that (does it
+load? does it define the right functions?) passes on exactly this drift.
+
 ## Unreleased (0.28.2) — the Origin rule, stated correctly
 
 No behaviour change. The `Origin` check is unchanged and the default stays
