@@ -1,5 +1,8 @@
 use crate::common::authz::{self, Capability};
 use crate::common::storage_timeout::with_storage_timeout;
+use crate::messages::queue_limits::{
+    validate_peer_queue_limit, validate_recipient_queue_limit, validate_sender_queue_limit,
+};
 // Shared with the TSP relay path in `messages::inbound`, which cannot reach into
 // this module: `protocols` only exists in a `didcomm` build.
 use crate::server::uri_points_at_self;
@@ -177,147 +180,6 @@ fn parse_next_did(msg: &Message, session: &Session) -> Result<String, MediatorEr
             format!("Failed to parse forwarding message body. Reason: {e}"),
         )),
     }
-}
-
-/// Whether adding `incoming` messages to a queue already holding `queued`
-/// would meet or exceed `limit`. `-1` means "unlimited"; `ephemeral`
-/// forwards (live-stream only) never count against a queue.
-fn queue_at_capacity(queued: u32, incoming: usize, limit: i32, ephemeral: bool) -> bool {
-    limit != -1 && !ephemeral && queued + incoming as u32 >= limit as u32
-}
-
-/// Reject the forward when the sender already has too many messages queued
-/// **for this one recipient**.
-///
-/// This is the gate that catches a sender flooding a peer. The per-DID totals
-/// below cannot: a community holding one uncollected membership card for each
-/// of two hundred members presents identically to a sender aiming two hundred
-/// messages at one victim, so capping the total silences the community because
-/// *its members* went offline. That is the failure this function exists to
-/// stop — it moves only when one relationship is genuinely over-full.
-///
-/// Inert when the backend does not track per-pair counts (the trait default
-/// returns 0) or when the limit is `-1`. `ephemeral` forwards (live-stream
-/// only) bypass queue accounting entirely, as with the other gates.
-async fn validate_peer_queue_limit(
-    msg: &Message,
-    from_did_hash: &str,
-    next_did_hash: &str,
-    attachment_count: usize,
-    ephemeral: bool,
-    state: &SharedData,
-    session: &Session,
-) -> Result<(), MediatorError> {
-    let limit = state.config.limits.queued_send_messages_per_peer;
-    if limit == -1 || ephemeral {
-        return Ok(());
-    }
-    let queued = state
-        .database
-        .peer_queue_count(from_did_hash, next_did_hash)
-        .await?;
-    if queue_at_capacity(queued, attachment_count, limit, ephemeral) {
-        warn!(
-            "Sender DID ({}) has too many messages waiting for recipient ({})",
-            session.did_hash, next_did_hash
-        );
-        return Err(MediatorError::problem(
-            95,
-            &session.session_id,
-            Some(msg.id.to_string()),
-            ProblemReportSorter::Error,
-            ProblemReportScope::Protocol,
-            "limits.queue.peer",
-            "Too many messages already waiting for this recipient",
-            vec![],
-            StatusCode::SERVICE_UNAVAILABLE,
-        ));
-    }
-    Ok(())
-}
-
-/// Reject the forward when the sender already has too many messages queued.
-/// `ephemeral` forwards (live-stream only) bypass the queue accounting.
-///
-/// A **coarse ceiling only** — see [`validate_peer_queue_limit`], which is the
-/// gate that distinguishes flooding from fan-out. This one cannot, so its
-/// default sits high enough not to catch legitimate fan-out. It is deliberately
-/// not the mediator's storage bound either: every queued message is counted in
-/// exactly one recipient's inbox, so the per-recipient caps already bound total
-/// storage on their own.
-fn validate_sender_queue_limit(
-    msg: &Message,
-    from_account: &Account,
-    attachment_count: usize,
-    ephemeral: bool,
-    state: &SharedData,
-    session: &Session,
-) -> Result<(), MediatorError> {
-    let send_limit = from_account
-        .queue_send_limit
-        .unwrap_or(state.config.limits.queued_send_messages_soft);
-    if queue_at_capacity(
-        from_account.send_queue_count,
-        attachment_count,
-        send_limit,
-        ephemeral,
-    ) {
-        warn!(
-            "Sender DID ({}) has too many messages waiting to be delivered",
-            session.did_hash
-        );
-        return Err(MediatorError::problem(
-            61,
-            &session.session_id,
-            Some(msg.id.to_string()),
-            ProblemReportSorter::Error,
-            ProblemReportScope::Protocol,
-            "limits.queue.sender",
-            "Sender has too many messages waiting to be delivered",
-            vec![],
-            StatusCode::SERVICE_UNAVAILABLE,
-        ));
-    }
-    Ok(())
-}
-
-/// Reject the forward when the recipient (next hop) already has too many
-/// messages queued. Bypassed for `ephemeral` forwards.
-fn validate_recipient_queue_limit(
-    msg: &Message,
-    next_account: &Account,
-    next_did_hash: &str,
-    attachment_count: usize,
-    ephemeral: bool,
-    state: &SharedData,
-    session: &Session,
-) -> Result<(), MediatorError> {
-    let recv_limit = next_account
-        .queue_receive_limit
-        .unwrap_or(state.config.limits.queued_receive_messages_soft);
-    if queue_at_capacity(
-        next_account.receive_queue_count,
-        attachment_count,
-        recv_limit,
-        ephemeral,
-    ) {
-        warn!(
-            "Next DID ({}) has too many messages waiting to be delivered",
-            next_did_hash
-        );
-        return Err(MediatorError::problem(
-            62,
-            &session.session_id,
-            Some(msg.id.to_string()),
-            ProblemReportSorter::Error,
-            ProblemReportScope::Protocol,
-            "limits.queue.recipient",
-            "Recipient (next) has too many messages waiting to be delivered",
-            vec![],
-            StatusCode::SERVICE_UNAVAILABLE,
-        ));
-    }
-    Ok(())
 }
 
 /// Decode the first attachment of a forward into its inner DIDComm payload.
@@ -910,7 +772,7 @@ pub(crate) async fn process(
         // both this and the coarse sender total would fire, and `limits.queue.peer`
         // is the one that tells the operator which relationship is at fault.
         validate_peer_queue_limit(
-            msg,
+            Some(msg.id.as_str()),
             &from_account.did_hash,
             &next_did_hash,
             attachments.len(),
@@ -919,9 +781,9 @@ pub(crate) async fn process(
             session,
         )
         .await?;
-        validate_sender_queue_limit(msg, &from_account, attachments.len(), ephemeral, state, session)?;
+        validate_sender_queue_limit(Some(msg.id.as_str()), &from_account, attachments.len(), ephemeral, state, session)?;
         validate_recipient_queue_limit(
-            msg,
+            Some(msg.id.as_str()),
             &next_account,
             &next_did_hash,
             attachments.len(),
@@ -1224,8 +1086,8 @@ async fn service_endpoint_for_remote(
 #[cfg(test)]
 mod tests {
     use super::{
-        EndpointHop, classify_endpoint, didcomm_endpoints, parse_next_did, queue_at_capacity,
-        relay_peer_trusted, relay_sender_acls, rewrap_inner_attachment, uri_points_at_self,
+        EndpointHop, classify_endpoint, didcomm_endpoints, parse_next_did, relay_peer_trusted,
+        relay_sender_acls, rewrap_inner_attachment, uri_points_at_self,
     };
     use crate::common::session::Session;
     use crate::server::{compute_self_authorities_from, normalize_host};
@@ -1289,20 +1151,6 @@ mod tests {
         )
         .finalize();
         assert!(rewrap_inner_attachment("did:peer:this_mediator", &msg).is_none());
-    }
-
-    #[test]
-    fn queue_at_capacity_logic() {
-        // `-1` means unlimited — never at capacity, even when massively over.
-        assert!(!queue_at_capacity(1_000, 1_000, -1, false));
-        // Ephemeral (live-stream) forwards bypass queue accounting entirely.
-        assert!(!queue_at_capacity(1_000, 1_000, 10, true));
-        // Strictly under the limit.
-        assert!(!queue_at_capacity(5, 4, 10, false)); // 9 < 10
-        // At the limit (>=) is rejected.
-        assert!(queue_at_capacity(5, 5, 10, false)); // 10 >= 10
-        // Over the limit.
-        assert!(queue_at_capacity(20, 1, 10, false)); // 21 >= 10
     }
 
     #[test]

@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased (0.28.0) — the queue gates reach direct delivery
+
+The three queue-depth gates lived in `protocols::routing`, which exists only in
+a `didcomm` build and is reached only by a `forward`. Direct delivery — a client
+handing the mediator an already-packed envelope for a local DID — and the TSP
+bridge stored to a recipient's inbox with **no depth limit of any kind**: not
+the sender total, not the recipient total, and not the per-relationship count
+added in 0.27.0. A sender on that path could fill any inbox without bound, and
+the VTI-29 fix did not reach it.
+
+The gates move to `messages::queue_limits`, outside the `didcomm` gate, and
+identify a message by id rather than by a parsed `Message` — the direct path
+carries an opaque envelope. Direct delivery and the TSP bridge now run all
+three before storing.
+
+**Mediator-generated replies stay exempt**, and that is load-bearing rather
+than a convenience: they are how a client is told its queue is full. Gating
+them would turn a full inbox into an unreportable one, leaving the peer with a
+silence it cannot distinguish from a dead mediator. The exemption falls out of
+where the check sits — the `Envelope` arm is client traffic, the `Message` arm
+is the mediator's own.
+
+Breaking for operators: traffic on the direct path that was previously always
+accepted can now be refused with `limits.queue.peer`,
+`limits.queue.sender` or `limits.queue.recipient`.
+
 ## Unreleased (0.27.0) — forwards are gated per relationship
 
 A sender was refused with `limits.queue.sender` once its per-DID send total

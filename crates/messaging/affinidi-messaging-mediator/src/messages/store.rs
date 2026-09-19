@@ -188,12 +188,30 @@ pub(crate) async fn store_message(
                 }
                 WrapperType::Envelope(to_did, message, expiry) => {
                     // Message is already packed, likely a direct delivery from a client
+                    //
+                    // Queue gates apply here and NOT to the `Message` arm
+                    // above, whose sender is the mediator itself: those are the
+                    // replies that tell a client its queue is full, so gating
+                    // them would make a full inbox an unreportable one. This
+                    // arm is client traffic, and before this it reached the
+                    // store with no depth limit at all — the hole that let a
+                    // direct sender fill any inbox without bound, and that the
+                    // per-relationship gate for VTI-29 did not reach.
+                    let to_hash = digest(to_did);
+                    crate::messages::queue_limits::validate_store_queue_limits(
+                        state,
+                        session,
+                        None,
+                        &session.did_hash,
+                        &to_hash,
+                    )
+                    .await?;
                     match _store_message(
                         state,
                         session,
                         response,
                         message,
-                        &digest(to_did),
+                        &to_hash,
                         Some(&session.did_hash),
                         *expiry,
                     )

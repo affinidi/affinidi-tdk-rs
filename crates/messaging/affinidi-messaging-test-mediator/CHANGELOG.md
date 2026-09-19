@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (0.9.3) — `TestMediatorBuilder::queue_send_limit_per_peer`
+
+Sets `limits.queued_send_messages_per_peer`, so a test can reach the
+`limits.queue.peer` refusal in a handful of sends rather than fifty. `-1`
+disables the gate.
+
+Added for the direct-delivery queue tests in mediator 0.28.0. Note the
+mediator's existing convention when choosing a value: `queue_at_capacity`
+refuses at `queued + incoming >= limit`, so a limit of L admits L-1.
+
 ## Unreleased (0.9.2) — `mediator` 0.27
 
 Follows the mediator's per-relationship forward gate. No source change here

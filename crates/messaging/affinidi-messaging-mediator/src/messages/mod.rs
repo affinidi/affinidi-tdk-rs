@@ -97,6 +97,7 @@ pub mod inbound;
 pub mod inbound_v1;
 #[cfg(feature = "didcomm")]
 pub mod protocols;
+pub(crate) mod queue_limits;
 pub(crate) mod store;
 #[cfg(feature = "didcomm-v1")]
 pub mod v1_mediation;
