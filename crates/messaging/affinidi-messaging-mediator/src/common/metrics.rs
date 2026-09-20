@@ -203,6 +203,46 @@ pub mod names {
     /// available failure.
     pub const QUEUE_SURVEY_TRUNCATED: &str = "queue_survey_truncated";
 
+    // ── Delivery state ──────────────────────────────────────────────────────
+    //
+    // Defined in `mediator-common` beside the code that emits them, and
+    // re-exported here so every metric name is still findable in one place.
+
+    /// counter: Messages whose expiry was brought forward because they had
+    /// been delivered (`limits.delivered_expiry_seconds`).
+    ///
+    /// Absent on a default deployment, where that limit is `0` and the
+    /// shortening is off — the series is not emitted at all rather than
+    /// emitted as a flat zero, because those mean different things.
+    pub use affinidi_messaging_mediator_common::store::delivery_metrics::DELIVERED_EXPIRY_ADVANCED as MESSAGES_DELIVERED_EXPIRY_ADVANCED_TOTAL;
+    /// counter: Messages handed to a recipient for the **first** time.
+    ///
+    /// Paired with [`MESSAGES_REDELIVERED_TOTAL`]: the ratio between them is
+    /// how much of a deployment's pickup traffic is re-doing work it has
+    /// already done.
+    pub use affinidi_messaging_mediator_common::store::delivery_metrics::FIRST_DELIVERED as MESSAGES_FIRST_DELIVERED_TOTAL;
+    /// counter: Handovers of a message already delivered at least
+    /// `POISON_ATTEMPTS` times.
+    ///
+    /// **Classification only — nothing is evicted because of it.** `attempts`
+    /// is driven by the recipient, which decides when to fetch, so a threshold
+    /// on it is something a recipient can reach at will. Making eviction more
+    /// aggressive on that basis would let a recipient destroy a sender's
+    /// messages by doing nothing but collecting them repeatedly, so this
+    /// counts and reports rather than acting.
+    ///
+    /// What it is good for is telling apart two failures that look identical
+    /// on a depth graph: a recipient that never came back, and a recipient
+    /// that keeps taking a message and never finishing with it.
+    pub use affinidi_messaging_mediator_common::store::delivery_metrics::POISON_SUSPECTED as MESSAGES_POISON_SUSPECTED_TOTAL;
+    /// counter: Handovers of a message that had already been delivered.
+    ///
+    /// Normal in small numbers — a reconnect, a restart, a client that polls
+    /// before acknowledging. A sustained rate means messages are being
+    /// collected and not released, which is the shape that fills a sender's
+    /// queue with work that is already done.
+    pub use affinidi_messaging_mediator_common::store::delivery_metrics::REDELIVERED as MESSAGES_REDELIVERED_TOTAL;
+
     // ── Redis stored functions ──────────────────────────────────────────────
 
     /// gauge: whether the Lua library the deployment loads is the one this

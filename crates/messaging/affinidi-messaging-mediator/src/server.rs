@@ -582,6 +582,7 @@ pub async fn serve_internal(
             store.clone(),
             &config.streaming_uuid,
             ws_send_budget.clone(),
+            config.limits.delivered_expiry_seconds,
         ))
     } else {
         None

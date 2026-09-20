@@ -293,6 +293,10 @@ pub struct StreamingTask {
     pub channel: mpsc::Sender<StreamingUpdate>,
     /// Global byte pool shared by every connection's send queue.
     pub send_budget: WsSendBudget,
+    /// `limits.delivered_expiry_seconds`, carried so the redelivery drain
+    /// records handovers on the same terms as every other delivery path. `0`
+    /// leaves expiry untouched, which is the default.
+    pub delivered_expiry_seconds: u64,
 }
 
 impl StreamingTask {
@@ -316,6 +320,7 @@ impl StreamingTask {
         database: Arc<dyn MediatorStore>,
         mediator_uuid: &str,
         send_budget: WsSendBudget,
+        delivered_expiry_seconds: u64,
     ) -> Self {
         // Control-plane channel (register/start/stop/deregister). Carries no
         // message bodies — a handful of small structs — so a slot count is the
@@ -325,6 +330,7 @@ impl StreamingTask {
             channel: tx,
             uuid: mediator_uuid.to_string(),
             send_budget,
+            delivered_expiry_seconds,
         };
         let rx = Arc::new(Mutex::new(rx));
 
@@ -627,6 +633,7 @@ impl StreamingTask {
                     did_hash.to_string(),
                     session_id.to_string(),
                     Arc::clone(replay_in_progress),
+                    self.delivered_expiry_seconds,
                 );
             } else {
                 debug!(
@@ -847,6 +854,7 @@ impl StreamingTask {
                     value.did_hash.clone(),
                     new_session_id.to_string(),
                     Arc::clone(replay_in_progress),
+                    self.delivered_expiry_seconds,
                 );
             } else {
                 debug!(
@@ -875,6 +883,7 @@ fn spawn_inbox_redelivery(
     did_hash: String,
     session_id: String,
     replay_in_progress: Arc<DashSet<String>>,
+    delivered_expiry_seconds: u64,
 ) {
     tokio::spawn(async move {
         let mut start_id: Option<String> = None;
@@ -892,6 +901,7 @@ fn spawn_inbox_redelivery(
                     &did_hash,
                     &options,
                     affinidi_messaging_mediator_common::time::unix_timestamp_millis() as u64,
+                    delivered_expiry_seconds,
                 )
                 .await
             {
@@ -976,6 +986,7 @@ mod tests {
             // Generous budget: these tests exercise registration/redelivery, not
             // buffer exhaustion (which `ws_budget` covers directly).
             send_budget: WsSendBudget::new(16 * 1024 * 1024),
+            delivered_expiry_seconds: 0,
         }
     }
 

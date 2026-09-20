@@ -1,5 +1,14 @@
 # Affinidi Messaging Mediator Config
 
+## Unreleased (0.4.1) — `delivered_expiry_seconds`
+
+A new `[limits]` key, defaulted to `"0"` and overridable with
+`LIMIT_DELIVERED_EXPIRY_SECONDS`. `0` means a delivered message expires no
+differently from any other, which is the historical behaviour.
+
+`#[serde(default)]`, so an existing `mediator.toml` that has never heard of it
+loads unchanged.
+
 ## Unreleased (0.4.0) — `queued_send_messages_per_peer`
 
 Adds the per-relationship outbound limit to `[limits]`. It carries a

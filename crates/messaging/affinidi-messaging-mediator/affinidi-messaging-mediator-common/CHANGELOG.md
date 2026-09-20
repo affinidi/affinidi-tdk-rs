@@ -1,5 +1,56 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.9) — a delivered message can expire on its own, shorter clock
+
+A message the recipient has collected but not acknowledged was held for the
+full `message_expiry_seconds` — and held **against its sender**, counting
+toward that sender's queue-depth limits the whole time. For a recipient that
+collected it and simply never acknowledged, that is a week of a sender's
+allowance spent on work that is already done. It is the shape reported upstream
+as an outbound queue that never drained, seen from the other end.
+
+`mark_delivered` now takes `delivered_ttl_secs`: on a message's **first**
+handover it brings that message's expiry forward to `now + ttl`, if that is
+sooner. `0` disables it and is the default.
+
+**No new index and no new sweeper.** The entry is added to the existing expiry
+index at the earlier slot, and the existing sweeper deletes it there. Added
+rather than *moved*, because removing the original would need each backend to
+know its own prior expiry — which the Redis metadata hash does not carry — and
+is unnecessary: every sweeper already counts a message that is gone as
+`already_deleted`. The Redis backend has always behaved this way anyway, since
+its stored `delete_message` never removed the expiry entry either.
+
+**Only the first delivery moves it.** A redelivery must not keep pushing the
+deadline out, or a client that reconnects often would pin its sender's
+allowance indefinitely — the mirror of the bug being fixed. And a message that
+already expires sooner keeps its own deadline: a client-set expiry is a promise
+this must not extend.
+
+### Poison messages are classified, not evicted
+
+`POISON_ATTEMPTS` (5) and a `messages_poison_suspected_total` counter
+distinguish two failures that look identical on a depth graph: a recipient that
+never came back, and one that keeps collecting a message and never finishing
+with it.
+
+Nothing is evicted on that basis, and the restraint is the point. `attempts` is
+driven by the recipient, which decides when to fetch, so a threshold on it is
+one a recipient can reach at will — evicting on it would let a recipient
+destroy a *sender's* messages by doing nothing but collecting them repeatedly.
+Any future use must be `attempts >= N` **AND** an age the recipient does not
+control, never `OR`.
+
+`mark_delivered` returns a `DeliveryMarkReport`, published as
+`messages_first_delivered_total`, `messages_redelivered_total`,
+`messages_poison_suspected_total` and
+`messages_delivered_expiry_advanced_total`. Only non-zero fields are emitted,
+so a deployment with the shortening off never emits that series rather than
+emitting a flat zero — the two mean different things.
+
+Breaking: `MediatorStore::mark_delivered` and `fetch_messages_delivering` gain
+a parameter, and `mark_delivered` returns a report instead of `()`.
+
 ## Unreleased (0.16.8) — the `attempts` threshold must be a conjunction
 
 Documentation only.

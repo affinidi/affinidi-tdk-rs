@@ -57,9 +57,10 @@ use affinidi_messaging_mediator_common::{
     circuit_breaker::CircuitBreaker,
     errors::MediatorError,
     store::{
-        DeletionAuthority, DeliveryDecision, DeliveryState, ExpiryReport, ForwardQueueEntry,
-        InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats, PubSubRecord, Session,
-        SessionState, SessionSweepReport, StatCounter, StoreHealth, StreamingClientState, ops,
+        DeletionAuthority, DeliveryDecision, DeliveryMarkReport, DeliveryState, ExpiryReport,
+        ForwardQueueEntry, InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats,
+        POISON_ATTEMPTS, PubSubRecord, Session, SessionState, SessionSweepReport, StatCounter,
+        StoreHealth, StreamingClientState, ops,
     },
     types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
@@ -1108,7 +1109,13 @@ impl MediatorStore for FjallStore {
         Ok(())
     }
 
-    async fn mark_delivered(&self, msg_ids: &[String], now_ms: u64) -> Result<(), MediatorError> {
+    async fn mark_delivered(
+        &self,
+        msg_ids: &[String],
+        now_ms: u64,
+        delivered_ttl_secs: u64,
+    ) -> Result<DeliveryMarkReport, MediatorError> {
+        let mut report = DeliveryMarkReport::default();
         // One batch for the whole pickup rather than a write per message: a
         // pickup is up to `limit` messages and this is bookkeeping alongside
         // it, not the work itself.
@@ -1127,8 +1134,32 @@ impl MediatorStore for FjallStore {
                 continue;
             };
             let mut stored: StoredMessage = Self::decode(&raw)?;
+            let first_delivery = stored.first_delivered_at_ms.is_none();
+            if first_delivery {
+                report.first_delivered += 1;
+            } else {
+                report.redelivered += 1;
+                if stored.delivery_attempts >= POISON_ATTEMPTS {
+                    report.poison_suspected += 1;
+                }
+            }
             stored.first_delivered_at_ms.get_or_insert(now_ms);
             stored.delivery_attempts = stored.delivery_attempts.saturating_add(1);
+
+            // Only the first delivery brings the deadline forward, and only
+            // when it is genuinely sooner. A redelivery must not keep pushing
+            // it out, and a message that already expires sooner keeps its own
+            // deadline — a client-set expiry is a promise this must not extend.
+            if first_delivery && delivered_ttl_secs > 0 {
+                let deadline = now_ms / 1_000 + delivered_ttl_secs;
+                if stored.expires_at == 0 || deadline < stored.expires_at {
+                    // Added, not moved: the original entry stays and resolves
+                    // to `already_deleted` when the sweeper reaches it.
+                    batch.insert(&self.expiry, expiry_key(deadline, id), Vec::<u8>::new());
+                    report.expiry_advanced += 1;
+                }
+            }
+
             batch.insert(&self.messages, key, Self::encode(&stored)?);
             wrote = true;
         }
@@ -1138,7 +1169,7 @@ impl MediatorStore for FjallStore {
                 .commit()
                 .map_err(|e| Self::db_err("mark_delivered:commit", e))?;
         }
-        Ok(())
+        Ok(report)
     }
 
     async fn delivery_state(&self, msg_id: &str) -> Result<Option<DeliveryState>, MediatorError> {
@@ -4232,11 +4263,11 @@ mod tests {
         assert_eq!(state.attempts, 0);
 
         store
-            .mark_delivered(std::slice::from_ref(&id), 1_000)
+            .mark_delivered(std::slice::from_ref(&id), 1_000, 0)
             .await
             .expect("mark");
         store
-            .mark_delivered(std::slice::from_ref(&id), 5_000)
+            .mark_delivered(std::slice::from_ref(&id), 5_000, 0)
             .await
             .expect("mark");
 
@@ -4252,6 +4283,99 @@ mod tests {
              so a reconnecting client must not reset its own clock"
         );
         assert_eq!(state.attempts, 2);
+    }
+
+    /// Parity with `memory_store`: the two backends must agree on when a
+    /// delivered message expires, or a deployment's durability depends on
+    /// which backend it happens to run. Mirrors
+    /// `a_delivered_message_expires_on_the_shorter_clock` there.
+    #[tokio::test]
+    async fn a_delivered_message_expires_on_the_shorter_clock() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        let alice = hash("alice");
+        let bob = hash("bob");
+        for did in [&alice, &bob] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        let week = 7 * 24 * 60 * 60;
+        let id = store
+            .store_message("s", "hello", &bob, Some(&alice), week, 0)
+            .await
+            .expect("store");
+
+        let report = store
+            .mark_delivered(std::slice::from_ref(&id), 0, 3_600)
+            .await
+            .expect("mark");
+        assert_eq!(report.first_delivered, 1);
+        assert_eq!(report.expiry_advanced, 1);
+
+        assert_eq!(
+            store
+                .sweep_expired_messages(3_599, &hash("admin"))
+                .await
+                .expect("sweep")
+                .expired,
+            0,
+            "still held before its shortened deadline"
+        );
+        assert_eq!(
+            store
+                .sweep_expired_messages(3_600, &hash("admin"))
+                .await
+                .expect("sweep")
+                .expired,
+            1,
+            "gone at the shortened deadline, not in a week"
+        );
+    }
+
+    /// A redelivery must not re-arm the deadline — a client that reconnects
+    /// often would otherwise pin its sender's allowance indefinitely, which is
+    /// the mirror of the problem this feature fixes.
+    #[tokio::test]
+    async fn a_redelivery_does_not_push_the_deadline_out() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        let alice = hash("alice");
+        let bob = hash("bob");
+        for did in [&alice, &bob] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        let week = 7 * 24 * 60 * 60;
+        let id = store
+            .store_message("s", "hello", &bob, Some(&alice), week, 0)
+            .await
+            .expect("store");
+
+        store
+            .mark_delivered(std::slice::from_ref(&id), 0, 3_600)
+            .await
+            .expect("first");
+        let report = store
+            .mark_delivered(std::slice::from_ref(&id), 3_000_000, 3_600)
+            .await
+            .expect("redelivery");
+        assert_eq!(report.first_delivered, 0);
+        assert_eq!(report.redelivered, 1);
+        assert_eq!(report.expiry_advanced, 0);
+
+        assert_eq!(
+            store
+                .sweep_expired_messages(3_600, &hash("admin"))
+                .await
+                .expect("sweep")
+                .expired,
+            1,
+            "the ORIGINAL shortened deadline still holds"
+        );
     }
 
     /// Records written before these fields existed are on disk and must still
@@ -4283,7 +4407,7 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let store = FjallStore::open(dir.path()).expect("open");
         store
-            .mark_delivered(&["never-existed".to_string()], 1_000)
+            .mark_delivered(&["never-existed".to_string()], 1_000, 0)
             .await
             .expect("marking an absent message must not fail a delivery");
         assert!(

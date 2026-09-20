@@ -80,7 +80,7 @@ pub async fn inbox_fetch_handler(
             }
 
         // Fetch messages if possible
-        let mut results = state.database.fetch_messages_delivering(&session.session_id, &session.did_hash, &body, state.clock.unix_millis() as u64).await.map_err(|e| {MediatorError::problem_with_log(
+        let mut results = state.database.fetch_messages_delivering(&session.session_id, &session.did_hash, &body, state.clock.unix_millis() as u64, state.config.limits.delivered_expiry_seconds).await.map_err(|e| {MediatorError::problem_with_log(
             14, session.session_id.clone(), None,
             ProblemReportSorter::Error, ProblemReportScope::Protocol,
             "me.res.storage.error",

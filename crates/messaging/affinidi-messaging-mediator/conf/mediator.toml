@@ -370,6 +370,35 @@ local_max_acl = "1000"
 ### recipients that poll infrequently and must not miss messages.
 message_expiry_seconds = "604800"
 
+### Env: LIMIT_DELIVERED_EXPIRY_SECONDS
+### TTL in seconds for a message that has ALREADY been handed to its recipient,
+### counted from that first handover. "0" (the default) means no different from
+### any other message.
+###
+### Why you might set it: a message the recipient has collected but not
+### acknowledged is held for the full `message_expiry_seconds` above, and held
+### AGAINST ITS SENDER, counting toward that sender's queue-depth limits the
+### whole time. For a recipient that collected it and simply never
+### acknowledged, that is a week of a sender's allowance spent on work that is
+### already done.
+###
+### Why it is off by default: shortening it is a real reduction in durability,
+### not a free win. A message can be marked delivered and still not have
+### reached an application — the delivery layer deliberately does NOT
+### acknowledge a message that reached no consumer, precisely so the mediator
+### redelivers it. Set this shorter than a client's worst restart window and
+### you will destroy exactly those messages.
+###
+### Scale: if you set it, set it well above how long your slowest client can be
+### down and still expect its mail. 86400 (one day) is a reasonable starting
+### point for clients that reconnect within minutes; there is no safe value for
+### a fleet with clients that are offline for days.
+###
+### Watch `messages_delivered_expiry_advanced_total` to see how often it
+### applies, and `messages_poison_suspected_total` to tell a recipient that
+### never came back from one that keeps collecting and never finishing.
+delivered_expiry_seconds = "0"
+
 ### Env: LIMIT_MESSAGE_SIZE
 ### Maximum message size in bytes (1MB).
 ### Scale: raise for large-payload workloads; keep <= http_size and ws_size;

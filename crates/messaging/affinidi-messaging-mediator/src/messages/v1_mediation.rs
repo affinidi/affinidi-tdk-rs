@@ -350,6 +350,7 @@ async fn message_pickup(
                         delete_policy: FetchDeletePolicy::DoNotDelete,
                     },
                     state.clock.unix_millis() as u64,
+                    state.config.limits.delivered_expiry_seconds,
                 )
                 .await?;
 

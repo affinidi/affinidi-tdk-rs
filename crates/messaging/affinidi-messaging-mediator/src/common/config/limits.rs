@@ -15,6 +15,24 @@ pub struct LimitsConfig {
     pub listed_messages: usize,
     pub local_max_acl: usize,
     pub message_expiry_seconds: u64,
+    /// How long a message is kept after it has **first been handed to its
+    /// recipient**, in seconds. `0` disables the shortening entirely, which is
+    /// the default and the historical behaviour.
+    ///
+    /// A message the recipient has collected but not acknowledged is held for
+    /// the full [`message_expiry_seconds`](Self::message_expiry_seconds) — and
+    /// held **against its sender**, counting toward that sender's queue-depth
+    /// limits the whole time. For a recipient that collected it and simply did
+    /// not acknowledge, that is a week of a sender's allowance spent on work
+    /// that is already done.
+    ///
+    /// It is off by default because shortening it is a real reduction in
+    /// durability, not a free win: a message can be marked delivered and still
+    /// not have reached an application — the delivery layer deliberately does
+    /// not acknowledge a message that reached no consumer, so that the mediator
+    /// redelivers it. Setting this shorter than a client's worst restart
+    /// window will destroy exactly those messages.
+    pub delivered_expiry_seconds: u64,
     pub message_size: usize,
     /// Per-relationship outbound cap: how many messages one sender may have
     /// queued for one *specific* recipient. This is the gate that catches
@@ -106,6 +124,7 @@ impl Default for LimitsConfig {
             listed_messages: 100,
             local_max_acl: 1_000,
             message_expiry_seconds: 604_800,
+            delivered_expiry_seconds: 0,
             message_size: 1_048_576,
             queued_send_messages_per_peer: 50,
             queued_send_messages_soft: 2_000,
@@ -191,6 +210,10 @@ impl std::convert::TryFrom<LimitsConfigRaw> for LimitsConfig {
             local_max_acl: raw.local_max_acl.parse().unwrap_or_else(|_| {
                 warn_default("local_max_acl", "1000");
                 1_000
+            }),
+            delivered_expiry_seconds: raw.delivered_expiry_seconds.parse().unwrap_or_else(|_| {
+                warn_default("delivered_expiry_seconds", "0");
+                0
             }),
             message_expiry_seconds: raw.message_expiry_seconds.parse().unwrap_or_else(|_| {
                 warn_default("message_expiry_seconds", "604800");
@@ -338,6 +361,7 @@ mod tests {
             http_size: "8192".to_string(),
             listed_messages: "50".to_string(),
             local_max_acl: "500".to_string(),
+            delivered_expiry_seconds: "0".to_string(),
             message_expiry_seconds: "3600".to_string(),
             message_size: "2048".to_string(),
             queued_send_messages_per_peer: "50".to_string(),
@@ -398,6 +422,7 @@ mod tests {
             http_size: "10485760".to_string(),
             listed_messages: "100".to_string(),
             local_max_acl: "1000".to_string(),
+            delivered_expiry_seconds: "0".to_string(),
             message_expiry_seconds: "10080".to_string(),
             message_size: "1048576".to_string(),
             queued_send_messages_per_peer: "50".to_string(),
