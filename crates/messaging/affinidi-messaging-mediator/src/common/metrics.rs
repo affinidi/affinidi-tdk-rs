@@ -205,18 +205,31 @@ pub mod names {
 
     // ── Redis stored functions ──────────────────────────────────────────────
 
-    /// gauge: 1 when the Lua library the running Redis holds matches the one
-    /// compiled into this binary, 0 when it does not.
+    /// gauge: whether the Lua library the deployment loads is the one this
+    /// binary was built against — `1` match, `0` mismatch, `-1` the check
+    /// could not be performed.
     ///
-    /// Zero does **not** mean the library failed to load — a failed load is a
+    /// `0` does **not** mean the library failed to load — a failed load is a
     /// startup error and the mediator never gets here. It means the load
     /// succeeded against a *different* file: `functions_file` points at a copy
     /// from another release. That is a silent downgrade, because the function
     /// names are unchanged between versions and only the bodies differ, so
-    /// every call still succeeds and simply does less. #828's per-relationship
-    /// accounting is the worked example — an older library never writes
-    /// `PEER_Q`, so `peer_queue_count` reads 0 for ever and the gate that
-    /// depends on it is inert while appearing healthy.
+    /// every call still succeeds and simply does less. The per-relationship
+    /// accounting added in 0.27.0 is the worked example — an older library
+    /// never writes `PEER_Q`, so `peer_queue_count` reads 0 for ever and the
+    /// gate that depends on it is inert while appearing healthy.
+    ///
+    /// `-1` is a distinct state on purpose. A check that could not read its
+    /// file has reached no verdict, and collapsing that into either `0` or `1`
+    /// gives one value two meanings — one benign, one not. Alert on `== 0`
+    /// for a wrong library and on `< 0` for a check that is not running; a
+    /// series that is merely absent is a third thing again.
+    ///
+    /// A non-`1` value also shows as `degraded` on `/readyz` (200, in
+    /// rotation) via the `redis_stored_functions` component. It is
+    /// deliberately not load-bearing: what it reports is a *fairness* control
+    /// being inert, not an authorization one, so nothing becomes reachable
+    /// that was not already.
     pub const REDIS_FUNCTIONS_MATCH_BUILD: &str = "redis_functions_match_build";
 
     // ── Accounts ────────────────────────────────────────────────────────────

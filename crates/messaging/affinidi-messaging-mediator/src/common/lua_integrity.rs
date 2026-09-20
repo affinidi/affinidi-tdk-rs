@@ -41,14 +41,26 @@
 //!
 //! # It reports, it does not refuse
 //!
-//! A mismatch logs at `error` and drives
+//! A mismatch logs at `error`, drives
 //! [`REDIS_FUNCTIONS_MATCH_BUILD`](crate::common::metrics::names::REDIS_FUNCTIONS_MATCH_BUILD)
-//! to 0; it does not stop the mediator starting. An operator who has
-//! deliberately customised the library, or who is mid-rollout between two
-//! releases, should get a loud warning rather than a node that will not boot —
-//! refusing to start would turn an observability gap into an outage, which is
-//! the wrong trade for a check whose entire purpose is to make a silent
-//! problem visible.
+//! to 0, and shows as `degraded` on `/readyz` — 200, still in rotation. It
+//! does not stop the mediator starting.
+//!
+//! **The reason is what the stale library actually costs, not the
+//! inconvenience of a failed boot.** `limits.queue.peer` is a fairness and
+//! resource-exhaustion control, not an authorization one. With an old library
+//! loaded that gate is inert, but the sender-total and recipient-total gates
+//! still apply and *nothing becomes reachable that was not already* — the
+//! failure is degraded fairness, not unauthorized access. That is what makes
+//! failing open defensible here, and it is deliberately narrower than "a
+//! refusal to boot would be an outage", which would equally justify failing
+//! open on an authorization check, where it would be wrong.
+//!
+//! The same reasoning fixes the readiness state: `degraded` keeps the instance
+//! serving and flags the condition, which is the existing meaning of that
+//! state rather than a new one invented here. Had this needed 503
+//! `not_ready`, the argument above would not hold and the check would belong
+//! at boot instead.
 
 use sha256::digest;
 
@@ -59,6 +71,12 @@ use sha256::digest;
 const BUILT_AGAINST: &str = include_str!("../../conf/atm-functions.lua");
 
 /// Outcome of comparing the deployment's library against the built-in one.
+///
+/// Three states, not two, and the third is the point. A check that folds "I
+/// looked and it differs" together with "I could not look" produces one value
+/// meaning two things — one benign, one not — which is the failure mode that
+/// makes a metric worse than no metric. Fail-open is only as good as its
+/// report, so the report has to distinguish them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LuaIntegrity {
     /// The file matches what this binary expects.
@@ -70,6 +88,37 @@ pub enum LuaIntegrity {
         /// Short digest of the library compiled into this binary.
         expected: String,
     },
+    /// The check could not be performed — the path is unreadable, missing, or
+    /// not something this process can open. **Not** evidence of a mismatch,
+    /// and deliberately not reported as one.
+    Unknown {
+        /// Why the file could not be read, for the log line.
+        reason: String,
+    },
+}
+
+impl LuaIntegrity {
+    /// Value for [`REDIS_FUNCTIONS_MATCH_BUILD`]: 1 match, 0 mismatch, -1
+    /// could-not-check.
+    ///
+    /// `-1` rather than a second metric so a dashboard cannot plot the gauge
+    /// and silently omit the case where it is uninformative — an alert on
+    /// `== 0` keeps meaning "wrong library", and `< 0` is visibly a different
+    /// condition rather than a gap in the series.
+    ///
+    /// [`REDIS_FUNCTIONS_MATCH_BUILD`]: crate::common::metrics::names::REDIS_FUNCTIONS_MATCH_BUILD
+    fn gauge_value(&self) -> f64 {
+        match self {
+            LuaIntegrity::Match => 1.0,
+            LuaIntegrity::Mismatch { .. } => 0.0,
+            LuaIntegrity::Unknown { .. } => -1.0,
+        }
+    }
+
+    /// Whether this outcome should show as `degraded` on `/readyz`.
+    pub fn is_healthy(&self) -> bool {
+        matches!(self, LuaIntegrity::Match)
+    }
 }
 
 /// Normalise before hashing so a checkout with CRLF line endings, or an editor
@@ -108,32 +157,32 @@ pub fn check(loaded: &str) -> LuaIntegrity {
     }
 }
 
-/// Run the check against the file at `path`, publish the gauge, and log.
+/// Run the check against the file at `path`, publish the gauge, log, and
+/// return the outcome so the caller can surface it on `/readyz`.
 ///
-/// A file that cannot be read is *not* reported as a mismatch — the caller
-/// loads the same path immediately afterwards and will fail properly there,
-/// and inventing a mismatch here would put a misleading digest in the log for
-/// what is really a missing file.
-pub fn check_and_report(path: &str) {
-    let Ok(loaded) = std::fs::read_to_string(path) else {
-        tracing::debug!(
-            functions_file = %path,
-            "could not read the stored-function file for the integrity check; \
-             leaving it to the loader to report"
-        );
-        return;
+/// A file that cannot be read is reported as [`LuaIntegrity::Unknown`], never
+/// as a mismatch: the caller loads the same path immediately afterwards and
+/// will fail properly there, and inventing a mismatch would put a misleading
+/// digest in the log for what is really a missing file.
+pub fn check_and_report(path: &str) -> LuaIntegrity {
+    let outcome = match std::fs::read_to_string(path) {
+        Ok(loaded) => check(&loaded),
+        Err(e) => LuaIntegrity::Unknown {
+            reason: e.to_string(),
+        },
     };
 
-    match check(&loaded) {
+    metrics::gauge!(crate::common::metrics::names::REDIS_FUNCTIONS_MATCH_BUILD)
+        .set(outcome.gauge_value());
+
+    match &outcome {
         LuaIntegrity::Match => {
-            metrics::gauge!(crate::common::metrics::names::REDIS_FUNCTIONS_MATCH_BUILD).set(1.0);
             tracing::info!(
                 functions_file = %path,
                 "stored-function library matches this build"
             );
         }
         LuaIntegrity::Mismatch { found, expected } => {
-            metrics::gauge!(crate::common::metrics::names::REDIS_FUNCTIONS_MATCH_BUILD).set(0.0);
             tracing::error!(
                 functions_file = %path,
                 found = %found,
@@ -146,8 +195,22 @@ pub fn check_and_report(path: &str) {
                  this release's conf/atm-functions.lua and restart."
             );
         }
+        LuaIntegrity::Unknown { reason } => {
+            tracing::warn!(
+                functions_file = %path,
+                reason = %reason,
+                "could not read the stored-function file to check it against this build — \
+                 this is NOT a mismatch, it is an unperformed check, and the gauge reports \
+                 -1 rather than a verdict it did not reach"
+            );
+        }
     }
+
+    outcome
 }
+
+/// Component name under which the outcome is published to `/readyz`.
+pub const COMPONENT: &str = "redis_stored_functions";
 
 #[cfg(test)]
 mod tests {
@@ -191,7 +254,70 @@ mod tests {
                 assert_eq!(found.len(), 12);
                 assert_eq!(expected.len(), 12);
             }
-            LuaIntegrity::Match => panic!("an unrelated file must not match"),
+            other => panic!("an unrelated file must not match: {other:?}"),
         }
+    }
+
+    /// An unreadable file is an *unperformed check*, not a verdict. Folding it
+    /// into `Mismatch` would raise a false alarm naming a digest that was
+    /// never computed; folding it into `Match` would report healthy for a file
+    /// nobody read. It gets its own state and its own gauge value.
+    #[test]
+    fn a_file_that_cannot_be_read_is_unknown_not_a_mismatch() {
+        let outcome = check_and_report("/nonexistent/atm-functions.lua");
+        assert!(matches!(outcome, LuaIntegrity::Unknown { .. }));
+        assert_eq!(outcome.gauge_value(), -1.0);
+        assert!(!outcome.is_healthy());
+    }
+
+    /// The three states map to three distinct gauge values, so an alert on
+    /// `== 0` keeps meaning "wrong library" and cannot be tripped by a check
+    /// that never ran.
+    #[test]
+    fn each_state_has_its_own_gauge_value() {
+        assert_eq!(LuaIntegrity::Match.gauge_value(), 1.0);
+        assert_eq!(
+            LuaIntegrity::Mismatch {
+                found: "a".into(),
+                expected: "b".into()
+            }
+            .gauge_value(),
+            0.0
+        );
+        assert_eq!(
+            LuaIntegrity::Unknown {
+                reason: "boom".into()
+            }
+            .gauge_value(),
+            -1.0
+        );
+    }
+
+    /// Only a match is healthy — both failure states show as `degraded` on
+    /// `/readyz`, and neither fails readiness.
+    #[test]
+    fn only_a_match_is_healthy() {
+        assert!(LuaIntegrity::Match.is_healthy());
+        assert!(
+            !LuaIntegrity::Mismatch {
+                found: "a".into(),
+                expected: "b".into()
+            }
+            .is_healthy()
+        );
+        assert!(
+            !LuaIntegrity::Unknown {
+                reason: "boom".into()
+            }
+            .is_healthy()
+        );
+    }
+
+    #[test]
+    fn checking_the_shipped_file_on_disk_reports_a_match() {
+        // The path the default config ships, resolved from this source file
+        // rather than the working directory.
+        let shipped = concat!(env!("CARGO_MANIFEST_DIR"), "/conf/atm-functions.lua");
+        assert_eq!(check_and_report(shipped), LuaIntegrity::Match);
     }
 }

@@ -59,11 +59,22 @@ writes `PEER_Q`, so `peer_queue_count` reads 0 for every relationship for ever
 and `limits.queue.peer` never fires, with nothing logged.
 
 Startup now compares the file at `database.functions_file` against the copy
-compiled into the binary and publishes `redis_functions_match_build`. A
-mismatch logs at `error` with both digests and the path. It **reports rather
-than refuses** — a node that will not boot over a config mismatch turns an
-observability gap into an outage, which is the wrong trade for a check that
-exists to make a silent problem visible.
+compiled into the binary and publishes `redis_functions_match_build`: `1`
+match, `0` mismatch, `-1` the check could not be performed. Three states
+because a check that could not read its file has reached no verdict, and
+collapsing that into either of the other two gives one value two meanings —
+one benign, one not. A mismatch logs at `error` with both digests and the
+path, and shows as `degraded` on `/readyz` (200, still in rotation) via a
+non-load-bearing `redis_stored_functions` component.
+
+It **reports rather than refuses**, and the reason is what a stale library
+actually costs. `limits.queue.peer` is a fairness and resource-exhaustion
+control, not an authorization one: with an old library loaded that gate is
+inert, but the sender-total and recipient-total gates still apply and nothing
+becomes reachable that was not already. The failure is degraded fairness, not
+unauthorized access. That is deliberately a narrower argument than "refusing to
+boot would be an outage", which would equally justify failing open on an
+authorization check — where it would be wrong.
 
 Presence checks and function-name listings were both considered and rejected:
 they report healthy for exactly the case that matters.
