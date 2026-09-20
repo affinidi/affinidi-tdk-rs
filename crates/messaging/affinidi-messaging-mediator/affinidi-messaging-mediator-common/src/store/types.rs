@@ -387,10 +387,27 @@ pub struct DeliveryState {
     ///
     /// Nothing acts on this today, which is why it is recorded as a plain
     /// observation. Before eviction or refusal is built on it, the threshold
-    /// needs pairing with something the recipient does *not* control — elapsed
-    /// time since [`first_delivered_at_ms`](Self::first_delivered_at_ms), say —
-    /// so that a recipient can at most bring forward an outcome that age was
-    /// going to reach anyway.
+    /// must be **conjoined** with something the recipient does *not* control:
+    ///
+    /// ```text
+    /// attempts >= N  AND  age_since_first_delivery >= T     // safe
+    /// attempts >= N  OR   age_since_first_delivery >= T     // NOT safe
+    /// ```
+    ///
+    /// The `AND` gives the property this section is about — a recipient can at
+    /// most bring forward an outcome that age was going to reach anyway. The
+    /// `OR` hands the whole hazard straight back, because the term the
+    /// recipient controls fires on its own. That is one word in the
+    /// implementation and near-invisible in review, which is why it is written
+    /// out here rather than left as "paired with".
+    ///
+    /// # Unsafe alone in both directions, for different reasons
+    ///
+    /// It can be wrong **low by accident** — a lost update between the fetch
+    /// and the mark undercounts, which is the direction that fails safe — and
+    /// wrong **high on purpose**, which is not. A number that can drift down by
+    /// accident and up by intent is not a counter, and code that treats it as
+    /// one will be wrong in whichever direction matters at the time.
     pub attempts: u32,
 }
 

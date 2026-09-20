@@ -1,5 +1,30 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.8) — the `attempts` threshold must be a conjunction
+
+Documentation only.
+
+`DeliveryState::attempts` already said it counts the recipient's behaviour and
+must be "paired with" something the recipient does not control. "Paired with"
+admits both readings, and only one is safe:
+
+```text
+attempts >= N  AND  age_since_first_delivery >= T     // safe
+attempts >= N  OR   age_since_first_delivery >= T     // NOT safe
+```
+
+The `AND` gives the property the section is about — a recipient can at most
+bring forward an outcome that age was going to reach anyway. The `OR` hands the
+whole hazard back, because the term the recipient controls fires on its own.
+One word in an implementation, near-invisible in review, so it is now written
+out.
+
+Also records that `attempts` is unsafe alone in **both** directions, for
+different reasons: wrong low by accident (a lost update between fetch and mark
+undercounts — the direction that fails safe) and wrong high on purpose (which
+does not). A number that drifts down by accident and up by intent is not a
+counter.
+
 ## Unreleased (0.16.7) — the mediator records when a message was handed over
 
 `MediatorStore` gains `mark_delivered`, `delivery_state` and
