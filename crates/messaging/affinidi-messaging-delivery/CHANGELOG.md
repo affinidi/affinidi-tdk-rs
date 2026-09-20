@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.1.17 — an ack that cannot be delivered is no longer dropped
+
+An ack is a delete at the mediator, and the dispatcher issues it over the
+transport the message arrived on. Two paths ended with no ack and no durable
+trace of that: the source transport was **gone** (logged at `debug`, dropped),
+or the ack call **failed** (logged at `warn`, dropped, no retry).
+
+Neither loses the message — the mediator still holds it and offers it again on
+the next pickup. But until that happens the message stays queued **against its
+sender**, counting toward the sender's queue-depth limits. With those limits now
+enforced on every path, a sender can be refused over messages its recipient
+processed days ago. That is the shape reported upstream as an outbound queue
+that never drained.
+
+An undeliverable ack is now parked and retried on its own clock — not on
+inbound traffic, since the transport that owes an ack is by definition the one
+that has gone quiet. Retries are **same-transport-only**: a transport id names a
+wire to a particular mediator, and an ack is a delete of a message id *at that
+mediator*, so replaying it elsewhere would at best do nothing and at worst
+delete an unrelated message sharing an id. A transport reinstalled under the
+same id — the ordinary reconnect — is the same wire and settles the parked ack.
+
+Bounded, and neither bound loses data: at most 4096 parked acks (past that the
+**oldest** goes, being the one most likely already settled by a redelivery), and
+an entry is abandoned after 5 minutes. Abandoning is safe for the same reason
+the original bug was survivable — the mediator still holds the message. What is
+not safe is doing it silently, so every abandonment is counted and logged.
+
+New `MessagingService::ack_stats() -> AckStats`: `acked`, `deferred`, `settled`,
+`abandoned`, `overflowed`, `no_consumer`, `pending`. Counters rather than
+metrics because this crate keeps a deliberately small dependency set; a host
+that scrapes Prometheus reads these and publishes them under its own names.
+
+`abandoned` is the number that matters — each one is a message the recipient
+handled that is still queued against its sender. `no_consumer` counts the
+deliberate no-ack arm, which is the contract working rather than a failure, and
+is counted for exactly that reason: a consumer that never subscribes otherwise
+produces a steady climb and no other symptom until the recipient's queue fills.
+
+Additive: no API removed, no behaviour change for a transport whose acks land.
+
 ## 0.1.16 — the outbox can be emptied
 
 `OutboxStore` had no way to remove anything. `put` upserted, state moved
