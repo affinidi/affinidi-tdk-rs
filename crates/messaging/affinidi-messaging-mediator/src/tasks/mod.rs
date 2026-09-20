@@ -5,6 +5,9 @@
 /// standalone binary in `mediator-processors` can reuse the same
 /// implementation; re-exported here for backward compatibility.
 pub use affinidi_messaging_mediator_common::tasks::forwarding as forwarding_processor;
+/// Point-in-time survey of per-DID queue depth and age, sampled by the
+/// statistics task.
+pub mod queue_survey;
 pub mod statistics;
 pub mod supervisor;
 /// Packs messages the mediator itself authors (the forwarding-failure problem

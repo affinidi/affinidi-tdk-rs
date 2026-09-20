@@ -135,6 +135,103 @@ pub mod names {
     /// counter: Requests rejected by rate limiter (label: scope = ip|did)
     pub const RATE_LIMITED_TOTAL: &str = "rate_limited_total";
 
+    // ── Queue depth ─────────────────────────────────────────────────────────
+    //
+    // Sampled once per statistics cycle by `tasks::queue_survey`. Until these
+    // existed the only queue a deployment could see was the forwarding one
+    // (`FORWARD_QUEUE_LENGTH`) — a per-DID inbox or outbox backing up was
+    // invisible until it crossed a limit and started refusing traffic, which
+    // is a page rather than an alert.
+
+    /// counter: Messages refused by a queue-depth gate (label: gate =
+    /// peer|sender|recipient), counted where the gate refuses in
+    /// `messages::queue_limits`.
+    ///
+    /// `peer` is the per-relationship cap and the one that moves first when a
+    /// single peer stops collecting; `sender` and `recipient` are the coarse
+    /// per-DID ceilings. A rising `peer` beside flat totals is one stuck
+    /// relationship. Rising `sender` means a DID is at its global ceiling,
+    /// which after the defaults moved to 2000/10000 should be rare enough to
+    /// alert on directly.
+    pub const QUEUE_LIMIT_REFUSALS_TOTAL: &str = "queue_limit_refusals_total";
+    /// gauge: Messages currently queued across surveyed accounts (label:
+    /// folder = inbox|outbox).
+    ///
+    /// Inbox and outbox count the *same* stored messages from the two ends —
+    /// a message is one recipient's inbox entry and one sender's outbox entry
+    /// — so they are not additive, and outbox is the lower of the two by
+    /// construction (anonymous senders have no outbox entry at all; see
+    /// [`QUEUE_OLDEST_AGE_SECONDS`]).
+    pub const QUEUE_DEPTH_MESSAGES: &str = "queue_depth_messages";
+    /// gauge: Bytes currently queued across surveyed accounts (label: folder
+    /// = inbox|outbox). Same non-additive caveat as [`QUEUE_DEPTH_MESSAGES`].
+    pub const QUEUE_DEPTH_BYTES: &str = "queue_depth_bytes";
+    /// gauge: Age in seconds of the oldest message still queued, across the
+    /// accounts probed this cycle (label: folder = inbox|outbox).
+    ///
+    /// **The signal for a queue that has stopped draining.** Depth alone
+    /// cannot distinguish a busy queue from a stuck one; age can. A value
+    /// climbing steadily toward `message_expiry_seconds` means nothing is
+    /// collecting and the only thing that will clear the queue is expiry.
+    ///
+    /// Two limits on what it sees, both by construction rather than by
+    /// accident. It covers only the accounts probed this cycle — the deepest
+    /// queues, capped at `MAX_AGE_PROBES` — so a shallow queue that is very
+    /// old can be missed while deeper ones exist. And the outbox series is
+    /// blind to anonymous senders: an outbox entry is only allocated when the
+    /// sender is known, so anonymous traffic appears in the inbox series
+    /// alone. Read the pair, not either half.
+    pub const QUEUE_OLDEST_AGE_SECONDS: &str = "queue_oldest_age_seconds";
+    /// gauge: Highest ratio of used-to-permitted queue depth seen on any
+    /// surveyed account (label: folder = inbox|outbox), where 1.0 means an
+    /// account is exactly at the limit at which it starts being refused.
+    ///
+    /// This is the early warning the refusal counters cannot be: it moves
+    /// before anything is refused. An account with no explicit limit is
+    /// measured against the configured default; an account set to unlimited
+    /// (`-1`) is excluded rather than counted as 0, since it has no ratio.
+    pub const QUEUE_MAX_SATURATION_RATIO: &str = "queue_max_saturation_ratio";
+    /// gauge: Accounts examined in the most recent survey.
+    pub const QUEUE_ACCOUNTS_SURVEYED: &str = "queue_accounts_surveyed";
+    /// gauge: 1 when the survey stopped at `MAX_ACCOUNTS_PER_SURVEY` before
+    /// reaching the end of the account list, 0 when it covered everything.
+    ///
+    /// Non-zero means the depth totals and the saturation maximum are lower
+    /// bounds rather than true values. It exists so a partial survey reports
+    /// itself instead of quietly under-reporting, which for a metric whose
+    /// job is to catch a queue nobody is watching would be the worst
+    /// available failure.
+    pub const QUEUE_SURVEY_TRUNCATED: &str = "queue_survey_truncated";
+
+    // ── Redis stored functions ──────────────────────────────────────────────
+
+    /// gauge: whether the Lua library the deployment loads is the one this
+    /// binary was built against — `1` match, `0` mismatch, `-1` the check
+    /// could not be performed.
+    ///
+    /// `0` does **not** mean the library failed to load — a failed load is a
+    /// startup error and the mediator never gets here. It means the load
+    /// succeeded against a *different* file: `functions_file` points at a copy
+    /// from another release. That is a silent downgrade, because the function
+    /// names are unchanged between versions and only the bodies differ, so
+    /// every call still succeeds and simply does less. The per-relationship
+    /// accounting added in 0.27.0 is the worked example — an older library
+    /// never writes `PEER_Q`, so `peer_queue_count` reads 0 for ever and the
+    /// gate that depends on it is inert while appearing healthy.
+    ///
+    /// `-1` is a distinct state on purpose. A check that could not read its
+    /// file has reached no verdict, and collapsing that into either `0` or `1`
+    /// gives one value two meanings — one benign, one not. Alert on `== 0`
+    /// for a wrong library and on `< 0` for a check that is not running; a
+    /// series that is merely absent is a third thing again.
+    ///
+    /// A non-`1` value also shows as `degraded` on `/readyz` (200, in
+    /// rotation) via the `redis_stored_functions` component. It is
+    /// deliberately not load-bearing: what it reports is a *fairness* control
+    /// being inert, not an authorization one, so nothing becomes reachable
+    /// that was not already.
+    pub const REDIS_FUNCTIONS_MATCH_BUILD: &str = "redis_functions_match_build";
+
     // ── Accounts ────────────────────────────────────────────────────────────
 
     /// gauge: Currently active authenticated sessions

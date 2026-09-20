@@ -4,6 +4,9 @@ pub mod config;
 pub mod did_rate_limiter;
 pub mod error_codes;
 pub mod jwt_auth;
+/// Startup check that the Redis stored-function library matches this build.
+#[cfg(feature = "redis-backend")]
+pub mod lua_integrity;
 pub mod metrics;
 pub mod request_id;
 pub mod request_metrics;

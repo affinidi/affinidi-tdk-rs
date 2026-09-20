@@ -18,7 +18,8 @@ use crate::{
         readiness_handler,
     },
     tasks::{
-        statistics::statistics, supervisor::TaskSupervisor, websocket_streaming::StreamingTask,
+        queue_survey::SurveyDefaults, statistics::statistics, supervisor::TaskSupervisor,
+        websocket_streaming::StreamingTask,
     },
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
@@ -271,6 +272,11 @@ pub async fn serve_internal(
     // streaming) all consume `Arc<dyn MediatorStore>`, so they run
     // unchanged regardless of which backend is in use.
     use affinidi_messaging_mediator_common::store::MediatorStore;
+    // Outcome of the stored-function integrity check, published to `/readyz`
+    // once the supervisor that owns the health registry exists. `None` on any
+    // build or backend where there are no stored functions to check.
+    #[cfg(feature = "redis-backend")]
+    let mut lua_integrity_outcome: Option<crate::common::lua_integrity::LuaIntegrity> = None;
     let store: Arc<dyn MediatorStore> = if let Some(store) = pre_built_store {
         // Initialise the store (no-op for Memory; opens partitions
         // for Fjall; loads Lua + runs migrations for Redis if a
@@ -335,6 +341,17 @@ pub async fn serve_internal(
                     "Loading LUA scripts into the database from file: {}",
                     functions_file
                 );
+                // Before loading, not after: the interesting failure is a file
+                // from another release, which loads perfectly and then does
+                // less than this build expects. Reporting it first means the
+                // warning sits directly above the "Loaded LUA scripts"
+                // success line it qualifies.
+                //
+                // Held for `/readyz` — the supervisor that owns the health
+                // registry does not exist yet at this point.
+                lua_integrity_outcome = Some(crate::common::lua_integrity::check_and_report(
+                    functions_file,
+                ));
                 store.load_scripts(functions_file).await.map_err(|e| {
                     error!("Failed to load LUA scripts: {e}");
                     e
@@ -384,15 +401,66 @@ pub async fn serve_internal(
     // loops with no shutdown `select!` — it aborts them on shutdown.
     let supervisor = TaskSupervisor::new(shutdown_token.clone());
 
+    // Surface the stored-function integrity check on `/readyz`.
+    //
+    // `load_bearing: false` is the whole argument for checking rather than
+    // refusing: this reports a *fairness* control being inert, not an
+    // authorization one, so the instance stays in rotation (200 `degraded`)
+    // and an operator sees the condition on a dashboard. A `Restarting` state
+    // is the registry's only way to say "not healthy" for something that is
+    // not a restartable task; the `last_error` beside it says what it means.
+    #[cfg(feature = "redis-backend")]
+    if let Some(outcome) = &lua_integrity_outcome
+        && !outcome.is_healthy()
+    {
+        use crate::tasks::supervisor::{ComponentHealth, ComponentState};
+        supervisor.registry().insert(
+            crate::common::lua_integrity::COMPONENT.to_string(),
+            ComponentHealth {
+                name: crate::common::lua_integrity::COMPONENT.to_string(),
+                load_bearing: false,
+                state: ComponentState::Restarting,
+                restarts: 0,
+                last_error: Some(match outcome {
+                    crate::common::lua_integrity::LuaIntegrity::Mismatch { found, expected } => {
+                        format!(
+                            "stored-function library does not match this build \
+                             (found {found}, expected {expected})"
+                        )
+                    }
+                    crate::common::lua_integrity::LuaIntegrity::Unknown { reason } => {
+                        format!("stored-function library could not be checked: {reason}")
+                    }
+                    crate::common::lua_integrity::LuaIntegrity::Match => unreachable!(),
+                }),
+                since: chrono::Utc::now(),
+            },
+        );
+    }
+
     // Statistics task — non-load-bearing (metrics only). Runs against any
     // backend via the trait.
     {
         let store = store.clone();
         let tags = config.tags.clone();
+        let stats_clock = clock.clone();
+        // Defaults the queue survey measures an account against when it has
+        // set no limit of its own — the same fallback the gates themselves
+        // apply in `messages::queue_limits`, so saturation reaching 1.0 means
+        // the account is at the depth where it starts being refused.
+        let queue_defaults = SurveyDefaults {
+            send_soft: config.limits.queued_send_messages_soft,
+            receive_soft: config.limits.queued_receive_messages_soft,
+        };
         supervisor.spawn("statistics", false, move || {
             let store = store.clone();
             let tags = tags.clone();
-            async move { statistics(store, tags).await.map_err(|e| e.to_string()) }
+            let clock = stats_clock.clone();
+            async move {
+                statistics(store, tags, clock, queue_defaults)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
         });
     }
 

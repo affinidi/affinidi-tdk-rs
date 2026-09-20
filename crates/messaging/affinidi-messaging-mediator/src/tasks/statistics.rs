@@ -1,18 +1,22 @@
 use crate::common::metrics::names;
+use crate::tasks::queue_survey::{self, QueueSurvey, SurveyDefaults};
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{MediatorStore, types::MetadataStats},
+    types::clock::Clock,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{Instrument, Level, debug, info, span};
+use tracing::{Instrument, Level, debug, info, span, warn};
 
 /// Periodically logs statistics about the database.
 /// Is spawned as a task from main().
 pub async fn statistics(
     database: Arc<dyn MediatorStore>,
     tags: HashMap<String, String>,
+    clock: Arc<dyn Clock>,
+    queue_defaults: SurveyDefaults,
 ) -> Result<(), MediatorError> {
     let _span = span!(Level::INFO, "statistics");
 
@@ -61,6 +65,7 @@ pub async fn statistics(
             );
 
             publish_metrics(&database, &stats).await;
+            publish_queue_metrics(&database, &clock, queue_defaults, &tags).await;
 
             previous_stats = stats;
         }
@@ -112,4 +117,77 @@ async fn publish_metrics(database: &Arc<dyn MediatorStore>, stats: &MetadataStat
     for (name, value) in totals {
         metrics::counter!(name).absolute(value.max(0) as u64);
     }
+}
+
+/// Run a queue survey and publish it.
+///
+/// Best-effort like the rest of this task: a store error here is logged and
+/// the cycle moves on, because a metrics path that can stall the statistics
+/// loop is worse than a missing sample.
+///
+/// The gauges are set on every cycle including the empty one — a queue that
+/// drains must drive its age gauge back to zero rather than leaving the last
+/// non-zero reading standing, which would look identical to a queue that is
+/// still stuck.
+async fn publish_queue_metrics(
+    database: &Arc<dyn MediatorStore>,
+    clock: &Arc<dyn Clock>,
+    defaults: SurveyDefaults,
+    tags: &HashMap<String, String>,
+) {
+    let survey = match queue_survey::survey(database.as_ref(), clock, defaults).await {
+        Ok(survey) => survey,
+        Err(e) => {
+            debug!("queue survey unavailable this cycle: {e}");
+            return;
+        }
+    };
+
+    for (folder, stats) in [("inbox", &survey.inbox), ("outbox", &survey.outbox)] {
+        metrics::gauge!(names::QUEUE_DEPTH_MESSAGES, "folder" => folder).set(stats.messages as f64);
+        metrics::gauge!(names::QUEUE_DEPTH_BYTES, "folder" => folder).set(stats.bytes as f64);
+        metrics::gauge!(names::QUEUE_OLDEST_AGE_SECONDS, "folder" => folder)
+            .set(stats.oldest.as_ref().map_or(0.0, |o| o.age_secs as f64));
+        metrics::gauge!(names::QUEUE_MAX_SATURATION_RATIO, "folder" => folder)
+            .set(stats.max_saturation.unwrap_or(0.0));
+    }
+    metrics::gauge!(names::QUEUE_ACCOUNTS_SURVEYED).set(survey.accounts_surveyed as f64);
+    metrics::gauge!(names::QUEUE_SURVEY_TRUNCATED).set(u8::from(survey.truncated) as f64);
+
+    log_survey(&survey, tags);
+}
+
+/// Log the survey alongside the `UpdateStats` events, so a deployment without
+/// a Prometheus scrape still gets the numbers.
+///
+/// The oldest queue's DID hash is logged but never used as a metric label:
+/// there is one label value per DID, which is exactly the unbounded
+/// cardinality that makes a Prometheus server fall over. The log line is where
+/// an operator learns *which* queue is stuck; the gauge only says that one is.
+fn log_survey(survey: &QueueSurvey, tags: &HashMap<String, String>) {
+    if survey.truncated {
+        warn!(
+            ?tags,
+            accounts_surveyed = survey.accounts_surveyed,
+            cap = queue_survey::MAX_ACCOUNTS_PER_SURVEY,
+            "queue survey hit its account cap — depth totals and saturation are lower bounds, \
+             not true values"
+        );
+    }
+    info!(
+        event_type = "QueueSurvey",
+        ?tags,
+        accounts_surveyed = survey.accounts_surveyed,
+        truncated = survey.truncated,
+        inbox_messages = survey.inbox.messages,
+        inbox_bytes = survey.inbox.bytes,
+        inbox_max_saturation = survey.inbox.max_saturation,
+        inbox_oldest_age_secs = survey.inbox.oldest.as_ref().map(|o| o.age_secs),
+        inbox_oldest_did_hash = survey.inbox.oldest.as_ref().map(|o| o.did_hash.as_str()),
+        outbox_messages = survey.outbox.messages,
+        outbox_bytes = survey.outbox.bytes,
+        outbox_max_saturation = survey.outbox.max_saturation,
+        outbox_oldest_age_secs = survey.outbox.oldest.as_ref().map(|o| o.age_secs),
+        outbox_oldest_did_hash = survey.outbox.oldest.as_ref().map(|o| o.did_hash.as_str()),
+    );
 }
