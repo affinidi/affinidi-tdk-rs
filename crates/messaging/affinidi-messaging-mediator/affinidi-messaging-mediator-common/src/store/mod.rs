@@ -512,6 +512,23 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         Ok(None)
     }
 
+    /// Delivery state for several messages at once, in the order asked.
+    ///
+    /// The single-message [`delivery_state`](Self::delivery_state) is one round
+    /// trip per message, which is fine for a lookup and wrong for a sample of a
+    /// hundred. This is the batched form; a backend with no batching answers by
+    /// looping, which is no worse than the caller doing it.
+    async fn delivery_states(
+        &self,
+        msg_ids: &[String],
+    ) -> Result<Vec<Option<DeliveryState>>, MediatorError> {
+        let mut out = Vec::with_capacity(msg_ids.len());
+        for id in msg_ids {
+            out.push(self.delivery_state(id).await?);
+        }
+        Ok(out)
+    }
+
     /// Retrieve message metadata without the body. Used by handlers that
     /// need to authorise an action before fetching the (potentially large)
     /// body.

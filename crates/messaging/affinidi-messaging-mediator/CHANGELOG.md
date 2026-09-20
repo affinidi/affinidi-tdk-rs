@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased (0.28.8) — how much of a queue is work already done
+
+The queue survey now samples the queues it already probes and reports how many
+of their oldest messages have **already been handed to their recipient**:
+`queue_delivered_unacked_messages` and `queue_delivered_unacked_sample_size`,
+both labelled by folder.
+
+**This pair is what says whether `limits.delivered_expiry_seconds` is worth
+turning on.** That limit ships off, because shortening a delivered message's
+life is a real durability trade — and until now an operator had no way to see
+what turning it on would do. A high ratio means queues are holding work that is
+already done and occupying senders' allowances for nothing; a ratio near zero
+means enabling it would change little and the trade is not worth making. It is
+the same principle as `dryRun` on a purge: see the impact before taking it.
+
+A **sample, not a census**, and reported as a pair so it reads as a ratio — a
+full count would mean reading every queued message's delivery state every
+cycle, which is the scan the survey exists to avoid. Taken from the **oldest**
+end of the deepest queues, because that is where a delivered-and-still-queued
+message accumulates; the newest end is mostly messages nobody has had a chance
+to collect. Cost is one extra listing and one batched state read per
+already-probed queue, bounded by the existing probe cap.
+
+An empty queue contributes nothing rather than a zero-of-zero that would drag
+the fleet ratio toward "nothing is delivered", and a failed sample costs that
+queue's sample without losing the age reading that already succeeded.
+
+### `queued_send_messages_per_peer` is checked against the receive limit
+
+Warned at boot for the configured defaults, and **again when an account's own
+`queue_receive_limit` is set** — a boot check of the globals structurally
+cannot cover the per-account case, because the limit that matters is the
+effective one, and an account granted a receive limit at or below `per_peer`
+becomes monopolisable by a single sender the moment it is set.
+
 ## Unreleased (0.28.7) — `limits.delivered_expiry_seconds`, off by default
 
 Lets an operator say how long a message is kept **after** its recipient has

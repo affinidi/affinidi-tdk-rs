@@ -191,6 +191,32 @@ pub mod names {
     /// measured against the configured default; an account set to unlimited
     /// (`-1`) is excluded rather than counted as 0, since it has no ratio.
     pub const QUEUE_MAX_SATURATION_RATIO: &str = "queue_max_saturation_ratio";
+    /// gauge: Messages in the sample that had already been handed to their
+    /// recipient (label: folder = inbox|outbox).
+    ///
+    /// A **sample**, not a census — read with
+    /// [`QUEUE_DELIVERED_UNACKED_SAMPLE_SIZE`]. A full count would mean reading
+    /// every queued message's delivery state every cycle, which is the scan
+    /// this survey exists to avoid.
+    ///
+    /// **This pair is what says whether `limits.delivered_expiry_seconds` is
+    /// worth turning on.** A high ratio means queues are holding work that is
+    /// already done, occupying senders' allowances for nothing; a ratio near
+    /// zero means enabling it would change little and is not worth the
+    /// durability trade. Multiply the ratio by
+    /// [`QUEUE_DEPTH_MESSAGES`] for an estimate of the messages involved.
+    ///
+    /// Sampled from the **oldest** end of the deepest queues, because that is
+    /// where a delivered-and-still-queued message accumulates; the newest end
+    /// is mostly messages nobody has had a chance to collect.
+    pub const QUEUE_DELIVERED_UNACKED: &str = "queue_delivered_unacked_messages";
+    /// gauge: How many messages were examined to produce
+    /// [`QUEUE_DELIVERED_UNACKED`] (label: folder = inbox|outbox).
+    ///
+    /// Zero means nothing was sampled this cycle — every probed queue was
+    /// empty, or every sample failed — and the companion gauge should be read
+    /// as "no data" rather than "none delivered".
+    pub const QUEUE_DELIVERED_UNACKED_SAMPLE_SIZE: &str = "queue_delivered_unacked_sample_size";
     /// gauge: Accounts examined in the most recent survey.
     pub const QUEUE_ACCOUNTS_SURVEYED: &str = "queue_accounts_surveyed";
     /// gauge: 1 when the survey stopped at `MAX_ACCOUNTS_PER_SURVEY` before

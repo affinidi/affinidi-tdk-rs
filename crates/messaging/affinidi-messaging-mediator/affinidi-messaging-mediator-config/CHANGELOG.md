@@ -1,5 +1,21 @@
 # Affinidi Messaging Mediator Config
 
+## Unreleased (0.4.2) — `warn_per_peer_not_below_receive_limit`
+
+The per-relationship send cap exists so one stuck or hostile sender cannot
+monopolise a recipient's inbox. That only holds while it is **strictly below**
+the recipient's total: at `per_peer >= receive`, one sender reaches the
+recipient's whole allowance before its own per-relationship gate ever refuses
+it, and every other sender is then refused by the recipient-total gate for
+traffic it did not cause.
+
+A warning rather than an error — it is a legal configuration, and an operator
+running a single trusted sender per recipient may want it.
+
+`-1` on either side is handled explicitly: an unlimited `per_peer` removes the
+protection outright and says so; an unlimited receive limit means there is no
+total to monopolise and warns about nothing.
+
 ## Unreleased (0.4.1) — `delivered_expiry_seconds`
 
 A new `[limits]` key, defaulted to `"0"` and overridable with

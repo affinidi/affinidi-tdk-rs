@@ -1,5 +1,15 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.10) — batched delivery-state reads
+
+`MediatorStore::delivery_states` reads several messages' delivery state in one
+call. The single-message form is one round trip per message, which is fine for
+a lookup and wrong for a sample of a hundred; the Redis backend answers the
+batch in a single pipeline, and the default implementation loops, which is no
+worse than the caller doing it.
+
+Added for the queue survey's delivered-but-unacked sampling.
+
 ## Unreleased (0.16.9) — a delivered message can expire on its own, shorter clock
 
 A message the recipient has collected but not acknowledged was held for the

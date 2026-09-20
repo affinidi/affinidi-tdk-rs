@@ -89,6 +89,20 @@ pub(crate) trait QueueSource: Send + Sync {
         did_hash: &str,
         folder: Folder,
     ) -> Result<Option<u64>, MediatorError>;
+
+    /// Of the `limit` oldest messages in `did_hash`'s `folder`, how many have
+    /// already been handed to their recipient — and how many were looked at.
+    ///
+    /// The **oldest** end on purpose: a message that has been delivered and is
+    /// still queued has been that way for as long as it has been queued, so
+    /// the head of the queue is where it accumulates. Sampling the newest end
+    /// would mostly count messages nobody has had a chance to collect yet.
+    async fn delivered_unacked_sample(
+        &self,
+        did_hash: &str,
+        folder: Folder,
+        limit: u32,
+    ) -> Result<(usize, usize), MediatorError>;
 }
 
 #[async_trait]
@@ -115,6 +129,28 @@ impl<T: MediatorStore + ?Sized> QueueSource for T {
             .first()
             .map(|m| m.timestamp))
     }
+
+    async fn delivered_unacked_sample(
+        &self,
+        did_hash: &str,
+        folder: Folder,
+        limit: u32,
+    ) -> Result<(usize, usize), MediatorError> {
+        let page = self
+            .list_messages(did_hash, folder, Some(("-", "+")), limit)
+            .await?;
+        if page.is_empty() {
+            return Ok((0, 0));
+        }
+        let ids: Vec<String> = page.iter().map(|m| m.msg_id.clone()).collect();
+        // Batched: one round trip for the page rather than one per message.
+        let states = self.delivery_states(&ids).await?;
+        let delivered = states
+            .iter()
+            .filter(|state| state.as_ref().is_some_and(|s| s.delivered()))
+            .count();
+        Ok((delivered, page.len()))
+    }
 }
 
 /// Ceiling on account records read in one survey. A deployment with more
@@ -125,6 +161,15 @@ pub(crate) const MAX_ACCOUNTS_PER_SURVEY: u32 = 10_000;
 /// Ceiling on age probes per folder. The deepest queues are probed first, on
 /// the grounds that a queue nobody is draining is also a queue that grows.
 pub(crate) const MAX_AGE_PROBES: usize = 32;
+
+/// Messages sampled per probed queue when measuring how much of it is work
+/// already done.
+///
+/// A sample, not a census: a full count would mean reading every queued
+/// message's delivery state on every cycle, which is the scan this survey
+/// exists to avoid. One page from the oldest end of each already-probed queue
+/// costs one extra listing and one batched state read per queue.
+pub(crate) const DELIVERED_SAMPLE: u32 = 100;
 
 /// Page size for the `account_list` walk. The store caps this at 100 itself.
 const ACCOUNT_PAGE: u32 = 100;
@@ -152,6 +197,22 @@ pub(crate) struct FolderStats {
     /// maximum down and read as healthy.
     pub max_saturation: Option<f64>,
     pub oldest: Option<QueueAge>,
+    /// Of [`sampled`](Self::sampled) messages examined across the probed
+    /// queues, how many had already been handed to their recipient.
+    ///
+    /// **This is the number that says whether
+    /// `limits.delivered_expiry_seconds` is worth turning on.** A high ratio
+    /// means queues are full of work that is already done and is occupying
+    /// senders' allowances for nothing; a ratio near zero means enabling it
+    /// would change little and is not worth the durability trade.
+    pub delivered_unacked: usize,
+    /// How many messages were examined to produce
+    /// [`delivered_unacked`](Self::delivered_unacked).
+    ///
+    /// Reported so the pair can be read as a ratio and applied to the depth
+    /// gauge. A bare count would be meaningless without knowing whether it came
+    /// from ten messages or a thousand.
+    pub sampled: usize,
 }
 
 /// A complete survey.
@@ -280,8 +341,17 @@ pub(crate) async fn survey(
         }
     }
 
-    out.inbox.oldest = probe_oldest(store, clock, inbox_probes, Folder::Inbox).await;
-    out.outbox.oldest = probe_oldest(store, clock, outbox_probes, Folder::Outbox).await;
+    let (oldest, delivered, sampled) =
+        probe_queues(store, clock, inbox_probes, Folder::Inbox).await;
+    out.inbox.oldest = oldest;
+    out.inbox.delivered_unacked = delivered;
+    out.inbox.sampled = sampled;
+
+    let (oldest, delivered, sampled) =
+        probe_queues(store, clock, outbox_probes, Folder::Outbox).await;
+    out.outbox.oldest = oldest;
+    out.outbox.delivered_unacked = delivered;
+    out.outbox.sampled = sampled;
 
     Ok(out)
 }
@@ -289,31 +359,60 @@ pub(crate) async fn survey(
 /// Probe each candidate and keep the oldest. A probe that errors is skipped:
 /// this is a metrics path, and one unreadable queue must not cost the whole
 /// survey.
-async fn probe_oldest(
+async fn probe_queues(
     store: &(impl QueueSource + ?Sized),
     clock: &Arc<dyn Clock>,
     candidates: BinaryHeap<Reverse<(u32, String)>>,
     folder: Folder,
-) -> Option<QueueAge> {
+) -> (Option<QueueAge>, usize, usize) {
     let mut oldest: Option<QueueAge> = None;
+    let mut delivered_unacked = 0usize;
+    let mut sampled = 0usize;
+
     for Reverse((_, did_hash)) in candidates.into_sorted_vec() {
         match oldest_age(store, clock, &did_hash, folder.clone()).await {
             Ok(Some(age_secs)) => {
                 if oldest.as_ref().is_none_or(|o| age_secs > o.age_secs) {
-                    oldest = Some(QueueAge { did_hash, age_secs });
+                    oldest = Some(QueueAge {
+                        did_hash: did_hash.clone(),
+                        age_secs,
+                    });
                 }
             }
-            Ok(None) => {}
+            Ok(None) => {
+                // Empty queue: nothing to age and nothing to sample.
+                continue;
+            }
             Err(e) => {
                 tracing::debug!(
                     did_hash = %did_hash,
                     ?folder,
                     "queue age probe failed this cycle: {e}"
                 );
+                continue;
+            }
+        }
+
+        // Independent of the age probe: a failure here costs the sample for
+        // one queue, not the age reading that already succeeded.
+        match store
+            .delivered_unacked_sample(&did_hash, folder.clone(), DELIVERED_SAMPLE)
+            .await
+        {
+            Ok((delivered, examined)) => {
+                delivered_unacked += delivered;
+                sampled += examined;
+            }
+            Err(e) => {
+                tracing::debug!(
+                    did_hash = %did_hash,
+                    ?folder,
+                    "delivered-unacked sample failed this cycle: {e}"
+                );
             }
         }
     }
-    oldest
+    (oldest, delivered_unacked, sampled)
 }
 
 /// `f64` has no `Ord`, and these are ratios that can legitimately be absent,
@@ -367,6 +466,10 @@ mod tests {
         failing: Vec<String>,
         /// Accounts returned per page, to exercise the cursor walk.
         page_size: usize,
+        /// `(did_hash, folder)` -> `(delivered, examined)` for the sample.
+        samples: HashMap<(String, String), (usize, usize)>,
+        /// DIDs whose sample read should fail.
+        failing_sample: Vec<String>,
     }
 
     impl FakeSource {
@@ -405,6 +508,17 @@ mod tests {
 
         fn failing_probe(mut self, did: &str) -> Self {
             self.failing.push(did.to_string());
+            self
+        }
+
+        fn sampled(mut self, did: &str, folder: Folder, delivered: usize, examined: usize) -> Self {
+            self.samples
+                .insert((did.to_string(), folder.to_string()), (delivered, examined));
+            self
+        }
+
+        fn failing_sample(mut self, did: &str) -> Self {
+            self.failing_sample.push(did.to_string());
             self
         }
     }
@@ -447,6 +561,26 @@ mod tests {
                 .oldest
                 .get(&(did_hash.to_string(), folder.to_string()))
                 .copied())
+        }
+
+        async fn delivered_unacked_sample(
+            &self,
+            did_hash: &str,
+            folder: Folder,
+            _limit: u32,
+        ) -> Result<(usize, usize), MediatorError> {
+            if self.failing_sample.iter().any(|d| d == did_hash) {
+                return Err(MediatorError::InternalError(
+                    500,
+                    "test".into(),
+                    "sample failed".into(),
+                ));
+            }
+            Ok(self
+                .samples
+                .get(&(did_hash.to_string(), folder.to_string()))
+                .copied()
+                .unwrap_or((0, 0)))
         }
     }
 
@@ -679,5 +813,77 @@ mod tests {
             .map(|r| r.0.1.clone())
             .collect();
         assert_eq!(kept, vec!["first".to_string()]);
+    }
+
+    /// The pair that decides whether `limits.delivered_expiry_seconds` is worth
+    /// enabling: how much of what is queued is work already done.
+    #[tokio::test]
+    async fn the_sample_reports_delivered_and_how_many_were_looked_at() {
+        let src = FakeSource::new()
+            .with_account("alice", 0, 10)
+            .aged("alice", Folder::Outbox, HOUR_MS)
+            .sampled("alice", Folder::Outbox, 7, 10);
+        let out = survey(&src, &clock_at(2 * 3_600), DEFAULTS)
+            .await
+            .expect("survey");
+
+        assert_eq!(out.outbox.delivered_unacked, 7);
+        assert_eq!(
+            out.outbox.sampled, 10,
+            "the denominator must be reported, or the count means nothing"
+        );
+    }
+
+    /// Samples add up across the probed queues, so the ratio is fleet-level
+    /// rather than whichever queue happened to be probed last.
+    #[tokio::test]
+    async fn samples_accumulate_across_probed_queues() {
+        let src = FakeSource::new()
+            .with_account("a", 0, 5)
+            .aged("a", Folder::Outbox, HOUR_MS)
+            .sampled("a", Folder::Outbox, 2, 5)
+            .with_account("b", 0, 5)
+            .aged("b", Folder::Outbox, HOUR_MS)
+            .sampled("b", Folder::Outbox, 3, 5);
+        let out = survey(&src, &clock_at(2 * 3_600), DEFAULTS)
+            .await
+            .expect("survey");
+        assert_eq!(out.outbox.delivered_unacked, 5);
+        assert_eq!(out.outbox.sampled, 10);
+    }
+
+    /// An empty queue contributes nothing rather than a zero-of-zero that
+    /// would drag a fleet ratio toward "nothing is delivered".
+    #[tokio::test]
+    async fn an_empty_queue_is_not_sampled() {
+        let src = FakeSource::new().with_account("alice", 0, 3);
+        // No `aged` entry: the queue reads as empty.
+        let out = survey(&src, &clock_at(1_000), DEFAULTS)
+            .await
+            .expect("survey");
+        assert_eq!(out.outbox.sampled, 0);
+        assert_eq!(out.outbox.delivered_unacked, 0);
+    }
+
+    /// A failed sample costs that queue's sample and nothing else — the age
+    /// reading that already succeeded still stands.
+    #[tokio::test]
+    async fn a_failed_sample_does_not_cost_the_age_reading() {
+        let src = FakeSource::new()
+            .with_account("broken", 0, 9)
+            .aged("broken", Folder::Outbox, HOUR_MS)
+            .failing_sample("broken")
+            .with_account("fine", 0, 4)
+            .aged("fine", Folder::Outbox, 2 * HOUR_MS)
+            .sampled("fine", Folder::Outbox, 1, 4);
+        let out = survey(&src, &clock_at(10 * 3_600), DEFAULTS)
+            .await
+            .expect("survey");
+
+        // The oldest is still found, from the queue whose sample failed.
+        assert_eq!(out.outbox.oldest.expect("oldest").did_hash, "broken");
+        // And the readable queue still contributes its sample.
+        assert_eq!(out.outbox.delivered_unacked, 1);
+        assert_eq!(out.outbox.sampled, 4);
     }
 }

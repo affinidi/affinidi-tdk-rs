@@ -150,6 +150,10 @@ async fn publish_queue_metrics(
             .set(stats.oldest.as_ref().map_or(0.0, |o| o.age_secs as f64));
         metrics::gauge!(names::QUEUE_MAX_SATURATION_RATIO, "folder" => folder)
             .set(stats.max_saturation.unwrap_or(0.0));
+        metrics::gauge!(names::QUEUE_DELIVERED_UNACKED, "folder" => folder)
+            .set(stats.delivered_unacked as f64);
+        metrics::gauge!(names::QUEUE_DELIVERED_UNACKED_SAMPLE_SIZE, "folder" => folder)
+            .set(stats.sampled as f64);
     }
     metrics::gauge!(names::QUEUE_ACCOUNTS_SURVEYED).set(survey.accounts_surveyed as f64);
     metrics::gauge!(names::QUEUE_SURVEY_TRUNCATED).set(u8::from(survey.truncated) as f64);
@@ -184,10 +188,14 @@ fn log_survey(survey: &QueueSurvey, tags: &HashMap<String, String>) {
         inbox_max_saturation = survey.inbox.max_saturation,
         inbox_oldest_age_secs = survey.inbox.oldest.as_ref().map(|o| o.age_secs),
         inbox_oldest_did_hash = survey.inbox.oldest.as_ref().map(|o| o.did_hash.as_str()),
+        inbox_delivered_unacked = survey.inbox.delivered_unacked,
+        inbox_sampled = survey.inbox.sampled,
         outbox_messages = survey.outbox.messages,
         outbox_bytes = survey.outbox.bytes,
         outbox_max_saturation = survey.outbox.max_saturation,
         outbox_oldest_age_secs = survey.outbox.oldest.as_ref().map(|o| o.age_secs),
         outbox_oldest_did_hash = survey.outbox.oldest.as_ref().map(|o| o.did_hash.as_str()),
+        outbox_delivered_unacked = survey.outbox.delivered_unacked,
+        outbox_sampled = survey.outbox.sampled,
     );
 }

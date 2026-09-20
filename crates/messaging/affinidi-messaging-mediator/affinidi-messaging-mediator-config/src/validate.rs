@@ -148,6 +148,45 @@ pub fn warn_permissive_default_with_denylist_mode(
     None
 }
 
+/// Warn when one sender's per-relationship allowance is not strictly below a
+/// recipient's total inbox allowance — the condition under which a single
+/// sender can fill a recipient's inbox on its own.
+///
+/// The per-relationship cap exists so that one stuck or hostile sender cannot
+/// monopolise a recipient. That only holds while it is *smaller* than the
+/// recipient's total: at `per_peer >= receive`, one sender reaches the
+/// recipient's whole allowance before its own per-relationship gate ever
+/// refuses it, and every other sender is then refused by the recipient-total
+/// gate for traffic it did not cause.
+///
+/// `-1` on either side is unlimited. An unlimited `per_peer` removes the
+/// protection outright; an unlimited receive limit means no total to be
+/// monopolised, so there is nothing to warn about.
+///
+/// A warning rather than an error: it is a legal configuration, and an operator
+/// running a single trusted sender per recipient may genuinely want it.
+pub fn warn_per_peer_not_below_receive_limit(
+    per_peer: i32,
+    receive_limit: i32,
+    scope: &str,
+) -> Option<String> {
+    // Unlimited recipient total: nothing to monopolise.
+    if receive_limit < 0 {
+        return None;
+    }
+    if per_peer < 0 {
+        return Some(format!(
+            "queued_send_messages_per_peer is unlimited (-1) for {scope}, so one sender can fill              the recipient's entire inbox allowance of {receive_limit} on its own. The              per-relationship cap exists to prevent exactly that; unlimited disables it."
+        ));
+    }
+    if per_peer >= receive_limit {
+        return Some(format!(
+            "queued_send_messages_per_peer ({per_peer}) is not below the receive limit              ({receive_limit}) for {scope} — one sender can reach the recipient's whole              allowance before its own per-relationship gate refuses it, and every other sender              is then refused for traffic it did not cause. Set per_peer strictly below the              smallest receive limit any account may be granted."
+        ));
+    }
+    None
+}
+
 /// Warn when remote (non-local) DIDs may send admin-protocol messages.
 /// The secure posture restricts admin messaging to locally-registered
 /// DIDs; disabling that widens the admin attack surface.
@@ -318,5 +357,32 @@ mod tests {
     fn warns_only_when_remote_admin_unblocked() {
         assert!(warn_remote_admin_allowed(false).is_some());
         assert!(warn_remote_admin_allowed(true).is_none());
+    }
+
+    #[test]
+    fn per_peer_must_be_strictly_below_the_receive_limit() {
+        // Healthy: the per-relationship cap bites well before the total.
+        assert!(warn_per_peer_not_below_receive_limit(50, 200, "defaults").is_none());
+
+        // Equal is not enough: one sender reaches the whole allowance exactly
+        // as its own gate would first refuse it.
+        assert!(warn_per_peer_not_below_receive_limit(200, 200, "defaults").is_some());
+        assert!(warn_per_peer_not_below_receive_limit(201, 200, "defaults").is_some());
+    }
+
+    #[test]
+    fn an_unlimited_per_peer_removes_the_protection_and_says_so() {
+        let msg = warn_per_peer_not_below_receive_limit(-1, 200, "defaults")
+            .expect("unlimited per_peer disables the gate");
+        assert!(msg.contains("unlimited"));
+    }
+
+    /// No total to monopolise means nothing to warn about — including when
+    /// both are unlimited, which is a deliberate opt-out of limits rather than
+    /// a misconfiguration.
+    #[test]
+    fn an_unlimited_receive_limit_has_nothing_to_monopolise() {
+        assert!(warn_per_peer_not_below_receive_limit(50, -1, "account x").is_none());
+        assert!(warn_per_peer_not_below_receive_limit(-1, -1, "account x").is_none());
     }
 }

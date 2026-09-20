@@ -10,7 +10,8 @@
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_mediator_config::validate::{
     check_did_syntax, check_jwt_expiry, check_tls, warn_admin_is_mediator, warn_implicit_relay,
-    warn_permissive_default_with_denylist_mode, warn_remote_admin_allowed,
+    warn_per_peer_not_below_receive_limit, warn_permissive_default_with_denylist_mode,
+    warn_remote_admin_allowed,
 };
 use tracing::warn;
 
@@ -45,6 +46,16 @@ pub fn validate_config(config: &Config) -> Result<(), MediatorError> {
     if let Some(msg) = warn_permissive_default_with_denylist_mode(
         &config.security.mediator_acl_mode,
         &config.security.global_acl_default,
+    ) {
+        warn!("{msg}");
+    }
+    // The default pair every account starts on. An account with its own
+    // `queue_receive_limit` is checked where that limit is set — the effective
+    // limit is per-account, so a boot-time check of the globals cannot cover it.
+    if let Some(msg) = warn_per_peer_not_below_receive_limit(
+        config.limits.queued_send_messages_per_peer,
+        config.limits.queued_receive_messages_soft,
+        "the configured defaults",
     ) {
         warn!("{msg}");
     }
