@@ -147,6 +147,7 @@ pub fn apply_env_overrides(config: &mut ConfigRaw) {
         config.limits.delivered_expiry_seconds,
         "LIMIT_DELIVERED_EXPIRY_SECONDS"
     );
+    env_override!(config.limits.pickup_round_robin, "LIMIT_PICKUP_ROUND_ROBIN");
     env_override!(
         config.limits.message_expiry_seconds,
         "LIMIT_MESSAGE_EXPIRY_SECONDS"

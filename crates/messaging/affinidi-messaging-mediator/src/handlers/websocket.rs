@@ -1141,6 +1141,7 @@ async fn drain_tsp_inbox(
                 &options,
                 state.clock.unix_millis() as u64,
                 state.config.limits.delivered_expiry_seconds,
+                state.config.limits.pickup_round_robin,
             )
             .await
         {

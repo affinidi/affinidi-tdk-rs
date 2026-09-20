@@ -902,6 +902,10 @@ fn spawn_inbox_redelivery(
                     &options,
                     affinidi_messaging_mediator_common::time::unix_timestamp_millis() as u64,
                     delivered_expiry_seconds,
+                    // This drain pages with `start_id` and wants stream order:
+                    // it is re-covering a socket's whole inbox, not choosing
+                    // between competing senders.
+                    false,
                 )
                 .await
             {

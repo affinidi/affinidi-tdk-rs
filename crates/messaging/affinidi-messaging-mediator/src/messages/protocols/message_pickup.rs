@@ -349,6 +349,7 @@ pub(crate) async fn delivery_request(
                 },
                 state.clock.unix_millis() as u64,
                 state.config.limits.delivered_expiry_seconds,
+                state.config.limits.pickup_round_robin,
             )
             .await?;
         debug!("msgs fetched: {}", messages.success.len());

@@ -33,6 +33,23 @@ pub struct LimitsConfig {
     /// redelivers it. Setting this shorter than a client's worst restart
     /// window will destroy exactly those messages.
     pub delivered_expiry_seconds: u64,
+    /// Give each sender a turn on pickup instead of serving the inbox strictly
+    /// head-first. On by default.
+    ///
+    /// A sender that queued fifty messages ahead of another's is otherwise
+    /// fifty messages a recipient must collect before it sees the second — and
+    /// if it cannot process them and does not delete them, it never does.
+    ///
+    /// On by default because, unlike
+    /// [`delivered_expiry_seconds`](Self::delivered_expiry_seconds), this
+    /// destroys nothing: order **within** a sender is preserved exactly, only
+    /// the interleaving between senders changes, and no ordering guarantee
+    /// covers that. A recipient with one peer sees byte-identical results.
+    ///
+    /// Turn it off if a client genuinely depends on cross-sender arrival order
+    /// — which is depending on a coincidence, but is a real thing to have to
+    /// live with.
+    pub pickup_round_robin: bool,
     pub message_size: usize,
     /// Per-relationship outbound cap: how many messages one sender may have
     /// queued for one *specific* recipient. This is the gate that catches
@@ -125,6 +142,7 @@ impl Default for LimitsConfig {
             local_max_acl: 1_000,
             message_expiry_seconds: 604_800,
             delivered_expiry_seconds: 0,
+            pickup_round_robin: true,
             message_size: 1_048_576,
             queued_send_messages_per_peer: 50,
             queued_send_messages_soft: 2_000,
@@ -210,6 +228,10 @@ impl std::convert::TryFrom<LimitsConfigRaw> for LimitsConfig {
             local_max_acl: raw.local_max_acl.parse().unwrap_or_else(|_| {
                 warn_default("local_max_acl", "1000");
                 1_000
+            }),
+            pickup_round_robin: raw.pickup_round_robin.parse().unwrap_or_else(|_| {
+                warn_default("pickup_round_robin", "true");
+                true
             }),
             delivered_expiry_seconds: raw.delivered_expiry_seconds.parse().unwrap_or_else(|_| {
                 warn_default("delivered_expiry_seconds", "0");
@@ -362,6 +384,7 @@ mod tests {
             listed_messages: "50".to_string(),
             local_max_acl: "500".to_string(),
             delivered_expiry_seconds: "0".to_string(),
+            pickup_round_robin: "true".to_string(),
             message_expiry_seconds: "3600".to_string(),
             message_size: "2048".to_string(),
             queued_send_messages_per_peer: "50".to_string(),
@@ -423,6 +446,7 @@ mod tests {
             listed_messages: "100".to_string(),
             local_max_acl: "1000".to_string(),
             delivered_expiry_seconds: "0".to_string(),
+            pickup_round_robin: "true".to_string(),
             message_expiry_seconds: "10080".to_string(),
             message_size: "1048576".to_string(),
             queued_send_messages_per_peer: "50".to_string(),

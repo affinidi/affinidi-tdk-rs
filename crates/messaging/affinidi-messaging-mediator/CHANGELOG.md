@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (0.28.9) — `limits.pickup_round_robin`, on by default
+
+A pickup now gives each sender a turn instead of serving an inbox strictly
+head-first, so one sender's backlog stops hiding the sender behind it.
+
+**On by default**, unlike `delivered_expiry_seconds`, and the difference is the
+point: this destroys nothing. Order **within** a sender is preserved exactly,
+only the interleaving between senders changes, and nothing guarantees that. A
+recipient talking to one peer sees byte-identical results.
+
+Turn it off with `pickup_round_robin = "false"` if a client genuinely depends
+on cross-sender arrival order.
+
+The WebSocket redelivery drain passes `false` explicitly: it pages with
+`start_id` and is re-covering a socket's whole inbox in order, not choosing
+between competing senders.
+
 ## Unreleased (0.28.8) — how much of a queue is work already done
 
 The queue survey now samples the queues it already probes and reports how many
