@@ -2972,6 +2972,161 @@ mod tests {
         assert!(state.attempts >= POISON_ATTEMPTS);
     }
 
+    /// End-to-end through a real store: a sender's backlog no longer hides the
+    /// sender behind it. Before this, a pickup of two returned alice's first
+    /// two and bob waited.
+    #[tokio::test]
+    async fn a_fair_pickup_reaches_past_one_senders_backlog() {
+        use affinidi_messaging_mediator_common::types::messages::FetchOptions;
+
+        let store = MemoryStore::new();
+        for did in ["alice", "bob", "carol"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        // alice queues four for carol, then bob queues one.
+        for n in ["a1", "a2", "a3", "a4"] {
+            store
+                .store_message("s", n, "carol", Some("alice"), 0, 0)
+                .await
+                .expect("store");
+        }
+        store
+            .store_message("s", "b1", "carol", Some("bob"), 0, 0)
+            .await
+            .expect("store");
+
+        let fetched = store
+            .fetch_messages_delivering(
+                "s",
+                "carol",
+                &FetchOptions {
+                    limit: 2,
+                    ..Default::default()
+                },
+                0,
+                0,
+                true,
+            )
+            .await
+            .expect("fetch");
+
+        let senders: Vec<Option<&str>> = fetched
+            .success
+            .iter()
+            .map(|m| m.from_address.as_deref())
+            .collect();
+        assert_eq!(
+            senders,
+            vec![Some("alice"), Some("bob")],
+            "bob must get a turn rather than queueing behind alice's backlog"
+        );
+    }
+
+    /// The same pickup with fairness off is strict arrival order — so the
+    /// escape hatch actually does something, and the difference is exactly
+    /// what it claims to be.
+    #[tokio::test]
+    async fn fairness_off_serves_the_queue_head_first() {
+        use affinidi_messaging_mediator_common::types::messages::FetchOptions;
+
+        let store = MemoryStore::new();
+        for did in ["alice", "bob", "carol"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        for n in ["a1", "a2"] {
+            store
+                .store_message("s", n, "carol", Some("alice"), 0, 0)
+                .await
+                .expect("store");
+        }
+        store
+            .store_message("s", "b1", "carol", Some("bob"), 0, 0)
+            .await
+            .expect("store");
+
+        let fetched = store
+            .fetch_messages_delivering(
+                "s",
+                "carol",
+                &FetchOptions {
+                    limit: 2,
+                    ..Default::default()
+                },
+                0,
+                0,
+                false,
+            )
+            .await
+            .expect("fetch");
+
+        let senders: Vec<Option<&str>> = fetched
+            .success
+            .iter()
+            .map(|m| m.from_address.as_deref())
+            .collect();
+        assert_eq!(senders, vec![Some("alice"), Some("alice")]);
+    }
+
+    /// A paging caller keeps stream order even with fairness on: a round-robin
+    /// result is not a contiguous range, so "continue after the last id" would
+    /// silently skip messages.
+    #[tokio::test]
+    async fn a_paging_fetch_keeps_stream_order() {
+        use affinidi_messaging_mediator_common::types::messages::FetchOptions;
+
+        let store = MemoryStore::new();
+        for did in ["alice", "bob", "carol"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        for n in ["a1", "a2"] {
+            store
+                .store_message("s", n, "carol", Some("alice"), 0, 0)
+                .await
+                .expect("store");
+        }
+        store
+            .store_message("s", "b1", "carol", Some("bob"), 0, 0)
+            .await
+            .expect("store");
+
+        // Page from the very beginning: still stream order, because start_id
+        // is set at all.
+        let fetched = store
+            .fetch_messages_delivering(
+                "s",
+                "carol",
+                &FetchOptions {
+                    limit: 2,
+                    start_id: Some("-".to_string()),
+                    ..Default::default()
+                },
+                0,
+                0,
+                true,
+            )
+            .await
+            .expect("fetch");
+        let senders: Vec<Option<&str>> = fetched
+            .success
+            .iter()
+            .map(|m| m.from_address.as_deref())
+            .collect();
+        assert_eq!(
+            senders,
+            vec![Some("alice"), Some("alice")],
+            "a paging caller must not get an interleaved, non-contiguous result"
+        );
+    }
+
     /// An optimistic fetch deletes as it reads, so there is nothing left to
     /// stamp — and on Redis stamping anyway would resurrect the message's
     /// metadata hash as a permanent orphan, because `HSETNX` creates a missing
@@ -3006,6 +3161,7 @@ mod tests {
                 },
                 7_000,
                 0,
+                false,
             )
             .await
             .expect("fetch");
@@ -3052,6 +3208,7 @@ mod tests {
                 },
                 7_000,
                 0,
+                false,
             )
             .await
             .expect("fetch");

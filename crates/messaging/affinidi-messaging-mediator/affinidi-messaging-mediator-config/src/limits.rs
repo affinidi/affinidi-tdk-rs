@@ -20,6 +20,10 @@ pub struct LimitsConfigRaw {
     /// message" — the historical behaviour.
     #[serde(default = "default_delivered_expiry_seconds")]
     pub delivered_expiry_seconds: String,
+    /// Give each sender a turn on pickup instead of serving the inbox strictly
+    /// head-first. `"true"` by default.
+    #[serde(default = "default_pickup_round_robin")]
+    pub pickup_round_robin: String,
     pub message_size: String,
     #[serde(default = "default_queued_send_messages_per_peer")]
     pub queued_send_messages_per_peer: String,
@@ -59,6 +63,13 @@ pub struct LimitsConfigRaw {
 /// upgrade — only by an operator who has read what it does.
 fn default_delivered_expiry_seconds() -> String {
     "0".to_string()
+}
+
+/// On. Unlike the delivered-expiry shortening, this destroys nothing and
+/// changes only the interleaving between senders — order within a sender is
+/// preserved, and a recipient talking to one peer sees no change at all.
+fn default_pickup_round_robin() -> String {
+    "true".to_string()
 }
 
 fn default_queued_send_messages_per_peer() -> String {

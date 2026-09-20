@@ -1,5 +1,10 @@
 # Affinidi Messaging Mediator Config
 
+## Unreleased (0.4.3) — `pickup_round_robin`
+
+A new `[limits]` key, `"true"` by default, overridable with
+`LIMIT_PICKUP_ROUND_ROBIN`.
+
 ## Unreleased (0.4.2) — `warn_per_peer_not_below_receive_limit`
 
 The per-relationship send cap exists so one stuck or hostile sender cannot

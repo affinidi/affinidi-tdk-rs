@@ -574,6 +574,23 @@ impl MediatorStore for RedisStore {
             .collect())
     }
 
+    async fn get_messages(
+        &self,
+        did_hash: &str,
+        msg_ids: &[String],
+    ) -> Result<Vec<Option<MessageListElement>>, MediatorError> {
+        // Sequential rather than pipelined, deliberately: `get_message` already
+        // combines a metadata read, an ownership check and a body read, and
+        // re-implementing that as a raw pipeline would put a second copy of the
+        // authorisation rules in the codebase. A fair pickup asks for at most
+        // `limit` of these, which is the same handful the plain fetch reads.
+        let mut out = Vec::with_capacity(msg_ids.len());
+        for id in msg_ids {
+            out.push(self.get_message(did_hash, id).await?);
+        }
+        Ok(out)
+    }
+
     async fn get_message(
         &self,
         did_hash: &str,

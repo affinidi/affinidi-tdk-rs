@@ -1,5 +1,42 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.11) — a pickup can give each sender a turn
+
+An inbox is an arrival-ordered stream and a plain fetch reads it from the head,
+so a sender that queued fifty messages ahead of another's is fifty messages the
+recipient must get through first — and if it cannot process them and does not
+delete them, it never reaches the second sender at all. The per-relationship
+cap bounds how bad that gets; it does not change the shape.
+
+`MediatorStore::fetch_messages_fair` lists a bounded window, deals one message
+from each sender in turn, and reads only the chosen bodies.
+`fetch_messages_delivering` takes a `round_robin` flag and routes between the
+two.
+
+**Order within a sender is preserved exactly.** Only the interleaving between
+senders changes, and no ordering guarantee covers that — two senders' messages
+reach a mediator in whatever order the network delivered them. With a single
+sender the result is byte-identical to a plain range read.
+
+Turn order follows **first arrival**, not map iteration, so the result is
+deterministic. An anonymous sender is one sender rather than many: unattributed
+traffic gets one share between it, not one per message, which is the
+conservative reading.
+
+**`start_id` paging always takes stream order**, even with fairness on. A
+round-robin selection is not a contiguous range, so "continue after the last id
+I got" has no meaning against it and honouring it would silently skip messages.
+
+Cost is one extra listing per pickup, bounded by `FAIR_WINDOW_FACTOR` (10x the
+caller's limit) and `MAX_FAIR_WINDOW` (500), so it does not grow with the
+queue. `MediatorStore::get_messages` reads the chosen bodies as a batch.
+
+Done entirely in Rust rather than in the Redis stored functions, for the reason
+`mark_delivered` gives: a deployment loading a stale `atm-functions.lua` would
+silently lose the fairness while appearing healthy.
+
+Breaking: `fetch_messages_delivering` gains a parameter.
+
 ## Unreleased (0.16.10) — batched delivery-state reads
 
 `MediatorStore::delivery_states` reads several messages' delivery state in one

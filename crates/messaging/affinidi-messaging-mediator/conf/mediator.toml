@@ -399,6 +399,34 @@ message_expiry_seconds = "604800"
 ### never came back from one that keeps collecting and never finishing.
 delivered_expiry_seconds = "0"
 
+### Env: LIMIT_PICKUP_ROUND_ROBIN
+### Give each sender a turn on pickup instead of serving an inbox strictly
+### head-first. "true" by default.
+###
+### Why it is on: an inbox is arrival-ordered, so a sender that queued fifty
+### messages ahead of another's is fifty messages a recipient must collect
+### before it sees the second — and if it cannot process them and does not
+### delete them, it never does. The per-relationship cap bounds how bad that
+### gets; it does not change the shape.
+###
+### What it does NOT change: order WITHIN a sender is preserved exactly. Only
+### the interleaving between senders changes, and nothing guarantees that —
+### two senders' messages reach a mediator in whatever order the network
+### delivered them. A recipient that talks to one peer sees byte-identical
+### results.
+###
+### Cost: one extra listing per pickup. The listing window is bounded
+### (10x the caller's limit, capped at 500), so it does not grow with the
+### queue.
+###
+### A caller paging with `start_id` always gets stream order regardless, because
+### a round-robin selection is not a contiguous range and "continue after the
+### last id" would silently skip messages.
+###
+### Turn it off only if a client genuinely depends on cross-sender arrival
+### order.
+pickup_round_robin = "true"
+
 ### Env: LIMIT_MESSAGE_SIZE
 ### Maximum message size in bytes (1MB).
 ### Scale: raise for large-payload workloads; keep <= http_size and ws_size;

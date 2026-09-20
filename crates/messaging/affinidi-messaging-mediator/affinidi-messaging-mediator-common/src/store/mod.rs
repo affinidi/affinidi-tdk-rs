@@ -56,6 +56,20 @@ use crate::types::{
         MessageListElement,
     },
 };
+pub mod fair_pickup;
+
+/// How much of the queue a fair pickup looks at, as a multiple of the caller's
+/// limit.
+///
+/// Enough to see past one sender's burst without reading the whole queue: at
+/// the default per-relationship cap of 50, a window of ten times a typical
+/// pickup limit reaches well past any single sender's share.
+pub const FAIR_WINDOW_FACTOR: usize = 10;
+
+/// Hard ceiling on that window, so a caller asking for a large limit cannot
+/// turn one pickup into a queue scan.
+pub const MAX_FAIR_WINDOW: usize = 500;
+
 use async_trait::async_trait;
 
 /// How many handovers make a message worth reporting as possibly poison.
@@ -381,6 +395,112 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         msg_id: &str,
     ) -> Result<Option<MessageListElement>, MediatorError>;
 
+    /// Several messages by id, with bodies, in the order asked.
+    ///
+    /// The single-message [`get_message`](Self::get_message) is a round trip
+    /// each; a fair pickup needs a whole batch, so backends that can read them
+    /// together should. The default loops, which is no worse than the caller
+    /// doing it.
+    ///
+    /// A message that has gone since it was listed comes back as `None` rather
+    /// than an error — a concurrent delete is normal, not a failure.
+    async fn get_messages(
+        &self,
+        did_hash: &str,
+        msg_ids: &[String],
+    ) -> Result<Vec<Option<MessageListElement>>, MediatorError> {
+        let mut out = Vec::with_capacity(msg_ids.len());
+        for id in msg_ids {
+            out.push(self.get_message(did_hash, id).await?);
+        }
+        Ok(out)
+    }
+
+    /// Fetch, giving each sender a turn rather than serving the queue strictly
+    /// head-first.
+    ///
+    /// # Why this is a separate path
+    ///
+    /// An inbox is an arrival-ordered stream and a plain fetch reads it from
+    /// the head, so a sender that queued fifty messages ahead of another's is
+    /// fifty messages the recipient must get through first — and if it cannot
+    /// process them and does not delete them, it never reaches the other
+    /// sender at all. The per-relationship cap bounds how bad that gets; it
+    /// does not change its shape.
+    ///
+    /// Order **within** a sender is preserved exactly. Only the interleaving
+    /// between senders changes, which no ordering guarantee covers — two
+    /// senders' messages arrive in whatever order the network delivered them.
+    ///
+    /// # Cost, and why it is two round trips rather than one
+    ///
+    /// Listing is cheap and bodies are not, so this lists a window, chooses
+    /// from it, and reads only the chosen bodies: one listing plus one batched
+    /// get, against the single stored-function call a plain fetch makes. The
+    /// window is `limit * `[`FAIR_WINDOW_FACTOR`], capped at
+    /// [`MAX_FAIR_WINDOW`], so the extra cost is bounded and does not grow with
+    /// the queue.
+    ///
+    /// # It ignores `start_id`, and the caller must not pass one
+    ///
+    /// A round-robin selection is not a contiguous stream range, so "continue
+    /// after the last id I got" has no meaning against it — a client paging
+    /// that way would skip messages. Callers use this only for a fresh pickup;
+    /// a paging drain wants stream order anyway and should call
+    /// [`fetch_messages`](Self::fetch_messages).
+    async fn fetch_messages_fair(
+        &self,
+        session_id: &str,
+        did_hash: &str,
+        options: &FetchOptions,
+    ) -> Result<GetMessagesResponse, MediatorError> {
+        let window_size = options
+            .limit
+            .saturating_mul(FAIR_WINDOW_FACTOR)
+            .min(MAX_FAIR_WINDOW);
+
+        let window = self
+            .list_messages(
+                did_hash,
+                Folder::Inbox,
+                Some(("-", "+")),
+                window_size as u32,
+            )
+            .await?;
+        let chosen = fair_pickup::round_robin_select(&window, options.limit);
+        if chosen.is_empty() {
+            return Ok(GetMessagesResponse::default());
+        }
+
+        let mut response = GetMessagesResponse::default();
+        for (id, message) in chosen
+            .iter()
+            .zip(self.get_messages(did_hash, &chosen).await?)
+        {
+            // Listed a moment ago and gone now: a concurrent pickup or the
+            // expiry sweeper. Not an error, and not something to report as a
+            // failed read.
+            let Some(message) = message else { continue };
+            response.success.push(message);
+
+            if matches!(options.delete_policy, FetchDeletePolicy::Optimistic)
+                && let Err(e) = self
+                    .delete_message(
+                        id,
+                        DeletionAuthority::Owner {
+                            did_hash: did_hash.to_string(),
+                        },
+                    )
+                    .await
+            {
+                response.delete_errors.push((id.clone(), e.to_string()));
+            }
+        }
+
+        let _ = session_id;
+        Ok(response)
+    }
+
     /// Fetch messages and record that they were handed over.
     ///
     /// The delivery paths call this rather than [`fetch_messages`] so the
@@ -402,8 +522,19 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         options: &FetchOptions,
         now_ms: u64,
         delivered_ttl_secs: u64,
+        round_robin: bool,
     ) -> Result<GetMessagesResponse, MediatorError> {
-        let response = self.fetch_messages(session_id, did_hash, options).await?;
+        // A round-robin selection is not a contiguous stream range, so a caller
+        // that is paging with `start_id` must get stream order — "continue
+        // after the last id I got" has no meaning against an interleaved
+        // result, and honouring it would skip messages. A paging drain wants
+        // stream order anyway.
+        let response = if round_robin && options.start_id.is_none() {
+            self.fetch_messages_fair(session_id, did_hash, options)
+                .await?
+        } else {
+            self.fetch_messages(session_id, did_hash, options).await?
+        };
 
         // An optimistic fetch deletes each message as it reads it, so by the
         // time this runs there is nothing left to stamp — and stamping anyway
