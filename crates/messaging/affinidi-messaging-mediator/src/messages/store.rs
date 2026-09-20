@@ -53,7 +53,7 @@ async fn _store_message(
             to_did_hash,
             from_did_hash,
             expiry,
-            state.config.limits.queued_receive_messages_hard as usize,
+            state.config.limits.queue_stream_maxlen(),
         )
         .await
 }
@@ -374,7 +374,7 @@ pub(crate) async fn store_forwarded_message(
                 &recipient_did_hash,
                 sender_hash,
                 expires_at,
-                state.config.limits.queued_receive_messages_hard as usize,
+                state.config.limits.queue_stream_maxlen(),
             )
             .await
         {

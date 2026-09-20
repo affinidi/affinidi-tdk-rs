@@ -52,6 +52,49 @@ pub struct LimitsConfig {
     pub pubsub_buffer: usize,
 }
 
+impl LimitsConfig {
+    /// Stream `MAXLEN` for the per-DID inbox and outbox streams.
+    ///
+    /// One value bounds **both** streams — the `store_message` Lua applies the
+    /// single `queue_maxlen` argument to `RECEIVE_Q` and `SEND_Q` alike — so it
+    /// has to sit above the larger of the two hard limits, not one of them.
+    ///
+    /// It previously *was* one of them: the receive hard limit was passed
+    /// directly, so the send stream was trimmed at the receive bound. That was
+    /// latent while the send soft limit (200) sat far below it, and became
+    /// reachable when 0.28.0 raised the send limits past it. A trim removes the
+    /// stream entry and nothing decrements `SEND_QUEUE_COUNT` or `PEER_Q` —
+    /// only `delete_message` does — so past the trim a sender is refused by
+    /// counters for messages it can no longer list or purge, and recovers only
+    /// when the message TTL expires.
+    ///
+    /// Hence `+ 1`, not `max(..)`: strictly above every limit an account can be
+    /// *clamped* to, so trimming cannot fire for an account that is being held
+    /// to a limit. Trimming is a backstop against state the gates should have
+    /// prevented, never a bound on traffic they allow.
+    ///
+    /// **Residual, stated rather than hidden:** an account may be granted `-1`
+    /// or `-2` (unlimited), which `account_update` passes through *without*
+    /// clamping to the hard limit. No finite bound can sit above that, so for
+    /// such an account the stream is still bounded while its counters are not.
+    /// Those accounts have deliberately opted out of limits; the divergence is
+    /// a property of that choice, not of this value.
+    ///
+    /// A global hard limit of `-1` disables trimming outright (`0` = no
+    /// `MAXLEN`), which also avoids handing Redis the result of casting `-1`
+    /// to `usize`.
+    #[must_use]
+    pub fn queue_stream_maxlen(&self) -> usize {
+        if self.queued_send_messages_hard < 0 || self.queued_receive_messages_hard < 0 {
+            return 0;
+        }
+        let larger = self
+            .queued_send_messages_hard
+            .max(self.queued_receive_messages_hard);
+        larger as usize + 1
+    }
+}
+
 impl Default for LimitsConfig {
     fn default() -> Self {
         LimitsConfig {
@@ -260,6 +303,9 @@ mod tests {
         assert_eq!(limits.message_expiry_seconds, 604_800);
         assert_eq!(limits.message_size, 1_048_576);
         assert_eq!(limits.queued_send_messages_per_peer, 50);
+        // Strictly above BOTH hard limits — one value bounds both streams.
+        assert!(limits.queue_stream_maxlen() > limits.queued_send_messages_hard as usize);
+        assert!(limits.queue_stream_maxlen() > limits.queued_receive_messages_hard as usize);
         // The send total is a coarse ceiling, not the flooding gate — see
         // `validate_peer_queue_limit`. It sits well above realistic fan-out so
         // that a sender is not silenced because its recipients went offline.
@@ -377,5 +423,82 @@ mod tests {
         // Invalid values should fall back to unwrap_or defaults
         assert_eq!(limits.attachments_max_count, 20);
         assert_eq!(limits.crypto_operations_per_message, 1000);
+    }
+}
+
+#[cfg(test)]
+mod queue_stream_maxlen_tests {
+    use super::LimitsConfig;
+
+    /// The regression 0.28.0 introduced: the send stream was trimmed at the
+    /// *receive* hard limit, so raising the send limits past it made trimming
+    /// reachable in ordinary use — and a trim removes the stream entry while
+    /// `SEND_QUEUE_COUNT` and `PEER_Q` keep counting it.
+    #[test]
+    fn maxlen_sits_above_the_larger_hard_limit_not_the_receive_one() {
+        let limits = LimitsConfig {
+            queued_send_messages_hard: 10_000,
+            queued_receive_messages_hard: 1_000,
+            ..LimitsConfig::default()
+        };
+        // The bug was `1_000` here, which is below the send limit it also bounds.
+        assert_eq!(limits.queue_stream_maxlen(), 10_001);
+    }
+
+    /// Symmetric: whichever side is larger is the one that has to fit.
+    #[test]
+    fn maxlen_follows_whichever_hard_limit_is_larger() {
+        let limits = LimitsConfig {
+            queued_send_messages_hard: 500,
+            queued_receive_messages_hard: 9_000,
+            ..LimitsConfig::default()
+        };
+        assert_eq!(limits.queue_stream_maxlen(), 9_001);
+    }
+
+    /// An unlimited hard limit disables trimming rather than casting `-1` to
+    /// `usize` and handing Redis 18446744073709551615 as a `MAXLEN`.
+    #[test]
+    fn an_unlimited_hard_limit_disables_trimming() {
+        let send_unlimited = LimitsConfig {
+            queued_send_messages_hard: -1,
+            ..LimitsConfig::default()
+        };
+        assert_eq!(send_unlimited.queue_stream_maxlen(), 0);
+
+        let receive_unlimited = LimitsConfig {
+            queued_receive_messages_hard: -1,
+            ..LimitsConfig::default()
+        };
+        assert_eq!(receive_unlimited.queue_stream_maxlen(), 0);
+    }
+
+    /// The property the value exists for, over the whole settable range: a
+    /// stream is never trimmed at or below a limit an account can be clamped
+    /// to, because that is what makes counters and stream diverge.
+    #[test]
+    fn maxlen_is_never_at_or_below_a_clampable_limit() {
+        for (send, receive) in [
+            (1, 1),
+            (200, 200),
+            (1_000, 10_000),
+            (10_000, 1_000),
+            (i32::MAX, 5),
+        ] {
+            let limits = LimitsConfig {
+                queued_send_messages_hard: send,
+                queued_receive_messages_hard: receive,
+                ..LimitsConfig::default()
+            };
+            let maxlen = limits.queue_stream_maxlen();
+            assert!(
+                maxlen > send as usize,
+                "send {send} not below maxlen {maxlen}"
+            );
+            assert!(
+                maxlen > receive as usize,
+                "receive {receive} not below maxlen {maxlen}"
+            );
+        }
     }
 }

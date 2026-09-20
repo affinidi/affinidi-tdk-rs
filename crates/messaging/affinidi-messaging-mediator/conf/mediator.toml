@@ -417,6 +417,21 @@ queued_receive_messages_soft = "200"
 ### backend storage per DID (this x message_size).
 queued_receive_messages_hard = "1000"
 
+### NOT A SETTING — how the two `hard` limits above bound the Redis streams.
+###
+### On the Redis backend the per-DID inbox and outbox streams carry a MAXLEN,
+### derived as (larger of the two hard limits) + 1 — strictly above both, and
+### 0 (no trimming) if either is -1. It is derived rather than configured
+### because it MUST sit above them: a trim removes a stream entry while the
+### queue counters keep counting it, so a DID past the trim is refused by
+### counters for messages it can no longer list or purge, recovering only when
+### the message TTL expires. Raising a hard limit therefore moves the stream
+### bound with it automatically; there is no second number to remember.
+###
+### Residual: an account granted -1 or -2 (unlimited) is not clamped to the
+### hard limit, so no finite bound sits above it and trimming can still reach
+### such an account. That is a property of choosing unlimited.
+
 ### Env: LIMIT_TO_KEYS_PER_DID
 ### Maximum keys per recipient DID (DoS protection).
 ### Scale: rarely needs changing; only raise for recipients that legitimately

@@ -63,6 +63,9 @@ local function store_message(keys, args)
         -- Update the sender records
         redis.call('HINCRBY', 'DID:' .. args[5], 'SEND_QUEUE_BYTES', bytes)
         redis.call('HINCRBY', 'DID:' .. args[5], 'SEND_QUEUE_COUNT', 1)
+        -- Per-relationship depth: one hash per sender, one field per recipient.
+        -- The per-DID total above cannot tell fan-out from flooding; this can.
+        redis.call('HINCRBY', 'PEER_Q:' .. args[5], args[4], 1)
         if queue_maxlen > 0 then
             SQ = redis.call('XADD', 'SEND_Q:' .. args[5], 'MAXLEN', '~', queue_maxlen, time .. '-*',
                 'MSG_ID', keys[1], 'BYTES', bytes, 'TO', args[4])
@@ -138,6 +141,12 @@ local function delete_message(keys, args)
         -- Remove the sender records
         redis.call('HINCRBY', 'DID:' .. meta.map.FROM, 'SEND_QUEUE_BYTES', -bytes)
         redis.call('HINCRBY', 'DID:' .. meta.map.FROM, 'SEND_QUEUE_COUNT', -1)
+        -- Per-relationship depth. HDEL at zero so a sender that has messaged
+        -- many peers does not keep a field for each of them forever.
+        local peer_left = redis.call('HINCRBY', 'PEER_Q:' .. meta.map.FROM, meta.map.TO, -1)
+        if tonumber(peer_left) <= 0 then
+            redis.call('HDEL', 'PEER_Q:' .. meta.map.FROM, meta.map.TO)
+        end
         SQ = redis.call('XDEL', 'SEND_Q:' .. meta.map.FROM, meta.map.SEND_ID)
     end
 
