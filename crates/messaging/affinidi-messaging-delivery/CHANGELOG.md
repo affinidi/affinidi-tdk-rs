@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.1.18 — the drain backs off per destination, not per message
+
+The drain discarded the send error entirely (`Err(_e)`), so a queue-full
+refusal was handled as an ordinary failure: bump `attempts`, back off
+exponentially, try again. Two things wrong with that.
+
+**It punished the message for the relationship's condition.** `attempts` drives
+exponential backoff to a 60s cap, so a peer whose queue clears in a minute left
+its sender waiting far longer than it needed to, for a refusal the message did
+not cause and could not fix.
+
+**It re-learned the same refusal once per queued message.** Fifty entries for a
+blocked peer meant fifty sends, fifty refusals and fifty store writes on every
+tick — aimed at a mediator that is refusing precisely because it is already
+holding too much. One refusal is enough to know the answer for the rest.
+
+A queue-full refusal now defers its **destination** for the remainder of the
+pass, scheduled by the server's `Retry-After` (30s when it sends none, matching
+the mediator's own hint), with `attempts` left alone and `deliver_by_ms` still
+the bound that stops it going on for ever.
+
+`DrainReport::backpressured` counts these separately from `retried`, because the
+remedy differs: a climbing `backpressured` beside a flat `retried` means a peer
+has stopped collecting, not that the network is unhealthy.
+
+The blast radius is respected — a destination refused with `limits.queue.peer`
+does not hold up any other destination in the same pass. Deferring everything
+because one peer stopped collecting is the failure the per-relationship gate
+exists to prevent, and it would have been reintroduced here, client-side.
+
+An ordinary transport failure keeps its previous behaviour exactly, and a
+closed delivery window still outranks a full queue: an entry that can never be
+delivered is `Failed`, not deferred.
+
 ## 0.1.17 — an ack that cannot be delivered is no longer dropped
 
 An ack is a delete at the mediator, and the dispatcher issues it over the

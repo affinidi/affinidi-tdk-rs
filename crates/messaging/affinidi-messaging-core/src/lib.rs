@@ -28,7 +28,7 @@ pub mod transport;
 pub mod types;
 
 pub use error::MessagingError;
-pub use http_status::HttpStatusError;
+pub use http_status::{HttpStatusError, QueueFullGate};
 pub use traits::{IdentityResolver, MessagingProtocol, RelationshipManager};
 pub use transport::{
     ConnState, Inbound, InboundAck, InboundKind, MessageTransport, RelationshipRequest,

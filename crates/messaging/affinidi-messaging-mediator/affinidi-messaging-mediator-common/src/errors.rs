@@ -4,7 +4,7 @@ use crate::types::{
 };
 use axum::{
     Json,
-    http::StatusCode,
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
 use rand::{RngExt, distr::Alphanumeric};
@@ -249,6 +249,10 @@ impl IntoResponse for AppError {
         };
 
         let request_id = ctx.request_id.clone();
+
+        // Set by the arms that can carry a pacing hint; attached as a
+        // `Retry-After` header below.
+        let mut retry_after_secs: Option<u64> = None;
 
         let response = match self.error {
             MediatorError::ErrorHandlingError(error_code, session_id, msg) => {
@@ -568,6 +572,10 @@ impl IntoResponse for AppError {
                 log_text,
             ) => {
                 event!(Level::WARN, "{}{}", log_text, ctx_log);
+                // Read before the report is serialised away: a queue-full
+                // refusal carries a pacing hint, and the code is what
+                // identifies it.
+                retry_after_secs = queue_full_retry_after_secs(&problem_report.code);
                 ErrorResponse {
                     http_code,
                     session_id,
@@ -579,12 +587,51 @@ impl IntoResponse for AppError {
                 }
             }
         };
-        (
-            StatusCode::from_u16(response.http_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            Json(response),
-        )
-            .into_response()
+        let status =
+            StatusCode::from_u16(response.http_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        match retry_after_secs {
+            Some(secs) => (
+                status,
+                [(header::RETRY_AFTER, secs.to_string())],
+                Json(response),
+            )
+                .into_response(),
+            None => (status, Json(response)).into_response(),
+        }
     }
+}
+
+/// Seconds a client should wait before resending, for a queue-full refusal.
+///
+/// A `503` with no `Retry-After` gives a caller nothing to pace on, so it
+/// retries as fast as its loop allows — into a queue that is full precisely
+/// because nothing is draining it. A modest floor is worth more than an
+/// accurate number here, and an accurate number is not available: the
+/// condition clears when the *recipient* next collects, which the mediator
+/// cannot predict and should not pretend to.
+///
+/// So this is deliberately a **floor, not a schedule**. It is long enough to
+/// stop a hot retry loop and short enough that a queue which drains a moment
+/// later is not held back for minutes.
+pub const QUEUE_FULL_RETRY_AFTER_SECS: u64 = 30;
+
+/// The pacing hint for a problem-report code, when it is a queue-depth
+/// refusal.
+///
+/// Matched on the code suffix rather than the numeric error code so that the
+/// hint follows the documented `limits.queue.*` contract — the same strings a
+/// client matches on — rather than a parallel table of numbers that can drift
+/// from it.
+fn queue_full_retry_after_secs(code: &str) -> Option<u64> {
+    const GATES: [&str; 3] = [
+        "limits.queue.peer",
+        "limits.queue.sender",
+        "limits.queue.recipient",
+    ];
+    GATES
+        .iter()
+        .any(|gate| code.ends_with(gate))
+        .then_some(QUEUE_FULL_RETRY_AFTER_SECS)
 }
 
 /// JSON error response body returned by the mediator's HTTP API.
@@ -762,5 +809,94 @@ mod tests {
         let id1 = create_session_id();
         let id2 = create_session_id();
         assert_ne!(id1, id2, "Two session IDs should not be identical");
+    }
+
+    /// A `503` with no `Retry-After` gives a caller nothing to pace on, so it
+    /// retries as fast as its loop allows — into a queue that is full
+    /// precisely because nothing is draining it.
+    #[test]
+    fn every_queue_gate_carries_a_pacing_hint() {
+        for code in [
+            "e.p.limits.queue.peer",
+            "e.p.limits.queue.sender",
+            "e.p.limits.queue.recipient",
+        ] {
+            assert_eq!(
+                queue_full_retry_after_secs(code),
+                Some(QUEUE_FULL_RETRY_AFTER_SECS),
+                "code {code}"
+            );
+        }
+    }
+
+    /// The hint belongs only to the queue gates: attaching it to every refusal
+    /// would tell a caller to wait before retrying things that will never
+    /// succeed, and hide the ones that would.
+    #[test]
+    fn other_refusals_carry_no_hint() {
+        for code in [
+            "e.p.message.expired",
+            "e.p.authorization.local",
+            "e.p.limits.queue",
+            "",
+        ] {
+            assert_eq!(queue_full_retry_after_secs(code), None, "code {code}");
+        }
+    }
+
+    /// Matched on the suffix, so the DIDComm problem-report prefix is not part
+    /// of the contract a client has to reproduce.
+    #[test]
+    fn the_prefix_is_not_part_of_the_match() {
+        assert_eq!(
+            queue_full_retry_after_secs("limits.queue.peer"),
+            Some(QUEUE_FULL_RETRY_AFTER_SECS)
+        );
+    }
+
+    #[test]
+    fn a_queue_refusal_response_carries_retry_after() {
+        let err: AppError = MediatorError::problem(
+            95,
+            "session",
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "limits.queue.peer",
+            "Too many messages already waiting for this recipient",
+            vec![],
+            StatusCode::SERVICE_UNAVAILABLE,
+        )
+        .into();
+        let response = err.into_response();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+            Some(QUEUE_FULL_RETRY_AFTER_SECS.to_string().as_str()),
+            "a queue-full refusal must tell the caller how long to wait"
+        );
+    }
+
+    #[test]
+    fn an_unrelated_problem_report_has_no_retry_after() {
+        let err: AppError = MediatorError::problem(
+            31,
+            "session",
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "message.expired",
+            "Message has expired",
+            vec![],
+            StatusCode::BAD_REQUEST,
+        )
+        .into();
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response.headers().get(header::RETRY_AFTER).is_none());
     }
 }

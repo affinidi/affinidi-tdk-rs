@@ -48,6 +48,9 @@ pub struct HttpStatusError {
 impl HttpStatusError {
     /// HTTP 429 Too Many Requests.
     pub const TOO_MANY_REQUESTS: u16 = 429;
+    /// HTTP 503 Service Unavailable — the status the mediator's queue-depth
+    /// gates refuse with.
+    pub const SERVICE_UNAVAILABLE: u16 = 503;
     /// Response header naming the service whose rate limiter refused a request.
     pub const RATE_LIMIT_SOURCE_HEADER: &'static str = "x-rate-limit-source";
 
@@ -132,6 +135,103 @@ impl HttpStatusError {
     /// `Retry-After` as a [`Duration`], when one was given.
     pub fn retry_after(&self) -> Option<Duration> {
         self.retry_after_secs.map(Duration::from_secs)
+    }
+
+    /// Which queue-depth gate refused this send, when one did.
+    ///
+    /// A queue-full refusal is not a fault of the message being sent and not a
+    /// fault of the sender: it says the *relationship* or the *account* is
+    /// holding more undelivered messages than the mediator permits, usually
+    /// because the recipient has stopped collecting. Treating it as an
+    /// ordinary transport failure — retry this one message with backoff — is
+    /// wrong twice over: it retries a message that cannot succeed until
+    /// something else changes, and it does so once per queued message rather
+    /// than once per blocked destination.
+    ///
+    /// Recognised from the mediator's problem report rather than the status
+    /// alone, because a `503` on its own could be anything.
+    pub fn queue_full(&self) -> Option<QueueFullGate> {
+        if self.status != Self::SERVICE_UNAVAILABLE {
+            return None;
+        }
+        QueueFullGate::from_problem_body(&self.body)
+    }
+}
+
+/// Which of the mediator's three queue-depth gates refused a send.
+///
+/// They mean materially different things to a sender, which is why this is an
+/// enum rather than a boolean: [`Peer`](Self::Peer) is one relationship backing
+/// up and the sender's other destinations are unaffected, while
+/// [`Sender`](Self::Sender) is the sender's own global ceiling and *everything*
+/// it sends is refused until its queue drains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum QueueFullGate {
+    /// Too many messages already queued from this sender **for this one
+    /// recipient**. Other destinations still work.
+    Peer,
+    /// The sender's own total queue is full, across every recipient. Nothing
+    /// it sends will be accepted until that drains.
+    Sender,
+    /// The *recipient's* inbox is full, from all senders. Another sender's
+    /// traffic may be what filled it.
+    Recipient,
+}
+
+impl QueueFullGate {
+    /// Problem-report code for the per-relationship gate.
+    pub const PEER_CODE: &'static str = "limits.queue.peer";
+    /// Problem-report code for the sender-total gate.
+    pub const SENDER_CODE: &'static str = "limits.queue.sender";
+    /// Problem-report code for the recipient-total gate.
+    pub const RECIPIENT_CODE: &'static str = "limits.queue.recipient";
+
+    /// Map a problem-report code to its gate.
+    ///
+    /// Matches on the suffix rather than the whole string: the mediator emits
+    /// these prefixed per the DIDComm problem-report convention (`e.p.` for an
+    /// error at protocol scope), and a sender should not break if that prefix
+    /// ever varies.
+    pub fn from_problem_code(code: &str) -> Option<Self> {
+        if code.ends_with(Self::PEER_CODE) {
+            Some(Self::Peer)
+        } else if code.ends_with(Self::SENDER_CODE) {
+            Some(Self::Sender)
+        } else if code.ends_with(Self::RECIPIENT_CODE) {
+            Some(Self::Recipient)
+        } else {
+            None
+        }
+    }
+
+    /// Dig the gate out of a mediator error body.
+    ///
+    /// The mediator answers with `{"message": "<serialised problem report>"}`,
+    /// so the report is a JSON *string* inside a JSON object. Both shapes are
+    /// accepted — the wrapper, and a bare problem report — so this keeps
+    /// working if a caller hands over the inner document directly.
+    ///
+    /// Deliberately not a substring search for `limits.queue.peer` over the
+    /// whole body: that would also match the text of an unrelated error that
+    /// merely quoted the code, and this decides whether to stop sending to a
+    /// destination.
+    fn from_problem_body(body: &str) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_str(body).ok()?;
+
+        // The wrapper: `message` holds the report as an escaped JSON string.
+        if let Some(message) = value.get("message").and_then(|m| m.as_str())
+            && let Ok(report) = serde_json::from_str::<serde_json::Value>(message)
+            && let Some(code) = report.get("code").and_then(|c| c.as_str())
+            && let Some(gate) = Self::from_problem_code(code)
+        {
+            return Some(gate);
+        }
+
+        // A bare problem report.
+        value
+            .get("code")
+            .and_then(|c| c.as_str())
+            .and_then(Self::from_problem_code)
     }
 }
 
@@ -256,5 +356,125 @@ mod tests {
         let err = HttpStatusError::from_parts("send", 503, None, None, "busy");
         assert!(!err.is_rate_limited());
         assert_eq!(err.to_string(), "send: status(503), body(busy)");
+    }
+
+    /// The mediator's real response shape: an `ErrorResponse` whose `message`
+    /// is the problem report serialised as a JSON *string*.
+    fn mediator_body(code: &str) -> String {
+        let report = serde_json::json!({ "code": code, "comment": "too many" }).to_string();
+        serde_json::json!({
+            "sessionId": "s",
+            "httpCode": 503,
+            "errorCode": 95,
+            "errorCodeStr": "DIDCommProblemReport",
+            "message": report,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn each_gate_is_recognised_from_the_mediators_own_body() {
+        for (code, expected) in [
+            ("e.p.limits.queue.peer", QueueFullGate::Peer),
+            ("e.p.limits.queue.sender", QueueFullGate::Sender),
+            ("e.p.limits.queue.recipient", QueueFullGate::Recipient),
+        ] {
+            let err = HttpStatusError::from_parts("send", 503, None, None, mediator_body(code));
+            assert_eq!(err.queue_full(), Some(expected), "code {code}");
+        }
+    }
+
+    /// The gates mean different things to a sender — one blocked relationship
+    /// versus every destination blocked — so they must not collapse together.
+    #[test]
+    fn peer_and_sender_are_not_interchangeable() {
+        let peer = HttpStatusError::from_parts(
+            "send",
+            503,
+            None,
+            None,
+            mediator_body("e.p.limits.queue.peer"),
+        );
+        let sender = HttpStatusError::from_parts(
+            "send",
+            503,
+            None,
+            None,
+            mediator_body("e.p.limits.queue.sender"),
+        );
+        assert_ne!(peer.queue_full(), sender.queue_full());
+    }
+
+    #[test]
+    fn a_bare_problem_report_is_accepted_too() {
+        let body = serde_json::json!({ "code": "e.p.limits.queue.peer" }).to_string();
+        let err = HttpStatusError::from_parts("send", 503, None, None, body);
+        assert_eq!(err.queue_full(), Some(QueueFullGate::Peer));
+    }
+
+    #[test]
+    fn an_unrelated_503_is_not_a_queue_refusal() {
+        let err = HttpStatusError::from_parts("send", 503, None, None, "service restarting");
+        assert_eq!(err.queue_full(), None);
+        let other = HttpStatusError::from_parts(
+            "send",
+            503,
+            None,
+            None,
+            mediator_body("e.p.message.expired"),
+        );
+        assert_eq!(other.queue_full(), None);
+    }
+
+    /// The status is part of the contract: a body that mentions a gate under
+    /// some other status is not a queue refusal.
+    #[test]
+    fn the_status_must_be_503() {
+        let err = HttpStatusError::from_parts(
+            "send",
+            429,
+            None,
+            None,
+            mediator_body("e.p.limits.queue.peer"),
+        );
+        assert_eq!(err.queue_full(), None);
+    }
+
+    /// This decides whether to stop sending to a destination, so it must not
+    /// fire on prose that merely quotes a gate name.
+    #[test]
+    fn prose_mentioning_a_gate_does_not_count_as_one() {
+        let err = HttpStatusError::from_parts(
+            "send",
+            503,
+            None,
+            None,
+            "the operator should read about limits.queue.peer in the docs",
+        );
+        assert_eq!(err.queue_full(), None);
+
+        let quoted = serde_json::json!({
+            "message": "see limits.queue.peer for details"
+        })
+        .to_string();
+        let err = HttpStatusError::from_parts("send", 503, None, None, quoted);
+        assert_eq!(
+            err.queue_full(),
+            None,
+            "a message field that is not a problem report must not match"
+        );
+    }
+
+    #[test]
+    fn a_queue_refusal_carries_the_servers_pacing_hint() {
+        let err = HttpStatusError::from_parts(
+            "send",
+            503,
+            None,
+            Some("30"),
+            mediator_body("e.p.limits.queue.peer"),
+        );
+        assert_eq!(err.queue_full(), Some(QueueFullGate::Peer));
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(30)));
     }
 }
