@@ -2383,4 +2383,244 @@ mod tests {
         assert_eq!(got.0, "invite-data-base64");
         assert_eq!(got.1, "alice");
     }
+
+    /// End-to-end filtered purge against a real store, placed in this module
+    /// because the storage CI job runs `--lib "store::memory_store"` — a test
+    /// of backend behaviour anywhere else would compile in one job and run in
+    /// none.
+    #[tokio::test]
+    async fn a_filtered_purge_removes_only_the_named_peer() {
+        use affinidi_messaging_mediator_common::store::PurgeFilter;
+
+        let store = MemoryStore::new();
+        for did in ["alice", "bob", "carol"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        // alice -> bob twice, alice -> carol once.
+        for (n, to) in [("m1", "bob"), ("m2", "bob"), ("m3", "carol")] {
+            store
+                .store_message("s", n, to, Some("alice"), 0, 0)
+                .await
+                .expect("store");
+        }
+
+        let filter = PurgeFilter {
+            peer: Some("bob".into()),
+            ..Default::default()
+        };
+        let report = store
+            .purge_folder_filtered("alice", Folder::Outbox, &filter)
+            .await
+            .expect("purge");
+
+        assert_eq!(report.count, 2, "both messages for bob");
+        assert_eq!(report.scanned, 3, "carol's was examined and kept");
+        assert!(report.bytes > 0);
+
+        // Carol's message survives, in both directions.
+        let left = store
+            .list_messages("alice", Folder::Outbox, None, 100)
+            .await
+            .expect("list");
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].to_address.as_deref(), Some("carol"));
+        assert_eq!(
+            store
+                .list_messages("carol", Folder::Inbox, None, 100)
+                .await
+                .expect("list")
+                .len(),
+            1,
+            "purging alice's outbox for bob must not touch carol's inbox"
+        );
+    }
+
+    /// A purge must never report a message as removed when the delete refused.
+    /// Telling an operator the queue is emptier than it is, while they are
+    /// reaching for this precisely because a full queue is causing an outage,
+    /// is the one lie a recovery tool must not tell.
+    #[tokio::test]
+    async fn a_refused_delete_is_reported_as_failed_not_purged() {
+        use affinidi_messaging_mediator_common::store::{
+            DeletionAuthority, PurgeFilter, PurgeReport,
+        };
+
+        let store = MemoryStore::new();
+        for did in ["alice", "bob", "carol"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        let id = store
+            .store_message("s", "m1", "bob", Some("alice"), 0, 0)
+            .await
+            .expect("store");
+
+        // A message alice sent to bob. Carol owns neither end, so a delete by
+        // carol is refused rather than "already gone".
+        let refused = store
+            .delete_message(
+                &id,
+                DeletionAuthority::Owner {
+                    did_hash: "carol".to_string(),
+                },
+            )
+            .await;
+        let err = refused.expect_err("carol may not delete alice's message");
+        assert!(
+            !err.to_string().contains("NOT_FOUND"),
+            "this must be a refusal, not an already-gone, or the test proves \
+             nothing about the failure path. Got: {err}"
+        );
+
+        // Carol's own outbox is empty, so nothing is touched either way — the
+        // point is that alice's message survives.
+        let report: PurgeReport = store
+            .purge_folder_filtered("carol", Folder::Outbox, &PurgeFilter::default())
+            .await
+            .expect("purge");
+        assert_eq!(report.count, 0);
+        assert_eq!(report.failed, 0);
+        assert!(
+            store
+                .list_messages("alice", Folder::Outbox, None, 10)
+                .await
+                .expect("list")
+                .len()
+                == 1,
+            "alice's message must survive carol's purge"
+        );
+    }
+
+    /// The already-gone case is NOT a failure: the caller asked for the message
+    /// to be absent and it is. The filtered purge tells it apart from a real
+    /// refusal by this marker, so the wording is pinned — if it changes, an
+    /// already-gone message starts being counted as a failure, which is the
+    /// safe direction but should be deliberate rather than silent.
+    #[tokio::test]
+    async fn an_already_gone_message_reports_not_found() {
+        use affinidi_messaging_mediator_common::store::DeletionAuthority;
+
+        let store = MemoryStore::new();
+        let err = store
+            .delete_message(
+                "not-a-message",
+                DeletionAuthority::Owner {
+                    did_hash: "alice".to_string(),
+                },
+            )
+            .await
+            .expect_err("deleting an absent message reports not-found");
+        assert!(err.to_string().contains("NOT_FOUND"), "got: {err}");
+    }
+
+    /// A dry run is the difference between a recovery tool and a second
+    /// incident: it must report exactly what the real purge would remove, and
+    /// remove nothing.
+    #[tokio::test]
+    async fn a_dry_run_reports_without_removing() {
+        use affinidi_messaging_mediator_common::store::PurgeFilter;
+
+        let store = MemoryStore::new();
+        for did in ["alice", "bob"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        for n in ["m1", "m2"] {
+            store
+                .store_message("s", n, "bob", Some("alice"), 0, 0)
+                .await
+                .expect("store");
+        }
+
+        let dry = PurgeFilter {
+            dry_run: true,
+            ..Default::default()
+        };
+        let report = store
+            .purge_folder_filtered("alice", Folder::Outbox, &dry)
+            .await
+            .expect("dry run");
+        assert_eq!(report.count, 2);
+        assert_eq!(
+            store
+                .list_messages("alice", Folder::Outbox, None, 100)
+                .await
+                .expect("list")
+                .len(),
+            2,
+            "a dry run must not remove anything"
+        );
+
+        // The same filter without dry_run removes exactly what was reported.
+        let wet = PurgeFilter::default();
+        let report2 = store
+            .purge_folder_filtered("alice", Folder::Outbox, &wet)
+            .await
+            .expect("purge");
+        assert_eq!(report2.count, report.count, "the dry run predicted this");
+        assert!(
+            store
+                .list_messages("alice", Folder::Outbox, None, 100)
+                .await
+                .expect("list")
+                .is_empty()
+        );
+    }
+
+    /// The walk must page past entries it does not match. With more messages
+    /// than one page and a filter that rejects most of them, restarting from
+    /// the beginning each round would never terminate.
+    #[tokio::test]
+    async fn a_narrow_filter_over_many_pages_terminates_and_keeps_the_rest() {
+        use affinidi_messaging_mediator_common::store::PurgeFilter;
+
+        let store = MemoryStore::new();
+        for did in ["alice", "bob", "carol"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        // 250 for carol (kept) and 3 for bob (purged), interleaved so the
+        // matches are not all on the first page.
+        for i in 0..250 {
+            store
+                .store_message("s", &format!("c{i}"), "carol", Some("alice"), 0, 0)
+                .await
+                .expect("store");
+            if i % 100 == 0 {
+                store
+                    .store_message("s", &format!("b{i}"), "bob", Some("alice"), 0, 0)
+                    .await
+                    .expect("store");
+            }
+        }
+
+        let filter = PurgeFilter {
+            peer: Some("bob".into()),
+            ..Default::default()
+        };
+        let report = store
+            .purge_folder_filtered("alice", Folder::Outbox, &filter)
+            .await
+            .expect("purge");
+
+        assert_eq!(report.count, 3);
+        assert_eq!(report.scanned, 253, "every entry was examined exactly once");
+        assert_eq!(
+            store
+                .list_messages("alice", Folder::Outbox, None, 1_000)
+                .await
+                .expect("list")
+                .len(),
+            250
+        );
+    }
 }
