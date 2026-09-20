@@ -189,7 +189,7 @@ pub use crate::protocols::tsp::{
     PeerCapability, PersistentRelationshipStore, RecoveryAction, RecoveryCoordinator,
     RecoveryMetrics, RecoveryState, RelationshipKv, RelationshipStore, SendProtocol, SendReadiness,
     TSP_DISCOVER_FEATURE_URI, ThreadDigests, TspPolicy, TspSupport, TspWebSocket, full_jitter,
-    readiness_for,
+    invite_refusal_is_benign, readiness_for,
 };
 /// Re-export of the pure-TSP authentication handler so a TSP-only client can
 /// register it on the TDK in place of the built-in DIDComm auth flow.

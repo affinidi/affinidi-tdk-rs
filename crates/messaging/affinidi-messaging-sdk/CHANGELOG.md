@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### 0.26.12 — a re-establishing send survives the peer inviting us first
+
+`send_reestablishing` reads the send readiness and then invites, and those are
+two separate awaits on the relationship store. The peer can move our half
+between them: its own invite arrives, `None` + `ReceiveInvite` leaves us
+`InviteReceived`, and `SendInvite` is legal only from `None`. The invite was
+then refused with
+
+```
+invalid transition: SendInvite in state InviteReceived
+```
+
+and the payload was never sent — the method returned that error instead.
+
+That is not a failed send. It is the outcome the invite existed to produce,
+reached from the other side: a relationship is on record again, and
+`admits_application_message()` is true for every state but `None`, so §3.6
+admits the payload. And the collision is commonest exactly where this method
+matters most, because two endpoints repairing the same broken relationship at
+once is what a mediator restart or a peer redeploy produces.
+
+A refused invite is now answered by **re-reading the store** rather than by
+inspecting the error: our half no longer `None` means carry on to the payload;
+still `None` means the invite failed for its own reasons and that error stands.
+The payload is sent exactly once either way. The decision is the new pure
+`invite_refusal_is_benign(SendReadiness) -> bool`, exported beside
+`readiness_for` and unit-tested with it — the race lives between two awaits and
+cannot be staged in a test, so the decision is what is pinned.
+
+**Behavioural change to send semantics (R3.6).** A `send_reestablishing` call
+that returned `Err` on this collision now returns `Ok` with the payload
+delivered. No signature changes. Callers that treated the error as "the peer is
+unreachable" were being told the wrong thing; nothing needs to change on their
+side, but a consumer with its own workaround for it can drop it. Found by
+`vta-service`, whose one-shot D6 recovery reported the peer as silent for a frame
+that had never left the node (OpenVTC/verifiable-trust-infrastructure#1582).
+
 ### 0.26.11 — queue status, and a purge you can narrow
 
 `ATM::queue_status()` returns this DID's own depth, effective limits, resulting
@@ -24,7 +61,6 @@ Query values are percent-encoded rather than interpolated: the mediator rejects
 unknown parameters, so an unescaped `&` in a peer value would turn one
 parameter into two and fail loudly — but it should not be possible to reach
 that in the first place.
-
 
 ### 0.26.10 — the deletion handler stops re-deleting redelivered messages
 
