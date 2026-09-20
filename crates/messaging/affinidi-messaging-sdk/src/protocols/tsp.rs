@@ -935,6 +935,34 @@ pub fn readiness_for(state: RelationshipState) -> SendReadiness {
     }
 }
 
+/// May a refused `SendInvite` be carried on from, given the readiness read
+/// **after** the refusal?
+///
+/// The question arises only inside
+/// [`send_reestablishing`](TspOps::send_reestablishing), whose readiness read
+/// and `SendInvite` are two separate awaits on the store: the peer can invite us
+/// in between, leaving our half [`InviteReceived`](RelationshipState::InviteReceived),
+/// and `SendInvite` is legal only from [`None`](RelationshipState::None). The
+/// answer is decided on the *store* rather than on the error, because an
+/// [`ATMError`]'s text is not a contract and the state is.
+///
+/// - Anything but [`Reestablish`](SendReadiness::Reestablish) means a
+///   relationship is on record again — the peer invited us while we were
+///   preparing to invite it, which is the outcome the invite existed to produce.
+///   §3.6 admits the payload over any state but `None`, so carry on.
+/// - [`Reestablish`](SendReadiness::Reestablish) means our half is still `None`:
+///   the invite failed for its own reasons, nothing has changed, and sending the
+///   payload would feed it to the peer's §7.2.2 drop and report success. Surface
+///   the error.
+///
+/// Pure and total, like [`readiness_for`] beside it, and for the same reason:
+/// the race it answers lives between two awaits and cannot be staged in a test,
+/// so the decision is what gets pinned.
+#[must_use]
+pub fn invite_refusal_is_benign(after: SendReadiness) -> bool {
+    !matches!(after, SendReadiness::Reestablish)
+}
+
 /// [`readiness_for`] the state currently held for the `(our_vid, their_vid)`
 /// pair in `store`. Reads local state only — no network — so it composes with a
 /// durable [`RelationshipStore`]: after a restart the readiness reflects what
@@ -2148,6 +2176,31 @@ impl TspOps<'_> {
     /// `Bidirectional`: that shows up only as a round-trip timeout (§7.2.2's drop
     /// is silent) and is the send/outbox layer's job to detect and retry
     /// (design note D4). Here `Ready` sends once and returns.
+    ///
+    /// # The peer may invite us mid-sequence
+    ///
+    /// The readiness read and the invite's `SendInvite` transition are two
+    /// separate awaits on the relationship store, and the peer can move our half
+    /// between them: its own invite arrives, `None` + `ReceiveInvite` leaves us
+    /// [`InviteReceived`](RelationshipState::InviteReceived), and `SendInvite` is
+    /// legal only from [`None`](RelationshipState::None). The invite is then
+    /// refused with `invalid transition: SendInvite in state InviteReceived`.
+    ///
+    /// That is not a failed send. It is the outcome the invite existed to
+    /// produce, reached from the other side — a relationship is on record again,
+    /// and [`admits_application_message`](RelationshipState::admits_application_message)
+    /// is true for every state but `None`, so the payload can go. Returning the
+    /// error instead loses it, and loses it worst where this method matters
+    /// most: two endpoints repairing the same broken relationship at once is
+    /// what a mediator restart or a peer redeploy produces, so the collision is
+    /// commonest exactly when recovery is.
+    ///
+    /// So a refused invite is answered by **re-reading the store** rather than by
+    /// inspecting the error — [`invite_refusal_is_benign`] is the decision, and
+    /// is pure so it can be tested without a mediator. Our half no longer `None`
+    /// means carry on to the payload; still `None` means the invite failed for
+    /// its own reasons (no route, no key, the mediator refused it) and that error
+    /// stands. The payload is sent exactly once either way.
     pub async fn send_reestablishing(
         &self,
         profile: &Arc<ATMProfile>,
@@ -2155,10 +2208,21 @@ impl TspOps<'_> {
         route: &[String],
         payload: &[u8],
     ) -> Result<(), ATMError> {
-        if self.send_readiness(profile, their_did).await? == SendReadiness::Reestablish {
+        if self.send_readiness(profile, their_did).await? == SendReadiness::Reestablish
             // Sends the invite and moves us to `Pending`; the payload below rides
             // after it (§3.6) rather than waiting for the accept.
-            self.form_relationship_routed(profile, their_did).await?;
+            && let Err(e) = self.form_relationship_routed(profile, their_did).await
+        {
+            let after = self.send_readiness(profile, their_did).await?;
+            if !invite_refusal_is_benign(after) {
+                return Err(e);
+            }
+            tracing::debug!(
+                %their_did,
+                ?after,
+                "a re-establishing invite was refused because the peer re-formed the \
+                 relationship first; sending the payload over it (§3.6)",
+            );
         }
         self.send_routed(profile, route, payload).await
     }
@@ -3473,7 +3537,7 @@ mod tests {
         RecoveryAction, RecoveryCoordinator, RecoveryState, RelationshipEvent, RelationshipKv,
         RelationshipState, RelationshipStore, SendReadiness, TSP_DISCOVER_FEATURE_URI, TspPolicy,
         TspSupport, advance_state, classify_protocol, disclosure_advertises_tsp, full_jitter,
-        next_state, readiness_for, readiness_for_pair,
+        invite_refusal_is_benign, next_state, readiness_for, readiness_for_pair,
     };
     use crate::errors::ATMError;
     use crate::protocols::discover_features::{
@@ -4284,6 +4348,52 @@ mod tests {
                 readiness_for(state),
                 SendReadiness::Reestablish,
                 "{state:?} must not re-invite"
+            );
+        }
+    }
+
+    /// The collision `send_reestablishing` has to survive: the peer invited us
+    /// between our readiness read and our `SendInvite`, so the invite was refused
+    /// and our half now reads `InviteReceived`. A relationship is on record, §3.6
+    /// admits the payload over it, and the send carries on.
+    ///
+    /// Pinned here rather than end-to-end because the race lives between two
+    /// awaits — there is no point at which a test can put the peer's invite.
+    #[test]
+    fn a_peer_invite_landing_mid_reestablish_is_carried_on_from() {
+        assert!(invite_refusal_is_benign(SendReadiness::HandshakeInFlight));
+    }
+
+    /// The peer went further and the handshake completed under us. Still on
+    /// record, still sendable — more so.
+    #[test]
+    fn a_completed_relationship_is_carried_on_from() {
+        assert!(invite_refusal_is_benign(SendReadiness::Ready));
+    }
+
+    /// Nothing on record after the refusal, so the invite genuinely failed.
+    /// Sending the payload here would feed it to the peer's §7.2.2 drop and
+    /// report success, so the error has to stand.
+    #[test]
+    fn a_half_still_absent_means_the_invite_really_failed() {
+        assert!(!invite_refusal_is_benign(SendReadiness::Reestablish));
+    }
+
+    /// The two decisions must not drift apart: exactly the readiness that asks
+    /// for an invite is the one that makes a refusal fatal.
+    #[test]
+    fn benign_refusal_is_the_complement_of_asking_to_reestablish() {
+        for state in [
+            RelationshipState::Bidirectional,
+            RelationshipState::None,
+            RelationshipState::Pending,
+            RelationshipState::InviteReceived,
+        ] {
+            let readiness = readiness_for(state);
+            assert_eq!(
+                invite_refusal_is_benign(readiness),
+                readiness != SendReadiness::Reestablish,
+                "{state:?}"
             );
         }
     }
