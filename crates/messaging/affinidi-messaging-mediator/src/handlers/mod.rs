@@ -25,6 +25,7 @@ pub mod message_outbound;
 pub mod message_purge;
 #[cfg(feature = "didcomm")]
 pub(crate) mod oob_discovery;
+pub mod queue_status;
 pub mod websocket;
 pub mod well_known_did_fetch;
 
@@ -52,6 +53,9 @@ pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router 
             "/purge/{folder}",
             delete(message_purge::message_purge_handler),
         )
+        // A DID's own queue depth, limits and age. Without it a sender learned
+        // its queue was full by being refused, which is already the failure.
+        .route("/queue/status", get(queue_status::queue_status_handler))
         // Websocket endpoint for ATM clients
         .route("/ws", get(websocket::websocket_handler))
         // Helps to test if you are who you think you are

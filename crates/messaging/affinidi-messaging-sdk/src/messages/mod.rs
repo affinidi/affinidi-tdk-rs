@@ -94,8 +94,90 @@ impl GenericDataStruct for DeleteMessageRequest {}
 pub struct PurgeQueueResponse {
     pub count: usize,
     pub bytes: usize,
+    /// Messages examined. Above `count` when the purge was narrowed, so a
+    /// caller can tell "the filter matched nothing" from "the folder was
+    /// empty".
+    ///
+    /// `#[serde(default)]` so a response from a mediator that predates
+    /// filtered purges still deserialises.
+    #[serde(default)]
+    pub scanned: usize,
+    /// The purge was a dry run: `count` and `bytes` describe what *would* have
+    /// been removed and nothing was.
+    #[serde(default)]
+    pub dry_run: bool,
+    /// Messages that matched but could **not** be removed.
+    ///
+    /// Non-zero means the queue is not as empty as `count` alone suggests. An
+    /// already-gone message is not counted here — the caller asked for it to be
+    /// absent and it is.
+    #[serde(default)]
+    pub failed: usize,
+    /// The purge stopped at the mediator's scan ceiling with messages still
+    /// unexamined. Everything reported was really removed; re-run the same
+    /// filter to continue.
+    #[serde(default)]
+    pub truncated: bool,
 }
 impl GenericDataStruct for PurgeQueueResponse {}
+
+/// One side of a DID's queue at the mediator — what is held, and how close
+/// that is to the point where the mediator starts refusing.
+///
+/// `limit` is the **effective** limit for this account: its own override when
+/// it has one, the mediator's configured default otherwise. `-1` means
+/// unlimited.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueSideStatus {
+    /// Messages currently queued.
+    pub messages: u32,
+    /// Bytes currently queued.
+    pub bytes: u64,
+    /// The depth at which this account starts being refused. `-1` = unlimited.
+    pub limit: i32,
+    /// `messages / limit`, or `None` when the limit is unlimited.
+    ///
+    /// Provided rather than left to the caller so that "am I near the wall"
+    /// has one answer everywhere, including the unlimited case — where the
+    /// honest answer is "there is no ratio", not "zero".
+    pub saturation: Option<f64>,
+    /// How long the oldest queued message has been waiting, or `None` when the
+    /// queue is empty.
+    ///
+    /// Depth cannot tell a busy queue from a stuck one. An age climbing toward
+    /// the mediator's message expiry means nothing is collecting.
+    pub oldest_age_secs: Option<u64>,
+}
+
+/// A DID's own queue status at the mediator.
+///
+/// # Why this exists
+///
+/// A sender learned its queue was full by being refused — at which point it is
+/// already failing, and the messages it was refused are the ones it most wanted
+/// to send. Everything needed to see it coming was in the account record and
+/// unreachable: a DID could read neither its own depth nor the limit it was
+/// measured against.
+///
+/// With this a sender can pace itself at 80% instead of discovering the wall at
+/// 100%, and an operator can tell a queue that is deep-but-draining from one
+/// that has stopped.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueStatusResponse {
+    /// Messages this DID has sent that are still waiting for their recipients.
+    pub send: QueueSideStatus,
+    /// Messages waiting in this DID's own inbox.
+    pub receive: QueueSideStatus,
+    /// How many messages this DID may have queued for any **one** recipient.
+    ///
+    /// Separate from `send.limit` because it is the gate that moves first: a
+    /// sender fanning out to many peers stays well under its send total while
+    /// a single stuck relationship crosses this. `-1` = unlimited.
+    pub send_per_peer_limit: i32,
+}
+impl GenericDataStruct for QueueStatusResponse {}
 
 /// Get messages Request struct
 #[derive(Debug, Default, Serialize, Deserialize)]

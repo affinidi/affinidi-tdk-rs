@@ -4,13 +4,15 @@ use crate::{
     common::session::Session,
 };
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
+use affinidi_messaging_mediator_common::store::PurgeFilter;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use affinidi_messaging_sdk::messages::{Folder, PurgeQueueResponse};
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use http::StatusCode;
+use serde::Deserialize;
 use tracing::{Instrument, Level, info, span};
 
 /// Empty one of the calling DID's own queues.
@@ -43,10 +45,36 @@ use tracing::{Instrument, Level, info, span};
 /// Purging is destructive and unrecoverable: undelivered messages are gone, not
 /// returned to their senders. It is logged at `info` with the count and bytes
 /// so the loss is on the record.
+/// Narrowing for a purge, from the query string.
+///
+/// All optional, and all absent is the historical whole-folder purge — so an
+/// existing caller is unaffected and keeps the faster path.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PurgeParams {
+    /// Only messages exchanged with this counterparty DID hash. In an outbox
+    /// that is who the message was sent to; in an inbox, who sent it.
+    pub peer: Option<String>,
+    /// Only messages that have been queued at least this long.
+    pub older_than_secs: Option<u64>,
+    /// Report what would be purged and purge nothing.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+impl PurgeParams {
+    /// Whether anything actually narrows the purge. A dry run counts: it must
+    /// take the filtered path even with no filter, or it would purge.
+    fn narrows(&self) -> bool {
+        self.peer.is_some() || self.older_than_secs.is_some() || self.dry_run
+    }
+}
+
 pub async fn message_purge_handler(
     session: Session,
     State(state): State<SharedData>,
     Path(folder): Path<Folder>,
+    Query(params): Query<PurgeParams>,
 ) -> Result<(StatusCode, Json<SuccessResponse<PurgeQueueResponse>>), AppError> {
     let _span = span!(
         Level::DEBUG,
@@ -73,14 +101,75 @@ pub async fn message_purge_handler(
             .into());
         }
 
-        let (count, bytes) = state
-            .database
-            .purge_folder(&session.session_id, &session.did_hash, folder.clone())
-            .await?;
+        let report = if params.narrows() {
+            let filter = PurgeFilter {
+                peer: params.peer.clone(),
+                // Seconds of age from the caller become an absolute arrival
+                // cut-off here, so the whole walk is measured against one
+                // instant rather than drifting as it pages.
+                arrived_before_ms: params.older_than_secs.map(|secs| {
+                    state
+                        .clock
+                        .unix_millis()
+                        .saturating_sub(u128::from(secs) * 1_000) as u64
+                }),
+                dry_run: params.dry_run,
+            };
+            state
+                .database
+                .purge_folder_filtered(&session.did_hash, folder.clone(), &filter)
+                .await?
+        } else {
+            // Nothing to narrow by: keep the whole-folder path, which drops
+            // the stream key in one go rather than walking it.
+            let (count, bytes) = state
+                .database
+                .purge_folder(&session.session_id, &session.did_hash, folder.clone())
+                .await?;
+            affinidi_messaging_mediator_common::store::PurgeReport {
+                count,
+                bytes,
+                scanned: count,
+                failed: 0,
+                truncated: false,
+            }
+        };
+
+        let (count, bytes, scanned) = (report.count, report.bytes, report.scanned);
+        let (failed, truncated) = (report.failed, report.truncated);
 
         // `info`, not `debug`: this destroys undelivered messages, and the
-        // count is the only record that they existed.
-        info!(?folder, count, bytes, "purged queue on the owner's request");
+        // count is the only record that they existed. A dry run says so, so a
+        // log reader is never left inferring whether anything was destroyed.
+        if params.dry_run {
+            info!(
+                ?folder,
+                count,
+                bytes,
+                scanned,
+                peer = ?params.peer,
+                older_than_secs = ?params.older_than_secs,
+                "dry run: reported what a purge would remove, removed nothing"
+            );
+        } else {
+            info!(
+                ?folder,
+                count,
+                bytes,
+                scanned,
+                failed,
+                truncated,
+                peer = ?params.peer,
+                older_than_secs = ?params.older_than_secs,
+                "purged queue on the owner's request"
+            );
+        }
+
+        let message = if params.dry_run {
+            format!("{count} message(s) would be purged")
+        } else {
+            format!("{count} message(s) purged")
+        };
 
         Ok((
             StatusCode::OK,
@@ -89,8 +178,15 @@ pub async fn message_purge_handler(
                 http_code: StatusCode::OK.as_u16(),
                 error_code: 0,
                 error_code_str: "NA".to_string(),
-                message: format!("{count} message(s) purged"),
-                data: Some(PurgeQueueResponse { count, bytes }),
+                message,
+                data: Some(PurgeQueueResponse {
+                    count,
+                    bytes,
+                    scanned,
+                    dry_run: params.dry_run,
+                    failed,
+                    truncated,
+                }),
             }),
         ))
     }

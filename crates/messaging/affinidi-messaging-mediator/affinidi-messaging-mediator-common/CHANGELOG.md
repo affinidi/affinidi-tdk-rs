@@ -1,5 +1,46 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.6) — `MediatorStore::purge_folder_filtered`
+
+`purge_folder` is all-or-nothing, and the queue that strands a deployment is
+rarely one where destroying everything is right. Adds a filtered purge over
+`PurgeFilter` (counterparty, arrival age, dry run) returning a `PurgeReport`
+of what was — or would have been — removed.
+
+**Defaulted on the trait rather than implemented per backend**, over
+`list_messages` and `delete_message`. Those are the same primitives the paged
+client-side workaround already used, so every backend gets this with no new
+storage code and no new invariants to keep true. The cost is one paged walk of
+the folder, which is the right trade for a recovery path that runs when
+something has already gone wrong.
+
+Paging advances by the **exclusive successor** of the last stream id seen. A
+filtered purge leaves non-matching entries in place, so restarting from the
+beginning each round — which the unfiltered purge can do, because it empties as
+it goes — would spin on them forever. Stream ids are `"<unix-ms>-<sequence>"`
+in every backend, so incrementing the sequence gives that successor without a
+backend-specific exclusive-range syntax.
+
+A purge reports only what it **actually removed**. The first cut discarded the
+delete result, so a refusal — a backend error, an authorisation failure — was
+counted as a successful purge, telling an operator the queue was emptier than it
+is while they were reaching for the tool precisely because a full queue was
+causing an outage. `PurgeReport` gains `failed`, and an already-gone message is
+counted as neither removed nor failed: the caller asked for it to be absent and
+it is.
+
+The walk is bounded by `MAX_PURGE_SCAN` (10,000), reported as
+`PurgeReport::truncated`. A filtered purge walks the folder and a **dry run
+walks it without shrinking it**, so unlike a real purge it is perfectly
+repeatable at full cost — the most expensive thing an authenticated DID can ask
+for per request, by two orders of magnitude over `/list`. The per-DID rate
+limiter bounds how often; this bounds how much.
+
+Age is filtered on **arrival**, not expiry. `expires_at` is
+`min(client_expires_time, now + TTL)` and a client may set a short one, so
+ordering by expiry does not order by age; the stream id carries the arrival
+stamp and a client cannot reorder it.
+
 ## Unreleased (0.16.5) — a queue-full refusal says how long to wait
 
 The queue-depth gates refused with a bare `503`. `Retry-After` was set only by

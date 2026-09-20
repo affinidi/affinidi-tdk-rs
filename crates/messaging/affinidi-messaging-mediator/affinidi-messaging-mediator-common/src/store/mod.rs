@@ -54,6 +54,131 @@ use crate::types::{
     messages::{FetchOptions, Folder, GetMessagesResponse, MessageList, MessageListElement},
 };
 use async_trait::async_trait;
+
+/// Ceiling on messages one filtered purge will examine.
+///
+/// A filtered purge walks the folder, and a **dry run walks it without
+/// shrinking it** — so, unlike the real purge, it is perfectly repeatable at
+/// full cost. That makes it the most expensive thing an authenticated DID can
+/// ask for per request, by roughly two orders of magnitude over `/list`, which
+/// is capped at 100. The per-DID rate limiter bounds how often a caller may
+/// ask; this bounds how much each ask costs.
+///
+/// A caller with a deeper queue than this gets a partial purge that reports
+/// itself as such, and re-running continues against a folder that is now
+/// shorter.
+pub const MAX_PURGE_SCAN: usize = 10_000;
+
+/// Whether a delete failed because the message was already gone.
+///
+/// Every backend signals this the same way — the in-memory and Fjall stores and
+/// the Redis stored function all produce a `NOT_FOUND:` message — but it is
+/// matched on text, which is fragile. It is safe fragility: if the wording ever
+/// changes, an already-gone message is counted as a *failure* rather than a
+/// success, so a purge would under-report what it removed rather than
+/// over-report it. The test in `memory_store` pins the current wording so the
+/// change is noticed rather than merely survived.
+fn is_not_found(err: &MediatorError) -> bool {
+    err.to_string().contains("NOT_FOUND")
+}
+
+/// Which messages a [`purge_folder_filtered`](MediatorStore::purge_folder_filtered)
+/// call should remove.
+///
+/// An empty filter matches everything, which is what the unfiltered
+/// [`purge_folder`](MediatorStore::purge_folder) already does faster — so a
+/// caller with nothing to narrow by should use that instead.
+#[derive(Debug, Default, Clone)]
+pub struct PurgeFilter {
+    /// Only messages exchanged with this counterparty (a DID *hash*).
+    ///
+    /// "Counterparty" rather than "recipient" because which end that is
+    /// depends on the folder: in an outbox it is who the message was sent to,
+    /// in an inbox who sent it. Naming it for one of those would be wrong half
+    /// the time.
+    pub peer: Option<String>,
+    /// Only messages that arrived at or before this Unix millisecond.
+    ///
+    /// Arrival, not expiry: expiry is `min(client_expires_time, now + TTL)`
+    /// and a client may set a short one, so ordering by it does not order by
+    /// age. The stream id carries the arrival stamp and a client cannot
+    /// reorder it.
+    pub arrived_before_ms: Option<u64>,
+    /// Count what would be removed and remove nothing.
+    ///
+    /// A purge is destructive and unrecoverable, and the operator reaching for
+    /// it is usually reacting to an incident. Being able to ask first is the
+    /// difference between a recovery tool and a second incident.
+    pub dry_run: bool,
+}
+
+impl PurgeFilter {
+    /// Whether `element` in `folder` is in scope.
+    pub fn matches(&self, element: &MessageListElement, folder: &Folder) -> bool {
+        if let Some(peer) = &self.peer {
+            let counterparty = match folder {
+                Folder::Inbox => element.from_address.as_deref(),
+                Folder::Outbox => element.to_address.as_deref(),
+            };
+            // A message whose counterparty is unrecorded (an anonymous sender)
+            // never matches a `peer` filter: it cannot be shown to be the peer
+            // asked for, and a purge must not delete on a maybe.
+            if counterparty != Some(peer.as_str()) {
+                return false;
+            }
+        }
+        if let Some(before) = self.arrived_before_ms
+            && element.timestamp > before
+        {
+            return false;
+        }
+        true
+    }
+}
+
+/// What a filtered purge did, or would have done.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PurgeReport {
+    /// Messages matched **and actually removed** — or, for a dry run, matched
+    /// and would have been.
+    ///
+    /// Deliberately not "matched": a purge that reported a message it had
+    /// failed to delete would be telling the caller the queue is emptier than
+    /// it is, which is the one lie a recovery tool must not tell.
+    pub count: usize,
+    /// Bytes counted in [`count`](Self::count).
+    pub bytes: usize,
+    /// Messages examined. `scanned` far above `count` means the filter is
+    /// narrow, which is the point; it is reported so a caller can tell "the
+    /// filter matched nothing" from "the folder was empty".
+    pub scanned: usize,
+    /// Messages that matched the filter but could **not** be removed.
+    ///
+    /// A message that was already gone is not counted here — the caller asked
+    /// for it to be absent and it is. This is for real refusals: a backend
+    /// error, or an authorisation failure. Non-zero means the queue is not as
+    /// empty as `count` alone would suggest, and the operator should look
+    /// before concluding the recovery worked.
+    pub failed: usize,
+    /// The walk stopped at its scan ceiling with messages still unexamined.
+    ///
+    /// The purge is partial, not wrong: everything reported was really removed.
+    /// Re-running the same filter continues from a folder that is now shorter.
+    pub truncated: bool,
+}
+
+/// The next stream id strictly after `id`, for paging a filtered walk.
+///
+/// Stream ids are `"<unix-ms>-<sequence>"` in every backend — Redis natively,
+/// and the Fjall and in-memory stores format their `(ms, seq)` pairs the same
+/// way — so incrementing the sequence gives the exclusive successor without
+/// needing a backend-specific exclusive-range syntax.
+fn exclusive_successor(id: &str) -> Option<String> {
+    let (ms, seq) = id.split_once('-')?;
+    let ms: u64 = ms.parse().ok()?;
+    let seq: u64 = seq.parse().ok()?;
+    Some(format!("{ms}-{}", seq.checked_add(1)?))
+}
 use std::time::Duration;
 use tokio::sync::broadcast;
 
@@ -235,6 +360,130 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         did_hash: &str,
         folder: Folder,
     ) -> Result<(usize, usize), MediatorError>;
+
+    /// Purge only the messages in a folder that match `filter`, and report
+    /// what was (or would be) removed.
+    ///
+    /// # Why this is not `purge_folder`
+    ///
+    /// [`purge_folder`](Self::purge_folder) is all-or-nothing, and the queue
+    /// that strands a deployment is rarely one where destroying everything is
+    /// the right answer. The operation an operator actually wants is "drop what
+    /// I have been holding for this dead peer" or "drop anything older than a
+    /// week" — with, first, "tell me what that would be". Without those, the
+    /// only recovery from a full queue is to destroy an entire outbox including
+    /// the messages that were about to be delivered.
+    ///
+    /// # Implementation
+    ///
+    /// Defaulted here rather than implemented per backend, over
+    /// [`list_messages`](Self::list_messages) and
+    /// [`delete_message`](Self::delete_message). Those are the same primitives
+    /// the paged client-side workaround used, so every backend gets this with
+    /// no new storage code and no new invariants to keep true — the cost is one
+    /// paged walk of the folder, which is the right trade for a recovery path
+    /// that runs when something has already gone wrong.
+    ///
+    /// Paging advances by the exclusive successor of the last stream id seen,
+    /// because a filtered purge leaves non-matching entries in place: restarting
+    /// from the beginning each round, as the unfiltered purge can, would spin on
+    /// them forever.
+    async fn purge_folder_filtered(
+        &self,
+        did_hash: &str,
+        folder: Folder,
+        filter: &PurgeFilter,
+    ) -> Result<PurgeReport, MediatorError> {
+        const PAGE: u32 = 100;
+        let mut report = PurgeReport::default();
+        let mut cursor = "-".to_string();
+
+        loop {
+            // Bound the work one call can ask for. A filtered purge walks the
+            // folder, and a dry run walks it without shrinking it — so, unlike
+            // the real purge, it is perfectly repeatable at full cost. That
+            // makes it the most expensive thing an authenticated DID can ask
+            // for per request, by roughly two orders of magnitude over `/list`,
+            // which is capped at 100.
+            //
+            // The per-DID rate limiter bounds how often; this bounds how much.
+            // A caller with more than this queued gets a partial purge that
+            // says so, and re-running continues — the same shape the queue
+            // survey uses, for the same reason.
+            if report.scanned >= MAX_PURGE_SCAN {
+                report.truncated = true;
+                break;
+            }
+
+            let page = self
+                .list_messages(did_hash, folder.clone(), Some((&cursor, "+")), PAGE)
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+
+            let mut last_id = None;
+            for element in &page {
+                let stream_id = match folder {
+                    Folder::Inbox => element.receive_id.as_deref(),
+                    Folder::Outbox => element.send_id.as_deref(),
+                };
+                last_id = stream_id.map(str::to_string).or(last_id);
+                report.scanned += 1;
+
+                if !filter.matches(element, &folder) {
+                    continue;
+                }
+                if filter.dry_run {
+                    report.count += 1;
+                    report.bytes += element.size as usize;
+                    continue;
+                }
+
+                match self
+                    .delete_message(
+                        &element.msg_id,
+                        DeletionAuthority::Owner {
+                            did_hash: did_hash.to_string(),
+                        },
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        report.count += 1;
+                        report.bytes += element.size as usize;
+                    }
+                    // A message already gone — a concurrent pickup, or the
+                    // expiry sweeper — is not a failure: the caller asked for
+                    // it to be absent and it is. It is not counted as removed
+                    // either, because this call did not remove it.
+                    Err(e) if is_not_found(&e) => {}
+                    // Anything else is a message still sitting in the queue.
+                    // Counting it as purged would report the queue emptier
+                    // than it is, to an operator who is reaching for this
+                    // precisely because a full queue is causing an outage.
+                    Err(e) => {
+                        report.failed += 1;
+                        tracing::warn!(
+                            msg_id = %element.msg_id,
+                            error = %e,
+                            "filtered purge could not remove a matching message"
+                        );
+                    }
+                }
+            }
+
+            // No usable stream id on the whole page: refuse to loop rather
+            // than page from the same place for ever.
+            let Some(last_id) = last_id else { break };
+            let Some(next) = exclusive_successor(&last_id) else {
+                break;
+            };
+            cursor = next;
+        }
+
+        Ok(report)
+    }
 
     /// Remove the stream key for a folder without purging the messages
     /// it references. Used when account removal needs to drop the
@@ -1079,5 +1328,120 @@ mod tests {
             1,
             "new session written in place"
         );
+    }
+
+    use super::{PurgeFilter, exclusive_successor};
+    use crate::types::messages::{Folder, MessageListElement};
+
+    fn element(ts: u64, from: Option<&str>, to: Option<&str>) -> MessageListElement {
+        MessageListElement {
+            msg_id: "m".into(),
+            timestamp: ts,
+            size: 10,
+            from_address: from.map(str::to_string),
+            to_address: to.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_empty_filter_matches_everything() {
+        let f = PurgeFilter::default();
+        assert!(f.matches(&element(1, Some("alice"), Some("bob")), &Folder::Inbox));
+        assert!(f.matches(&element(u64::MAX, None, None), &Folder::Outbox));
+    }
+
+    /// Which end "peer" means depends on the folder: in an outbox it is who
+    /// the message went to, in an inbox who sent it. Getting this backwards
+    /// would purge the wrong messages.
+    #[test]
+    fn peer_is_the_counterparty_for_the_folder() {
+        let f = PurgeFilter {
+            peer: Some("bob".into()),
+            ..Default::default()
+        };
+        let msg = element(1, Some("alice"), Some("bob"));
+        assert!(
+            f.matches(&msg, &Folder::Outbox),
+            "in an outbox, the peer is the recipient"
+        );
+        assert!(
+            !f.matches(&msg, &Folder::Inbox),
+            "in an inbox, the peer is the sender — bob did not send this"
+        );
+
+        let f = PurgeFilter {
+            peer: Some("alice".into()),
+            ..Default::default()
+        };
+        assert!(f.matches(&msg, &Folder::Inbox));
+        assert!(!f.matches(&msg, &Folder::Outbox));
+    }
+
+    /// A purge is unrecoverable, so an unrecorded counterparty never matches a
+    /// `peer` filter — it cannot be shown to be the peer asked for.
+    #[test]
+    fn an_unknown_counterparty_never_matches_a_peer_filter() {
+        let f = PurgeFilter {
+            peer: Some("bob".into()),
+            ..Default::default()
+        };
+        assert!(!f.matches(&element(1, None, None), &Folder::Inbox));
+        assert!(!f.matches(&element(1, None, None), &Folder::Outbox));
+    }
+
+    #[test]
+    fn the_age_cutoff_is_inclusive_and_keeps_newer_messages() {
+        let f = PurgeFilter {
+            arrived_before_ms: Some(1_000),
+            ..Default::default()
+        };
+        assert!(f.matches(&element(999, None, None), &Folder::Inbox));
+        assert!(f.matches(&element(1_000, None, None), &Folder::Inbox));
+        assert!(
+            !f.matches(&element(1_001, None, None), &Folder::Inbox),
+            "a message newer than the cutoff must survive"
+        );
+    }
+
+    /// Both narrowings apply together: "this peer AND older than that".
+    #[test]
+    fn peer_and_age_are_both_required_when_both_are_set() {
+        let f = PurgeFilter {
+            peer: Some("bob".into()),
+            arrived_before_ms: Some(1_000),
+            ..Default::default()
+        };
+        assert!(f.matches(&element(500, None, Some("bob")), &Folder::Outbox));
+        assert!(
+            !f.matches(&element(2_000, None, Some("bob")), &Folder::Outbox),
+            "right peer, too new"
+        );
+        assert!(
+            !f.matches(&element(500, None, Some("carol")), &Folder::Outbox),
+            "old enough, wrong peer"
+        );
+    }
+
+    /// Paging a *filtered* walk cannot restart from the beginning: entries that
+    /// did not match stay in place, so it would spin on them forever. The
+    /// successor must be strictly greater than the id it came from.
+    #[test]
+    fn the_cursor_advances_past_the_id_it_came_from() {
+        assert_eq!(
+            exclusive_successor("1700000000000-0").as_deref(),
+            Some("1700000000000-1")
+        );
+        assert_eq!(exclusive_successor("5-41").as_deref(), Some("5-42"));
+    }
+
+    #[test]
+    fn an_unparseable_cursor_stops_the_walk_rather_than_guessing() {
+        assert_eq!(exclusive_successor("not-a-stream-id"), None);
+        assert_eq!(exclusive_successor("12345"), None);
+        assert_eq!(exclusive_successor(""), None);
+        // Sequence at the ceiling: no successor exists, so stop rather than wrap
+        // back to the start of the stream and re-walk it.
+        assert_eq!(exclusive_successor(&format!("1-{}", u64::MAX)), None);
     }
 }

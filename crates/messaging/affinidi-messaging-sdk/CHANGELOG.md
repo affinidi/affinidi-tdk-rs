@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### 0.26.11 — queue status, and a purge you can narrow
+
+`ATM::queue_status()` returns this DID's own depth, effective limits, resulting
+saturation and oldest-message age at the mediator. The point is to pace
+**before** being refused: saturation reaching 1.0 is the depth at which the
+mediator starts rejecting sends, so a client that slows at 0.8 never gets
+there. A climbing `oldestAgeSecs` beside a steady depth says the peer has
+stopped collecting — which depth alone cannot distinguish from a busy queue.
+
+`ATM::purge_queue_filtered()` narrows a purge by counterparty, by age, or to a
+dry run. `purge_queue()` is unchanged and is now a shim over it with no
+options, which takes the mediator's faster whole-folder path.
+
+`PurgeQueueResponse` gains `scanned`, `dry_run`, `failed` and `truncated`, all
+`#[serde(default)]`, so a response from an older mediator still deserialises.
+`failed` is non-zero when the mediator matched a message but could not remove
+it — the queue is then not as empty as `count` alone suggests.
+
+Query values are percent-encoded rather than interpolated: the mediator rejects
+unknown parameters, so an unescaped `&` in a peer value would turn one
+parameter into two and fail loudly — but it should not be possible to reach
+that in the first place.
+
+
 ### 0.26.10 — the deletion handler stops re-deleting redelivered messages
 
 0.26.8 stopped discarding the mediator's answer to a background delete, and what

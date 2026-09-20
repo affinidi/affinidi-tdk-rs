@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased (0.28.5) — a queue can be inspected, and cleared precisely
+
+Two recovery gaps, both of which made a full queue worse than it needed to be.
+
+### `GET /queue/status`
+
+A sender learned its queue was full by being **refused** — at which point it is
+already failing, and the messages it was refused are the ones it most wanted to
+send. Everything needed to see it coming sat in the account record and was
+unreachable: a DID could read neither its own depth nor the limit it was being
+measured against, so "slow down at 80%" was not expressible.
+
+Returns, for the calling DID only: send and receive depth and bytes, the
+**effective** limit for that account (its own override, or the configured
+default), the resulting saturation, the oldest queued message's age, and the
+per-peer send limit — which is separate because it is the gate that moves
+first: a sender fanning out to many peers stays well under its send total while
+a single stuck relationship crosses the per-peer cap.
+
+`saturation` is `None` rather than `0.0` for an unlimited queue. Reporting zero
+would make the one account that can never be full read as the emptiest.
+
+Depth comes from the account record, which already held it, so this adds no
+accounting. The ages are one range read each against the arrival-ordered
+streams.
+
+### `DELETE /purge/{folder}` takes `?peer=`, `?olderThanSecs=` and `?dryRun=`
+
+The whole-folder purge is rarely the operation an operator wants. The queue
+that strands a deployment is usually full of messages for **one** peer that
+stopped collecting, or old enough to be certain nobody is coming for them — and
+destroying the rest of the outbox to clear those is a second incident.
+
+`dryRun` reports what would go and removes nothing. A purge is unrecoverable
+and the operator reaching for it is usually mid-incident; being able to ask
+first is the difference between a recovery tool and another outage.
+
+`peer` is the **counterparty**, which end depending on the folder: in an outbox
+who the message went to, in an inbox who sent it. A message whose counterparty
+is unrecorded — an anonymous sender — never matches a `peer` filter, because it
+cannot be shown to be the peer asked for and a purge must not delete on a
+maybe.
+
+With no parameters the behaviour is exactly as before, including the faster
+whole-folder path that drops the stream key rather than walking it.
+
+`PurgeQueueResponse` gains `scanned` and `dryRun`, both `#[serde(default)]`, so
+a response from an older mediator still deserialises.
+
 ## Unreleased (0.28.4) — a queue can be watched before it becomes an outage
 
 The only queue a deployment could see was the forwarding one
