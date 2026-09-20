@@ -2,6 +2,7 @@
 //! their state on a truthful hop-accept (`Sent`) or rescheduling with backoff on
 //! failure.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -13,6 +14,14 @@ use crate::outbox::{OutboxError, OutboxState, OutboxStore};
 const BACKOFF_BASE_MS: u64 = 1_000;
 /// Backoff ceiling.
 const BACKOFF_CAP_MS: u64 = 60_000;
+
+/// How long a destination is left alone after a queue-full refusal that came
+/// with no `Retry-After`.
+///
+/// Matches the mediator's own hint, so a mediator that sends one and a mediator
+/// that does not produce the same pacing rather than two different behaviours
+/// a operator would have to know about.
+const QUEUE_FULL_FALLBACK_MS: u64 = 30_000;
 
 /// Exponential backoff for the `attempts`-th failed send: 1s, 2s, 4s, … capped
 /// at 60s. `attempts == 0` is `0` (a fresh entry attempts immediately).
@@ -38,6 +47,15 @@ pub struct DrainReport {
     pub retried: usize,
     /// Entries whose delivery window expired while still queued (→ `Failed`).
     pub failed: usize,
+    /// Entries deferred because their destination's queue at the mediator is
+    /// full (stay `Queued`).
+    ///
+    /// Counted apart from `retried` because it is not a failure of the send and
+    /// carries a different remedy: nothing about this message or this wire is
+    /// wrong, and no number of retries will help until the destination's queue
+    /// drains. A climbing `backpressured` beside a flat `retried` means a peer
+    /// has stopped collecting, not that the network is unhealthy.
+    pub backpressured: usize,
 }
 
 /// One drain pass at logical time `now_ms`: attempt every due **unbound** entry
@@ -99,6 +117,14 @@ async fn drain_filtered(
 ) -> Result<DrainReport, OutboxError> {
     let due = store.due(now_ms).await?;
     let mut report = DrainReport::default();
+    // Destinations refused this pass, and when they may be tried again.
+    //
+    // Without this the drain re-learns the same refusal once per queued
+    // message: a peer holding fifty undelivered messages costs fifty sends,
+    // fifty refusals and fifty store writes on every tick, against a mediator
+    // that is refusing precisely because it is already holding too much. One
+    // refusal is enough to know the answer for the rest.
+    let mut blocked: HashMap<String, u64> = HashMap::new();
 
     for mut entry in due {
         if !claims(entry.via.as_deref()) {
@@ -111,6 +137,18 @@ async fn drain_filtered(
             continue;
         }
 
+        // A destination already refused in this pass: defer without sending.
+        // Checked before `deliver_by_ms` would be, deliberately after it — an
+        // entry whose window has closed is `Failed` whatever the destination's
+        // queue is doing, and reporting it as merely deferred would hide a
+        // delivery that is never going to happen.
+        if let Some(&until) = blocked.get(&entry.dest_did) {
+            entry.next_attempt_at_ms = until;
+            store.put(entry).await?;
+            report.backpressured += 1;
+            continue;
+        }
+
         match transport.send(&entry.dest_did, entry.packed.clone()).await {
             Ok(receipt) => {
                 entry.state = OutboxState::Sent;
@@ -119,6 +157,35 @@ async fn drain_filtered(
                 entry.hop_id = receipt.hop_id;
                 store.put(entry).await?;
                 report.sent += 1;
+            }
+            Err(e) if e.queue_full().is_some() => {
+                let gate = e.queue_full().expect("just matched");
+                let wait_ms = e
+                    .retry_after()
+                    .map(|d| d.as_millis().min(u64::MAX as u128) as u64)
+                    .unwrap_or(QUEUE_FULL_FALLBACK_MS);
+                let until = now_ms.saturating_add(wait_ms);
+
+                // `attempts` is deliberately NOT incremented. It drives
+                // exponential backoff, and backing off exponentially here
+                // would punish a message for a condition it did not cause and
+                // cannot fix — a relationship that clears in a minute would be
+                // waiting fifteen. The server's own pacing hint is the right
+                // clock, and `deliver_by_ms` remains the bound that stops this
+                // going on for ever.
+                entry.next_attempt_at_ms = until;
+                let dest = entry.dest_did.clone();
+                store.put(entry).await?;
+                report.backpressured += 1;
+
+                tracing::warn!(
+                    dest = %dest,
+                    ?gate,
+                    wait_ms,
+                    "destination queue full at the mediator — deferring this destination \
+                     for the rest of this pass"
+                );
+                blocked.insert(dest, until);
             }
             Err(_e) => {
                 entry.attempts += 1;
@@ -228,6 +295,12 @@ mod tests {
     struct MockTransport {
         fail: AtomicBool,
         sent: Mutex<Vec<Vec<u8>>>,
+        /// Every destination `send` was called for, so a test can prove a
+        /// deferred destination was not dialled again.
+        dests: Mutex<Vec<String>>,
+        /// Destination that answers with a queue-full 503, and the
+        /// `Retry-After` it carries (`None` = the header is absent).
+        queue_full_dest: Mutex<Option<(String, Option<u64>)>>,
         _conn_tx: watch::Sender<ConnState>,
         conn_rx: watch::Receiver<ConnState>,
     }
@@ -238,9 +311,19 @@ mod tests {
             Self {
                 fail: AtomicBool::new(fail),
                 sent: Mutex::new(Vec::new()),
+                dests: Mutex::new(Vec::new()),
+                queue_full_dest: Mutex::new(None),
                 _conn_tx: tx,
                 conn_rx: rx,
             }
+        }
+
+        /// Make `dest` answer as the mediator does when a queue-depth gate
+        /// refuses: a 503 whose body is the serialised problem report.
+        fn refusing(dest: &str, retry_after: Option<u64>) -> Self {
+            let t = Self::new(false);
+            *t.queue_full_dest.lock().unwrap() = Some((dest.to_string(), retry_after));
+            t
         }
     }
 
@@ -250,8 +333,33 @@ mod tests {
             TransportKind::Didcomm
         }
         async fn send(&self, _dest: &str, packed: Vec<u8>) -> Result<SendReceipt, MessagingError> {
+            self.dests.lock().unwrap().push(_dest.to_string());
             if self.fail.load(Ordering::SeqCst) {
                 return Err(MessagingError::Transport("mock send failed".into()));
+            }
+            if let Some((dest, retry_after)) = self.queue_full_dest.lock().unwrap().as_ref()
+                && dest == _dest
+            {
+                let report =
+                    serde_json::json!({ "code": "e.p.limits.queue.peer", "comment": "full" })
+                        .to_string();
+                let body = serde_json::json!({
+                    "sessionId": "s",
+                    "httpCode": 503,
+                    "errorCode": 95,
+                    "errorCodeStr": "DIDCommProblemReport",
+                    "message": report,
+                })
+                .to_string();
+                let retry = retry_after.map(|s| s.to_string());
+                return Err(affinidi_messaging_core::HttpStatusError::from_parts(
+                    "send",
+                    503,
+                    None,
+                    retry.as_deref(),
+                    body,
+                )
+                .into());
             }
             self.sent.lock().unwrap().push(packed);
             Ok(SendReceipt {
@@ -459,5 +567,148 @@ mod tests {
             OutboxState::Failed
         );
         assert!(transport.sent.lock().unwrap().is_empty());
+    }
+
+    fn queued_to(key: &str, dest: &str, now: u64) -> OutboxEntry {
+        OutboxEntry::new(key, dest, vec![9, 9], now, now + 600_000)
+    }
+
+    /// A queue-full refusal is not this message's failure, so it must not
+    /// inflate the message's backoff — the server's own pacing hint is the
+    /// right clock.
+    #[tokio::test]
+    async fn a_queue_full_refusal_defers_without_bumping_attempts() {
+        let store = InMemoryOutboxStore::new();
+        store
+            .put(queued_to("k1", "did:example:bob", 1_000))
+            .await
+            .unwrap();
+        let transport = MockTransport::refusing("did:example:bob", Some(45));
+
+        let report = drain_once(&store, &transport, 1_000).await.unwrap();
+        assert_eq!(report.backpressured, 1);
+        assert_eq!(report.retried, 0, "a full queue is not a failed send");
+        assert_eq!(report.sent, 0);
+
+        let e = store.get("k1").await.unwrap().unwrap();
+        assert_eq!(e.state, OutboxState::Queued);
+        assert_eq!(e.attempts, 0, "backoff must not escalate on a full queue");
+        assert_eq!(
+            e.next_attempt_at_ms,
+            1_000 + 45_000,
+            "the server's Retry-After is the schedule"
+        );
+    }
+
+    /// With no `Retry-After` the drain still paces itself rather than hot
+    /// looping into a queue that is full because nothing is draining it.
+    #[tokio::test]
+    async fn a_refusal_without_a_hint_uses_the_fallback_wait() {
+        let store = InMemoryOutboxStore::new();
+        store
+            .put(queued_to("k1", "did:example:bob", 1_000))
+            .await
+            .unwrap();
+        let transport = MockTransport::refusing("did:example:bob", None);
+
+        drain_once(&store, &transport, 1_000).await.unwrap();
+        let e = store.get("k1").await.unwrap().unwrap();
+        assert_eq!(e.next_attempt_at_ms, 1_000 + QUEUE_FULL_FALLBACK_MS);
+    }
+
+    /// The point of the per-destination map: one refusal answers for every
+    /// other entry aimed at the same peer, instead of the drain re-learning it
+    /// once per queued message against a mediator already holding too much.
+    #[tokio::test]
+    async fn one_refusal_defers_the_whole_destination_without_more_sends() {
+        let store = InMemoryOutboxStore::new();
+        for k in ["k1", "k2", "k3"] {
+            store
+                .put(queued_to(k, "did:example:bob", 1_000))
+                .await
+                .unwrap();
+        }
+        let transport = MockTransport::refusing("did:example:bob", Some(30));
+
+        let report = drain_once(&store, &transport, 1_000).await.unwrap();
+        assert_eq!(report.backpressured, 3, "all three are deferred");
+        assert_eq!(
+            transport.dests.lock().unwrap().len(),
+            1,
+            "only the first entry is actually sent; the rest are deferred unsent"
+        );
+        for k in ["k1", "k2", "k3"] {
+            let e = store.get(k).await.unwrap().unwrap();
+            assert_eq!(e.state, OutboxState::Queued);
+            assert_eq!(e.next_attempt_at_ms, 1_000 + 30_000);
+        }
+    }
+
+    /// The blast radius of `limits.queue.peer` is one relationship, and the
+    /// drain must respect that — deferring every destination because one peer
+    /// stopped collecting is the failure #828 exists to prevent, reintroduced
+    /// client-side.
+    #[tokio::test]
+    async fn a_blocked_destination_does_not_stop_the_others() {
+        let store = InMemoryOutboxStore::new();
+        store
+            .put(queued_to("blocked", "did:example:bob", 1_000))
+            .await
+            .unwrap();
+        store
+            .put(queued_to("fine", "did:example:carol", 1_000))
+            .await
+            .unwrap();
+        let transport = MockTransport::refusing("did:example:bob", Some(30));
+
+        let report = drain_once(&store, &transport, 1_000).await.unwrap();
+        assert_eq!(report.backpressured, 1);
+        assert_eq!(report.sent, 1, "the healthy peer still gets its message");
+        assert_eq!(
+            store.get("fine").await.unwrap().unwrap().state,
+            OutboxState::Sent
+        );
+        assert_eq!(
+            store.get("blocked").await.unwrap().unwrap().state,
+            OutboxState::Queued
+        );
+    }
+
+    /// An ordinary transport failure keeps its old behaviour exactly: bump
+    /// attempts, back off exponentially, count as retried.
+    #[tokio::test]
+    async fn an_ordinary_failure_is_still_a_backoff_retry() {
+        let store = InMemoryOutboxStore::new();
+        store
+            .put(queued_to("k1", "did:example:bob", 1_000))
+            .await
+            .unwrap();
+        let transport = MockTransport::new(true);
+
+        let report = drain_once(&store, &transport, 1_000).await.unwrap();
+        assert_eq!(report.retried, 1);
+        assert_eq!(report.backpressured, 0);
+        let e = store.get("k1").await.unwrap().unwrap();
+        assert_eq!(e.attempts, 1);
+        assert_eq!(e.next_attempt_at_ms, 1_000 + backoff_ms(1));
+    }
+
+    /// A closed delivery window outranks a full queue: reporting an entry as
+    /// merely deferred when it can never be delivered would hide a failure.
+    #[tokio::test]
+    async fn an_expired_window_fails_even_when_the_destination_is_blocked() {
+        let store = InMemoryOutboxStore::new();
+        let mut expired = queued_to("late", "did:example:bob", 1_000);
+        expired.deliver_by_ms = 1_500;
+        store.put(expired).await.unwrap();
+        let transport = MockTransport::refusing("did:example:bob", Some(30));
+
+        let report = drain_once(&store, &transport, 2_000).await.unwrap();
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.backpressured, 0);
+        assert_eq!(
+            store.get("late").await.unwrap().unwrap().state,
+            OutboxState::Failed
+        );
     }
 }

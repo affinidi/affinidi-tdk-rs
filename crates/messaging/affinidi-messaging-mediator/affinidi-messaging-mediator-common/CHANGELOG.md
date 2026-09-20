@@ -1,5 +1,26 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.5) — a queue-full refusal says how long to wait
+
+The queue-depth gates refused with a bare `503`. `Retry-After` was set only by
+the rate limiter, on `429`s, so a client refused by a full queue had nothing to
+pace on and retried as fast as its loop allowed — into a queue that is full
+precisely because nothing is draining it.
+
+A `limits.queue.peer` / `.sender` / `.recipient` refusal now carries
+`Retry-After: 30`.
+
+Thirty seconds is a **floor, not a schedule**, and deliberately so: the
+condition clears when the *recipient* next collects, which the mediator cannot
+predict and should not pretend to. It is long enough to stop a hot retry loop
+and short enough that a queue draining a moment later is not held back for
+minutes.
+
+Matched on the problem-report code suffix rather than a parallel table of
+numeric error codes, so the hint follows the documented `limits.queue.*`
+contract — the same strings a client matches on — and cannot drift from it.
+Every other refusal is unchanged and carries no hint.
+
 ## Unreleased (0.16.4) — `MediatorStore::peer_queue_count`
 
 Adds the per-relationship queue depth a sender holds for one specific

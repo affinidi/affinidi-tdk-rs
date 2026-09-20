@@ -1,6 +1,35 @@
 # Affinidi Messaging Core Changelog
 
 ## Unreleased
+### 0.1.9 — a queue-full refusal is a distinguishable thing
+
+`MessagingError::queue_full()` and `HttpStatusError::queue_full()` return which
+of the mediator's three queue-depth gates refused a send, as a `QueueFullGate`
+(`Peer` / `Sender` / `Recipient`). `MessagingError::retry_after()` exposes the
+server's pacing hint alongside it.
+
+Until now a queue-full `503` was indistinguishable from any other transport
+failure, so every caller treated it as one: retry *this message* with backoff.
+That is wrong twice over. The message is fine and the wire is fine — nothing
+will succeed until the destination's queue drains — and doing it per message
+means a peer holding fifty undelivered messages costs fifty pointless sends per
+drain, against a mediator that is refusing precisely because it is already
+holding too much.
+
+The three gates are an enum rather than a boolean because they mean different
+things to a sender: `Peer` is one relationship backing up and every other
+destination still works, while `Sender` is the sender's own ceiling and
+*everything* it sends is refused until its queue drains.
+
+Recognised from the problem-report code in the body, not from the status alone
+— a `503` could be anything — and matched on the code's suffix so the DIDComm
+`e.p.` prefix is not part of the contract a client has to reproduce. Both the
+mediator's wrapper shape and a bare problem report are accepted. It is
+deliberately **not** a substring search: this decides whether to stop sending to
+a destination, and prose that merely quotes a gate name must not trigger it.
+
+Additive: new methods and a new type, nothing removed or changed.
+
 ### 0.1.8 — an `Inbound` says whether it is traffic or a request about the relationship
 
 `Inbound` gains `kind: InboundKind`, distinguishing application data from a
