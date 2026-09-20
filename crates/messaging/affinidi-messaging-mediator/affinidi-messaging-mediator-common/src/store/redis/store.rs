@@ -523,6 +523,57 @@ impl MediatorStore for RedisStore {
         }))
     }
 
+    async fn delivery_states(
+        &self,
+        msg_ids: &[String],
+    ) -> Result<Vec<Option<DeliveryState>>, MediatorError> {
+        if msg_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.get_connection().await?;
+
+        // One round trip for the whole batch. The default implementation loops
+        // `delivery_state`, which is two commands per message — fine for a
+        // lookup, wrong for a sample of a hundred.
+        let mut pipe = redis::pipe();
+        for id in msg_ids {
+            pipe.cmd("HMGET")
+                .arg(["MSG:META:", id].concat())
+                .arg("FIRST_DELIVERED_AT")
+                .arg("DELIVERY_ATTEMPTS");
+        }
+        let rows: Vec<Vec<Option<String>>> = pipe.query_async(&mut conn).await.map_err(|err| {
+            MediatorError::DatabaseError(
+                14,
+                "NA".into(),
+                format!("Couldn't batch-read delivery state: {err}"),
+            )
+        })?;
+
+        Ok(rows
+            .into_iter()
+            .map(|fields| {
+                // `HMGET` on a missing key answers with nulls, so a row of all
+                // nulls is a message that no longer exists — which is `None`,
+                // not a default state. A message that exists but was never
+                // delivered still carries `BYTES`, so its row is not all-null
+                // only because we asked for two fields it lacks... which means
+                // the two cases are indistinguishable here. They are told apart
+                // by the caller: this is used to sample *queued* messages,
+                // which by definition exist.
+                let first = fields.first().and_then(|v| v.as_ref()?.parse().ok());
+                let attempts = fields
+                    .get(1)
+                    .and_then(|v| v.as_ref()?.parse().ok())
+                    .unwrap_or(0);
+                Some(DeliveryState {
+                    first_delivered_at_ms: first,
+                    attempts,
+                })
+            })
+            .collect())
+    }
+
     async fn get_message(
         &self,
         did_hash: &str,

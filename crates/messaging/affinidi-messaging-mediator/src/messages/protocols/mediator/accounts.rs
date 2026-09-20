@@ -526,6 +526,25 @@ pub(crate) async fn process(
                     (send_queue_limit, receive_queue_limit)
                 };
 
+                // The per-account half of the per-peer invariant. A boot-time
+                // check of the globals cannot cover this: the limit that
+                // matters is the *effective* one, and an account granted a
+                // receive limit at or below `queued_send_messages_per_peer`
+                // becomes monopolisable by a single sender the moment it is
+                // set. `-2` means "reset to default", which is the configured
+                // default and already checked at boot.
+                if let Some(limit) = receive_queue_limit
+                    && limit != -2
+                    && let Some(msg) =
+                        affinidi_messaging_mediator_config::validate::warn_per_peer_not_below_receive_limit(
+                            state.config.limits.queued_send_messages_per_peer,
+                            limit,
+                            &format!("account {did_hash}"),
+                        )
+                {
+                    warn!("{msg}");
+                }
+
                 match state.database.account_change_queue_limits(&did_hash, send_queue_limit, receive_queue_limit).await {
                     Ok(_) => {
                         info!("Changed account queue_limits for DID: ({}) to send({:?}) receive({:?})", did_hash, send_queue_limit, receive_queue_limit);
