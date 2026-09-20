@@ -340,13 +340,14 @@ pub(crate) async fn delivery_request(
         // All the parsing is done, lets attempt to retrieve messages
         let messages = state
             .database
-            .fetch_messages(
+            .fetch_messages_delivering(
                 &session.session_id,
                 &recipient_did_hash,
                 &FetchOptions {
                     limit,
                     ..Default::default()
                 },
+                state.clock.unix_millis() as u64,
             )
             .await?;
         debug!("msgs fetched: {}", messages.success.len());

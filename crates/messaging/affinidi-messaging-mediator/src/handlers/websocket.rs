@@ -1135,7 +1135,12 @@ async fn drain_tsp_inbox(
         };
         let page = match state
             .database
-            .fetch_messages(&session.session_id, &session.did_hash, &options)
+            .fetch_messages_delivering(
+                &session.session_id,
+                &session.did_hash,
+                &options,
+                state.clock.unix_millis() as u64,
+            )
             .await
         {
             Ok(page) => page,

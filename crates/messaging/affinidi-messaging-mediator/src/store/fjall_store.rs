@@ -57,9 +57,9 @@ use affinidi_messaging_mediator_common::{
     circuit_breaker::CircuitBreaker,
     errors::MediatorError,
     store::{
-        DeletionAuthority, DeliveryDecision, ExpiryReport, ForwardQueueEntry, InboxStatusReply,
-        MediatorStore, MessageMetaData, MetadataStats, PubSubRecord, Session, SessionState,
-        SessionSweepReport, StatCounter, StoreHealth, StreamingClientState, ops,
+        DeletionAuthority, DeliveryDecision, DeliveryState, ExpiryReport, ForwardQueueEntry,
+        InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats, PubSubRecord, Session,
+        SessionState, SessionSweepReport, StatCounter, StoreHealth, StreamingClientState, ops,
     },
     types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
@@ -370,6 +370,18 @@ struct StoredMessage {
     send_id: Option<(u64, u64)>,
     /// Unix-seconds expiry. `0` means no expiry.
     expires_at: u64,
+    /// Unix milliseconds when this message was first handed to its recipient.
+    ///
+    /// `#[serde(default)]` because records written before this field existed
+    /// are on disk and must still decode. They read back as never-delivered,
+    /// which is the honest answer: the mediator genuinely does not know, and
+    /// that is a different claim from "delivered zero times".
+    #[serde(default)]
+    first_delivered_at_ms: Option<u64>,
+    /// How many times it has been handed over. A lower bound — see
+    /// [`DeliveryState::attempts`].
+    #[serde(default)]
+    delivery_attempts: u32,
 }
 
 /// Wire format for inbox/outbox stream entries.
@@ -903,6 +915,8 @@ impl MediatorStore for FjallStore {
             receive_id,
             send_id,
             expires_at,
+            first_delivered_at_ms: None,
+            delivery_attempts: 0,
         };
 
         // Read-modify-write the affected accounts so their queue
@@ -1092,6 +1106,54 @@ impl MediatorStore for FjallStore {
         let _ = self.bump_global("DELETED_BYTES", stored.bytes as i64);
         let _ = self.bump_global("DELETED_COUNT", 1);
         Ok(())
+    }
+
+    async fn mark_delivered(&self, msg_ids: &[String], now_ms: u64) -> Result<(), MediatorError> {
+        // One batch for the whole pickup rather than a write per message: a
+        // pickup is up to `limit` messages and this is bookkeeping alongside
+        // it, not the work itself.
+        let _guard = self.write_lock.lock().await;
+        let mut batch = self.db.batch();
+        let mut wrote = false;
+
+        for id in msg_ids {
+            let key = id.as_bytes();
+            let Some(raw) = self
+                .messages
+                .get(key)
+                .map_err(|e| Self::db_err("mark_delivered:get", e))?
+            else {
+                // Deleted between the read and here — nothing to stamp.
+                continue;
+            };
+            let mut stored: StoredMessage = Self::decode(&raw)?;
+            stored.first_delivered_at_ms.get_or_insert(now_ms);
+            stored.delivery_attempts = stored.delivery_attempts.saturating_add(1);
+            batch.insert(&self.messages, key, Self::encode(&stored)?);
+            wrote = true;
+        }
+
+        if wrote {
+            batch
+                .commit()
+                .map_err(|e| Self::db_err("mark_delivered:commit", e))?;
+        }
+        Ok(())
+    }
+
+    async fn delivery_state(&self, msg_id: &str) -> Result<Option<DeliveryState>, MediatorError> {
+        let Some(raw) = self
+            .messages
+            .get(msg_id.as_bytes())
+            .map_err(|e| Self::db_err("delivery_state:get", e))?
+        else {
+            return Ok(None);
+        };
+        let stored: StoredMessage = Self::decode(&raw)?;
+        Ok(Some(DeliveryState {
+            first_delivered_at_ms: stored.first_delivered_at_ms,
+            attempts: stored.delivery_attempts,
+        }))
     }
 
     async fn get_message(
@@ -4138,5 +4200,98 @@ mod tests {
         // Explicit delete returns true once, false thereafter.
         assert!(store.oob_discovery_delete(&id).await.unwrap());
         assert!(!store.oob_discovery_delete(&id).await.unwrap());
+    }
+
+    /// Parity with `memory_store`: the two backends must agree on delivery
+    /// state, or eviction and poison detection built on it behave differently
+    /// depending on which backend a deployment runs. Mirrors
+    /// `delivery_is_recorded_and_the_first_stamp_is_kept` there.
+    #[tokio::test]
+    async fn delivery_is_recorded_and_the_first_stamp_is_kept() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        let alice = hash("alice");
+        let bob = hash("bob");
+        for did in [&alice, &bob] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        let id = store
+            .store_message("s", "hello", &bob, Some(&alice), 0, 0)
+            .await
+            .expect("store");
+
+        let state = store
+            .delivery_state(&id)
+            .await
+            .expect("state")
+            .expect("exists");
+        assert!(!state.delivered());
+        assert_eq!(state.attempts, 0);
+
+        store
+            .mark_delivered(std::slice::from_ref(&id), 1_000)
+            .await
+            .expect("mark");
+        store
+            .mark_delivered(std::slice::from_ref(&id), 5_000)
+            .await
+            .expect("mark");
+
+        let state = store
+            .delivery_state(&id)
+            .await
+            .expect("state")
+            .expect("exists");
+        assert_eq!(
+            state.first_delivered_at_ms,
+            Some(1_000),
+            "the first stamp is sticky: ageing keys off when it was FIRST handed over, \
+             so a reconnecting client must not reset its own clock"
+        );
+        assert_eq!(state.attempts, 2);
+    }
+
+    /// Records written before these fields existed are on disk and must still
+    /// decode, reading back as never-delivered — which is the honest answer,
+    /// and a different claim from "delivered zero times".
+    #[tokio::test]
+    async fn a_record_written_without_delivery_fields_still_decodes() {
+        // The stored shape as it was before this change.
+        let legacy = serde_json::json!({
+            "body": "hello",
+            "bytes": 5,
+            "to_did_hash": "bob",
+            "from_did_hash": "alice",
+            "timestamp_ms": 1_700_000_000_000u64,
+            "receive_id": [1, 0],
+            "send_id": null,
+            "expires_at": 0,
+        })
+        .to_string();
+
+        let decoded: StoredMessage =
+            serde_json::from_str(&legacy).expect("a pre-existing record must still decode");
+        assert_eq!(decoded.first_delivered_at_ms, None);
+        assert_eq!(decoded.delivery_attempts, 0);
+    }
+
+    #[tokio::test]
+    async fn marking_a_vanished_message_is_not_an_error() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        store
+            .mark_delivered(&["never-existed".to_string()], 1_000)
+            .await
+            .expect("marking an absent message must not fail a delivery");
+        assert!(
+            store
+                .delivery_state("never-existed")
+                .await
+                .expect("state")
+                .is_none()
+        );
     }
 }

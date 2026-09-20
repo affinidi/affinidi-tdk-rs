@@ -51,7 +51,10 @@ use crate::types::{
     },
     administration::MediatorAdminList,
     audit::{AuditLogEntry, MediatorAuditLogList},
-    messages::{FetchOptions, Folder, GetMessagesResponse, MessageList, MessageListElement},
+    messages::{
+        FetchDeletePolicy, FetchOptions, Folder, GetMessagesResponse, MessageList,
+        MessageListElement,
+    },
 };
 use async_trait::async_trait;
 
@@ -192,9 +195,9 @@ pub mod ops;
 pub mod redis;
 
 pub use types::{
-    DeletionAuthority, DeliveryDecision, ExpiryReport, ForwardQueueEntry, InboxStatusReply,
-    MessageMetaData, MetadataStats, PubSubRecord, Session, SessionClaims, SessionState,
-    SessionSweepReport, StatCounter, StoreHealth, StreamingClientState,
+    DeletionAuthority, DeliveryDecision, DeliveryState, ExpiryReport, ForwardQueueEntry,
+    InboxStatusReply, MessageMetaData, MetadataStats, PubSubRecord, Session, SessionClaims,
+    SessionState, SessionSweepReport, StatCounter, StoreHealth, StreamingClientState,
 };
 
 /// Fail-closed session rename used by the default
@@ -312,6 +315,105 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         did_hash: &str,
         msg_id: &str,
     ) -> Result<Option<MessageListElement>, MediatorError>;
+
+    /// Fetch messages and record that they were handed over.
+    ///
+    /// The delivery paths call this rather than [`fetch_messages`] so the
+    /// marking lives in one place. There are five call sites — REST fetch, the
+    /// websocket handler, the streaming task, message-pickup and v1 mediation
+    /// — and a stamp that five callers have to remember is a stamp that will be
+    /// missing from the sixth.
+    ///
+    /// Marking failures are swallowed by [`mark_delivered`]'s contract, so this
+    /// returns exactly what `fetch_messages` returned. A pickup that succeeded
+    /// is not failed because its bookkeeping did not.
+    ///
+    /// [`fetch_messages`]: Self::fetch_messages
+    /// [`mark_delivered`]: Self::mark_delivered
+    async fn fetch_messages_delivering(
+        &self,
+        session_id: &str,
+        did_hash: &str,
+        options: &FetchOptions,
+        now_ms: u64,
+    ) -> Result<GetMessagesResponse, MediatorError> {
+        let response = self.fetch_messages(session_id, did_hash, options).await?;
+
+        // An optimistic fetch deletes each message as it reads it, so by the
+        // time this runs there is nothing left to stamp — and stamping anyway
+        // is not merely wasted work. On Redis the delivery fields live on the
+        // message's own `MSG:META` hash, and `HSETNX` against a **missing** key
+        // creates it, so marking a message the fetch has already deleted would
+        // resurrect an orphaned hash with no body — on every message, for ever.
+        //
+        // Checked here rather than in each backend because this is where the
+        // policy is known, and because a backend that merely skips absent
+        // messages (as the in-memory and Fjall stores do) would still be doing
+        // a pointless read per message.
+        if matches!(options.delete_policy, FetchDeletePolicy::Optimistic) {
+            return Ok(response);
+        }
+
+        // Only what actually came back: `get_errors` are messages the fetch
+        // could not read, and stamping those would record a handover that
+        // never happened.
+        let delivered: Vec<String> = response.success.iter().map(|m| m.msg_id.clone()).collect();
+        if !delivered.is_empty() {
+            self.mark_delivered(&delivered, now_ms).await?;
+        }
+        Ok(response)
+    }
+
+    /// Record that `msg_ids` have been handed to their recipient: stamp the
+    /// first-delivery time if unset, and bump the attempt count.
+    ///
+    /// Called by the mediator after a pickup or a live push, **not** inside the
+    /// read itself. On Redis the read is a stored Lua function, so stamping
+    /// atomically would mean putting it in `atm-functions.lua` — and that is
+    /// exactly where it must not be.
+    ///
+    /// Not because operators would have to reload: they would not.
+    /// `Database::load_scripts` issues `FUNCTION LOAD REPLACE` at boot from
+    /// whatever `functions_file` names, unattended, and fails loudly if Redis
+    /// rejects it. The hazard is narrower and worse — **the file it loads can
+    /// be stale**, and then the load succeeds, correctly and loudly, with the
+    /// wrong library. That is what happened when the per-relationship
+    /// accounting was added to one copy of the file and not the copy a test
+    /// deployment pointed at.
+    ///
+    /// Which is the argument for keeping the stamp out of the Lua, and it is
+    /// the opposite of "this field does not matter much". Eviction of
+    /// delivered-but-unacknowledged messages, poison-message detection and
+    /// tiered expiry are all meant to be built on it. A stale library would
+    /// silently not stamp, and every one of those would silently not work — a
+    /// *mechanism* that quietly does nothing, where the earlier casualty was a
+    /// *gate* that failed safe. It belongs in Rust precisely **because** things
+    /// will depend on it.
+    ///
+    /// The cost is that marking is not atomic with the read, and the test that
+    /// makes that acceptable is that **both** error directions are safe: a
+    /// crash in between leaves `first_delivered_at_ms` unset, so eviction does
+    /// not fire early, and it undercounts `attempts`, so poison detection stays
+    /// lenient. Nothing becomes more aggressive when an update is lost. A
+    /// future field on this record that fails that test — one where a missed
+    /// update makes the mediator *do* something rather than not do it — needs
+    /// different treatment and should not be added here without saying so.
+    ///
+    /// Best-effort by contract: an implementation that cannot record this
+    /// returns `Ok(())` having done nothing, and callers must not treat the
+    /// absence of a stamp as evidence a message was never delivered.
+    async fn mark_delivered(&self, _msg_ids: &[String], _now_ms: u64) -> Result<(), MediatorError> {
+        Ok(())
+    }
+
+    /// What the mediator knows about `msg_id` having been handed over.
+    ///
+    /// `None` when the message does not exist. A message that exists but has
+    /// never been delivered returns a default [`DeliveryState`], which is the
+    /// honest answer — not an error, and not the same as "not found".
+    async fn delivery_state(&self, _msg_id: &str) -> Result<Option<DeliveryState>, MediatorError> {
+        Ok(None)
+    }
 
     /// Retrieve message metadata without the body. Used by handlers that
     /// need to authorise an action before fetching the (potentially large)

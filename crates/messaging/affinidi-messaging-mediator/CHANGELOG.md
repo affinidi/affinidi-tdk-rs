@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (0.28.6) — every delivery path records the handover
+
+The five paths that hand a message to its recipient — REST fetch, the WebSocket
+handler, the streaming task, message-pickup 3.0 and v1 mediation — now go
+through `fetch_messages_delivering`, which fetches and records the handover in
+one place.
+
+One place on purpose: a stamp that five callers have to remember is a stamp
+that will be missing from the sixth.
+
+Only messages that actually came back are marked. A `get_error` is a message
+the fetch could not read, and stamping it would record a handover that never
+happened.
+
+A marking failure never fails the pickup it belongs to. The delivery already
+succeeded, and trading a real delivery for a statistic is the wrong way round.
+
 ## Unreleased (0.28.5) — a queue can be inspected, and cleared precisely
 
 Two recovery gaps, both of which made a full queue worse than it needed to be.

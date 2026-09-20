@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.28.5"
+version = "0.28.6"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -138,11 +138,17 @@ affinidi-encoding = { version = "0.1", optional = true }
 ## Shared types: DatabaseHandler, errors, config structs, secret storage.
 ## Backend features are enabled below via the mediator's own cargo features
 ## so operators only compile the backends their deployment needs.
-# 0.16.6 exactly, not `0.16`: the purge route builds a `PurgeFilter` and reads a
-# `PurgeReport`, which 0.16.6 adds. The looser requirement resolves an older
-# published mediator-common in `cargo publish --dry-run` and fails to compile on
-# the missing types, which the guard cannot tell from real registry drift.
-affinidi-messaging-mediator-common = { version = "0.16.6", path = "affinidi-messaging-mediator-common" }
+# An EXACT version, not `0.16`: the purge route builds a `PurgeFilter` and the
+# delivery paths call `fetch_messages_delivering`, neither of which exists in an
+# older published mediator-common. The looser requirement resolves one anyway in
+# `cargo publish --dry-run` and fails to compile on the missing types, which the
+# guard cannot tell from real registry drift.
+#
+# BUMP THIS IN LOCKSTEP with mediator-common's own version. Leaving it behind
+# names a version that no longer exists locally either, so the guard's "waiting
+# on a sibling" exemption — which requires the requirement to match the local
+# sibling exactly — stops applying and a `wait` becomes a `FAIL`.
+affinidi-messaging-mediator-common = { version = "0.16.7", path = "affinidi-messaging-mediator-common" }
 ## Raw TOML config schema — the `*ConfigRaw` types are defined here and the
 ## mediator re-exports them; the runtime `Config` + conversions stay local.
 affinidi-messaging-mediator-config = { version = "0.4", path = "affinidi-messaging-mediator-config" }
