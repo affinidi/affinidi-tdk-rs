@@ -20,6 +20,7 @@ use futures_util::stream::{self, BoxStream, StreamExt};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
+use crate::ack::{AckQueue, AckStats};
 use crate::confirm::confirm_delivered;
 use crate::outbox::{Key, OutboxEntry, OutboxState, OutboxStore};
 use crate::receipt::{self, Receipt, ReceiptPacker};
@@ -123,6 +124,11 @@ struct ServiceInner {
     /// A permanently-`Disconnected` signal handed out by the primary handle when
     /// there is no primary, so `connection_state()` always returns a live watch.
     fallback_conn: watch::Sender<ConnState>,
+    /// Acks that could not be delivered when they fell due, plus the counters
+    /// describing what has happened to acks overall. An ack is a delete at the
+    /// mediator, so one that is dropped leaves a handled message queued against
+    /// its sender — see [`crate::ack`].
+    acks: AckQueue,
 }
 
 impl ServiceInner {
@@ -282,6 +288,10 @@ impl ServiceInner {
 pub struct MessagingService {
     inner: Arc<ServiceInner>,
     _dispatcher: JoinHandle<()>,
+    /// Retries acks the dispatcher could not deliver. Aborted with the service,
+    /// like the dispatcher — a parked ack outliving its service would be acking
+    /// for a transport set that no longer exists.
+    _ack_retry: JoinHandle<()>,
 }
 
 impl MessagingService {
@@ -343,14 +353,33 @@ impl MessagingService {
             receipt_packer,
             inbound_tx,
             fallback_conn,
+            acks: AckQueue::default(),
         });
 
         let dispatcher = tokio::spawn(run_dispatcher(inner.clone(), inbound_rx));
+        // Parked acks are retried on their own clock, not on inbound traffic:
+        // the transport that owes an ack is by definition the one that has
+        // gone quiet, so waiting for its next message to drive the retry would
+        // wait for the thing that is not happening.
+        let ack_retry = tokio::spawn(run_ack_retry(inner.clone()));
 
         Self {
             inner,
             _dispatcher: dispatcher,
+            _ack_retry: ack_retry,
         }
+    }
+
+    /// A snapshot of ack health — how many inbound messages were released to
+    /// the mediator, how many are waiting on a transport that went away, and
+    /// how many were given up on.
+    ///
+    /// An ack is a delete at the mediator, so an ack that never lands leaves a
+    /// message the application has already handled sitting in its **sender's**
+    /// queue, counting against that sender's depth limits. A climbing
+    /// `abandoned` is that happening. See [`AckStats`].
+    pub fn ack_stats(&self) -> AckStats {
+        self.inner.acks.stats()
     }
 
     /// Install a secondary `transport` under `id`. It starts **receiving**
@@ -840,6 +869,11 @@ async fn run_dispatcher(
         if handed_off {
             ack_via_source(&inner, &src_id, ack).await;
         } else {
+            // Counted as well as logged. This arm is the contract working, not
+            // a failure, which is exactly why it needs a number: a consumer
+            // that never subscribes produces a steady climb here and no other
+            // symptom until the recipient's queue fills.
+            inner.acks.record_no_consumer();
             tracing::warn!(
                 transport = %src_id,
                 thread_id = ?item_thread_id,
@@ -879,15 +913,51 @@ fn deliver_unsolicited(inner: &Arc<ServiceInner>, confirmed_our_send: bool, item
 async fn ack_via_source(inner: &ServiceInner, src_id: &str, ack: InboundAck) {
     // Clone the Arc out of the lock BEFORE awaiting — never hold the std Mutex
     // across `.ack().await`.
+    //
+    // Neither failure arm below drops the ack any more. An ack is a delete at
+    // the mediator: dropping one leaves a message the application has already
+    // handled queued against its **sender**, counting toward that sender's
+    // depth limits until the mediator expires it. A sender refused over work
+    // its recipient finished days ago is what that looks like from outside.
     match inner.transport_by_id(src_id) {
-        Some(transport) => {
-            if let Err(e) = transport.ack(ack).await {
-                tracing::warn!(error = %e, "failed to ack inbound message after handoff");
+        Some(transport) => match transport.ack(ack.clone()).await {
+            Ok(()) => inner.acks.record_acked(),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    transport = %src_id,
+                    "failed to ack inbound message after handoff; parked for retry"
+                );
+                inner.acks.park(src_id, ack);
             }
-        }
+        },
+        // Removed between forwarding the inbound and acking it — a reconnect
+        // reinstalls the same id, and the parked ack settles then.
         None => {
-            tracing::debug!(transport = %src_id, "source transport removed before ack; skipping")
+            tracing::debug!(
+                transport = %src_id,
+                "source transport gone before ack; parked for retry"
+            );
+            inner.acks.park(src_id, ack);
         }
+    }
+}
+
+/// Retry parked acks on a fixed interval until they settle or age out.
+async fn run_ack_retry(inner: Arc<ServiceInner>) {
+    let mut ticker = tokio::time::interval(crate::ack::RETRY_INTERVAL);
+    // The first tick fires immediately; skip it so startup does not do a pass
+    // over an empty queue.
+    ticker.tick().await;
+    loop {
+        ticker.tick().await;
+        let now = tokio::time::Instant::now();
+        crate::ack::retry_pass(&inner.acks, now, |id, ack| {
+            inner
+                .transport_by_id(id)
+                .map(|transport| async move { transport.ack(ack).await })
+        })
+        .await;
     }
 }
 
@@ -951,6 +1021,9 @@ mod tests {
         acked: Mutex<Vec<String>>,
         conn_rx: watch::Receiver<ConnState>,
         fail_send: AtomicBool,
+        /// Makes `ack` fail, so a test can reach the parked-ack path without
+        /// racing a transport removal.
+        fail_ack: AtomicBool,
     }
 
     struct MockHandles {
@@ -968,6 +1041,7 @@ mod tests {
             acked: Mutex::new(Vec::new()),
             conn_rx,
             fail_send: AtomicBool::new(false),
+            fail_ack: AtomicBool::new(false),
         });
         MockHandles {
             transport,
@@ -1003,9 +1077,116 @@ mod tests {
             }
         }
         async fn ack(&self, ack: InboundAck) -> Result<(), MessagingError> {
+            if self.fail_ack.load(Ordering::SeqCst) {
+                return Err(MessagingError::Transport("mock ack failed".into()));
+            }
             self.acked.lock().unwrap().push(ack.0);
             Ok(())
         }
+    }
+
+    /// The VTI-31 shape, end to end through the real dispatcher: a message is
+    /// handed to a consumer, its ack cannot be delivered, and the ack is
+    /// **parked rather than dropped** — then settles once the transport can
+    /// take it.
+    ///
+    /// Before this, the ack was logged and discarded. The message stayed
+    /// queued at the mediator *against its sender*, counting toward that
+    /// sender's depth limits, until expiry — so a sender could be refused over
+    /// work its recipient had already finished.
+    #[tokio::test]
+    async fn an_ack_that_cannot_be_delivered_is_parked_and_later_settles() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let mut sub = svc.subscribe();
+
+        h.transport.fail_ack.store(true, Ordering::SeqCst);
+        h.inbound_tx
+            .send(inbound("push-park", None, "q-park"))
+            .unwrap();
+
+        // The consumer receives it, so the handoff is real: this is not the
+        // no-consumer case, it is a handled message whose ack failed.
+        let got = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("subscribe yields the push")
+            .expect("stream item");
+        assert_eq!(got.message.id, "push-park");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let stats = svc.ack_stats();
+        assert_eq!(stats.deferred, 1, "a failed ack must be parked");
+        assert_eq!(stats.pending, 1);
+        assert_eq!(stats.acked, 0);
+        assert!(
+            h.transport.acked.lock().unwrap().is_empty(),
+            "the ack did not land, which is the premise of this test"
+        );
+
+        // The transport recovers. Drive one retry pass directly rather than
+        // waiting out RETRY_INTERVAL.
+        h.transport.fail_ack.store(false, Ordering::SeqCst);
+        let inner = svc.inner.clone();
+        crate::ack::retry_pass(&inner.acks, tokio::time::Instant::now(), |id, ack| {
+            inner
+                .transport_by_id(id)
+                .map(|transport| async move { transport.ack(ack).await })
+        })
+        .await;
+
+        let stats = svc.ack_stats();
+        assert_eq!(stats.settled, 1, "the parked ack must eventually land");
+        assert_eq!(stats.pending, 0);
+        assert_eq!(stats.abandoned, 0);
+        assert_eq!(
+            h.transport.acked.lock().unwrap().as_slice(),
+            &["q-park"],
+            "the message must actually be released at the mediator"
+        );
+    }
+
+    /// A successful ack is counted, so `acked` climbing is the healthy baseline
+    /// the other counters are read against.
+    #[tokio::test]
+    async fn a_delivered_ack_is_counted() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let mut sub = svc.subscribe();
+
+        h.inbound_tx.send(inbound("push-ok", None, "q-ok")).unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("subscribe yields the push");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let stats = svc.ack_stats();
+        assert_eq!(stats.acked, 1);
+        assert_eq!(stats.deferred, 0);
+        assert_eq!(stats.no_consumer, 0);
+    }
+
+    /// The deliberate no-ack arm is counted separately from every failure, so
+    /// a consumer that never subscribes is visible as a number rather than
+    /// only as a warning nobody is reading.
+    #[tokio::test]
+    async fn a_message_with_no_consumer_is_counted_but_not_parked() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+
+        h.inbound_tx
+            .send(inbound("orphan-2", None, "q-orphan-2"))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let stats = svc.ack_stats();
+        assert_eq!(stats.no_consumer, 1);
+        assert_eq!(
+            stats.deferred, 0,
+            "not acking on purpose is not a deferred ack — parking it would \
+             delete a message nobody received"
+        );
+        assert_eq!(stats.pending, 0);
+        assert!(h.transport.acked.lock().unwrap().is_empty());
     }
 
     fn inbound(id: &str, thid: Option<&str>, ack: &str) -> Inbound {

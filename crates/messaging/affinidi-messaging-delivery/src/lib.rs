@@ -19,6 +19,9 @@
 //!
 //! [`MessageTransport`]: affinidi_messaging_core::MessageTransport
 
+/// Acks that could not be delivered when they fell due, and the counters that
+/// make a message held-but-never-released visible.
+pub mod ack;
 pub mod confirm;
 /// The `MessageTransport` conformance suite (design §11), parameterized over the
 /// wire. Available under the `conformance` feature (and in tests).
@@ -32,6 +35,7 @@ pub mod reap;
 pub mod receipt;
 pub mod service;
 
+pub use ack::AckStats;
 pub use confirm::{
     ConfirmReport, DrainPollReport, Escalation, ExpiryEscalator, confirm_delivered,
     confirmation_loop, confirmation_loop_with, outbox_drain_loop, poll_outbox_drain,
