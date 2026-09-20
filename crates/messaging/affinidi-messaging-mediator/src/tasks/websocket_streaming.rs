@@ -887,7 +887,12 @@ fn spawn_inbox_redelivery(
                 ..Default::default() // delete_policy defaults to DoNotDelete
             };
             let page = match database
-                .fetch_messages(&session_id, &did_hash, &options)
+                .fetch_messages_delivering(
+                    &session_id,
+                    &did_hash,
+                    &options,
+                    affinidi_messaging_mediator_common::time::unix_timestamp_millis() as u64,
+                )
                 .await
             {
                 Ok(page) => page,

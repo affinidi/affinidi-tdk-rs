@@ -13,11 +13,11 @@
 //! subscribers can share one Redis pubsub bridge.
 
 use crate::circuit_breaker::CircuitBreaker;
-use crate::store::DeliveryDecision;
 use crate::store::redis::database::{
     forwarding::ForwardQueueEntry as InnerForwardEntry, stats::MetadataStats as InnerMetadataStats,
     store::MessageMetaData as InnerMessageMetaData,
 };
+use crate::store::{DeliveryDecision, DeliveryState};
 use crate::types::{
     accounts::{Account, AccountType, MediatorAccountList},
     acls::{AccessListModeType, MediatorACLSet},
@@ -345,6 +345,129 @@ impl MediatorStore for RedisStore {
         self.handler
             .delete_message(None, did_hash, message_hash, None, admin)
             .await
+    }
+
+    async fn mark_delivered(&self, msg_ids: &[String], now_ms: u64) -> Result<(), MediatorError> {
+        if msg_ids.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.get_connection().await?;
+
+        // Write only to metadata hashes that still exist.
+        //
+        // `HSETNX` and `HINCRBY` both **create** a hash when the key is
+        // missing, so marking a message that has already been deleted does not
+        // quietly do nothing — it resurrects `MSG:META:<id>` as an orphan with
+        // two fields, no body, no stream entry, and nothing that will ever
+        // clean it up, because `delete_message` has already run. An earlier
+        // version of this comment asserted the opposite, which was wrong in
+        // exactly the case that matters.
+        //
+        // The caller already declines to mark an optimistic fetch, where the
+        // read deletes as it goes and every message would hit this. The check
+        // here covers the rest: a concurrent delete, or the expiry sweeper,
+        // landing between the fetch and the mark.
+        //
+        // It narrows that window rather than closing it — a delete landing
+        // between this `EXISTS` and the write below still resurrects the hash.
+        // Closing it properly needs the read and the mark in one round trip,
+        // which means a stored function, and the reasons for staying out of
+        // `atm-functions.lua` are on `MediatorStore::mark_delivered`. Stated
+        // rather than papered over.
+        let mut exists_pipe = redis::pipe();
+        for id in msg_ids {
+            exists_pipe.cmd("EXISTS").arg(["MSG:META:", id].concat());
+        }
+        let present: Vec<bool> = exists_pipe.query_async(&mut conn).await.map_err(|err| {
+            MediatorError::DatabaseError(
+                14,
+                "NA".into(),
+                format!("Couldn't check message metadata before marking delivery: {err}"),
+            )
+        })?;
+
+        // One pipeline for the whole pickup. `HSETNX` on the first-delivery
+        // stamp is what makes the stamp itself idempotent: the first handover
+        // wins and a redelivery leaves it alone, with no read-modify-write and
+        // no race between two concurrent pickups.
+        let mut pipe = redis::pipe();
+        let mut writing = false;
+        for (id, exists) in msg_ids.iter().zip(present) {
+            if !exists {
+                continue;
+            }
+            writing = true;
+            let key = ["MSG:META:", id].concat();
+            pipe.cmd("HSETNX")
+                .arg(&key)
+                .arg("FIRST_DELIVERED_AT")
+                .arg(now_ms)
+                .ignore();
+            pipe.cmd("HINCRBY")
+                .arg(&key)
+                .arg("DELIVERY_ATTEMPTS")
+                .arg(1)
+                .ignore();
+        }
+        if !writing {
+            return Ok(());
+        }
+
+        // Best-effort by the trait's contract: this is bookkeeping beside a
+        // pickup that has already succeeded, and failing the pickup because the
+        // bookkeeping failed would trade a real delivery for a statistic.
+        if let Err(err) = pipe.exec_async(&mut conn).await {
+            warn!(
+                "Couldn't record delivery for {} message(s): {}",
+                msg_ids.len(),
+                err
+            );
+        }
+        Ok(())
+    }
+
+    async fn delivery_state(&self, msg_id: &str) -> Result<Option<DeliveryState>, MediatorError> {
+        let mut conn = self.get_connection().await?;
+        let key = ["MSG:META:", msg_id].concat();
+
+        let fields: Vec<Option<String>> = redis::cmd("HMGET")
+            .arg(&key)
+            .arg("FIRST_DELIVERED_AT")
+            .arg("DELIVERY_ATTEMPTS")
+            .query_async(&mut conn)
+            .await
+            .map_err(|err| {
+                MediatorError::DatabaseError(
+                    14,
+                    "NA".into(),
+                    format!("Couldn't read delivery state for ({msg_id}): {err}"),
+                )
+            })?;
+
+        // `HMGET` on a missing key answers with nulls rather than an error, so
+        // "no metadata at all" is how a missing message presents.
+        let exists: bool = redis::cmd("EXISTS")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .map_err(|err| {
+                MediatorError::DatabaseError(
+                    14,
+                    "NA".into(),
+                    format!("Couldn't check message metadata for ({msg_id}): {err}"),
+                )
+            })?;
+        if !exists {
+            return Ok(None);
+        }
+
+        Ok(Some(DeliveryState {
+            first_delivered_at_ms: fields.first().and_then(|v| v.as_ref()?.parse().ok()),
+            attempts: fields
+                .get(1)
+                .and_then(|v| v.as_ref()?.parse().ok())
+                .unwrap_or(0),
+        }))
     }
 
     async fn get_message(

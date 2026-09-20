@@ -338,7 +338,7 @@ async fn message_pickup(
 
             let fetched = state
                 .database
-                .fetch_messages(
+                .fetch_messages_delivering(
                     &session.session_id,
                     &account.did_hash,
                     &FetchOptions {
@@ -349,6 +349,7 @@ async fn message_pickup(
                         // lost in flight. See the protocol module docs.
                         delete_policy: FetchDeletePolicy::DoNotDelete,
                     },
+                    state.clock.unix_millis() as u64,
                 )
                 .await?;
 

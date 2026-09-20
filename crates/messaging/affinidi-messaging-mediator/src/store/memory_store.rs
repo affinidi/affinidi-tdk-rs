@@ -27,9 +27,9 @@ use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{
-        DeletionAuthority, DeliveryDecision, ExpiryReport, ForwardQueueEntry, InboxStatusReply,
-        MediatorStore, MessageMetaData, MetadataStats, PubSubRecord, Session, SessionSweepReport,
-        StatCounter, StoreHealth, StreamingClientState, ops,
+        DeletionAuthority, DeliveryDecision, DeliveryState, ExpiryReport, ForwardQueueEntry,
+        InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats, PubSubRecord, Session,
+        SessionSweepReport, StatCounter, StoreHealth, StreamingClientState, ops,
     },
     types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
@@ -95,6 +95,11 @@ struct MessageRecord {
     send_id: Option<StreamId>,
     /// Unix-seconds expiry; `0` means no expiry.
     expires_at: u64,
+    /// Unix milliseconds when this message was first handed to its recipient.
+    first_delivered_at_ms: Option<u64>,
+    /// How many times it has been handed over. A lower bound — see
+    /// [`DeliveryState::attempts`].
+    delivery_attempts: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -490,6 +495,8 @@ impl MediatorStore for MemoryStore {
                 receive_id,
                 send_id,
                 expires_at,
+                first_delivered_at_ms: None,
+                delivery_attempts: 0,
             },
         );
 
@@ -568,6 +575,27 @@ impl MediatorStore for MemoryStore {
         state.messages.remove(message_hash);
 
         Ok(())
+    }
+
+    async fn mark_delivered(&self, msg_ids: &[String], now_ms: u64) -> Result<(), MediatorError> {
+        let mut state = self.state.lock().await;
+        for id in msg_ids {
+            // A message deleted between the read and this call is simply gone;
+            // there is nothing to stamp and nothing has gone wrong.
+            if let Some(record) = state.messages.get_mut(id) {
+                record.first_delivered_at_ms.get_or_insert(now_ms);
+                record.delivery_attempts = record.delivery_attempts.saturating_add(1);
+            }
+        }
+        Ok(())
+    }
+
+    async fn delivery_state(&self, msg_id: &str) -> Result<Option<DeliveryState>, MediatorError> {
+        let state = self.state.lock().await;
+        Ok(state.messages.get(msg_id).map(|record| DeliveryState {
+            first_delivered_at_ms: record.first_delivered_at_ms,
+            attempts: record.delivery_attempts,
+        }))
     }
 
     async fn get_message(
@@ -2622,5 +2650,187 @@ mod tests {
                 .len(),
             250
         );
+    }
+
+    /// The keystone this whole change exists for: the mediator can now tell a
+    /// message nobody has collected from one that has been collected and never
+    /// released. Before this the two were indistinguishable, which is why
+    /// "delivered but still queued against its sender" had no name.
+    #[tokio::test]
+    async fn delivery_is_recorded_and_the_first_stamp_is_kept() {
+        let store = MemoryStore::new();
+        for did in ["alice", "bob"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        let id = store
+            .store_message("s", "hello", "bob", Some("alice"), 0, 0)
+            .await
+            .expect("store");
+
+        // Never collected: known to be undelivered, which is a different claim
+        // from "delivered zero times ago".
+        let state = store
+            .delivery_state(&id)
+            .await
+            .expect("state")
+            .expect("exists");
+        assert!(!state.delivered());
+        assert_eq!(state.attempts, 0);
+        assert_eq!(state.since_first_delivery_secs(10_000), None);
+
+        store
+            .mark_delivered(std::slice::from_ref(&id), 1_000)
+            .await
+            .expect("mark");
+        let state = store
+            .delivery_state(&id)
+            .await
+            .expect("state")
+            .expect("exists");
+        assert!(state.delivered());
+        assert_eq!(state.first_delivered_at_ms, Some(1_000));
+        assert_eq!(state.attempts, 1);
+
+        // Redelivery bumps the count but must NOT move the first stamp —
+        // eviction and ageing key off when it was FIRST handed over, so a
+        // reconnecting client would otherwise keep resetting its own clock.
+        store
+            .mark_delivered(std::slice::from_ref(&id), 5_000)
+            .await
+            .expect("mark");
+        let state = store
+            .delivery_state(&id)
+            .await
+            .expect("state")
+            .expect("exists");
+        assert_eq!(
+            state.first_delivered_at_ms,
+            Some(1_000),
+            "first stamp is sticky"
+        );
+        assert_eq!(state.attempts, 2);
+        assert_eq!(state.since_first_delivery_secs(61_000), Some(60));
+    }
+
+    /// Marking is best-effort by contract: a message deleted between the read
+    /// and the mark is simply gone, and that must not be an error — the pickup
+    /// it belonged to already succeeded.
+    #[tokio::test]
+    async fn marking_a_vanished_message_is_not_an_error() {
+        let store = MemoryStore::new();
+        store
+            .mark_delivered(&["never-existed".to_string()], 1_000)
+            .await
+            .expect("marking an absent message must not fail a delivery");
+        assert!(
+            store
+                .delivery_state("never-existed")
+                .await
+                .expect("state")
+                .is_none(),
+            "a message that does not exist has no delivery state, which is not the \
+             same as an undelivered one"
+        );
+    }
+
+    /// An optimistic fetch deletes as it reads, so there is nothing left to
+    /// stamp — and on Redis stamping anyway would resurrect the message's
+    /// metadata hash as a permanent orphan, because `HSETNX` creates a missing
+    /// key. The skip lives in the shared wrapper, so this pins it for every
+    /// backend.
+    #[tokio::test]
+    async fn an_optimistic_fetch_records_nothing_because_nothing_remains() {
+        use affinidi_messaging_mediator_common::types::messages::{
+            FetchDeletePolicy, FetchOptions,
+        };
+
+        let store = MemoryStore::new();
+        for did in ["alice", "bob"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        let id = store
+            .store_message("s", "one", "bob", Some("alice"), 0, 0)
+            .await
+            .expect("store");
+
+        let fetched = store
+            .fetch_messages_delivering(
+                "s",
+                "bob",
+                &FetchOptions {
+                    limit: 10,
+                    delete_policy: FetchDeletePolicy::Optimistic,
+                    ..Default::default()
+                },
+                7_000,
+            )
+            .await
+            .expect("fetch");
+        assert_eq!(fetched.success.len(), 1);
+
+        // The message is gone, so it has no delivery state — not a default
+        // one, and emphatically not a resurrected record.
+        assert!(
+            store.delivery_state(&id).await.expect("state").is_none(),
+            "an optimistically fetched message is deleted; marking it would \
+             recreate metadata for a message that no longer exists"
+        );
+    }
+
+    /// The wrapper the five delivery paths call: fetching hands the messages
+    /// over, so fetching is what records the handover.
+    #[tokio::test]
+    async fn fetching_records_delivery_for_what_came_back() {
+        use affinidi_messaging_mediator_common::types::messages::FetchOptions;
+
+        let store = MemoryStore::new();
+        for did in ["alice", "bob"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        let a = store
+            .store_message("s", "one", "bob", Some("alice"), 0, 0)
+            .await
+            .expect("store");
+        let b = store
+            .store_message("s", "two", "bob", Some("alice"), 0, 0)
+            .await
+            .expect("store");
+
+        let fetched = store
+            .fetch_messages_delivering(
+                "s",
+                "bob",
+                &FetchOptions {
+                    limit: 10,
+                    ..Default::default()
+                },
+                7_000,
+            )
+            .await
+            .expect("fetch");
+        assert_eq!(fetched.success.len(), 2);
+
+        for id in [&a, &b] {
+            let state = store
+                .delivery_state(id)
+                .await
+                .expect("state")
+                .expect("exists");
+            assert_eq!(
+                state.first_delivered_at_ms,
+                Some(7_000),
+                "a fetched message has been handed over"
+            );
+            assert_eq!(state.attempts, 1);
+        }
     }
 }

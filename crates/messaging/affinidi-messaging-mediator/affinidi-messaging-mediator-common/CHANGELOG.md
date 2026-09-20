@@ -1,5 +1,75 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.7) — the mediator records when a message was handed over
+
+`MediatorStore` gains `mark_delivered`, `delivery_state` and
+`fetch_messages_delivering`, backed by a per-message `DeliveryState`
+(`first_delivered_at_ms`, `attempts`) on every backend.
+
+Until now the mediator could say how many messages a DID had queued and how old
+the oldest was, and **nothing about whether any of them had ever reached
+anyone**. That gap is why one specific failure had no name: a recipient picks a
+message up, processes it, and does not acknowledge it — because the ack was
+dropped, or because the application declined it terminally — and the message
+stays queued *against its sender*, counting toward that sender's depth limits,
+until expiry. From the mediator's side that was indistinguishable from a
+message nobody had collected.
+
+They are not the same thing and they do not want the same treatment. A message
+nobody has collected should wait: the recipient may be offline and holding it
+is what the queue is for. A message collected several times and never released
+is either finished work or a poison message, and waiting longer achieves
+nothing either way. Eviction of delivered-but-unacknowledged messages,
+poison-message detection and tiered expiry all need this distinction and none
+of them could be built without it.
+
+**Marking happens in Rust, after the read, deliberately.** On Redis the read is
+a stored Lua function, so stamping atomically would mean putting it in
+`atm-functions.lua` — and that is exactly where it must not be. Not because
+operators would have to reload: `load_scripts` issues `FUNCTION LOAD REPLACE`
+at boot, unattended. The hazard is that **the file it loads can be stale**, and
+then the load succeeds, correctly and loudly, with the wrong library — which is
+what happened when the per-relationship accounting was added to one copy of the
+file and not the copy a test deployment pointed at. A stale library would
+silently not stamp, and everything built on the stamp would silently not work:
+a *mechanism* that quietly does nothing, where the earlier casualty was a *gate*
+that failed safe. It belongs in Rust precisely **because** things will depend
+on it.
+
+The cost is that marking is not atomic with the read, and what makes that
+acceptable is that **both** error directions are safe: a lost update leaves
+`first_delivered_at_ms` unset, so eviction does not fire early, and undercounts
+`attempts`, so poison detection stays lenient. Nothing becomes more aggressive
+when an update is lost. A future field on this record that fails that test —
+where a missed update makes the mediator *do* something rather than not do it —
+needs different treatment.
+
+**Marking is skipped entirely for an optimistic fetch**, which deletes each
+message as it reads it. On Redis the delivery fields live on the message's own
+`MSG:META` hash, and `HSETNX` against a *missing* key **creates** it — so
+stamping a message the fetch had already deleted would resurrect an orphaned
+hash with no body, no stream entry and nothing to clean it up, on every message
+of every optimistic fetch. For the remaining case — a concurrent delete or the
+expiry sweeper landing between the fetch and the mark — the Redis path now
+writes only to hashes that still exist. That narrows the window rather than
+closing it, and the residual is stated in the code rather than papered over.
+
+`attempts` is documented as a **lower bound, not a count**: `attempts >= n` is
+sound evidence, `attempts < n` is evidence of nothing. The asymmetry is
+invisible at a call site that reads the number without reading the field's docs,
+so it is stated on the field.
+
+`attempts` is also documented as counting the **recipient's** behaviour, not the
+message's: a recipient that fetches repeatedly without acknowledging can drive
+it as high as it likes. Nothing acts on it today, but poison-eviction keyed on
+`attempts` alone would let a recipient destroy a sender's traffic, so the
+threshold must be paired with something the recipient does not control — elapsed
+time since first delivery — before anything is built on it.
+
+Fjall's on-disk record gains both fields as `#[serde(default)]`. Existing
+records read back as never-delivered, which is the honest answer — the mediator
+genuinely does not know — and a different claim from "delivered zero times".
+
 ## Unreleased (0.16.6) — `MediatorStore::purge_folder_filtered`
 
 `purge_folder` is all-or-nothing, and the queue that strands a deployment is

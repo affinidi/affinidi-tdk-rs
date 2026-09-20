@@ -326,6 +326,90 @@ impl DeletionAuthority {
     }
 }
 
+/// What the mediator knows about a queued message having been handed over.
+///
+/// # Why this exists
+///
+/// The mediator could say how many messages a DID had queued and how old the
+/// oldest was, and nothing at all about whether any of them had ever reached
+/// anyone. That gap is why a specific failure had no name: a recipient picks a
+/// message up, processes it, and does not acknowledge it — because the ack was
+/// dropped, or because the application declined the message terminally — and
+/// the message stays queued **against its sender**, counting toward that
+/// sender's depth limits, until expiry. From the mediator's side that is
+/// indistinguishable from a message nobody has collected.
+///
+/// They are not the same thing and they do not want the same treatment. A
+/// message nobody has collected should wait: the recipient may be offline and
+/// the whole point of the queue is to hold it. A message that has been
+/// collected several times and never released is either finished work or a
+/// poison message, and in both cases waiting longer achieves nothing.
+///
+/// # What it is not
+///
+/// Not proof of anything. It records that the mediator handed the bytes over,
+/// which is weaker than delivery and much weaker than processing — a recipient
+/// that crashes mid-handler still counts as delivered here. It is a signal for
+/// eviction and alerting, never authority for saying a message *was*
+/// delivered.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryState {
+    /// Unix milliseconds when this message was first handed to its recipient,
+    /// or `None` if it never has been.
+    pub first_delivered_at_ms: Option<u64>,
+    /// How many times it has been handed over — a **lower bound**, not a
+    /// count.
+    ///
+    /// Marking happens after the read rather than inside it, so a crash or a
+    /// failed write between the two loses an increment. That makes
+    /// `attempts >= n` sound evidence of at least `n` handovers, and
+    /// `attempts < n` no evidence of anything: a message may have been
+    /// delivered more often than this says, never fewer.
+    ///
+    /// So "this has been redelivered enough times to be poison" is a
+    /// conclusion this field can support, and "this looks healthy" is not. The
+    /// asymmetry is invisible at a call site that reads the number without
+    /// reading this, which is why it is stated on the field rather than in the
+    /// module docs.
+    ///
+    /// Above one means redelivery, which is normal once — a reconnect, a
+    /// restart — and suspicious when it keeps climbing while the message stays
+    /// queued.
+    ///
+    /// # It counts the recipient's behaviour, not the message's
+    ///
+    /// The recipient decides when to pick messages up, so a recipient that
+    /// fetches repeatedly without acknowledging can drive this as high as it
+    /// likes. **Anything built on a threshold here is therefore something a
+    /// recipient can trigger against a sender's messages**: poison-eviction
+    /// keyed on `attempts` alone would let a recipient cause a sender's traffic
+    /// to be destroyed, without the sender doing anything wrong.
+    ///
+    /// Nothing acts on this today, which is why it is recorded as a plain
+    /// observation. Before eviction or refusal is built on it, the threshold
+    /// needs pairing with something the recipient does *not* control — elapsed
+    /// time since [`first_delivered_at_ms`](Self::first_delivered_at_ms), say —
+    /// so that a recipient can at most bring forward an outcome that age was
+    /// going to reach anyway.
+    pub attempts: u32,
+}
+
+impl DeliveryState {
+    /// Whether the message has been handed over at least once.
+    pub fn delivered(&self) -> bool {
+        self.first_delivered_at_ms.is_some()
+    }
+
+    /// How long ago it was first handed over, in seconds, given `now_ms`.
+    ///
+    /// A stamp in the future — a clock that stepped backwards — reads as `0`
+    /// rather than wrapping to an enormous age.
+    pub fn since_first_delivery_secs(&self, now_ms: u64) -> Option<u64> {
+        self.first_delivered_at_ms
+            .map(|at| now_ms.saturating_sub(at) / 1_000)
+    }
+}
+
 /// The recipient-side facts a delivery gate needs, resolved in one lookup.
 ///
 /// Returned by [`MediatorStore::delivery_decision`]. Existence is carried by
