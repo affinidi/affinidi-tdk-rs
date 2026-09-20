@@ -58,6 +58,71 @@ use crate::types::{
 };
 use async_trait::async_trait;
 
+/// How many handovers make a message worth reporting as possibly poison.
+///
+/// A threshold for **classification only**. Nothing is evicted because of it,
+/// and that is deliberate: `attempts` is driven by the recipient, which decides
+/// when to fetch, so acting on it would let a recipient destroy a sender's
+/// messages by doing nothing but collecting them repeatedly. See
+/// [`DeliveryState::attempts`](crate::store::types::DeliveryState::attempts).
+pub const POISON_ATTEMPTS: u32 = 5;
+
+/// Metric names emitted by [`MediatorStore::fetch_messages_delivering`].
+///
+/// Defined here, beside the code that emits them, and re-exported from the
+/// mediator's own `metrics::names` where every other metric is documented —
+/// one definition, discoverable in the usual place.
+pub mod delivery_metrics {
+    /// counter: messages handed to a recipient for the first time.
+    pub const FIRST_DELIVERED: &str = "messages_first_delivered_total";
+    /// counter: handovers of a message that had already been delivered.
+    pub const REDELIVERED: &str = "messages_redelivered_total";
+    /// counter: handovers of a message already delivered at least
+    /// [`POISON_ATTEMPTS`](super::POISON_ATTEMPTS) times.
+    pub const POISON_SUSPECTED: &str = "messages_poison_suspected_total";
+    /// counter: messages whose expiry was brought forward because they had
+    /// been delivered.
+    pub const DELIVERED_EXPIRY_ADVANCED: &str = "messages_delivered_expiry_advanced_total";
+}
+
+/// What one [`mark_delivered`](MediatorStore::mark_delivered) call did.
+///
+/// Returned rather than logged so the caller decides what to do with it — the
+/// shared fetch wrapper turns it into counters, and a backend that records
+/// nothing returns it empty.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DeliveryMarkReport {
+    /// Messages handed over for the first time.
+    pub first_delivered: usize,
+    /// Messages that had been handed over before.
+    pub redelivered: usize,
+    /// Redeliveries of a message already past [`POISON_ATTEMPTS`].
+    pub poison_suspected: usize,
+    /// Messages whose expiry was brought forward.
+    pub expiry_advanced: usize,
+}
+
+/// Turn a [`DeliveryMarkReport`] into counters.
+///
+/// Only non-zero fields are touched, so a deployment with the delivered-expiry
+/// shortening off never emits that series at all rather than emitting a flat
+/// zero — the two look different on a dashboard and mean different things.
+fn publish_delivery_metrics(report: &DeliveryMarkReport) {
+    for (name, value) in [
+        (delivery_metrics::FIRST_DELIVERED, report.first_delivered),
+        (delivery_metrics::REDELIVERED, report.redelivered),
+        (delivery_metrics::POISON_SUSPECTED, report.poison_suspected),
+        (
+            delivery_metrics::DELIVERED_EXPIRY_ADVANCED,
+            report.expiry_advanced,
+        ),
+    ] {
+        if value > 0 {
+            metrics::counter!(name).increment(value as u64);
+        }
+    }
+}
+
 /// Ceiling on messages one filtered purge will examine.
 ///
 /// A filtered purge walks the folder, and a **dry run walks it without
@@ -336,6 +401,7 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         did_hash: &str,
         options: &FetchOptions,
         now_ms: u64,
+        delivered_ttl_secs: u64,
     ) -> Result<GetMessagesResponse, MediatorError> {
         let response = self.fetch_messages(session_id, did_hash, options).await?;
 
@@ -359,7 +425,10 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         // never happened.
         let delivered: Vec<String> = response.success.iter().map(|m| m.msg_id.clone()).collect();
         if !delivered.is_empty() {
-            self.mark_delivered(&delivered, now_ms).await?;
+            let report = self
+                .mark_delivered(&delivered, now_ms, delivered_ttl_secs)
+                .await?;
+            publish_delivery_metrics(&report);
         }
         Ok(response)
     }
@@ -402,8 +471,36 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// Best-effort by contract: an implementation that cannot record this
     /// returns `Ok(())` having done nothing, and callers must not treat the
     /// absence of a stamp as evidence a message was never delivered.
-    async fn mark_delivered(&self, _msg_ids: &[String], _now_ms: u64) -> Result<(), MediatorError> {
-        Ok(())
+    ///
+    /// # `delivered_ttl_secs`
+    ///
+    /// When non-zero, a message marked delivered **for the first time** also
+    /// has its expiry brought forward to `now + delivered_ttl_secs`, so a
+    /// message the recipient has already collected stops occupying its
+    /// sender's queue allowance for a full week. `0` disables that and is the
+    /// default.
+    ///
+    /// The index entry is **added, not moved**. Removing the original would
+    /// need each backend to know the prior expiry, which the Redis metadata
+    /// hash does not carry — and it is unnecessary, because every sweeper
+    /// already counts a message that is gone as `already_deleted` rather than
+    /// failing. The earlier slot deletes the message; the later slot resolves
+    /// to a no-op. That is how the Redis backend has always behaved anyway,
+    /// since its stored `delete_message` never removed the expiry entry.
+    ///
+    /// **Only the first delivery moves it.** A redelivery must not keep pushing
+    /// the deadline out, or a client that reconnects often would pin its
+    /// sender's allowance indefinitely — the mirror of the bug this exists to
+    /// fix. It is also the reason this cannot be driven by `attempts`: that
+    /// number is recipient-controlled, and anything keyed on it alone lets a
+    /// recipient decide when a sender's messages die.
+    async fn mark_delivered(
+        &self,
+        _msg_ids: &[String],
+        _now_ms: u64,
+        _delivered_ttl_secs: u64,
+    ) -> Result<DeliveryMarkReport, MediatorError> {
+        Ok(DeliveryMarkReport::default())
     }
 
     /// What the mediator knows about `msg_id` having been handed over.

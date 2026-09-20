@@ -1140,6 +1140,7 @@ async fn drain_tsp_inbox(
                 &session.did_hash,
                 &options,
                 state.clock.unix_millis() as u64,
+                state.config.limits.delivered_expiry_seconds,
             )
             .await
         {

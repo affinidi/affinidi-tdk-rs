@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.28.6"
+version = "0.28.7"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -148,10 +148,15 @@ affinidi-encoding = { version = "0.1", optional = true }
 # names a version that no longer exists locally either, so the guard's "waiting
 # on a sibling" exemption — which requires the requirement to match the local
 # sibling exactly — stops applying and a `wait` becomes a `FAIL`.
-affinidi-messaging-mediator-common = { version = "0.16.7", path = "affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-common = { version = "0.16.9", path = "affinidi-messaging-mediator-common" }
 ## Raw TOML config schema — the `*ConfigRaw` types are defined here and the
 ## mediator re-exports them; the runtime `Config` + conversions stay local.
-affinidi-messaging-mediator-config = { version = "0.4", path = "affinidi-messaging-mediator-config" }
+# An EXACT version, not `0.4`: the runtime config reads
+# `limits.delivered_expiry_seconds`, which 0.4.1 adds to `LimitsConfigRaw`. The
+# looser requirement resolves an older published config crate in
+# `cargo publish --dry-run` and fails to compile on the missing field. Bump in
+# lockstep with that crate's own version.
+affinidi-messaging-mediator-config = { version = "0.4.1", path = "affinidi-messaging-mediator-config" }
 ## Humantime for the VTA cache TTL (`[secrets].cache_ttl = "30d"`).
 humantime = "2"
 ## CLI parsing for the mediator binary's subcommands (`mediator`,

@@ -27,9 +27,10 @@ use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{
-        DeletionAuthority, DeliveryDecision, DeliveryState, ExpiryReport, ForwardQueueEntry,
-        InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats, PubSubRecord, Session,
-        SessionSweepReport, StatCounter, StoreHealth, StreamingClientState, ops,
+        DeletionAuthority, DeliveryDecision, DeliveryMarkReport, DeliveryState, ExpiryReport,
+        ForwardQueueEntry, InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats,
+        POISON_ATTEMPTS, PubSubRecord, Session, SessionSweepReport, StatCounter, StoreHealth,
+        StreamingClientState, ops,
     },
     types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
@@ -577,17 +578,47 @@ impl MediatorStore for MemoryStore {
         Ok(())
     }
 
-    async fn mark_delivered(&self, msg_ids: &[String], now_ms: u64) -> Result<(), MediatorError> {
+    async fn mark_delivered(
+        &self,
+        msg_ids: &[String],
+        now_ms: u64,
+        delivered_ttl_secs: u64,
+    ) -> Result<DeliveryMarkReport, MediatorError> {
+        let mut report = DeliveryMarkReport::default();
         let mut state = self.state.lock().await;
         for id in msg_ids {
             // A message deleted between the read and this call is simply gone;
             // there is nothing to stamp and nothing has gone wrong.
-            if let Some(record) = state.messages.get_mut(id) {
-                record.first_delivered_at_ms.get_or_insert(now_ms);
-                record.delivery_attempts = record.delivery_attempts.saturating_add(1);
+            let Some(record) = state.messages.get_mut(id) else {
+                continue;
+            };
+            let first_delivery = record.first_delivered_at_ms.is_none();
+            if first_delivery {
+                report.first_delivered += 1;
+            } else {
+                report.redelivered += 1;
+                if record.delivery_attempts >= POISON_ATTEMPTS {
+                    report.poison_suspected += 1;
+                }
+            }
+            record.first_delivered_at_ms.get_or_insert(now_ms);
+            record.delivery_attempts = record.delivery_attempts.saturating_add(1);
+
+            // Only the first delivery brings the deadline forward, and only
+            // when it is genuinely sooner. A redelivery must not keep pushing
+            // it out, and a message that already expires sooner keeps its own
+            // deadline — a client-set expiry is a promise this must not extend.
+            if first_delivery && delivered_ttl_secs > 0 {
+                let deadline = now_ms / 1_000 + delivered_ttl_secs;
+                if record.expires_at == 0 || deadline < record.expires_at {
+                    // Added, not moved: the original slot stays and resolves to
+                    // `already_deleted` when the sweeper reaches it.
+                    state.index_expiry(deadline, id);
+                    report.expiry_advanced += 1;
+                }
             }
         }
-        Ok(())
+        Ok(report)
     }
 
     async fn delivery_state(&self, msg_id: &str) -> Result<Option<DeliveryState>, MediatorError> {
@@ -2682,7 +2713,7 @@ mod tests {
         assert_eq!(state.since_first_delivery_secs(10_000), None);
 
         store
-            .mark_delivered(std::slice::from_ref(&id), 1_000)
+            .mark_delivered(std::slice::from_ref(&id), 1_000, 0)
             .await
             .expect("mark");
         let state = store
@@ -2698,7 +2729,7 @@ mod tests {
         // eviction and ageing key off when it was FIRST handed over, so a
         // reconnecting client would otherwise keep resetting its own clock.
         store
-            .mark_delivered(std::slice::from_ref(&id), 5_000)
+            .mark_delivered(std::slice::from_ref(&id), 5_000, 0)
             .await
             .expect("mark");
         let state = store
@@ -2722,7 +2753,7 @@ mod tests {
     async fn marking_a_vanished_message_is_not_an_error() {
         let store = MemoryStore::new();
         store
-            .mark_delivered(&["never-existed".to_string()], 1_000)
+            .mark_delivered(&["never-existed".to_string()], 1_000, 0)
             .await
             .expect("marking an absent message must not fail a delivery");
         assert!(
@@ -2734,6 +2765,211 @@ mod tests {
             "a message that does not exist has no delivery state, which is not the \
              same as an undelivered one"
         );
+    }
+
+    /// Item 1 + 3: a message the recipient has collected stops occupying its
+    /// sender's allowance for a week. The sweeper does the deleting — this just
+    /// brings the deadline forward — so the whole feature reuses the expiry
+    /// index and sweeper that already exist.
+    #[tokio::test]
+    async fn a_delivered_message_expires_on_the_shorter_clock() {
+        let store = MemoryStore::new();
+        for did in ["alice", "bob"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        // Expires in a week.
+        let week = 7 * 24 * 60 * 60;
+        let id = store
+            .store_message("s", "hello", "bob", Some("alice"), week, 0)
+            .await
+            .expect("store");
+
+        // Delivered at t=0 with a one-hour delivered TTL.
+        let report = store
+            .mark_delivered(std::slice::from_ref(&id), 0, 3_600)
+            .await
+            .expect("mark");
+        assert_eq!(report.first_delivered, 1);
+        assert_eq!(report.expiry_advanced, 1);
+
+        // Nothing is due before the shortened deadline...
+        let swept = store
+            .sweep_expired_messages(3_599, "admin")
+            .await
+            .expect("sweep");
+        assert_eq!(swept.expired, 0);
+        assert!(
+            store.delivery_state(&id).await.expect("state").is_some(),
+            "still held before its shortened deadline"
+        );
+
+        // ...and it goes at the shortened deadline, not in a week.
+        let swept = store
+            .sweep_expired_messages(3_600, "admin")
+            .await
+            .expect("sweep");
+        assert_eq!(swept.expired, 1);
+        assert!(store.delivery_state(&id).await.expect("state").is_none());
+    }
+
+    /// Off by default. A deployment that does not opt in keeps the behaviour it
+    /// had, because shortening this is a real reduction in durability.
+    #[tokio::test]
+    async fn a_ttl_of_zero_leaves_the_deadline_alone() {
+        let store = MemoryStore::new();
+        for did in ["alice", "bob"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        let week = 7 * 24 * 60 * 60;
+        let id = store
+            .store_message("s", "hello", "bob", Some("alice"), week, 0)
+            .await
+            .expect("store");
+
+        let report = store
+            .mark_delivered(std::slice::from_ref(&id), 0, 0)
+            .await
+            .expect("mark");
+        assert_eq!(report.expiry_advanced, 0);
+
+        let swept = store
+            .sweep_expired_messages(3_600, "admin")
+            .await
+            .expect("sweep");
+        assert_eq!(swept.expired, 0, "no shortening without the limit set");
+        assert!(store.delivery_state(&id).await.expect("state").is_some());
+    }
+
+    /// **The bug this design exists to avoid.** A client that reconnects often
+    /// would otherwise keep pushing its sender's deadline out, pinning that
+    /// sender's allowance indefinitely — the mirror of the problem being
+    /// fixed. Only the first handover moves it.
+    #[tokio::test]
+    async fn a_redelivery_does_not_push_the_deadline_out() {
+        let store = MemoryStore::new();
+        for did in ["alice", "bob"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        let week = 7 * 24 * 60 * 60;
+        let id = store
+            .store_message("s", "hello", "bob", Some("alice"), week, 0)
+            .await
+            .expect("store");
+
+        store
+            .mark_delivered(std::slice::from_ref(&id), 0, 3_600)
+            .await
+            .expect("first");
+        // Redelivered much later; must not move the deadline to t+3600 again.
+        let report = store
+            .mark_delivered(std::slice::from_ref(&id), 3_000_000, 3_600)
+            .await
+            .expect("redelivery");
+        assert_eq!(report.first_delivered, 0);
+        assert_eq!(report.redelivered, 1);
+        assert_eq!(
+            report.expiry_advanced, 0,
+            "a redelivery must not re-arm the deadline"
+        );
+
+        let swept = store
+            .sweep_expired_messages(3_600, "admin")
+            .await
+            .expect("sweep");
+        assert_eq!(
+            swept.expired, 1,
+            "the ORIGINAL shortened deadline still holds"
+        );
+    }
+
+    /// A client-set expiry is a promise the mediator must not extend. If the
+    /// message already dies sooner than the delivered TTL would allow, it keeps
+    /// its own deadline.
+    #[tokio::test]
+    async fn a_sooner_expiry_is_never_extended() {
+        let store = MemoryStore::new();
+        for did in ["alice", "bob"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        // Expires in 60s; the delivered TTL would put it at 3600s.
+        let id = store
+            .store_message("s", "hello", "bob", Some("alice"), 60, 0)
+            .await
+            .expect("store");
+
+        let report = store
+            .mark_delivered(std::slice::from_ref(&id), 0, 3_600)
+            .await
+            .expect("mark");
+        assert_eq!(
+            report.expiry_advanced, 0,
+            "the message already expires sooner; nothing to bring forward"
+        );
+
+        let swept = store
+            .sweep_expired_messages(60, "admin")
+            .await
+            .expect("sweep");
+        assert_eq!(swept.expired, 1, "its own 60s deadline still applies");
+    }
+
+    /// Poison is **classified, not acted on**. `attempts` is recipient-driven,
+    /// so evicting on it would let a recipient destroy a sender's messages by
+    /// collecting them repeatedly. The counter rises; nothing else changes.
+    #[tokio::test]
+    async fn repeated_redelivery_is_reported_and_changes_nothing() {
+        let store = MemoryStore::new();
+        for did in ["alice", "bob"] {
+            store
+                .account_add(did, &MediatorACLSet::default(), None)
+                .await
+                .expect("add");
+        }
+        let week = 7 * 24 * 60 * 60;
+        let id = store
+            .store_message("s", "hello", "bob", Some("alice"), week, 0)
+            .await
+            .expect("store");
+
+        // Well past the poison threshold, with the shortening OFF so nothing
+        // else can be responsible for a change.
+        let mut suspected = 0;
+        for _ in 0..(POISON_ATTEMPTS + 3) {
+            suspected += store
+                .mark_delivered(std::slice::from_ref(&id), 0, 0)
+                .await
+                .expect("mark")
+                .poison_suspected;
+        }
+        assert!(
+            suspected > 0,
+            "a repeatedly redelivered message is reported"
+        );
+
+        // And it is still there: classification does not evict.
+        let swept = store
+            .sweep_expired_messages(week - 1, "admin")
+            .await
+            .expect("sweep");
+        assert_eq!(swept.expired, 0);
+        let state = store
+            .delivery_state(&id)
+            .await
+            .expect("state")
+            .expect("exists");
+        assert!(state.attempts >= POISON_ATTEMPTS);
     }
 
     /// An optimistic fetch deletes as it reads, so there is nothing left to
@@ -2769,6 +3005,7 @@ mod tests {
                     ..Default::default()
                 },
                 7_000,
+                0,
             )
             .await
             .expect("fetch");
@@ -2814,6 +3051,7 @@ mod tests {
                     ..Default::default()
                 },
                 7_000,
+                0,
             )
             .await
             .expect("fetch");

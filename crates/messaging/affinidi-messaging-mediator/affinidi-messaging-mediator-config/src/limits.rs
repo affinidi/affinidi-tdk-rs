@@ -15,6 +15,11 @@ pub struct LimitsConfigRaw {
     pub listed_messages: String,
     pub local_max_acl: String,
     pub message_expiry_seconds: String,
+    /// How long a message is kept after it has first been handed to its
+    /// recipient. `"0"` (the default) means "no different from any other
+    /// message" — the historical behaviour.
+    #[serde(default = "default_delivered_expiry_seconds")]
+    pub delivered_expiry_seconds: String,
     pub message_size: String,
     #[serde(default = "default_queued_send_messages_per_peer")]
     pub queued_send_messages_per_peer: String,
@@ -49,6 +54,13 @@ pub struct LimitsConfigRaw {
 /// messages for any one recipient; beyond that it is flooding that peer, not
 /// serving it. Defaulted (rather than required) so an existing `mediator.toml`
 /// keeps loading without an edit.
+/// Off. Enabling this shortens how long a delivered-but-unacknowledged message
+/// survives, which is a reduction in durability, so it is never turned on by an
+/// upgrade — only by an operator who has read what it does.
+fn default_delivered_expiry_seconds() -> String {
+    "0".to_string()
+}
+
 fn default_queued_send_messages_per_peer() -> String {
     "50".to_string()
 }

@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (0.28.7) — `limits.delivered_expiry_seconds`, off by default
+
+Lets an operator say how long a message is kept **after** its recipient has
+collected it, counted from that first handover, instead of holding it for the
+full week against its sender's queue allowance.
+
+**Off by default, and it stays off on upgrade.** Shortening this is a real
+reduction in durability rather than a free win: a message can be marked
+delivered and still not have reached an application, because the delivery layer
+deliberately does *not* acknowledge a message that reached no consumer — that
+is what makes the mediator redeliver it. Set shorter than a client's worst
+restart window, this destroys exactly those messages. `conf/mediator.toml`
+says so where an operator will read it.
+
+All five delivery paths pass the limit through, so the clock starts on whichever
+one hands the message over.
+
+New counters: `messages_first_delivered_total`, `messages_redelivered_total`,
+`messages_poison_suspected_total`, `messages_delivered_expiry_advanced_total`.
+The last is absent rather than zero on a default deployment.
+
 ## Unreleased (0.28.6) — every delivery path records the handover
 
 The five paths that hand a message to its recipient — REST fetch, the WebSocket

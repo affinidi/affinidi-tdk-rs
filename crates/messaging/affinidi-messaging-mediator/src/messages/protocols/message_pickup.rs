@@ -348,6 +348,7 @@ pub(crate) async fn delivery_request(
                     ..Default::default()
                 },
                 state.clock.unix_millis() as u64,
+                state.config.limits.delivered_expiry_seconds,
             )
             .await?;
         debug!("msgs fetched: {}", messages.success.len());

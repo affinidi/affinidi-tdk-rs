@@ -17,7 +17,7 @@ use crate::store::redis::database::{
     forwarding::ForwardQueueEntry as InnerForwardEntry, stats::MetadataStats as InnerMetadataStats,
     store::MessageMetaData as InnerMessageMetaData,
 };
-use crate::store::{DeliveryDecision, DeliveryState};
+use crate::store::{DeliveryDecision, DeliveryMarkReport, DeliveryState};
 use crate::types::{
     accounts::{Account, AccountType, MediatorAccountList},
     acls::{AccessListModeType, MediatorACLSet},
@@ -347,9 +347,15 @@ impl MediatorStore for RedisStore {
             .await
     }
 
-    async fn mark_delivered(&self, msg_ids: &[String], now_ms: u64) -> Result<(), MediatorError> {
+    async fn mark_delivered(
+        &self,
+        msg_ids: &[String],
+        now_ms: u64,
+        delivered_ttl_secs: u64,
+    ) -> Result<DeliveryMarkReport, MediatorError> {
+        let mut report = DeliveryMarkReport::default();
         if msg_ids.is_empty() {
-            return Ok(());
+            return Ok(report);
         }
         let mut conn = self.get_connection().await?;
 
@@ -391,39 +397,86 @@ impl MediatorStore for RedisStore {
         // wins and a redelivery leaves it alone, with no read-modify-write and
         // no race between two concurrent pickups.
         let mut pipe = redis::pipe();
-        let mut writing = false;
+        let mut marked: Vec<&String> = Vec::new();
         for (id, exists) in msg_ids.iter().zip(present) {
             if !exists {
                 continue;
             }
-            writing = true;
+            marked.push(id);
             let key = ["MSG:META:", id].concat();
+            // NOT `.ignore()`: the reply says whether this was the first
+            // delivery (1) or a redelivery (0), which is what decides below
+            // whether the expiry deadline moves. Reading it back beats
+            // inferring it, and costs nothing — the command runs either way.
             pipe.cmd("HSETNX")
                 .arg(&key)
                 .arg("FIRST_DELIVERED_AT")
-                .arg(now_ms)
-                .ignore();
+                .arg(now_ms);
             pipe.cmd("HINCRBY")
                 .arg(&key)
                 .arg("DELIVERY_ATTEMPTS")
                 .arg(1)
                 .ignore();
         }
-        if !writing {
-            return Ok(());
+        if marked.is_empty() {
+            return Ok(report);
         }
 
         // Best-effort by the trait's contract: this is bookkeeping beside a
         // pickup that has already succeeded, and failing the pickup because the
         // bookkeeping failed would trade a real delivery for a statistic.
-        if let Err(err) = pipe.exec_async(&mut conn).await {
-            warn!(
-                "Couldn't record delivery for {} message(s): {}",
-                msg_ids.len(),
-                err
-            );
+        let stamped: Vec<bool> = match pipe.query_async(&mut conn).await {
+            Ok(replies) => replies,
+            Err(err) => {
+                warn!(
+                    "Couldn't record delivery for {} message(s): {}",
+                    msg_ids.len(),
+                    err
+                );
+                return Ok(report);
+            }
+        };
+
+        // A `1` from `HSETNX` means this call set the stamp, so it was the
+        // first handover; `0` means the stamp was already there.
+        report.first_delivered = stamped.iter().filter(|first| **first).count();
+        report.redelivered = stamped.len() - report.first_delivered;
+
+        if delivered_ttl_secs == 0 {
+            return Ok(report);
         }
-        Ok(())
+
+        // Bring the deadline forward, for first deliveries only.
+        //
+        // Added, not moved: the metadata hash does not carry the message's own
+        // expiry, so this cannot compare the two — and does not need to.
+        // Whichever slot the sweeper reaches first deletes the message and the
+        // other resolves to `already_deleted`, so a message whose own expiry is
+        // sooner simply keeps it.
+        let deadline = now_ms / 1_000 + delivered_ttl_secs;
+        let slot_key = format!("MSG_EXPIRY:{deadline}");
+        let mut expiry_pipe = redis::pipe();
+        let mut moving = false;
+        for (id, first_delivery) in marked.iter().zip(stamped) {
+            if !first_delivery {
+                continue;
+            }
+            moving = true;
+            report.expiry_advanced += 1;
+            expiry_pipe
+                .cmd("ZADD")
+                .arg("MSG_EXPIRY")
+                .arg("NX")
+                .arg(deadline)
+                .arg(&slot_key)
+                .ignore();
+            expiry_pipe.cmd("SADD").arg(&slot_key).arg(*id).ignore();
+        }
+        if moving && let Err(err) = expiry_pipe.exec_async(&mut conn).await {
+            warn!("Couldn't bring delivered-message expiry forward: {err}");
+            report.expiry_advanced = 0;
+        }
+        Ok(report)
     }
 
     async fn delivery_state(&self, msg_id: &str) -> Result<Option<DeliveryState>, MediatorError> {

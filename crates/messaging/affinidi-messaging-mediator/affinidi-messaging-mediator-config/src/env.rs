@@ -144,6 +144,10 @@ pub fn apply_env_overrides(config: &mut ConfigRaw) {
     env_override!(config.limits.listed_messages, "LIMIT_LISTED_MESSAGES");
     env_override!(config.limits.local_max_acl, "LIMIT_LOCAL_MAX_ACL");
     env_override!(
+        config.limits.delivered_expiry_seconds,
+        "LIMIT_DELIVERED_EXPIRY_SECONDS"
+    );
+    env_override!(
         config.limits.message_expiry_seconds,
         "LIMIT_MESSAGE_EXPIRY_SECONDS"
     );
