@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.9.4"
+version = "0.9.5"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -95,6 +95,9 @@ affinidi-tsp = { version = "0.2", path = "../affinidi-tsp" }
 base64 = "0.23"
 ## Trust Tasks payload types named by the Trust Tasks integration tests.
 trust-tasks-rs = "0.21"
+## Verifies the mediator's signed Trust Task responses.
+trust-tasks-proof = { version = "0.21", default-features = false, features = ["affinidi"] }
+affinidi-data-integrity = "0.7"
 ## Tracing subscriber for test diagnostics.
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ## WebSocket handshake test.

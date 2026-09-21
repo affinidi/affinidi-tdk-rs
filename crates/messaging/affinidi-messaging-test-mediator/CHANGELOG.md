@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.9.5) — test only
+
+New integration test `a_trust_task_response_is_signed_by_the_mediator`, and the
+dev-dependencies it verifies with (`trust-tasks-proof`, `affinidi-data-integrity`).
+No change to the library API.
+
 ## Unreleased (0.9.4) — `TestMediatorBuilder::trust_task_verification`
 
 Sets `security.trust_task_verification`, so a test can run the mediator with
