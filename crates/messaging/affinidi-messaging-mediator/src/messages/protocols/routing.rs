@@ -487,7 +487,7 @@ async fn deliver_forward(
                 })?;
 
             metrics::counter!(crate::common::metrics::names::MESSAGES_FORWARDED_TOTAL).increment(1);
-            state.monitor.forwarded(
+            state.monitor.queued_for_relay(
                 &entry.from_did_hash,
                 &entry.to_did_hash,
                 &entry.message,

@@ -17,6 +17,7 @@
 
 use crate::store::{MediatorStore, types::ForwardQueueEntry};
 use crate::tasks::forwarding::config::ForwardingConfig;
+use crate::tasks::forwarding::observer::{ForwardOutcome, ForwardTransport, ForwardingObserver};
 use crate::tasks::forwarding::packer::SystemMessagePacker;
 use crate::time::{unix_timestamp_millis, unix_timestamp_secs};
 use affinidi_net_guard::{EgressPolicy, guarded_dns_resolver};
@@ -298,6 +299,8 @@ pub struct ForwardingProcessor {
     /// are encrypted for their recipient. `None` when the host has no mediator
     /// identity to pack with — see [`SystemMessagePacker`].
     packer: Option<Arc<dyn SystemMessagePacker>>,
+    /// Told the fate of every relay attempt — see [`ForwardingObserver`].
+    observer: Option<Arc<dyn ForwardingObserver>>,
 }
 
 impl ForwardingProcessor {
@@ -327,6 +330,7 @@ impl ForwardingProcessor {
             http_pool,
             ws_pool: Arc::new(Mutex::new(HashMap::new())),
             packer: None,
+            observer: None,
         })
     }
 
@@ -339,6 +343,20 @@ impl ForwardingProcessor {
     pub fn with_system_packer(mut self, packer: Arc<dyn SystemMessagePacker>) -> Self {
         self.packer = Some(packer);
         self
+    }
+
+    /// Report each relay attempt's outcome to `observer` (the mediator's traffic
+    /// monitor). Optional for the same reason as
+    /// [`with_system_packer`](Self::with_system_packer).
+    pub fn with_observer(mut self, observer: Arc<dyn ForwardingObserver>) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
+    fn observe(&self, entry: &ForwardQueueEntry, outcome: ForwardOutcome) {
+        if let Some(observer) = &self.observer {
+            observer.observe(entry, outcome);
+        }
     }
 
     /// Start the forwarding processor. This runs indefinitely.
@@ -514,6 +532,7 @@ impl ForwardingProcessor {
                     "FORWARD_EXPIRED: to_did_hash={} from_did_hash={} endpoint={}",
                     msg.to_did_hash, msg.from_did_hash, endpoint_url
                 );
+                self.observe(msg, ForwardOutcome::Expired);
             }
             if let Err(e) = self
                 .database
@@ -594,6 +613,13 @@ impl ForwardingProcessor {
 
         // Deliver messages
         let transport = if use_websocket { "WebSocket" } else { "REST" };
+        let relayed = ForwardOutcome::Relayed {
+            transport: if use_websocket {
+                ForwardTransport::Websocket
+            } else {
+                ForwardTransport::Rest
+            },
+        };
         debug!(
             "Delivering {} messages to {} via {}",
             ready.len(),
@@ -623,6 +649,7 @@ impl ForwardingProcessor {
                         forward_time_ms,
                         delay_info,
                     );
+                    self.observe(msg, relayed);
                     succeeded.push(msg.stream_id.as_str());
                 }
                 Err(e) => {
@@ -694,6 +721,12 @@ impl ForwardingProcessor {
                     if let Err(e) = self.database.forward_queue_delete(&ids).await {
                         warn!("Failed to delete abandoned entry: {e}");
                     }
+                    self.observe(
+                        msg,
+                        ForwardOutcome::Abandoned {
+                            attempts: msg.retry_count + 1,
+                        },
+                    );
 
                     // Send problem report to the original sender if we know their DID
                     if self.config.report_errors && !msg.from_did.is_empty() {
@@ -721,8 +754,23 @@ impl ForwardingProcessor {
                     // `max_len = 0` keeps the legacy unbounded behaviour
                     // for retries; the inbound enqueue path applies the
                     // queue limit instead.
-                    if let Err(e) = self.database.forward_queue_enqueue(&retry_entry, 0).await {
-                        error!("Failed to re-enqueue retry entry (message may be lost): {e}");
+                    match self.database.forward_queue_enqueue(&retry_entry, 0).await {
+                        Ok(_) => self.observe(
+                            msg,
+                            ForwardOutcome::Retrying {
+                                attempt: msg.retry_count + 1,
+                                max_retries: self.config.max_retries,
+                            },
+                        ),
+                        Err(e) => {
+                            error!("Failed to re-enqueue retry entry (message may be lost): {e}");
+                            self.observe(
+                                msg,
+                                ForwardOutcome::Abandoned {
+                                    attempts: msg.retry_count + 1,
+                                },
+                            );
+                        }
                     }
                 }
             }

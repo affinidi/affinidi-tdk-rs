@@ -660,6 +660,9 @@ pub async fn serve_internal(
     if config.processors.forwarding.enabled && config.processors.forwarding.external_forwarding {
         let store = store.clone();
         let fwd_config = config.processors.forwarding.clone();
+        let observer: Arc<
+            dyn affinidi_messaging_mediator_common::tasks::forwarding::ForwardingObserver,
+        > = Arc::new(monitor.clone());
         // A DIDComm-less build has no `pack_encrypted` to offer; the processor
         // logs the abandonment instead of storing a report nobody can read.
         #[cfg(feature = "didcomm")]
@@ -673,11 +676,13 @@ pub async fn serve_internal(
         supervisor.spawn("forwarding_processor", true, move || {
             let store = store.clone();
             let fwd_config = fwd_config.clone();
+            let observer = observer.clone();
             #[cfg(feature = "didcomm")]
             let packer = packer.clone();
             async move {
-                let processor =
-                    ForwardingProcessor::new(fwd_config, store).map_err(|e| e.to_string())?;
+                let processor = ForwardingProcessor::new(fwd_config, store)
+                    .map_err(|e| e.to_string())?
+                    .with_observer(observer);
                 #[cfg(feature = "didcomm")]
                 let processor = processor.with_system_packer(packer);
                 processor.start().await.map_err(|e| e.to_string())

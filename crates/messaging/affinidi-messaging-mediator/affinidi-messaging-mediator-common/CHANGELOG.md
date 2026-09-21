@@ -1,5 +1,20 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.16) — forwarding outcomes, for the traffic monitor
+
+`ForwardingProcessor::with_observer` takes a `ForwardingObserver`, which is
+told the fate of every relay attempt as a `ForwardOutcome`:
+- `Relayed { transport }`: the peer accepted it (a 2xx over REST, or a
+  positive relay-ack over a websocket).
+- `Retrying { attempt, max_retries }`: the attempt failed and the entry was
+  queued again.
+- `Abandoned { attempts }`: dropped undelivered, either because its retries
+  ran out or because it couldn't be queued again.
+- `Expired`: the entry expired before it could be relayed.
+
+It is injected the way `with_system_packer` is, so the standalone
+`forwarding_processor` binary, which has no monitor, is unchanged. Additive.
+
 ## Unreleased (0.16.15) — audit actions for the traffic monitor
 
 `AuditAction` gains `MonitorSubscribe` (`monitor_subscribe`) and
