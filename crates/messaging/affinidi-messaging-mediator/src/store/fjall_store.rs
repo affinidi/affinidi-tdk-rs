@@ -896,6 +896,31 @@ impl MediatorStore for FjallStore {
 
         let _guard = self.write_lock.lock().await;
 
+        // Idempotent on the message hash. A sender that re-submits the same
+        // bytes — the delivery layer's outbox re-sends `entry.packed` verbatim
+        // when a send errors after the mediator had in fact stored it — used to
+        // get a second inbox and outbox entry and a second counter increment
+        // over a single `messages` row. The one delete then released one of
+        // each, and the rest leaked for good: the sender's `send_queue_count`
+        // crept up until the `limits.queue.sender` gate refused all its
+        // traffic, and even expiry could not recover it, because both copies
+        // share one expiry key. Checked under the write lock, so two
+        // concurrent stores of the same bytes cannot both pass.
+        if let Some(existing) = self
+            .messages
+            .get(msg_id.as_bytes())
+            .map_err(|e| Self::db_err("store_message:messages.get", e))?
+        {
+            let existing: StoredMessage = Self::decode(&existing)?;
+            if existing.to_did_hash == to_did_hash {
+                tracing::debug!(
+                    msg_id,
+                    "message already stored for this recipient; not storing it twice"
+                );
+                return Ok(msg_id);
+            }
+        }
+
         let receive_id = self.alloc_stream_id();
         let send_id = if from != "ANONYMOUS" {
             Some(self.alloc_stream_id())
@@ -4417,5 +4442,59 @@ mod tests {
                 .expect("state")
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod idempotent_store_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn hash(s: &str) -> String {
+        sha256::digest(s)
+    }
+
+    /// REGRESSION (2026-09-21): a re-submitted message — the delivery layer's
+    /// outbox re-sends the identical packed bytes when a send errors after the
+    /// mediator had already stored it — was counted twice and released once.
+    /// The sender's `send_queue_count` leaked one per duplicate, for good, until
+    /// a live did-hosting control DID hit `limits.queue.sender` and could answer
+    /// nobody. After the one delete, every counter must be back to zero.
+    #[tokio::test]
+    async fn a_resubmitted_message_is_stored_and_counted_once() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        let (to, from) = (hash("vta"), hash("control"));
+
+        let a = store
+            .store_message("s", "same-bytes", &to, Some(&from), 0, 0)
+            .await
+            .expect("first store");
+        let b = store
+            .store_message("s", "same-bytes", &to, Some(&from), 0, 0)
+            .await
+            .expect("re-submitted store");
+        assert_eq!(a, b, "the same bytes keep the same id");
+
+        let sender = store.account_get(&from).await.unwrap().unwrap();
+        assert_eq!(sender.send_queue_count, 1, "counted once");
+        assert_eq!(store.peer_queue_count(&from, &to).await.unwrap(), 1);
+
+        store
+            .delete_message(
+                &a,
+                DeletionAuthority::Owner {
+                    did_hash: to.clone(),
+                },
+            )
+            .await
+            .expect("delete");
+
+        let sender = store.account_get(&from).await.unwrap().unwrap();
+        let recipient = store.account_get(&to).await.unwrap().unwrap();
+        assert_eq!(sender.send_queue_count, 0, "the sender count must not leak");
+        assert_eq!(sender.send_queue_bytes, 0);
+        assert_eq!(recipient.receive_queue_count, 0, "nor the recipient's");
+        assert_eq!(store.peer_queue_count(&from, &to).await.unwrap(), 0);
     }
 }
