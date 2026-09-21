@@ -111,6 +111,10 @@ pub fn apply_env_overrides(config: &mut ConfigRaw) {
         config.security.admin_messages_expiry,
         "ADMIN_MESSAGES_EXPIRY"
     );
+    env_override!(
+        config.security.trust_task_verification,
+        "TRUST_TASK_VERIFICATION"
+    );
 
     env_override!(config.streaming.enabled, "STREAMING_ENABLED");
     env_override!(config.streaming.uuid, "STREAMING_UUID");

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.28.12"
+version = "0.28.13"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -74,7 +74,14 @@ memory-backend = []
 ## At least one of `didcomm` or `tsp` must be enabled (see the `compile_error!`
 ## in `lib.rs`); the two are NOT mutually exclusive — they are designed to run
 ## together (`--features didcomm,tsp`), which is the dual-protocol deployment.
-didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding", "dep:affinidi-crypto", "dep:trust-tasks-rs"]
+didcomm = [
+  "dep:affinidi-messaging-didcomm",
+  "dep:affinidi-encoding",
+  "dep:affinidi-crypto",
+  "dep:trust-tasks-rs",
+  "dep:trust-tasks-proof",
+  "dep:affinidi-data-integrity",
+]
 
 ## DIDComm v1 (Aries RFC 0019) — additive alongside DIDComm v2.1, and requires
 ## it: a v1 sender still reaches the mediator over the v2-authenticated session
@@ -129,6 +136,9 @@ affinidi-messaging-didcomm-v1 = { path = "../affinidi-messaging-didcomm-v1", ver
 ## Trust Tasks framework core — consumes Trust Task documents (the messaging
 ## ping / account / acl / access-list tasks) carried over the binding envelope.
 trust-tasks-rs = { version = "0.21", optional = true }
+# Verifies Trust Task proofs (eddsa-jcs-2022) before any handler runs.
+trust-tasks-proof = { version = "0.21", default-features = false, features = ["affinidi"], optional = true }
+affinidi-data-integrity = { version = "0.7", optional = true }
 ## Optional: JOSE key-agreement types for the didcomm compat layer (#327)
 affinidi-crypto = { version = "0.2", features = ["jose"], optional = true }
 ## Optional: Trust Spanning Protocol (activated by `tsp` feature)
@@ -156,7 +166,7 @@ affinidi-messaging-mediator-common = { version = "0.16.12", path = "affinidi-mes
 # looser requirement resolves an older published config crate in
 # `cargo publish --dry-run` and fails to compile on the missing field. Bump in
 # lockstep with that crate's own version.
-affinidi-messaging-mediator-config = { version = "0.4.3", path = "affinidi-messaging-mediator-config" }
+affinidi-messaging-mediator-config = { version = "0.4.4", path = "affinidi-messaging-mediator-config" }
 ## Humantime for the VTA cache TTL (`[secrets].cache_ttl = "30d"`).
 humantime = "2"
 ## CLI parsing for the mediator binary's subcommands (`mediator`,

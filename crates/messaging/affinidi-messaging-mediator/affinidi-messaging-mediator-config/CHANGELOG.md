@@ -1,5 +1,12 @@
 # Affinidi Messaging Mediator Config
 
+## Unreleased (0.4.4) — `trust_task_verification`
+
+A new `[security]` key, `trust_task_verification` (`"warn"` | `"enforce"`),
+overridable with `TRUST_TASK_VERIFICATION`. `#[serde(default)]`, so a config
+written before it deserializes unchanged; the mediator reads an empty value as
+`"warn"`.
+
 ## Unreleased (0.4.3) — `pickup_round_robin`
 
 A new `[limits]` key, `"true"` by default, overridable with

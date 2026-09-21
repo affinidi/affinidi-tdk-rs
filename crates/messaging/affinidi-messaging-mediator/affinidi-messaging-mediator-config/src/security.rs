@@ -26,4 +26,10 @@ pub struct SecurityConfigRaw {
     /// that predate the flag deserialize without it (empty → `false`).
     #[serde(default)]
     pub enable_inter_mediator_relay: String,
+    /// `warn` or `enforce` — whether a Trust Task that fails its acceptance
+    /// checks (proof, `issuedAt`, issuer binding) is refused or only logged.
+    /// `#[serde(default)]` so configs that predate the setting deserialize
+    /// without it (empty → `warn`).
+    #[serde(default)]
+    pub trust_task_verification: String,
 }

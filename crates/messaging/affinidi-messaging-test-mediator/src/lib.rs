@@ -105,6 +105,8 @@ use affinidi_messaging_mediator_common::{
     MediatorSecrets, errors::MediatorError, secrets::backends::MemoryStore as SecretsMemoryStore,
     store::MediatorStore,
 };
+// Re-exported so tests can pick the Trust Task acceptance mode.
+pub use affinidi_messaging_mediator::common::config::TrustTaskVerification;
 // Re-exported so tests can build/inject a clock from one import.
 pub use affinidi_messaging_mediator_common::types::clock::{Clock, SystemClock, TestClock};
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
@@ -335,6 +337,8 @@ pub struct TestMediatorBuilder {
     block_remote_admin_msgs: Option<bool>,
     /// Override for `SecurityConfig.enable_inter_mediator_relay`.
     enable_inter_mediator_relay: Option<bool>,
+    /// Override for `SecurityConfig.trust_task_verification`.
+    trust_task_verification: Option<TrustTaskVerification>,
     /// Override for `SecurityConfig.jwt_access_expiry` (seconds).
     jwt_access_expiry_secs: Option<u64>,
     /// Override for `SecurityConfig.jwt_refresh_expiry` (seconds).
@@ -387,6 +391,7 @@ impl Default for TestMediatorBuilder {
             force_session_did_match: None,
             block_remote_admin_msgs: None,
             enable_inter_mediator_relay: None,
+            trust_task_verification: None,
             jwt_access_expiry_secs: None,
             jwt_refresh_expiry_secs: None,
             max_websocket_connections_per_did: None,
@@ -669,6 +674,13 @@ impl TestMediatorBuilder {
         self
     }
 
+    /// Override `trust_task_verification`. Defaults to the production value
+    /// (`Warn`); tests of proof enforcement set `Enforce`.
+    pub fn trust_task_verification(mut self, mode: TrustTaskVerification) -> Self {
+        self.trust_task_verification = Some(mode);
+        self
+    }
+
     /// Override JWT expiries. Defaults: 900 s access, 86 400 s refresh.
     /// Useful for testing token-refresh flows by shrinking access
     /// expiry to a few seconds.
@@ -875,6 +887,9 @@ impl TestMediatorBuilder {
         }
         if let Some(b) = self.enable_inter_mediator_relay {
             security.enable_inter_mediator_relay = b;
+        }
+        if let Some(mode) = self.trust_task_verification {
+            security.trust_task_verification = mode;
         }
         if let Some(secs) = self.jwt_access_expiry_secs {
             security.jwt_access_expiry = secs;

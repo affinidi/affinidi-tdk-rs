@@ -304,6 +304,41 @@ pub struct SecurityConfig {
     /// `SEND_FORWARDED` even without this flag (with a deprecation warning at
     /// boot); a future release will require the flag.
     pub enable_inter_mediator_relay: bool,
+    /// Whether a Trust Task failing its acceptance checks is refused or only
+    /// logged. See [`TrustTaskVerification`].
+    pub trust_task_verification: TrustTaskVerification,
+}
+
+/// What the mediator does with a Trust Task that fails its acceptance checks —
+/// a missing or invalid `proof`, a stale or missing `issuedAt`, or an in-band
+/// `issuer` that is not the authenticated sender.
+///
+/// `Warn` is the transition setting: the failure is logged and counted
+/// (`trust_task_acceptance_failures_total`) and the task still runs, so clients
+/// that do not sign yet keep working. `Enforce` refuses it with a problem
+/// report. `Warn` is the default for now because every client built before
+/// `affinidi-messaging-sdk` 0.26.13 sends unsigned tasks; it will become
+/// `Enforce` in a later release.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrustTaskVerification {
+    #[default]
+    Warn,
+    Enforce,
+}
+
+impl std::str::FromStr for TrustTaskVerification {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "" | "warn" => Ok(Self::Warn),
+            "enforce" => Ok(Self::Enforce),
+            other => Err(format!(
+                "security.trust_task_verification must be \"warn\" or \"enforce\", not {other:?}"
+            )),
+        }
+    }
 }
 
 impl Debug for SecurityConfig {
@@ -335,6 +370,7 @@ impl Debug for SecurityConfig {
             .field("force_session_did_match", &self.force_session_did_match)
             .field("block_remote_admin_msgs", &self.block_remote_admin_msgs)
             .field("admin_messages_expiry", &self.admin_messages_expiry)
+            .field("trust_task_verification", &self.trust_task_verification)
             .field(
                 "enable_inter_mediator_relay",
                 &self.enable_inter_mediator_relay,
@@ -411,6 +447,7 @@ impl SecurityConfig {
             block_anonymous_outer_envelope: true,
             force_session_did_match: true,
             block_remote_admin_msgs: true,
+            trust_task_verification: TrustTaskVerification::Warn,
             admin_messages_expiry: 3,
             enable_inter_mediator_relay: false,
         }
@@ -661,6 +698,14 @@ impl SecurityConfigRawExt for SecurityConfigRaw {
                         false
                     })
             },
+            // A security setting that doesn't parse is a hard error, not a
+            // silent default — a typo must not quietly pick the weaker mode.
+            trust_task_verification: self.trust_task_verification.parse().map_err(
+                |e: String| {
+                    tracing::error!("{e}");
+                    MediatorError::ConfigError(12, "NA".into(), e)
+                },
+            )?,
             ..SecurityConfig::default(secrets_resolver)
         };
 

@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased (0.28.13) — Trust Tasks are checked before they run
+
+Every served management Trust Task (everything but `messaging/ping`, which keeps
+its own pipeline) now passes the Trust Tasks §7.2 acceptance checks before its
+handler runs, over DIDComm and TSP alike:
+
+- **freshness** — `issuedAt` inside the acceptance window; a task whose spec
+  requires a proof or `issuedAt` must carry `issuedAt` and be under 5 minutes old;
+- **issuer binding** — an in-band `issuer` must be the authenticated sender;
+- **proof** — a present proof must verify (`eddsa-jcs-2022` / `eddsa-rdfc-2022`)
+  with an Ed25519 key the issuer lists under `authentication` or
+  `assertionMethod`, published as Multikey **or JWK**;
+- **spec policy** — `proofRequired` / `issuedAtRequired` / `recipientRequired`.
+
+Until now only `ping` was checked at all, with proofs accepted unverified.
+
+**Nothing that works today stops working.** A new `[security]` setting,
+`trust_task_verification` (env `TRUST_TASK_VERIFICATION`), defaults to `"warn"`:
+a failing task is logged, counted in `trust_task_acceptance_failures_total{reason,mode}`,
+and still executed, and the mediator warns at boot that it is in `warn` mode.
+Set `"enforce"` once clients sign — `affinidi-messaging-sdk` 0.26.13 and later
+sign every Trust Task — and a failing task is refused with a problem report:
+`message.trust_task.proof_required`, `.proof_invalid`, `.stale`,
+`.identity_mismatch` or `.rejected`. A later release will make `"enforce"` the
+default. An unrecognised value is a startup error, not a silent fallback.
+
+The proof is verified over the document **as received**, not as re-serialised:
+`trust_tasks_proof::affinidi::Verifier` re-serialises the parsed document, so a
+genuine proof over, say, an `issuedAt` written `+00:00` rather than `Z` failed
+there. Duplicate-execution (replay) protection follows separately.
+
+New dependencies (under `didcomm`): `trust-tasks-proof` 0.21 (`affinidi` backend)
+and `affinidi-data-integrity` 0.7 — both already in the build graph.
+
 ## Unreleased (0.28.12) — one list declares every served trust task
 
 Internal refactor, no behaviour change. The trust-task dispatch in `consume()`

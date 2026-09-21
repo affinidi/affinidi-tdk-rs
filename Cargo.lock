@@ -606,9 +606,10 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator"
-version = "0.28.12"
+version = "0.28.13"
 dependencies = [
  "affinidi-crypto",
+ "affinidi-data-integrity",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-encoding",
@@ -671,6 +672,7 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
+ "trust-tasks-proof",
  "trust-tasks-rs",
  "url",
  "uuid",
@@ -734,7 +736,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-config"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "affinidi-messaging-mediator-common",
  "serde",
@@ -867,7 +869,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-test-mediator"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",

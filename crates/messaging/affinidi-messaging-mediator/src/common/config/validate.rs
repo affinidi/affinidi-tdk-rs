@@ -62,6 +62,15 @@ pub fn validate_config(config: &Config) -> Result<(), MediatorError> {
     if let Some(msg) = warn_remote_admin_allowed(config.security.block_remote_admin_msgs) {
         warn!("{msg}");
     }
+    if config.security.trust_task_verification == super::TrustTaskVerification::Warn {
+        warn!(
+            "security.trust_task_verification = \"warn\": Trust Tasks that fail their \
+             acceptance checks (missing/invalid proof, stale issuedAt, issuer ≠ sender) \
+             are logged and still executed. Set \"enforce\" once your clients sign \
+             (affinidi-messaging-sdk 0.26.13+); watch trust_task_acceptance_failures_total \
+             to see who does not yet."
+        );
+    }
     if let Some(msg) = warn_implicit_relay(
         config.security.enable_inter_mediator_relay,
         &config.security.global_acl_default,
