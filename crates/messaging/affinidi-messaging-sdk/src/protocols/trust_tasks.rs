@@ -33,7 +33,7 @@ use sha256::digest;
 use tracing::warn;
 use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
 use trust_tasks_rs::TrustTask;
-use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping, queue, stats};
+use trust_tasks_rs::specs::messaging::{access_list, account, acl, message, ping, queue, stats};
 use trust_tasks_rs::specs::{audit, config};
 use uuid::Uuid;
 
@@ -424,6 +424,88 @@ impl TrustTasksOps<'_> {
         task.recipient = Some(mediator_did.to_string());
 
         let response: TrustTask<stats::show::v0_1::Response> = self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
+    /// Send a `messaging/message/list` Trust Task and return one page of
+    /// stored-message metadata from an account's receive or send queue, oldest
+    /// first — never bodies. `did_hash = None` lists the caller's own queue
+    /// (which must be served locally); another account needs admin rights.
+    /// `peer` narrows to one counterparty (the sender in a receive queue, the
+    /// recipient in a send queue). Pass the previous page's `next_cursor` to
+    /// continue.
+    pub async fn message_list(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<String>,
+        queue: message::list::v0_1::Queue,
+        peer: Option<String>,
+        cursor: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<message::list::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let vid = |v: String| {
+            message::list::v0_1::Vid::from_str(&v)
+                .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))
+        };
+        let did = did_hash.map(vid).transpose()?;
+        let peer = peer.map(vid).transpose()?;
+        let cursor = cursor
+            .map(|c| message::list::v0_1::PayloadCursor::from_str(&c))
+            .transpose()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid cursor: {e}")))?;
+        let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
+
+        let p: message::list::v0_1::Payload = payload(
+            message::list::v0_1::Payload::builder()
+                .did(did)
+                .queue(queue)
+                .peer(peer)
+                .cursor(cursor)
+                .limit(limit),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<message::list::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
+    /// Send a `messaging/message/get` Trust Task and return one stored message
+    /// exactly as the mediator holds it — still encrypted — with its metadata.
+    /// `did_hash = None` reads from the caller's own queues; another account's
+    /// message needs a rootAdmin, and the mediator audits the read. This is not
+    /// a pickup: the message stays queued and its delivery state is unchanged.
+    ///
+    /// A caller holding the recipient's key-agreement secret can unpack the
+    /// returned envelope locally.
+    pub async fn message_get(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<String>,
+        msg_id: &str,
+    ) -> Result<message::get::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let did = did_hash
+            .map(|d| message::get::v0_1::Vid::from_str(&d))
+            .transpose()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
+        let msg_id = message::get::v0_1::PayloadMsgId::from_str(msg_id)
+            .map_err(|e| ATMError::MsgSendError(format!("invalid message id: {e}")))?;
+
+        let p: message::get::v0_1::Payload = payload(
+            message::get::v0_1::Payload::builder()
+                .did(did)
+                .msg_id(msg_id),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<message::get::v0_1::Response> =
+            self.exchange(profile, task).await?;
         Ok(response.payload)
     }
 

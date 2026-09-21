@@ -1,5 +1,18 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.14) — audit actions for message operations
+
+`AuditAction` gains `MessageRead` (`message_read`), `MessageDelete`
+(`message_delete`) and `QueuePurge` (`queue_purge`), recorded when an
+administrator reads or deletes another account's messages or purges a queue.
+
+`AuditAction` is now `#[non_exhaustive]`, so future kinds are not breaking.
+Adding variants and the attribute is source-breaking for a crate that matches
+the enum exhaustively; none outside the mediator does. A client still on the
+deprecated DIDComm `admin-management` audit-log protocol with an older copy of
+this crate cannot deserialise an entry of a new kind — read the log with the
+`audit/list` Trust Task instead.
+
 ## Unreleased (0.16.13) — a Trust Task duplicate-execution record
 
 `MediatorStore` gains `trust_task_claim(key, digest, retain_until, now) ->

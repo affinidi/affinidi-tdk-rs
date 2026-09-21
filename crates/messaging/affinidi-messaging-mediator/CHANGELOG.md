@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (0.28.18) — `messaging/message/list` and `messaging/message/get`
+
+- **`message/list`** — stored-message metadata for one queue, oldest first,
+  never bodies: id, size, arrival time, sender/recipient and delivery state
+  (`queued`, or `delivered` with when). `peer` narrows to one counterparty and
+  is applied while paging, so a page can come back short with a cursor.
+- **`message/get`** — one stored message verbatim and undecrypted, with its
+  metadata and detected protocol. Not a pickup: the delivery state is untouched.
+
+The requester's own queues need the `local` capability (as REST `/list` does);
+another account's metadata needs admin standing, and another account's message
+**body** needs a rootAdmin (`messaging/message/get:rootAdminRequired`) — the
+one read that can expose content, e.g. a signed-only DIDComm message. Such a
+read is recorded in the audit log (`messageRead`). A message id from another
+account's queue is indistinguishable from one that does not exist. Requires
+`affinidi-messaging-mediator-common` 0.16.14.
+
 ## Unreleased (0.28.17) — `messaging/queue/status`
 
 One account's two queues, read live: depth, bytes, effective limit (the

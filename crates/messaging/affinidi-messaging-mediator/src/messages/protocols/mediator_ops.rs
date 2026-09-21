@@ -11,19 +11,23 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::store::types::DeliveryState;
 use affinidi_messaging_mediator_common::types::accounts::AccountType;
-use affinidi_messaging_mediator_common::types::messages::Folder;
+use affinidi_messaging_mediator_common::types::audit::AuditAction;
+use affinidi_messaging_mediator_common::types::messages::{Folder, MessageProtocol};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use trust_tasks_rs::TrustTask;
-use trust_tasks_rs::specs::messaging::{queue, stats};
+use trust_tasks_rs::specs::messaging::{message, queue, stats};
 use uuid::Uuid;
 
 use crate::SharedData;
+use crate::common::authz::{self, Capability};
 use crate::common::session::Session;
 use crate::messages::protocols::mediator::acls::check_permissions;
+use crate::messages::protocols::mediator::record_audit;
 use crate::messages::protocols::trust_tasks::{
     require_admin, serialize_err, tt_problem, validate_tt_basic,
 };
@@ -349,6 +353,335 @@ async fn peer_breakdown(
             })
         })
         .collect())
+}
+
+/// Default and maximum page size for `messaging/message/list`, and how many
+/// entries one call may examine when a `peer` filter skips most of them.
+const MESSAGE_LIST_DEFAULT_LIMIT: u32 = 100;
+const MESSAGE_LIST_MAX_LIMIT: u32 = 500;
+const MESSAGE_LIST_MAX_SCAN: u32 = 5_000;
+
+/// The largest stored message `messaging/message/get` returns (10 MiB, the
+/// spec's `message` bound).
+const MESSAGE_GET_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Resolve the account a self-or-admin message task targets, and authorise it.
+///
+/// An omitted `did` is the requester's own account, which additionally needs
+/// the `local` capability — the same gate as the REST `/list`, `/delete` and
+/// `/purge` routes, since only a locally served account has queues here.
+/// Another account needs admin standing.
+fn message_target(
+    did: Option<String>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+) -> Result<String, MediatorError> {
+    let target = did.unwrap_or_else(|| session.did_hash.clone());
+    if target == session.did_hash {
+        if authz::require_capability(&session.acls, Capability::Local).is_err() {
+            return Err(tt_problem(
+                session,
+                "authorization.local",
+                "the account is not local to this mediator".into(),
+                StatusCode::FORBIDDEN,
+            ));
+        }
+    } else if !check_permissions(
+        session,
+        std::slice::from_ref(&target),
+        state.config.security.block_remote_admin_msgs,
+        sender_kid,
+    ) {
+        return Err(tt_problem(
+            session,
+            "authorization.account.denied",
+            format!("not permitted to act on the messages of account {target}"),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+    Ok(target)
+}
+
+/// The next stream id strictly after `id` (`"<ms>-<seq>"` in every backend).
+fn stream_successor(id: &str) -> Option<String> {
+    let (ms, seq) = id.split_once('-')?;
+    let ms: u64 = ms.parse().ok()?;
+    let seq: u64 = seq.parse().ok()?;
+    Some(format!("{ms}-{}", seq.checked_add(1)?))
+}
+
+/// Handle `messaging/message/list`: stored-message metadata for one queue,
+/// oldest first. Never a body. Self (with `local`) or admin.
+///
+/// `peer` narrows to one counterparty — the sender in a receive queue, the
+/// recipient in a send queue. The filter is applied while paging, so a page
+/// may come back short with a `nextCursor`; one call examines at most
+/// [`MESSAGE_LIST_MAX_SCAN`] entries.
+pub(crate) async fn consume_message_list(
+    typed: TrustTask<message::list::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: DateTime<Utc>,
+) -> Result<Value, MediatorError> {
+    use message::list::v0_1::Queue;
+
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    let payload = &typed.payload;
+    let target = message_target(
+        payload.did.as_ref().map(|d| d.to_string()),
+        state,
+        session,
+        sender_kid,
+    )?;
+    if state.database.account_get(&target).await?.is_none() {
+        return Err(tt_problem(
+            session,
+            "account.not_found",
+            format!("account {target} not found"),
+            StatusCode::NOT_FOUND,
+        ));
+    }
+
+    let receive = !matches!(payload.queue, Queue::Send);
+    let folder = if receive {
+        Folder::Inbox
+    } else {
+        Folder::Outbox
+    };
+    let limit = payload.limit.map_or(MESSAGE_LIST_DEFAULT_LIMIT, |n| {
+        n.get().min(u64::from(MESSAGE_LIST_MAX_LIMIT)) as u32
+    });
+    let peer = payload.peer.as_ref().map(|p| p.to_string());
+
+    let mut start = match &payload.cursor {
+        Some(c) => stream_successor(c).ok_or_else(|| {
+            tt_problem(
+                session,
+                "message.trust_task.malformed",
+                "invalid cursor".into(),
+                StatusCode::BAD_REQUEST,
+            )
+        })?,
+        None => "-".to_string(),
+    };
+    let mut kept = Vec::new();
+    let mut scanned = 0u32;
+    let mut last_seen: Option<String> = None;
+    let mut exhausted = false;
+    while (kept.len() as u32) < limit && scanned < MESSAGE_LIST_MAX_SCAN {
+        let batch = limit.min(MESSAGE_LIST_MAX_SCAN - scanned);
+        let page = state
+            .database
+            .list_messages(&target, folder.clone(), Some((&start, "+")), batch)
+            .await?;
+        let got = page.len() as u32;
+        for m in page {
+            scanned += 1;
+            let stream_id = if receive {
+                m.receive_id.clone()
+            } else {
+                m.send_id.clone()
+            };
+            let counterparty = if receive {
+                &m.from_address
+            } else {
+                &m.to_address
+            };
+            let wanted = peer
+                .as_ref()
+                .is_none_or(|p| counterparty.as_deref() == Some(p));
+            if let Some(id) = &stream_id {
+                last_seen = Some(id.clone());
+            }
+            if wanted {
+                kept.push(m);
+                if kept.len() as u32 == limit {
+                    break;
+                }
+            }
+        }
+        if got < batch {
+            exhausted = true;
+            break;
+        }
+        match last_seen.as_deref().and_then(stream_successor) {
+            Some(next) => start = next,
+            None => {
+                exhausted = true;
+                break;
+            }
+        }
+    }
+
+    let ids: Vec<String> = kept.iter().map(|m| m.msg_id.clone()).collect();
+    let states = state
+        .database
+        .delivery_states(&ids)
+        .await
+        .unwrap_or_default();
+    let queue_name = if receive { "receive" } else { "send" };
+    let messages: Vec<Value> = kept
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let mut meta = json!({
+                "msgId": m.msg_id,
+                "queue": queue_name,
+                "size": m.size,
+                "receivedAt": millis_to_datetime(m.timestamp),
+            });
+            if let Some(from) = &m.from_address {
+                meta["from"] = json!(from);
+            }
+            if let Some(to) = &m.to_address {
+                meta["to"] = json!(to);
+            }
+            apply_delivery_state(&mut meta, states.get(i).cloned().flatten());
+            meta
+        })
+        .collect();
+
+    let mut response = json!({ "messages": messages });
+    if !exhausted && let Some(last) = last_seen {
+        response["nextCursor"] = json!(last);
+    }
+    let response: message::list::v0_1::Response = from_json(response)?;
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/message/get`: one stored message, verbatim and
+/// undecrypted, with its metadata.
+///
+/// An account's own message (with `local`); another account's only for a
+/// **rootAdmin** — it is the one read here that can expose content a plain
+/// admin should not see (a signed-only or plaintext DIDComm message is
+/// readable without the recipient's key) — and such a read is audited. This
+/// is not a pickup: the message's delivery state is unchanged. The response is
+/// signed, as the spec requires, by the shared response path.
+pub(crate) async fn consume_message_get(
+    typed: TrustTask<message::get::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: DateTime<Utc>,
+) -> Result<Value, MediatorError> {
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    let payload = &typed.payload;
+    let requested = payload.did.as_ref().map(|d| d.to_string());
+    let cross_account = requested.as_ref().is_some_and(|d| *d != session.did_hash);
+    if cross_account && session.account_type != AccountType::RootAdmin {
+        return Err(tt_problem(
+            session,
+            "messaging/message/get:rootAdminRequired",
+            "reading another account's stored message requires a rootAdmin".into(),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+    let target = message_target(requested, state, session, sender_kid)?;
+    if state.database.account_get(&target).await?.is_none() {
+        return Err(tt_problem(
+            session,
+            "messaging/message/get:unknownAccount",
+            format!("account {target} not found"),
+            StatusCode::NOT_FOUND,
+        ));
+    }
+
+    let msg_id = payload.msg_id.to_string();
+    // `get_message` answers `None` unless `target` is the message's sender or
+    // recipient — so an id from someone else's queue is indistinguishable
+    // from one that does not exist.
+    let Some(stored) = state.database.get_message(&target, &msg_id).await? else {
+        return Err(tt_problem(
+            session,
+            "messaging/message/get:unknownMessage",
+            format!("no message {msg_id} in the queues of account {target}"),
+            StatusCode::NOT_FOUND,
+        ));
+    };
+    if stored.size > MESSAGE_GET_MAX_BYTES {
+        return Err(tt_problem(
+            session,
+            "messaging/message/get:messageTooLarge",
+            format!(
+                "message {msg_id} is {} bytes; the limit is {MESSAGE_GET_MAX_BYTES}",
+                stored.size
+            ),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ));
+    }
+    let Some(body) = stored.msg.clone() else {
+        return Err(tt_problem(
+            session,
+            "messaging/message/get:unknownMessage",
+            format!("message {msg_id} has no stored body"),
+            StatusCode::NOT_FOUND,
+        ));
+    };
+
+    let receive = stored.to_address.as_deref() == Some(target.as_str());
+    let mut meta = json!({
+        "msgId": stored.msg_id,
+        "queue": if receive { "receive" } else { "send" },
+        "size": stored.size,
+        "receivedAt": millis_to_datetime(stored.timestamp),
+        "protocol": wire_protocol(&body),
+    });
+    if let Some(from) = &stored.from_address {
+        meta["from"] = json!(from);
+    }
+    if let Some(to) = &stored.to_address {
+        meta["to"] = json!(to);
+    }
+    let delivery = state.database.delivery_state(&msg_id).await.ok().flatten();
+    apply_delivery_state(&mut meta, delivery);
+
+    if cross_account {
+        record_audit(
+            state,
+            session,
+            &target,
+            AuditAction::MessageRead,
+            format!("read message {msg_id} ({} bytes)", stored.size),
+        )
+        .await;
+    }
+
+    let response: message::get::v0_1::Response =
+        from_json(json!({ "meta": meta, "message": body }))?;
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Set `deliveryState` / `deliveredAt` on a `MessageMeta` from the store's
+/// record. Absent when the backend keeps no record.
+fn apply_delivery_state(meta: &mut Value, state: Option<DeliveryState>) {
+    let Some(state) = state else { return };
+    match state.first_delivered_at_ms {
+        Some(ms) => {
+            meta["deliveryState"] = json!("delivered");
+            meta["deliveredAt"] = json!(millis_to_datetime(ms));
+        }
+        None => meta["deliveryState"] = json!("queued"),
+    }
+}
+
+/// The spec's `WireProtocol` for a stored message body.
+fn wire_protocol(body: &str) -> &'static str {
+    match MessageProtocol::detect(body) {
+        MessageProtocol::DidComm => "didcomm",
+        MessageProtocol::Tsp => "tsp",
+        _ => "other",
+    }
+}
+
+fn millis_to_datetime(ms: u64) -> DateTime<Utc> {
+    DateTime::from_timestamp_millis(ms as i64).unwrap_or_default()
 }
 
 /// One page of the ranking, as a `queue/list` response body.

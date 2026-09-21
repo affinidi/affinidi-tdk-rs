@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.9.8) — test only
+
+`mediator_ops` covers `message/list` (peer filter + cursor paging, reading is
+not a pickup) and `message/get` (own message; a plain admin refused another
+account's; a rootAdmin allowed and audited). No change to the library API.
+
 ## Unreleased (0.9.7) — test only
 
 `mediator_ops` covers `queue/status`: the send-queue breakdown ranks the

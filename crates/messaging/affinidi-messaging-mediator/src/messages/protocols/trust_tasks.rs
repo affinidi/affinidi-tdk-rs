@@ -36,7 +36,7 @@ use sha256::digest;
 use std::collections::HashSet;
 use std::str::FromStr;
 use subtle::ConstantTimeEq;
-use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping, queue, stats};
+use trust_tasks_rs::specs::messaging::{access_list, account, acl, message, ping, queue, stats};
 use trust_tasks_rs::specs::{audit, config};
 use trust_tasks_rs::{
     ConsumeChecks, ConsumeOutcome, NoValidator, Payload, PayloadPolicy, ProofPolicy, ProofVerifier,
@@ -317,6 +317,28 @@ pub(crate) async fn consume(
             )
             .await?
         }
+        ServedTask::MessageList => {
+            mediator_ops::consume_message_list(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &sk,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
+        ServedTask::MessageGet => {
+            mediator_ops::consume_message_get(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &sk,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
         ServedTask::QueueStatus => {
             mediator_ops::consume_queue_status(
                 downcast(&doc, session)?,
@@ -400,6 +422,8 @@ served_tasks! {
     StatsShow => stats::show::v0_1::Payload,
     QueueList => queue::list::v0_1::Payload,
     QueueStatus => queue::status::v0_1::Payload,
+    MessageList => message::list::v0_1::Payload,
+    MessageGet => message::get::v0_1::Payload,
 }
 
 impl ServedTask {
@@ -1585,6 +1609,11 @@ fn audit_action_name(a: AuditAction) -> &'static str {
         AuditAction::AccountChangeQueueLimits => "accountChangeQueueLimits",
         AuditAction::AdminAdd => "adminAdd",
         AuditAction::AdminStrip => "adminStrip",
+        AuditAction::MessageRead => "messageRead",
+        AuditAction::MessageDelete => "messageDelete",
+        AuditAction::QueuePurge => "queuePurge",
+        // A kind added to the common crate before this mapping learns it.
+        _ => "other",
     }
 }
 

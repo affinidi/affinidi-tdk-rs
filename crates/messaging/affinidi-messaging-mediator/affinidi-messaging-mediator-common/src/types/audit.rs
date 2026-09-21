@@ -19,7 +19,12 @@ pub const AUDIT_LOG_MAX_ENTRIES: usize = 10_000;
 
 /// The kind of privileged change an [`AuditLogEntry`] records. Serialized with
 /// stable snake_case names so the wire form is independent of the Rust spelling.
+///
+/// `#[non_exhaustive]`: new kinds of recorded action are added as the
+/// mediator gains operations, and a consumer must not assume the list is
+/// complete.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AuditAction {
     /// A DID's ACL bitmask was replaced (`set_did_acl`).
     #[serde(rename = "set_acl")]
@@ -51,6 +56,17 @@ pub enum AuditAction {
     /// One or more DIDs had admin status stripped.
     #[serde(rename = "admin_strip")]
     AdminStrip,
+    /// An administrator read another account's stored message
+    /// (`messaging/message/get`).
+    #[serde(rename = "message_read")]
+    MessageRead,
+    /// Messages were deleted from another account's queue by an
+    /// administrator (`messaging/message/delete`).
+    #[serde(rename = "message_delete")]
+    MessageDelete,
+    /// A queue was purged (`messaging/queue/purge`).
+    #[serde(rename = "queue_purge")]
+    QueuePurge,
 }
 
 /// A single audit-log record: one privileged change, by one actor, at one time.
