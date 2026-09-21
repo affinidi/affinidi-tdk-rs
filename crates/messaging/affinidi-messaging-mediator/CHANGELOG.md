@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (0.28.14) — a Trust Task runs once
+
+A consequential Trust Task (one whose spec requires a proof or `issuedAt`) is
+now recorded in the store once it passes its acceptance checks, keyed by the
+authenticated sender and the document `id`. The same document again is refused
+with `message.trust_task.duplicate`; a different document under a used `id` with
+`message.trust_task.id_conflict`; a store that cannot be consulted with
+`message.trust_task.unavailable` (503). Before, a captured `account/update` could
+be replayed for as long as its envelope was accepted — and to any other
+instance sharing the store.
+
+The record is claimed last, after every other check, so a refused document never
+burns its `id`. It is kept until the end of the acceptance window (`issuedAt` +
+5 minutes + skew), or `expiresAt` if sooner — a far-future `expiresAt` cannot make
+the mediator hold it longer. Reads are not recorded. Like the other checks, a
+duplicate is only logged under `security.trust_task_verification = "warn"` and
+refused under `"enforce"`. Lapsed records are swept on the session-sweep cadence
+(Redis expires them itself). Requires `affinidi-messaging-mediator-common` 0.16.13.
+
 ## Unreleased (0.28.13) — Trust Tasks are checked before they run
 
 Every served management Trust Task (everything but `messaging/ping`, which keeps

@@ -35,7 +35,7 @@ use crate::{
     store::{
         DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MediatorStore,
         MessageMetaData, MetadataStats, PubSubRecord, Session, SessionState, StatCounter,
-        StoreHealth, StreamingClientState,
+        StoreHealth, StreamingClientState, TrustTaskClaim,
     },
 };
 use async_trait::async_trait;
@@ -1080,6 +1080,64 @@ impl MediatorStore for RedisStore {
     }
 
     // ─── OOB Discovery invitations ──────────────────────────────────────────
+
+    async fn trust_task_claim(
+        &self,
+        key: &str,
+        digest: &str,
+        retain_until: u64,
+        now: u64,
+    ) -> Result<TrustTaskClaim, MediatorError> {
+        let _ = now; // Redis expires the key itself at `retain_until`.
+        let redis_key = format!("TRUST_TASK_CLAIM:{key}");
+        let mut conn = self.get_connection().await?;
+        let db_err = |op: &str, err: redis::RedisError| {
+            MediatorError::DatabaseError(14, "NA".into(), format!("trust_task_claim {op}: {err}"))
+        };
+
+        // SET NX is the atomic check-and-record: exactly one caller across all
+        // instances sharing this Redis wins the first claim.
+        let set: Option<String> = redis::cmd("SET")
+            .arg(&redis_key)
+            .arg(digest)
+            .arg("NX")
+            .arg("EXAT")
+            .arg(retain_until)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| db_err("SET", e))?;
+        if set.is_some() {
+            return Ok(TrustTaskClaim::Fresh);
+        }
+
+        let recorded: Option<String> = redis::cmd("GET")
+            .arg(&redis_key)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| db_err("GET", e))?;
+        Ok(match recorded {
+            Some(recorded) if recorded == digest => TrustTaskClaim::Duplicate,
+            Some(_) => TrustTaskClaim::Conflict,
+            // Expired between the SET and the GET: the record is gone, so this
+            // is a first sight after all. Try once more to record it.
+            None => {
+                let set: Option<String> = redis::cmd("SET")
+                    .arg(&redis_key)
+                    .arg(digest)
+                    .arg("NX")
+                    .arg("EXAT")
+                    .arg(retain_until)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|e| db_err("SET", e))?;
+                if set.is_some() {
+                    TrustTaskClaim::Fresh
+                } else {
+                    TrustTaskClaim::Conflict
+                }
+            }
+        })
+    }
 
     async fn oob_discovery_store(
         &self,

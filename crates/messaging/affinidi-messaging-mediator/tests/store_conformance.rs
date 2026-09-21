@@ -42,8 +42,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use affinidi_messaging_mediator_common::store::MediatorStore;
 use affinidi_messaging_mediator_common::store::types::{ForwardQueueEntry, Session, SessionState};
+use affinidi_messaging_mediator_common::store::{MediatorStore, TrustTaskClaim};
 use affinidi_messaging_mediator_common::types::audit::{AuditAction, AuditLogEntry};
 use affinidi_messaging_sdk::protocols::mediator::{
     accounts::{Account, AccountType},
@@ -970,6 +970,69 @@ async fn check_v1_routing_keys(store: Arc<dyn MediatorStore>) {
     );
 }
 
+/// The Trust Task duplicate-execution record: first claim wins, the same
+/// document again is a duplicate, a different document under the same key is a
+/// conflict, keys are independent, and a lapsed record is gone. The lapse uses
+/// the real clock because Redis expires keys on wall time.
+async fn check_trust_task_claim(store: Arc<dyn MediatorStore>) {
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
+    let t = now();
+    let long = t + 600;
+
+    assert_eq!(
+        store.trust_task_claim("k1", "d1", long, t).await.unwrap(),
+        TrustTaskClaim::Fresh
+    );
+    assert_eq!(
+        store.trust_task_claim("k1", "d1", long, t).await.unwrap(),
+        TrustTaskClaim::Duplicate,
+        "the same document again must not run twice"
+    );
+    assert_eq!(
+        store.trust_task_claim("k1", "d2", long, t).await.unwrap(),
+        TrustTaskClaim::Conflict,
+        "a different document under a used id must be refused"
+    );
+    assert_eq!(
+        store.trust_task_claim("k2", "d1", long, t).await.unwrap(),
+        TrustTaskClaim::Fresh,
+        "keys are independent"
+    );
+
+    // A record that has lapsed is absent: the key can be claimed afresh.
+    assert_eq!(
+        store.trust_task_claim("k3", "d1", t + 1, t).await.unwrap(),
+        TrustTaskClaim::Fresh
+    );
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    let later = now();
+    store
+        .sweep_expired_trust_task_claims(later)
+        .await
+        .expect("sweep");
+    assert_eq!(
+        store
+            .trust_task_claim("k3", "d9", later + 600, later)
+            .await
+            .unwrap(),
+        TrustTaskClaim::Fresh,
+        "a lapsed record must not block a new claim"
+    );
+    // …and the sweep left live records alone.
+    assert_eq!(
+        store
+            .trust_task_claim("k1", "d1", long, later)
+            .await
+            .unwrap(),
+        TrustTaskClaim::Duplicate
+    );
+}
+
 /// Generate one `#[tokio::test]` per check for a backend `$ctor`.
 /// Gated to the in-process backends that use it — a Redis-only build drives the
 /// async `conformance_for_redis!` instead, so an ungated def would warn (unused)
@@ -1036,6 +1099,10 @@ macro_rules! conformance_for {
             async fn v1_routing_keys() {
                 check_v1_routing_keys(ready($ctor).await).await;
             }
+            #[tokio::test]
+            async fn trust_task_claim() {
+                check_trust_task_claim(ready($ctor).await).await;
+            }
         }
     };
 }
@@ -1083,4 +1150,5 @@ conformance_for_redis!(redis,
     oob_discovery_roundtrip  => check_oob_discovery_roundtrip  @ 12,
     delivery_decision_matches_access_list => check_delivery_decision_matches_access_list @ 13,
     v1_routing_keys          => check_v1_routing_keys          @ 14,
+    trust_task_claim         => check_trust_task_claim         @ 15,
 );

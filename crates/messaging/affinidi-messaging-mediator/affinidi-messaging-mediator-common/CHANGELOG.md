@@ -1,5 +1,18 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.13) — a Trust Task duplicate-execution record
+
+`MediatorStore` gains `trust_task_claim(key, digest, retain_until, now) ->
+TrustTaskClaim` (`Fresh` / `Duplicate` / `Conflict`) and
+`sweep_expired_trust_task_claims(now)`. Redis records a claim with an atomic
+`SET NX EXAT`, so one claim wins across every mediator instance sharing the
+store; Fjall and Memory check-and-record under their write lock and are swept.
+
+Both methods have default implementations, so a third-party store still
+compiles. The default `trust_task_claim` **returns an error** rather than
+`Fresh`: a store that keeps no record cannot say whether a document already
+ran, and the mediator fails closed on it.
+
 ## Unreleased (0.16.12) — `config_path`: one rule for every configured path
 
 New always-built module `config_path`, with `resolve_config_relative`: resolves a

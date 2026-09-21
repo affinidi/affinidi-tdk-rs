@@ -29,13 +29,14 @@ use affinidi_did_common::DocumentExt;
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_encoding::ED25519_PUB;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::store::TrustTaskClaim;
 use affinidi_secrets_resolver::secrets::KeyType;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use serde_json::Value;
 use trust_tasks_proof::affinidi::parse_data_integrity_proof;
-use trust_tasks_rs::{FreshnessPolicy, SpecPolicy, TrustTask};
+use trust_tasks_rs::{DEFAULT_MAX_AGE, FreshnessPolicy, SpecPolicy, TrustTask, document_digest};
 
 use crate::SharedData;
 use crate::common::config::TrustTaskVerification;
@@ -57,6 +58,12 @@ pub(crate) enum Rejection {
     ProofInvalid(String),
     /// Any other per-spec presence rule (e.g. `issuedAt`, `recipient`).
     PolicyViolation(String),
+    /// This exact document was already executed.
+    Duplicate,
+    /// A different document already executed under this `id`.
+    IdConflict,
+    /// The duplicate-execution record could not be consulted.
+    RecordUnavailable(String),
 }
 
 impl Rejection {
@@ -68,6 +75,18 @@ impl Rejection {
             Rejection::ProofRequired => "message.trust_task.proof_required",
             Rejection::ProofInvalid(_) => "message.trust_task.proof_invalid",
             Rejection::PolicyViolation(_) => "message.trust_task.rejected",
+            Rejection::Duplicate => "message.trust_task.duplicate",
+            Rejection::IdConflict => "message.trust_task.id_conflict",
+            Rejection::RecordUnavailable(_) => "message.trust_task.unavailable",
+        }
+    }
+
+    /// HTTP-equivalent status for the problem report: a record that could not
+    /// be consulted is retryable (503); everything else is a refusal (403).
+    fn status(&self) -> StatusCode {
+        match self {
+            Rejection::RecordUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            _ => StatusCode::FORBIDDEN,
         }
     }
 
@@ -78,6 +97,9 @@ impl Rejection {
             Rejection::ProofRequired => "proof_required",
             Rejection::ProofInvalid(_) => "proof_invalid",
             Rejection::PolicyViolation(_) => "policy",
+            Rejection::Duplicate => "duplicate",
+            Rejection::IdConflict => "id_conflict",
+            Rejection::RecordUnavailable(_) => "record_unavailable",
         }
     }
 
@@ -90,6 +112,13 @@ impl Rejection {
             Rejection::ProofRequired => "this Trust Task type requires a proof".to_string(),
             Rejection::ProofInvalid(d) => format!("Trust Task proof did not verify: {d}"),
             Rejection::PolicyViolation(d) => format!("Trust Task violates its spec policy: {d}"),
+            Rejection::Duplicate => "this Trust Task was already executed".to_string(),
+            Rejection::IdConflict => {
+                "a different Trust Task was already executed under this id".to_string()
+            }
+            Rejection::RecordUnavailable(d) => {
+                format!("the duplicate-execution record is unavailable: {d}")
+            }
         }
     }
 }
@@ -111,7 +140,14 @@ pub(crate) async fn accept(
 ) -> Result<(), MediatorError> {
     let mode = state.config.security.trust_task_verification;
     let resolver = SigningKeyResolver::new(state.did_resolver.clone());
-    let Err(rejection) = check(doc, raw, policy, sender_did, now, &resolver).await else {
+    // The duplicate-execution claim runs last, and only once every other
+    // check has passed: claiming first would burn the id of a document that
+    // was then refused, so its corrected resend could never run.
+    let outcome = match check(doc, raw, policy, sender_did, now, &resolver).await {
+        Ok(()) => claim(doc, policy, sender_did, now, state).await,
+        Err(rejection) => Err(rejection),
+    };
+    let Err(rejection) = outcome else {
         return Ok(());
     };
 
@@ -131,7 +167,7 @@ pub(crate) async fn accept(
             session,
             rejection.code(),
             rejection.detail(),
-            StatusCode::FORBIDDEN,
+            rejection.status(),
         )),
         TrustTaskVerification::Warn => {
             tracing::warn!(
@@ -161,12 +197,7 @@ pub(crate) async fn check(
 ) -> Result<(), Rejection> {
     // 1. Freshness. A type whose spec requires a proof or `issuedAt` is
     //    consequential: it gets the bounded window and must carry `issuedAt`.
-    let consequential = policy.is_proof_required || policy.is_issued_at_required;
-    let freshness = if consequential {
-        FreshnessPolicy::consequential()
-    } else {
-        FreshnessPolicy::default()
-    };
+    let freshness = freshness_for(policy);
     doc.validate_freshness(now, &freshness)
         .map_err(|reason| Rejection::Stale(format!("{reason:?}")))?;
 
@@ -200,6 +231,75 @@ pub(crate) async fn check(
     })?;
 
     Ok(())
+}
+
+/// A task is consequential when its spec requires a proof or `issuedAt`.
+fn is_consequential(policy: SpecPolicy) -> bool {
+    policy.is_proof_required || policy.is_issued_at_required
+}
+
+/// The acceptance window: bounded (5 minutes, `issuedAt` required) for a
+/// consequential task, the framework default otherwise.
+fn freshness_for(policy: SpecPolicy) -> FreshnessPolicy {
+    if is_consequential(policy) {
+        FreshnessPolicy::consequential()
+    } else {
+        FreshnessPolicy::default()
+    }
+}
+
+/// Record a consequential task in the store's duplicate-execution record
+/// (Trust Tasks §7.2 item 11). Reads are not recorded: running one twice
+/// changes nothing.
+///
+/// The key is the **authenticated sender** plus the document `id`, hashed — a
+/// party can only ever burn its own ids. The record is kept until the end of
+/// the acceptance window: `issuedAt` + max age + skew, or `expiresAt` if that
+/// is sooner. A later `expiresAt` buys nothing, because the freshness check
+/// already refuses the document once the window closes — so a producer cannot
+/// make the mediator hold a record for longer than that.
+async fn claim(
+    doc: &TrustTask<Value>,
+    policy: SpecPolicy,
+    sender_did: &str,
+    now: DateTime<Utc>,
+    state: &SharedData,
+) -> Result<(), Rejection> {
+    if !is_consequential(policy) {
+        return Ok(());
+    }
+    let retain_until = retention_end(doc, policy, now);
+
+    let digest = document_digest(doc)
+        .map_err(|e| Rejection::PolicyViolation(format!("document digest: {e}")))?;
+    let key = sha256::digest(format!("{sender_did}\n{}", doc.id));
+    let verdict = state
+        .database
+        .trust_task_claim(
+            &key,
+            digest.as_str(),
+            retain_until.timestamp().max(0) as u64,
+            now.timestamp().max(0) as u64,
+        )
+        .await
+        .map_err(|e| Rejection::RecordUnavailable(e.to_string()))?;
+    match verdict {
+        TrustTaskClaim::Fresh => Ok(()),
+        TrustTaskClaim::Duplicate => Err(Rejection::Duplicate),
+        TrustTaskClaim::Conflict => Err(Rejection::IdConflict),
+    }
+}
+
+/// Until when the duplicate-execution record for `doc` must be kept: the end
+/// of its acceptance window, or its `expiresAt` if that comes first.
+fn retention_end(doc: &TrustTask<Value>, policy: SpecPolicy, now: DateTime<Utc>) -> DateTime<Utc> {
+    let freshness = freshness_for(policy);
+    let window_end = doc.issued_at.unwrap_or(now)
+        + freshness.max_age.unwrap_or(DEFAULT_MAX_AGE)
+        + freshness.skew;
+    freshness
+        .record_expiry(doc, now)
+        .map_or(window_end, |expiry| expiry.min(window_end))
 }
 
 /// Verify a document's Data Integrity proof over the document **as received**.
@@ -372,6 +472,39 @@ mod tests {
             &SigningKeyResolver::new(resolver),
         )
         .await
+    }
+
+    fn account_update_policy() -> SpecPolicy {
+        SpecPolicy::of::<trust_tasks_rs::specs::messaging::account::update::v0_1::Payload>()
+    }
+
+    #[test]
+    fn a_far_expires_at_cannot_stretch_the_replay_record() {
+        // A producer's `expiresAt` a year out must not make the mediator keep
+        // the record a year: freshness refuses the document after the window.
+        let (did, _) = did_key();
+        let now = Utc::now();
+        let mut doc = doc_json(ACCOUNT_UPDATE, &did, Some(now));
+        doc["expiresAt"] = Value::String((now + TimeDelta::days(365)).to_rfc3339());
+        let doc: TrustTask<Value> = serde_json::from_value(doc).unwrap();
+        let end = retention_end(&doc, account_update_policy(), now);
+        assert!(end <= now + TimeDelta::minutes(10), "retained until {end}");
+        assert!(
+            end >= now + TimeDelta::minutes(5),
+            "window must be covered: {end}"
+        );
+    }
+
+    #[test]
+    fn a_near_expires_at_shortens_the_replay_record() {
+        let (did, _) = did_key();
+        let now = Utc::now();
+        let mut doc = doc_json(ACCOUNT_UPDATE, &did, Some(now));
+        let soon = now + TimeDelta::seconds(30);
+        doc["expiresAt"] = Value::String(soon.to_rfc3339());
+        let doc: TrustTask<Value> = serde_json::from_value(doc).unwrap();
+        let end = retention_end(&doc, account_update_policy(), now);
+        assert_eq!(end.timestamp(), soon.timestamp());
     }
 
     #[tokio::test]
