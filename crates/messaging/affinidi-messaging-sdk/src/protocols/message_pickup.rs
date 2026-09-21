@@ -524,44 +524,84 @@ impl MessagePickup {
         wait: Duration,
         auto_delete: bool,
     ) -> Result<Option<(Message, Box<UnpackMetadata>)>, ATMError> {
-        let _span = span!(Level::DEBUG, "live_stream_get");
+        let (ws_channel, rx) = self.live_stream_register(profile, msg_id).await?;
+        self.live_stream_await(atm, profile, msg_id, ws_channel, rx, wait, auto_delete)
+            .await
+    }
 
-        async move {
-            let Some(mediator) = &*profile.inner.mediator else {
-                warn!("Mediator not set for profile {}", profile.inner.alias);
-                return Err(ATMError::ProfileError("No Mediator set for profile".into()));
+    /// Register interest in the message `msg_id` — matched by id, `thid` or
+    /// `pthid` — without waiting for it. Pair with [`Self::live_stream_await`].
+    ///
+    /// Registering **before** the request that provokes the reply is sent is
+    /// what makes a request/response exchange safe alongside another reader of
+    /// the same live stream: the websocket task offers each inbound message to
+    /// a registered reply first and to a pending `live_stream_next` only after.
+    /// Registering after sending leaves a window in which a fast reply is
+    /// handed to that `next` reader instead, and the exchange times out.
+    pub(crate) async fn live_stream_register(
+        &self,
+        profile: &Arc<ATMProfile>,
+        msg_id: &str,
+    ) -> Result<
+        (
+            tokio::sync::mpsc::Sender<WebSocketCommands>,
+            tokio::sync::oneshot::Receiver<WebSocketResponses>,
+        ),
+        ATMError,
+    > {
+        let Some(mediator) = &*profile.inner.mediator else {
+            warn!("Mediator not set for profile {}", profile.inner.alias);
+            return Err(ATMError::ProfileError("No Mediator set for profile".into()));
+        };
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        // Clone the sender and drop the read guard at once: `stop_websocket`
+        // takes the WRITE lock on this same `ws_channel_tx`, so a guard held
+        // across the caller's wait would block every shutdown until it
+        // elapsed. The sender is an `mpsc::Sender`, so a clone is cheap.
+        let ws_channel = {
+            let guard = mediator.ws_channel_tx.read().await;
+            let Some(ws_channel) = guard.as_ref() else {
+                warn!(
+                    "WebSocket channel not set for profile {}",
+                    profile.inner.alias
+                );
+                return Err(ATMError::ProfileError(
+                    "No WebSocket channel set for profile".into(),
+                ));
             };
+            ws_channel.clone()
+        };
 
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            // Send the next request to the profile websocket
-            // Clone the sender, then drop the read guard *before* the wait
-            // below. `stop_websocket` takes the WRITE lock on this same
-            // `ws_channel_tx`, so a guard held across the wait blocks every
-            // shutdown until the poll window elapses — and with `wait: None`
-            // that window is `Duration::MAX`, i.e. forever. The sender is an
-            // `mpsc::Sender`, so a clone is cheap and carries no borrow.
-            let ws_channel = {
-                let guard = mediator.ws_channel_tx.read().await;
-                let Some(ws_channel) = guard.as_ref() else {
-                    warn!(
-                        "WebSocket channel not set for profile {}",
-                        profile.inner.alias
-                    );
-                    return Err(ATMError::ProfileError(
-                        "No WebSocket channel set for profile".into(),
-                    ));
-                };
-                ws_channel.clone()
-            };
-
-            // Send the get request to the ws_handler
-            ws_channel.send(WebSocketCommands::GetMessage(msg_id.to_string(), tx)).await.map_err(|err| {
+        // Send the get request to the ws_handler
+        ws_channel
+            .send(WebSocketCommands::GetMessage(msg_id.to_string(), tx))
+            .await
+            .map_err(|err| {
                 ATMError::TransportError(format!(
                     "Could not send GetMessage({msg_id}) Command to websocket: {err:?}"
                 ))
             })?;
-            debug!("sent get request to ws_handler");
+        debug!("registered interest in {msg_id} with ws_handler");
+        Ok((ws_channel, rx))
+    }
 
+    /// Wait for a message registered with [`Self::live_stream_register`]. On
+    /// timeout the registration is cancelled.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn live_stream_await(
+        &self,
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        msg_id: &str,
+        ws_channel: tokio::sync::mpsc::Sender<WebSocketCommands>,
+        rx: tokio::sync::oneshot::Receiver<WebSocketResponses>,
+        wait: Duration,
+        auto_delete: bool,
+    ) -> Result<Option<(Message, Box<UnpackMetadata>)>, ATMError> {
+        let _span = span!(Level::DEBUG, "live_stream_get");
+
+        async move {
             // Setup the timer for the wait, doesn't do anything till `await` is called in the select! macro
             let sleep = tokio::time::sleep(wait);
             tokio::pin!(sleep);

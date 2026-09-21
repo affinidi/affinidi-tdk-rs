@@ -77,7 +77,19 @@ impl ATM {
             ));
         };
 
-        if let Some(channel) = &*mediator.ws_channel_tx.read().await {
+        if let Some(channel) = mediator.ws_channel_tx.read().await.clone() {
+            // Register interest in the reply BEFORE transmitting. The websocket
+            // task offers each inbound message to a registered reply first and
+            // to a pending `live_stream_next` only after, so registering first
+            // closes the window in which a fast reply was handed to a concurrent
+            // live-stream reader instead and this call timed out (R1.7).
+            let pickup = crate::protocols::message_pickup::MessagePickup::default();
+            let reply = if wait_for_response {
+                Some(pickup.live_stream_register(profile, msg_id).await?)
+            } else {
+                None
+            };
+
             // Send to the WS_Connection task for this profile
             debug!(
                 "Profile ({}): Sending message to WebSocket Connection Handler",
@@ -96,18 +108,23 @@ impl ATM {
             // reconnect (socket `None`) or a failed socket write now surfaces as
             // an error instead of a false `Ok(EmptyResponse)`. This is the
             // behaviour change every downstream "delivered" log was built on.
-            match reply_rx.await {
-                Ok(Ok(())) => {}
-                Ok(Err(reason)) => {
-                    return Err(ATMError::TransportError(format!(
-                        "WebSocket message not transmitted: {reason}"
-                    )));
+            let written = match reply_rx.await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(reason)) => Err(ATMError::TransportError(format!(
+                    "WebSocket message not transmitted: {reason}"
+                ))),
+                Err(_) => Err(ATMError::TransportError(
+                    "WebSocket task ended before confirming the send".to_string(),
+                )),
+            };
+            if let Err(e) = written {
+                // Nothing was sent, so no reply will come: drop the registration.
+                if reply.is_some() {
+                    let _ = channel
+                        .send(WebSocketCommands::CancelGetMessage(msg_id.to_string()))
+                        .await;
                 }
-                Err(_) => {
-                    return Err(ATMError::TransportError(
-                        "WebSocket task ended before confirming the send".to_string(),
-                    ));
-                }
+                return Err(e);
             }
 
             debug!(
@@ -115,10 +132,17 @@ impl ATM {
                 profile.inner.alias
             );
 
-            if wait_for_response {
-                let response = self
-                    .message_pickup()
-                    .live_stream_get(profile, msg_id, Duration::from_secs(10), true)
+            if let Some((ws_channel, rx)) = reply {
+                let response = pickup
+                    .live_stream_await(
+                        self,
+                        profile,
+                        msg_id,
+                        ws_channel,
+                        rx,
+                        Duration::from_secs(10),
+                        true,
+                    )
                     .await?;
 
                 if let Some((message, _)) = response {
