@@ -847,6 +847,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "affinidi-messaging-mediator-tui"
+version = "0.1.0"
+dependencies = [
+ "affinidi-messaging-didcomm",
+ "affinidi-messaging-mediator-admin",
+ "affinidi-messaging-mediator-common",
+ "affinidi-messaging-test-mediator",
+ "chrono",
+ "clap",
+ "crossterm",
+ "futures-util",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "sha256",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "affinidi-messaging-sdk"
 version = "0.26.19"
 dependencies = [
