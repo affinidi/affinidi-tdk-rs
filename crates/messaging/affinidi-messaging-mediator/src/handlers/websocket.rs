@@ -763,7 +763,7 @@ async fn handle_socket(
 
                                     // Process the message, which also takes care of any storing and live-streaming of the message
                                     state.monitor.received(&session.did_hash, Channel::Websocket, Protocol::DidComm, msg.as_bytes());
-                                    let outcome = handle_inbound(&state, &session, &msg).await;
+                                    let outcome = crate::monitor::with_channel(Channel::Websocket, handle_inbound(&state, &session, &msg)).await;
                                     if let Err(e) = &outcome {
                                         state.monitor.refused(&session.did_hash, Channel::Websocket, Protocol::DidComm, msg.as_bytes(), e);
                                     }
@@ -867,7 +867,7 @@ async fn handle_socket(
                                     #[cfg(feature = "tsp")]
                                     if affinidi_tsp::is_tsp(&msg) {
                                         state.monitor.received(&session.did_hash, Channel::Websocket, Protocol::Tsp, &msg);
-                                        if let Err(e) = handle_inbound_tsp(&state, &session, &msg).await {
+                                        if let Err(e) = crate::monitor::with_channel(Channel::Websocket, handle_inbound_tsp(&state, &session, &msg)).await {
                                             state.monitor.refused(&session.did_hash, Channel::Websocket, Protocol::Tsp, &msg, &e);
                                             warn!("WebSocket TSP inbound error: {}", e);
                                         }
@@ -901,7 +901,7 @@ async fn handle_socket(
                                     };
 
                                     state.monitor.received(&session.did_hash, Channel::Websocket, Protocol::DidComm, msg.as_bytes());
-                                    match handle_inbound(&state, &session, &msg).await {
+                                    match crate::monitor::with_channel(Channel::Websocket, handle_inbound(&state, &session, &msg)).await {
                                         Ok(_) => {}
                                         Err(e) => {
                                             state.monitor.refused(&session.did_hash, Channel::Websocket, Protocol::DidComm, msg.as_bytes(), &e);
@@ -1173,6 +1173,8 @@ async fn drain_tsp_inbox(
             // inbox stream id, used as the exclusive fetch cursor.
             start_id = element.receive_id.clone();
 
+            let parties = (element.from_address.clone(), element.to_address.clone());
+            let size = element.size;
             let Some(body) = element.msg else { continue };
             // Deletion keys on `msg_id` (the message hash) — the same key the
             // optimistic-delete fetch path uses; `receive_id` is only the stream
@@ -1208,6 +1210,15 @@ async fn drain_tsp_inbox(
                 warn!("Failed to send TSP message to WebSocket client: {e}");
                 return ControlFlow::Break(());
             }
+            // Only once it is on the wire.
+            state.monitor.delivered(
+                &id,
+                parties.0.as_deref(),
+                parties.1.as_deref(),
+                size,
+                Channel::Websocket,
+                Some(&body),
+            );
 
             if ack_mode {
                 // Delete-to-ack: the write is not the acknowledgement, so keep
@@ -1219,24 +1230,33 @@ async fn drain_tsp_inbox(
                     message_id = %id,
                     "Sent TSP message, awaiting client ack (tsp-ack mode)"
                 );
-            } else if let Err(err) = state
+            } else {
                 // Delete-on-send: delivered as far as this mode is concerned. A
                 // delete error is logged but not fatal — the frame is already
                 // on the wire, so we continue.
-                .database
-                .delete_message(
-                    &id,
-                    DeletionAuthority::Owner {
-                        did_hash: session.did_hash.clone(),
-                    },
-                )
-                .await
-            {
-                warn!(
-                    did_hash = %session.did_hash,
-                    message_id = %id,
-                    "Failed to delete delivered TSP message: {err}"
-                );
+                match state
+                    .database
+                    .delete_message(
+                        &id,
+                        DeletionAuthority::Owner {
+                            did_hash: session.did_hash.clone(),
+                        },
+                    )
+                    .await
+                {
+                    Ok(()) => state.monitor.deleted(
+                        &id,
+                        &session.did_hash,
+                        parties.0.as_deref(),
+                        parties.1.as_deref(),
+                        Channel::Websocket,
+                    ),
+                    Err(err) => warn!(
+                        did_hash = %session.did_hash,
+                        message_id = %id,
+                        "Failed to delete delivered TSP message: {err}"
+                    ),
+                }
             }
 
             total += 1;

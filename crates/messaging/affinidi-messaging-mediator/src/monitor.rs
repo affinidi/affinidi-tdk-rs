@@ -240,6 +240,56 @@ fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
+tokio::task_local! {
+    /// The channel the inbound frame being handled arrived on — set around each
+    /// inbound entry point, read by protocol handlers (a pickup, say) that
+    /// report a delivery but are not told how the request came in.
+    static CHANNEL: Channel;
+}
+
+/// Run `f` with `channel` as the current inbound channel.
+pub(crate) async fn with_channel<F: std::future::Future>(channel: Channel, f: F) -> F::Output {
+    CHANNEL.scope(channel, f).await
+}
+
+/// The channel the current inbound frame arrived on; `Internal` outside one.
+pub(crate) fn current_channel() -> Channel {
+    CHANNEL.try_with(|c| *c).unwrap_or(Channel::Internal)
+}
+
+/// The recipient account (DID hash) a frame is addressed to, read from its
+/// cleartext header only — never by decrypting, and only when a subscriber
+/// will see it. A DIDComm v2 JWE names its recipients' key ids; a TSP envelope
+/// its receiver VID. A DIDComm v1 envelope names only verkeys, and a signed or
+/// plaintext DIDComm message no recipient in its header, so those are `None`.
+pub(crate) fn frame_recipient(frame: &[u8], protocol: Protocol) -> Option<String> {
+    let did = match protocol {
+        Protocol::DidComm => didcomm_recipient(frame)?,
+        #[cfg(feature = "tsp")]
+        Protocol::Tsp => affinidi_tsp::MetaEnvelope::parse(frame).ok()?.receiver,
+        _ => return None,
+    };
+    Some(digest(did.as_str()))
+}
+
+/// The DID of a DIDComm JWE's first recipient: `recipients[0].header.kid` in the
+/// JSON serialisation, the protected header's `kid` in the compact one.
+fn didcomm_recipient(frame: &[u8]) -> Option<String> {
+    let kid = if frame.first() == Some(&b'{') {
+        let v: Value = serde_json::from_slice(frame).ok()?;
+        v["recipients"][0]["header"]["kid"].as_str()?.to_string()
+    } else {
+        use base64::Engine as _;
+        let header = std::str::from_utf8(frame).ok()?.split('.').next()?;
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(header)
+            .ok()?;
+        let v: Value = serde_json::from_slice(&bytes).ok()?;
+        v["kid"].as_str()?.to_string()
+    };
+    Some(kid.split('#').next().unwrap_or(&kid).to_string())
+}
+
 /// `(code, detail)` for a refusal: the problem-report code when the error
 /// carries one, else the error's own text.
 pub(crate) fn refusal_outcome(
@@ -272,6 +322,7 @@ impl TrafficMonitor {
         self.emit(|| TrafficEvent {
             msg_id: Some(sha256::digest(frame)),
             from: Some(sender.to_string()),
+            to: frame_recipient(frame, protocol),
             size: Some(frame.len() as u64),
             ..TrafficEvent::new(Direction::Inbound, Stage::Received, channel, protocol)
         });
@@ -289,10 +340,27 @@ impl TrafficMonitor {
         self.emit(|| TrafficEvent {
             msg_id: Some(sha256::digest(frame)),
             from: Some(sender.to_string()),
+            to: frame_recipient(frame, protocol),
             size: Some(frame.len() as u64),
             outcome: Some(refusal_outcome(error)),
             ..TrafficEvent::new(Direction::Inbound, Stage::Refused, channel, protocol)
         });
+    }
+
+    /// A stored message handed out on pickup, from its store record.
+    pub(crate) fn delivered_element(
+        &self,
+        element: &affinidi_messaging_mediator_common::types::messages::MessageListElement,
+        channel: Channel,
+    ) {
+        self.delivered(
+            &element.msg_id,
+            element.from_address.as_deref(),
+            element.to_address.as_deref(),
+            element.size,
+            channel,
+            element.msg.as_deref(),
+        );
     }
 
     /// A stored message was handed to its recipient on pickup.
@@ -533,6 +601,12 @@ impl TrafficMonitor {
             tx,
             subscriptions: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Whether anyone is listening — for a hook that would have to do extra
+    /// work (a store read) to fill an event in.
+    pub fn is_active(&self) -> bool {
+        self.tx.receiver_count() > 0
     }
 
     /// Emit an event if anyone is listening. `build` runs only then, so an
@@ -919,6 +993,46 @@ mod tests {
     fn emitting_with_no_subscriber_builds_nothing() {
         let monitor = TrafficMonitor::new();
         monitor.emit(|| panic!("the event must not be built with nobody listening"));
+    }
+
+    #[test]
+    fn a_json_jwe_names_its_recipient() {
+        let frame = br#"{"protected":"x","recipients":[{"header":{"kid":"did:example:bob#key-1"},"encrypted_key":"x"}],"iv":"x","ciphertext":"x","tag":"x"}"#;
+        assert_eq!(
+            frame_recipient(frame, Protocol::DidComm),
+            Some(digest("did:example:bob"))
+        );
+    }
+
+    #[test]
+    fn a_compact_jwe_names_its_recipient_in_the_protected_header() {
+        use base64::Engine as _;
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"alg":"ECDH-ES+A256KW","kid":"did:example:carol#key-2"}"#);
+        let frame = format!("{header}.a.b.c.d");
+        assert_eq!(
+            frame_recipient(frame.as_bytes(), Protocol::DidComm),
+            Some(digest("did:example:carol"))
+        );
+    }
+
+    #[test]
+    fn frames_without_a_recipient_header_have_none() {
+        // A signed-only JWS names no recipient; v1 envelopes carry verkeys, not DIDs.
+        assert_eq!(
+            frame_recipient(br#"{"payload":"x","signatures":[]}"#, Protocol::DidComm),
+            None
+        );
+        assert_eq!(frame_recipient(b"anything", Protocol::DidCommV1), None);
+        assert_eq!(frame_recipient(b"not json", Protocol::DidComm), None);
+    }
+
+    #[tokio::test]
+    async fn the_inbound_channel_is_visible_inside_its_scope_only() {
+        assert_eq!(current_channel(), Channel::Internal);
+        let inside = with_channel(Channel::Websocket, async { current_channel() }).await;
+        assert_eq!(inside, Channel::Websocket);
+        assert_eq!(current_channel(), Channel::Internal);
     }
 
     #[test]

@@ -355,6 +355,11 @@ async fn message_pickup(
                 )
                 .await?;
 
+            for element in &fetched.success {
+                state
+                    .monitor
+                    .delivered_element(element, crate::monitor::current_channel());
+            }
             let messages: Vec<mp::QueuedMessage> = fetched
                 .success
                 .iter()
@@ -411,7 +416,7 @@ async fn message_pickup(
                 // `Owner` authority makes the store reject an id the client
                 // neither sent nor received, so one client cannot delete
                 // another's messages by guessing ids.
-                if let Err(e) = state
+                match state
                     .database
                     .delete_message(
                         id,
@@ -421,7 +426,14 @@ async fn message_pickup(
                     )
                     .await
                 {
-                    debug!(%id, error = %e, "v1 messages-received: delete failed");
+                    Ok(()) => state.monitor.deleted(
+                        id,
+                        &account.did_hash,
+                        None,
+                        Some(&account.did_hash),
+                        crate::monitor::current_channel(),
+                    ),
+                    Err(e) => debug!(%id, error = %e, "v1 messages-received: delete failed"),
                 }
             }
 

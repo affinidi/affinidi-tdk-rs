@@ -156,13 +156,16 @@ pub async fn message_inbound_handler(
             state
                 .monitor
                 .received(&session.did_hash, Channel::Rest, Protocol::Tsp, &body);
-            let response = handle_inbound_tsp(&state, &session, &body)
-                .await
-                .inspect_err(|e| {
-                    state
-                        .monitor
-                        .refused(&session.did_hash, Channel::Rest, Protocol::Tsp, &body, e)
-                })?;
+            let response = crate::monitor::with_channel(
+                Channel::Rest,
+                handle_inbound_tsp(&state, &session, &body),
+            )
+            .await
+            .inspect_err(|e| {
+                state
+                    .monitor
+                    .refused(&session.did_hash, Channel::Rest, Protocol::Tsp, &body, e)
+            })?;
             return Ok((
                 StatusCode::OK,
                 Json(SuccessResponse {
@@ -226,18 +229,20 @@ pub async fn message_inbound_handler(
                     Protocol::DidCommV1,
                     raw.as_bytes(),
                 );
-                let outcome =
-                    crate::messages::inbound_v1::handle_inbound_didcomm_v1(&state, &session, raw)
-                        .await
-                        .inspect_err(|e| {
-                            state.monitor.refused(
-                                &session.did_hash,
-                                Channel::Rest,
-                                Protocol::DidCommV1,
-                                raw.as_bytes(),
-                                e,
-                            )
-                        })?;
+                let outcome = crate::monitor::with_channel(
+                    Channel::Rest,
+                    crate::messages::inbound_v1::handle_inbound_didcomm_v1(&state, &session, raw),
+                )
+                .await
+                .inspect_err(|e| {
+                    state.monitor.refused(
+                        &session.did_hash,
+                        Channel::Rest,
+                        Protocol::DidCommV1,
+                        raw.as_bytes(),
+                        e,
+                    )
+                })?;
 
                 return Ok(match outcome {
                     // A routed forward answers like any other stored message.
@@ -315,17 +320,18 @@ pub async fn message_inbound_handler(
             Protocol::DidComm,
             s.as_bytes(),
         );
-        let response = handle_inbound(&state, &session, &s)
-            .await
-            .inspect_err(|e| {
-                state.monitor.refused(
-                    &session.did_hash,
-                    Channel::Rest,
-                    Protocol::DidComm,
-                    s.as_bytes(),
-                    e,
-                )
-            })?;
+        let response =
+            crate::monitor::with_channel(Channel::Rest, handle_inbound(&state, &session, &s))
+                .await
+                .inspect_err(|e| {
+                    state.monitor.refused(
+                        &session.did_hash,
+                        Channel::Rest,
+                        Protocol::DidComm,
+                        s.as_bytes(),
+                        e,
+                    )
+                })?;
 
         Ok((
             StatusCode::OK,

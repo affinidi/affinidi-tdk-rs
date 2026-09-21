@@ -297,6 +297,8 @@ pub struct StreamingTask {
     /// records handovers on the same terms as every other delivery path. `0`
     /// leaves expiry untouched, which is the default.
     pub delivered_expiry_seconds: u64,
+    /// Where inbox redelivery reports what it hands to a socket.
+    pub(crate) monitor: crate::monitor::TrafficMonitor,
 }
 
 impl StreamingTask {
@@ -322,6 +324,27 @@ impl StreamingTask {
         send_budget: WsSendBudget,
         delivered_expiry_seconds: u64,
     ) -> Self {
+        Self::spawn_supervised_with_monitor(
+            supervisor,
+            database,
+            mediator_uuid,
+            send_budget,
+            delivered_expiry_seconds,
+            crate::monitor::TrafficMonitor::new(),
+        )
+    }
+
+    /// [`Self::spawn_supervised`], reporting redeliveries to `monitor` — the
+    /// mediator's traffic monitor, so a subscriber sees messages handed to a
+    /// socket on reconnect.
+    pub fn spawn_supervised_with_monitor(
+        supervisor: &TaskSupervisor,
+        database: Arc<dyn MediatorStore>,
+        mediator_uuid: &str,
+        send_budget: WsSendBudget,
+        delivered_expiry_seconds: u64,
+        monitor: crate::monitor::TrafficMonitor,
+    ) -> Self {
         // Control-plane channel (register/start/stop/deregister). Carries no
         // message bodies — a handful of small structs — so a slot count is the
         // right bound here and 10 is plenty.
@@ -331,6 +354,7 @@ impl StreamingTask {
             uuid: mediator_uuid.to_string(),
             send_budget,
             delivered_expiry_seconds,
+            monitor,
         };
         let rx = Arc::new(Mutex::new(rx));
 
@@ -634,6 +658,7 @@ impl StreamingTask {
                     session_id.to_string(),
                     Arc::clone(replay_in_progress),
                     self.delivered_expiry_seconds,
+                    self.monitor.clone(),
                 );
             } else {
                 debug!(
@@ -855,6 +880,7 @@ impl StreamingTask {
                     new_session_id.to_string(),
                     Arc::clone(replay_in_progress),
                     self.delivered_expiry_seconds,
+                    self.monitor.clone(),
                 );
             } else {
                 debug!(
@@ -876,6 +902,7 @@ impl StreamingTask {
 /// re-cover, not an ack. The client deletes what it has processed via the
 /// normal message-pickup path, so this is at-least-once and idempotent by
 /// message id.
+#[allow(clippy::too_many_arguments)]
 fn spawn_inbox_redelivery(
     database: Arc<dyn MediatorStore>,
     client_tx: mpsc::Sender<QueuedCommand>,
@@ -884,6 +911,7 @@ fn spawn_inbox_redelivery(
     session_id: String,
     replay_in_progress: Arc<DashSet<String>>,
     delivered_expiry_seconds: u64,
+    monitor: crate::monitor::TrafficMonitor,
 ) {
     tokio::spawn(async move {
         let mut start_id: Option<String> = None;
@@ -929,7 +957,10 @@ fn spawn_inbox_redelivery(
                 if let Some(receive_id) = &element.receive_id {
                     start_id = Some(receive_id.clone());
                 }
+                let (msg_id, size) = (element.msg_id.clone(), element.size);
+                let parties = (element.from_address.clone(), element.to_address.clone());
                 let Some(msg) = element.msg else { continue };
+                let body_for_monitor = monitor.is_active().then(|| msg.clone());
 
                 // Fetched with `DoNotDelete`, so anything not queued here stays
                 // in the inbox. Stopping the drain early is therefore lossless —
@@ -944,6 +975,14 @@ fn spawn_inbox_redelivery(
                     break 'drain;
                 }
                 metrics::counter!(WEBSOCKET_REDELIVERED_MESSAGES_TOTAL).increment(1);
+                monitor.delivered(
+                    &msg_id,
+                    parties.0.as_deref(),
+                    parties.1.as_deref(),
+                    size,
+                    crate::monitor::Channel::Websocket,
+                    body_for_monitor.as_deref(),
+                );
                 total += 1;
 
                 if total >= REDELIVERY_MAX {
@@ -991,6 +1030,7 @@ mod tests {
             // buffer exhaustion (which `ws_budget` covers directly).
             send_budget: WsSendBudget::new(16 * 1024 * 1024),
             delivered_expiry_seconds: 0,
+            monitor: crate::monitor::TrafficMonitor::new(),
         }
     }
 
