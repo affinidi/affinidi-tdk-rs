@@ -39,6 +39,12 @@ pub mod parameter_store;
 /// one), so the string one writes is the string the other reads.
 pub mod s3_target;
 
+/// Resolving a relative path written in a configuration file against that
+/// file's directory. Pure (`std` only), always built: shared by the mediator
+/// runtime and its processors, which load configuration separately, so one
+/// rule governs every path any of them reads.
+pub mod config_path;
+
 #[cfg(feature = "server")]
 pub mod circuit_breaker;
 /// Database wiring: the lean `DatabaseConfig` serde struct is always

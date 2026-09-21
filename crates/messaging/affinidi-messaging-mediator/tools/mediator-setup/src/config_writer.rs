@@ -81,7 +81,7 @@ pub fn write_config(config: &WizardConfig, generated: &GeneratedValues) -> anyho
 }
 
 /// Get the config directory from the config path.
-fn config_dir(config: &WizardConfig) -> std::path::PathBuf {
+pub(crate) fn config_dir(config: &WizardConfig) -> std::path::PathBuf {
     Path::new(&config.config_path)
         .parent()
         .unwrap_or(Path::new("."))
@@ -222,11 +222,8 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
                 let cert = generated
                     .ssl_cert_path
                     .as_deref()
-                    .unwrap_or("conf/keys/end.cert");
-                let key = generated
-                    .ssl_key_path
-                    .as_deref()
-                    .unwrap_or("conf/keys/end.key");
+                    .unwrap_or("keys/end.cert");
+                let key = generated.ssl_key_path.as_deref().unwrap_or("keys/end.key");
                 sec["ssl_certificate_file"] = toml_edit::value(cert);
                 sec["ssl_key_file"] = toml_edit::value(key);
             }
@@ -1146,14 +1143,14 @@ storage = "keyring://affinidi-mediator"
             ..WizardConfig::default()
         };
         let generated = GeneratedValues {
-            ssl_cert_path: Some("conf/keys/end.cert".into()),
-            ssl_key_path: Some("conf/keys/end.key".into()),
+            ssl_cert_path: Some("keys/end.cert".into()),
+            ssl_key_path: Some("keys/end.key".into()),
             ..test_generated()
         };
         let toml = generate_toml(&config, &generated).unwrap();
         assert!(toml.contains("use_ssl = \"true\""));
-        assert!(toml.contains("ssl_certificate_file = \"conf/keys/end.cert\""));
-        assert!(toml.contains("ssl_key_file = \"conf/keys/end.key\""));
+        assert!(toml.contains("ssl_certificate_file = \"keys/end.cert\""));
+        assert!(toml.contains("ssl_key_file = \"keys/end.key\""));
     }
 
     #[test]

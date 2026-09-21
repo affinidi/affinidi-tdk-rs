@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased (0.28.11) — a path in the config file means "relative to the config file"
+
+`functions_file`, `ssl_certificate_file` and `ssl_key_file` now resolve against
+the directory of the configuration file that names them, not the process's
+working directory. Starting the mediator with `--config
+/etc/mediator/mediator.toml` from anywhere else used to fail with
+`Couldn't ready database functions_file (./conf/atm-functions.lua)` (Keyring
+VTI-07). The TLS paths had the same defect and only ever worked because the
+mediator was started from the repository root.
+
+**Nothing that works today stops working.** A path absent beside the config but
+present relative to the working directory still resolves, and logs a
+deprecation warning naming the setting — emitted once the logging subscriber is
+up, since config is read before it exists and a warning then is dropped. The
+one case whose answer changes is a file present in *both* places, where the one
+beside the config now wins.
+
+A path set by **environment variable** (`DATABASE_FUNCTIONS_FILE`,
+`SSL_CERTIFICATE_FILE`, `SSL_KEY_FILE`) is taken as given: it was not written in
+the config file, so "relative to the config file" is not what it means.
+
+The shipped `conf/mediator.toml` now writes its paths relative to `conf/`
+(`./atm-functions.lua`, `keys/end.cert`, `keys/end.key`), so a default start
+does not warn. A deployment carrying a copy of the **old** default keeps
+working through the fallback and warns until the paths are updated.
+
 ## Unreleased (0.28.10) — a re-submitted message is stored once, and its counters no longer leak
 
 Storing a message is now idempotent on its hash, in all three backends. The
@@ -25,7 +51,6 @@ bytes addressed to a *different* recipient are unchanged by this release.
 Redis deployments pick up the changed `conf/atm-functions.lua` at startup via
 `FUNCTION LOAD REPLACE`; a deployment that ships its own copy of that file must
 update it, which `redis_functions_match_build` reports.
-
 ## Unreleased (0.28.9) — `limits.pickup_round_robin`, on by default
 
 A pickup now gives each sender a turn instead of serving an inbox strictly

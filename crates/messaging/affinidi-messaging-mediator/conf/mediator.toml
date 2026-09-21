@@ -114,7 +114,7 @@ admin_did = "did://did:peer:2.Vz6MkksX9huJxJwvLtj9vc3gXbT2m1WVy4Uoi3ssEiSSH2ZYJ.
 [database]
 ### Env: DATABASE_FUNCTIONS_FILE
 ### Path to the database functions file
-functions_file = "./conf/atm-functions.lua"
+functions_file = "./atm-functions.lua"
 
 ### Env: DATABASE_URL
 ### URL of the Redis compatible database
@@ -181,11 +181,11 @@ use_ssl = "false"
 
 ### Env: SSL_CERTIFICATE_FILE
 ### Path to the SSL certificate file
-ssl_certificate_file = "conf/keys/end.cert"
+ssl_certificate_file = "keys/end.cert"
 
 ### Env: SSL_KEY_FILE
 ### Path to the SSL certificate key file
-ssl_key_file = "conf/keys/end.key"
+ssl_key_file = "keys/end.key"
 
 ### JWT signing key is no longer a config field — it lives in the unified
 ### `[secrets]` backend under the well-known key `mediator/jwt/secret` and

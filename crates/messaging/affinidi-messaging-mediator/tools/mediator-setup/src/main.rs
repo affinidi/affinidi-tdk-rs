@@ -1674,12 +1674,19 @@ fn write_config_artefacts(
     artefacts: &MintedArtefacts,
     save_recipe: bool,
 ) -> anyhow::Result<()> {
-    // Self-signed SSL (when requested). Writes `conf/keys/end.cert`
-    // and `conf/keys/end.key` (the latter at 0o600 via
-    // `secure_fs`); paths feed into `mediator.toml`.
+    // Self-signed SSL (when requested). The files go in `keys/` **beside
+    // `mediator.toml`**, and the paths written into it are relative to that
+    // file — the rule the mediator now resolves every configured path by
+    // (Keyring VTI-07). Generating into a working-directory-relative
+    // `conf/keys` put the key wherever the wizard happened to run, and left a
+    // config that only worked when started from that same directory.
     let (ssl_cert_path, ssl_key_path) = if config.ssl_mode == SSL_SELF_SIGNED {
-        let (cert, key) = generators::ssl::generate_self_signed_cert("conf/keys")?;
-        (Some(cert), Some(key))
+        let keys_dir = config_writer::config_dir(config).join("keys");
+        generators::ssl::generate_self_signed_cert(&keys_dir.to_string_lossy())?;
+        (
+            Some("keys/end.cert".to_string()),
+            Some("keys/end.key".to_string()),
+        )
     } else {
         (None, None)
     };
@@ -2374,8 +2381,8 @@ fn print_final_summary(config: &app::WizardConfig) {
     }
 
     if config.ssl_mode == SSL_SELF_SIGNED {
-        println!("    \x1b[36mconf/keys/end.cert\x1b[0m  — SSL certificate");
-        println!("    \x1b[36mconf/keys/end.key\x1b[0m   — SSL private key");
+        println!("    \x1b[36mkeys/end.cert\x1b[0m  — SSL certificate (beside mediator.toml)");
+        println!("    \x1b[36mkeys/end.key\x1b[0m   — SSL private key (beside mediator.toml)");
     }
 
     if config.did_method == DID_WEBVH {

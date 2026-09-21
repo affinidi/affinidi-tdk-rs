@@ -1,5 +1,13 @@
 # Affinidi Messaging Mediator Processors
 
+## Unreleased (0.14.1) — `functions_file` resolves against the config file
+
+Both processors resolve `functions_file` the way the mediator now does:
+relative to the configuration file, with the working-directory fallback and a
+deprecation warning. They load configuration independently of the mediator, so
+without this the two would disagree about where the same config file's Lua
+functions live. Requires `mediator-common` 0.16.12 for `config_path`.
+
 ## Unreleased (0.14.0) — TSP Rev 3: `mediator-common` 0.16
 
 No source change in this crate. It takes a minor for the same reason
