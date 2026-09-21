@@ -421,7 +421,10 @@ impl WebSocketTransport {
                                     debug!("Message ({}) not found in cache, added to wanted list", id);
                                 }
                             }
-                            Some(WebSocketCommands::CancelGetMessage(_id)) => {
+                            Some(WebSocketCommands::CancelGetMessage(id)) => {
+                                // Drop the registration so a reply that arrives
+                                // later is not handed to a receiver nobody holds.
+                                self.inbound_cache.wanted_list.remove(&id);
                                 debug!("Get message cancelled");
                             }
                             None => break,

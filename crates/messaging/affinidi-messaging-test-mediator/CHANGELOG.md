@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.9.11) — test only
+
+`trust_tasks`: request/response Trust Task calls keep their replies while a
+concurrent `live_stream_next` reader runs on the same profile. No change to the
+library API.
+
 ## Unreleased (0.9.10) — test only
 
 `mediator_ops` covers the monitor: an admin sees a message to bob stored, live

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### 0.26.19 — a reply reaches the call that asked for it
+
+`send_message(.., wait_for_response = true, ..)` — which every Trust Task call
+and other request/response exchange uses — now registers interest in the reply
+**before** transmitting the request, instead of after. The websocket task hands
+an inbound message to a registered reply before any pending
+`live_stream_next`, so registering first closes the window in which a fast
+reply was given to a concurrent live-stream reader: the reader received a
+message it did not ask for, and the call timed out ten seconds later. An
+application that reads its live stream (pushed messages, monitor events) while
+making request/response calls on the same profile hit this under load.
+
+`CancelGetMessage` now actually drops the registration (it was a no-op), so a
+timed-out or failed wait no longer leaves a stale entry that a later message
+with the same id is handed to. A request that fails to transmit cancels its
+registration. `live_stream_get` is unchanged for callers.
 ### 0.26.18 — the traffic monitor
 
 `trust_tasks().monitor_subscribe(profile, filter, lease_seconds,

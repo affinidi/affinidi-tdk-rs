@@ -688,3 +688,66 @@ async fn a_trust_task_response_is_signed_by_the_mediator() {
         .await
         .expect("the response proof verifies against the mediator DID");
 }
+
+#[tokio::test]
+async fn request_response_survives_a_concurrent_live_stream_reader() {
+    // A console reads its live stream (monitor events, pushed messages) while it
+    // makes request/response Trust Task calls on the same connection. The reply
+    // to a call must reach that call, not the reader: `send_message` registers
+    // interest in the reply before transmitting, and the websocket task offers
+    // an inbound message to a registered reply before any pending `next`.
+    // Registering after transmitting let a fast reply fall to the reader, and
+    // the call timed out ten seconds later.
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader = {
+        let atm = env.atm.clone();
+        let profile = alice.profile.clone();
+        let stop = stop.clone();
+        tokio::spawn(async move {
+            let mut stolen = Vec::new();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                // Unsolicited traffic (e.g. the pickup `status` sent when live
+                // delivery is enabled) is the reader's to take; a Trust Task
+                // reply is not.
+                if let Ok(Some((m, _))) = atm
+                    .message_pickup()
+                    .live_stream_next(&profile, Some(std::time::Duration::from_millis(100)), false)
+                    .await
+                    && m.typ == affinidi_messaging_sdk::protocols::trust_tasks::ENVELOPE_TYPE
+                {
+                    stolen.push(format!("{} thid={:?}", m.typ, m.thid));
+                }
+            }
+            stolen
+        })
+    };
+
+    for i in 0..20 {
+        let started = std::time::Instant::now();
+        env.atm
+            .trust_tasks()
+            .account_get(&alice.profile, None)
+            .await
+            .unwrap_or_else(|e| panic!("call {i} lost its reply to the live-stream reader: {e:?}"));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "call {i} only completed after a timeout"
+        );
+    }
+
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let stolen = reader.await.expect("reader task");
+    assert!(
+        stolen.is_empty(),
+        "no reply was handed to the reader: {stolen:?}"
+    );
+}
