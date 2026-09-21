@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.9.4) — `TestMediatorBuilder::trust_task_verification`
+
+Sets `security.trust_task_verification`, so a test can run the mediator with
+Trust Task proof enforcement on (`TrustTaskVerification::Enforce`, re-exported
+from this crate). Requires `affinidi-messaging-mediator` 0.28.13.
+
 ## Unreleased (0.9.3) — `TestMediatorBuilder::queue_send_limit_per_peer`
 
 Sets `limits.queued_send_messages_per_peer`, so a test can reach the

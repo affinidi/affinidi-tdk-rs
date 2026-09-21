@@ -263,6 +263,17 @@ force_session_did_match = "true"
 ### If true, admin messages must be delivered directly (not via another mediator)
 block_remote_admin_msgs = "true"
 
+### Env: TRUST_TASK_VERIFICATION
+### What to do with a Trust Task (account / ACL / queue management) that fails
+### its acceptance checks: a missing or invalid proof, a stale or missing
+### issuedAt, or an issuer that is not the authenticated sender.
+###   "warn"    — log it, count it (trust_task_acceptance_failures_total), run it
+###   "enforce" — refuse it with a problem report
+### Defaults to "warn" while clients adopt signing (affinidi-messaging-sdk
+### 0.26.13+ signs every Trust Task). Set "enforce" once your clients sign;
+### a later release will make "enforce" the default.
+trust_task_verification = "warn"
+
 ### Env: ADMIN_MESSAGES_EXPIRY
 ### TTL in seconds for admin messages (minimizes replay attack risk)
 admin_messages_expiry = "3"

@@ -468,7 +468,12 @@ pub(crate) async fn handle_inbound_tsp(
         // here — they took the `receiver != mediator` opaque pass-through above.
         TspMessageType::Direct | TspMessageType::Control => {
             if let Some(doc) = trust_tasks::parse_if_served(&unpacked.payload) {
-                return dispatch_tsp_trust_task(state, session, &meta.sender, doc).await;
+                // The proof is verified over the payload as sent, not as
+                // re-serialised from `doc`. It already parsed as a document,
+                // so it parses as JSON.
+                let raw: serde_json::Value = serde_json::from_slice(&unpacked.payload)
+                    .map_err(|e| MediatorError::InternalError(14, "NA".into(), e.to_string()))?;
+                return dispatch_tsp_trust_task(state, session, &meta.sender, doc, &raw).await;
             }
             deliver_tsp_local(state, session, raw).await
         }
@@ -509,12 +514,14 @@ async fn dispatch_tsp_trust_task(
     session: &Session,
     sender_vid: &str,
     doc: trust_tasks_rs::TrustTask<serde_json::Value>,
+    raw: &serde_json::Value,
 ) -> Result<InboundMessageResponse, MediatorError> {
     let now_secs = state.clock.unix_secs();
 
     // The sender VID is the framework identity; TSP VIDs carry no key fragment,
     // so it is already the shape `consume` wants.
-    let Some(response) = trust_tasks::consume(doc, state, session, sender_vid, now_secs).await?
+    let Some(response) =
+        trust_tasks::consume(doc, raw, state, session, sender_vid, now_secs).await?
     else {
         // A ping identity mismatch emits nothing — same as the DIDComm path.
         return Ok(InboundMessageResponse::Stored(

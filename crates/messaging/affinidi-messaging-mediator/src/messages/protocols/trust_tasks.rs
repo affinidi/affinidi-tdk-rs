@@ -40,7 +40,8 @@ use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping};
 use trust_tasks_rs::specs::{audit, config};
 use trust_tasks_rs::{
     ConsumeChecks, ConsumeOutcome, NoValidator, Payload, PayloadPolicy, ProofPolicy, ProofVerifier,
-    TransportContext, TransportHandler, TrustTask, TypeUri, VerificationError, consume_inbound,
+    SpecPolicy, TransportContext, TransportHandler, TrustTask, TypeUri, VerificationError,
+    consume_inbound,
 };
 use uuid::Uuid;
 
@@ -48,6 +49,7 @@ use crate::SharedData;
 use crate::common::session::Session;
 use crate::messages::protocols::mediator::acls::check_permissions;
 use crate::messages::protocols::mediator::record_audit;
+use crate::messages::protocols::trust_task_verify;
 use crate::messages::{ProcessMessageResponse, WrapperType};
 
 /// DIDComm `type` URI of a Trust Tasks binding envelope.
@@ -126,7 +128,9 @@ pub(crate) async fn process(
     })?;
 
     let now_secs = state.clock.unix_secs();
-    let Some(response_value) = consume(doc, state, session, &sender_kid, now_secs).await? else {
+    let Some(response_value) =
+        consume(doc, &message.body, state, session, &sender_kid, now_secs).await?
+    else {
         // identity_mismatch with no transport sender → emit nothing.
         return Ok(ProcessMessageResponse::default());
     };
@@ -176,6 +180,7 @@ pub(crate) fn vid_of(kid: &str) -> String {
 /// caller that passes an unverified claim hands an attacker the admin surface.
 pub(crate) async fn consume(
     doc: TrustTask<Value>,
+    raw: &Value,
     state: &SharedData,
     session: &Session,
     sender_kid: &str,
@@ -197,6 +202,22 @@ pub(crate) async fn consume(
             StatusCode::NOT_IMPLEMENTED,
         ));
     };
+    // The §7.2 acceptance checks (freshness, issuer binding, proof, spec
+    // policy) for every management task. `ping` keeps its own pipeline: it is
+    // not consequential, and it answers an identity mismatch with silence.
+    if task != ServedTask::Ping {
+        trust_task_verify::accept(
+            &doc,
+            raw,
+            task.spec_policy(),
+            &sender_did,
+            now,
+            state,
+            session,
+        )
+        .await?;
+    }
+
     let response_value: Value = match task {
         ServedTask::Ping => {
             match consume_ping(downcast(&doc, session)?, &mediator_did, &sender_did, now).await? {
@@ -316,6 +337,14 @@ macro_rules! served_tasks {
             pub(crate) fn type_uri(self) -> TypeUri {
                 match self {
                     $(ServedTask::$variant => type_uri_of::<$payload>()),+
+                }
+            }
+
+            /// The spec's presence rules (proof, `issuedAt`, recipient) for
+            /// this task, read off its generated payload type.
+            pub(crate) fn spec_policy(self) -> SpecPolicy {
+                match self {
+                    $(ServedTask::$variant => SpecPolicy::of::<$payload>()),+
                 }
             }
         }
@@ -1741,7 +1770,12 @@ fn to_wire_account<T: serde::de::DeserializeOwned>(acc: &Account) -> T {
     .expect("messaging Account types share the one shared schema")
 }
 
-fn tt_problem(session: &Session, code: &str, message: String, status: StatusCode) -> MediatorError {
+pub(crate) fn tt_problem(
+    session: &Session,
+    code: &str,
+    message: String,
+    status: StatusCode,
+) -> MediatorError {
     MediatorError::problem(
         37,
         &session.session_id,

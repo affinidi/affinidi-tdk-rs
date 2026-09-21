@@ -553,3 +553,51 @@ async fn account_update_acl_self_service_refuses_an_admin_only_flag() {
         "a non-admin may not change an admin-only flag"
     );
 }
+
+#[tokio::test]
+async fn a_signed_task_is_accepted_when_the_mediator_enforces_proofs() {
+    // With `trust_task_verification = enforce`, a proof-required task from the
+    // SDK must still succeed: the SDK stamps `issuedAt` and signs with the
+    // profile's Ed25519 key, and the mediator verifies that proof against the
+    // profile's DID document. If either side drifted, this refuses with
+    // `message.trust_task.proof_required` / `proof_invalid`.
+    use affinidi_messaging_test_mediator::{TestMediator, TrustTaskVerification};
+    use trust_tasks_rs::specs::messaging::account::update::v0_1::QueueLimits;
+
+    let mediator = TestMediator::builder()
+        .trust_task_verification(TrustTaskVerification::Enforce)
+        .spawn()
+        .await
+        .expect("spawn enforcing mediator");
+    let env = TestEnvironment::new(mediator)
+        .await
+        .expect("wire the SDK to the mediator");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+
+    let updated = env
+        .atm
+        .trust_tasks()
+        .account_update(
+            &alice.profile,
+            None,
+            None,
+            None,
+            Some(
+                QueueLimits::builder()
+                    .send_queue_limit(Some(7))
+                    .try_into()
+                    .expect("QueueLimits has no required member"),
+            ),
+        )
+        .await
+        .expect("a signed, fresh account/update is accepted under enforce");
+    assert_eq!(
+        updated.queue_limits.and_then(|q| q.send_queue_limit),
+        Some(7)
+    );
+}
