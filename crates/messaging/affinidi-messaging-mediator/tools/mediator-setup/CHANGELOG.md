@@ -1,5 +1,16 @@
 # Affinidi Messaging Mediator Setup
 
+## Unreleased (0.1.34) — self-signed TLS files land beside `mediator.toml`
+
+A self-signed certificate and key are now written to `keys/` **beside the
+generated `mediator.toml`**, and the config names them as `keys/end.cert` and
+`keys/end.key`, relative to itself. They were generated into a
+working-directory-relative `conf/keys`, so the key landed wherever the wizard
+happened to run and the config only worked when the mediator was started from
+that same directory. The generated `functions_file` follows the shipped default
+and is likewise config-relative, which is where the wizard already writes
+`atm-functions.lua`.
+
 ## Unreleased (0.1.33) — every build this wizard emits or runs passes `--locked`
 
 The wizard runs `cargo install` itself and writes the `cargo build` and

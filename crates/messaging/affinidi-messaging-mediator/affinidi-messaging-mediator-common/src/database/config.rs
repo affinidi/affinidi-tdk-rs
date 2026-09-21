@@ -36,7 +36,7 @@ pub struct DatabaseConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         DatabaseConfig {
-            functions_file: Some("./conf/atm-functions.lua".into()),
+            functions_file: Some("./atm-functions.lua".into()),
             database_url: "redis://127.0.0.1/".into(),
             database_timeout: 2,
             circuit_breaker_threshold: 5,

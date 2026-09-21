@@ -1,5 +1,17 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.12) — `config_path`: one rule for every configured path
+
+New always-built module `config_path`, with `resolve_config_relative`: resolves a
+path written in a configuration file against that file's directory, falling
+back to the working directory for compatibility, and reports which through
+`PathSource` (`#[non_exhaustive]`). It logs nothing, so a caller can use it
+before tracing is initialised and warn afterwards. Shared by the mediator and
+its standalone processors, which load configuration separately.
+
+`DatabaseConfig::default()`'s `functions_file` is now `./atm-functions.lua`,
+relative to the config file, matching the shipped `mediator.toml`.
+
 ## Unreleased (0.16.11) — a pickup can give each sender a turn
 
 An inbox is an arrival-ordered stream and a plain fetch reads it from the head,

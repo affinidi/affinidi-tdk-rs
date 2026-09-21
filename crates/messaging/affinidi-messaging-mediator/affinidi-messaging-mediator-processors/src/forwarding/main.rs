@@ -95,6 +95,26 @@ async fn main() -> Result<(), ProcessorError> {
 
 fn _read_config(file: &str) -> Result<Config, ProcessorError> {
     let config = std::fs::read_to_string(file).expect("Couldn't read config file");
-    let config: Config = toml::from_str(&config).expect("Couldn't parse config file");
+    let mut config: Config = toml::from_str(&config).expect("Couldn't parse config file");
+
+    // `functions_file` is written in the config file, so it resolves against
+    // that file's directory, with the legacy working-directory fallback —
+    // the same rule the mediator applies (Keyring VTI-07). Logging is already
+    // up by the time this runs, so the deprecation warning is seen.
+    if let Some(raw) = config.database.functions_file.clone() {
+        use affinidi_messaging_mediator_common::config_path::{
+            PathSource, resolve_config_relative,
+        };
+        let resolved = resolve_config_relative(std::path::Path::new(file), &raw);
+        if resolved.source == PathSource::WorkingDir {
+            tracing::warn!(
+                path = %raw,
+                config_file = file,
+                "resolved `functions_file` against the working directory because it is \
+                 not beside the config file; this fallback is deprecated"
+            );
+        }
+        config.database.functions_file = Some(resolved.path.to_string_lossy().into_owned());
+    }
     Ok(config)
 }

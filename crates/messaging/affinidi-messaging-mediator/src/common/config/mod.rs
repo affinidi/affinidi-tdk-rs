@@ -51,7 +51,7 @@ pub(crate) type AwsConfig = aws_config::SdkConfig;
 pub(crate) type AwsConfig = ();
 use serde::Serialize;
 use sha256::digest;
-use std::{collections::HashMap, env, fmt, sync::Arc};
+use std::{collections::HashMap, env, fmt, path::Path, sync::Arc};
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 #[cfg(feature = "vta")]
@@ -1157,6 +1157,53 @@ pub(crate) fn warn_if_tsp_advertised_without_feature(config: &Config) {
     }
 }
 
+/// Resolve every filesystem path written in the configuration file against
+/// that file's directory (Keyring VTI-07); see
+/// [`affinidi_messaging_mediator_common::config_path`] for the rule and its
+/// legacy fallback.
+///
+/// A path set by **environment variable** is left exactly as given. It was not
+/// written in the config file, so "relative to the config file" is not what it
+/// means — relative to where the process started is — and resolving it here
+/// would also report it as deprecated, which it is not.
+fn resolve_configured_paths(config: &mut ConfigRaw, config_file: &Path) {
+    use affinidi_messaging_mediator_common::config_path::{PathSource, resolve_config_relative};
+
+    let resolve = |label: &str, env_var: &str, raw: &str| -> String {
+        if env::var_os(env_var).is_some() {
+            return raw.to_string();
+        }
+        let resolved = resolve_config_relative(config_file, raw);
+        if resolved.source == PathSource::WorkingDir {
+            warn!(
+                setting = label,
+                path = raw,
+                config_file = %config_file.display(),
+                "resolved `{label}` against the working directory because it is not \
+                 beside the config file; this fallback is deprecated. Move the file \
+                 next to the config, or write the path relative to the config file."
+            );
+        }
+        resolved.path.to_string_lossy().into_owned()
+    };
+
+    config.database.functions_file = resolve(
+        "functions_file",
+        "DATABASE_FUNCTIONS_FILE",
+        &config.database.functions_file,
+    );
+    if let Some(cert) = config.security.ssl_certificate_file.as_deref() {
+        config.security.ssl_certificate_file = Some(resolve(
+            "ssl_certificate_file",
+            "SSL_CERTIFICATE_FILE",
+            cert,
+        ));
+    }
+    if let Some(key) = config.security.ssl_key_file.as_deref() {
+        config.security.ssl_key_file = Some(resolve("ssl_key_file", "SSL_KEY_FILE", key));
+    }
+}
+
 pub async fn init(config_file: &str, with_ansi: bool) -> Result<Config, MediatorError> {
     // Read configuration file parameters. `read_config_file` lives in the config
     // crate now (returns its lean `ConfigError`); map it back to MediatorError.
@@ -1216,12 +1263,81 @@ pub async fn init(config_file: &str, with_ansi: bool) -> Result<Config, Mediator
         })?;
     }
 
+    // Here and nowhere earlier: the subscriber above now exists, so the
+    // deprecation warning is seen rather than dropped, and the conversion
+    // below — which is where TLS paths are checked — sees resolved paths.
+    let mut config = config;
+    resolve_configured_paths(&mut config, Path::new(config_file));
+
     match <Config as async_convert::TryFrom<ConfigRaw>>::try_from(config).await {
         Ok(config) => {
             info!("Configuration settings parsed successfully.\n{:#?}", config);
             Ok(config)
         }
         Err(err) => Err(err),
+    }
+}
+
+#[cfg(test)]
+mod configured_path_tests {
+    use super::*;
+    use std::fs;
+
+    /// Stage the shipped `conf/` as an operator would deploy it: somewhere
+    /// that is not the working directory the tests run in.
+    fn deploy_shipped_conf() -> (tempfile::TempDir, std::path::PathBuf) {
+        let conf = Path::new(env!("CARGO_MANIFEST_DIR")).join("conf");
+        let dir = tempfile::tempdir().unwrap();
+        for f in ["mediator.toml", "atm-functions.lua"] {
+            fs::copy(conf.join(f), dir.path().join(f)).unwrap();
+        }
+        let config_file = dir.path().join("mediator.toml");
+        (dir, config_file)
+    }
+
+    /// Keyring VTI-07: a config file outside the working directory finds the
+    /// Lua functions that ship beside it. Before, this resolved to
+    /// `./conf/atm-functions.lua` relative to wherever the process started.
+    #[test]
+    fn the_shipped_default_finds_its_functions_file_beside_itself() {
+        let (dir, config_file) = deploy_shipped_conf();
+        let mut config = affinidi_messaging_mediator_config::env::read_config_file(
+            config_file.to_str().unwrap(),
+        )
+        .unwrap();
+
+        resolve_configured_paths(&mut config, &config_file);
+
+        let resolved = Path::new(&config.database.functions_file);
+        assert!(
+            resolved.starts_with(dir.path()),
+            "resolved beside the config, not against the working directory: {}",
+            resolved.display()
+        );
+        assert!(resolved.exists(), "{}", resolved.display());
+    }
+
+    /// And it does so by the intended rule, not the deprecated fallback — so a
+    /// default start is silent. A default that leaned on the fallback would
+    /// warn on every start, and a warning that always fires is one people
+    /// learn to ignore.
+    #[test]
+    fn the_shipped_default_does_not_lean_on_the_legacy_fallback() {
+        use affinidi_messaging_mediator_common::config_path::{
+            PathSource, resolve_config_relative,
+        };
+        let (_dir, config_file) = deploy_shipped_conf();
+        let config = affinidi_messaging_mediator_config::env::read_config_file(
+            config_file.to_str().unwrap(),
+        )
+        .unwrap();
+
+        let r = resolve_config_relative(&config_file, &config.database.functions_file);
+        assert_eq!(
+            r.source,
+            PathSource::ConfigDir,
+            "the shipped `functions_file` must be written relative to the config file"
+        );
     }
 }
 
