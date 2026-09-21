@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.9.10) — test only
+
+`mediator_ops` covers the monitor: an admin sees a message to bob stored, live
+and signed, metadata only; a standard account may watch only itself and its
+subscription cannot be ended by another. No change to the library API.
+
 ## Unreleased (0.9.9) — test only
 
 `mediator_ops` covers `message/delete` (per-id results, admin delete audited,

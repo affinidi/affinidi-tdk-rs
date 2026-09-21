@@ -95,6 +95,16 @@ pub async fn inbox_fetch_handler(
             .success
             .iter_mut()
             .for_each(|m| m.detect_protocol_in_place());
+        for m in &results.success {
+            state.monitor.delivered(
+                &m.msg_id,
+                m.from_address.as_deref(),
+                m.to_address.as_deref(),
+                m.size,
+                crate::monitor::Channel::Rest,
+                m.msg.as_deref(),
+            );
+        }
 
         Ok((
             StatusCode::OK,

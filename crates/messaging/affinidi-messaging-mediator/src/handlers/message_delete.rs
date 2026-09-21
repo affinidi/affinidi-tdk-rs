@@ -85,7 +85,16 @@ pub async fn message_delete_handler(
                 .await;
 
             match result {
-                Ok(_) => deleted.success.push(message.into()),
+                Ok(_) => {
+                    state.monitor.deleted(
+                        message,
+                        &session.did_hash,
+                        None,
+                        None,
+                        crate::monitor::Channel::Rest,
+                    );
+                    deleted.success.push(message.into())
+                }
                 Err(err) => {
                     debug!(message_id = message, error = %err, "Delete failed (may already be deleted)");
                     deleted.errors.push((message.into(), err.to_string()));

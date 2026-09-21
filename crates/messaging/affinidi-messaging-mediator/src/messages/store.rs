@@ -30,7 +30,7 @@ async fn _store_message(
     expiry: u64,
 ) -> Result<String, MediatorError> {
     // Live stream the message?
-    if let Some(stream_uuid) = state
+    let live = if let Some(stream_uuid) = state
         .database
         .streaming_is_client_live(to_did_hash, response.force_live_delivery)
         .await
@@ -43,9 +43,12 @@ async fn _store_message(
             response.force_live_delivery,
         )
         .await;
-    }
+        true
+    } else {
+        false
+    };
 
-    state
+    let msg_id = state
         .database
         .store_message(
             &session.session_id,
@@ -55,7 +58,11 @@ async fn _store_message(
             expiry,
             state.config.limits.queue_stream_maxlen(),
         )
-        .await
+        .await?;
+    state
+        .monitor
+        .stored(&msg_id, from_did_hash, to_did_hash, data, live);
+    Ok(msg_id)
 }
 
 /// Stores a message in the mediator's database
@@ -338,7 +345,7 @@ pub(crate) async fn store_forwarded_message(
     async move {
         let recipient_did_hash = digest(recipient);
         // Live stream the message?
-        if let Some(stream_uuid) = state
+        let live = if let Some(stream_uuid) = state
             .database
             .streaming_is_client_live(&recipient_did_hash, false)
             .await
@@ -352,7 +359,10 @@ pub(crate) async fn store_forwarded_message(
             )
             .await;
             debug!("Live streaming message to did_hash: {}", recipient_did_hash);
-        }
+            true
+        } else {
+            false
+        };
 
         let expires_at = if let Some(expires_at) = expires_at {
             let now = state.clock.unix_secs();
@@ -379,6 +389,9 @@ pub(crate) async fn store_forwarded_message(
             .await
         {
             Ok(msg_id) => {
+                state
+                    .monitor
+                    .stored(&msg_id, sender_hash, &recipient_did_hash, message, live);
                 debug!(
                     "message id({}) stored successfully recipient({})",
                     msg_id, recipient

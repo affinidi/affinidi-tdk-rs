@@ -33,7 +33,9 @@ use sha256::digest;
 use tracing::warn;
 use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
 use trust_tasks_rs::TrustTask;
-use trust_tasks_rs::specs::messaging::{access_list, account, acl, message, ping, queue, stats};
+use trust_tasks_rs::specs::messaging::{
+    access_list, account, acl, message, monitor, ping, queue, stats,
+};
 use trust_tasks_rs::specs::{audit, config};
 use uuid::Uuid;
 
@@ -589,6 +591,68 @@ impl TrustTasksOps<'_> {
         Ok(response.payload)
     }
 
+    /// Send a `messaging/monitor/subscribe` Trust Task: open (or, with
+    /// `renew`, renew and re-filter) a leased live tap on the mediator's
+    /// traffic metadata. Events arrive as `messaging/monitor/event` batches on
+    /// the profile's **live stream** — never in its queue — so the profile must
+    /// have its websocket enabled; read them with
+    /// [`decode_monitor_event`](super::trust_tasks::decode_monitor_event).
+    ///
+    /// An administrator may watch anything; any other account only its own
+    /// traffic (an omitted `dids` filter is narrowed to it). Renew before
+    /// `expires_at`; the default lease is 300 s.
+    pub async fn monitor_subscribe(
+        &self,
+        profile: &Arc<ATMProfile>,
+        filter: Option<monitor::subscribe::v0_1::MonitorFilter>,
+        lease_seconds: Option<u32>,
+        max_events_per_second: Option<u32>,
+        renew: Option<String>,
+    ) -> Result<monitor::subscribe::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let renew = renew
+            .map(|r| monitor::subscribe::v0_1::PayloadSubscriptionId::from_str(&r))
+            .transpose()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid subscription id: {e}")))?;
+        let p: monitor::subscribe::v0_1::Payload = payload(
+            monitor::subscribe::v0_1::Payload::builder()
+                .filter(filter)
+                .lease_seconds(lease_seconds.map(i64::from))
+                .max_events_per_second(
+                    max_events_per_second.and_then(|n| std::num::NonZeroU64::new(n as u64)),
+                )
+                .subscription_id(renew),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<monitor::subscribe::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
+    /// Send a `messaging/monitor/unsubscribe` Trust Task, ending a subscription
+    /// and returning how many events it sent and dropped.
+    pub async fn monitor_unsubscribe(
+        &self,
+        profile: &Arc<ATMProfile>,
+        subscription_id: &str,
+    ) -> Result<monitor::unsubscribe::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let id = monitor::unsubscribe::v0_1::PayloadSubscriptionId::from_str(subscription_id)
+            .map_err(|e| ATMError::MsgSendError(format!("invalid subscription id: {e}")))?;
+        let p: monitor::unsubscribe::v0_1::Payload =
+            payload(monitor::unsubscribe::v0_1::Payload::builder().subscription_id(id))?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<monitor::unsubscribe::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
     /// Send a `messaging/queue/status` Trust Task and return one account's two
     /// queues, live: depth, bytes, effective limit, saturation and the age of
     /// the oldest message. `did_hash` names the account; `None` is the caller's
@@ -770,6 +834,21 @@ impl TrustTasksOps<'_> {
         }
         None
     }
+}
+
+/// Recognise a `messaging/monitor/event` batch among live-stream messages.
+///
+/// Returns `None` for anything else, so a live-stream reader can route monitor
+/// batches to its display and pass every other message on.
+pub fn decode_monitor_event(message: &Message) -> Option<TrustTask<monitor::event::v0_1::Payload>> {
+    use trust_tasks_rs::Payload as _;
+    if message.typ != ENVELOPE_TYPE
+        || message.body.get("type").and_then(Value::as_str)
+            != Some(monitor::event::v0_1::Payload::TYPE_URI)
+    {
+        return None;
+    }
+    serde_json::from_value(message.body.clone()).ok()
 }
 
 fn new_id() -> String {

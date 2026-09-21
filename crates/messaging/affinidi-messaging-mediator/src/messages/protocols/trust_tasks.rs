@@ -36,7 +36,9 @@ use sha256::digest;
 use std::collections::HashSet;
 use std::str::FromStr;
 use subtle::ConstantTimeEq;
-use trust_tasks_rs::specs::messaging::{access_list, account, acl, message, ping, queue, stats};
+use trust_tasks_rs::specs::messaging::{
+    access_list, account, acl, message, monitor, ping, queue, stats,
+};
 use trust_tasks_rs::specs::{audit, config};
 use trust_tasks_rs::{
     ConsumeChecks, ConsumeOutcome, NoValidator, Payload, PayloadPolicy, ProofPolicy, ProofVerifier,
@@ -361,6 +363,26 @@ pub(crate) async fn consume(
             )
             .await?
         }
+        ServedTask::MonitorSubscribe => {
+            mediator_ops::consume_monitor_subscribe(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
+        ServedTask::MonitorUnsubscribe => {
+            mediator_ops::consume_monitor_unsubscribe(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
         ServedTask::QueueStatus => {
             mediator_ops::consume_queue_status(
                 downcast(&doc, session)?,
@@ -448,6 +470,8 @@ served_tasks! {
     MessageGet => message::get::v0_1::Payload,
     MessageDelete => message::delete::v0_1::Payload,
     QueuePurge => queue::purge::v0_1::Payload,
+    MonitorSubscribe => monitor::subscribe::v0_1::Payload,
+    MonitorUnsubscribe => monitor::unsubscribe::v0_1::Payload,
 }
 
 impl ServedTask {

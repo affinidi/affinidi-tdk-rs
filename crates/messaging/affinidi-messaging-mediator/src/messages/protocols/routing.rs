@@ -487,6 +487,12 @@ async fn deliver_forward(
                 })?;
 
             metrics::counter!(crate::common::metrics::names::MESSAGES_FORWARDED_TOTAL).increment(1);
+            state.monitor.forwarded(
+                &entry.from_did_hash,
+                &entry.to_did_hash,
+                &entry.message,
+                crate::monitor::Protocol::DidComm,
+            );
             info!(
                 "FORWARD_ENQUEUED: to_did_hash={} from_did_hash={} endpoint={}",
                 next_did_hash, from_account.did_hash, endpoint_url

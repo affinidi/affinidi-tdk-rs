@@ -1,5 +1,6 @@
 #[cfg(feature = "tsp")]
 use crate::messages::inbound::handle_inbound_tsp;
+use crate::monitor::{Channel, Protocol};
 use crate::{
     SharedData,
     common::authz::{self, Capability},
@@ -152,7 +153,16 @@ pub async fn message_inbound_handler(
         // dual didcomm+tsp build. DIDComm bytes fall through to the unchanged path.
         #[cfg(feature = "tsp")]
         if affinidi_tsp::is_tsp(&body) {
-            let response = handle_inbound_tsp(&state, &session, &body).await?;
+            state
+                .monitor
+                .received(&session.did_hash, Channel::Rest, Protocol::Tsp, &body);
+            let response = handle_inbound_tsp(&state, &session, &body)
+                .await
+                .inspect_err(|e| {
+                    state
+                        .monitor
+                        .refused(&session.did_hash, Channel::Rest, Protocol::Tsp, &body, e)
+                })?;
             return Ok((
                 StatusCode::OK,
                 Json(SuccessResponse {
@@ -210,9 +220,24 @@ pub async fn message_inbound_handler(
                 metrics::counter!(names::MESSAGES_INBOUND_TOTAL).increment(1);
                 metrics::counter!(names::MESSAGE_BYTES_INBOUND_TOTAL).increment(raw.len() as u64);
 
+                state.monitor.received(
+                    &session.did_hash,
+                    Channel::Rest,
+                    Protocol::DidCommV1,
+                    raw.as_bytes(),
+                );
                 let outcome =
                     crate::messages::inbound_v1::handle_inbound_didcomm_v1(&state, &session, raw)
-                        .await?;
+                        .await
+                        .inspect_err(|e| {
+                            state.monitor.refused(
+                                &session.did_hash,
+                                Channel::Rest,
+                                Protocol::DidCommV1,
+                                raw.as_bytes(),
+                                e,
+                            )
+                        })?;
 
                 return Ok(match outcome {
                     // A routed forward answers like any other stored message.
@@ -284,7 +309,23 @@ pub async fn message_inbound_handler(
         metrics::counter!(names::MESSAGES_INBOUND_TOTAL).increment(1);
         metrics::counter!(names::MESSAGE_BYTES_INBOUND_TOTAL).increment(s.len() as u64);
 
-        let response = handle_inbound(&state, &session, &s).await?;
+        state.monitor.received(
+            &session.did_hash,
+            Channel::Rest,
+            Protocol::DidComm,
+            s.as_bytes(),
+        );
+        let response = handle_inbound(&state, &session, &s)
+            .await
+            .inspect_err(|e| {
+                state.monitor.refused(
+                    &session.did_hash,
+                    Channel::Rest,
+                    Protocol::DidComm,
+                    s.as_bytes(),
+                    e,
+                )
+            })?;
 
         Ok((
             StatusCode::OK,
