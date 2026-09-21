@@ -22,11 +22,16 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use affinidi_did_common::DocumentExt;
 use affinidi_messaging_didcomm::message::Message;
+use affinidi_secrets_resolver::SecretsResolver;
+use affinidi_secrets_resolver::secrets::{KeyType, Secret};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sha256::digest;
+use tracing::warn;
+use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
 use trust_tasks_rs::TrustTask;
 use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping};
 use trust_tasks_rs::specs::{audit, config};
@@ -81,7 +86,7 @@ impl TrustTasksOps<'_> {
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
-        let response: TrustTask<ping::v0_1::Response> = self.exchange(profile, &task).await?;
+        let response: TrustTask<ping::v0_1::Response> = self.exchange(profile, task).await?;
         Ok(response.payload)
     }
 
@@ -106,7 +111,7 @@ impl TrustTasksOps<'_> {
         task.recipient = Some(mediator_did.to_string());
 
         let response: TrustTask<account::get::v0_1::Response> =
-            self.exchange(profile, &task).await?;
+            self.exchange(profile, task).await?;
         Ok(response.payload.account)
     }
 
@@ -142,7 +147,7 @@ impl TrustTasksOps<'_> {
         task.recipient = Some(mediator_did.to_string());
 
         let response: TrustTask<account::list::v0_1::Response> =
-            self.exchange(profile, &task).await?;
+            self.exchange(profile, task).await?;
         Ok(response.payload)
     }
 
@@ -185,7 +190,7 @@ impl TrustTasksOps<'_> {
         task.recipient = Some(mediator_did.to_string());
 
         let response: TrustTask<account::update::v0_1::Response> =
-            self.exchange(profile, &task).await?;
+            self.exchange(profile, task).await?;
         Ok(response.payload.account)
     }
 
@@ -209,7 +214,7 @@ impl TrustTasksOps<'_> {
         task.recipient = Some(mediator_did.to_string());
 
         let response: TrustTask<account::remove::v0_1::Response> =
-            self.exchange(profile, &task).await?;
+            self.exchange(profile, task).await?;
         Ok(response.payload.removed)
     }
 
@@ -232,7 +237,7 @@ impl TrustTasksOps<'_> {
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
-        let response: TrustTask<acl::get::v0_1::Response> = self.exchange(profile, &task).await?;
+        let response: TrustTask<acl::get::v0_1::Response> = self.exchange(profile, task).await?;
         Ok(response.payload)
     }
 
@@ -265,7 +270,7 @@ impl TrustTasksOps<'_> {
         task.recipient = Some(mediator_did.to_string());
 
         let response: TrustTask<account::add::v0_1::Response> =
-            self.exchange(profile, &task).await?;
+            self.exchange(profile, task).await?;
         Ok(response.payload.account)
     }
 
@@ -304,7 +309,7 @@ impl TrustTasksOps<'_> {
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
         let response: TrustTask<access_list::update::v0_1::Response> =
-            self.exchange(profile, &task).await?;
+            self.exchange(profile, task).await?;
         Ok(response.payload)
     }
 
@@ -347,7 +352,7 @@ impl TrustTasksOps<'_> {
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
         let response: TrustTask<access_list::list::v0_1::Response> =
-            self.exchange(profile, &task).await?;
+            self.exchange(profile, task).await?;
         Ok(response.payload)
     }
 
@@ -371,8 +376,7 @@ impl TrustTasksOps<'_> {
         let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
-        let response: TrustTask<audit::list::v0_1::Response> =
-            self.exchange(profile, &task).await?;
+        let response: TrustTask<audit::list::v0_1::Response> = self.exchange(profile, task).await?;
         Ok(response.payload)
     }
 
@@ -400,16 +404,22 @@ impl TrustTasksOps<'_> {
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
         let response: TrustTask<config::show::v0_1::Response> =
-            self.exchange(profile, &task).await?;
+            self.exchange(profile, task).await?;
         Ok(response.payload)
     }
 
-    /// Wrap a `TrustTask<P>` in the DIDComm binding envelope, authcrypt + send it
-    /// to the mediator, and decode the reply's body as a `TrustTask<R>`.
+    /// Stamp `issuedAt`, sign, wrap the `TrustTask<P>` in the DIDComm binding
+    /// envelope, authcrypt + send it to the mediator, and decode the reply's body
+    /// as a `TrustTask<R>`.
+    ///
+    /// Every document leaves with `issuedAt` set, and with a Data Integrity
+    /// `proof` whenever the profile holds an Ed25519 key it can sign with — see
+    /// [`Self::sign`]. Most `messaging/*` specs require both on the request, and a
+    /// mediator that enforces them refuses a document that lacks them.
     async fn exchange<P, R>(
         &self,
         profile: &Arc<ATMProfile>,
-        task: &TrustTask<P>,
+        mut task: TrustTask<P>,
     ) -> Result<TrustTask<R>, ATMError>
     where
         P: Serialize,
@@ -418,8 +428,10 @@ impl TrustTasksOps<'_> {
         let atm = self.atm;
         let (profile_did, mediator_did) = profile.dids()?;
 
-        let body = serde_json::to_value(task)
+        task.issued_at = Some(chrono::Utc::now());
+        let body = serde_json::to_value(&task)
             .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))?;
+        let body = self.sign(profile_did, body).await?;
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -452,6 +464,58 @@ impl TrustTasksOps<'_> {
     }
 }
 
+impl TrustTasksOps<'_> {
+    /// Attach a Data Integrity proof (`eddsa-jcs-2022`, `assertionMethod`) made
+    /// with the profile's Ed25519 key.
+    ///
+    /// A profile with no Ed25519 key it can sign with — a P-256-only DID, or one
+    /// whose DID document can't be resolved right now — sends the document
+    /// **unsigned** and warns, rather than failing a call that worked before this
+    /// SDK signed anything. That is a deliberate transition: the mediator is the
+    /// party that decides whether an unsigned request is acceptable, and once it
+    /// enforces proofs it answers `proofRequired`, which surfaces as an error
+    /// here. A signing failure with a key in hand is an error, never a silent
+    /// downgrade.
+    async fn sign(&self, did: &str, doc: Value) -> Result<Value, ATMError> {
+        let Some(secret) = self.signing_secret(did).await else {
+            warn!(
+                did,
+                "no Ed25519 signing key for this profile; sending the Trust Task unsigned — \
+                 a mediator that enforces proofs will refuse it"
+            );
+            return Ok(doc);
+        };
+        sign_trust_task(&doc, &secret, SignOptions::new())
+            .await
+            .map_err(|e| ATMError::MsgSendError(format!("couldn't sign Trust Task: {e}")))
+    }
+
+    /// The profile's Ed25519 secret to sign with: an `assertionMethod` key if the
+    /// DID document declares one (the proof purpose the signature asserts), else
+    /// an `authentication` key — a `did:peer:2` profile typically has only the
+    /// latter.
+    async fn signing_secret(&self, did: &str) -> Option<Secret> {
+        let doc = match self.atm.inner.tdk_common.did_resolver().resolve(did).await {
+            Ok(resolved) => resolved.doc,
+            Err(e) => {
+                warn!(did, error = %e, "couldn't resolve own DID to pick a Trust Task signing key");
+                return None;
+            }
+        };
+        let resolver = self.atm.inner.tdk_common.secrets_resolver();
+        let assertion = doc.find_assertion_method(None);
+        let authentication = doc.find_authentication(None);
+        for kid in assertion.into_iter().chain(authentication) {
+            if let Some(secret) = resolver.get_secret(kid).await
+                && secret.get_key_type() == KeyType::Ed25519
+            {
+                return Some(secret);
+            }
+        }
+        None
+    }
+}
+
 fn new_id() -> String {
     format!("urn:uuid:{}", Uuid::new_v4())
 }
@@ -460,4 +524,76 @@ fn decode_body<R: DeserializeOwned>(body: &Value) -> Result<TrustTask<R>, ATMErr
     serde_json::from_value(body.clone()).map_err(|e| {
         ATMError::MsgReceiveError(format!("response is not a Trust Task document: {e}"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trust_tasks_proof::affinidi::Verifier;
+    use trust_tasks_rs::ProofVerifier;
+
+    /// An Ed25519 `did:key` secret whose `kid` is the DID's own verification
+    /// method, so the stock `did:key` verifier can resolve it offline.
+    fn did_key_secret() -> (String, Secret) {
+        let seed = [7u8; 32];
+        let mb = Secret::generate_ed25519(None, Some(&seed))
+            .get_public_keymultibase()
+            .expect("ed25519 multibase");
+        let did = format!("did:key:{mb}");
+        let secret = Secret::generate_ed25519(Some(&format!("{did}#{mb}")), Some(&seed));
+        (did, secret)
+    }
+
+    #[tokio::test]
+    async fn a_signed_task_survives_typed_parsing_and_verifies() {
+        // The mediator re-reads every request as a typed `TrustTask<P>` before it
+        // verifies, so the proof this SDK emits must round-trip through the typed
+        // document — not merely verify as loose JSON.
+        let (did, secret) = did_key_secret();
+        let p: ping::v0_1::Payload =
+            payload(ping::v0_1::Payload::builder().nonce(Some("n".into()))).unwrap();
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(did.clone());
+        task.recipient = Some("did:web:mediator.example".into());
+        task.issued_at = Some(chrono::Utc::now());
+
+        let signed = sign_trust_task(
+            &serde_json::to_value(&task).unwrap(),
+            &secret,
+            SignOptions::new(),
+        )
+        .await
+        .expect("sign");
+        let typed: TrustTask<ping::v0_1::Payload> =
+            serde_json::from_value(signed).expect("signed document parses as typed");
+
+        assert!(typed.proof.is_some());
+        assert!(typed.issued_at.is_some());
+        Verifier::for_did_key()
+            .verify(&typed)
+            .await
+            .expect("stock verifier accepts the proof");
+    }
+
+    #[tokio::test]
+    async fn a_tampered_payload_fails_verification() {
+        let (did, secret) = did_key_secret();
+        let p: ping::v0_1::Payload =
+            payload(ping::v0_1::Payload::builder().nonce(Some("n".into()))).unwrap();
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(did);
+        task.recipient = Some("did:web:mediator.example".into());
+
+        let mut signed = sign_trust_task(
+            &serde_json::to_value(&task).unwrap(),
+            &secret,
+            SignOptions::new(),
+        )
+        .await
+        .expect("sign");
+        signed["payload"]["nonce"] = Value::String("changed".into());
+        let typed: TrustTask<ping::v0_1::Payload> = serde_json::from_value(signed).unwrap();
+
+        assert!(Verifier::for_did_key().verify(&typed).await.is_err());
+    }
 }

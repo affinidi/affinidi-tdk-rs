@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### 0.26.13 — every Trust Task leaves with `issuedAt` and a proof
+
+`trust_tasks()` requests now carry `issuedAt` and an `eddsa-jcs-2022` Data
+Integrity `proof` made with the profile's Ed25519 key (an `assertionMethod` key
+if the DID declares one, else its `authentication` key — the usual case for a
+`did:peer:2` profile). Most `messaging/*` specs require both on the request,
+and the mediator is about to start enforcing them; this ships first so clients
+are already compliant when it does.
+
+**Nothing that works today stops working.** A mediator that does not verify
+proofs ignores them. A profile with no Ed25519 key — or whose own DID cannot be
+resolved at send time — sends the request unsigned and logs a warning, as it
+did before; a mediator that enforces proofs answers such a request with
+`proofRequired`. A signing failure with a key in hand is an error, never a
+silent downgrade to unsigned.
+
+New dependencies: `trust-tasks-proof` 0.21 (`affinidi` backend only) and
+`chrono`. Both were already in the build graph through `trust-tasks-rs` and the
+workspace's own `affinidi-data-integrity`.
+
 ### 0.26.12 — a re-establishing send survives the peer inviting us first
 
 `send_reestablishing` reads the send readiness and then invites, and those are
