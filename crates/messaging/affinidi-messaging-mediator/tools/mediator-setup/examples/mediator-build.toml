@@ -31,10 +31,12 @@
 #   container — Docker image (generates Dockerfile alongside config)
 type = "server"
 
-# protocols: ["didcomm"] | ["tsp"] | ["didcomm", "tsp"]
-#   didcomm — DIDComm v2 (recommended, industry standard)
-#   tsp     — Trust Spanning Protocol (experimental)
-protocols = ["didcomm"]
+# protocols: ["didcomm", "tsp"] (the default) | ["didcomm"] | ["tsp"]
+#   didcomm — DIDComm v2 (industry standard)
+#   tsp     — Trust Spanning Protocol, the preferred transport; advertised as
+#             `#tsp` in the mediator's DID. Keep `didcomm` alongside it: TSP
+#             currently authenticates over the DIDComm session.
+protocols = ["didcomm", "tsp"]
 
 # use_vta: enable VTA (Verifiable Trust Agent) integration
 #   true  — VTA manages DIDs and keys centrally (recommended for production)

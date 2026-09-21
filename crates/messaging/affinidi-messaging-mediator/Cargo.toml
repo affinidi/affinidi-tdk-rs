@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.28.20"
+version = "0.28.21"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -17,10 +17,10 @@ name = "mediator"
 path = "src/main.rs"
 
 [features]
-## Default: DIDComm v2 protocol support + Redis storage backend + jemalloc,
-## plus VTA-backed key management.
+## Default: DIDComm v2 and TSP protocol support + Redis storage backend +
+## jemalloc, plus VTA-backed key management.
 ## AWS integration is opt-in: use --features aws when deploying to AWS.
-default = ["didcomm", "redis-backend", "jemalloc", "vta"]
+default = ["didcomm", "tsp", "redis-backend", "jemalloc", "vta"]
 
 ## VTA-backed key management — the mediator fetches its operating secrets from
 ## a Verifiable Trust Agent at boot, refreshes them periodically, and offers
@@ -93,7 +93,7 @@ didcomm = [
 ## feature alone does not yet make the mediator usable by a stock Credo wallet.
 didcomm-v1 = ["didcomm", "dep:affinidi-messaging-didcomm-v1"]
 
-## TSP (Trust Spanning Protocol) — supported, additive alongside DIDComm. Carries TSP
+## TSP (Trust Spanning Protocol) — ON by default, additive alongside DIDComm. Carries TSP
 ## Direct / Routed / Nested / Control messages, the TSP↔DIDComm bridge, Trust Tasks over
 ## TSP, and advertises a TSPTransport service for discovery. Run together with `didcomm`:
 ## TSP currently reuses the DIDComm-authenticated session, so a `tsp`-only build has no

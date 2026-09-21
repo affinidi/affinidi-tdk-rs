@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.28.21) — TSP is a default feature
+
+`tsp` joins `didcomm` in the mediator's default features, so a mediator built
+with defaults routes TSP and — for a self-hosted `did:web` — advertises a
+`TSPTransport` service beside its `DIDCommMessaging` one. TSP is the preferred
+transport across the stack: a peer that sees `#tsp` on a party whose mediator
+is this one sends TSP here, and a default build that could not receive it sent
+those peers into nothing (Keyring VTI-33). A `did:webvh` mediator DID cannot be
+rewritten at boot; mint it with TSP (the setup wizard now does by default) or
+add the service in a new log entry. `--no-default-features` builds are
+unchanged, and a build without `tsp` still warns when its DID advertises it.
+
 ## Unreleased (0.28.20) — a live traffic monitor
 
 `messaging/monitor/subscribe` / `unsubscribe` open a leased (default 5 min, at

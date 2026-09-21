@@ -89,7 +89,7 @@ Available CLI options:
 | Flag | Values | Default |
 |---|---|---|
 | `--deployment` | `local`, `server`, `container` | `local` |
-| `--protocol` | `didcomm`, `tsp` | `didcomm` |
+| `--protocol` | `didcomm` (DIDComm only), `tsp` (DIDComm + TSP) | `tsp` (both) |
 | `--did-method` | `peer`, `webvh`, `vta` | per deployment |
 | `--public-url` | URL string | (required for webvh) |
 | `--secret-storage` | `file`, `keyring`, `aws`, `gcp`, `azure`, `vault` | per deployment |
@@ -119,7 +119,7 @@ least one secret backend must be enabled. Defaults are
 | Feature | Default | Description |
 |---|---|---|
 | `didcomm` | Yes | DIDComm v2 — production protocol |
-| `tsp` | No | Trust Spanning Protocol — supported; run with `didcomm` (dual-protocol) |
+| `tsp` | Yes | Trust Spanning Protocol — the preferred transport; run with `didcomm` (dual-protocol) |
 
 > **TSP endpoint advertisement.** For other mediators to route/forward TSP messages
 > to this one, this mediator's DID document must advertise a `TSPTransport` service

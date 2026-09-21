@@ -177,9 +177,9 @@ impl std::fmt::Display for DeploymentType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Protocol {
-    /// DIDComm v2 (recommended)
+    /// DIDComm v2 only (TSP off)
     Didcomm,
-    /// TSP — Trust Spanning Protocol (experimental)
+    /// TSP — Trust Spanning Protocol, alongside DIDComm (the default)
     Tsp,
 }
 
