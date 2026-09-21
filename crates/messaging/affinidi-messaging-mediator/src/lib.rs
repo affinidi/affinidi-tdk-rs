@@ -31,6 +31,7 @@ pub mod didcomm_compat;
 pub mod didcomm_v1_identity;
 pub mod handlers;
 pub mod messages;
+pub mod monitor;
 pub mod server;
 pub mod store;
 pub mod tasks;
@@ -65,6 +66,9 @@ pub struct SharedData {
     /// The latest queue survey, published by the statistics task and served by
     /// the `messaging/queue/list` and `messaging/stats/show` Trust Tasks.
     pub queue_snapshot: QueueSnapshotCell,
+    /// The live traffic monitor: the event bus the data plane emits onto and
+    /// the `messaging/monitor/*` subscriptions reading it.
+    pub monitor: monitor::TrafficMonitor,
     /// Storage backend for sessions, messages, accounts, and live
     /// streaming. Polymorphic so the mediator can run against Redis,
     /// Fjall, or memory without changing handler code.

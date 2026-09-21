@@ -67,6 +67,13 @@ pub enum AuditAction {
     /// A queue was purged (`messaging/queue/purge`).
     #[serde(rename = "queue_purge")]
     QueuePurge,
+    /// An administrator opened or renewed a live traffic-monitor subscription
+    /// (`messaging/monitor/subscribe`).
+    #[serde(rename = "monitor_subscribe")]
+    MonitorSubscribe,
+    /// A traffic-monitor subscription was ended (`messaging/monitor/unsubscribe`).
+    #[serde(rename = "monitor_unsubscribe")]
+    MonitorUnsubscribe,
 }
 
 /// A single audit-log record: one privileged change, by one actor, at one time.

@@ -136,6 +136,14 @@ pub async fn message_purge_handler(
         };
 
         let (count, bytes, scanned) = (report.count, report.bytes, report.scanned);
+        if !params.dry_run {
+            state.monitor.purged(
+                &session.did_hash,
+                count,
+                bytes,
+                crate::monitor::Channel::Rest,
+            );
+        }
         let (failed, truncated) = (report.failed, report.truncated);
 
         // `info`, not `debug`: this destroys undelivered messages, and the

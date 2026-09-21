@@ -787,6 +787,12 @@ async fn forward_tsp_remote(
             )
         })?;
 
+    state.monitor.forwarded(
+        &entry.from_did_hash,
+        &entry.to_did_hash,
+        &entry.message,
+        crate::monitor::Protocol::Tsp,
+    );
     tracing::info!(%next, %endpoint_url, "TSP message enqueued for remote forwarding");
     Ok(InboundMessageResponse::Forwarded)
 }

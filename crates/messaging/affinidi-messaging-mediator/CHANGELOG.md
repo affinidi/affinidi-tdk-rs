@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased (0.28.20) — a live traffic monitor
+
+`messaging/monitor/subscribe` / `unsubscribe` open a leased (default 5 min, at
+most 1 h, renewable), filtered live tap on the mediator's traffic **metadata**,
+delivered as signed `messaging/monitor/event` batches over the subscriber's live
+connection: what arrived and over which channel (REST / websocket) and protocol
+(DIDComm v2, DIDComm v1, TSP), what was refused and with which problem code,
+what was stored, delivered, forwarded to another mediator, deleted or purged —
+with sender, recipient, size and message id. Never a message body.
+
+Filters: DIDs (either party), direction, stage, protocol, channel, message-type
+prefix, failures only. An administrator may watch anything; any other account
+only its own traffic — an omitted `dids` filter is narrowed to it, and naming
+another account is refused. Three subscriptions per account.
+
+A monitor must not hurt what it watches: emitting costs one atomic load when
+nobody subscribes; events are **never queued or stored** — over the rate
+ceiling, lagging, or with the subscriber offline they are counted in `dropped`;
+batches (≤500, flushed each second, a heartbeat every 30 s) go straight to the
+streaming publisher and emit nothing themselves; and a subscriber's own
+management traffic with the mediator (its console polling) is left out.
+
+Not yet observed (a following release): forwarding-processor outcomes (relayed,
+failed, abandoned), per-message expiry, deliveries on DIDComm pickup, TSP-socket
+drain and redelivery, and subscribers on a raw-TSP socket. Scope is per instance
+behind a shared Redis.
+
+**Accountability and disclosure.** Every administrator subscribe, renew and
+unsubscribe is written to the audit log (`monitorSubscribe` /
+`monitorUnsubscribe`: who watched which accounts, for how long, with what
+filter) — an administrator's tap can see every account's correspondence
+metadata, so it must be on the record. A refusal carries the problem-report
+code and comment the sender was already sent; an internal failure is reported
+as `internalError` with no detail, the full text staying in the server log.
+Requires `affinidi-messaging-mediator-common` 0.16.15.
+
 ## Unreleased (0.28.19) — `messaging/message/delete` and `messaging/queue/purge`
 
 The two destructive mediator-operations Trust Tasks:

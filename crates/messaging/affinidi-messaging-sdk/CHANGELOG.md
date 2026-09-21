@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 0.26.18 — the traffic monitor
+
+`trust_tasks().monitor_subscribe(profile, filter, lease_seconds,
+max_events_per_second, renew)` and `trust_tasks().monitor_unsubscribe(profile,
+id)`, plus `protocols::trust_tasks::decode_monitor_event(&Message)` to pick the
+signed `messaging/monitor/event` batches out of a live stream. The profile needs
+its websocket enabled; events are never queued.
+
 ### 0.26.17 — `message_delete` and `queue_purge`
 
 `trust_tasks().message_delete(profile, did_hash, msg_ids)` and

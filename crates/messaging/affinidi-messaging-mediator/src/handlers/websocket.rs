@@ -5,6 +5,7 @@ use crate::common::metrics::names::{
 use crate::didcomm_compat;
 #[cfg(feature = "tsp")]
 use crate::messages::inbound::handle_inbound_tsp;
+use crate::monitor::{Channel, Protocol};
 use crate::{
     SharedData,
     common::authz::{self, Capability},
@@ -761,7 +762,11 @@ async fn handle_socket(
                                     }
 
                                     // Process the message, which also takes care of any storing and live-streaming of the message
+                                    state.monitor.received(&session.did_hash, Channel::Websocket, Protocol::DidComm, msg.as_bytes());
                                     let outcome = handle_inbound(&state, &session, &msg).await;
+                                    if let Err(e) = &outcome {
+                                        state.monitor.refused(&session.did_hash, Channel::Websocket, Protocol::DidComm, msg.as_bytes(), e);
+                                    }
 
                                     // A relay socket gets a `relay-ack` per frame instead of a
                                     // problem report. Two reasons it cannot have the latter: a
@@ -861,7 +866,9 @@ async fn handle_socket(
                                     // are UTF-8-decoded and handled as DIDComm exactly as before.
                                     #[cfg(feature = "tsp")]
                                     if affinidi_tsp::is_tsp(&msg) {
+                                        state.monitor.received(&session.did_hash, Channel::Websocket, Protocol::Tsp, &msg);
                                         if let Err(e) = handle_inbound_tsp(&state, &session, &msg).await {
+                                            state.monitor.refused(&session.did_hash, Channel::Websocket, Protocol::Tsp, &msg, &e);
                                             warn!("WebSocket TSP inbound error: {}", e);
                                         }
                                         continue;
@@ -893,9 +900,11 @@ async fn handle_socket(
                                         }
                                     };
 
+                                    state.monitor.received(&session.did_hash, Channel::Websocket, Protocol::DidComm, msg.as_bytes());
                                     match handle_inbound(&state, &session, &msg).await {
                                         Ok(_) => {}
                                         Err(e) => {
+                                            state.monitor.refused(&session.did_hash, Channel::Websocket, Protocol::DidComm, msg.as_bytes(), &e);
                                             warn!("WebSocket inbound error: {}", e);
                                             continue;
                                         }

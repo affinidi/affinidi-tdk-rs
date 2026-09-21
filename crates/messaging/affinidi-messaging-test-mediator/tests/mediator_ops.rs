@@ -546,3 +546,144 @@ async fn a_dry_run_counts_and_the_real_purge_removes_only_the_filtered_peer() {
         "carol's message survives"
     );
 }
+
+/// Read the admin's live stream until a monitor batch shows an event matching
+/// `wanted`, or `deadline` passes.
+async fn await_monitor_event(
+    env: &TestEnvironment,
+    watcher: &TestUser,
+    wanted: impl Fn(&serde_json::Value) -> bool,
+    deadline: Duration,
+) -> Option<serde_json::Value> {
+    use affinidi_messaging_sdk::protocols::trust_tasks::decode_monitor_event;
+    let until = tokio::time::Instant::now() + deadline;
+    while tokio::time::Instant::now() < until {
+        let next = env
+            .atm
+            .message_pickup()
+            .live_stream_next(&watcher.profile, Some(Duration::from_millis(500)), false)
+            .await
+            .expect("live stream");
+        let Some((message, _)) = next else { continue };
+        let Some(batch) = decode_monitor_event(&message) else {
+            continue;
+        };
+        assert!(
+            batch.proof.is_some(),
+            "every monitor batch is signed by the mediator"
+        );
+        for event in &batch.payload.events {
+            let event = serde_json::to_value(event).unwrap();
+            assert!(
+                event.get("message").is_none(),
+                "metadata only, never a body"
+            );
+            if wanted(&event) {
+                return Some(event);
+            }
+        }
+    }
+    None
+}
+
+#[tokio::test]
+async fn an_admin_watches_a_message_arrive_live() {
+    use trust_tasks_rs::specs::messaging::monitor::subscribe::v0_1::MonitorFilter;
+
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let bob = env.add_user("bob").await.expect("bob");
+    let admin = promoted(&env, "admin", AccountType::Admin).await;
+
+    let filter: MonitorFilter =
+        serde_json::from_value(json!({ "dids": [bob.did_hash()] })).unwrap();
+    let sub = env
+        .atm
+        .trust_tasks()
+        .monitor_subscribe(&admin.profile, Some(filter), Some(60), None, None)
+        .await
+        .expect("admin subscribes");
+
+    send_direct(&env, &alice, &bob).await;
+
+    let bob_hash = bob.did_hash();
+    let stored = await_monitor_event(
+        &env,
+        &admin,
+        |e| e["stage"] == "stored" && e["to"] == bob_hash.as_str(),
+        Duration::from_secs(10),
+    )
+    .await
+    .expect("the store of alice's message to bob is seen live");
+    assert_eq!(stored["from"], alice.did_hash().as_str());
+    assert_eq!(stored["protocol"], "didcomm");
+
+    let ended = env
+        .atm
+        .trust_tasks()
+        .monitor_unsubscribe(&admin.profile, &sub.subscription_id.to_string())
+        .await
+        .expect("unsubscribe");
+    assert!(ended.events_sent.unwrap_or(0) >= 1);
+
+    // An administrator's tap on other accounts' traffic is on the record.
+    let audit = env
+        .atm
+        .trust_tasks()
+        .audit_list(&admin.profile, None, None)
+        .await
+        .expect("audit");
+    let text = format!("{audit:?}");
+    assert!(
+        text.contains("monitorSubscribe"),
+        "subscribe audited: {text}"
+    );
+    assert!(
+        text.contains("monitorUnsubscribe"),
+        "unsubscribe audited: {text}"
+    );
+}
+
+#[tokio::test]
+async fn a_standard_account_monitors_only_itself() {
+    use trust_tasks_rs::specs::messaging::monitor::subscribe::v0_1::MonitorFilter;
+
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let bob = env.add_user("bob").await.expect("bob");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("alice live");
+    let tt = env.atm.trust_tasks();
+
+    let other: MonitorFilter = serde_json::from_value(json!({ "dids": [bob.did_hash()] })).unwrap();
+    let refused = tt
+        .monitor_subscribe(&alice.profile, Some(other), None, None, None)
+        .await;
+    assert!(
+        refused.is_err(),
+        "naming another account is refused, not narrowed"
+    );
+
+    let own = tt
+        .monitor_subscribe(&alice.profile, None, None, None, None)
+        .await
+        .expect("alice may watch her own traffic");
+    let dids: Vec<String> = own
+        .filter
+        .dids
+        .clone()
+        .unwrap_or_default()
+        .iter()
+        .map(|d| d.to_string())
+        .collect();
+    assert_eq!(dids, vec![alice.did_hash()], "narrowed to her own account");
+
+    // Someone else cannot end it.
+    let bob_live = promoted(&env, "bob-watcher", AccountType::Standard).await;
+    let stolen = tt
+        .monitor_unsubscribe(&bob_live.profile, &own.subscription_id.to_string())
+        .await;
+    assert!(stolen.is_err());
+}

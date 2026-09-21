@@ -21,7 +21,7 @@ use http::StatusCode;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use trust_tasks_rs::TrustTask;
-use trust_tasks_rs::specs::messaging::{message, queue, stats};
+use trust_tasks_rs::specs::messaging::{message, monitor, queue, stats};
 use uuid::Uuid;
 
 use crate::SharedData;
@@ -659,6 +659,178 @@ pub(crate) async fn consume_message_get(
         .map_err(serialize_err)
 }
 
+/// Handle `messaging/monitor/subscribe`: open or renew a leased, filtered live
+/// tap on the mediator's traffic metadata (see [`crate::monitor`]).
+///
+/// An administrator may watch anything. Anyone else sees only traffic to or
+/// from their own account: an omitted `dids` is narrowed to it, and naming any
+/// other account is refused rather than silently narrowed. The response
+/// carries the filter actually in force.
+pub(crate) async fn consume_monitor_subscribe(
+    typed: TrustTask<monitor::subscribe::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: DateTime<Utc>,
+) -> Result<Value, MediatorError> {
+    use crate::monitor::{
+        DEFAULT_LEASE_SECONDS, DEFAULT_MAX_EVENTS_PER_SECOND, Filter, MAX_EVENTS_PER_SECOND,
+        MAX_LEASE_SECONDS, MonitorError,
+    };
+
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    let payload = &typed.payload;
+    let is_admin = matches!(
+        session.account_type,
+        AccountType::Admin | AccountType::RootAdmin
+    );
+
+    let mut filter: Filter = match &payload.filter {
+        Some(f) => serde_json::to_value(f)
+            .and_then(serde_json::from_value)
+            .map_err(serialize_err)?,
+        None => Filter::default(),
+    };
+    if !is_admin {
+        match &filter.dids {
+            None => filter.dids = Some(vec![session.did_hash.clone()]),
+            Some(dids) if dids.iter().all(|d| *d == session.did_hash) => {}
+            Some(_) => {
+                return Err(tt_problem(
+                    session,
+                    "permissionDenied",
+                    "only an administrator may monitor another account's traffic".into(),
+                    StatusCode::FORBIDDEN,
+                ));
+            }
+        }
+    }
+
+    let lease = payload.lease_seconds.map_or(DEFAULT_LEASE_SECONDS, |s| {
+        s.clamp(10, MAX_LEASE_SECONDS as i64) as u64
+    });
+    let max_eps = payload
+        .max_events_per_second
+        .map_or(DEFAULT_MAX_EVENTS_PER_SECOND, |n| {
+            n.get().min(MAX_EVENTS_PER_SECOND)
+        });
+    let renew = payload.subscription_id.as_ref().map(|s| s.to_string());
+
+    let granted = state
+        .monitor
+        .subscribe(
+            state,
+            &session.did,
+            &session.did_hash,
+            renew.as_deref(),
+            filter,
+            lease,
+            max_eps,
+        )
+        .await
+        .map_err(|e| match e {
+            MonitorError::UnknownSubscription => tt_problem(
+                session,
+                "messaging/monitor/subscribe:unknownSubscription",
+                "no such subscription held by this account".into(),
+                StatusCode::NOT_FOUND,
+            ),
+            MonitorError::TooManySubscriptions => tt_problem(
+                session,
+                "messaging/monitor/subscribe:tooManySubscriptions",
+                format!(
+                    "this account already holds {} monitor subscriptions",
+                    crate::monitor::MAX_SUBSCRIPTIONS_PER_OWNER
+                ),
+                StatusCode::TOO_MANY_REQUESTS,
+            ),
+        })?;
+
+    // An administrator's tap can see other accounts' traffic metadata, so it
+    // is on the record: who watched which accounts, and for how long. (A
+    // non-admin's subscription is confined to its own traffic.)
+    if is_admin {
+        let scope = granted
+            .filter
+            .dids
+            .as_ref()
+            .map_or_else(|| "all accounts".to_string(), |d| abbreviate(d));
+        record_audit(
+            state,
+            session,
+            granted
+                .filter
+                .dids
+                .as_ref()
+                .and_then(|d| (d.len() == 1).then(|| d[0].as_str()))
+                .unwrap_or("*"),
+            AuditAction::MonitorSubscribe,
+            format!(
+                "{} monitor {} watching {scope} for {lease}s (filter: {})",
+                if renew.is_some() { "renewed" } else { "opened" },
+                granted.subscription_id,
+                granted.filter.to_json(),
+            ),
+        )
+        .await;
+    }
+
+    let response: monitor::subscribe::v0_1::Response = from_json(json!({
+        "subscriptionId": granted.subscription_id,
+        "expiresAt": granted.expires_at,
+        "filter": granted.filter.to_json(),
+        "maxEventsPerSecond": granted.max_eps,
+    }))?;
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/monitor/unsubscribe`: end a subscription — the owner's
+/// own, or any for a rootAdmin. Another account's id answers exactly as an
+/// unknown one does.
+pub(crate) async fn consume_monitor_unsubscribe(
+    typed: TrustTask<monitor::unsubscribe::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: DateTime<Utc>,
+) -> Result<Value, MediatorError> {
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    let subscription_id = typed.payload.subscription_id.to_string();
+    let (sent, dropped) = state
+        .monitor
+        .unsubscribe(
+            &subscription_id,
+            &session.did_hash,
+            session.account_type == AccountType::RootAdmin,
+        )
+        .map_err(|_| {
+            tt_problem(
+                session,
+                "messaging/monitor/unsubscribe:unknownSubscription",
+                "no such subscription held by this account".into(),
+                StatusCode::NOT_FOUND,
+            )
+        })?;
+    if matches!(
+        session.account_type,
+        AccountType::Admin | AccountType::RootAdmin
+    ) {
+        record_audit(
+            state,
+            session,
+            "*",
+            AuditAction::MonitorUnsubscribe,
+            format!("ended monitor {subscription_id} ({sent} events sent, {dropped} dropped)"),
+        )
+        .await;
+    }
+    let response: monitor::unsubscribe::v0_1::Response =
+        from_json(json!({ "eventsSent": sent, "eventsDropped": dropped }))?;
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
 /// Refuse a destructive operation on a privileged account's queue unless the
 /// requester is a rootAdmin. An account acting on its own queue is exempt: the
 /// guard protects administrators' queues from *other* administrators.
@@ -738,12 +910,19 @@ pub(crate) async fn consume_message_delete(
         let id = id.to_string();
         // Only messages the target account sends or receives are in scope;
         // `get_message` answers `None` for anything else.
-        if state.database.get_message(&target, &id).await?.is_none() {
+        let Some(stored) = state.database.get_message(&target, &id).await? else {
             results.push(json!({ "msgId": id, "deleted": false, "reason": "notFound" }));
             continue;
-        }
+        };
         match state.database.delete_message(&id, authority.clone()).await {
             Ok(()) => {
+                state.monitor.deleted(
+                    &id,
+                    &target,
+                    stored.from_address.as_deref(),
+                    stored.to_address.as_deref(),
+                    crate::monitor::Channel::Internal,
+                );
                 results.push(json!({ "msgId": id, "deleted": true }));
                 deleted_ids.push(id);
             }
@@ -864,6 +1043,12 @@ pub(crate) async fn consume_queue_purge(
         "receive"
     };
     if !dry_run {
+        state.monitor.purged(
+            &target,
+            report.count,
+            report.bytes,
+            crate::monitor::Channel::Internal,
+        );
         record_audit(
             state,
             session,
