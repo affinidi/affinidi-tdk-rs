@@ -249,8 +249,11 @@ fn apply_cli_args(args: &Args, config: &mut WizardConfig) {
     }
     if let Some(ref protocol) = args.protocol {
         match protocol {
+            // TSP is on by default, so naming DIDComm is how a pre-fill opts
+            // out of it — the same result `--protocol didcomm` always gave.
             cli::Protocol::Didcomm => {
                 config.didcomm_enabled = true;
+                config.tsp_enabled = false;
             }
             cli::Protocol::Tsp => {
                 config.tsp_enabled = true;

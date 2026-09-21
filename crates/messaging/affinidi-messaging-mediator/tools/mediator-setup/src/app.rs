@@ -371,7 +371,8 @@ pub struct WizardConfig {
     pub vta_context: String,
     /// DIDComm v2 protocol enabled (default: true)
     pub didcomm_enabled: bool,
-    /// TSP protocol enabled (experimental, default: false)
+    /// TSP protocol enabled (default: true — the preferred transport, carried
+    /// alongside DIDComm, and advertised as `#tsp` in the mediator's DID)
     pub tsp_enabled: bool,
     /// DIDComm v1 (Aries RFC 0019) enabled (default: false). Additive
     /// alongside DIDComm v2.1, and dependent on it.
@@ -524,13 +525,13 @@ impl WizardConfig {
     /// `cargo build`, `cargo run`) so all paths stay in lockstep.
     ///
     /// Always emits exactly one storage backend feature
-    /// (`redis-backend` or `fjall-backend`) and exactly one protocol
-    /// feature (`didcomm`, optionally plus `tsp`). The mediator's
-    /// default features are `["didcomm", "redis-backend"]`, so callers
-    /// must pair this with `--no-default-features` whenever the list
-    /// differs from those defaults — otherwise the secret-storage
-    /// feature picked here would be silently combined with the default
-    /// backend instead of the one the operator chose.
+    /// (`redis-backend` or `fjall-backend`), the protocols chosen, and the
+    /// mediator's other defaults (`jemalloc`, `vta`), which the wizard never
+    /// turns off. Callers pair it with `--no-default-features` whenever it
+    /// differs from [`MEDIATOR_DEFAULT_FEATURES`], so it has to be complete:
+    /// a feature missing here is missing from the binary. That is how
+    /// wizard-built mediators lost `vta` — and with it the VTA integration a
+    /// VTA-linked config needs, which a build without it skips silently.
     pub fn cargo_features(&self) -> Vec<&'static str> {
         let mut features = Vec::new();
 
@@ -556,6 +557,12 @@ impl WizardConfig {
             _ => "redis-backend",
         });
 
+        // Defaults no wizard choice removes. `vta` is needed by every
+        // VTA-linked deployment, and costs a non-VTA one nothing but a
+        // dependency; `jemalloc` is the allocator the mediator ships with.
+        features.push("jemalloc");
+        features.push("vta");
+
         // Route through the canonical `STORAGE_*` constants rather
         // than re-typing the URL prefixes — keeps this in lockstep
         // with `consts.rs` if a scheme prefix ever changes.
@@ -571,16 +578,25 @@ impl WizardConfig {
         features
     }
 
-    /// Whether [`Self::cargo_features`] differs from the mediator's
-    /// own default features (`["didcomm", "redis-backend"]`). Callers
-    /// use this to decide whether to pass `--no-default-features` —
-    /// when it returns `false`, plain `cargo build -p
-    /// affinidi-messaging-mediator` is sufficient.
+    /// Whether [`Self::cargo_features`] differs from the mediator's own
+    /// default features ([`MEDIATOR_DEFAULT_FEATURES`]), as a set. Callers
+    /// use this to decide whether to pass `--no-default-features` — when it
+    /// returns `false`, plain `cargo build -p affinidi-messaging-mediator` is
+    /// sufficient.
     pub fn needs_explicit_features(&self) -> bool {
-        let features = self.cargo_features();
-        features.as_slice() != ["didcomm", "redis-backend"]
+        let mut features = self.cargo_features();
+        let mut defaults = MEDIATOR_DEFAULT_FEATURES.to_vec();
+        features.sort_unstable();
+        defaults.sort_unstable();
+        features != defaults
     }
 }
+
+/// The mediator crate's `default` features, which
+/// [`WizardConfig::needs_explicit_features`] compares against. Must match
+/// `affinidi-messaging-mediator/Cargo.toml`; a test reads that file to hold it.
+pub const MEDIATOR_DEFAULT_FEATURES: [&str; 5] =
+    ["didcomm", "tsp", "redis-backend", "jemalloc", "vta"];
 
 impl Default for WizardConfig {
     fn default() -> Self {
@@ -591,7 +607,7 @@ impl Default for WizardConfig {
             vta_mode: String::new(),
             vta_context: DEFAULT_VTA_CONTEXT.into(),
             didcomm_enabled: true,
-            tsp_enabled: false,
+            tsp_enabled: true,
             didcomm_v1_enabled: false,
             didcomm_v1_allow_unauthenticated_forwards: false,
             did_method: String::new(),
@@ -2345,8 +2361,8 @@ impl WizardApp {
                         "Industry-standard DID-based messaging",
                     ),
                     SelectionOption::new(
-                        format!("{tsp_check} TSP (Trust Spanning Protocol) [experimental]"),
-                        "Lightweight trust protocol — experimental support",
+                        format!("{tsp_check} TSP (Trust Spanning Protocol) (recommended)"),
+                        "Preferred transport — metadata-private routing",
                     ),
                 ]
             }
@@ -2690,7 +2706,7 @@ impl WizardApp {
             }
             WizardStep::Protocol => match self.selection_index {
                 0 => "DIDComm v2 is the industry standard for DID-based secure messaging. Recommended for most deployments. [Space] toggles; [Enter] continues.".into(),
-                1 => "TSP is a lightweight alternative to DIDComm. EXPERIMENTAL: not all mediator features are supported yet. Can be enabled alongside DIDComm. [Space] toggles; [Enter] continues.".into(),
+                1 => "TSP (Trust Spanning Protocol) is the preferred transport: peers that advertise both pick TSP. Carried alongside DIDComm, and advertised as `#tsp` in the mediator's DID. Keep DIDComm on too — TSP currently authenticates over the DIDComm session. [Space] toggles; [Enter] continues.".into(),
                 _ => String::new(),
             },
             WizardStep::Did => {
@@ -4055,7 +4071,7 @@ impl WizardApp {
                 self.config.use_vta = true;
                 self.config.vta_mode = VTA_MODE_ONLINE.into();
                 self.config.didcomm_enabled = true;
-                self.config.tsp_enabled = false;
+                self.config.tsp_enabled = true;
                 self.config.did_method = DID_VTA.into();
                 // The unified secret backend is independent of VTA mode —
                 // pick a sensible default per platform; the operator
@@ -4737,7 +4753,7 @@ mod tests {
     fn default_config_has_sensible_values() {
         let cfg = WizardConfig::default();
         assert!(cfg.didcomm_enabled);
-        assert!(!cfg.tsp_enabled);
+        assert!(cfg.tsp_enabled, "TSP is on by default");
         assert_eq!(cfg.config_path, DEFAULT_CONFIG_PATH);
         assert_eq!(cfg.database_url, DEFAULT_REDIS_URL);
         assert_eq!(cfg.listen_address, DEFAULT_LISTEN_ADDR);
@@ -4750,8 +4766,57 @@ mod tests {
         // needs_explicit_features must return false so the wizard
         // doesn't pass `--no-default-features` for the trivial case.
         let cfg = WizardConfig::default();
-        assert_eq!(cfg.cargo_features(), vec!["didcomm", "redis-backend"]);
+        assert_eq!(
+            cfg.cargo_features(),
+            vec!["didcomm", "tsp", "redis-backend", "jemalloc", "vta"]
+        );
         assert!(!cfg.needs_explicit_features());
+    }
+
+    /// [`MEDIATOR_DEFAULT_FEATURES`] is a copy of the mediator's own
+    /// `default`, and the wizard's `--no-default-features` decision is only
+    /// as right as the copy. It had drifted: the copy said
+    /// `["didcomm", "redis-backend"]` while the crate also defaulted `jemalloc`
+    /// and `vta`, so every explicit build the wizard rendered dropped both.
+    #[test]
+    fn mediator_default_features_match_the_mediator_crate() {
+        let manifest: toml::Value =
+            toml::from_str(include_str!("../../../Cargo.toml")).expect("mediator Cargo.toml");
+        let mut actual: Vec<&str> = manifest["features"]["default"]
+            .as_array()
+            .expect("a default feature list")
+            .iter()
+            .map(|v| v.as_str().expect("feature names are strings"))
+            .collect();
+        let mut expected = MEDIATOR_DEFAULT_FEATURES.to_vec();
+        actual.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(actual, expected);
+    }
+
+    /// Every explicit feature list the wizard renders keeps `vta`: without it
+    /// the mediator silently skips the VTA integration a VTA-linked config
+    /// relies on.
+    #[test]
+    fn explicit_feature_lists_keep_vta_and_jemalloc() {
+        for cfg in [
+            WizardConfig {
+                storage_backend: "fjall".into(),
+                ..Default::default()
+            },
+            WizardConfig {
+                secret_storage: "aws_secrets://".into(),
+                ..Default::default()
+            },
+            WizardConfig {
+                tsp_enabled: false,
+                ..Default::default()
+            },
+        ] {
+            assert!(cfg.needs_explicit_features());
+            let f = cfg.cargo_features();
+            assert!(f.contains(&"vta") && f.contains(&"jemalloc"), "{f:?}");
+        }
     }
 
     #[test]
@@ -4765,7 +4830,10 @@ mod tests {
             storage_backend: "fjall".into(),
             ..Default::default()
         };
-        assert_eq!(cfg.cargo_features(), vec!["didcomm", "fjall-backend"]);
+        assert_eq!(
+            cfg.cargo_features(),
+            vec!["didcomm", "tsp", "fjall-backend", "jemalloc", "vta"]
+        );
         assert!(cfg.needs_explicit_features());
     }
 
@@ -4783,7 +4851,14 @@ mod tests {
         };
         assert_eq!(
             cfg.cargo_features(),
-            vec!["didcomm", "redis-backend", "secrets-aws"]
+            vec![
+                "didcomm",
+                "tsp",
+                "redis-backend",
+                "jemalloc",
+                "vta",
+                "secrets-aws"
+            ]
         );
         assert!(cfg.needs_explicit_features());
     }
@@ -4797,7 +4872,14 @@ mod tests {
         };
         assert_eq!(
             cfg.cargo_features(),
-            vec!["didcomm", "fjall-backend", "secrets-vault"]
+            vec![
+                "didcomm",
+                "tsp",
+                "fjall-backend",
+                "jemalloc",
+                "vta",
+                "secrets-vault"
+            ]
         );
         assert!(cfg.needs_explicit_features());
     }
@@ -4811,18 +4893,18 @@ mod tests {
             storage_backend: "totally-not-a-real-backend".into(),
             ..Default::default()
         };
-        assert_eq!(cfg.cargo_features(), vec!["didcomm", "redis-backend"]);
+        assert!(cfg.cargo_features().contains(&"redis-backend"));
     }
 
     #[test]
-    fn cargo_features_tsp_protocol_included() {
+    fn cargo_features_didcomm_only_leaves_tsp_out() {
         let cfg = WizardConfig {
-            tsp_enabled: true,
+            tsp_enabled: false,
             ..Default::default()
         };
         assert_eq!(
             cfg.cargo_features(),
-            vec!["didcomm", "tsp", "redis-backend"]
+            vec!["didcomm", "redis-backend", "jemalloc", "vta"]
         );
         assert!(cfg.needs_explicit_features());
     }
@@ -5284,8 +5366,12 @@ mod tests {
         advance_to(&mut app, WizardStep::Protocol);
         assert!(app.current_step.is_multi_select());
 
-        // DIDComm is selected by default
+        // Both are selected by default; turn TSP off so DIDComm is the only
+        // one left.
         assert!(app.config.didcomm_enabled);
+        assert!(app.config.tsp_enabled);
+        app.selection_index = 1;
+        app.toggle_current_multi_select();
         assert!(!app.config.tsp_enabled);
 
         // Space toggles the highlighted option — try to turn DIDComm off when
@@ -5305,10 +5391,12 @@ mod tests {
         app.config.deployment_type = DEPLOYMENT_LOCAL.into();
         advance_to(&mut app, WizardStep::Protocol);
 
-        // Turn on TSP alongside DIDComm via Space.
+        // TSP is on by default; Space turns it off and on again.
         app.selection_index = 1;
         app.toggle_current_multi_select();
         assert!(app.config.didcomm_enabled);
+        assert!(!app.config.tsp_enabled);
+        app.toggle_current_multi_select();
         assert!(app.config.tsp_enabled);
 
         // Enter advances — no more "Continue >" pseudo-row.

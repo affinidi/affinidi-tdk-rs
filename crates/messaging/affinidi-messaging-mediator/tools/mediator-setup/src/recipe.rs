@@ -106,7 +106,9 @@ pub struct DeploymentSection {
 }
 
 fn default_protocols() -> Vec<String> {
-    vec!["didcomm".into()]
+    // TSP is the preferred transport and rides alongside DIDComm, which it
+    // still authenticates over. `protocols = ["didcomm"]` opts out.
+    vec!["didcomm".into(), "tsp".into()]
 }
 
 #[derive(Debug, Deserialize)]

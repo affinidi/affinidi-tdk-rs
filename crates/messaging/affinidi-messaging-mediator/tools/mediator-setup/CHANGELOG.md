@@ -1,5 +1,24 @@
 # Affinidi Messaging Mediator Setup
 
+## Unreleased (0.1.35) — TSP on by default, and wizard builds keep `vta`
+
+**TSP is on by default.** The protocol step pre-selects TSP beside DIDComm and
+no longer calls it experimental; a recipe with no `protocols` gets
+`["didcomm", "tsp"]`; `--protocol didcomm` still means DIDComm only. The
+mediator DID the wizard mints — `did:peer`, local `did:webvh` or VTA-rendered —
+carries a `#tsp` `TSPTransport` service accordingly. Existing recipes that list
+`protocols = ["didcomm"]` are unchanged.
+
+**Fixed: every explicit build dropped `vta` and `jemalloc`.** The wizard passes
+`--no-default-features` whenever its feature list differs from the mediator's
+defaults, but its copy of those defaults was `["didcomm", "redis-backend"]`
+while the mediator also defaulted `jemalloc` and `vta`, and the list it emitted
+never included either. Any wizard run that chose a secrets backend, Fjall or TSP
+— that is, nearly all of them — rendered a `cargo install`, `cargo build` and
+Dockerfile whose binary had no VTA integration, which a VTA-linked config then
+skipped without an error. The list now carries both, and a test reads the
+mediator's `Cargo.toml` so the copy cannot drift again.
+
 ## Unreleased (0.1.34) — self-signed TLS files land beside `mediator.toml`
 
 A self-signed certificate and key are now written to `keys/` **beside the
