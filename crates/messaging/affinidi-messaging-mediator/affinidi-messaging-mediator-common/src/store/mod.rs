@@ -319,6 +319,17 @@ where
 ///
 /// See the module-level docs for backend feature flags, multi-process
 /// guarantees, atomicity, and the error model.
+/// Outcome of [`MediatorStore::trust_task_claim`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrustTaskClaim {
+    /// First sight of this document: execute it.
+    Fresh,
+    /// The same document again: do not execute it a second time.
+    Duplicate,
+    /// A different document under an id already used: refuse it.
+    Conflict,
+}
+
 #[async_trait]
 pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     // ─── Bootstrap & health ──────────────────────────────────────────────────
@@ -1198,6 +1209,50 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
 
     /// Delete an OOB invitation. Returns `true` when an entry was deleted.
     async fn oob_discovery_delete(&self, oob_id: &str) -> Result<bool, MediatorError>;
+
+    // ─── Trust Task duplicate-execution record ──────────────────────────────
+
+    /// Claim a Trust Task for execution — the Trust Tasks §7.2 item 11
+    /// duplicate-execution record.
+    ///
+    /// `key` identifies the document (the caller scopes it to the issuer, so
+    /// one party cannot burn another's ids); `digest` is the document's
+    /// content digest. The first claim of a key records `digest` until
+    /// `retain_until` (Unix seconds) and is [`TrustTaskClaim::Fresh`]; a later
+    /// claim of the same key before then is [`TrustTaskClaim::Duplicate`] when
+    /// the digest matches and [`TrustTaskClaim::Conflict`] when it does not. A
+    /// record whose `retain_until` has passed (by `now`) is treated as absent.
+    ///
+    /// The check-and-record must be atomic across every mediator instance
+    /// sharing the store — that is what makes a replay to a *second* instance
+    /// fail too.
+    ///
+    /// **The default refuses.** A store that does not implement this cannot
+    /// say whether a document was already executed, and executing anyway is
+    /// the double execution the rule forbids; the caller fails closed on the
+    /// error. Every built-in backend overrides it.
+    async fn trust_task_claim(
+        &self,
+        key: &str,
+        digest: &str,
+        retain_until: u64,
+        now: u64,
+    ) -> Result<TrustTaskClaim, MediatorError> {
+        let _ = (key, digest, retain_until, now);
+        Err(MediatorError::InternalError(
+            14,
+            "NA".into(),
+            "this store keeps no Trust Task duplicate-execution record".into(),
+        ))
+    }
+
+    /// Drop Trust Task claims whose `retain_until` is at or before `now`.
+    /// Returns how many were removed. Backends with native key expiry (Redis)
+    /// keep the default no-op.
+    async fn sweep_expired_trust_task_claims(&self, now: u64) -> Result<usize, MediatorError> {
+        let _ = now;
+        Ok(0)
+    }
 
     // ─── Stats / counters ───────────────────────────────────────────────────
 

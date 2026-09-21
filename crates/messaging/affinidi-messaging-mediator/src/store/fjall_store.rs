@@ -29,6 +29,8 @@
 //!   2=RootAdmin, 3=Mediator)
 //! - `oob_invites`        — `oob_id` → JSON `{ invite_b64, did_hash,
 //!   expires_at }`
+//! - `trust_task_claims`  — claim key → JSON `{ digest, retain_until }`; the
+//!   Trust Task duplicate-execution record, swept once `retain_until` passes
 //! - `forward_queue`      — `stream_id` → JSON-serialised
 //!   [`ForwardQueueEntry`]
 //! - `forward_pending`    — `{group}:{stream_id}` → claim metadata
@@ -60,7 +62,7 @@ use affinidi_messaging_mediator_common::{
         DeletionAuthority, DeliveryDecision, DeliveryMarkReport, DeliveryState, ExpiryReport,
         ForwardQueueEntry, InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats,
         POISON_ATTEMPTS, PubSubRecord, Session, SessionState, SessionSweepReport, StatCounter,
-        StoreHealth, StreamingClientState, ops,
+        StoreHealth, StreamingClientState, TrustTaskClaim, ops,
     },
     types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
@@ -184,6 +186,7 @@ const PARTITION_ACCESS_LISTS: &str = "access_lists";
 const PARTITION_ADMINS: &str = "admins";
 const PARTITION_V1_ROUTING_KEYS: &str = "v1_routing_keys";
 const PARTITION_OOB_INVITES: &str = "oob_invites";
+const PARTITION_TRUST_TASK_CLAIMS: &str = "trust_task_claims";
 const PARTITION_FORWARD_QUEUE: &str = "forward_queue";
 const PARTITION_FORWARD_PENDING: &str = "forward_pending";
 const PARTITION_GLOBALS: &str = "globals";
@@ -224,6 +227,7 @@ pub struct FjallStore {
     /// `MediatorStore::v1_routing_key_bind`.
     v1_routing_keys: Keyspace,
     oob_invites: Keyspace,
+    trust_task_claims: Keyspace,
     forward_queue: Keyspace,
     forward_pending: Keyspace,
     globals: Keyspace,
@@ -440,6 +444,14 @@ struct StoredSession {
     expires_at_unix: u64,
 }
 
+/// Persisted Trust Task claim.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct StoredTrustTaskClaim {
+    digest: String,
+    /// Unix seconds after which the claim is treated as absent.
+    retain_until: u64,
+}
+
 /// Persisted OOB invitation record.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct StoredOobInvite {
@@ -639,6 +651,7 @@ impl FjallStore {
             admins: open_partition(PARTITION_ADMINS)?,
             v1_routing_keys: open_partition(PARTITION_V1_ROUTING_KEYS)?,
             oob_invites: open_partition(PARTITION_OOB_INVITES)?,
+            trust_task_claims: open_partition(PARTITION_TRUST_TASK_CLAIMS)?,
             forward_queue,
             forward_pending: open_partition(PARTITION_FORWARD_PENDING)?,
             globals: open_partition(PARTITION_GLOBALS)?,
@@ -2515,6 +2528,71 @@ impl MediatorStore for FjallStore {
     }
 
     // ─── OOB Discovery invitations ──────────────────────────────────────────
+
+    async fn trust_task_claim(
+        &self,
+        key: &str,
+        digest: &str,
+        retain_until: u64,
+        now: u64,
+    ) -> Result<TrustTaskClaim, MediatorError> {
+        // Check-and-record under the write lock, so two concurrent arrivals
+        // of one document cannot both read "absent".
+        let _guard = self.write_lock.lock().await;
+        if let Some(raw) = self
+            .trust_task_claims
+            .get(key.as_bytes())
+            .map_err(|e| Self::db_err("trust_task_claim:get", e))?
+        {
+            let stored: StoredTrustTaskClaim = Self::decode(&raw)?;
+            if stored.retain_until > now {
+                return Ok(if stored.digest == digest {
+                    TrustTaskClaim::Duplicate
+                } else {
+                    TrustTaskClaim::Conflict
+                });
+            }
+        }
+        let stored = StoredTrustTaskClaim {
+            digest: digest.to_string(),
+            retain_until,
+        };
+        self.trust_task_claims
+            .insert(key.as_bytes(), Self::encode(&stored)?)
+            .map_err(|e| Self::db_err("trust_task_claim:insert", e))?;
+        Ok(TrustTaskClaim::Fresh)
+    }
+
+    async fn sweep_expired_trust_task_claims(&self, now: u64) -> Result<usize, MediatorError> {
+        let mut expired: Vec<Vec<u8>> = Vec::new();
+        for guard in self.trust_task_claims.iter() {
+            let (key, value) = guard
+                .into_inner()
+                .map_err(|e| Self::db_err("sweep_expired_trust_task_claims:iter", e))?;
+            let stored: StoredTrustTaskClaim = Self::decode(&value)?;
+            if stored.retain_until <= now {
+                expired.push(key.as_ref().to_vec());
+            }
+        }
+        // Under the lock, re-check each before removing: a claim re-recorded
+        // since the scan (same key, new window) must survive.
+        let _guard = self.write_lock.lock().await;
+        let mut removed = 0;
+        for key in expired {
+            if let Some(raw) = self
+                .trust_task_claims
+                .get(&key)
+                .map_err(|e| Self::db_err("sweep_expired_trust_task_claims:get", e))?
+                && Self::decode::<StoredTrustTaskClaim>(&raw)?.retain_until <= now
+            {
+                self.trust_task_claims
+                    .remove(&key)
+                    .map_err(|e| Self::db_err("sweep_expired_trust_task_claims:remove", e))?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
 
     async fn oob_discovery_store(
         &self,

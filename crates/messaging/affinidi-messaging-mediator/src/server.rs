@@ -541,6 +541,12 @@ pub async fn serve_internal(
                             warn!("Session expiry sweep error: {err}");
                         }
                     }
+                    // The Trust Task duplicate-execution record lives a few
+                    // minutes per entry; drop lapsed ones on the same cadence.
+                    // A no-op on Redis, which expires the keys itself.
+                    if let Err(err) = store.sweep_expired_trust_task_claims(now_secs).await {
+                        warn!("Trust Task claim sweep error: {err}");
+                    }
                 }
             }
         });

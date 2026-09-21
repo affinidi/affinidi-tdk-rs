@@ -30,7 +30,7 @@ use affinidi_messaging_mediator_common::{
         DeletionAuthority, DeliveryDecision, DeliveryMarkReport, DeliveryState, ExpiryReport,
         ForwardQueueEntry, InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats,
         POISON_ATTEMPTS, PubSubRecord, Session, SessionSweepReport, StatCounter, StoreHealth,
-        StreamingClientState, ops,
+        StreamingClientState, TrustTaskClaim, ops,
     },
     types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
@@ -231,6 +231,10 @@ struct MemoryState {
 
     // ─── OOB invitations ────────────────────────────────────────────
     oob_invites: HashMap<String, OobInvite>,
+
+    // ─── Trust Task duplicate-execution record ──────────────────────
+    /// key → (digest, retain_until unix secs).
+    trust_task_claims: HashMap<String, (String, u64)>,
 
     // ─── Forward queue ──────────────────────────────────────────────
     forward_queue: BTreeMap<StreamId, ForwardQueueEntry>,
@@ -1470,6 +1474,37 @@ impl MediatorStore for MemoryStore {
     }
 
     // ─── OOB Discovery invitations ──────────────────────────────────────────
+
+    async fn trust_task_claim(
+        &self,
+        key: &str,
+        digest: &str,
+        retain_until: u64,
+        now: u64,
+    ) -> Result<TrustTaskClaim, MediatorError> {
+        let mut state = self.state.lock().await;
+        match state.trust_task_claims.get(key) {
+            Some((recorded, until)) if *until > now => Ok(if recorded == digest {
+                TrustTaskClaim::Duplicate
+            } else {
+                TrustTaskClaim::Conflict
+            }),
+            // Absent, or lapsed: this is a first sight.
+            _ => {
+                state
+                    .trust_task_claims
+                    .insert(key.to_string(), (digest.to_string(), retain_until));
+                Ok(TrustTaskClaim::Fresh)
+            }
+        }
+    }
+
+    async fn sweep_expired_trust_task_claims(&self, now: u64) -> Result<usize, MediatorError> {
+        let mut state = self.state.lock().await;
+        let before = state.trust_task_claims.len();
+        state.trust_task_claims.retain(|_, (_, until)| *until > now);
+        Ok(before - state.trust_task_claims.len())
+    }
 
     async fn oob_discovery_store(
         &self,
