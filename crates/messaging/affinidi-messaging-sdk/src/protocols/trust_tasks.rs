@@ -509,6 +509,86 @@ impl TrustTasksOps<'_> {
         Ok(response.payload)
     }
 
+    /// Send a `messaging/message/delete` Trust Task: remove up to 100 stored
+    /// messages from an account's queues. `did_hash = None` is the caller's own
+    /// account; another account needs admin rights, and a privileged account
+    /// (admin, rootAdmin, mediator) a rootAdmin. The response reports each id
+    /// in request order — an id not in that account's queues is `notFound`,
+    /// never a whole-call failure, and never reported deleted unless it was.
+    pub async fn message_delete(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<String>,
+        msg_ids: &[String],
+    ) -> Result<message::delete::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let did = did_hash
+            .map(|d| message::delete::v0_1::Vid::from_str(&d))
+            .transpose()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
+        let ids = msg_ids
+            .iter()
+            .map(|id| message::delete::v0_1::PayloadMsgIdsItem::from_str(id))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid message id: {e}")))?;
+
+        let p: message::delete::v0_1::Payload = payload(
+            message::delete::v0_1::Payload::builder()
+                .did(did)
+                .msg_ids(ids),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<message::delete::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
+    /// Send a `messaging/queue/purge` Trust Task: remove every message in one
+    /// account queue — optionally only those exchanged with `peer` or older
+    /// than `older_than_seconds`. With `dry_run = true` nothing is removed and
+    /// `matched` says what would be; interactive tools should dry-run first
+    /// and confirm the count. Undelivered messages are gone, not returned.
+    ///
+    /// `did_hash = None` is the caller's own account; another needs admin
+    /// rights, and a privileged account a rootAdmin. The mediator audits every
+    /// real purge.
+    pub async fn queue_purge(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<String>,
+        queue: queue::purge::v0_1::Queue,
+        peer: Option<String>,
+        older_than_seconds: Option<u64>,
+        dry_run: bool,
+    ) -> Result<queue::purge::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let vid = |v: String| {
+            queue::purge::v0_1::Vid::from_str(&v)
+                .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))
+        };
+        let did = did_hash.map(vid).transpose()?;
+        let peer = peer.map(vid).transpose()?;
+
+        let p: queue::purge::v0_1::Payload = payload(
+            queue::purge::v0_1::Payload::builder()
+                .did(did)
+                .queue(queue)
+                .peer(peer)
+                .older_than_seconds(older_than_seconds)
+                .dry_run(Some(dry_run)),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<queue::purge::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
     /// Send a `messaging/queue/status` Trust Task and return one account's two
     /// queues, live: depth, bytes, effective limit, saturation and the age of
     /// the oldest message. `did_hash` names the account; `None` is the caller's

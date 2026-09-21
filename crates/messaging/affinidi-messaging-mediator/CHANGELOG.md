@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased (0.28.19) — `messaging/message/delete` and `messaging/queue/purge`
+
+The two destructive mediator-operations Trust Tasks:
+
+- **`message/delete`** — up to 100 message ids from one account's queues, each
+  reported in request order. An id not in that account's queues is a per-item
+  `notFound` (indistinguishable from a missing one), never a whole-task failure,
+  and nothing is reported deleted that the store did not remove.
+- **`queue/purge`** — one account queue, optionally only one counterparty's
+  messages or those older than an age, with `dryRun` to count first. Built on
+  the same `purge_folder_filtered` as REST `/purge`. What the spec's response has
+  no member for — messages examined, matched-but-not-removed, and whether the
+  walk hit its scan ceiling — is under `ext["com.affinidi.mediator"]`, so a
+  partial purge is never reported as complete.
+
+The account's own queues need `local`, as the REST routes do. Another account's
+need admin standing, and an admin, rootAdmin or mediator account's queue needs a
+**rootAdmin** (`…:rootAdminRequired`) — an admin cannot wipe another admin's
+mailbox. Deleting another account's messages is audited (`messageDelete`), and
+every real purge is audited (`queuePurge`), including one that removed nothing.
+REST `/purge` still cannot touch another account's queue; the admin gate on the
+Trust Task is what makes the cross-account form safe.
+
 ## Unreleased (0.28.18) — `messaging/message/list` and `messaging/message/get`
 
 - **`message/list`** — stored-message metadata for one queue, oldest first,

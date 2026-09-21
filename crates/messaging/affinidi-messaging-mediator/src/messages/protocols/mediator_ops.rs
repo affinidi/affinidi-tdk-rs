@@ -11,7 +11,8 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_mediator_common::store::types::DeliveryState;
+use affinidi_messaging_mediator_common::store::types::{DeletionAuthority, DeliveryState};
+use affinidi_messaging_mediator_common::store::{PurgeFilter, PurgeReport};
 use affinidi_messaging_mediator_common::types::accounts::AccountType;
 use affinidi_messaging_mediator_common::types::audit::AuditAction;
 use affinidi_messaging_mediator_common::types::messages::{Folder, MessageProtocol};
@@ -656,6 +657,270 @@ pub(crate) async fn consume_message_get(
         from_json(json!({ "meta": meta, "message": body }))?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
+}
+
+/// Refuse a destructive operation on a privileged account's queue unless the
+/// requester is a rootAdmin. An account acting on its own queue is exempt: the
+/// guard protects administrators' queues from *other* administrators.
+fn guard_privileged_target(
+    target: &str,
+    target_type: AccountType,
+    session: &Session,
+    code: &str,
+) -> Result<(), MediatorError> {
+    let privileged = matches!(
+        target_type,
+        AccountType::Admin | AccountType::RootAdmin | AccountType::Mediator
+    );
+    if privileged && target != session.did_hash && session.account_type != AccountType::RootAdmin {
+        return Err(tt_problem(
+            session,
+            code,
+            format!("acting on the queues of privileged account {target} requires a rootAdmin"),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+    Ok(())
+}
+
+/// Handle `messaging/message/delete`: remove up to 100 stored messages from
+/// one account's queues, reporting each id's outcome in request order.
+///
+/// Self (with `local`) or admin; an admin, admin/rootAdmin or mediator account
+/// needs a rootAdmin. An id not in the target account's queues is a per-item
+/// `notFound` — never a whole-task failure, and never reported deleted unless
+/// the store removed it. Deleting another account's messages is audited.
+pub(crate) async fn consume_message_delete(
+    typed: TrustTask<message::delete::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: DateTime<Utc>,
+) -> Result<Value, MediatorError> {
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    let payload = &typed.payload;
+    let target = message_target(
+        payload.did.as_ref().map(|d| d.to_string()),
+        state,
+        session,
+        sender_kid,
+    )?;
+    let Some(account) = state.database.account_get(&target).await? else {
+        return Err(tt_problem(
+            session,
+            "messaging/message/delete:unknownAccount",
+            format!("account {target} not found"),
+            StatusCode::NOT_FOUND,
+        ));
+    };
+    guard_privileged_target(
+        &target,
+        account._type,
+        session,
+        "messaging/message/delete:rootAdminRequired",
+    )?;
+
+    let own = target == session.did_hash;
+    let authority = if own {
+        DeletionAuthority::Owner {
+            did_hash: target.clone(),
+        }
+    } else {
+        DeletionAuthority::Admin {
+            admin_did_hash: session.did_hash.clone(),
+        }
+    };
+
+    let mut results = Vec::with_capacity(payload.msg_ids.len());
+    let mut deleted_ids = Vec::new();
+    for id in &payload.msg_ids {
+        let id = id.to_string();
+        // Only messages the target account sends or receives are in scope;
+        // `get_message` answers `None` for anything else.
+        if state.database.get_message(&target, &id).await?.is_none() {
+            results.push(json!({ "msgId": id, "deleted": false, "reason": "notFound" }));
+            continue;
+        }
+        match state.database.delete_message(&id, authority.clone()).await {
+            Ok(()) => {
+                results.push(json!({ "msgId": id, "deleted": true }));
+                deleted_ids.push(id);
+            }
+            // Gone between the lookup and the delete (a concurrent pickup or
+            // expiry): not deleted by us, so not reported as deleted.
+            Err(e) if is_not_found(&e) => {
+                results.push(json!({ "msgId": id, "deleted": false, "reason": "notFound" }));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    if !own && !deleted_ids.is_empty() {
+        record_audit(
+            state,
+            session,
+            &target,
+            AuditAction::MessageDelete,
+            format!(
+                "deleted {} message(s): {}",
+                deleted_ids.len(),
+                abbreviate(&deleted_ids)
+            ),
+        )
+        .await;
+    }
+
+    let response: message::delete::v0_1::Response = from_json(json!({ "results": results }))?;
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/queue/purge`: remove every message in one account queue,
+/// optionally only those exchanged with one counterparty or older than an
+/// age — or, with `dryRun`, report what would go and remove nothing.
+///
+/// Self (with `local`) or admin; a privileged account's queue needs a
+/// rootAdmin. Undelivered messages are gone, not returned to their senders.
+/// Every real purge is audited, including one that removed nothing. What the
+/// spec's response has no member for — messages examined, messages that
+/// matched but could not be removed, and whether the walk hit its scan
+/// ceiling — is reported under `ext["com.affinidi.mediator"]` rather than
+/// dropped: a recovery tool must not imply a queue is emptier than it is.
+pub(crate) async fn consume_queue_purge(
+    typed: TrustTask<queue::purge::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: DateTime<Utc>,
+) -> Result<Value, MediatorError> {
+    use queue::purge::v0_1::Queue;
+
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    let payload = &typed.payload;
+    let target = message_target(
+        payload.did.as_ref().map(|d| d.to_string()),
+        state,
+        session,
+        sender_kid,
+    )?;
+    let Some(account) = state.database.account_get(&target).await? else {
+        return Err(tt_problem(
+            session,
+            "messaging/queue/purge:unknownAccount",
+            format!("account {target} not found"),
+            StatusCode::NOT_FOUND,
+        ));
+    };
+    guard_privileged_target(
+        &target,
+        account._type,
+        session,
+        "messaging/queue/purge:rootAdminRequired",
+    )?;
+
+    let folder = if matches!(payload.queue, Queue::Send) {
+        Folder::Outbox
+    } else {
+        Folder::Inbox
+    };
+    let dry_run = payload.dry_run.unwrap_or(false);
+    let peer = payload.peer.as_ref().map(|p| p.to_string());
+    let older_than = payload.older_than_seconds;
+
+    let report = if peer.is_some() || older_than.is_some() || dry_run {
+        let filter = PurgeFilter {
+            peer: peer.clone(),
+            arrived_before_ms: older_than.map(|secs| {
+                state
+                    .clock
+                    .unix_millis()
+                    .saturating_sub(u128::from(secs) * 1_000) as u64
+            }),
+            dry_run,
+        };
+        state
+            .database
+            .purge_folder_filtered(&target, folder.clone(), &filter)
+            .await?
+    } else {
+        let (count, bytes) = state
+            .database
+            .purge_folder(&session.session_id, &target, folder.clone())
+            .await?;
+        PurgeReport {
+            count,
+            bytes,
+            scanned: count,
+            failed: 0,
+            truncated: false,
+        }
+    };
+
+    let queue_name = if matches!(folder, Folder::Outbox) {
+        "send"
+    } else {
+        "receive"
+    };
+    if !dry_run {
+        record_audit(
+            state,
+            session,
+            &target,
+            AuditAction::QueuePurge,
+            format!(
+                "purged {} message(s), {} bytes from the {queue_name} queue (peer: {}, older than: {}s){}",
+                report.count,
+                report.bytes,
+                peer.as_deref().unwrap_or("any"),
+                older_than.map_or_else(|| "any".to_string(), |s| s.to_string()),
+                if report.failed > 0 || report.truncated {
+                    format!("; {} failed, truncated: {}", report.failed, report.truncated)
+                } else {
+                    String::new()
+                },
+            ),
+        )
+        .await;
+    }
+
+    let response: queue::purge::v0_1::Response = from_json(json!({
+        "matched": report.count + report.failed,
+        "matchedBytes": report.bytes,
+        "purged": if dry_run { 0 } else { report.count },
+        "dryRun": dry_run,
+        "ext": {
+            "com.affinidi.mediator": {
+                "scanned": report.scanned,
+                "failed": report.failed,
+                "truncated": report.truncated,
+            }
+        },
+    }))?;
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Whether a store error means "no such message". The backends report it as
+/// an internal error with code 404 and a `NOT_FOUND` marker.
+fn is_not_found(e: &MediatorError) -> bool {
+    matches!(e, MediatorError::InternalError(404, ..)) || e.to_string().contains("NOT_FOUND")
+}
+
+/// The first few ids for an audit line, with a count of the rest.
+fn abbreviate(ids: &[String]) -> String {
+    const SHOWN: usize = 5;
+    let head = ids
+        .iter()
+        .take(SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    match ids.len().saturating_sub(SHOWN) {
+        0 => head,
+        more => format!("{head} and {more} more"),
+    }
 }
 
 /// Set `deliveryState` / `deliveredAt` on a `MessageMeta` from the store's

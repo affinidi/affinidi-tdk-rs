@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### 0.26.17 — `message_delete` and `queue_purge`
+
+`trust_tasks().message_delete(profile, did_hash, msg_ids)` and
+`trust_tasks().queue_purge(profile, did_hash, queue, peer, older_than_seconds, dry_run)`
+— the `messaging/message/delete` and `messaging/queue/purge` Trust Tasks. Dry-run
+a purge and confirm the count before running it for real.
+
 ### 0.26.16 — `message_list` and `message_get`
 
 `trust_tasks().message_list(profile, did_hash, queue, peer, cursor, limit)` and
