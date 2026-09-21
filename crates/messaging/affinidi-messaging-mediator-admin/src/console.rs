@@ -477,8 +477,16 @@ async fn discover_mediator(atm: &ATM, did: &str) -> Result<String> {
         .iter()
         .filter(|s| s.type_.iter().any(|t| t == "DIDCommMessaging"))
         .flat_map(|s| s.service_endpoint.get_uris())
-        .find(|uri| uri.starts_with("did:"))
+        .find_map(|uri| mediator_did_in(&uri))
         .ok_or_else(|| ConsoleError::NoMediator(did.to_string()))
+}
+
+/// The mediator DID a `DIDCommMessaging` endpoint URI names, if it names one
+/// (rather than a URL). `affinidi-did-common` before 0.4.3 returns a map-form
+/// endpoint's `uri` JSON-quoted, so the quotes are stripped first.
+fn mediator_did_in(uri: &str) -> Option<String> {
+    let uri = uri.trim_matches('"');
+    uri.starts_with("did:").then(|| uri.to_string())
 }
 
 #[cfg(test)]
@@ -492,6 +500,14 @@ mod tests {
             "acl": acl,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn a_mediator_did_is_found_quoted_or_not_and_a_url_is_not_one() {
+        let did = "did:webvh:Qm:example.com:mediator";
+        assert_eq!(mediator_did_in(did).as_deref(), Some(did));
+        assert_eq!(mediator_did_in(&format!("\"{did}\"")).as_deref(), Some(did));
+        assert_eq!(mediator_did_in("https://mediator.example.com/"), None);
     }
 
     #[test]
