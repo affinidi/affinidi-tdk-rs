@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.28.12) — one list declares every served trust task
+
+Internal refactor, no behaviour change. The trust-task dispatch in `consume()`
+and the `served_type_uris()` array the TSP arm reads had to be edited in step;
+a type dispatched but not listed was filed into the mediator's inbox when it
+arrived over TSP, and its caller timed out with nothing logged. A
+`served_tasks!` macro now declares each served type once and generates a
+`ServedTask` enum that `consume()` matches exhaustively — a registered type
+without a handler no longer compiles — and that `parse_if_served` reads. The
+same eleven types are served, with the same handlers and the same
+`protocol.trust_task.unsupported` report for anything else.
+
 ## Unreleased (0.28.11) — a path in the config file means "relative to the config file"
 
 `functions_file`, `ssl_certificate_file` and `ssl_key_file` now resolve against

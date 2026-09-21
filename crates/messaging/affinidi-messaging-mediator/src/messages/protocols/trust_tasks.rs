@@ -186,83 +186,10 @@ pub(crate) async fn consume(
     let sender_did = vid_of(&sender_kid);
     let now = chrono::DateTime::from_timestamp(now_secs as i64, 0).unwrap_or_else(chrono::Utc::now);
 
-    // Route by task type across the ping / account / acl / access-list families.
+    // Route by task type. The match is exhaustive over `ServedTask`, so a type
+    // registered in `served_tasks!` without a handler here fails to compile.
     let sk = Some(sender_kid.clone());
-    let response_value: Value = if doc.type_uri == type_uri_of::<ping::v0_1::Payload>() {
-        match consume_ping(downcast(&doc, session)?, &mediator_did, &sender_did, now).await? {
-            Some(value) => value,
-            // identity_mismatch with no transport sender → emit nothing.
-            None => return Ok(None),
-        }
-    } else if doc.type_uri == type_uri_of::<account::get::v0_1::Payload>() {
-        consume_account_get(
-            downcast(&doc, session)?,
-            state,
-            session,
-            &Some(sender_kid.clone()),
-            &mediator_did,
-            now,
-        )
-        .await?
-    } else if doc.type_uri == type_uri_of::<account::list::v0_1::Payload>() {
-        consume_account_list(downcast(&doc, session)?, state, session, &mediator_did, now).await?
-    } else if doc.type_uri == type_uri_of::<account::update::v0_1::Payload>() {
-        consume_account_update(
-            downcast(&doc, session)?,
-            state,
-            session,
-            &sk,
-            &mediator_did,
-            now,
-        )
-        .await?
-    } else if doc.type_uri == type_uri_of::<account::remove::v0_1::Payload>() {
-        consume_account_remove(
-            downcast(&doc, session)?,
-            state,
-            session,
-            &Some(sender_kid.clone()),
-            &mediator_did,
-            now,
-        )
-        .await?
-    } else if doc.type_uri == type_uri_of::<account::add::v0_1::Payload>() {
-        consume_account_add(downcast(&doc, session)?, state, session, &mediator_did, now).await?
-    } else if doc.type_uri == type_uri_of::<acl::get::v0_1::Payload>() {
-        consume_acl_get(
-            downcast(&doc, session)?,
-            state,
-            session,
-            &Some(sender_kid.clone()),
-            &mediator_did,
-            now,
-        )
-        .await?
-    } else if doc.type_uri == type_uri_of::<access_list::update::v0_1::Payload>() {
-        consume_access_list_update(
-            downcast(&doc, session)?,
-            state,
-            session,
-            &sk,
-            &mediator_did,
-            now,
-        )
-        .await?
-    } else if doc.type_uri == type_uri_of::<access_list::list::v0_1::Payload>() {
-        consume_access_list_list(
-            downcast(&doc, session)?,
-            state,
-            session,
-            &sk,
-            &mediator_did,
-            now,
-        )
-        .await?
-    } else if doc.type_uri == type_uri_of::<audit::list::v0_1::Payload>() {
-        consume_audit_list(downcast(&doc, session)?, state, session, &mediator_did, now).await?
-    } else if doc.type_uri == type_uri_of::<config::show::v0_1::Payload>() {
-        consume_config_show(downcast(&doc, session)?, state, session, &mediator_did, now).await?
-    } else {
+    let Some(task) = ServedTask::from_type_uri(&doc.type_uri) else {
         return Err(tt_problem(
             session,
             "protocol.trust_task.unsupported",
@@ -270,33 +197,151 @@ pub(crate) async fn consume(
             StatusCode::NOT_IMPLEMENTED,
         ));
     };
+    let response_value: Value = match task {
+        ServedTask::Ping => {
+            match consume_ping(downcast(&doc, session)?, &mediator_did, &sender_did, now).await? {
+                Some(value) => value,
+                // identity_mismatch with no transport sender → emit nothing.
+                None => return Ok(None),
+            }
+        }
+        ServedTask::AccountGet => {
+            consume_account_get(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &sk,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
+        ServedTask::AccountList => {
+            consume_account_list(downcast(&doc, session)?, state, session, &mediator_did, now)
+                .await?
+        }
+        ServedTask::AccountUpdate => {
+            consume_account_update(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &sk,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
+        ServedTask::AccountRemove => {
+            consume_account_remove(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &sk,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
+        ServedTask::AccountAdd => {
+            consume_account_add(downcast(&doc, session)?, state, session, &mediator_did, now)
+                .await?
+        }
+        ServedTask::AclGet => {
+            consume_acl_get(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &sk,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
+        ServedTask::AccessListUpdate => {
+            consume_access_list_update(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &sk,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
+        ServedTask::AccessListList => {
+            consume_access_list_list(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &sk,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
+        ServedTask::AuditList => {
+            consume_audit_list(downcast(&doc, session)?, state, session, &mediator_did, now).await?
+        }
+        ServedTask::ConfigShow => {
+            consume_config_show(downcast(&doc, session)?, state, session, &mediator_did, now)
+                .await?
+        }
+    };
 
     Ok(Some(response_value))
 }
 
-/// Every Trust Task type this mediator serves.
+/// Declares every Trust Task type this mediator serves — the **single list**.
 ///
-/// `tsp`-gated with [`parse_if_served`]: the DIDComm binding carries an envelope
-/// type URI, so it never needs to recognise a request by its payload. Only the
-/// TSP arm does. The dispatch in [`consume`]
-/// must stay in step with it — [`parse_if_served`] uses it to decide whether an
-/// untagged payload is a management request, and a type missing here would be
-/// filed into the mediator's inbox instead of answered.
-#[cfg(feature = "tsp")]
-fn served_type_uris() -> [TypeUri; 11] {
-    [
-        type_uri_of::<ping::v0_1::Payload>(),
-        type_uri_of::<account::get::v0_1::Payload>(),
-        type_uri_of::<account::list::v0_1::Payload>(),
-        type_uri_of::<account::update::v0_1::Payload>(),
-        type_uri_of::<account::remove::v0_1::Payload>(),
-        type_uri_of::<account::add::v0_1::Payload>(),
-        type_uri_of::<acl::get::v0_1::Payload>(),
-        type_uri_of::<access_list::update::v0_1::Payload>(),
-        type_uri_of::<access_list::list::v0_1::Payload>(),
-        type_uri_of::<audit::list::v0_1::Payload>(),
-        type_uri_of::<config::show::v0_1::Payload>(),
-    ]
+/// It generates [`ServedTask`], whose variants [`consume`] matches exhaustively,
+/// and [`ServedTask::ALL`], which [`parse_if_served`] (the TSP arm) and discovery
+/// read. Before this, the dispatch chain and a hand-kept `served_type_uris()`
+/// array had to be edited in step; a type added to the dispatch but not the
+/// array was silently filed into the mediator's inbox when it arrived over TSP.
+/// Now a new type is one line here, and the compiler refuses to build until
+/// [`consume`] has an arm for it.
+macro_rules! served_tasks {
+    ($($variant:ident => $payload:ty),+ $(,)?) => {
+        /// A Trust Task type this mediator serves. See [`served_tasks!`].
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub(crate) enum ServedTask {
+            $($variant),+
+        }
+
+        impl ServedTask {
+            /// Every served type, in declaration order.
+            pub(crate) const ALL: &'static [ServedTask] = &[$(ServedTask::$variant),+];
+
+            /// The canonical request type URI of this task.
+            pub(crate) fn type_uri(self) -> TypeUri {
+                match self {
+                    $(ServedTask::$variant => type_uri_of::<$payload>()),+
+                }
+            }
+        }
+    };
+}
+
+served_tasks! {
+    Ping => ping::v0_1::Payload,
+    AccountGet => account::get::v0_1::Payload,
+    AccountList => account::list::v0_1::Payload,
+    AccountUpdate => account::update::v0_1::Payload,
+    AccountRemove => account::remove::v0_1::Payload,
+    AccountAdd => account::add::v0_1::Payload,
+    AclGet => acl::get::v0_1::Payload,
+    AccessListUpdate => access_list::update::v0_1::Payload,
+    AccessListList => access_list::list::v0_1::Payload,
+    AuditList => audit::list::v0_1::Payload,
+    ConfigShow => config::show::v0_1::Payload,
+}
+
+impl ServedTask {
+    /// The served task a document's `type` names, if any. Only an exact match
+    /// on a request type URI is served — a `#response` or a retired URI is not.
+    pub(crate) fn from_type_uri(uri: &TypeUri) -> Option<Self> {
+        Self::ALL.iter().copied().find(|t| t.type_uri() == *uri)
+    }
 }
 
 /// Parse `payload` as a Trust Task document, but only claim it when this
@@ -308,11 +353,11 @@ fn served_type_uris() -> [TypeUri; 11] {
 /// shape is *not* claimed, so it still reaches the mediator's inbox. The cost of
 /// being wrong runs one way only: a served type mis-parsed as mail would be
 /// silently filed, so the type check is the thing that must not drift, which is
-/// why [`served_type_uris`] is a single list next to the dispatch that uses it.
+/// why it reads [`ServedTask`] — the same list the dispatch matches on.
 #[cfg(feature = "tsp")]
 pub(crate) fn parse_if_served(payload: &[u8]) -> Option<TrustTask<Value>> {
     let doc: TrustTask<Value> = serde_json::from_slice(payload).ok()?;
-    served_type_uris().contains(&doc.type_uri).then_some(doc)
+    ServedTask::from_type_uri(&doc.type_uri).map(|_| doc)
 }
 
 /// The canonical request type URI of a generated payload `P`.
@@ -1942,70 +1987,33 @@ mod tsp_dispatch_tests {
     }
 
     #[test]
-    fn the_served_list_matches_what_consume_dispatches() {
-        // `served_type_uris` decides what the TSP arm *claims*; the if/else
-        // chain in `consume` decides what it *answers*. Drift either way is
-        // silent and expensive:
-        //
-        //   * dispatched but not served → over TSP the request is filed into
-        //     the mediator's inbox instead of answered, and the caller waits out
-        //     its timeout with no error logged anywhere;
-        //   * served but not dispatched → the arm claims the message, then
-        //     `consume` refuses it as unsupported, so a message that would have
-        //     been delivered is now an error.
-        //
-        // Neither is reachable from a runtime assertion: the dispatch is an
-        // if/else chain, not a table, so nothing enumerates it. Read the source
-        // instead — the same technique the chain itself would need to be
-        // rewritten to avoid.
-        const SRC: &str = include_str!("trust_tasks.rs");
-
-        let consume_body = {
-            let start = SRC
-                .find("pub(crate) async fn consume(")
-                .expect("`consume` must exist");
-            let rest = &SRC[start..];
-            &rest[..rest.find("\n}\n").expect("`consume` must terminate")]
-        };
-        let served_body = {
-            let start = SRC
-                .find("fn served_type_uris()")
-                .expect("`served_type_uris` must exist");
-            let rest = &SRC[start..];
-            &rest[..rest
-                .find("\n}\n")
-                .expect("`served_type_uris` must terminate")]
-        };
-
-        // Every `type_uri_of::<X>()` mentioned, by its turbofish payload path.
-        fn payload_paths(body: &str) -> std::collections::BTreeSet<&str> {
-            body.match_indices("type_uri_of::<")
-                .filter_map(|(i, m)| {
-                    let rest = &body[i + m.len()..];
-                    rest.find(">()").map(|end| rest[..end].trim())
-                })
-                .collect()
+    fn every_served_task_is_claimed_by_its_own_type_uri() {
+        // `consume` matches `ServedTask` exhaustively, so "dispatched but not
+        // served" and "served but not dispatched" no longer compile. What is
+        // left to check is the lookup itself: each registered type must map
+        // back to itself — two variants sharing a payload type would make one
+        // of them unreachable — and must be claimed by the TSP arm.
+        let mut seen = std::collections::HashSet::new();
+        for &task in ServedTask::ALL {
+            let uri = task.type_uri();
+            assert!(
+                seen.insert(uri.to_string()),
+                "{task:?} duplicates a type URI"
+            );
+            assert_eq!(ServedTask::from_type_uri(&uri), Some(task));
+            assert!(
+                parse_if_served(&doc_json(&uri.to_string())).is_some(),
+                "{task:?} is served but the TSP arm would file it as mail"
+            );
         }
+    }
 
-        let dispatched = payload_paths(consume_body);
-        let served = payload_paths(served_body);
-
-        assert!(
-            !dispatched.is_empty(),
-            "failed to read the dispatch chain — did `consume` change shape?"
-        );
-        let missing: Vec<_> = dispatched.difference(&served).collect();
-        assert!(
-            missing.is_empty(),
-            "dispatched by `consume` but absent from `served_type_uris`, so the TSP arm \
-             will file these as mail and the caller will time out: {missing:?}"
-        );
-        let extra: Vec<_> = served.difference(&dispatched).collect();
-        assert!(
-            extra.is_empty(),
-            "listed in `served_type_uris` but not dispatched by `consume`, so the TSP arm \
-             will claim these and then refuse them as unsupported: {extra:?}"
-        );
+    #[test]
+    fn a_response_type_is_not_served() {
+        // Only requests are dispatched. A `#response` addressed to the mediator
+        // is a reply to something it sent, never a management request.
+        let uri = format!("{}#response", ServedTask::AccountGet.type_uri());
+        assert!(parse_if_served(&doc_json(&uri)).is_none());
     }
 
     #[test]
