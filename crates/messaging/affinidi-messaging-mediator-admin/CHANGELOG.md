@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased (0.1.1) — finding the mediator in a map-form service
+
+`MediatorConsole::connect` now finds the mediator in a `DIDCommMessaging`
+service written in the map or array form
+(`[{ "uri": "did:…", "accept": [...] }]`), which is how VTA-managed DIDs
+publish it. `affinidi-did-common` 0.4.2 (the version on crates.io) returns
+that `uri` JSON-quoted, so the mediator DID was missed and `connect` failed
+with `no mediator for …`. `affinidi-did-common` 0.4.3 fixes this at the source,
+and the console now also accepts the quoted form, so it works whichever of
+the two a build resolves.
+
 ## Unreleased (0.1.0) — first release
 
 The headless engine behind the mediator console:

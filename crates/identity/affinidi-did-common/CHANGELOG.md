@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased (0.4.3) — a service endpoint's URI is a URI
+
+`Endpoint::get_uri` and `get_uris` return the `uri` member's **value** for the
+map and array forms of `serviceEndpoint`, as they already did for the plain
+URL form. Before, those forms returned its JSON encoding, quotes included
+(`"\"did:example:mediator\""`). A caller that checked the result (a
+`starts_with("did:")` to tell a mediator DID from a URL, say) silently found
+nothing. A non-string `uri` is now skipped rather than returned as JSON text.
+
+The fix was merged in #785 but never released: that change left the version
+at 0.4.2, which was already published, so crates.io kept serving the old
+code. Callers that stripped the quotes themselves are unaffected, because
+trimming an unquoted string changes nothing.
+
 ## Unreleased (0.4.2) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
