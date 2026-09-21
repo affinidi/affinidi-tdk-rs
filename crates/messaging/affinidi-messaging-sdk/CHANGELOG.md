@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 0.26.16 — `message_list` and `message_get`
+
+`trust_tasks().message_list(profile, did_hash, queue, peer, cursor, limit)` and
+`trust_tasks().message_get(profile, did_hash, msg_id)` — the
+`messaging/message/list` and `messaging/message/get` Trust Tasks. `message_get`
+returns the stored envelope still encrypted; a caller holding the recipient's
+key can unpack it locally.
+
 ### 0.26.15 — `queue_status`
 
 `trust_tasks().queue_status(profile, did_hash, include_peers)` — the

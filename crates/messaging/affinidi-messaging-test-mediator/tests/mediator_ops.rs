@@ -227,3 +227,144 @@ async fn an_admin_reads_any_accounts_queue() {
     assert_eq!(status.queues.receive.count, 0);
     assert!(status.receive_peers.is_empty());
 }
+
+/// An account promoted to `role` in the store before it authenticates, with a
+/// live stream for request/response Trust Tasks.
+async fn promoted(env: &TestEnvironment, alias: &str, role: AccountType) -> TestUser {
+    let user = env.add_user(alias).await.expect("add user");
+    env.mediator
+        .store()
+        .account_set_role(&user.did_hash(), &role)
+        .await
+        .expect("promote");
+    env.atm
+        .profile_add(&user.profile, true)
+        .await
+        .expect("enable websocket");
+    user
+}
+
+#[tokio::test]
+async fn an_account_lists_and_reads_its_own_messages() {
+    use trust_tasks_rs::specs::messaging::message::list::v0_1::Queue;
+
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let carol = env.add_user("carol").await.expect("carol");
+    let bob = env.add_user("bob").await.expect("bob");
+    env.atm
+        .profile_add(&bob.profile, true)
+        .await
+        .expect("bob live");
+    send_direct(&env, &alice, &bob).await;
+    send_direct(&env, &carol, &bob).await;
+    send_direct(&env, &alice, &bob).await;
+
+    // Page one message at a time, filtered to alice.
+    let tt = env.atm.trust_tasks();
+    let first = tt
+        .message_list(
+            &bob.profile,
+            None,
+            Queue::Receive,
+            Some(alice.did_hash()),
+            None,
+            Some(1),
+        )
+        .await
+        .expect("bob lists his receive queue");
+    assert_eq!(first.messages.len(), 1);
+    assert_eq!(
+        first.messages[0].from.as_ref().map(|f| f.as_str()),
+        Some(alice.did_hash().as_str())
+    );
+    let cursor = first
+        .next_cursor
+        .expect("a second alice message remains")
+        .to_string();
+    let second = tt
+        .message_list(
+            &bob.profile,
+            None,
+            Queue::Receive,
+            Some(alice.did_hash()),
+            Some(cursor),
+            Some(1),
+        )
+        .await
+        .expect("second page");
+    assert_eq!(second.messages.len(), 1);
+    assert_ne!(first.messages[0].msg_id, second.messages[0].msg_id);
+
+    // Unfiltered, all three are there, oldest first.
+    let all = tt
+        .message_list(&bob.profile, None, Queue::Receive, None, None, None)
+        .await
+        .expect("full listing");
+    assert_eq!(all.messages.len(), 3);
+
+    // Bob fetches one raw: the stored envelope, still encrypted.
+    let id = all.messages[0].msg_id.to_string();
+    let got = tt
+        .message_get(&bob.profile, None, &id)
+        .await
+        .expect("bob reads his own message");
+    assert_eq!(got.meta.msg_id.to_string(), id);
+    assert!(got.message.contains("ciphertext"), "an authcrypted JWE");
+
+    // Reading is not a pickup: it is still listed afterwards.
+    let again = tt
+        .message_list(&bob.profile, None, Queue::Receive, None, None, None)
+        .await
+        .expect("relist");
+    assert_eq!(again.messages.len(), 3);
+}
+
+#[tokio::test]
+async fn only_a_root_admin_reads_another_accounts_message_and_it_is_audited() {
+    use trust_tasks_rs::specs::messaging::message::list::v0_1::Queue;
+
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let bob = env.add_user("bob").await.expect("bob");
+    send_direct(&env, &alice, &bob).await;
+    let admin = promoted(&env, "admin", AccountType::Admin).await;
+    let root = promoted(&env, "root", AccountType::RootAdmin).await;
+    let tt = env.atm.trust_tasks();
+
+    // A plain admin may list bob's queue (metadata)…
+    let listed = tt
+        .message_list(
+            &admin.profile,
+            Some(bob.did_hash()),
+            Queue::Receive,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("an admin lists bob's metadata");
+    let id = listed.messages[0].msg_id.to_string();
+
+    // …but not read the message itself.
+    let denied = tt
+        .message_get(&admin.profile, Some(bob.did_hash()), &id)
+        .await;
+    assert!(denied.is_err(), "a plain admin must not read bob's message");
+
+    // A rootAdmin can, and the read is audited.
+    let got = tt
+        .message_get(&root.profile, Some(bob.did_hash()), &id)
+        .await
+        .expect("a rootAdmin reads bob's message");
+    assert_eq!(got.meta.msg_id.to_string(), id);
+    let audit = tt
+        .audit_list(&root.profile, None, None)
+        .await
+        .expect("read the audit log");
+    let text = format!("{audit:?}");
+    assert!(
+        text.contains("messageRead"),
+        "cross-account read audited: {text}"
+    );
+}
