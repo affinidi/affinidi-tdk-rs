@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.9.9) — test only
+
+`mediator_ops` covers `message/delete` (per-id results, admin delete audited,
+standard account refused) and `queue/purge` (peer-filtered dry run then purge;
+another admin's queue needs a rootAdmin). No change to the library API.
+
 ## Unreleased (0.9.8) — test only
 
 `mediator_ops` covers `message/list` (peer filter + cursor paging, reading is

@@ -368,3 +368,181 @@ async fn only_a_root_admin_reads_another_accounts_message_and_it_is_audited() {
         "cross-account read audited: {text}"
     );
 }
+
+async fn receive_ids(env: &TestEnvironment, user: &TestUser) -> Vec<String> {
+    use trust_tasks_rs::specs::messaging::message::list::v0_1::Queue;
+    env.atm
+        .trust_tasks()
+        .message_list(&user.profile, None, Queue::Receive, None, None, None)
+        .await
+        .expect("list")
+        .messages
+        .iter()
+        .map(|m| m.msg_id.to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn an_account_deletes_its_own_messages_and_each_id_is_reported() {
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let bob = env.add_user("bob").await.expect("bob");
+    env.atm
+        .profile_add(&bob.profile, true)
+        .await
+        .expect("bob live");
+    send_direct(&env, &alice, &bob).await;
+    send_direct(&env, &alice, &bob).await;
+
+    let ids = receive_ids(&env, &bob).await;
+    let request = vec![ids[0].clone(), "no-such-message".to_string()];
+    let result = env
+        .atm
+        .trust_tasks()
+        .message_delete(&bob.profile, None, &request)
+        .await
+        .expect("bob deletes from his own queue");
+
+    assert_eq!(result.results.len(), 2, "one result per id, in order");
+    assert!(result.results[0].deleted);
+    assert!(
+        !result.results[1].deleted,
+        "an unknown id is not reported deleted"
+    );
+    assert_eq!(receive_ids(&env, &bob).await, vec![ids[1].clone()]);
+}
+
+#[tokio::test]
+async fn deleting_another_accounts_messages_needs_admin_and_is_audited() {
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let bob = env.add_user("bob").await.expect("bob");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("alice live");
+    env.atm
+        .profile_add(&bob.profile, true)
+        .await
+        .expect("bob live");
+    send_direct(&env, &alice, &bob).await;
+    let ids = receive_ids(&env, &bob).await;
+    let tt = env.atm.trust_tasks();
+
+    let denied = tt
+        .message_delete(&alice.profile, Some(bob.did_hash()), &ids)
+        .await;
+    assert!(
+        denied.is_err(),
+        "a standard account must not delete bob's messages"
+    );
+
+    let admin = promoted(&env, "admin", AccountType::Admin).await;
+    let done = tt
+        .message_delete(&admin.profile, Some(bob.did_hash()), &ids)
+        .await
+        .expect("an admin deletes bob's message");
+    assert!(done.results[0].deleted);
+    assert!(receive_ids(&env, &bob).await.is_empty());
+
+    let audit = tt
+        .audit_list(&admin.profile, None, None)
+        .await
+        .expect("audit");
+    assert!(format!("{audit:?}").contains("messageDelete"));
+}
+
+#[tokio::test]
+async fn a_privileged_accounts_queue_needs_a_root_admin() {
+    use trust_tasks_rs::specs::messaging::queue::purge::v0_1::Queue;
+
+    let env = direct_env().await;
+    let admin = promoted(&env, "admin", AccountType::Admin).await;
+    let other = promoted(&env, "other-admin", AccountType::Admin).await;
+    let root = promoted(&env, "root", AccountType::RootAdmin).await;
+    let tt = env.atm.trust_tasks();
+
+    let denied = tt
+        .queue_purge(
+            &admin.profile,
+            Some(other.did_hash()),
+            Queue::Receive,
+            None,
+            None,
+            true,
+        )
+        .await;
+    assert!(
+        denied.is_err(),
+        "an admin must not purge another admin's queue"
+    );
+
+    let allowed = tt
+        .queue_purge(
+            &root.profile,
+            Some(other.did_hash()),
+            Queue::Receive,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("a rootAdmin may");
+    assert!(allowed.dry_run);
+}
+
+#[tokio::test]
+async fn a_dry_run_counts_and_the_real_purge_removes_only_the_filtered_peer() {
+    use trust_tasks_rs::specs::messaging::queue::purge::v0_1::Queue;
+
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let carol = env.add_user("carol").await.expect("carol");
+    let bob = env.add_user("bob").await.expect("bob");
+    env.atm
+        .profile_add(&bob.profile, true)
+        .await
+        .expect("bob live");
+    for _ in 0..3 {
+        send_direct(&env, &alice, &bob).await;
+    }
+    send_direct(&env, &carol, &bob).await;
+    let tt = env.atm.trust_tasks();
+
+    let preview = tt
+        .queue_purge(
+            &bob.profile,
+            None,
+            Queue::Receive,
+            Some(alice.did_hash()),
+            None,
+            true,
+        )
+        .await
+        .expect("dry run");
+    assert_eq!(preview.matched, 3);
+    assert_eq!(preview.purged, 0);
+    assert_eq!(
+        receive_ids(&env, &bob).await.len(),
+        4,
+        "a dry run removes nothing"
+    );
+
+    let purged = tt
+        .queue_purge(
+            &bob.profile,
+            None,
+            Queue::Receive,
+            Some(alice.did_hash()),
+            None,
+            false,
+        )
+        .await
+        .expect("purge alice's messages");
+    assert_eq!(purged.purged, 3);
+    assert_eq!(
+        receive_ids(&env, &bob).await.len(),
+        1,
+        "carol's message survives"
+    );
+}
