@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.9.7) — test only
+
+`mediator_ops` covers `queue/status`: the send-queue breakdown ranks the
+recipient holding the most uncollected messages first; a standard account
+cannot read another's queues; an admin can. No change to the library API.
+
 ## Unreleased (0.9.6) — test only
 
 New integration suite `mediator_ops`: an administrator reads `stats/show` and

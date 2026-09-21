@@ -427,6 +427,40 @@ impl TrustTasksOps<'_> {
         Ok(response.payload)
     }
 
+    /// Send a `messaging/queue/status` Trust Task and return one account's two
+    /// queues, live: depth, bytes, effective limit, saturation and the age of
+    /// the oldest message. `did_hash` names the account; `None` is the caller's
+    /// own (self needs no admin rights). `include_peers = Some(n)` also returns
+    /// each queue's top `n` counterparties — in the send queue, the recipients
+    /// that have not yet collected.
+    pub async fn queue_status(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<String>,
+        include_peers: Option<u32>,
+    ) -> Result<queue::status::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+
+        let did = did_hash
+            .map(|d| queue::status::v0_1::Vid::from_str(&d))
+            .transpose()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
+        let include_peers = include_peers.and_then(|n| std::num::NonZeroU64::new(n as u64));
+
+        let p: queue::status::v0_1::Payload = payload(
+            queue::status::v0_1::Payload::builder()
+                .did(did)
+                .include_peers(include_peers),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<queue::status::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
     /// Send a `messaging/queue/list` Trust Task (admin only) and return one page
     /// of accounts ranked, descending, by `sort` on the chosen `queue`
     /// (defaults: the receive queue, by message count, skipping empty queues).

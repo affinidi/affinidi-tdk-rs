@@ -8,9 +8,11 @@
 //! signing are shared with the account/ACL tasks in [`super::trust_tasks`].
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_mediator_common::types::accounts::AccountType;
+use affinidi_messaging_mediator_common::types::messages::Folder;
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use serde::de::DeserializeOwned;
@@ -21,10 +23,16 @@ use uuid::Uuid;
 
 use crate::SharedData;
 use crate::common::session::Session;
+use crate::messages::protocols::mediator::acls::check_permissions;
 use crate::messages::protocols::trust_tasks::{
     require_admin, serialize_err, tt_problem, validate_tt_basic,
 };
 use crate::tasks::queue_survey::{AccountQueues, FolderStats, QueueSnapshot};
+
+/// How many messages of one queue `queue/status` reads to break it down by
+/// counterparty. The breakdown covers the oldest this-many messages; a deeper
+/// queue is reported on that prefix, which is where a stall shows first.
+const PEER_SCAN_LIMIT: u32 = 2_000;
 
 /// Default and maximum page size for `messaging/queue/list`.
 const QUEUE_LIST_DEFAULT_LIMIT: usize = 50;
@@ -173,6 +181,174 @@ pub(crate) async fn consume_queue_list(
     let response: queue::list::v0_1::Response = from_json(response)?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
+}
+
+/// Handle `messaging/queue/status`: one account's two queues, live.
+///
+/// Self or admin — an omitted `did` is the requester's own account. Depth
+/// comes from the account record, limits are the effective ones (the account's
+/// own, else the mediator default), and each queue's oldest message is one
+/// range read. With `includePeers`, each queue is also broken down by
+/// counterparty: in the send queue that is *who has not collected* — a message
+/// is held against its sender until the recipient deletes it, so a stalled
+/// recipient shows up as the top entry in its senders' send queues.
+pub(crate) async fn consume_queue_status(
+    typed: TrustTask<queue::status::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    sender_kid: &Option<String>,
+    mediator_did: &str,
+    now: DateTime<Utc>,
+) -> Result<Value, MediatorError> {
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+
+    let target = typed
+        .payload
+        .did
+        .as_ref()
+        .map_or_else(|| session.did_hash.clone(), |d| d.to_string());
+    if !check_permissions(
+        session,
+        std::slice::from_ref(&target),
+        state.config.security.block_remote_admin_msgs,
+        sender_kid,
+    ) {
+        return Err(tt_problem(
+            session,
+            "authorization.account.denied",
+            format!("not permitted to read the queues of account {target}"),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+    let account = state.database.account_get(&target).await?.ok_or_else(|| {
+        tt_problem(
+            session,
+            "account.not_found",
+            format!("account {target} not found"),
+            StatusCode::NOT_FOUND,
+        )
+    })?;
+
+    let limits = &state.config.limits;
+    let receive_limit = account
+        .queue_receive_limit
+        .unwrap_or(limits.queued_receive_messages_soft);
+    let send_limit = account
+        .queue_send_limit
+        .unwrap_or(limits.queued_send_messages_soft);
+    let now_secs = state.clock.unix_secs();
+
+    let receive = live_depth(
+        state,
+        &target,
+        Folder::Inbox,
+        account.receive_queue_count,
+        account.receive_queue_bytes,
+        receive_limit,
+        now_secs,
+    )
+    .await;
+    let send = live_depth(
+        state,
+        &target,
+        Folder::Outbox,
+        account.send_queue_count,
+        account.send_queue_bytes,
+        send_limit,
+        now_secs,
+    )
+    .await;
+
+    let mut summary = json!({ "did": target, "receive": receive, "send": send });
+    if let Some(role) = account_type_name(&account._type) {
+        summary["accountType"] = json!(role);
+    }
+    let mut response = json!({ "queues": summary });
+
+    if let Some(top) = typed.payload.include_peers {
+        let top = top.get() as usize;
+        response["receivePeers"] =
+            json!(peer_breakdown(state, &target, Folder::Inbox, top, now_secs).await?);
+        response["sendPeers"] =
+            json!(peer_breakdown(state, &target, Folder::Outbox, top, now_secs).await?);
+    }
+
+    let response: queue::status::v0_1::Response = from_json(response)?;
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// One queue's live `QueueDepth`. The oldest-message read is best-effort: a
+/// queue whose age cannot be read still reports its depth.
+async fn live_depth(
+    state: &SharedData,
+    did_hash: &str,
+    folder: Folder,
+    count: u32,
+    bytes: u64,
+    limit: i32,
+    now_secs: u64,
+) -> Value {
+    let mut depth = json!({ "count": count, "bytes": bytes, "limit": limit.max(-1) });
+    if limit > 0 {
+        depth["saturation"] = json!(f64::from(count) / f64::from(limit));
+    }
+    if let Ok(oldest) = state
+        .database
+        .list_messages(did_hash, folder, Some(("-", "+")), 1)
+        .await
+        && let Some(first) = oldest.first()
+    {
+        depth["oldestAgeSeconds"] = json!(now_secs.saturating_sub(first.timestamp / 1_000));
+    }
+    depth
+}
+
+/// The top `top` counterparties of one queue by message count, over its oldest
+/// [`PEER_SCAN_LIMIT`] messages. In an inbox the counterparty is the sender
+/// (anonymous messages have none and are left out); in an outbox, the
+/// recipient.
+async fn peer_breakdown(
+    state: &SharedData,
+    did_hash: &str,
+    folder: Folder,
+    top: usize,
+    now_secs: u64,
+) -> Result<Vec<Value>, MediatorError> {
+    let inbox = matches!(folder, Folder::Inbox);
+    let messages = state
+        .database
+        .list_messages(did_hash, folder, Some(("-", "+")), PEER_SCAN_LIMIT)
+        .await?;
+
+    // peer → (count, bytes, oldest arrival ms)
+    let mut peers: HashMap<String, (u64, u64, u64)> = HashMap::new();
+    for m in &messages {
+        let peer = if inbox {
+            &m.from_address
+        } else {
+            &m.to_address
+        };
+        let Some(peer) = peer else { continue };
+        let entry = peers.entry(peer.clone()).or_insert((0, 0, u64::MAX));
+        entry.0 += 1;
+        entry.1 += m.size;
+        entry.2 = entry.2.min(m.timestamp);
+    }
+    let mut ranked: Vec<(String, (u64, u64, u64))> = peers.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(&b.0)));
+    Ok(ranked
+        .into_iter()
+        .take(top)
+        .map(|(peer, (count, bytes, oldest_ms))| {
+            json!({
+                "peer": peer,
+                "count": count,
+                "bytes": bytes,
+                "oldestAgeSeconds": now_secs.saturating_sub(oldest_ms / 1_000),
+            })
+        })
+        .collect())
 }
 
 /// One page of the ranking, as a `queue/list` response body.
