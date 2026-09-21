@@ -1660,6 +1660,8 @@ fn audit_action_name(a: AuditAction) -> &'static str {
         AuditAction::MessageRead => "messageRead",
         AuditAction::MessageDelete => "messageDelete",
         AuditAction::QueuePurge => "queuePurge",
+        AuditAction::MonitorSubscribe => "monitorSubscribe",
+        AuditAction::MonitorUnsubscribe => "monitorUnsubscribe",
         // A kind added to the common crate before this mapping learns it.
         _ => "other",
     }

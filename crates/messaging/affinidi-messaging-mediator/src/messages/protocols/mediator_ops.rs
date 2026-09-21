@@ -746,6 +746,35 @@ pub(crate) async fn consume_monitor_subscribe(
             ),
         })?;
 
+    // An administrator's tap can see other accounts' traffic metadata, so it
+    // is on the record: who watched which accounts, and for how long. (A
+    // non-admin's subscription is confined to its own traffic.)
+    if is_admin {
+        let scope = granted
+            .filter
+            .dids
+            .as_ref()
+            .map_or_else(|| "all accounts".to_string(), |d| abbreviate(d));
+        record_audit(
+            state,
+            session,
+            granted
+                .filter
+                .dids
+                .as_ref()
+                .and_then(|d| (d.len() == 1).then(|| d[0].as_str()))
+                .unwrap_or("*"),
+            AuditAction::MonitorSubscribe,
+            format!(
+                "{} monitor {} watching {scope} for {lease}s (filter: {})",
+                if renew.is_some() { "renewed" } else { "opened" },
+                granted.subscription_id,
+                granted.filter.to_json(),
+            ),
+        )
+        .await;
+    }
+
     let response: monitor::subscribe::v0_1::Response = from_json(json!({
         "subscriptionId": granted.subscription_id,
         "expiresAt": granted.expires_at,
@@ -767,10 +796,11 @@ pub(crate) async fn consume_monitor_unsubscribe(
     now: DateTime<Utc>,
 ) -> Result<Value, MediatorError> {
     validate_tt_basic(&typed, session, mediator_did, now)?;
+    let subscription_id = typed.payload.subscription_id.to_string();
     let (sent, dropped) = state
         .monitor
         .unsubscribe(
-            &typed.payload.subscription_id.to_string(),
+            &subscription_id,
             &session.did_hash,
             session.account_type == AccountType::RootAdmin,
         )
@@ -782,6 +812,19 @@ pub(crate) async fn consume_monitor_unsubscribe(
                 StatusCode::NOT_FOUND,
             )
         })?;
+    if matches!(
+        session.account_type,
+        AccountType::Admin | AccountType::RootAdmin
+    ) {
+        record_audit(
+            state,
+            session,
+            "*",
+            AuditAction::MonitorUnsubscribe,
+            format!("ended monitor {subscription_id} ({sent} events sent, {dropped} dropped)"),
+        )
+        .await;
+    }
     let response: monitor::unsubscribe::v0_1::Response =
         from_json(json!({ "eventsSent": sent, "eventsDropped": dropped }))?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))

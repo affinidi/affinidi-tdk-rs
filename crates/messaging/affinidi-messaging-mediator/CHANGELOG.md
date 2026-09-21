@@ -27,6 +27,15 @@ failed, abandoned), per-message expiry, deliveries on DIDComm pickup, TSP-socket
 drain and redelivery, and subscribers on a raw-TSP socket. Scope is per instance
 behind a shared Redis.
 
+**Accountability and disclosure.** Every administrator subscribe, renew and
+unsubscribe is written to the audit log (`monitorSubscribe` /
+`monitorUnsubscribe`: who watched which accounts, for how long, with what
+filter) — an administrator's tap can see every account's correspondence
+metadata, so it must be on the record. A refusal carries the problem-report
+code and comment the sender was already sent; an internal failure is reported
+as `internalError` with no detail, the full text staying in the server log.
+Requires `affinidi-messaging-mediator-common` 0.16.15.
+
 ## Unreleased (0.28.19) — `messaging/message/delete` and `messaging/queue/purge`
 
 The two destructive mediator-operations Trust Tasks:

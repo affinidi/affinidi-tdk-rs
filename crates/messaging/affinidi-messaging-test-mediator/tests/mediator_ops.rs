@@ -625,6 +625,23 @@ async fn an_admin_watches_a_message_arrive_live() {
         .await
         .expect("unsubscribe");
     assert!(ended.events_sent.unwrap_or(0) >= 1);
+
+    // An administrator's tap on other accounts' traffic is on the record.
+    let audit = env
+        .atm
+        .trust_tasks()
+        .audit_list(&admin.profile, None, None)
+        .await
+        .expect("audit");
+    let text = format!("{audit:?}");
+    assert!(
+        text.contains("monitorSubscribe"),
+        "subscribe audited: {text}"
+    );
+    assert!(
+        text.contains("monitorUnsubscribe"),
+        "unsubscribe audited: {text}"
+    );
 }
 
 #[tokio::test]

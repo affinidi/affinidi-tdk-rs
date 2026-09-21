@@ -1,5 +1,12 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.15) — audit actions for the traffic monitor
+
+`AuditAction` gains `MonitorSubscribe` (`monitor_subscribe`) and
+`MonitorUnsubscribe` (`monitor_unsubscribe`), recorded when an administrator
+opens, renews or ends a live traffic-monitor subscription. Additive:
+`AuditAction` is `#[non_exhaustive]`.
+
 ## Unreleased (0.16.14) — audit actions for message operations
 
 `AuditAction` gains `MessageRead` (`message_read`), `MessageDelete`

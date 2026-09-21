@@ -23,6 +23,18 @@
 //! Events carry metadata only — never a message body. Scope is per instance:
 //! behind a shared Redis, a subscriber sees the traffic of the instance it is
 //! connected to.
+//!
+//! # What a subscription reveals
+//!
+//! Correspondence metadata: who exchanged messages with whom (as DID hashes),
+//! when, over which channel and protocol, how large, and which were refused and
+//! with what code. A non-administrator is confined to events in which its own
+//! account is a party, so it learns only its own correspondents — which it
+//! already knows from its own traffic. An administrator can watch every
+//! account; that reach is the feature, and it is why every administrator
+//! subscribe, renew and unsubscribe is written to the audit log. Refusals
+//! carry the problem-report code and comment the sender was already sent; an
+//! internal failure is reported as `internalError` with no detail.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -238,7 +250,13 @@ pub(crate) fn refusal_outcome(
         MediatorError::MediatorError(_, _, _, report, _, _) => {
             (report.code.clone(), Some(report.comment.clone()))
         }
-        other => ("error".to_string(), Some(other.to_string())),
+        // Anything else is an internal failure whose text can carry backend
+        // detail (store errors, internal identifiers). Subscribers get a stable
+        // code only; the full text stays in the server log.
+        other => {
+            tracing::debug!(error = %other, "refusal reported to the monitor as internalError");
+            ("internalError".to_string(), None)
+        }
     }
 }
 
@@ -901,6 +919,19 @@ mod tests {
     fn emitting_with_no_subscriber_builds_nothing() {
         let monitor = TrafficMonitor::new();
         monitor.emit(|| panic!("the event must not be built with nobody listening"));
+    }
+
+    #[test]
+    fn an_internal_error_reaches_the_monitor_without_its_text() {
+        use affinidi_messaging_mediator_common::errors::MediatorError;
+        let internal = MediatorError::InternalError(
+            14,
+            "NA".into(),
+            "redis://:secret@db.internal:6379 connection refused".into(),
+        );
+        let (code, detail) = refusal_outcome(&internal);
+        assert_eq!(code, "internalError");
+        assert!(detail.is_none(), "backend text must not reach a subscriber");
     }
 
     #[test]

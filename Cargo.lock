@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-common"
-version = "0.16.14"
+version = "0.16.15"
 dependencies = [
  "aes-gcm",
  "affinidi-net-guard",
