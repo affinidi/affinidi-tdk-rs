@@ -49,7 +49,7 @@ use crate::SharedData;
 use crate::common::session::Session;
 use crate::messages::protocols::mediator::acls::check_permissions;
 use crate::messages::protocols::mediator::record_audit;
-use crate::messages::protocols::trust_task_verify;
+use crate::messages::protocols::{trust_task_sign, trust_task_verify};
 use crate::messages::{ProcessMessageResponse, WrapperType};
 
 /// DIDComm `type` URI of a Trust Tasks binding envelope.
@@ -308,6 +308,9 @@ pub(crate) async fn consume(
                 .await?
         }
     };
+
+    // Every success response is signed as the mediator (see `trust_task_sign`).
+    let response_value = trust_task_sign::sign_response(response_value, state).await?;
 
     Ok(Some(response_value))
 }

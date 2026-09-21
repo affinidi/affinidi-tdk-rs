@@ -6,5 +6,6 @@ pub(crate) mod mediator;
 pub mod message_pickup;
 pub mod ping;
 pub mod routing;
+pub(crate) mod trust_task_sign;
 pub(crate) mod trust_task_verify;
 pub mod trust_tasks;

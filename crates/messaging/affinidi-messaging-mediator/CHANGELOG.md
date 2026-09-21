@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased (0.28.15) — Trust Task responses are signed
+
+Every success response to a Trust Task — over DIDComm and TSP — now carries an
+`eddsa-jcs-2022` Data Integrity proof made with the mediator DID's Ed25519 key
+(`assertionMethod` if the DID declares one, else `authentication`), so a client
+can keep the answer as evidence independent of the transport. `issuedAt` is
+stamped, and `issuer` is the mediator DID. `messaging/message/get` — which can
+return another account's stored envelope — requires a signed response; the
+other `messaging/*` specs recommend one.
+
+A mediator whose DID has no Ed25519 signing key among its secrets answers
+unsigned and logs once that it cannot answer `message/get` conformantly. A
+signing failure with a key in hand is an error, never a silent downgrade.
+Clients that ignore `proof` are unaffected.
+
 ## Unreleased (0.28.14) — a Trust Task runs once
 
 A consequential Trust Task (one whose spec requires a proof or `issuedAt`) is

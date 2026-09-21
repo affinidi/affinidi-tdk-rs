@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator"
-version = "0.28.14"
+version = "0.28.15"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -869,8 +869,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-test-mediator"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
+ "affinidi-data-integrity",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
  "affinidi-messaging-didcomm-v1",
@@ -895,6 +896,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "trust-tasks-proof",
  "trust-tasks-rs",
  "url",
  "uuid",

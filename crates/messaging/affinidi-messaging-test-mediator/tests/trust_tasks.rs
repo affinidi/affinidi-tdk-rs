@@ -601,3 +601,90 @@ async fn a_signed_task_is_accepted_when_the_mediator_enforces_proofs() {
         Some(7)
     );
 }
+
+#[tokio::test]
+async fn a_trust_task_response_is_signed_by_the_mediator() {
+    // Send a Trust Task by hand so the raw response body is visible, then
+    // verify its proof over the JSON exactly as received, against the
+    // mediator's own DID document.
+    use affinidi_data_integrity::VerifyOptions;
+    use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+    use affinidi_messaging_didcomm::message::Message;
+    use affinidi_messaging_sdk::protocols::trust_tasks::ENVELOPE_TYPE;
+    use affinidi_messaging_sdk::transports::SendMessageResponse;
+    use std::sync::Arc;
+    use trust_tasks_proof::affinidi::{CachedDidResolver, parse_data_integrity_proof};
+
+    let env = TestEnvironment::spawn()
+        .await
+        .expect("spawn test environment");
+    let alice = env.add_user("alice").await.expect("add alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("enable websocket for alice");
+    let mediator_did = env.mediator.did().to_string();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let task = serde_json::json!({
+        "id": "urn:uuid:7c1e0a1e-0000-4000-8000-000000000042",
+        "type": "https://trusttasks.org/spec/messaging/ping/0.1",
+        "issuer": alice.did,
+        "recipient": mediator_did,
+        "payload": { "nonce": "signed-response" },
+    });
+    let msg = Message::build(
+        "urn:uuid:7c1e0a1e-0000-4000-8000-0000000000ff".to_string(),
+        ENVELOPE_TYPE.to_string(),
+        task,
+    )
+    .to(mediator_did.clone())
+    .from(alice.did.clone())
+    .created_time(now)
+    .expires_time(now + 60)
+    .finalize();
+    let msg_id = msg.id.clone();
+    let (packed, _) = env
+        .atm
+        .pack_encrypted(&msg, &mediator_did, Some(&alice.did), None)
+        .await
+        .expect("authcrypt the ping");
+
+    let SendMessageResponse::Message(reply) = env
+        .atm
+        .send_message(&alice.profile, &packed, &msg_id, true, true)
+        .await
+        .expect("mediator answers the ping")
+    else {
+        panic!("expected a response message");
+    };
+    let body = reply.body;
+
+    assert_eq!(body["issuer"].as_str(), Some(mediator_did.as_str()));
+    let proof = parse_data_integrity_proof(body.get("proof").expect("the response is signed"))
+        .expect("a Data Integrity proof");
+    assert_eq!(
+        proof.verification_method.split('#').next(),
+        Some(mediator_did.as_str()),
+        "signed with the mediator's own key"
+    );
+
+    let mut unsigned = body.as_object().unwrap().clone();
+    unsigned.remove("proof");
+    let resolver = CachedDidResolver::new(Arc::new(
+        DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap(),
+    ));
+    proof
+        .verify(
+            &serde_json::Value::Object(unsigned),
+            &resolver,
+            VerifyOptions::new(),
+        )
+        .await
+        .expect("the response proof verifies against the mediator DID");
+}
