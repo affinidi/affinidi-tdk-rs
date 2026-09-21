@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.28.15"
+version = "0.28.16"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -135,7 +135,7 @@ affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version =
 affinidi-messaging-didcomm-v1 = { path = "../affinidi-messaging-didcomm-v1", version = "0.2", optional = true }
 ## Trust Tasks framework core — consumes Trust Task documents (the messaging
 ## ping / account / acl / access-list tasks) carried over the binding envelope.
-trust-tasks-rs = { version = "0.21", optional = true }
+trust-tasks-rs = { version = "0.21.10", optional = true }
 # Verifies Trust Task proofs (eddsa-jcs-2022) before any handler runs.
 trust-tasks-proof = { version = "0.21", default-features = false, features = ["affinidi"], optional = true }
 affinidi-data-integrity = { version = "0.7", optional = true }

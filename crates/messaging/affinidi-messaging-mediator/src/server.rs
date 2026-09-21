@@ -18,7 +18,9 @@ use crate::{
         readiness_handler,
     },
     tasks::{
-        queue_survey::SurveyDefaults, statistics::statistics, supervisor::TaskSupervisor,
+        queue_survey::{QueueSnapshotCell, SurveyDefaults},
+        statistics::statistics_with_snapshot,
+        supervisor::TaskSupervisor,
         websocket_streaming::StreamingTask,
     },
 };
@@ -439,8 +441,11 @@ pub async fn serve_internal(
     }
 
     // Statistics task — non-load-bearing (metrics only). Runs against any
-    // backend via the trait.
+    // backend via the trait. It also publishes each queue survey for the
+    // `messaging/queue/list` and `messaging/stats/show` Trust Tasks.
+    let queue_snapshot = QueueSnapshotCell::default();
     {
+        let queue_snapshot = queue_snapshot.clone();
         let store = store.clone();
         let tags = config.tags.clone();
         let stats_clock = clock.clone();
@@ -456,8 +461,9 @@ pub async fn serve_internal(
             let store = store.clone();
             let tags = tags.clone();
             let clock = stats_clock.clone();
+            let queue_snapshot = queue_snapshot.clone();
             async move {
-                statistics(store, tags, clock, queue_defaults)
+                statistics_with_snapshot(store, tags, clock, queue_defaults, queue_snapshot)
                     .await
                     .map_err(|e| e.to_string())
             }
@@ -746,6 +752,7 @@ pub async fn serve_internal(
         self_authorities: Arc::new(self_authorities),
         component_health: supervisor.registry(),
         clock,
+        queue_snapshot,
         #[cfg(feature = "tsp")]
         tsp_identity: Arc::new(tokio::sync::OnceCell::new()),
         #[cfg(feature = "didcomm-v1")]

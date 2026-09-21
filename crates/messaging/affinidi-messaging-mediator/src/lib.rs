@@ -17,6 +17,7 @@ use common::{config::Config, did_rate_limiter::DidRateLimiter, jwt_auth::AuthErr
 use dashmap::DashMap;
 use http::request::Parts;
 use std::{collections::HashSet, fmt::Debug, sync::Arc, sync::atomic::AtomicUsize};
+use tasks::queue_survey::QueueSnapshotCell;
 use tasks::supervisor::HealthRegistry;
 use tasks::websocket_streaming::StreamingTask;
 use tokio_util::sync::CancellationToken;
@@ -61,6 +62,9 @@ pub struct SharedData {
     pub service_start_timestamp: DateTime<Utc>,
     /// Cached DID resolver for resolving DID documents.
     pub did_resolver: DIDCacheClient,
+    /// The latest queue survey, published by the statistics task and served by
+    /// the `messaging/queue/list` and `messaging/stats/show` Trust Tasks.
+    pub queue_snapshot: QueueSnapshotCell,
     /// Storage backend for sessions, messages, accounts, and live
     /// streaming. Polymorphic so the mediator can run against Redis,
     /// Fjall, or memory without changing handler code.

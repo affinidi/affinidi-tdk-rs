@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (0.9.6) — test only
+
+New integration suite `mediator_ops`: an administrator reads `stats/show` and
+`queue/list`; a standard account is refused both. No change to the library API.
+
 ## Unreleased (0.9.5) — test only
 
 New integration test `a_trust_task_response_is_signed_by_the_mediator`, and the

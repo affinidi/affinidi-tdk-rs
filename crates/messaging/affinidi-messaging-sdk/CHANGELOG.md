@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### 0.26.14 — `stats_show` and `queue_list`
+
+`trust_tasks().stats_show(profile)` and
+`trust_tasks().queue_list(profile, queue, sort, min_count, cursor, limit)` —
+the admin-only `messaging/stats/show` and `messaging/queue/list` Trust Tasks, for
+mediator operator tooling. Requires `trust-tasks-rs` 0.21.10.
+
 ### 0.26.13 — every Trust Task leaves with `issuedAt` and a proof
 
 `trust_tasks()` requests now carry `issuedAt` and an `eddsa-jcs-2022` Data

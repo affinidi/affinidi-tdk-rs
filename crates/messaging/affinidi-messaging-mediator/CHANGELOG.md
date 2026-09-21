@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased (0.28.16) — `messaging/stats/show` and `messaging/queue/list`
+
+Two admin-only Trust Tasks for operator tooling (trustoverip/dtgwg-trust-tasks-tf#549):
+
+- **`messaging/stats/show`** — version, start time and uptime, live and maximum
+  websocket connections, the lifetime message/session/invitation counters,
+  forwarding queue length and limit, circuit-breaker state, and the latest queue
+  survey's totals (depth, bytes, worst saturation, oldest probed message). The
+  Trust Task counterpart of `/admin/status`, without the database URL.
+- **`messaging/queue/list`** — accounts ranked by the depth, bytes, oldest
+  message or saturation of their receive or send queue, paged by a cursor pinned
+  to one survey.
+
+Both are served from the queue survey the statistics task already runs every
+minute, which now keeps a per-account row for every non-empty queue (with the
+probed ages) and publishes it — so an admin console polling them costs the store
+nothing. `snapshotAt` says how old the ranking is; before the first survey
+completes, `queue/list` answers `message.trust_task.unavailable`.
+
+`tasks::statistics::statistics` keeps its signature; `statistics_with_snapshot`
+is the variant that publishes the survey. Requires `trust-tasks-rs` 0.21.10.
+
 ## Unreleased (0.28.15) — Trust Task responses are signed
 
 Every success response to a Trust Task — over DIDComm and TSP — now carries an

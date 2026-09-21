@@ -36,7 +36,7 @@ use sha256::digest;
 use std::collections::HashSet;
 use std::str::FromStr;
 use subtle::ConstantTimeEq;
-use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping};
+use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping, queue, stats};
 use trust_tasks_rs::specs::{audit, config};
 use trust_tasks_rs::{
     ConsumeChecks, ConsumeOutcome, NoValidator, Payload, PayloadPolicy, ProofPolicy, ProofVerifier,
@@ -49,7 +49,7 @@ use crate::SharedData;
 use crate::common::session::Session;
 use crate::messages::protocols::mediator::acls::check_permissions;
 use crate::messages::protocols::mediator::record_audit;
-use crate::messages::protocols::{trust_task_sign, trust_task_verify};
+use crate::messages::protocols::{mediator_ops, trust_task_sign, trust_task_verify};
 use crate::messages::{ProcessMessageResponse, WrapperType};
 
 /// DIDComm `type` URI of a Trust Tasks binding envelope.
@@ -307,6 +307,26 @@ pub(crate) async fn consume(
             consume_config_show(downcast(&doc, session)?, state, session, &mediator_did, now)
                 .await?
         }
+        ServedTask::StatsShow => {
+            mediator_ops::consume_stats_show(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
+        ServedTask::QueueList => {
+            mediator_ops::consume_queue_list(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
     };
 
     // Every success response is signed as the mediator (see `trust_task_sign`).
@@ -366,6 +386,8 @@ served_tasks! {
     AccessListList => access_list::list::v0_1::Payload,
     AuditList => audit::list::v0_1::Payload,
     ConfigShow => config::show::v0_1::Payload,
+    StatsShow => stats::show::v0_1::Payload,
+    QueueList => queue::list::v0_1::Payload,
 }
 
 impl ServedTask {
@@ -1397,7 +1419,7 @@ async fn consume_access_list_list(
 }
 
 /// Reject a non-admin caller of an admin-only task.
-fn require_admin(session: &Session, task: &str) -> Result<(), MediatorError> {
+pub(crate) fn require_admin(session: &Session, task: &str) -> Result<(), MediatorError> {
     if matches!(
         session.account_type,
         AccountType::Admin | AccountType::RootAdmin
@@ -1793,7 +1815,7 @@ pub(crate) fn tt_problem(
 }
 
 /// Framework basics: the request is addressed to this mediator and not expired.
-fn validate_tt_basic<P>(
+pub(crate) fn validate_tt_basic<P>(
     typed: &TrustTask<P>,
     session: &Session,
     mediator_did: &str,
@@ -1834,7 +1856,7 @@ fn serialize_err_msg(msg: String) -> MediatorError {
     MediatorError::InternalError(14, "NA".to_string(), msg)
 }
 
-fn serialize_err(e: serde_json::Error) -> MediatorError {
+pub(crate) fn serialize_err(e: serde_json::Error) -> MediatorError {
     MediatorError::InternalError(
         14,
         "NA".to_string(),
