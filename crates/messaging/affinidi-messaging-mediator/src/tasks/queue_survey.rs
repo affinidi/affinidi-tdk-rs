@@ -53,7 +53,11 @@ use std::sync::Arc;
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::MediatorStore,
-    types::{accounts::MediatorAccountList, clock::Clock, messages::Folder},
+    types::{
+        accounts::{AccountType, MediatorAccountList},
+        clock::Clock,
+        messages::Folder,
+    },
 };
 use async_trait::async_trait;
 
@@ -215,15 +219,78 @@ pub(crate) struct FolderStats {
     pub sampled: usize,
 }
 
+/// One surveyed account's two queues, as served by `messaging/queue/list`.
+///
+/// Limits are the **effective** ones — the account's own, else the mediator
+/// default — so saturation can be computed without another lookup.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AccountQueues {
+    pub did_hash: String,
+    pub account_type: AccountType,
+    pub receive_count: u32,
+    pub receive_bytes: u64,
+    pub receive_limit: i32,
+    pub send_count: u32,
+    pub send_bytes: u64,
+    pub send_limit: i32,
+    /// Oldest-message age, known only for the queues this survey probed.
+    pub receive_oldest_secs: Option<u64>,
+    pub send_oldest_secs: Option<u64>,
+}
+
+impl AccountQueues {
+    pub fn receive_saturation(&self) -> Option<f64> {
+        saturation(self.receive_count, self.receive_limit)
+    }
+    pub fn send_saturation(&self) -> Option<f64> {
+        saturation(self.send_count, self.send_limit)
+    }
+}
+
 /// A complete survey.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct QueueSurvey {
+    /// Every surveyed account with at least one non-empty queue.
+    ///
+    /// Empty accounts are left out: they are the bulk of a large deployment
+    /// and never the answer to "which queues need attention".
+    pub accounts: Vec<AccountQueues>,
     pub accounts_surveyed: u32,
     /// `true` when the walk stopped at [`MAX_ACCOUNTS_PER_SURVEY`] with
     /// accounts still unread, making every total here a lower bound.
     pub truncated: bool,
     pub inbox: FolderStats,
     pub outbox: FolderStats,
+}
+
+/// The most recent completed survey, and when it ran.
+#[derive(Debug)]
+pub struct QueueSnapshot {
+    pub(crate) taken_at: chrono::DateTime<chrono::Utc>,
+    pub(crate) survey: QueueSurvey,
+}
+
+/// The latest [`QueueSnapshot`], shared between the statistics task that
+/// writes it once a minute and the `messaging/queue/list` and
+/// `messaging/stats/show` Trust Tasks that read it.
+///
+/// Serving those from the survey rather than a live walk is the point: ranking
+/// every account on request would cost a full account scan per call, which an
+/// admin console polling every few seconds would turn into constant load.
+#[derive(Clone, Debug, Default)]
+pub struct QueueSnapshotCell(Arc<std::sync::RwLock<Option<Arc<QueueSnapshot>>>>);
+
+impl QueueSnapshotCell {
+    pub(crate) fn publish(&self, snapshot: QueueSnapshot) {
+        // A poisoned lock only means a reader panicked mid-clone; the value is
+        // still a complete snapshot, so keep publishing.
+        let mut slot = self.0.write().unwrap_or_else(|e| e.into_inner());
+        *slot = Some(Arc::new(snapshot));
+    }
+
+    pub(crate) fn latest(&self) -> Option<Arc<QueueSnapshot>> {
+        self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
 }
 
 /// Effective queue limits for accounts that set none of their own.
@@ -307,6 +374,20 @@ pub(crate) async fn survey(
 
             let recv_limit = account.queue_receive_limit.unwrap_or(defaults.receive_soft);
             let send_limit = account.queue_send_limit.unwrap_or(defaults.send_soft);
+            if account.receive_queue_count > 0 || account.send_queue_count > 0 {
+                out.accounts.push(AccountQueues {
+                    did_hash: account.did_hash.clone(),
+                    account_type: account._type,
+                    receive_count: account.receive_queue_count,
+                    receive_bytes: account.receive_queue_bytes,
+                    receive_limit: recv_limit,
+                    send_count: account.send_queue_count,
+                    send_bytes: account.send_queue_bytes,
+                    send_limit,
+                    receive_oldest_secs: None,
+                    send_oldest_secs: None,
+                });
+            }
             out.inbox.max_saturation = max_opt(
                 out.inbox.max_saturation,
                 saturation(account.receive_queue_count, recv_limit),
@@ -341,17 +422,23 @@ pub(crate) async fn survey(
         }
     }
 
-    let (oldest, delivered, sampled) =
+    let (oldest, delivered, sampled, ages) =
         probe_queues(store, clock, inbox_probes, Folder::Inbox).await;
     out.inbox.oldest = oldest;
     out.inbox.delivered_unacked = delivered;
     out.inbox.sampled = sampled;
+    for account in out.accounts.iter_mut() {
+        account.receive_oldest_secs = ages.get(&account.did_hash).copied();
+    }
 
-    let (oldest, delivered, sampled) =
+    let (oldest, delivered, sampled, ages) =
         probe_queues(store, clock, outbox_probes, Folder::Outbox).await;
     out.outbox.oldest = oldest;
     out.outbox.delivered_unacked = delivered;
     out.outbox.sampled = sampled;
+    for account in out.accounts.iter_mut() {
+        account.send_oldest_secs = ages.get(&account.did_hash).copied();
+    }
 
     Ok(out)
 }
@@ -364,7 +451,13 @@ async fn probe_queues(
     clock: &Arc<dyn Clock>,
     candidates: BinaryHeap<Reverse<(u32, String)>>,
     folder: Folder,
-) -> (Option<QueueAge>, usize, usize) {
+) -> (
+    Option<QueueAge>,
+    usize,
+    usize,
+    std::collections::HashMap<String, u64>,
+) {
+    let mut ages = std::collections::HashMap::new();
     let mut oldest: Option<QueueAge> = None;
     let mut delivered_unacked = 0usize;
     let mut sampled = 0usize;
@@ -372,6 +465,7 @@ async fn probe_queues(
     for Reverse((_, did_hash)) in candidates.into_sorted_vec() {
         match oldest_age(store, clock, &did_hash, folder.clone()).await {
             Ok(Some(age_secs)) => {
+                ages.insert(did_hash.clone(), age_secs);
                 if oldest.as_ref().is_none_or(|o| age_secs > o.age_secs) {
                     oldest = Some(QueueAge {
                         did_hash: did_hash.clone(),
@@ -412,7 +506,7 @@ async fn probe_queues(
             }
         }
     }
-    (oldest, delivered_unacked, sampled)
+    (oldest, delivered_unacked, sampled, ages)
 }
 
 /// `f64` has no `Ord`, and these are ratios that can legitimately be absent,

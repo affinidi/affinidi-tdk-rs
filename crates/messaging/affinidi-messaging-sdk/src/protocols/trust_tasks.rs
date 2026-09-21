@@ -33,7 +33,7 @@ use sha256::digest;
 use tracing::warn;
 use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
 use trust_tasks_rs::TrustTask;
-use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping};
+use trust_tasks_rs::specs::messaging::{access_list, account, acl, ping, queue, stats};
 use trust_tasks_rs::specs::{audit, config};
 use uuid::Uuid;
 
@@ -405,6 +405,66 @@ impl TrustTasksOps<'_> {
         task.recipient = Some(mediator_did.to_string());
         let response: TrustTask<config::show::v0_1::Response> =
             self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
+    /// Send a `messaging/stats/show` Trust Task (admin only) and return the
+    /// mediator's telemetry: version and uptime, live connections, lifetime
+    /// message counters (monotonic — derive rates from successive readings),
+    /// forwarding and circuit-breaker state, and the latest queue-survey
+    /// aggregate (absent until the mediator's first survey completes).
+    pub async fn stats_show(
+        &self,
+        profile: &Arc<ATMProfile>,
+    ) -> Result<stats::show::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let p: stats::show::v0_1::Payload = payload(stats::show::v0_1::Payload::builder())?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<stats::show::v0_1::Response> = self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
+    /// Send a `messaging/queue/list` Trust Task (admin only) and return one page
+    /// of accounts ranked, descending, by `sort` on the chosen `queue`
+    /// (defaults: the receive queue, by message count, skipping empty queues).
+    ///
+    /// The ranking comes from the mediator's periodic queue survey —
+    /// `snapshot_at` says when it ran. Pass the previous page's `next_cursor` to
+    /// continue; a cursor from a survey that has since been replaced is refused,
+    /// and the caller starts again from the top.
+    pub async fn queue_list(
+        &self,
+        profile: &Arc<ATMProfile>,
+        queue: Option<queue::list::v0_1::Queue>,
+        sort: Option<queue::list::v0_1::PayloadSort>,
+        min_count: Option<u64>,
+        cursor: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<queue::list::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+
+        let cursor = cursor
+            .map(|c| queue::list::v0_1::PayloadCursor::from_str(&c))
+            .transpose()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid cursor: {e}")))?;
+        let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
+
+        let p: queue::list::v0_1::Payload = payload(
+            queue::list::v0_1::Payload::builder()
+                .queue(queue)
+                .sort(sort)
+                .min_count(min_count)
+                .cursor(cursor)
+                .limit(limit),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<queue::list::v0_1::Response> = self.exchange(profile, task).await?;
         Ok(response.payload)
     }
 

@@ -3,6 +3,7 @@
 
 pub mod discover_features;
 pub(crate) mod mediator;
+pub(crate) mod mediator_ops;
 pub mod message_pickup;
 pub mod ping;
 pub mod routing;

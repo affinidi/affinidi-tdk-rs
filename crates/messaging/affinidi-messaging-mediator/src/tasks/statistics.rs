@@ -1,5 +1,7 @@
 use crate::common::metrics::names;
-use crate::tasks::queue_survey::{self, QueueSurvey, SurveyDefaults};
+use crate::tasks::queue_survey::{
+    self, QueueSnapshot, QueueSnapshotCell, QueueSurvey, SurveyDefaults,
+};
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{MediatorStore, types::MetadataStats},
@@ -10,13 +12,32 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{Instrument, Level, debug, info, span, warn};
 
-/// Periodically logs statistics about the database.
-/// Is spawned as a task from main().
+/// [`statistics_with_snapshot`] without a snapshot consumer — for embedded
+/// callers that spawn the task themselves and serve no Trust Tasks.
 pub async fn statistics(
     database: Arc<dyn MediatorStore>,
     tags: HashMap<String, String>,
     clock: Arc<dyn Clock>,
     queue_defaults: SurveyDefaults,
+) -> Result<(), MediatorError> {
+    statistics_with_snapshot(
+        database,
+        tags,
+        clock,
+        queue_defaults,
+        QueueSnapshotCell::default(),
+    )
+    .await
+}
+
+/// Periodically logs statistics about the database.
+/// Is spawned as a task from main().
+pub async fn statistics_with_snapshot(
+    database: Arc<dyn MediatorStore>,
+    tags: HashMap<String, String>,
+    clock: Arc<dyn Clock>,
+    queue_defaults: SurveyDefaults,
+    snapshot: QueueSnapshotCell,
 ) -> Result<(), MediatorError> {
     let _span = span!(Level::INFO, "statistics");
 
@@ -65,7 +86,7 @@ pub async fn statistics(
             );
 
             publish_metrics(&database, &stats).await;
-            publish_queue_metrics(&database, &clock, queue_defaults, &tags).await;
+            publish_queue_metrics(&database, &clock, queue_defaults, &tags, &snapshot).await;
 
             previous_stats = stats;
         }
@@ -134,6 +155,7 @@ async fn publish_queue_metrics(
     clock: &Arc<dyn Clock>,
     defaults: SurveyDefaults,
     tags: &HashMap<String, String>,
+    snapshot: &QueueSnapshotCell,
 ) {
     let survey = match queue_survey::survey(database.as_ref(), clock, defaults).await {
         Ok(survey) => survey,
@@ -159,6 +181,10 @@ async fn publish_queue_metrics(
     metrics::gauge!(names::QUEUE_SURVEY_TRUNCATED).set(u8::from(survey.truncated) as f64);
 
     log_survey(&survey, tags);
+
+    let taken_at = chrono::DateTime::from_timestamp(clock.unix_secs() as i64, 0)
+        .unwrap_or_else(chrono::Utc::now);
+    snapshot.publish(QueueSnapshot { taken_at, survey });
 }
 
 /// Log the survey alongside the `UpdateStats` events, so a deployment without
