@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 0.26.15 — `queue_status`
+
+`trust_tasks().queue_status(profile, did_hash, include_peers)` — the
+`messaging/queue/status` Trust Task: an account's two queues live, optionally
+broken down by counterparty. `did_hash = None` reads the caller's own.
+
 ### 0.26.14 — `stats_show` and `queue_list`
 
 `trust_tasks().stats_show(profile)` and

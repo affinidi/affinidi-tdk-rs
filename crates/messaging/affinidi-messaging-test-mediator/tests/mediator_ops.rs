@@ -2,7 +2,11 @@
 //! (`messaging/stats/show`, `messaging/queue/list`), sent through the SDK to a
 //! live in-process mediator.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use affinidi_messaging_didcomm::Message;
+use serde_json::json;
+use uuid::Uuid;
 
 use affinidi_messaging_mediator_common::types::accounts::AccountType;
 use affinidi_messaging_test_mediator::{TestEnvironment, TestUser};
@@ -107,4 +111,119 @@ async fn a_standard_account_cannot_read_mediator_wide_views() {
         .queue_list(&alice.profile, None, None, None, None, None)
         .await;
     assert!(queues.is_err(), "queue/list must be refused: {queues:?}");
+}
+
+/// Authcrypt a basic message from `sender` to `recipient` and hand it to the
+/// mediator for direct delivery. The recipient does not collect it, so it
+/// stays in the recipient's receive queue and the sender's send queue.
+async fn send_direct(env: &TestEnvironment, sender: &TestUser, recipient: &TestUser) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let msg = Message::build(
+        Uuid::new_v4().to_string(),
+        "https://didcomm.org/basicmessage/2.0/message".to_string(),
+        json!({ "content": "queue status probe" }),
+    )
+    .to(recipient.did.clone())
+    .from(sender.did.clone())
+    .created_time(now)
+    .expires_time(now + 600)
+    .finalize();
+    let msg_id = msg.id.clone();
+    let (packed, _) = env
+        .atm
+        .pack_encrypted(&msg, &recipient.did, Some(&sender.did), Some(&sender.did))
+        .await
+        .expect("pack");
+    env.atm
+        .send_message(&sender.profile, &packed, &msg_id, false, false)
+        .await
+        .expect("direct delivery accepted");
+}
+
+/// An environment with direct delivery on, so messages queue between users.
+async fn direct_env() -> TestEnvironment {
+    TestEnvironment::spawn_with_direct_delivery()
+        .await
+        .expect("environment")
+}
+
+#[tokio::test]
+async fn queue_status_shows_who_has_not_collected() {
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let bob = env.add_user("bob").await.expect("bob");
+    let carol = env.add_user("carol").await.expect("carol");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("alice live");
+
+    for _ in 0..3 {
+        send_direct(&env, &alice, &bob).await;
+    }
+    send_direct(&env, &alice, &carol).await;
+
+    // Alice reads her own queues (no admin rights needed) with the breakdown.
+    let status = env
+        .atm
+        .trust_tasks()
+        .queue_status(&alice.profile, None, Some(5))
+        .await
+        .expect("alice reads her own queue status");
+
+    assert_eq!(status.queues.did.as_str(), alice.did_hash().as_str());
+    assert_eq!(
+        status.queues.send.count, 4,
+        "held against alice until collected"
+    );
+    let send_peers = status.send_peers;
+    assert_eq!(send_peers.len(), 2);
+    assert_eq!(
+        send_peers[0].peer.as_str(),
+        bob.did_hash().as_str(),
+        "bob holds the most uncollected messages"
+    );
+    assert_eq!(send_peers[0].count, 3);
+    assert_eq!(send_peers[1].count, 1);
+    assert!(status.queues.send.oldest_age_seconds.is_some());
+}
+
+#[tokio::test]
+async fn a_standard_account_cannot_read_another_accounts_queue() {
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let bob = env.add_user("bob").await.expect("bob");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("alice live");
+
+    let denied = env
+        .atm
+        .trust_tasks()
+        .queue_status(&alice.profile, Some(bob.did_hash()), None)
+        .await;
+    assert!(
+        denied.is_err(),
+        "alice must not read bob's queues: {denied:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_admin_reads_any_accounts_queue() {
+    let (env, admin) = with_admin().await;
+    let bob = env.add_user("bob").await.expect("bob");
+
+    let status = env
+        .atm
+        .trust_tasks()
+        .queue_status(&admin.profile, Some(bob.did_hash()), Some(3))
+        .await
+        .expect("an admin reads bob's queues");
+    assert_eq!(status.queues.did.as_str(), bob.did_hash().as_str());
+    assert_eq!(status.queues.receive.count, 0);
+    assert!(status.receive_peers.is_empty());
 }

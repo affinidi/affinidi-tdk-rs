@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (0.28.17) — `messaging/queue/status`
+
+One account's two queues, read live: depth, bytes, effective limit (the
+account's own, else the mediator default), saturation and the age of the oldest
+message — the Trust Task counterpart of `GET /queue/status`, for any account an
+administrator names or for the requester's own (self needs no admin rights;
+another account needs admin, else `authorization.account.denied`).
+
+`includePeers: n` also breaks each queue down by its top `n` counterparties over
+its oldest 2,000 messages. In the send queue that is *who has not collected*: a
+message is held against its sender until the recipient deletes it, so a stalled
+recipient is the top entry in every one of its senders' send queues.
+
 ## Unreleased (0.28.16) — `messaging/stats/show` and `messaging/queue/list`
 
 Two admin-only Trust Tasks for operator tooling (trustoverip/dtgwg-trust-tasks-tf#549):

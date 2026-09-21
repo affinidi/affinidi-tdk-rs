@@ -317,6 +317,17 @@ pub(crate) async fn consume(
             )
             .await?
         }
+        ServedTask::QueueStatus => {
+            mediator_ops::consume_queue_status(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &sk,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
         ServedTask::QueueList => {
             mediator_ops::consume_queue_list(
                 downcast(&doc, session)?,
@@ -388,6 +399,7 @@ served_tasks! {
     ConfigShow => config::show::v0_1::Payload,
     StatsShow => stats::show::v0_1::Payload,
     QueueList => queue::list::v0_1::Payload,
+    QueueStatus => queue::status::v0_1::Payload,
 }
 
 impl ServedTask {
