@@ -1,3 +1,9 @@
+//! `mediator-monitor` — a read-only `/admin/status` dashboard.
+//!
+//! **Superseded by `mediator-console`** (`affinidi-messaging-mediator-tui`),
+//! which shows the same figures and manages the mediator over signed Trust
+//! Tasks. This tool will be removed in a later release.
+
 mod auth;
 mod status;
 mod ui;

@@ -393,6 +393,24 @@ See [`docs/acls.md`](./docs/acls.md) for the reasoning behind each, and
 | [`affinidi-messaging-mediator-processors`](./affinidi-messaging-mediator-processors/) | Scalable parallel processors (message expiry, forwarding) |
 | `affinidi-messaging-mediator-common` | Shared types for the mediator |
 
+## Managing the mediator
+
+Run **`mediator-console`** against the mediator to operate it from a terminal:
+statistics, every account's queues with gradient quota bars, any account's
+messages (inspect, delete, preview-then-confirm purges), ACLs and queue limits,
+the audit log, and a live traffic monitor showing what arrives and leaves —
+DIDComm or TSP, and what was refused and why. Connect with the administrator
+profile the setup wizard wrote (`conf/admin-monitor.json`) to manage the whole
+mediator, or with any account's profile to manage just that account.
+
+```bash
+cargo run --release -p affinidi-messaging-mediator-tui -- --profile conf/admin-monitor.json
+```
+
+Setup and usage: [`affinidi-messaging-mediator-tui`](../affinidi-messaging-mediator-tui/).
+The console needs this mediator at 0.28.20 or later (the `messaging/*`
+operations Trust Tasks). It supersedes `tools/mediator-monitor`.
+
 ## Examples
 
 Ensure the mediator is running, then:

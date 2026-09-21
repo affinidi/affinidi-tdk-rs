@@ -59,6 +59,7 @@ members = [
   "crates/messaging/affinidi-messaging-test-mediator",
   "crates/messaging/affinidi-messaging-text-client",
   "crates/messaging/affinidi-messaging-mediator-admin",
+  "crates/messaging/affinidi-messaging-mediator-tui",
 
   # Trust: trust infrastructure
   "crates/trust/affinidi-trust-lists",
