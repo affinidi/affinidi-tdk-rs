@@ -83,6 +83,10 @@ pub async fn message_outbound_handler(
                     debug!("Got message: {:?}", msg);
                     // Tag the message's wire protocol so the client can route it.
                     msg.detect_protocol_in_place();
+                    state
+                        .monitor
+                        .delivered_element(&msg, crate::monitor::Channel::Rest);
+                    let parties = (msg.from_address.clone(), msg.to_address.clone());
                     messages.success.push(msg);
 
                     if body.delete {
@@ -98,6 +102,13 @@ pub async fn message_outbound_handler(
                             .await;
                         match result {
                             Ok(_) => {
+                                state.monitor.deleted(
+                                    msg_id,
+                                    &session.did_hash,
+                                    parties.0.as_deref(),
+                                    parties.1.as_deref(),
+                                    crate::monitor::Channel::Rest,
+                                );
                                 debug!("Deleted message: {}", msg_id);
                             }
                             Err(err) => {

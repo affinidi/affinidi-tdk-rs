@@ -74,6 +74,19 @@ pub async fn message_delete_handler(
         let mut deleted: DeleteMessageResponse = DeleteMessageResponse::default();
 
         for message in &body.message_ids {
+            // Only while someone is watching: read who the message was between,
+            // so its `deleted` event names both parties.
+            let parties = if state.monitor.is_active() {
+                state
+                    .database
+                    .get_message(&session.did_hash, message)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|m| (m.from_address, m.to_address))
+            } else {
+                None
+            };
             let result: Result<(), MediatorError> = state
                 .database
                 .delete_message(
@@ -86,11 +99,12 @@ pub async fn message_delete_handler(
 
             match result {
                 Ok(_) => {
+                    let (from, to) = parties.unwrap_or_default();
                     state.monitor.deleted(
                         message,
                         &session.did_hash,
-                        None,
-                        None,
+                        from.as_deref(),
+                        to.as_deref(),
                         crate::monitor::Channel::Rest,
                     );
                     deleted.success.push(message.into())

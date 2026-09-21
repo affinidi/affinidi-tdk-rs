@@ -644,6 +644,78 @@ async fn an_admin_watches_a_message_arrive_live() {
     );
 }
 
+/// A message's whole life is visible to the monitor, with both parties at
+/// every step: received (the recipient read from the envelope's cleartext
+/// header, the channel it arrived on), delivered when the recipient fetches
+/// it, and deleted when the recipient acknowledges it.
+#[tokio::test]
+async fn the_monitor_follows_a_message_from_arrival_to_deletion() {
+    use affinidi_messaging_sdk::messages::{DeleteMessageRequest, fetch::FetchOptions};
+    use trust_tasks_rs::specs::messaging::monitor::subscribe::v0_1::MonitorFilter;
+
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let bob = env.add_user("bob").await.expect("bob");
+    let admin = promoted(&env, "admin", AccountType::Admin).await;
+
+    let filter: MonitorFilter =
+        serde_json::from_value(json!({ "dids": [bob.did_hash()] })).unwrap();
+    env.atm
+        .trust_tasks()
+        .monitor_subscribe(&admin.profile, Some(filter), Some(60), None, None)
+        .await
+        .expect("admin subscribes");
+
+    send_direct(&env, &alice, &bob).await;
+
+    let alice_hash = alice.did_hash();
+    let bob_hash = bob.did_hash();
+    let received = await_monitor_event(
+        &env,
+        &admin,
+        |e| e["stage"] == "received" && e["to"] == bob_hash.as_str(),
+        Duration::from_secs(10),
+    )
+    .await
+    .expect("the arrival names its recipient");
+    assert_eq!(received["channel"], "rest");
+    assert_eq!(received["protocol"], "didcomm");
+
+    let fetched = env
+        .atm
+        .fetch_messages(&bob.profile, &FetchOptions::default())
+        .await
+        .expect("bob fetches");
+    let ids: Vec<String> = fetched.success.iter().map(|m| m.msg_id.clone()).collect();
+    assert_eq!(ids.len(), 1);
+
+    let delivered = await_monitor_event(
+        &env,
+        &admin,
+        |e| e["stage"] == "delivered" && e["to"] == bob_hash.as_str(),
+        Duration::from_secs(10),
+    )
+    .await
+    .expect("a REST fetch is a delivery");
+    assert_eq!(delivered["from"], alice_hash.as_str());
+    assert_eq!(delivered["channel"], "rest");
+
+    env.atm
+        .delete_messages_direct(&bob.profile, &DeleteMessageRequest { message_ids: ids })
+        .await
+        .expect("bob deletes");
+
+    let deleted = await_monitor_event(
+        &env,
+        &admin,
+        |e| e["stage"] == "deleted" && e["to"] == bob_hash.as_str(),
+        Duration::from_secs(10),
+    )
+    .await
+    .expect("the delete is seen");
+    assert_eq!(deleted["from"], alice_hash.as_str());
+}
+
 #[tokio::test]
 async fn a_standard_account_monitors_only_itself() {
     use trust_tasks_rs::specs::messaging::monitor::subscribe::v0_1::MonitorFilter;

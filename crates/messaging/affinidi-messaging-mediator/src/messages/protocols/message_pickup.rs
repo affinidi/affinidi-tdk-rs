@@ -353,6 +353,10 @@ pub(crate) async fn delivery_request(
             )
             .await?;
         debug!("msgs fetched: {}", messages.success.len());
+        let channel = crate::monitor::current_channel();
+        for element in &messages.success {
+            state.monitor.delivered_element(element, channel);
+        }
 
         if !messages.success.is_empty() {
             let response_msg = Message::build(
@@ -437,6 +441,17 @@ pub(crate) async fn messages_received(
                         .await
                     {
                         Ok(_) => {
+                            let (from, to) = msg
+                                .as_ref()
+                                .map(|m| (m.from_address.clone(), m.to_address.clone()))
+                                .unwrap_or_default();
+                            state.monitor.deleted(
+                                msg_id,
+                                &session.did_hash,
+                                from.as_deref(),
+                                to.as_deref(),
+                                crate::monitor::current_channel(),
+                            );
                             info!("Deleted message: {}", msg_id);
                         }
                         Err(err) => {

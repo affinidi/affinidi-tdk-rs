@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased (0.28.22) — the monitor sees every step, with both parties
+
+The traffic monitor (0.28.20) now reports a message's whole life, not just its
+arrival and storage:
+
+- **`received` names the recipient.** It is read from the envelope's cleartext
+  header (a DIDComm JWE's `kid`, a TSP envelope's receiver) and hashed like
+  every other party. Nothing is decrypted, and the header is only parsed while
+  someone is subscribed. DIDComm v1 and signed-only messages carry no DID in
+  the clear and still report none.
+- **Pickups and deletes report their channel.** A request handled deep in the
+  protocol layer (message pickup, v1 batch pickup and ack) reports the channel
+  it arrived on, REST or websocket.
+- **Collection is a `delivered` event.** Fetching over REST, message pickup
+  (`delivery-request`, live delivery), DIDComm v1 batch pickup and websocket
+  redelivery all report what they handed over, with sender and recipient.
+  Before, only websocket pushes did.
+- **`deleted` carries both parties.** Deletes over REST, pickup's
+  `messages-received`, the v1 ack and websocket delete-on-send now all name
+  the sender and the recipient. A REST delete looks each message up first to
+  do this, but only while someone is subscribed.
+
+The mediator's own management traffic with a subscriber is now filtered on the
+server in every case, because requests to the mediator carry it as the
+recipient.
+
 ## Unreleased (0.28.21) — TSP is a default feature
 
 `tsp` joins `didcomm` in the mediator's default features, so a mediator built

@@ -588,13 +588,17 @@ pub async fn serve_internal(
     // crate explicitly.
     ::metrics::gauge!(WS_SEND_BUFFER_AVAILABLE_BYTES).set(ws_send_budget.total_bytes() as f64);
 
+    // The traffic monitor, shared by the data plane (through `SharedData`) and
+    // the streaming task's inbox redelivery.
+    let monitor = crate::monitor::TrafficMonitor::new();
     let streaming_task = if config.streaming_enabled {
-        Some(StreamingTask::spawn_supervised(
+        Some(StreamingTask::spawn_supervised_with_monitor(
             &supervisor,
             store.clone(),
             &config.streaming_uuid,
             ws_send_budget.clone(),
             config.limits.delivered_expiry_seconds,
+            monitor.clone(),
         ))
     } else {
         None
@@ -753,7 +757,7 @@ pub async fn serve_internal(
         component_health: supervisor.registry(),
         clock,
         queue_snapshot,
-        monitor: crate::monitor::TrafficMonitor::new(),
+        monitor,
         #[cfg(feature = "tsp")]
         tsp_identity: Arc::new(tokio::sync::OnceCell::new()),
         #[cfg(feature = "didcomm-v1")]
