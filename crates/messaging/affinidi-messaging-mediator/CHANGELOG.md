@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased (0.28.10) — a re-submitted message is stored once, and its counters no longer leak
+
+Storing a message is now idempotent on its hash, in all three backends. The
+same bytes stored twice for the same recipient used to add a second inbox and
+outbox entry and a second queue-counter increment over a single message row.
+The one delete then released one of each and left the rest behind for good:
+the sender's `send_queue_count`, the recipient's `receive_queue_count` and the
+per-peer depth each kept one per duplicate. Expiry could not recover them
+either, because both copies share one expiry key. The recipient also saw the
+duplicate's delete refused with `NOT_FOUND`.
+
+Duplicates are ordinary traffic, not an edge case: the delivery layer's outbox
+re-sends the identical packed bytes whenever a send errors, including when the
+mediator had in fact stored it and only the acknowledgement was lost to a reset
+connection. On a live deployment the leak was one of the things behind a
+did-hosting control DID crossing `limits.queue.sender`, after which it could
+answer nobody.
+
+The check runs under the store's write lock (the Lua function is atomic in
+Redis), so two concurrent stores of the same bytes cannot both pass. The same
+bytes addressed to a *different* recipient are unchanged by this release.
+
+Redis deployments pick up the changed `conf/atm-functions.lua` at startup via
+`FUNCTION LOAD REPLACE`; a deployment that ships its own copy of that file must
+update it, which `redis_functions_match_build` reports.
+
 ## Unreleased (0.28.9) — `limits.pickup_round_robin`, on by default
 
 A pickup now gives each sender a turn instead of serving an inbox strictly

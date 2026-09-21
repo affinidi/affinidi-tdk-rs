@@ -423,6 +423,17 @@ impl MediatorStore for MemoryStore {
 
         let mut state = self.state.lock().await;
 
+        // Idempotent on the message hash, as in the Fjall backend — see
+        // `FjallStore::store_message` for the leak a re-submitted message
+        // caused. Same rule here so the two cannot drift.
+        if state
+            .messages
+            .get(&msg_id)
+            .is_some_and(|existing| existing.to_did_hash == to_did_hash)
+        {
+            return Ok(msg_id);
+        }
+
         // Allocate stream IDs first so we can record them on the
         // MessageRecord below.
         let receive_id = state.alloc_stream_id();
@@ -3227,5 +3238,38 @@ mod tests {
             );
             assert_eq!(state.attempts, 1);
         }
+    }
+}
+
+#[cfg(test)]
+mod idempotent_store_tests {
+    use super::*;
+
+    /// Same regression as the Fjall backend's: a re-submitted message is
+    /// stored and counted once, so its one delete leaves nothing behind.
+    #[tokio::test]
+    async fn a_resubmitted_message_is_stored_and_counted_once() {
+        let store = MemoryStore::new();
+        let (to, from) = (digest("vta"), digest("control"));
+        let a = store
+            .store_message("s", "same-bytes", &to, Some(&from), 0, 0)
+            .await
+            .expect("first store");
+        store
+            .store_message("s", "same-bytes", &to, Some(&from), 0, 0)
+            .await
+            .expect("re-submitted store");
+        store
+            .delete_message(
+                &a,
+                DeletionAuthority::Owner {
+                    did_hash: to.clone(),
+                },
+            )
+            .await
+            .expect("delete");
+        let sender = store.account_get(&from).await.unwrap().unwrap_or_default();
+        assert_eq!(sender.send_queue_count, 0, "the sender count must not leak");
+        assert_eq!(store.peer_queue_count(&from, &to).await.unwrap(), 0);
     }
 }

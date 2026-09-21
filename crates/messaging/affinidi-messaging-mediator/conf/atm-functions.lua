@@ -32,6 +32,15 @@ local function store_message(keys, args)
         queue_maxlen = tonumber(args[6]) or 0
     end
 
+    -- Idempotent on the message hash. A re-submitted message (the same bytes,
+    -- e.g. an outbox re-send after a lost acknowledgement) used to add a second
+    -- inbox/outbox entry and a second counter increment over one MSG row; the
+    -- single delete released one of each and the rest leaked for good. Same
+    -- rule as the Fjall and memory backends: a no-op for the same recipient.
+    if redis.call('HGET', 'MSG:META:' .. keys[1], 'TO') == args[4] then
+        return redis.status_reply('OK')
+    end
+
     -- Store message
     redis.call('SET', 'MSG:' .. keys[1], args[1])
 
