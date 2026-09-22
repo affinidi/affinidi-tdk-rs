@@ -104,10 +104,14 @@ impl Database {
             message_hash = message_hash
         );
         async move {
+            // The `store_message` Lua function keeps a message's metadata in
+            // the hash `MSG:META:{id}`: BYTES, TO, TIMESTAMP (unix ms), and
+            // FROM when the sender is known. (This read used to look for a
+            // `MESSAGE_STORE` hash field that nothing writes, so it could
+            // never succeed.)
             let mut conn = self.get_connection().await?;
-            let metadata: String = redis::cmd("HGET")
-                .arg("MESSAGE_STORE")
-                .arg(["METADATA:", message_hash].concat())
+            let fields: std::collections::HashMap<String, String> = redis::cmd("HGETALL")
+                .arg(["MSG:META:", message_hash].concat())
                 .query_async(&mut conn)
                 .await
                 .map_err(|err| {
@@ -122,17 +126,11 @@ impl Database {
                         format!("Couldn't get message metadata from database: {err}"),
                     )
                 })?;
-
-            let metadata: MessageMetaData = serde_json::from_str(&metadata).map_err(|err| {
-                event!(
-                    Level::ERROR,
-                    "Couldn't parse message metadata from database: {}",
-                    err
-                );
+            let metadata = metadata_from_fields(&fields).ok_or_else(|| {
                 MediatorError::DatabaseError(
                     22,
                     session_id.into(),
-                    format!("Couldn't parse message metadata from database: {err}"),
+                    format!("No usable metadata for message {message_hash}"),
                 )
             })?;
 
@@ -140,5 +138,44 @@ impl Database {
         }
         .instrument(_span)
         .await
+    }
+}
+
+/// A `MSG:META:{id}` hash as [`MessageMetaData`]; `None` when the message is
+/// gone (an empty hash) or a required field is missing or malformed.
+fn metadata_from_fields(
+    fields: &std::collections::HashMap<String, String>,
+) -> Option<MessageMetaData> {
+    Some(MessageMetaData {
+        bytes: fields.get("BYTES")?.parse().ok()?,
+        to_did_hash: fields.get("TO")?.clone(),
+        from_did_hash: fields.get("FROM").cloned(),
+        timestamp: fields.get("TIMESTAMP")?.parse().ok()?,
+    })
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+
+    #[test]
+    fn a_message_meta_hash_parses_and_an_empty_one_is_absent() {
+        let fields: std::collections::HashMap<String, String> = [
+            ("BYTES", "42"),
+            ("TO", "bob"),
+            ("FROM", "alice"),
+            ("TIMESTAMP", "1700000000123"),
+            ("RECEIVE_ID", "1-0"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let meta = metadata_from_fields(&fields).unwrap();
+        assert_eq!(meta.bytes, 42);
+        assert_eq!(meta.to_did_hash, "bob");
+        assert_eq!(meta.from_did_hash.as_deref(), Some("alice"));
+        assert_eq!(meta.timestamp, 1_700_000_000_123);
+
+        assert!(metadata_from_fields(&Default::default()).is_none());
     }
 }

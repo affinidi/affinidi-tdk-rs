@@ -61,8 +61,8 @@ use affinidi_messaging_mediator_common::{
     store::{
         DeletionAuthority, DeliveryDecision, DeliveryMarkReport, DeliveryState, ExpiryReport,
         ForwardQueueEntry, InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats,
-        POISON_ATTEMPTS, PubSubRecord, Session, SessionState, SessionSweepReport, StatCounter,
-        StoreHealth, StreamingClientState, TrustTaskClaim, ops,
+        OnExpired, POISON_ATTEMPTS, PubSubRecord, Session, SessionState, SessionSweepReport,
+        StatCounter, StoreHealth, StreamingClientState, TrustTaskClaim, ops,
     },
     types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
@@ -3054,6 +3054,16 @@ impl MediatorStore for FjallStore {
         now_secs: u64,
         admin_did_hash: &str,
     ) -> Result<ExpiryReport, MediatorError> {
+        self.sweep_expired_messages_observed(now_secs, admin_did_hash, None)
+            .await
+    }
+
+    async fn sweep_expired_messages_observed(
+        &self,
+        now_secs: u64,
+        admin_did_hash: &str,
+        on_expired: Option<OnExpired<'_>>,
+    ) -> Result<ExpiryReport, MediatorError> {
         // Range-scan the expiry partition with `expires_at <=
         // now_secs`. Keys are `expires_at_be_8 || msg_id`, so we
         // bound from `0u64` up to (and including) `now_secs`'s
@@ -3086,6 +3096,10 @@ impl MediatorStore for FjallStore {
         }
 
         for msg_id in to_delete {
+            let meta = match on_expired {
+                Some(_) => self.get_message_metadata("expiry", &msg_id).await.ok(),
+                None => None,
+            };
             match self
                 .delete_message(
                     &msg_id,
@@ -3095,7 +3109,12 @@ impl MediatorStore for FjallStore {
                 )
                 .await
             {
-                Ok(_) => report.expired += 1,
+                Ok(_) => {
+                    report.expired += 1;
+                    if let (Some(observe), Some(meta)) = (on_expired, &meta) {
+                        observe(&msg_id, meta);
+                    }
+                }
                 Err(_) => report.already_deleted += 1,
             }
         }

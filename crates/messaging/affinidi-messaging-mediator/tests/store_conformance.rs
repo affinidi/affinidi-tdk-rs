@@ -42,7 +42,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use affinidi_messaging_mediator_common::store::types::{ForwardQueueEntry, Session, SessionState};
+use affinidi_messaging_mediator_common::store::types::{
+    ForwardQueueEntry, MessageMetaData, Session, SessionState,
+};
 use affinidi_messaging_mediator_common::store::{MediatorStore, TrustTaskClaim};
 use affinidi_messaging_mediator_common::types::audit::{AuditAction, AuditLogEntry};
 use affinidi_messaging_sdk::protocols::mediator::{
@@ -1033,6 +1035,61 @@ async fn check_trust_task_claim(store: Arc<dyn MediatorStore>) {
     );
 }
 
+/// The observed expiry sweep reports each message it removes, with the
+/// metadata it had, and nothing it leaves.
+async fn check_expiry_sweep_reports_each_message(store: Arc<dyn MediatorStore>) {
+    use std::sync::Mutex;
+    let to = "did_hash_recipient_expiry";
+    let from = "did_hash_sender_expiry";
+    store
+        .account_add(to, &allow_all(), None)
+        .await
+        .expect("account_add recipient");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let body = "{\"protected\":\"expiring\"}";
+    let expiring = store
+        .store_message("s", body, to, Some(from), now - 10, 1000)
+        .await
+        .expect("store expiring");
+    let kept = store
+        .store_message("s", "{\"protected\":\"kept\"}", to, Some(from), NEVER, 1000)
+        .await
+        .expect("store kept");
+
+    // Readable by id on every backend (Redis read a key nothing wrote).
+    let meta = store
+        .get_message_metadata("s", &expiring)
+        .await
+        .expect("metadata");
+    assert_eq!(meta.to_did_hash, to);
+    assert_eq!(meta.from_did_hash.as_deref(), Some(from));
+
+    let seen: Mutex<Vec<(String, MessageMetaData)>> = Mutex::new(Vec::new());
+    let observe = |id: &str, meta: &MessageMetaData| {
+        seen.lock().unwrap().push((id.to_string(), meta.clone()));
+    };
+    let report = store
+        .sweep_expired_messages_observed(now, "did_hash_admin_expiry", Some(&observe))
+        .await
+        .expect("sweep");
+    assert_eq!(report.expired, 1, "{report:?}");
+
+    let seen = seen.into_inner().unwrap();
+    assert_eq!(seen.len(), 1, "only the expired message is reported");
+    let (id, meta) = &seen[0];
+    assert_eq!(id, &expiring);
+    assert_eq!(meta.to_did_hash, to);
+    assert_eq!(meta.from_did_hash.as_deref(), Some(from));
+    assert!(meta.bytes >= body.len(), "{} >= {}", meta.bytes, body.len());
+
+    assert!(store.get_message(to, &expiring).await.unwrap().is_none());
+    assert!(store.get_message(to, &kept).await.unwrap().is_some());
+}
+
 /// Generate one `#[tokio::test]` per check for a backend `$ctor`.
 /// Gated to the in-process backends that use it — a Redis-only build drives the
 /// async `conformance_for_redis!` instead, so an ungated def would warn (unused)
@@ -1103,6 +1160,10 @@ macro_rules! conformance_for {
             async fn trust_task_claim() {
                 check_trust_task_claim(ready($ctor).await).await;
             }
+            #[tokio::test]
+            async fn expiry_sweep_reports_each_message() {
+                check_expiry_sweep_reports_each_message(ready($ctor).await).await;
+            }
         }
     };
 }
@@ -1151,4 +1212,6 @@ conformance_for_redis!(redis,
     delivery_decision_matches_access_list => check_delivery_decision_matches_access_list @ 13,
     v1_routing_keys          => check_v1_routing_keys          @ 14,
     trust_task_claim         => check_trust_task_claim         @ 15,
+    // DB 0: every numbered index a default Redis offers (0..=15) is in use.
+    expiry_sweep_reports_each_message => check_expiry_sweep_reports_each_message @ 0,
 );

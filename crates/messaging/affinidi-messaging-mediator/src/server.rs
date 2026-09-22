@@ -470,6 +470,11 @@ pub async fn serve_internal(
         });
     }
 
+    // The traffic monitor, shared by the data plane (through `SharedData`),
+    // the streaming task's inbox redelivery, the forwarding processor and the
+    // expiry sweep below.
+    let monitor = crate::monitor::TrafficMonitor::new();
+
     // Message expiry sweep — non-load-bearing housekeeping. Runs against
     // any backend via `MediatorStore::sweep_expired_messages`. The
     // standalone `message_expiry_cleanup` binary in mediator-processors
@@ -479,19 +484,28 @@ pub async fn serve_internal(
     if config.processors.message_expiry_cleanup.enabled {
         let store = store.clone();
         let admin_did_hash = config.mediator_did_hash.clone();
+        let monitor = monitor.clone();
         // `E` is pinned explicitly: the loop never returns `Err`, so the
         // error type is otherwise unconstrained.
         supervisor.spawn::<_, _, String>("message_expiry_sweep", false, move || {
             let store = store.clone();
             let admin_did_hash = admin_did_hash.clone();
+            let monitor = monitor.clone();
             async move {
+                let observe = |msg_id: &str, meta: &affinidi_messaging_mediator_common::store::types::MessageMetaData| {
+                    monitor.expired(msg_id, meta)
+                };
                 let mut tick = tokio::time::interval(Duration::from_secs(1));
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     tick.tick().await;
                     let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
+                    // Each message's metadata is read only while someone watches.
+                    let on_expired = monitor.is_active().then_some(
+                        &observe as affinidi_messaging_mediator_common::store::OnExpired<'_>,
+                    );
                     match store
-                        .sweep_expired_messages(now_secs, &admin_did_hash)
+                        .sweep_expired_messages_observed(now_secs, &admin_did_hash, on_expired)
                         .await
                     {
                         Ok(report) if report.expired > 0 || report.timeslots_swept > 0 => {
@@ -588,9 +602,6 @@ pub async fn serve_internal(
     // crate explicitly.
     ::metrics::gauge!(WS_SEND_BUFFER_AVAILABLE_BYTES).set(ws_send_budget.total_bytes() as f64);
 
-    // The traffic monitor, shared by the data plane (through `SharedData`) and
-    // the streaming task's inbox redelivery.
-    let monitor = crate::monitor::TrafficMonitor::new();
     let streaming_task = if config.streaming_enabled {
         Some(StreamingTask::spawn_supervised_with_monitor(
             &supervisor,
