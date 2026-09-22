@@ -128,3 +128,66 @@ async fn an_admin_console_renders_real_data() {
     assert!(!peer_row.is_empty());
     assert!(account.contains("Receive queue"), "message table");
 }
+
+/// A long nickname gets the width it needs, even with the monitor pane open
+/// beside it, instead of being cut at a fixed width.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_named_account_gets_room_beside_the_monitor() {
+    use affinidi_messaging_mediator_admin::AddressBook;
+
+    let env = TestEnvironment::spawn_with_direct_delivery().await.unwrap();
+    let alice = env.add_user("alice").await.unwrap();
+    let bob = env.add_user("bob").await.unwrap();
+    let op = env.add_user("operator").await.unwrap();
+    env.mediator
+        .store()
+        .account_set_role(&op.did_hash(), &AccountType::Admin)
+        .await
+        .unwrap();
+    send(&env, &alice, &bob).await;
+
+    let console = MediatorConsole::connect(Identity {
+        alias: "operator".into(),
+        did: op.did.clone(),
+        secrets: op.secrets.clone(),
+        mediator_did: Some(env.mediator.did().to_string()),
+    })
+    .await
+    .unwrap();
+    let name = "Verifiable Data Rooms · vdr-host";
+    let mut book = AddressBook::new();
+    book.insert(&bob.did, name);
+    let mut app = App::new(console)
+        .with_color_depth(ColorDepth::TrueColor)
+        .with_address_book(book, None);
+    let mut terminal = Terminal::new(TestBackend::new(200, 30)).unwrap();
+
+    // Alice's account, live: bob is the recipient who hasn't collected.
+    app.handle_key(key(KeyCode::Char('m')));
+    app.open_account(Some(alice.did_hash()));
+    app.handle_key(key(KeyCode::Char('x'))); // her send queue
+    settle(&mut app, Duration::from_secs(3)).await;
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let account = screen(&terminal);
+    println!("{account}");
+    assert!(
+        account.contains(name),
+        "the whole nickname fits beside the monitor:\n{account}"
+    );
+
+    // Every account on the mediator, the named one by its name.
+    app.handle_key(key(KeyCode::Char('5')));
+    settle(&mut app, Duration::from_secs(2)).await;
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let accounts = screen(&terminal);
+    println!("{accounts}");
+    assert!(
+        accounts.contains("Accounts —"),
+        "accounts screen:\n{accounts}"
+    );
+    assert!(accounts.contains(name), "named account listed:\n{accounts}");
+    assert!(
+        accounts.contains("admin"),
+        "the operator's role shown:\n{accounts}"
+    );
+}

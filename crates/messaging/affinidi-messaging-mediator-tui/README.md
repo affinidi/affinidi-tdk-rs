@@ -79,6 +79,7 @@ is reported plainly.
 | `2` | **Queues** *(admin)* | Every account with a non-empty queue, ranked by depth, bytes, oldest message or saturation (`s` cycles the ranking, `x` switches between receive and send). Each queue has a **quota bar**. The ranking comes from the mediator's once-a-minute survey, and the title shows when that survey ran. |
 | `3` | **Account** | One account's two queues with quota bars, its **send queue by recipient** (who hasn't collected yet), and its messages. For a standard account, this is the whole console. |
 | `4` | **Audit** *(admin)* | The mediator's audit log of privileged changes. Monitor subscriptions and cross-account reads are recorded here too. |
+| `5` | **Accounts** *(admin)* | Every account on the mediator: name, hash, role (coloured), receive and send depth, bytes queued, access-list size. The mediator and administrators come first, then accounts you've named, then the rest. `⏎` opens one. Works on older mediators too. |
 
 **Quota bars** shade smoothly from green through amber to red along the bar,
 so how full a queue is shows as colour at its leading edge. They use 24-bit
@@ -90,7 +91,7 @@ to 256 colours, then to three plain colours; `NO_COLOR` switches colour off.
 | Key | Where | Does |
 |---|---|---|
 | `↑` `↓` / `j` `k` | tables | select a row |
-| `⏎` | Dashboard, Queues | open the selected account |
+| `⏎` | Dashboard, Queues, Accounts | open the selected account |
 | `x` | Queues, Account | receive ↔ send queue |
 | `s` | Dashboard, Queues | change the ranking |
 | `i` | Account | **inspect** the selected message: its metadata and raw envelope, decrypted locally when you hold the recipient's key (your own mail) |

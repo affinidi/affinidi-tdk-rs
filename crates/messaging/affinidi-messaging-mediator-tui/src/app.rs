@@ -38,11 +38,14 @@ const MONITOR_LINES: usize = 500;
 
 /// The console's screens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Tab {
     Dashboard,
     Queues,
     Account,
     Audit,
+    /// Every account on the mediator (administrators).
+    Accounts,
 }
 
 impl Tab {
@@ -52,17 +55,21 @@ impl Tab {
             Tab::Queues => "Queues",
             Tab::Account => "Account",
             Tab::Audit => "Audit",
+            Tab::Accounts => "Accounts",
         }
     }
 }
 
 /// A result of background work, applied with [`App::apply`].
+#[non_exhaustive]
 pub enum Update {
     Stats(Result<Value, ConsoleError>),
     Queues(Result<Value, ConsoleError>),
     Status(Result<Value, ConsoleError>),
     Messages(Result<Value, ConsoleError>),
     Audit(Result<Value, ConsoleError>),
+    /// Every account, all pages.
+    Accounts(Result<Vec<Value>, ConsoleError>),
     Inspected(Box<Result<InspectedMessage, ConsoleError>>),
     PurgePreview(Result<PurgePlan, ConsoleError>),
     /// A finished action: what to tell the user.
@@ -143,6 +150,8 @@ pub struct App {
     message_send: bool,
 
     audit: Vec<Value>,
+    accounts: Vec<Value>,
+    accounts_state: TableState,
     monitor: MonitorPane,
     popup: Option<Popup>,
     notice: Option<(String, bool)>,
@@ -190,6 +199,8 @@ impl App {
             message_state: TableState::default().with_selected(Some(0)),
             message_send: false,
             audit: Vec::new(),
+            accounts: Vec::new(),
+            accounts_state: TableState::default().with_selected(Some(0)),
             monitor: MonitorPane {
                 visible: false,
                 failures_only: false,
@@ -248,6 +259,7 @@ impl App {
     fn account_in_view(&self) -> Option<String> {
         match self.tab {
             Tab::Queues | Tab::Dashboard => self.selected_queue_did(),
+            Tab::Accounts => self.selected_account_did(),
             Tab::Account => self
                 .selected_message_field(if self.message_send { "to" } else { "from" })
                 .or_else(|| self.target.clone())
@@ -346,7 +358,13 @@ impl App {
 
     fn tabs(&self) -> Vec<Tab> {
         if self.admin() {
-            vec![Tab::Dashboard, Tab::Queues, Tab::Account, Tab::Audit]
+            vec![
+                Tab::Dashboard,
+                Tab::Queues,
+                Tab::Account,
+                Tab::Audit,
+                Tab::Accounts,
+            ]
         } else {
             vec![Tab::Account]
         }
@@ -368,7 +386,7 @@ impl App {
     pub fn refresh(&mut self) {
         // On a mediator too old to serve them, these screens explain that
         // instead of asking (see `render_unsupported`).
-        if !self.console.serves_operations() && self.tab != Tab::Audit {
+        if !self.console.serves_operations() && !matches!(self.tab, Tab::Audit | Tab::Accounts) {
             self.updated = Some(Instant::now());
             return;
         }
@@ -400,6 +418,9 @@ impl App {
                 self.spawn(
                     |c| async move { Update::Audit(to_value(c.audit(None, Some(200)).await)) },
                 );
+            }
+            Tab::Accounts => {
+                self.spawn(|c| async move { Update::Accounts(all_accounts(&c).await) })
             }
         }
     }
@@ -461,6 +482,19 @@ impl App {
                 }
                 Err(e) => self.error(e),
             },
+            Update::Accounts(r) => match r {
+                Ok(mut accounts) => {
+                    let book = &self.book;
+                    accounts.sort_by_key(|a| account_order(a, book));
+                    self.accounts = accounts;
+                    let len = self.accounts.len();
+                    if self.accounts_state.selected().is_none_or(|i| i >= len) {
+                        self.accounts_state.select(Some(0));
+                    }
+                    ok(self)
+                }
+                Err(e) => self.error(e),
+            },
             Update::Inspected(r) => match *r {
                 Ok(m) => self.popup = Some(inspect_popup(&m)),
                 Err(e) => self.error(e),
@@ -513,7 +547,7 @@ impl App {
         }
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Control::Quit,
-            KeyCode::Char(c @ '1'..='4') => {
+            KeyCode::Char(c @ '1'..='5') => {
                 if let Some(tab) = self.tabs().get((c as u8 - b'1') as usize) {
                     self.tab = *tab;
                     self.refresh();
@@ -554,6 +588,11 @@ impl App {
             }
             (Tab::Queues | Tab::Dashboard, KeyCode::Enter) => {
                 if let Some(did) = self.selected_queue_did() {
+                    self.open_account(Some(did));
+                }
+            }
+            (Tab::Accounts, KeyCode::Enter) => {
+                if let Some(did) = self.selected_account_did() {
                     self.open_account(Some(did));
                 }
             }
@@ -708,6 +747,7 @@ impl App {
         let (state, len) = match self.tab {
             Tab::Queues | Tab::Dashboard => (&mut self.queue_state, queue_rows(&self.queues).len()),
             Tab::Account => (&mut self.message_state, self.messages.len()),
+            Tab::Accounts => (&mut self.accounts_state, self.accounts.len()),
             Tab::Audit => return,
         };
         if len == 0 {
@@ -715,6 +755,11 @@ impl App {
         }
         let i = state.selected().unwrap_or(0) as i32 + delta;
         state.select(Some(i.clamp(0, len as i32 - 1) as usize));
+    }
+
+    fn selected_account_did(&self) -> Option<String> {
+        let i = self.accounts_state.selected()?;
+        self.accounts.get(i)?["did"].as_str().map(str::to_string)
     }
 
     fn selected_queue_did(&self) -> Option<String> {
@@ -885,7 +930,7 @@ impl App {
         } else {
             rows[2]
         };
-        if !self.console.serves_operations() && self.tab != Tab::Audit {
+        if !self.console.serves_operations() && !matches!(self.tab, Tab::Audit | Tab::Accounts) {
             self.render_unsupported(f, body);
         } else {
             self.render_screen(f, body);
@@ -902,6 +947,7 @@ impl App {
             Tab::Queues => self.render_queues(f, body),
             Tab::Account => self.render_account(f, body),
             Tab::Audit => self.render_audit(f, body),
+            Tab::Accounts => self.render_accounts(f, body),
         }
     }
 
@@ -1009,6 +1055,9 @@ impl App {
                         "↑↓ select  i inspect  d delete  p purge  P purge peer  x recv/send  o own  n name  b book  m monitor  q quit"
                     }
                     Tab::Audit => "n name  b book  m monitor  r refresh  q quit",
+                    Tab::Accounts => {
+                        "↑↓ select  ⏎ open  n name  b book  m monitor  r refresh  q quit"
+                    }
                 };
                 Line::styled(format!(" {keys}"), Style::default().fg(Color::DarkGray))
             }
@@ -1111,7 +1160,16 @@ impl App {
 
     fn render_queue_table(&mut self, f: &mut Frame, area: Rect, title: &str) {
         let rows = queue_rows(&self.queues);
-        let bar_width = 16;
+        // The account column fits the longest name (within reason) and the two
+        // quota bars share whatever width is left, so the table uses the pane.
+        let names: Vec<String> = rows
+            .iter()
+            .map(|q| label(&self.book, q["did"].as_str().unwrap_or("?")))
+            .collect();
+        let inner = area.width.saturating_sub(2);
+        const FIXED: u16 = 9 + 11 + 11 + 8 + 6; // role, two counts, oldest, gaps
+        let account_width = fit_width(&names, 15, 40);
+        let bar_width = (inner.saturating_sub(account_width + FIXED) / 2).clamp(8, 40);
         let depth = self.depth;
         let table_rows: Vec<Row> = rows
             .iter()
@@ -1159,7 +1217,7 @@ impl App {
         let table = Table::new(
             table_rows,
             [
-                Constraint::Length(15),
+                Constraint::Length(account_width),
                 Constraint::Length(9),
                 Constraint::Length(11),
                 Constraint::Length(bar_width),
@@ -1244,7 +1302,7 @@ impl App {
             Table::new(
                 peer_rows,
                 [
-                    Constraint::Length(15),
+                    Constraint::Fill(1),
                     Constraint::Length(7),
                     Constraint::Length(9),
                     Constraint::Length(9),
@@ -1290,11 +1348,11 @@ impl App {
             rows,
             [
                 Constraint::Length(9),
-                Constraint::Length(15),
-                Constraint::Length(15),
+                Constraint::Fill(2),
+                Constraint::Fill(2),
                 Constraint::Length(9),
                 Constraint::Length(10),
-                Constraint::Min(10),
+                Constraint::Fill(1),
             ],
         )
         .header(
@@ -1308,6 +1366,77 @@ impl App {
             self.messages.len()
         )));
         f.render_stateful_widget(table, parts[2], &mut self.message_state);
+    }
+
+    fn render_accounts(&mut self, f: &mut Frame, area: Rect) {
+        let names: Vec<String> = self
+            .accounts
+            .iter()
+            .map(|a| label(&self.book, a["did"].as_str().unwrap_or("?")))
+            .collect();
+        let name_width = fit_width(&names, 15, 40);
+        let rows: Vec<Row> = self
+            .accounts
+            .iter()
+            .zip(&names)
+            .map(|(a, name)| {
+                let hash = a["did"].as_str().unwrap_or("?");
+                let n = |k: &str| a[k].as_u64().map_or("–".into(), |v| v.to_string());
+                let bytes = a["receiveQueueBytes"].as_u64().unwrap_or(0)
+                    + a["sendQueueBytes"].as_u64().unwrap_or(0);
+                let role = a["accountType"].as_str().unwrap_or("").to_string();
+                let style = match role.as_str() {
+                    "rootAdmin" => Style::default().fg(Color::Red),
+                    "admin" => Style::default().fg(Color::Yellow),
+                    "mediator" => Style::default().fg(Color::Cyan),
+                    _ => Style::default(),
+                };
+                Row::new(vec![
+                    Cell::from(name.clone()),
+                    Cell::from(if self.book.name_of(hash).is_some() {
+                        short(hash)
+                    } else {
+                        String::new()
+                    }),
+                    Cell::from(role).style(style),
+                    Cell::from(n("receiveQueueCount")),
+                    Cell::from(n("sendQueueCount")),
+                    Cell::from(human_bytes(Some(bytes))),
+                    Cell::from(n("accessListCount")),
+                ])
+            })
+            .collect();
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Length(name_width),
+                Constraint::Length(14),
+                Constraint::Length(10),
+                Constraint::Length(8),
+                Constraint::Length(8),
+                Constraint::Length(9),
+                Constraint::Fill(1),
+            ],
+        )
+        .header(
+            Row::new(vec![
+                "account",
+                "hash",
+                "role",
+                "receive",
+                "send",
+                "queued",
+                "access list",
+            ])
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+        )
+        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" Accounts — {} ", self.accounts.len())),
+        );
+        f.render_stateful_widget(table, area, &mut self.accounts_state);
     }
 
     fn render_audit(&self, f: &mut Frame, area: Rect) {
@@ -1339,10 +1468,10 @@ impl App {
                 rows,
                 [
                     Constraint::Length(20),
-                    Constraint::Length(15),
+                    Constraint::Fill(1),
                     Constraint::Length(20),
-                    Constraint::Length(15),
-                    Constraint::Min(20),
+                    Constraint::Fill(1),
+                    Constraint::Fill(2),
                 ],
             )
             .header(
@@ -1380,6 +1509,10 @@ impl App {
         let block = Block::default().borders(Borders::ALL).title(title);
         let inner = block.inner(area);
         let height = inner.height as usize;
+        // Sender and recipient as aligned columns, sharing what the fixed
+        // columns (time, stage, protocol, channel, size) leave.
+        const FIXED: u16 = 8 + 3 + 10 + 10 + 10 + 3 + 6;
+        let name_w = (inner.width.saturating_sub(FIXED) / 2).clamp(14, 32) as usize; // a short hash is 13
         let skip = self.monitor.lines.len().saturating_sub(height);
         let lines: Vec<Line> = self
             .monitor
@@ -1387,12 +1520,66 @@ impl App {
             .iter()
             .skip(skip)
             .map(|l| match l {
-                MonitorLine::Event(v) => event_line(v, &self.book),
+                MonitorLine::Event(v) => event_line(v, &self.book, name_w),
                 MonitorLine::Note(line) => line.clone(),
             })
             .collect();
         f.render_widget(Paragraph::new(lines).block(block), area);
     }
+}
+
+/// Every account on the mediator, reading all pages of `account/list`.
+async fn all_accounts(console: &MediatorConsole) -> Result<Vec<Value>, ConsoleError> {
+    const PAGE: u32 = 500;
+    const MAX_PAGES: usize = 200;
+    let mut all = Vec::new();
+    let mut cursor = None;
+    for _ in 0..MAX_PAGES {
+        let page = serde_json::to_value(console.accounts(cursor, Some(PAGE)).await?)
+            .unwrap_or(Value::Null);
+        all.extend(page["accounts"].as_array().cloned().unwrap_or_default());
+        cursor = page["nextCursor"].as_str().map(str::to_string);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    Ok(all)
+}
+
+/// The Accounts list's order: the mediator and administrators first, then
+/// accounts you have named (by name), then the rest by hash.
+fn account_order(a: &Value, book: &AddressBook) -> (u8, String) {
+    let hash = a["did"].as_str().unwrap_or("");
+    let rank = match a["accountType"].as_str() {
+        Some("mediator") => 0,
+        Some("rootAdmin") => 1,
+        Some("admin") => 2,
+        _ if book.name_of(hash).is_some() => 3,
+        _ => 4,
+    };
+    let key = book
+        .name_of(hash)
+        .map(str::to_lowercase)
+        .unwrap_or_else(|| hash.to_string());
+    (rank, key)
+}
+
+/// `s` padded or cut (with `…`) to exactly `width` characters.
+fn fit(s: &str, width: usize) -> String {
+    let n = s.chars().count();
+    if n <= width {
+        format!("{s}{}", " ".repeat(width - n))
+    } else {
+        let cut: String = s.chars().take(width.saturating_sub(1)).collect();
+        format!("{cut}…")
+    }
+}
+
+/// A column width that fits the longest of `labels` (plus a space), held
+/// between `min` and `max`.
+fn fit_width(labels: &[String], min: u16, max: u16) -> u16 {
+    let longest = labels.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+    (longest + 1).clamp(min, max)
 }
 
 /// An account hash as the user knows it: its nickname, else a short hash.
@@ -1403,7 +1590,7 @@ fn label(book: &AddressBook, hash: &str) -> String {
 }
 
 /// One monitor event as a coloured line.
-fn event_line(e: &Value, book: &AddressBook) -> Line<'static> {
+fn event_line(e: &Value, book: &AddressBook, name_w: usize) -> Line<'static> {
     let s = |k: &str| e[k].as_str().unwrap_or("").to_string();
     let stage = s("stage");
     let color = match stage.as_str() {
@@ -1426,8 +1613,14 @@ fn event_line(e: &Value, book: &AddressBook) -> Line<'static> {
         Span::raw(format!(" {:<9} {:<9} ", s("protocol"), s("channel"))),
         Span::raw(format!(
             "{} → {} ",
-            e["from"].as_str().map_or("·".into(), |h| label(book, h)),
-            e["to"].as_str().map_or("·".into(), |h| label(book, h))
+            fit(
+                &e["from"].as_str().map_or("·".into(), |h| label(book, h)),
+                name_w
+            ),
+            fit(
+                &e["to"].as_str().map_or("·".into(), |h| label(book, h)),
+                name_w
+            )
         )),
         Span::styled(
             human_bytes(e["size"].as_u64()),
@@ -1684,10 +1877,26 @@ mod tests {
                 "from": sha256::digest(alice), "to": bob_hash,
             }),
             &book,
+            14,
         );
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(text.contains("alice → "), "{text}");
+        // Aligned: the sender is padded to the column width.
+        assert!(text.contains("alice          → "), "{text}");
         assert!(text.contains(&short(&bob_hash)), "{text}");
+    }
+
+    #[test]
+    fn text_is_fitted_to_its_column() {
+        assert_eq!(fit("abc", 5), "abc  ");
+        assert_eq!(fit("abcdef", 4), "abc…");
+        assert_eq!(fit("abcd", 4), "abcd");
+        let names = vec![
+            "short".to_string(),
+            "a much longer account name".to_string(),
+        ];
+        assert_eq!(fit_width(&names, 15, 40), 27);
+        assert_eq!(fit_width(&names, 15, 20), 20);
+        assert_eq!(fit_width(&[], 15, 40), 15);
     }
 
     #[test]
@@ -1699,6 +1908,7 @@ mod tests {
                 "outcome": { "code": "authorization.send" },
             }),
             &AddressBook::new(),
+            14,
         );
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("refused") && text.contains("authorization.send"));
