@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-tui"
-version = "0.1.5"
+version = "0.1.6"
 description = "Terminal console for an Affinidi messaging mediator: statistics, queues with gradient quota bars, messages, purges and a live traffic monitor — as embeddable ratatui components and the `mediator-console` binary."
 edition.workspace = true
 authors.workspace = true

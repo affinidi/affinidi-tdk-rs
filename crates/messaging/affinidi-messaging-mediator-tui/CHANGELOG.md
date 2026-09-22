@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (0.1.6) — account settings, and notices that clear
+
+- **Account settings:** the Account screen gains a **Settings** panel showing
+  the account's role (coloured), queue limits, access-list mode and size, and
+  every ACL flag as ✓/✗.
+- **`e` edits them:**
+  - `↑↓` selects, and space toggles a flag or cycles the role or access-list
+    mode.
+  - Digits set a queue limit (`-1` is unlimited).
+  - `s` saves only what changed, through `account/update`.
+  - The mediator decides what the session may change (for example, a role
+    change needs an administrator) and its refusal shows as a notice.
+  - Non-administrators don't get the role row.
+  - The editing logic is in the `account_edit` module (`AccountEdit`).
+- **Notices clear themselves:** a notice in the footer now gives way to the
+  key hints after 12 seconds instead of staying until the next one.
+
 ## Unreleased (0.1.5) — a Config screen
 
 A new **Config** screen (`6`, administrators) lists the mediator's
