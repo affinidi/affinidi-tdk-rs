@@ -445,12 +445,14 @@ pub(crate) async fn messages_received(
                                 .as_ref()
                                 .map(|m| (m.from_address.clone(), m.to_address.clone()))
                                 .unwrap_or_default();
+                            let body = msg.as_ref().and_then(|m| m.msg.clone());
                             state.monitor.deleted(
                                 msg_id,
                                 &session.did_hash,
                                 from.as_deref(),
                                 to.as_deref(),
                                 crate::monitor::current_channel(),
+                                body.as_deref(),
                             );
                             info!("Deleted message: {}", msg_id);
                         }

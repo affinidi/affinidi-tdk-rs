@@ -432,6 +432,10 @@ async fn message_pickup(
                         None,
                         Some(&account.did_hash),
                         crate::monitor::current_channel(),
+                        // A v1 mailbox holds v1 envelopes; the body is not in
+                        // hand here, so the stage is reported unclassified
+                        // rather than guessed.
+                        None,
                     ),
                     Err(e) => debug!(%id, error = %e, "v1 messages-received: delete failed"),
                 }

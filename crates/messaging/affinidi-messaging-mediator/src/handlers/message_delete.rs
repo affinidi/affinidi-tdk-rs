@@ -83,7 +83,7 @@ pub async fn message_delete_handler(
                     .await
                     .ok()
                     .flatten()
-                    .map(|m| (m.from_address, m.to_address))
+                    .map(|m| (m.from_address, m.to_address, m.msg))
             } else {
                 None
             };
@@ -99,13 +99,14 @@ pub async fn message_delete_handler(
 
             match result {
                 Ok(_) => {
-                    let (from, to) = parties.unwrap_or_default();
+                    let (from, to, body) = parties.unwrap_or_default();
                     state.monitor.deleted(
                         message,
                         &session.did_hash,
                         from.as_deref(),
                         to.as_deref(),
                         crate::monitor::Channel::Rest,
+                        body.as_deref(),
                     );
                     deleted.success.push(message.into())
                 }
