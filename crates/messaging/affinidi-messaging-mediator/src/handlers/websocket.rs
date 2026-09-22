@@ -956,6 +956,35 @@ async fn handle_socket(
                                     warn!("Failed to send message to WebSocket client: {e}");
                                 }
                             },
+                            WebSocketCommands::Verbatim(body) => {
+                                // The body IS the frame: a monitor batch,
+                                // pushed and stored nowhere, so there is no
+                                // inbox to drain for it. A raw-TSP socket gets
+                                // it as the Binary qb2 its client expects,
+                                // decoded from the base64url the live channel
+                                // carries; every other socket gets it as Text,
+                                // the same shape an ordinary push has.
+                                #[cfg(feature = "tsp")]
+                                if tsp_mode {
+                                    match BASE64_URL_SAFE_NO_PAD.decode(&body) {
+                                        Ok(qb2) => {
+                                            if let Err(e) =
+                                                socket.send(Message::Binary(qb2.into())).await
+                                            {
+                                                warn!("Failed to send frame to WebSocket client: {e}");
+                                            }
+                                        }
+                                        Err(e) => warn!(
+                                            did_hash = %session.did_hash,
+                                            "dropping a verbatim frame that isn't base64url: {e}"
+                                        ),
+                                    }
+                                    continue;
+                                }
+                                if let Err(e) = socket.send(Message::Text(body.into())).await {
+                                    warn!("Failed to send frame to WebSocket client: {e}");
+                                }
+                            },
                             WebSocketCommands::Close(why) => {
                                 #[cfg(feature = "didcomm")]
                                 if let Ok(msg) =  _package_problem_report(&state, &session, None, _close_problem_report(why)).await

@@ -516,6 +516,29 @@ fn peer_queue_key(from_hash: &str, to_hash: &str) -> Vec<u8> {
 }
 
 impl FjallStore {
+    /// Publish one live-streaming record into this instance's broadcast
+    /// channel. `verbatim` marks the body as the frame itself rather than a
+    /// notification to drain the stored inbox (see
+    /// `MediatorStore::streaming_publish_verbatim`).
+    async fn publish_record(
+        &self,
+        did_hash: &str,
+        mediator_uuid: &str,
+        message: &str,
+        force_delivery: bool,
+        verbatim: bool,
+    ) -> Result<(), MediatorError> {
+        let channels = self.broadcast_channels.lock().await;
+        if let Some(sender) = channels.get(mediator_uuid) {
+            let _ = sender.send(PubSubRecord {
+                did_hash: did_hash.to_string(),
+                message: message.to_string(),
+                force_delivery,
+                verbatim,
+            });
+        }
+        Ok(())
+    }
     /// Stage the per-pair count change for one message onto `batch`.
     ///
     /// `delta` is `+1` when a message is queued and `-1` when one leaves the
@@ -3052,15 +3075,18 @@ impl MediatorStore for FjallStore {
         // the broadcast channel works — it lets in-process subscribers
         // receive notifications. The cross-process aspect (which Fjall
         // can't do) stays unsupported.
-        let channels = self.broadcast_channels.lock().await;
-        if let Some(sender) = channels.get(mediator_uuid) {
-            let _ = sender.send(PubSubRecord {
-                did_hash: did_hash.to_string(),
-                message: message.to_string(),
-                force_delivery,
-            });
-        }
-        Ok(())
+        self.publish_record(did_hash, mediator_uuid, message, force_delivery, false)
+            .await
+    }
+
+    async fn streaming_publish_verbatim(
+        &self,
+        did_hash: &str,
+        mediator_uuid: &str,
+        message: &str,
+    ) -> Result<(), MediatorError> {
+        self.publish_record(did_hash, mediator_uuid, message, true, true)
+            .await
     }
 
     async fn streaming_subscribe(

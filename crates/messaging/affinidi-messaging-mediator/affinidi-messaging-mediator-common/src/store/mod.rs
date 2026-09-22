@@ -1443,6 +1443,32 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         force_delivery: bool,
     ) -> Result<(), MediatorError>;
 
+    /// Publish a frame to be delivered to the client **as it is**, rather
+    /// than as a notification to go and fetch what is stored.
+    ///
+    /// This is for a body that exists nowhere else: a monitor batch is pushed
+    /// and never stored, so a raw-TSP socket's usual answer to a notification
+    /// — drain the inbox — would deliver nothing at all. Ordinary deliveries
+    /// keep using [`streaming_publish_message`](Self::streaming_publish_message).
+    ///
+    /// **The default refuses**, so a store that cannot carry the distinction
+    /// makes the caller count the batch as dropped rather than report a frame
+    /// delivered that the socket then discards. Every built-in backend
+    /// implements it.
+    async fn streaming_publish_verbatim(
+        &self,
+        did_hash: &str,
+        mediator_uuid: &str,
+        message: &str,
+    ) -> Result<(), MediatorError> {
+        let _ = (did_hash, mediator_uuid, message);
+        Err(MediatorError::InternalError(
+            14,
+            "NA".into(),
+            "this store cannot publish a verbatim frame".into(),
+        ))
+    }
+
     /// Subscribe to live-streaming delivery notifications for one
     /// mediator UUID. Returns a [`broadcast::Receiver`]; lagged
     /// subscribers see [`broadcast::error::RecvError::Lagged`] which

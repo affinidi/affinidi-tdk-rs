@@ -818,12 +818,15 @@ async fn a_standard_account_monitors_only_itself() {
     assert!(stolen.is_err());
 }
 
-/// A monitor subscription made over TSP is refused rather than accepted and
-/// then silent: a raw-TSP connection discards live-only pushes, so monitor
-/// batches could never reach it. Other management tasks still work over TSP.
+/// A monitor subscription made over TSP is served, like every other
+/// management task. It used to be refused: monitor batches are live-only and
+/// a raw-TSP socket discards an ordinary push, so a subscription made over TSP
+/// would have been accepted and then silent. Batches are sealed to the
+/// subscriber's VID and pushed verbatim now — `tsp_monitor` drives the
+/// delivery end to end; this pins that the mediator accepts the subscription.
 #[cfg(feature = "tsp")]
 #[tokio::test]
-async fn a_monitor_subscription_over_tsp_is_refused_not_silent() {
+async fn a_monitor_subscription_over_tsp_is_served() {
     let env = direct_env().await;
     let alice = env.add_user("alice").await.expect("alice");
     let mediator_did = env.mediator.did().to_string();
@@ -839,8 +842,7 @@ async fn a_monitor_subscription_over_tsp_is_refused_not_silent() {
         .unwrap()
     };
 
-    let refused = env
-        .atm
+    env.atm
         .tsp()
         .send(
             &alice.profile,
@@ -851,14 +853,9 @@ async fn a_monitor_subscription_over_tsp_is_refused_not_silent() {
             ),
         )
         .await
-        .expect_err("monitor/subscribe over TSP must be refused")
-        .to_string();
-    assert!(
-        refused.contains("trust_task.transport") || refused.contains("400"),
-        "{refused}"
-    );
+        .expect("monitor/subscribe over TSP is served");
 
-    // The refusal is about monitoring, not TSP management in general.
+    // And the rest of TSP management still works alongside it.
     env.atm
         .tsp()
         .send(

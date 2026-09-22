@@ -518,25 +518,18 @@ async fn dispatch_tsp_trust_task(
 ) -> Result<InboundMessageResponse, MediatorError> {
     let now_secs = state.clock.unix_secs();
 
-    if let Some(task) = trust_tasks::ServedTask::from_type_uri(&doc.type_uri)
-        && !trust_tasks::served_over_tsp(task)
-    {
-        return Err(trust_tasks::tt_problem(
-            session,
-            "protocol.trust_task.transport",
-            format!(
-                "{} is not served over TSP: monitor events are pushed live over a DIDComm \
-                 connection, and a TSP connection would discard them. Subscribe over DIDComm.",
-                doc.type_uri
-            ),
-            StatusCode::BAD_REQUEST,
-        ));
-    }
-
     // The sender VID is the framework identity; TSP VIDs carry no key fragment,
     // so it is already the shape `consume` wants.
-    let Some(response) =
-        trust_tasks::consume(doc, raw, state, session, sender_vid, now_secs).await?
+    let Some(response) = trust_tasks::consume(
+        doc,
+        raw,
+        state,
+        session,
+        sender_vid,
+        now_secs,
+        trust_tasks::TaskTransport::Tsp,
+    )
+    .await?
     else {
         // A ping identity mismatch emits nothing — same as the DIDComm path.
         return Ok(InboundMessageResponse::Stored(
@@ -966,7 +959,7 @@ async fn tsp_forward_endpoint(
 
 /// Resolve a DID-based TSP VID to its keys + endpoints.
 #[cfg(feature = "tsp")]
-async fn resolve_tsp_vid(
+pub(crate) async fn resolve_tsp_vid(
     state: &SharedData,
     did: &str,
     session_id: &str,
