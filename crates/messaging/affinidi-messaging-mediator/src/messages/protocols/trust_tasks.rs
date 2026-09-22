@@ -2109,6 +2109,20 @@ mod tests {
     }
 }
 
+/// Whether `task` can be served to a client that asked over TSP.
+///
+/// Everything is, except `monitor/subscribe`. Monitor batches are live-only:
+/// they are pushed to the subscriber's connection and never stored. A raw-TSP
+/// socket treats every push as a signal to drain its *stored* inbox and
+/// discards the push itself, so a subscription made over TSP would be accepted
+/// and then deliver nothing. It is refused instead, and the client is told to
+/// subscribe over DIDComm (R1.1: never report success for something that
+/// will not be delivered).
+#[cfg(feature = "tsp")]
+pub(crate) fn served_over_tsp(task: ServedTask) -> bool {
+    !matches!(task, ServedTask::MonitorSubscribe)
+}
+
 #[cfg(all(test, feature = "tsp"))]
 mod tsp_dispatch_tests {
     use super::*;
@@ -2124,6 +2138,17 @@ mod tsp_dispatch_tests {
             "payload": {},
         }))
         .expect("test document serialises")
+    }
+
+    #[test]
+    fn a_monitor_subscription_is_not_served_over_tsp_and_the_rest_are() {
+        for task in ServedTask::ALL {
+            assert_eq!(
+                served_over_tsp(*task),
+                *task != ServedTask::MonitorSubscribe,
+                "{task:?}"
+            );
+        }
     }
 
     #[test]

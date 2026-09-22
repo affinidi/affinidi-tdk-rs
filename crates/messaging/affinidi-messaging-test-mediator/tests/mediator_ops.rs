@@ -786,3 +786,58 @@ async fn a_standard_account_monitors_only_itself() {
         .await;
     assert!(stolen.is_err());
 }
+
+/// A monitor subscription made over TSP is refused rather than accepted and
+/// then silent: a raw-TSP connection discards live-only pushes, so monitor
+/// batches could never reach it. Other management tasks still work over TSP.
+#[cfg(feature = "tsp")]
+#[tokio::test]
+async fn a_monitor_subscription_over_tsp_is_refused_not_silent() {
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let mediator_did = env.mediator.did().to_string();
+
+    let task = |type_uri: &str, payload: serde_json::Value| {
+        serde_json::to_vec(&json!({
+            "id": format!("urn:uuid:{}", Uuid::new_v4()),
+            "type": type_uri,
+            "issuer": alice.did,
+            "recipient": mediator_did,
+            "payload": payload,
+        }))
+        .unwrap()
+    };
+
+    let refused = env
+        .atm
+        .tsp()
+        .send(
+            &alice.profile,
+            &mediator_did,
+            &task(
+                "https://trusttasks.org/spec/messaging/monitor/subscribe/0.1",
+                json!({}),
+            ),
+        )
+        .await
+        .expect_err("monitor/subscribe over TSP must be refused")
+        .to_string();
+    assert!(
+        refused.contains("trust_task.transport") || refused.contains("400"),
+        "{refused}"
+    );
+
+    // The refusal is about monitoring, not TSP management in general.
+    env.atm
+        .tsp()
+        .send(
+            &alice.profile,
+            &mediator_did,
+            &task(
+                "https://trusttasks.org/spec/messaging/account/get/0.1",
+                json!({ "did": alice.did_hash() }),
+            ),
+        )
+        .await
+        .expect("account/get over TSP is still served");
+}
