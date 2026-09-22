@@ -13,6 +13,7 @@
 
 pub mod app;
 pub mod quota;
+pub mod tally;
 
 pub use app::{App, Control, Tab, Update};
 pub use quota::{ColorDepth, QuotaBar, quota_line};
