@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (0.28.31) — Trust Task proofs verified by `trust-tasks-proof`
+
+Trust Task proofs are now checked by the upstream `trust-tasks-proof`
+verifier (0.21.16 or later), and the mediator's own copy is removed. The
+upstream verifier now does what the mediator's did:
+- **Verifies the document as received** (`Verifier::verify_raw`), not a
+  re-serialised one.
+- **Binds the proof to the issuer:** the verification method must belong to
+  the in-band `issuer`.
+- **Accepts only signing keys:** the key must be listed (or embedded) under
+  `authentication` or `assertionMethod`. JWK and Multikey keys are both read.
+
+Only the `eddsa-jcs-2022` and `eddsa-rdfc-2022` suites are still accepted.
+No behaviour change is intended. Rejection messages come from the upstream
+crate and may be worded differently.
+
+The `trust-tasks-proof` dependency now requires 0.21.16.
+
 ## Unreleased (0.28.30) — `config/reload`
 
 The mediator serves the generic **`config/reload`** Trust Task (rootAdmin).

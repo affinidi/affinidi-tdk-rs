@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.28.30"
+version = "0.28.31"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -137,7 +137,7 @@ affinidi-messaging-didcomm-v1 = { path = "../affinidi-messaging-didcomm-v1", ver
 ## ping / account / acl / access-list tasks) carried over the binding envelope.
 trust-tasks-rs = { version = "0.21.10", optional = true }
 # Verifies Trust Task proofs (eddsa-jcs-2022) before any handler runs.
-trust-tasks-proof = { version = "0.21", default-features = false, features = ["affinidi"], optional = true }
+trust-tasks-proof = { version = "0.21.16", default-features = false, features = ["affinidi"], optional = true }
 affinidi-data-integrity = { version = "0.7", optional = true }
 ## Optional: JOSE key-agreement types for the didcomm compat layer (#327)
 affinidi-crypto = { version = "0.2", features = ["jose"], optional = true }

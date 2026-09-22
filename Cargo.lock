@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator"
-version = "0.28.30"
+version = "0.28.31"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -9648,12 +9648,13 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-proof"
-version = "0.21.10"
+version = "0.21.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee0a324f604bd81d544adfee1b30403f5b1df4965d328b3135e4250c1a8bb276"
+checksum = "3e63a2268e7095c146676a722ce19d56a809f0cef6b854f9c774942ca5694d5b"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
+ "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-encoding",
  "async-trait",

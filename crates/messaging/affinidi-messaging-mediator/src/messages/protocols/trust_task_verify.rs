@@ -21,21 +21,17 @@
 //! [`TrustTaskVerification`]: `warn` during the transition while clients start
 //! signing, `enforce` once they do.
 
+use std::sync::Arc;
+
+use affinidi_data_integrity::VerifyOptions;
 use affinidi_data_integrity::crypto_suites::CryptoSuite;
-use affinidi_data_integrity::{
-    DataIntegrityError, ResolvedKey, VerificationMethodResolver, VerifyOptions,
-};
-use affinidi_did_common::DocumentExt;
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_encoding::ED25519_PUB;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_mediator_common::store::TrustTaskClaim;
-use affinidi_secrets_resolver::secrets::KeyType;
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use serde_json::Value;
-use trust_tasks_proof::affinidi::parse_data_integrity_proof;
+use trust_tasks_proof::affinidi::{CachedDidResolver, Verifier};
 use trust_tasks_rs::{DEFAULT_MAX_AGE, FreshnessPolicy, SpecPolicy, TrustTask, document_digest};
 
 use crate::SharedData;
@@ -139,11 +135,11 @@ pub(crate) async fn accept(
     session: &Session,
 ) -> Result<(), MediatorError> {
     let mode = state.config.security.trust_task_verification;
-    let resolver = SigningKeyResolver::new(state.did_resolver.clone());
+    let verifier = proof_verifier(state.did_resolver.clone());
     // The duplicate-execution claim runs last, and only once every other
     // check has passed: claiming first would burn the id of a document that
     // was then refused, so its corrected resend could never run.
-    let outcome = match check(doc, raw, policy, sender_did, now, &resolver).await {
+    let outcome = match check(doc, raw, policy, sender_did, now, &verifier).await {
         Ok(()) => claim(doc, policy, sender_did, now, state).await,
         Err(rejection) => Err(rejection),
     };
@@ -186,14 +182,14 @@ pub(crate) async fn accept(
 /// The checks themselves, in §7.2 order. First failure wins.
 ///
 /// `doc` is the parsed document; `raw` is the JSON exactly as received, which
-/// is what the proof is verified over (see [`verify_proof`]).
+/// is what the proof is verified over (see [`proof_verifier`]).
 pub(crate) async fn check(
     doc: &TrustTask<Value>,
     raw: &Value,
     policy: SpecPolicy,
     sender_did: &str,
     now: DateTime<Utc>,
-    resolver: &SigningKeyResolver,
+    verifier: &Verifier,
 ) -> Result<(), Rejection> {
     // 1. Freshness. A type whose spec requires a proof or `issuedAt` is
     //    consequential: it gets the bounded window and must carry `issuedAt`.
@@ -215,9 +211,10 @@ pub(crate) async fn check(
     // 3. Proof, when present. The verifier binds the proof's verification
     //    method to the in-band issuer; the resolver binds it to a signing role.
     if doc.proof.is_some() {
-        verify_proof(raw, resolver)
+        verifier
+            .verify_raw(raw)
             .await
-            .map_err(Rejection::ProofInvalid)?;
+            .map_err(|e| Rejection::ProofInvalid(e.to_string()))?;
     }
 
     // 4. Spec policy: presence rules. Runs after verification so a present but
@@ -302,111 +299,27 @@ fn retention_end(doc: &TrustTask<Value>, policy: SpecPolicy, now: DateTime<Utc>)
         .map_or(window_end, |expiry| expiry.min(window_end))
 }
 
-/// Verify a document's Data Integrity proof over the document **as received**.
+/// The proof verifier: `eddsa` suites only, over keys the issuer's DID
+/// document lists under `authentication` or `assertionMethod`.
 ///
-/// `trust_tasks_proof::affinidi::Verifier` re-serialises the parsed
-/// `TrustTask` and verifies over that, so anything the round trip normalises —
-/// `issuedAt` written as `+00:00` rather than `Z`, a different number of
-/// fractional-second digits, a member the struct does not keep — changes the
-/// bytes under the signature and a genuine proof fails. Verifying the received
-/// JSON (minus `proof`) is what the signer actually signed.
-///
-/// The proof's verification method must belong to the in-band `issuer` (the
-/// §4.7/§4.8 binding), and only the `eddsa` suites are accepted.
-async fn verify_proof(raw: &Value, resolver: &SigningKeyResolver) -> Result<(), String> {
-    let obj = raw
-        .as_object()
-        .ok_or("Trust Task document is not a JSON object")?;
-    let proof = parse_data_integrity_proof(obj.get("proof").ok_or("no proof member")?)
-        .map_err(|e| e.to_string())?;
-
-    let issuer = obj
-        .get("issuer")
-        .and_then(Value::as_str)
-        .ok_or("document carries a proof but no in-band issuer to bind it to")?;
-    let vm_did = proof
-        .verification_method
-        .split('#')
-        .next()
-        .unwrap_or(&proof.verification_method);
-    if vm_did != issuer {
-        return Err(format!(
-            "verificationMethod is controlled by {vm_did}, not the document issuer {issuer}"
-        ));
-    }
-
-    let mut unsigned = obj.clone();
-    unsigned.remove("proof");
-    let options = VerifyOptions::new()
-        .with_allowed_suites(vec![CryptoSuite::EddsaJcs2022, CryptoSuite::EddsaRdfc2022]);
-    proof
-        .verify(&Value::Object(unsigned), resolver, options)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-impl SigningKeyResolver {
-    /// A resolver over the mediator's DID cache.
-    pub(crate) fn new(resolver: DIDCacheClient) -> Self {
-        Self { resolver }
-    }
-}
-
-/// Resolves a proof's verification method to an Ed25519 public key — but only
-/// one its DID document lists under `authentication` or `assertionMethod`.
-///
-/// The stock `CachedDidResolver` accepts any verification method in the
-/// document, including one listed only under `keyAgreement`, and reads only
-/// Multikey `publicKeyMultibase`. A `did:web` admin that publishes JWK keys
-/// could not be verified at all, and a key never meant for signing could sign.
-/// `did:peer:2` profiles usually list their Ed25519 key under
-/// `authentication` alone, so that relationship is accepted as well.
-pub(crate) struct SigningKeyResolver {
-    resolver: DIDCacheClient,
-}
-
-#[async_trait]
-impl VerificationMethodResolver for SigningKeyResolver {
-    async fn resolve_vm(&self, vm: &str) -> Result<ResolvedKey, DataIntegrityError> {
-        let did = vm.split('#').next().unwrap_or(vm);
-        let doc = self
-            .resolver
-            .resolve(did)
-            .await
-            .map_err(|e| DataIntegrityError::Resolver(format!("resolve {did}: {e}")))?
-            .doc;
-
-        // A relationship may reference the method by absolute or relative id.
-        let fragment = vm.find('#').map(|i| &vm[i..]);
-        let listed =
-            |id: &str| doc.contains_authentication(id) || doc.contains_assertion_method(id);
-        if !(listed(vm) || fragment.is_some_and(listed)) {
-            return Err(DataIntegrityError::Resolver(format!(
-                "{vm} is not an authentication or assertionMethod key of {did}"
-            )));
-        }
-
-        let method = doc
-            .get_verification_method(vm)
-            .or_else(|| fragment.and_then(|f| doc.get_verification_method(f)))
-            .ok_or_else(|| {
-                DataIntegrityError::Resolver(format!("{vm} is not in the DID document of {did}"))
-            })?;
-        let (codec, bytes) = method
-            .decode_public_key()
-            .map_err(|e| DataIntegrityError::Resolver(format!("{vm}: {e}")))?;
-        if codec != ED25519_PUB {
-            return Err(DataIntegrityError::Resolver(format!(
-                "{vm} is not an Ed25519 key (multicodec 0x{codec:x})"
-            )));
-        }
-        Ok(ResolvedKey::new(KeyType::Ed25519, bytes))
-    }
+/// It verifies the document **as received** (`verify_raw`), not a
+/// re-serialised `TrustTask`: a round trip can normalise `issuedAt` (`+00:00`
+/// to `Z`), re-render a number or drop an unknown member, and any of those
+/// changes the bytes under the signature. It also binds the proof's
+/// verification method to the in-band `issuer` (§4.7/§4.8), and the resolver
+/// refuses a key listed only under `keyAgreement`.
+pub(crate) fn proof_verifier(resolver: DIDCacheClient) -> Verifier {
+    Verifier::with_resolver(Arc::new(CachedDidResolver::new(Arc::new(resolver)))).with_options(
+        VerifyOptions::new()
+            .with_allowed_suites(vec![CryptoSuite::EddsaJcs2022, CryptoSuite::EddsaRdfc2022]),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use affinidi_data_integrity::VerificationMethodResolver;
+    use affinidi_did_common::DocumentExt;
     use affinidi_did_resolver_cache_sdk::config::DIDCacheConfigBuilder;
     use affinidi_secrets_resolver::secrets::Secret;
     use chrono::TimeDelta;
@@ -469,7 +382,7 @@ mod tests {
             policy_of(&doc),
             sender,
             Utc::now(),
-            &SigningKeyResolver::new(resolver),
+            &proof_verifier(resolver),
         )
         .await
     }
@@ -595,7 +508,7 @@ mod tests {
             .unwrap();
         let ka = resolver.resolve(&did).await.unwrap().doc;
         let ka_kid = ka.find_key_agreement(None)[0].to_string();
-        let err = SigningKeyResolver { resolver }
+        let err = CachedDidResolver::new(Arc::new(resolver))
             .resolve_vm(&ka_kid)
             .await
             .expect_err("a keyAgreement key must not resolve as a signing key");
