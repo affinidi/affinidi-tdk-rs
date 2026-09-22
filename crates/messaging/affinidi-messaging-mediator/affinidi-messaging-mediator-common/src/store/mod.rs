@@ -330,6 +330,11 @@ pub enum TrustTaskClaim {
     Conflict,
 }
 
+/// Told of each message the expiry sweep removes: its id, and its metadata as
+/// it was just before the delete. See
+/// [`MediatorStore::sweep_expired_messages_observed`].
+pub type OnExpired<'a> = &'a (dyn Fn(&str, &MessageMetaData) + Send + Sync);
+
 #[async_trait]
 pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     // ─── Bootstrap & health ──────────────────────────────────────────────────
@@ -1397,6 +1402,24 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         now_secs: u64,
         admin_did_hash: &str,
     ) -> Result<ExpiryReport, MediatorError>;
+
+    /// [`sweep_expired_messages`](Self::sweep_expired_messages), telling
+    /// `on_expired` (when given) the id and metadata of each message it
+    /// removes. The metadata is read before the delete, and only when an
+    /// observer is given, so an unobserved sweep costs no more than before.
+    ///
+    /// The built-in stores implement this. The default sweeps without
+    /// reporting individual messages, so a store written before this method
+    /// existed still compiles and still expires messages.
+    async fn sweep_expired_messages_observed(
+        &self,
+        now_secs: u64,
+        admin_did_hash: &str,
+        on_expired: Option<OnExpired<'_>>,
+    ) -> Result<ExpiryReport, MediatorError> {
+        let _ = on_expired;
+        self.sweep_expired_messages(now_secs, admin_did_hash).await
+    }
 
     /// Run one pass of the session expiry sweep, removing session
     /// records whose TTL has elapsed (`expires_at <= now_secs`).

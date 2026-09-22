@@ -1,5 +1,23 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.17) — the expiry sweep names what it removes
+
+- **`MediatorStore::sweep_expired_messages_observed`** takes an optional
+  `OnExpired` callback. The callback is told each removed message's id and
+  its `MessageMetaData` (sender, recipient, size, timestamp), which is read
+  just before the delete. The metadata read only happens when a callback is
+  given.
+  - It has a default implementation that sweeps without reporting individual
+    messages, so a store written before this method still compiles and still
+    expires messages.
+  - The Redis store implements it; the mediator's memory and Fjall stores do
+    too.
+- **Fixed: Redis `get_message_metadata` never found anything.** It read
+  `HGET MESSAGE_STORE METADATA:{id}`, a field nothing writes. The Lua
+  functions keep a message's metadata in the hash `MSG:META:{id}`, which it
+  now reads. Nothing in the mediator called it before this change, so the
+  bug had no visible effect.
+
 ## Unreleased (0.16.16) — forwarding outcomes, for the traffic monitor
 
 `ForwardingProcessor::with_observer` takes a `ForwardingObserver`, which is

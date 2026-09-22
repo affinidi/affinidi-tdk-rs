@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (0.28.24) — the monitor sees messages expire
+
+When the expiry sweep removes a stored message, the traffic monitor now
+reports it as `expired`, with its `msgId`, sender, recipient and size. This
+completes a message's life in the monitor:
+
+```
+received → stored → delivered → deleted
+                  ↘ expired  (never collected)
+```
+
+The sweep reads each message's metadata before deleting it, but only while
+someone is subscribed. An unwatched sweep costs what it did before.
+
+The memory and Fjall stores implement the new observed sweep, and a
+conformance check covering all three backends pins it. Requires
+`affinidi-messaging-mediator-common` 0.16.17.
+
 ## Unreleased (0.28.23) — the monitor follows relays to their end
 
 The traffic monitor now reports what became of a message relayed to another

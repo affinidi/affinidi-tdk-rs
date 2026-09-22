@@ -680,6 +680,69 @@ async fn the_monitor_follows_a_message_from_arrival_to_deletion() {
     assert_eq!(deleted["from"], alice_hash.as_str());
 }
 
+/// A message the expiry sweep removes is reported `expired`, with both
+/// parties and its size.
+#[tokio::test]
+async fn the_monitor_sees_a_message_expire() {
+    use affinidi_messaging_test_mediator::{TestClock, TestMediator};
+    use std::sync::Arc;
+    use trust_tasks_rs::specs::messaging::monitor::subscribe::v0_1::MonitorFilter;
+
+    let clock = TestClock::now();
+    let mediator = TestMediator::builder()
+        .local_direct_delivery(true, false)
+        .enable_message_expiry(true)
+        .clock(Arc::new(clock.clone()))
+        .spawn()
+        .await
+        .expect("mediator");
+    let env = TestEnvironment::new(mediator).await.expect("environment");
+    let alice = env.add_user("alice").await.expect("alice");
+    let bob = env.add_user("bob").await.expect("bob");
+    let admin = promoted(&env, "admin", AccountType::Admin).await;
+    // Authenticate alice now, at the real time.
+    env.atm
+        .profile_add(&alice.profile, false)
+        .await
+        .expect("alice");
+
+    let filter: MonitorFilter =
+        serde_json::from_value(json!({ "dids": [bob.did_hash()], "stages": ["expired"] })).unwrap();
+    env.atm
+        .trust_tasks()
+        .monitor_subscribe(&admin.profile, Some(filter), Some(60), None, None)
+        .await
+        .expect("admin subscribes");
+
+    // Stored while the mediator's clock is a year behind, the message's
+    // expiry is already past in real time, which is what the sweep runs on.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    clock.set_secs(now - 365 * 24 * 3600);
+    send_direct(&env, &alice, &bob).await;
+    clock.set_secs(now);
+
+    let bob_hash = bob.did_hash();
+    let expired = await_monitor_event(
+        &env,
+        &admin,
+        |e| e["stage"] == "expired" && e["to"] == bob_hash.as_str(),
+        Duration::from_secs(10),
+    )
+    .await
+    .expect("the sweep's removal is seen");
+    assert_eq!(expired["from"], alice.did_hash().as_str());
+    assert!(expired["size"].as_u64().unwrap() > 0);
+    assert!(expired["msgId"].is_string());
+    env.atm
+        .profile_add(&bob.profile, true)
+        .await
+        .expect("bob live");
+    assert!(receive_ids(&env, &bob).await.is_empty(), "it is gone");
+}
+
 #[tokio::test]
 async fn a_standard_account_monitors_only_itself() {
     use trust_tasks_rs::specs::messaging::monitor::subscribe::v0_1::MonitorFilter;

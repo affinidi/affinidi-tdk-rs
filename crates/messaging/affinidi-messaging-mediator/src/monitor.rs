@@ -415,6 +415,26 @@ impl TrafficMonitor {
         });
     }
 
+    /// The expiry sweep removed `msg_id`, whose metadata was `meta`.
+    pub(crate) fn expired(
+        &self,
+        msg_id: &str,
+        meta: &affinidi_messaging_mediator_common::store::types::MessageMetaData,
+    ) {
+        self.emit(|| TrafficEvent {
+            msg_id: Some(msg_id.to_string()),
+            from: meta.from_did_hash.clone(),
+            to: Some(meta.to_did_hash.clone()),
+            size: Some(meta.bytes as u64),
+            ..TrafficEvent::new(
+                Direction::Internal,
+                Stage::Expired,
+                Channel::Internal,
+                Protocol::Other,
+            )
+        });
+    }
+
     /// `account`'s queue was purged of `count` messages, `bytes` in total.
     pub(crate) fn purged(&self, account: &str, count: usize, bytes: usize, channel: Channel) {
         if count == 0 {

@@ -29,8 +29,8 @@ use affinidi_messaging_mediator_common::{
     store::{
         DeletionAuthority, DeliveryDecision, DeliveryMarkReport, DeliveryState, ExpiryReport,
         ForwardQueueEntry, InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats,
-        POISON_ATTEMPTS, PubSubRecord, Session, SessionSweepReport, StatCounter, StoreHealth,
-        StreamingClientState, TrustTaskClaim, ops,
+        OnExpired, POISON_ATTEMPTS, PubSubRecord, Session, SessionSweepReport, StatCounter,
+        StoreHealth, StreamingClientState, TrustTaskClaim, ops,
     },
     types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
@@ -1818,6 +1818,16 @@ impl MediatorStore for MemoryStore {
         now_secs: u64,
         admin_did_hash: &str,
     ) -> Result<ExpiryReport, MediatorError> {
+        self.sweep_expired_messages_observed(now_secs, admin_did_hash, None)
+            .await
+    }
+
+    async fn sweep_expired_messages_observed(
+        &self,
+        now_secs: u64,
+        admin_did_hash: &str,
+        on_expired: Option<OnExpired<'_>>,
+    ) -> Result<ExpiryReport, MediatorError> {
         // Snapshot due timeslot keys + their message ids under the
         // lock, then call delete_message for each.
         let due: Vec<(u64, Vec<String>)> = {
@@ -1835,6 +1845,10 @@ impl MediatorStore for MemoryStore {
         };
         for (ts, ids) in due {
             for msg_id in ids {
+                let meta = match on_expired {
+                    Some(_) => self.get_message_metadata("expiry", &msg_id).await.ok(),
+                    None => None,
+                };
                 let result = self
                     .delete_message(
                         &msg_id,
@@ -1844,7 +1858,12 @@ impl MediatorStore for MemoryStore {
                     )
                     .await;
                 match result {
-                    Ok(_) => report.expired += 1,
+                    Ok(_) => {
+                        report.expired += 1;
+                        if let (Some(observe), Some(meta)) = (on_expired, &meta) {
+                            observe(&msg_id, meta);
+                        }
+                    }
                     Err(_) => report.already_deleted += 1,
                 }
             }

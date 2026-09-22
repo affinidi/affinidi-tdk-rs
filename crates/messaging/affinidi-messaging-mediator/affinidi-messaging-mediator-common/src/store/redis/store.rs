@@ -1430,6 +1430,16 @@ impl MediatorStore for RedisStore {
         now_secs: u64,
         admin_did_hash: &str,
     ) -> Result<ExpiryReport, MediatorError> {
+        self.sweep_expired_messages_observed(now_secs, admin_did_hash, None)
+            .await
+    }
+
+    async fn sweep_expired_messages_observed(
+        &self,
+        now_secs: u64,
+        admin_did_hash: &str,
+        on_expired: Option<crate::store::OnExpired<'_>>,
+    ) -> Result<ExpiryReport, MediatorError> {
         // Replicates the legacy two-step `timeslot_scan` +
         // `expire_messages_from_timeslot` flow inline so the trait
         // doesn't have to expose the timeslot abstraction.
@@ -1473,12 +1483,23 @@ impl MediatorStore for RedisStore {
                     })?;
 
                 if let Some(msg_id) = msg_id {
+                    let meta = match on_expired {
+                        Some(_) => MediatorStore::get_message_metadata(self, "expiry", &msg_id)
+                            .await
+                            .ok(),
+                        None => None,
+                    };
                     match self
                         .handler
                         .delete_message(None, admin_did_hash, &msg_id, None, Some(admin_did_hash))
                         .await
                     {
-                        Ok(_) => report.expired += 1,
+                        Ok(_) => {
+                            report.expired += 1;
+                            if let (Some(observe), Some(meta)) = (on_expired, &meta) {
+                                observe(&msg_id, meta);
+                            }
+                        }
                         Err(_) => report.already_deleted += 1,
                     }
                 } else {
