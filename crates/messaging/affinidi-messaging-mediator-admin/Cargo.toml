@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-admin"
-version = "0.1.4"
+version = "0.1.5"
 description = "Headless client for operating an Affinidi messaging mediator over Trust Tasks — mediator-wide administration or an account's own queues, plus the live traffic monitor. The engine behind the mediator console; embeddable in any application."
 edition.workspace = true
 authors.workspace = true
@@ -12,11 +12,11 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
-affinidi-messaging-sdk = { version = "0.26.20", path = "../affinidi-messaging-sdk" }
+affinidi-messaging-sdk = { version = "0.26.23", path = "../affinidi-messaging-sdk" }
 affinidi-messaging-didcomm = { version = "0.15", path = "../affinidi-messaging-didcomm" }
 affinidi-tdk-common = "0.6"
 affinidi-secrets-resolver = "0.5"
-trust-tasks-rs = "0.21.10"
+trust-tasks-rs = "0.21.18"
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 serde = { version = "1", features = ["derive"] }

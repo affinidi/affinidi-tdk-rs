@@ -76,4 +76,38 @@ async fn authenticating_and_receiving_are_recorded() {
         got[1]
     );
     assert_eq!(got[0].last_received, None, "nothing was sent to alice");
+
+    // Over the wire, the times come back only when the request asks for them.
+    env.atm
+        .profile_add(&bob.profile, true)
+        .await
+        .expect("enable websocket for bob");
+    let quiet = env
+        .atm
+        .trust_tasks()
+        .account_get(&bob.profile, None)
+        .await
+        .expect("bob reads his own account");
+    assert_eq!(
+        (quiet.last_received_at, quiet.last_authenticated_at),
+        (None, None),
+        "a request that didn't ask gets neither time"
+    );
+
+    let asked = env
+        .atm
+        .trust_tasks()
+        .account_get_with_activity(&bob.profile, None, true)
+        .await
+        .expect("bob reads his own account, asking for activity");
+    assert!(
+        within(asked.last_received_at),
+        "the message alice sent: {:?}",
+        asked.last_received_at
+    );
+    assert!(
+        within(asked.last_authenticated_at),
+        "bob authenticated: {:?}",
+        asked.last_authenticated_at
+    );
 }

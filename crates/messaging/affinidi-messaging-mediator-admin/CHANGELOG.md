@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased (0.1.5) — account activity
+
+`account_of` and `accounts` now ask for each account's last received message
+and last authentication, on a mediator that serves them (`ACTIVITY_SINCE`,
+0.28.33). `serves_activity()` reports whether this mediator does.
+
+That gate is deliberately **closed when the mediator's version can't be
+read**, unlike the others: `includeActivity` is a request member, so asking
+a mediator that predates it would lose the account view itself rather than
+just the times.
+
 ## Unreleased (0.1.4) — changing the configuration
 
 - **New:** `MediatorConsole::patch_config(overrides)` changes mediator limits

@@ -589,8 +589,19 @@ async fn consume_account_get(
             )
         })?;
 
+    let mut wire = map_account_get(&account);
+    if typed.payload.include_activity.unwrap_or(false) {
+        let activity = state
+            .database
+            .account_activity(std::slice::from_ref(&target_hash))
+            .await?;
+        if let Some(activity) = activity.first() {
+            wire.last_received_at = activity.last_received;
+            wire.last_authenticated_at = activity.last_authenticated;
+        }
+    }
     let response: account::get::v0_1::Response =
-        build(account::get::v0_1::Response::builder().account(map_account_get(&account)))?;
+        build(account::get::v0_1::Response::builder().account(wire))?;
     let response_doc = typed.respond_with(Uuid::new_v4().to_string(), response);
     serde_json::to_value(&response_doc).map_err(serialize_err)
 }
@@ -658,12 +669,24 @@ async fn consume_account_list(
     let page = state.database.account_list(cursor, limit).await?;
     // Annotated: the element type used to be pinned by the response struct
     // literal below, and the builder's `TryInto` setter no longer pins it.
-    let accounts: Vec<account::list::v0_1::Account> = page
+    let mut accounts: Vec<account::list::v0_1::Account> = page
         .accounts
         .iter()
         .filter(|a| type_filter.as_ref().is_none_or(|t| a._type == *t))
         .map(to_wire_account::<account::list::v0_1::Account>)
         .collect();
+    // The times are read for the page as it is returned, in one call, so a
+    // filtered-out account costs nothing.
+    if typed.payload.include_activity.unwrap_or(false) {
+        let hashes: Vec<String> = accounts.iter().map(|a| a.did.to_string()).collect();
+        for (account, activity) in accounts
+            .iter_mut()
+            .zip(state.database.account_activity(&hashes).await?)
+        {
+            account.last_received_at = activity.last_received;
+            account.last_authenticated_at = activity.last_authenticated;
+        }
+    }
     // The store returns cursor 0 when the listing is exhausted.
     let next_cursor = (page.cursor != 0)
         .then(|| account::list::v0_1::ResponseNextCursor::from_str(&page.cursor.to_string()))

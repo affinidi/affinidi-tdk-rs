@@ -1465,7 +1465,7 @@ impl App {
         let parts = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(7),
+                Constraint::Length(8),
                 Constraint::Length(7),
                 Constraint::Min(4),
             ])
@@ -1645,6 +1645,11 @@ impl App {
                 a["acl"]["accessListMode"].as_str().unwrap_or("?"),
                 a["accessListCount"].as_u64().unwrap_or(0)
             )),
+            Line::raw(format!(
+                "last message {} ago  last login {} ago",
+                ago(a["lastReceivedAt"].as_u64()),
+                ago(a["lastAuthenticatedAt"].as_u64())
+            )),
             Line::from(flags),
         ];
         f.render_widget(
@@ -1689,6 +1694,8 @@ impl App {
                     Cell::from(n("receiveQueueCount")),
                     Cell::from(n("sendQueueCount")),
                     Cell::from(human_bytes(Some(bytes))),
+                    Cell::from(ago(a["lastReceivedAt"].as_u64())),
+                    Cell::from(ago(a["lastAuthenticatedAt"].as_u64())),
                     Cell::from(n("accessListCount")),
                 ])
             })
@@ -1702,6 +1709,8 @@ impl App {
                 Constraint::Length(8),
                 Constraint::Length(8),
                 Constraint::Length(9),
+                Constraint::Length(9),
+                Constraint::Length(9),
                 Constraint::Fill(1),
             ],
         )
@@ -1713,6 +1722,8 @@ impl App {
                 "receive",
                 "send",
                 "queued",
+                "msg ago",
+                "login ago",
                 "access list",
             ])
             .style(Style::default().add_modifier(Modifier::BOLD)),
@@ -2325,6 +2336,18 @@ fn human_secs(s: Option<u64>) -> String {
         Some(s) if s < 86_400 => format!("{}h", s / 3_600),
         Some(s) => format!("{}d", s / 86_400),
     }
+}
+
+/// How long ago a Unix-seconds timestamp was, for the activity columns. A
+/// mediator that doesn't serve the times, or has none for the account, gives
+/// `None` — shown the same as any other unknown ("–").
+fn ago(at: Option<u64>) -> String {
+    let (Some(at), Ok(now)) = (at, std::time::SystemTime::UNIX_EPOCH.elapsed()) else {
+        return "–".into();
+    };
+    // A time slightly in the future (clock skew between mediator and console)
+    // reads as "now" rather than as a wrapped-around age.
+    human_secs(Some(now.as_secs().saturating_sub(at)))
 }
 
 fn human_bytes(b: Option<u64>) -> String {
