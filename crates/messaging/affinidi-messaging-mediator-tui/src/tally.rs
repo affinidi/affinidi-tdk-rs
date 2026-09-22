@@ -9,6 +9,12 @@
 //! The totals cover what the monitor saw: events the mediator dropped for the
 //! rate limit, or lost in transit, are not in them (the pane's title shows how
 //! many).
+//!
+//! Memory is bounded whatever the traffic: at most [`MAX_ACCOUNTS`] accounts are
+//! tracked (a recipient comes from an envelope's cleartext header, so a sender
+//! can name any number of them), the least recently seen giving way; the
+//! ten-second rate is kept in one-second buckets; and counters saturate rather
+//! than wrap.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -17,6 +23,8 @@ use serde_json::Value;
 
 /// The window the "now" rate is measured over.
 const RECENT: Duration = Duration::from_secs(10);
+/// Most accounts tracked at once; beyond it the least recently seen is dropped.
+pub const MAX_ACCOUNTS: usize = 5_000;
 
 /// One account's traffic since the monitor started.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -52,8 +60,9 @@ pub struct TrafficTally {
     pub bytes: u64,
     /// Messages refused.
     pub refused: u64,
-    /// Arrival times within the last [`RECENT`], for the "now" rate.
-    recent: VecDeque<Instant>,
+    /// Arrivals within the last [`RECENT`], in one-second buckets
+    /// (bucket start, count), for the "now" rate.
+    recent: VecDeque<(Instant, u64)>,
     accounts: HashMap<String, AccountTally>,
 }
 
@@ -81,27 +90,35 @@ impl TrafficTally {
         let size = e["size"].as_u64().unwrap_or(0);
         match e["stage"].as_str() {
             Some("received") => {
-                self.messages += 1;
-                self.bytes += size;
-                self.recent.push_back(now);
+                self.messages = self.messages.saturating_add(1);
+                self.bytes = self.bytes.saturating_add(size);
+                match self.recent.back_mut() {
+                    Some((start, n)) if now.duration_since(*start) < Duration::from_secs(1) => {
+                        *n = n.saturating_add(1);
+                    }
+                    _ => self.recent.push_back((now, 1)),
+                }
                 if let Some(from) = from {
                     let a = self.account(from, now);
-                    a.sent += 1;
-                    a.bytes += size;
+                    a.sent = a.sent.saturating_add(1);
+                    a.bytes = a.bytes.saturating_add(size);
                 }
                 if let Some(to) = to {
-                    self.account(to, now).addressed += 1;
+                    let a = self.account(to, now);
+                    a.addressed = a.addressed.saturating_add(1);
                 }
             }
             Some("delivered") => {
                 if let Some(to) = to {
-                    self.account(to, now).delivered += 1;
+                    let a = self.account(to, now);
+                    a.delivered = a.delivered.saturating_add(1);
                 }
             }
             Some("refused") => {
-                self.refused += 1;
+                self.refused = self.refused.saturating_add(1);
                 if let Some(from) = from {
-                    self.account(from, now).refused += 1;
+                    let a = self.account(from, now);
+                    a.refused = a.refused.saturating_add(1);
                 }
             }
             _ => {}
@@ -110,6 +127,17 @@ impl TrafficTally {
     }
 
     fn account(&mut self, hash: &str, now: Instant) -> &mut AccountTally {
+        if !self.accounts.contains_key(hash) && self.accounts.len() >= MAX_ACCOUNTS {
+            // Make room: drop the account seen least recently.
+            if let Some(oldest) = self
+                .accounts
+                .iter()
+                .min_by_key(|(_, a)| a.last)
+                .map(|(k, _)| k.clone())
+            {
+                self.accounts.remove(&oldest);
+            }
+        }
         let a = self.accounts.entry(hash.to_string()).or_default();
         a.last = Some(now);
         a
@@ -119,7 +147,7 @@ impl TrafficTally {
         while self
             .recent
             .front()
-            .is_some_and(|t| now.duration_since(*t) > RECENT)
+            .is_some_and(|(t, _)| now.duration_since(*t) > RECENT)
         {
             self.recent.pop_front();
         }
@@ -137,11 +165,12 @@ impl TrafficTally {
 
     /// Messages per second over the last ten seconds.
     pub fn rate_now(&self, now: Instant) -> f64 {
-        let in_window = self
+        let in_window: u64 = self
             .recent
             .iter()
-            .filter(|t| now.duration_since(**t) <= RECENT)
-            .count();
+            .filter(|(t, _)| now.duration_since(*t) <= RECENT)
+            .map(|(_, n)| n)
+            .sum();
         in_window as f64 / RECENT.as_secs_f64()
     }
 
@@ -215,6 +244,37 @@ mod tests {
         let now = t0 + Duration::from_secs(40);
         assert!((t.rate(now) - 25.0 / 40.0).abs() < 1e-9);
         assert!((t.rate_now(now) - 0.5).abs() < 1e-9, "{}", t.rate_now(now));
+    }
+
+    #[test]
+    fn tracked_accounts_are_capped_and_the_stalest_gives_way() {
+        let t0 = Instant::now();
+        let mut t = TrafficTally::new(t0);
+        for i in 0..MAX_ACCOUNTS + 10 {
+            let now = t0 + Duration::from_millis(i as u64);
+            t.record(&event("delivered", "x", &format!("acct-{i}"), 1), now);
+        }
+        assert_eq!(t.accounts(), MAX_ACCOUNTS);
+        let kept: Vec<&str> = t.top(MAX_ACCOUNTS).into_iter().map(|(h, _)| h).collect();
+        assert!(!kept.contains(&"acct-0"), "the oldest was dropped");
+        assert!(kept.contains(&format!("acct-{}", MAX_ACCOUNTS + 9).as_str()));
+    }
+
+    #[test]
+    fn counters_saturate_and_the_rate_window_stays_small() {
+        let t0 = Instant::now();
+        let mut t = TrafficTally::new(t0);
+        t.record(&event("received", "a", "b", u64::MAX), t0);
+        t.record(&event("received", "a", "b", u64::MAX), t0);
+        assert_eq!(t.bytes, u64::MAX);
+        for _ in 0..10_000 {
+            t.record(&event("received", "a", "b", 1), t0);
+        }
+        assert!(
+            t.recent.len() <= 2,
+            "one bucket per second, not one entry per message"
+        );
+        assert!((t.rate_now(t0) - 10_002.0 / 10.0).abs() < 1e-9);
     }
 
     #[test]
