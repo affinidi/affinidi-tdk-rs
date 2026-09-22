@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (0.9.13) — account activity test
+
+- New end-to-end test `account_activity`: an authentication and a delivery are
+  recorded as the account's activity. There is no API change.
+
 ## Unreleased (0.9.12) — `legacy_admin_protocols`
 
 - `TestMediatorBuilder::legacy_admin_protocols(mode)` sets the mediator's

@@ -153,6 +153,29 @@ impl Default for Account {
     }
 }
 
+/// When an account was last active, as the mediator recorded it. Each field is
+/// Unix epoch seconds, or `None` when nothing has been recorded — for an
+/// account older than the recording, or a store that does not keep it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct AccountActivity {
+    /// The last message the mediator accepted for this account. Recorded at
+    /// most once a minute per account, so it can lag by up to a minute.
+    pub last_received: Option<u64>,
+    /// The account's last completed authentication, over any transport.
+    pub last_authenticated: Option<u64>,
+}
+
+/// Which of an account's [`AccountActivity`] times to record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ActivityKind {
+    /// A message addressed to it was accepted.
+    Received,
+    /// It completed authentication.
+    Authenticated,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct MediatorAccountList {
     pub accounts: Vec<Account>,

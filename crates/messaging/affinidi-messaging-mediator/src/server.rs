@@ -813,6 +813,7 @@ pub async fn serve_internal(
         clock,
         queue_snapshot,
         monitor,
+        activity: Default::default(),
         #[cfg(feature = "tsp")]
         tsp_identity: Arc::new(tokio::sync::OnceCell::new()),
         #[cfg(feature = "didcomm-v1")]

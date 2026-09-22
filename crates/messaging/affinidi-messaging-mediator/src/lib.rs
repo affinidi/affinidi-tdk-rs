@@ -22,6 +22,7 @@ use tasks::supervisor::HealthRegistry;
 use tasks::websocket_streaming::StreamingTask;
 use tokio_util::sync::CancellationToken;
 
+pub mod activity;
 pub mod builder;
 pub mod commands;
 pub mod common;
@@ -73,6 +74,9 @@ pub struct SharedData {
     /// The live traffic monitor: the event bus the data plane emits onto and
     /// the `messaging/monitor/*` subscriptions reading it.
     pub monitor: monitor::TrafficMonitor,
+    /// Records each account's last received message and last authentication,
+    /// served by `messaging/account/get` and `messaging/account/list`.
+    pub activity: activity::ActivityRecorder,
     /// Storage backend for sessions, messages, accounts, and live
     /// streaming. Polymorphic so the mediator can run against Redis,
     /// Fjall, or memory without changing handler code.

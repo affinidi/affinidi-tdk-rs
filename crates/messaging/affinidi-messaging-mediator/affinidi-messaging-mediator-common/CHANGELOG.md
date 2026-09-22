@@ -1,5 +1,22 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.21) — account activity
+
+`MediatorStore` gains two methods for recording when an account was last
+active:
+- `account_activity_record(did_hash, kind, at)` records one time: when a
+  message for the account was accepted (`ActivityKind::Received`), or when it
+  last authenticated (`ActivityKind::Authenticated`). Nothing is recorded for
+  an account that doesn't exist.
+- `account_activity(&[did_hash])` reads them back as `AccountActivity`, with
+  each time `None` until recorded.
+
+Both have default implementations (keep nothing, report nothing), so
+existing `MediatorStore` implementations still compile. The Redis backend
+implements both, keeping `ACTIVITY:{did_hash}` with one field per kind, and
+`account_remove` deletes it. `AccountActivity` and `ActivityKind` are
+`#[non_exhaustive]`.
+
 ## Unreleased (0.16.20) — `AuditAction::ConfigReload`
 
 `AuditAction::ConfigReload` (`config_reload`) is new. `AuditAction` is

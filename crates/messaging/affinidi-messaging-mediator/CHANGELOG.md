@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased (0.28.32) — the mediator records when each account was last active
+
+The mediator records two times for each account:
+- **Last received:** when it last accepted a message addressed to the
+  account, on either storage path. This is written at most once a minute per
+  account, so it doesn't add a store write to every message, and it can lag
+  by up to a minute.
+- **Last authenticated:** when the account last completed authentication,
+  over DIDComm/REST/WebSocket or TSP.
+
+Recording is best-effort: a failed write is logged at `debug` and never fails
+the message or the login. The minute throttle is held in memory and bounded
+(50,000 accounts).
+
+All three backends keep both times: Redis, Fjall (in `globals`) and memory.
+Removing an account removes its record.
+
+This release only records the times. Serving them on `messaging/account/get`
+and `messaging/account/list` (opt-in, `includeActivity`) follows once that
+spec change is published.
+
+Requires `affinidi-messaging-mediator-common` 0.16.21.
+
 ## Unreleased (0.28.31) — Trust Task proofs verified by `trust-tasks-proof`
 
 Trust Task proofs are now checked by the upstream `trust-tasks-proof`

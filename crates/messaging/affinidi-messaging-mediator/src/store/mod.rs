@@ -172,3 +172,70 @@ pub(crate) mod auth_flow_harness {
         );
     }
 }
+
+/// Cross-backend check of account activity: recorded for an existing account,
+/// not for an unknown one, each kind independently, and dropped with the
+/// account.
+#[cfg(all(test, any(feature = "fjall-backend", feature = "memory-backend")))]
+pub(crate) mod activity_harness {
+    use affinidi_messaging_mediator_common::store::{MediatorStore, Session};
+    use affinidi_messaging_mediator_common::types::accounts::{AccountActivity, ActivityKind};
+    use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
+
+    pub(crate) async fn run_account_activity<S: MediatorStore>(store: &S) {
+        let (alice, ghost) = ("alice-hash".to_string(), "ghost-hash".to_string());
+        store
+            .account_add(&alice, &MediatorACLSet::default(), None)
+            .await
+            .expect("account_add");
+
+        let before = store
+            .account_activity(std::slice::from_ref(&alice))
+            .await
+            .unwrap();
+        assert_eq!(before, vec![AccountActivity::default()], "nothing yet");
+
+        store
+            .account_activity_record(&alice, ActivityKind::Received, 100)
+            .await
+            .unwrap();
+        store
+            .account_activity_record(&alice, ActivityKind::Authenticated, 90)
+            .await
+            .unwrap();
+        store
+            .account_activity_record(&alice, ActivityKind::Received, 160)
+            .await
+            .unwrap();
+        store
+            .account_activity_record(&ghost, ActivityKind::Received, 100)
+            .await
+            .unwrap();
+
+        let got = store
+            .account_activity(&[alice.clone(), ghost.clone()])
+            .await
+            .unwrap();
+        assert_eq!(got[0].last_received, Some(160), "the later time replaces");
+        assert_eq!(
+            got[0].last_authenticated,
+            Some(90),
+            "recording one kind leaves the other"
+        );
+        assert_eq!(got[1], AccountActivity::default(), "no account, no record");
+
+        store
+            .account_remove(&Session::default(), &alice)
+            .await
+            .expect("account_remove");
+        store
+            .account_add(&alice, &MediatorACLSet::default(), None)
+            .await
+            .expect("re-add");
+        assert_eq!(
+            store.account_activity(&[alice]).await.unwrap(),
+            vec![AccountActivity::default()],
+            "removing an account removes its activity"
+        );
+    }
+}
