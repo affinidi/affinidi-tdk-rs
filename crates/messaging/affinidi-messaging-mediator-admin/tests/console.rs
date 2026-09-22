@@ -119,6 +119,16 @@ async fn an_admin_previews_then_purges_and_a_changed_queue_is_refused() {
         .await
         .expect("operator connects");
     assert_eq!(console.mode(), Mode::Admin { root: false });
+    // The version is read from the mediator's readyz probe at connect.
+    let version = console
+        .mediator_version()
+        .expect("the mediator reports its version");
+    assert_eq!(
+        version.split('.').count(),
+        3,
+        "a major.minor.patch release: {version}"
+    );
+    assert!(console.serves_operations());
     console.stats().await.expect("admin reads stats");
 
     let request = PurgeRequest {

@@ -23,7 +23,9 @@ mod identity;
 mod live;
 mod purge;
 
-pub use console::{Capabilities, InspectedMessage, MediatorConsole, Mode, Target};
+pub use console::{
+    Capabilities, InspectedMessage, MediatorConsole, Mode, OPERATIONS_SINCE, Target,
+};
 pub use error::{ConsoleError, Result};
 pub use identity::{Identity, IdentityChoice, IdentitySource, ProfileFileSource, StaticIdentities};
 pub use live::{MonitorEvent, MonitorFeed, MonitorFilter, MonitorUpdate};

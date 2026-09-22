@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased (0.1.1) — a mediator too old for most screens
+
+Connected to a mediator older than 0.28.20, the console no longer shows blank
+screens and "No response from API":
+- The header shows the mediator's version, with a warning when it's too old.
+- An administrator starts on the **Audit** screen, which older mediators
+  serve.
+- The Dashboard, Queues and Account screens explain what they need (the
+  version found and the version required) instead of sending requests the
+  mediator won't answer.
+
+The header also shows the mediator's version whenever it's known. Requires
+`affinidi-messaging-mediator-admin` 0.1.2.
+
 ## Unreleased (0.1.0) — first release
 
 `mediator-console`, a terminal console for an Affinidi messaging mediator, and

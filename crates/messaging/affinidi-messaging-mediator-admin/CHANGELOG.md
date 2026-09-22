@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (0.1.2) — say plainly when the mediator is too old
+
+- **New:** `MediatorConsole::mediator_version()` reports the version read from
+  the mediator's public `readyz` endpoint at connect.
+- **New:** `serves_operations()` says whether that version is at least
+  `OPERATIONS_SINCE` (0.28.20). When the version can't be read, it's assumed
+  to be recent enough, and the mediator answers for itself.
+- **Changed:** on an older mediator, statistics, the queue ranking and queue
+  status, message listing, reading and deleting, purges and the monitor
+  return `Refused(protocol.trust_task.unsupported)` at once, naming both
+  versions.
+  - Before, those requests were sent anyway. An older mediator doesn't
+    answer them, so every call waited out the SDK's 10-second reply timeout
+    and failed with "No response from API". (Mediator 0.28.26 also fixes the
+    general case: any refusal now answers its request.)
+  - Account, access-list, audit and configuration calls are unaffected.
+
 ## Unreleased (0.1.1) — finding the mediator in a map-form service
 
 `MediatorConsole::connect` now finds the mediator in a `DIDCommMessaging`

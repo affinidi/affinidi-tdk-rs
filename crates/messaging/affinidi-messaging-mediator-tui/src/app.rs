@@ -140,10 +140,18 @@ impl App {
     pub fn new(console: MediatorConsole) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let admin = matches!(console.mode(), Mode::Admin { .. });
+        // A mediator too old for the operations tasks still serves the audit
+        // log, so an administrator starts there rather than on a dashboard
+        // that cannot fill.
+        let tab = match (admin, console.serves_operations()) {
+            (true, true) => Tab::Dashboard,
+            (true, false) => Tab::Audit,
+            (false, _) => Tab::Account,
+        };
         let mut app = Self {
             console: Arc::new(console),
             depth: ColorDepth::detect(),
-            tab: if admin { Tab::Dashboard } else { Tab::Account },
+            tab,
             tx,
             rx,
             stats: None,
@@ -215,6 +223,12 @@ impl App {
 
     /// Reload what the current screen shows.
     pub fn refresh(&mut self) {
+        // On a mediator too old to serve them, these screens explain that
+        // instead of asking (see `render_unsupported`).
+        if !self.console.serves_operations() && self.tab != Tab::Audit {
+            self.updated = Some(Instant::now());
+            return;
+        }
         match self.tab {
             Tab::Dashboard => {
                 self.spawn(|c| async move { Update::Stats(to_value(c.stats().await)) });
@@ -558,10 +572,10 @@ impl App {
     }
 
     /// This console's own requests to the mediator, and the clean-up of their
-    /// replies. The mediator leaves out most of a subscriber's management
-    /// traffic, but a `received` event carries no recipient yet and a REST
-    /// `deleted` event no sender, so the console's own polling would still
-    /// show.
+    /// replies. From mediator 0.28.22 the mediator leaves all of that out
+    /// itself. Before that, a `received` event carried no recipient and a
+    /// `deleted` event no sender, so the console's own polling showed through;
+    /// this filter keeps the pane clean on those mediators.
     fn is_own_console_traffic(&self, e: &Value) -> bool {
         let me = self.console.did_hash();
         let mediator = sha256_hex(self.console.mediator_did());
@@ -664,16 +678,57 @@ impl App {
         } else {
             rows[2]
         };
+        if !self.console.serves_operations() && self.tab != Tab::Audit {
+            self.render_unsupported(f, body);
+        } else {
+            self.render_screen(f, body);
+        }
+        self.render_footer(f, rows[3]);
+        if let Some(popup) = &self.popup {
+            render_popup(f, area, popup);
+        }
+    }
+
+    fn render_screen(&mut self, f: &mut Frame, body: Rect) {
         match self.tab {
             Tab::Dashboard => self.render_dashboard(f, body),
             Tab::Queues => self.render_queues(f, body),
             Tab::Account => self.render_account(f, body),
             Tab::Audit => self.render_audit(f, body),
         }
-        self.render_footer(f, rows[3]);
-        if let Some(popup) = &self.popup {
-            render_popup(f, area, popup);
+    }
+
+    /// What a screen shows when the mediator predates the tasks it needs.
+    fn render_unsupported(&self, f: &mut Frame, area: Rect) {
+        let (major, minor, patch) = affinidi_messaging_mediator_admin::OPERATIONS_SINCE;
+        let version = self.console.mediator_version().unwrap_or("unknown");
+        let admin = matches!(self.console.mode(), Mode::Admin { .. });
+        let mut text = vec![
+            Line::styled(
+                format!("This mediator is version {version}."),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Line::raw(""),
+            Line::raw(format!(
+                "Statistics, queues, messages and the traffic monitor need \
+                 affinidi-messaging-mediator {major}.{minor}.{patch} or later."
+            )),
+            Line::raw("Upgrade the mediator to use this screen."),
+        ];
+        if admin {
+            text.push(Line::raw(""));
+            text.push(Line::raw(
+                "The Audit screen works on this mediator: press 4 or Tab.",
+            ));
         }
+        f.render_widget(
+            Paragraph::new(text)
+                .wrap(ratatui::widgets::Wrap { trim: false })
+                .block(Block::bordered().title(" Not available on this mediator ")),
+            area,
+        );
     }
 
     fn render_header(&self, f: &mut Frame, area: Rect) {
@@ -699,6 +754,18 @@ impl App {
             )),
             Span::styled(age, Style::default().fg(Color::DarkGray)),
         ]);
+        let mut line = line;
+        match self.console.mediator_version() {
+            Some(v) if !self.console.serves_operations() => line.push_span(Span::styled(
+                format!("  ⚠ mediator {v} is too old for most screens"),
+                Style::default().fg(Color::Yellow),
+            )),
+            Some(v) => line.push_span(Span::styled(
+                format!("  mediator {v}"),
+                Style::default().fg(Color::DarkGray),
+            )),
+            None => {}
+        }
         f.render_widget(Paragraph::new(line), area);
     }
 

@@ -18,6 +18,15 @@ mediator authorises each one on its own. The console also checks
 things the mediator would refuse anyway. Your mediator needs to serve the
 `messaging/*` operations tasks (`affinidi-messaging-mediator` 0.28.20 or later).
 
+At connect, the console reads the mediator's version from its public `readyz`
+endpoint (`mediator_version()`). On an older mediator, `serves_operations()`
+is false, and the operations calls (statistics, queues, messages, purges and
+the monitor) return `ConsoleError::Refused` with code
+`protocol.trust_task.unsupported` straight away. The message names the version
+found and the version needed. An older mediator doesn't answer these tasks at
+all, so without this check each call would wait out the reply timeout. Account,
+access-list, audit and configuration calls work on older mediators too.
+
 ## Connecting
 
 ```rust
