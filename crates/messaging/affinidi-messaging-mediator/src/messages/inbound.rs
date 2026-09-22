@@ -518,6 +518,21 @@ async fn dispatch_tsp_trust_task(
 ) -> Result<InboundMessageResponse, MediatorError> {
     let now_secs = state.clock.unix_secs();
 
+    if let Some(task) = trust_tasks::ServedTask::from_type_uri(&doc.type_uri)
+        && !trust_tasks::served_over_tsp(task)
+    {
+        return Err(trust_tasks::tt_problem(
+            session,
+            "protocol.trust_task.transport",
+            format!(
+                "{} is not served over TSP: monitor events are pushed live over a DIDComm \
+                 connection, and a TSP connection would discard them. Subscribe over DIDComm.",
+                doc.type_uri
+            ),
+            StatusCode::BAD_REQUEST,
+        ));
+    }
+
     // The sender VID is the framework identity; TSP VIDs carry no key fragment,
     // so it is already the shape `consume` wants.
     let Some(response) =

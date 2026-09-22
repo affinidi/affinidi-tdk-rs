@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased (0.28.25) — a monitor subscription over TSP is refused
+
+`messaging/monitor/subscribe` sent over TSP is now refused with
+`protocol.trust_task.transport`, telling the client to subscribe over DIDComm.
+
+Before, the subscription was accepted, and then no batch ever arrived.
+Monitor batches are live-only: they are pushed to the subscriber's
+connection and never stored. A raw-TSP connection treats every push as a
+signal to drain its stored inbox, and discards the push itself. Accepting a
+subscription that cannot deliver broke R1.1. Every other management task is
+still served over TSP.
+
+Delivering monitor batches to TSP subscribers would need a live-only binary
+push through the streaming channel. That's a new mechanism, and it isn't in
+this release.
+
 ## Unreleased (0.28.24) — the monitor sees messages expire
 
 When the expiry sweep removes a stored message, the traffic monitor now

@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator"
-version = "0.28.24"
+version = "0.28.25"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
