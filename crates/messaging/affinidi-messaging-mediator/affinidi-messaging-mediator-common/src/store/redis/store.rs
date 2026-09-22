@@ -19,7 +19,7 @@ use crate::store::redis::database::{
 };
 use crate::store::{DeliveryDecision, DeliveryMarkReport, DeliveryState};
 use crate::types::{
-    accounts::{Account, AccountType, MediatorAccountList},
+    accounts::{Account, AccountActivity, AccountType, ActivityKind, MediatorAccountList},
     acls::{AccessListModeType, MediatorACLSet},
     acls_handler::{
         MediatorACLGetResponse, MediatorAccessListAddResponse, MediatorAccessListGetResponse,
@@ -51,6 +51,19 @@ use tracing::{debug, warn};
 
 /// The key holding the mediator's `config/patch` overrides, a JSON object.
 const CONFIG_OVERRIDES_KEY: &str = "MEDIATOR_CONFIG_OVERRIDES";
+
+/// An account's activity times: a hash at `ACTIVITY:{did_hash}` with one field
+/// per [`ActivityKind`], so recording one never rewrites the other.
+fn activity_key(did_hash: &str) -> String {
+    format!("ACTIVITY:{did_hash}")
+}
+
+fn activity_field(kind: ActivityKind) -> &'static str {
+    match kind {
+        ActivityKind::Received => "RECEIVED",
+        ActivityKind::Authenticated => "AUTHENTICATED",
+    }
+}
 
 /// Fallback ring size when no tuning is supplied. Production derives this from
 /// `limits.pubsub_buffer / limits.message_size` via `with_pubsub_capacity`.
@@ -905,7 +918,19 @@ impl MediatorStore for RedisStore {
         acls: &MediatorACLSet,
         queue_limit: Option<u32>,
     ) -> Result<Account, MediatorError> {
-        self.account_add(did_hash, acls, queue_limit).await
+        let account = self.account_add(did_hash, acls, queue_limit).await?;
+        // A fresh account starts with no activity. This also collects a record
+        // that a message in flight wrote between a removal's existence check
+        // and its `DEL` below.
+        let mut conn = self.get_connection().await?;
+        if let Err(e) = redis::cmd("DEL")
+            .arg(activity_key(did_hash))
+            .exec_async(&mut conn)
+            .await
+        {
+            warn!("account {did_hash} added, but its old activity record remains: {e}");
+        }
+        Ok(account)
     }
 
     async fn account_remove(
@@ -919,7 +944,18 @@ impl MediatorStore for RedisStore {
             session_id: session.session_id.clone(),
             ..Default::default()
         };
-        self.account_remove(&inner_session, did_hash).await
+        let removed = self.account_remove(&inner_session, did_hash).await?;
+        if removed {
+            let mut conn = self.get_connection().await?;
+            if let Err(e) = redis::cmd("DEL")
+                .arg(activity_key(did_hash))
+                .exec_async(&mut conn)
+                .await
+            {
+                warn!("account {did_hash} removed, but not its activity record: {e}");
+            }
+        }
+        Ok(removed)
     }
 
     async fn account_list(
@@ -1427,6 +1463,68 @@ impl MediatorStore for RedisStore {
     }
 
     // ─── Message expiry processor ───────────────────────────────────────────
+
+    async fn account_activity_record(
+        &self,
+        did_hash: &str,
+        kind: ActivityKind,
+        at: u64,
+    ) -> Result<(), MediatorError> {
+        // Only for an account that exists, so a removed account's record is
+        // not written back by a message still in flight.
+        let mut conn = self.get_connection().await?;
+        redis::Script::new(
+            "if redis.call('EXISTS', KEYS[1]) == 1 then \
+               return redis.call('HSET', KEYS[2], ARGV[1], ARGV[2]) \
+             end return 0",
+        )
+        .key(format!("DID:{did_hash}"))
+        .key(activity_key(did_hash))
+        .arg(activity_field(kind))
+        .arg(at)
+        .invoke_async::<i64>(&mut conn)
+        .await
+        .map(|_| ())
+        .map_err(|e| {
+            MediatorError::DatabaseError(
+                14,
+                did_hash.into(),
+                format!("recording account activity: {e}"),
+            )
+        })
+    }
+
+    async fn account_activity(
+        &self,
+        did_hashes: &[String],
+    ) -> Result<Vec<AccountActivity>, MediatorError> {
+        if did_hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.get_connection().await?;
+        let mut pipe = redis::pipe();
+        for hash in did_hashes {
+            pipe.cmd("HMGET")
+                .arg(activity_key(hash))
+                .arg(activity_field(ActivityKind::Received))
+                .arg(activity_field(ActivityKind::Authenticated));
+        }
+        let rows: Vec<(Option<u64>, Option<u64>)> =
+            pipe.query_async(&mut conn).await.map_err(|e| {
+                MediatorError::DatabaseError(
+                    14,
+                    "NA".into(),
+                    format!("reading account activity: {e}"),
+                )
+            })?;
+        Ok(rows
+            .into_iter()
+            .map(|(last_received, last_authenticated)| AccountActivity {
+                last_received,
+                last_authenticated,
+            })
+            .collect())
+    }
 
     async fn config_overrides_get(&self) -> Result<Option<String>, MediatorError> {
         let mut conn = self.get_connection().await?;

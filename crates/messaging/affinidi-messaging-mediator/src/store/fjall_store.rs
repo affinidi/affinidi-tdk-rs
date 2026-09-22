@@ -55,6 +55,7 @@
 //! one key-only scan at open and maintained under `write_lock`
 //! thereafter, which is sound because this backend is single-process.
 
+use affinidi_messaging_mediator_common::types::accounts::{AccountActivity, ActivityKind};
 use affinidi_messaging_mediator_common::{
     circuit_breaker::CircuitBreaker,
     errors::MediatorError,
@@ -192,6 +193,18 @@ const PARTITION_FORWARD_PENDING: &str = "forward_pending";
 const PARTITION_GLOBALS: &str = "globals";
 /// `globals` key holding the `config/patch` overrides, a JSON object.
 const CONFIG_OVERRIDES_KEY: &str = "CONFIG_OVERRIDES";
+
+/// `globals` key holding one of an account's activity times (a big-endian
+/// `u64` of Unix seconds). One key per [`ActivityKind`], so recording one
+/// never rewrites the other. `None` for a kind this store does not keep.
+fn activity_key(kind: ActivityKind, did_hash: &str) -> Option<String> {
+    let tag = match kind {
+        ActivityKind::Received => "R",
+        ActivityKind::Authenticated => "A",
+        _ => return None,
+    };
+    Some(format!("ACTIVITY:{tag}:{did_hash}"))
+}
 const PARTITION_STREAMING_CLIENTS: &str = "streaming_clients";
 const PARTITION_AUDIT_LOG: &str = "audit_log";
 /// Separator between the two hashes in a `peer_queue` key. `0xFF` is not a
@@ -1863,8 +1876,17 @@ impl MediatorStore for FjallStore {
             record.queue_send_limit = Some(limit as i32);
             record.queue_receive_limit = Some(limit as i32);
         }
-        self.accounts
-            .insert(did_hash.as_bytes(), Self::encode(&record)?)
+        let _guard = self.write_lock.lock().await;
+        let mut batch = self.db.batch();
+        batch.insert(&self.accounts, did_hash.as_bytes(), Self::encode(&record)?);
+        // A fresh account starts with no activity, whatever was left behind.
+        for kind in [ActivityKind::Received, ActivityKind::Authenticated] {
+            if let Some(key) = activity_key(kind, did_hash) {
+                batch.remove(&self.globals, key.as_bytes());
+            }
+        }
+        batch
+            .commit()
             .map_err(|e| Self::db_err("account_add:insert", e))?;
         Ok(record.into_account(did_hash.to_string(), 0))
     }
@@ -1906,6 +1928,11 @@ impl MediatorStore for FjallStore {
         let mut batch = self.db.batch();
         batch.remove(&self.accounts, did_hash.as_bytes());
         batch.remove(&self.admins, did_hash.as_bytes());
+        for kind in [ActivityKind::Received, ActivityKind::Authenticated] {
+            if let Some(key) = activity_key(kind, did_hash) {
+                batch.remove(&self.globals, key.as_bytes());
+            }
+        }
         // Delete all access-list entries for this DID.
         let prefix = did_hash.as_bytes();
         for guard in self.access_lists.prefix(prefix) {
@@ -3051,6 +3078,55 @@ impl MediatorStore for FjallStore {
 
     // ─── Message expiry processor ───────────────────────────────────────────
 
+    async fn account_activity_record(
+        &self,
+        did_hash: &str,
+        kind: ActivityKind,
+        at: u64,
+    ) -> Result<(), MediatorError> {
+        let Some(key) = activity_key(kind, did_hash) else {
+            return Ok(());
+        };
+        // Under the write lock, so it cannot interleave with `account_remove`
+        // and leave a removed account's record behind.
+        let _guard = self.write_lock.lock().await;
+        let exists = self
+            .accounts
+            .contains_key(did_hash.as_bytes())
+            .map_err(|e| Self::db_err("account_activity_record:accounts.get", e))?;
+        if !exists {
+            return Ok(());
+        }
+        self.globals
+            .insert(key, at.to_be_bytes())
+            .map_err(|e| Self::db_err("account_activity_record", e))
+    }
+
+    async fn account_activity(
+        &self,
+        did_hashes: &[String],
+    ) -> Result<Vec<AccountActivity>, MediatorError> {
+        let read = |kind, hash: &str| -> Result<Option<u64>, MediatorError> {
+            let Some(key) = activity_key(kind, hash) else {
+                return Ok(None);
+            };
+            let value = self
+                .globals
+                .get(key)
+                .map_err(|e| Self::db_err("account_activity", e))?;
+            Ok(value.and_then(|v| <[u8; 8]>::try_from(v.as_ref()).ok().map(u64::from_be_bytes)))
+        };
+        did_hashes
+            .iter()
+            .map(|hash| {
+                let mut activity = AccountActivity::default();
+                activity.last_received = read(ActivityKind::Received, hash)?;
+                activity.last_authenticated = read(ActivityKind::Authenticated, hash)?;
+                Ok(activity)
+            })
+            .collect()
+    }
+
     async fn config_overrides_get(&self) -> Result<Option<String>, MediatorError> {
         let value = self
             .globals
@@ -3816,6 +3892,13 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let store = FjallStore::open(dir.path()).expect("open");
         crate::store::auth_flow_harness::run_auth_session_flow(&store).await;
+    }
+
+    #[tokio::test]
+    async fn account_activity() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        crate::store::activity_harness::run_account_activity(&store).await;
     }
 
     #[tokio::test]

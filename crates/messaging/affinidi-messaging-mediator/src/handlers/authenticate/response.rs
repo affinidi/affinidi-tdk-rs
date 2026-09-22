@@ -390,6 +390,12 @@ pub async fn authentication_response(
 
         // Register the DID and initial setup
         _register_did_and_setup(&state, &session.did_hash).await?;
+        // After registration, so a first authentication has an account to
+        // record it against.
+        state
+            .activity
+            .authenticated(&state, &session.did_hash)
+            .await;
 
         metrics::counter!(crate::common::metrics::names::AUTH_SUCCESS_TOTAL).increment(1);
         info!("Authentication successful for {}", session.did);

@@ -43,7 +43,7 @@
 
 use crate::errors::MediatorError;
 use crate::types::{
-    accounts::{Account, AccountType, MediatorAccountList},
+    accounts::{Account, AccountActivity, AccountType, ActivityKind, MediatorAccountList},
     acls::{AccessListModeType, MediatorACLSet},
     acls_handler::{
         MediatorACLGetResponse, MediatorAccessListAddResponse, MediatorAccessListGetResponse,
@@ -1257,6 +1257,44 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     async fn sweep_expired_trust_task_claims(&self, now: u64) -> Result<usize, MediatorError> {
         let _ = now;
         Ok(0)
+    }
+
+    // ─── Account activity ───────────────────────────────────────────────────
+
+    /// Record that the account `did_hash` did `kind` at `at` (Unix epoch
+    /// seconds), replacing the time recorded before. Nothing is recorded for
+    /// an account that does not exist.
+    ///
+    /// Adding an account clears whatever was recorded for that hash, so an
+    /// account never starts life holding a predecessor's times — including a
+    /// record written by a message that was in flight while the predecessor
+    /// was being removed, which the existence check cannot rule out on a
+    /// store without a transaction across both.
+    ///
+    /// Activity is observability, not state anything depends on, so the
+    /// default keeps nothing and succeeds; [`account_activity`] then reports
+    /// nothing recorded. Every built-in backend overrides both. Removing the
+    /// account removes its activity.
+    ///
+    /// [`account_activity`]: Self::account_activity
+    async fn account_activity_record(
+        &self,
+        did_hash: &str,
+        kind: ActivityKind,
+        at: u64,
+    ) -> Result<(), MediatorError> {
+        let _ = (did_hash, kind, at);
+        Ok(())
+    }
+
+    /// The recorded activity of each account in `did_hashes`, in the same
+    /// order. An account with nothing recorded, or none at all, gets
+    /// [`AccountActivity::default`].
+    async fn account_activity(
+        &self,
+        did_hashes: &[String],
+    ) -> Result<Vec<AccountActivity>, MediatorError> {
+        Ok(vec![AccountActivity::default(); did_hashes.len()])
     }
 
     // ─── Configuration overrides ────────────────────────────────────────────

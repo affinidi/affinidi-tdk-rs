@@ -24,6 +24,7 @@
 //!   re-delivers messages whose owning consumer has gone idle.
 
 use crate::common::time::unix_timestamp_secs;
+use affinidi_messaging_mediator_common::types::accounts::{AccountActivity, ActivityKind};
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{
@@ -193,6 +194,8 @@ struct ConsumerGroupState {
 struct MemoryState {
     /// The `config/patch` overrides, a JSON object.
     config_overrides: Option<String>,
+    /// Each account's recorded activity times.
+    activity: HashMap<String, AccountActivity>,
 
     // ─── Messages ───────────────────────────────────────────────────
     messages: HashMap<String, MessageRecord>,
@@ -1016,6 +1019,8 @@ impl MediatorStore for MemoryStore {
             record.queue_receive_limit = Some(limit as i32);
         }
         state.accounts.insert(did_hash.to_string(), record.clone());
+        // A fresh account starts with no activity.
+        state.activity.remove(did_hash);
         Ok(record.into_account(did_hash.to_string(), 0))
     }
 
@@ -1052,6 +1057,7 @@ impl MediatorStore for MemoryStore {
         // Drop the account, admin set membership, and known-DIDs entry.
         let mut state = self.state.lock().await;
         state.accounts.remove(did_hash);
+        state.activity.remove(did_hash);
         state.access_lists.remove(did_hash);
         state.admins.remove(did_hash);
         state.known_dids.retain(|d| d != did_hash);
@@ -1816,6 +1822,36 @@ impl MediatorStore for MemoryStore {
 
     // ─── Message expiry processor ───────────────────────────────────────────
 
+    async fn account_activity_record(
+        &self,
+        did_hash: &str,
+        kind: ActivityKind,
+        at: u64,
+    ) -> Result<(), MediatorError> {
+        let mut state = self.state.lock().await;
+        if !state.accounts.contains_key(did_hash) {
+            return Ok(());
+        }
+        let activity = state.activity.entry(did_hash.to_string()).or_default();
+        match kind {
+            ActivityKind::Received => activity.last_received = Some(at),
+            ActivityKind::Authenticated => activity.last_authenticated = Some(at),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn account_activity(
+        &self,
+        did_hashes: &[String],
+    ) -> Result<Vec<AccountActivity>, MediatorError> {
+        let state = self.state.lock().await;
+        Ok(did_hashes
+            .iter()
+            .map(|h| state.activity.get(h).copied().unwrap_or_default())
+            .collect())
+    }
+
     async fn config_overrides_get(&self) -> Result<Option<String>, MediatorError> {
         Ok(self.state.lock().await.config_overrides.clone())
     }
@@ -2202,6 +2238,12 @@ mod tests {
     async fn auth_session_flow_end_to_end() {
         let store = MemoryStore::new();
         crate::store::auth_flow_harness::run_auth_session_flow(&store).await;
+    }
+
+    #[tokio::test]
+    async fn account_activity() {
+        let store = MemoryStore::new();
+        crate::store::activity_harness::run_account_activity(&store).await;
     }
 
     #[tokio::test]

@@ -200,6 +200,10 @@ pub async fn tsp_authentication_response(
             .await?;
 
         debug!("TSP client authenticated: {}", session.did);
+        state
+            .activity
+            .authenticated(&state, &session.did_hash)
+            .await;
         metrics::counter!(crate::common::metrics::names::AUTH_SUCCESS_TOTAL).increment(1);
 
         Ok((
