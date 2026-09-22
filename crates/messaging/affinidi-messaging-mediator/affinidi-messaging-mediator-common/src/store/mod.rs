@@ -1275,6 +1275,10 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// Replace the stored configuration overrides with `overrides`, a JSON
     /// object. An empty object clears them.
     ///
+    /// This replaces the whole document, so a caller changing it must read,
+    /// modify and write under one lock; the mediator does all of that under
+    /// its patch lock (`LiveLimits::lock_for_patch`).
+    ///
     /// **The default refuses**: a patch must not report a value as stored when
     /// the store kept nothing. Every built-in backend overrides it.
     async fn config_overrides_set(&self, overrides: &str) -> Result<(), MediatorError> {

@@ -1779,9 +1779,26 @@ fn flatten_config(prefix: &str, value: &Value, out: &mut Vec<(String, Value)>) {
                 flatten_config(&key, v, out);
             }
         }
-        Value::Array(_) => out.push((prefix.to_string(), Value::String(value.to_string()))),
+        Value::Array(_) => out.push((
+            prefix.to_string(),
+            Value::String(redact_strings(value).to_string()),
+        )),
         Value::String(s) => out.push((prefix.to_string(), Value::String(redact_url(s)))),
         scalar => out.push((prefix.to_string(), scalar.clone())),
+    }
+}
+
+/// `value` with every string in it, at any depth, passed through [`redact_url`].
+fn redact_strings(value: &Value) -> Value {
+    match value {
+        Value::String(s) => Value::String(redact_url(s)),
+        Value::Array(items) => Value::Array(items.iter().map(redact_strings).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), redact_strings(v)))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
 
@@ -2335,5 +2352,16 @@ mod config_show_tests {
         assert_eq!(get("local_endpoints"), Some(json!("[\"a\",\"b\"]")));
         assert_eq!(get("listen_address"), Some(json!("0.0.0.0:7037")));
         assert!(out.iter().all(|(_, v)| !v.is_object() && !v.is_array()));
+
+        // A credential inside an array is redacted too.
+        let mut out = Vec::new();
+        flatten_config(
+            "",
+            &json!({ "endpoints": ["https://u:pw@a.example/", "https://b.example/"] }),
+            &mut out,
+        );
+        let text = out[0].1.as_str().unwrap().to_string();
+        assert!(!text.contains("pw"), "{text}");
+        assert!(text.contains("***@a.example"), "{text}");
     }
 }

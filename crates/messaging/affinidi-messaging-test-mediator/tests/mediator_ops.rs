@@ -915,8 +915,9 @@ async fn a_root_admin_patches_limits_and_each_key_is_answered() {
         &root,
         json!({
             "limits.deleted_messages": 1,
-            "limits.rate_limit_per_ip": 500,
+            "limits.rate_limit_per_ip": 50,
             "limits.queued_send_messages_hard": 1,
+            "limits.listed_messages": 100_000,
             "limits.message_size": 10,
             "security.use_ssl": true,
         }),
@@ -934,9 +935,10 @@ async fn a_root_admin_patches_limits_and_each_key_is_answered() {
         .iter()
         .map(|r| r["key"].as_str().unwrap())
         .collect();
-    assert_eq!(rejected.len(), 3, "{answer}");
+    assert_eq!(rejected.len(), 4, "{answer}");
     for key in [
         "limits.queued_send_messages_hard", // below its soft limit
+        "limits.listed_messages",           // looser than configured
         "limits.message_size",              // not patchable
         "security.use_ssl",                 // not a limit
     ] {
@@ -1018,7 +1020,7 @@ async fn a_patch_survives_a_restart() {
     patch(
         &first,
         &root,
-        json!({ "limits.listed_messages": 7, "limits.rate_limit_per_ip": 321 }),
+        json!({ "limits.listed_messages": 7, "limits.rate_limit_per_ip": 32 }),
     )
     .await
     .expect("patch");
@@ -1041,7 +1043,7 @@ async fn a_patch_survives_a_restart() {
     assert_eq!(listed["source"], "override");
     assert_eq!(
         shown(&second, &root, "limits.rate_limit_per_ip").await["value"],
-        321,
+        32,
         "a restart-gated override is in force after the restart"
     );
 }

@@ -1278,11 +1278,6 @@ fn from_json<T: DeserializeOwned>(value: Value) -> Result<T, MediatorError> {
     })
 }
 
-/// Patches are applied one at a time: each reads the stored overrides, adds to
-/// them and writes them back, and two interleaved patches would lose one
-/// another's keys.
-static CONFIG_PATCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 /// `config/patch` — change mediator limits at runtime. rootAdmin only.
 ///
 /// Each key is checked on its own (see
@@ -1317,7 +1312,9 @@ pub(crate) async fn consume_config_patch(
         ));
     }
 
-    let _one_at_a_time = CONFIG_PATCH.lock().await;
+    // One change at a time: this reads the stored overrides, adds to them and
+    // writes them back, and interleaved patches would lose each other's keys.
+    let _one_at_a_time = state.live_limits.lock_for_patch().await;
     let storage_err = |e: MediatorError| {
         tt_problem(
             session,
@@ -1358,7 +1355,7 @@ pub(crate) async fn consume_config_patch(
             accepted.push((key.clone(), class, Value::Null));
             continue;
         }
-        match with_override(&desired, key, value) {
+        match with_override(&desired, &baseline, key, value) {
             Ok(next) => {
                 desired = next;
                 stored.insert(key.clone(), value.clone());
