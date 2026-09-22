@@ -1,5 +1,11 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.18) — `MediatorError::threaded_to`
+
+`MediatorError::threaded_to(msg_id)` names `msg_id` as the message an error
+answers, unless the error already names one. The mediator uses it to thread
+every refusal to its request. Additive.
+
 ## Unreleased (0.16.17) — the expiry sweep names what it removes
 
 - **`MediatorStore::sweep_expired_messages_observed`** takes an optional

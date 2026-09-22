@@ -116,6 +116,37 @@ async fn a_standard_account_cannot_read_mediator_wide_views() {
     assert!(queues.is_err(), "queue/list must be refused: {queues:?}");
 }
 
+/// A refusal comes back as the answer to the request that provoked it — at
+/// once, carrying its reason — rather than as an unmatched problem report the
+/// caller waits out and reports as "no response".
+#[tokio::test]
+async fn a_refused_trust_task_is_answered_at_once_with_its_reason() {
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("alice live");
+
+    let started = std::time::Instant::now();
+    let refused = env
+        .atm
+        .trust_tasks()
+        .stats_show(&alice.profile)
+        .await
+        .expect_err("stats/show is admin-only");
+    let elapsed = started.elapsed();
+    let text = refused.to_string();
+    assert!(
+        !text.contains("No response"),
+        "the refusal must be matched to the request: {text}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "answered in {elapsed:?}, not after the reply timeout"
+    );
+}
+
 /// Authcrypt a basic message from `sender` to `recipient` and hand it to the
 /// mediator for direct delivery. The recipient does not collect it, so it
 /// stays in the recipient's receive queue and the sender's send queue.
