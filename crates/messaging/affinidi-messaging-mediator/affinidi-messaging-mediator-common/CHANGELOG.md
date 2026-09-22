@@ -1,5 +1,16 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.19) — stored configuration overrides
+
+- **`MediatorStore::config_overrides_get` / `config_overrides_set`** keep the
+  mediator's `config/patch` overrides, as a JSON object.
+  - The default `get` reports none.
+  - The default `set` **refuses**, so a patch never reports a value as stored
+    when the store kept nothing.
+  - Redis, Fjall and the memory store implement both.
+- **`AuditAction::ConfigPatch`** (`config_patch`) is new.
+- Additive.
+
 ## Unreleased (0.16.18) — `MediatorError::threaded_to`
 
 `MediatorError::threaded_to(msg_id)` names `msg_id` as the message an error

@@ -148,7 +148,7 @@ pub async fn admin_status_handler(
         },
         forwarding: ForwardingStatus {
             queue_length,
-            queue_limit: state.config.limits.forward_task_queue,
+            queue_limit: state.limits().forward_task_queue,
         },
         circuit_breaker: state.database.circuit_breaker_state(),
         database: DatabaseStatus {

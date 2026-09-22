@@ -49,6 +49,9 @@ use tokio::sync::{Mutex, broadcast};
 use tokio_stream::StreamExt;
 use tracing::{debug, warn};
 
+/// The key holding the mediator's `config/patch` overrides, a JSON object.
+const CONFIG_OVERRIDES_KEY: &str = "MEDIATOR_CONFIG_OVERRIDES";
+
 /// Fallback ring size when no tuning is supplied. Production derives this from
 /// `limits.pubsub_buffer / limits.message_size` via `with_pubsub_capacity`.
 const PUBSUB_BROADCAST_CAPACITY: usize = 32;
@@ -1424,6 +1427,37 @@ impl MediatorStore for RedisStore {
     }
 
     // ─── Message expiry processor ───────────────────────────────────────────
+
+    async fn config_overrides_get(&self) -> Result<Option<String>, MediatorError> {
+        let mut conn = self.get_connection().await?;
+        redis::cmd("GET")
+            .arg(CONFIG_OVERRIDES_KEY)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| {
+                MediatorError::DatabaseError(
+                    14,
+                    "NA".into(),
+                    format!("reading configuration overrides: {e}"),
+                )
+            })
+    }
+
+    async fn config_overrides_set(&self, overrides: &str) -> Result<(), MediatorError> {
+        let mut conn = self.get_connection().await?;
+        redis::cmd("SET")
+            .arg(CONFIG_OVERRIDES_KEY)
+            .arg(overrides)
+            .exec_async(&mut conn)
+            .await
+            .map_err(|e| {
+                MediatorError::DatabaseError(
+                    14,
+                    "NA".into(),
+                    format!("storing configuration overrides: {e}"),
+                )
+            })
+    }
 
     async fn sweep_expired_messages(
         &self,

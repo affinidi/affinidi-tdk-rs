@@ -39,6 +39,36 @@ pub async fn statistics_with_snapshot(
     queue_defaults: SurveyDefaults,
     snapshot: QueueSnapshotCell,
 ) -> Result<(), MediatorError> {
+    statistics_loop(database, tags, clock, move || queue_defaults, snapshot).await
+}
+
+/// [`statistics_with_snapshot`], measuring each queue survey against the
+/// limits in effect at the time, so a `config/patch` to a soft queue limit is
+/// what the next survey uses.
+pub async fn statistics_with_live_limits(
+    database: Arc<dyn MediatorStore>,
+    tags: HashMap<String, String>,
+    clock: Arc<dyn Clock>,
+    limits: crate::common::config::overrides::LiveLimits,
+    snapshot: QueueSnapshotCell,
+) -> Result<(), MediatorError> {
+    let defaults = move || {
+        let limits = limits.get();
+        SurveyDefaults {
+            send_soft: limits.queued_send_messages_soft,
+            receive_soft: limits.queued_receive_messages_soft,
+        }
+    };
+    statistics_loop(database, tags, clock, defaults, snapshot).await
+}
+
+async fn statistics_loop(
+    database: Arc<dyn MediatorStore>,
+    tags: HashMap<String, String>,
+    clock: Arc<dyn Clock>,
+    queue_defaults: impl Fn() -> SurveyDefaults + Send,
+    snapshot: QueueSnapshotCell,
+) -> Result<(), MediatorError> {
     let _span = span!(Level::INFO, "statistics");
 
     async move {
@@ -86,7 +116,7 @@ pub async fn statistics_with_snapshot(
             );
 
             publish_metrics(&database, &stats).await;
-            publish_queue_metrics(&database, &clock, queue_defaults, &tags, &snapshot).await;
+            publish_queue_metrics(&database, &clock, queue_defaults(), &tags, &snapshot).await;
 
             previous_stats = stats;
         }

@@ -74,6 +74,10 @@ pub enum AuditAction {
     /// A traffic-monitor subscription was ended (`messaging/monitor/unsubscribe`).
     #[serde(rename = "monitor_unsubscribe")]
     MonitorUnsubscribe,
+    /// A rootAdmin changed the mediator's configuration at runtime
+    /// (`config/patch`).
+    #[serde(rename = "config_patch")]
+    ConfigPatch,
 }
 
 /// A single audit-log record: one privileged change, by one actor, at one time.

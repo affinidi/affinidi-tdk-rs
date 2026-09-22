@@ -305,6 +305,16 @@ pub(crate) async fn consume(
         ServedTask::AuditList => {
             consume_audit_list(downcast(&doc, session)?, state, session, &mediator_did, now).await?
         }
+        ServedTask::ConfigPatch => {
+            mediator_ops::consume_config_patch(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
         ServedTask::ConfigShow => {
             consume_config_show(downcast(&doc, session)?, state, session, &mediator_did, now)
                 .await?
@@ -463,6 +473,7 @@ served_tasks! {
     AccessListList => access_list::list::v0_1::Payload,
     AuditList => audit::list::v0_1::Payload,
     ConfigShow => config::show::v0_1::Payload,
+    ConfigPatch => config::patch::v0_1::Payload,
     StatsShow => stats::show::v0_1::Payload,
     QueueList => queue::list::v0_1::Payload,
     QueueStatus => queue::status::v0_1::Payload,
@@ -825,12 +836,12 @@ async fn consume_account_update(
                     gate_self_managed_limit(
                         req_send,
                         session.acls.get_self_manage_send_queue_limit(),
-                        state.config.limits.queued_send_messages_hard,
+                        state.limits().queued_send_messages_hard,
                     ),
                     gate_self_managed_limit(
                         req_receive,
                         session.acls.get_self_manage_receive_queue_limit(),
-                        state.config.limits.queued_receive_messages_hard,
+                        state.limits().queued_receive_messages_hard,
                     ),
                 )
             } else {
@@ -1358,7 +1369,7 @@ async fn consume_access_list_update(
         let hashes: Vec<String> = typed.payload.add.iter().map(|v| v.to_string()).collect();
         let result = state
             .database
-            .access_list_add(state.config.limits.access_list_limit, &target_hash, &hashes)
+            .access_list_add(state.limits().access_list_limit, &target_hash, &hashes)
             .await?;
         record_audit(
             state,
@@ -1662,6 +1673,7 @@ fn audit_action_name(a: AuditAction) -> &'static str {
         AuditAction::QueuePurge => "queuePurge",
         AuditAction::MonitorSubscribe => "monitorSubscribe",
         AuditAction::MonitorUnsubscribe => "monitorUnsubscribe",
+        AuditAction::ConfigPatch => "configPatch",
         // A kind added to the common crate before this mapping learns it.
         _ => "other",
     }
@@ -1681,15 +1693,29 @@ async fn consume_config_show(
     mediator_did: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, MediatorError> {
+    use crate::common::config::overrides::{KeyClass, class_of, parse_stored};
     use config::show::v0_1::{ConfigField, ConfigFieldKey, ConfigFieldSource, Response};
     validate_tt_basic(&typed, session, mediator_did, now)?;
     require_admin(session, "config/show")?;
 
-    let config_object = serde_json::to_value(&state.config)
-        .map_err(serialize_err)?
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
+    // The configuration as dotted scalar keys (`limits.listed_messages`,
+    // `database.database_url`), with the limits as they are in effect now
+    // rather than as they were at startup.
+    let mut config_object = serde_json::to_value(&state.config).map_err(serialize_err)?;
+    config_object["limits"] = serde_json::to_value(&*state.limits()).map_err(serialize_err)?;
+    let mut flat = Vec::new();
+    flatten_config("", &config_object, &mut flat);
+
+    // Which keys a `config/patch` override supplies.
+    let overridden = parse_stored(
+        state
+            .database
+            .config_overrides_get()
+            .await
+            .ok()
+            .flatten()
+            .as_deref(),
+    );
 
     // Optional `keys` filter: return only the requested keys.
     let wanted: Option<HashSet<String>> = typed
@@ -1700,34 +1726,76 @@ async fn consume_config_show(
 
     let mut fields = Vec::new();
     let mut push_field = |key: String, value: Value| -> Result<(), MediatorError> {
-        if wanted.as_ref().is_none_or(|w| w.contains(&key)) {
-            fields.push(build(
-                ConfigField::builder()
-                    .key(
-                        ConfigFieldKey::from_str(&key)
-                            .map_err(|e| serialize_err_msg(format!("config key: {e}")))?,
-                    )
-                    .requires_restart(true)
-                    .source(
-                        ConfigFieldSource::from_str("mediator")
-                            .map_err(|e| serialize_err_msg(format!("config source: {e}")))?,
-                    )
-                    .value(value),
-            )?);
+        if wanted.as_ref().is_some_and(|w| !w.contains(&key)) {
+            return Ok(());
         }
+        let requires_restart = class_of(&key) != Some(KeyClass::Live);
+        let source = if overridden.contains_key(&key) {
+            "override"
+        } else {
+            "mediator"
+        };
+        fields.push(build(
+            ConfigField::builder()
+                .key(
+                    ConfigFieldKey::from_str(&key)
+                        .map_err(|e| serialize_err_msg(format!("config key: {e}")))?,
+                )
+                .requires_restart(requires_restart)
+                .source(
+                    ConfigFieldSource::from_str(source)
+                        .map_err(|e| serialize_err_msg(format!("config source: {e}")))?,
+                )
+                .value(value),
+        )?);
         Ok(())
     };
     push_field(
         "mediator.version".to_string(),
         Value::String(env!("CARGO_PKG_VERSION").to_string()),
     )?;
-    for (key, value) in config_object {
+    for (key, value) in flat {
         push_field(key, value)?;
     }
 
     let response: Response = build(Response::builder().fields(fields))?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
+}
+
+/// Flatten `value` into `prefix.key` → scalar pairs. Arrays, which the spec's
+/// scalar `value` cannot hold, become their JSON text. Credentials embedded in
+/// a URL are redacted: the spec requires it of any secret-bearing value, and a
+/// store URL such as `redis://:password@host` is one.
+fn flatten_config(prefix: &str, value: &Value, out: &mut Vec<(String, Value)>) {
+    match value {
+        Value::Object(map) => {
+            for (k, v) in map {
+                let key = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                flatten_config(&key, v, out);
+            }
+        }
+        Value::Array(_) => out.push((prefix.to_string(), Value::String(value.to_string()))),
+        Value::String(s) => out.push((prefix.to_string(), Value::String(redact_url(s)))),
+        scalar => out.push((prefix.to_string(), scalar.clone())),
+    }
+}
+
+/// `s` with the userinfo of a `scheme://user:password@host` URL replaced; any
+/// other string unchanged.
+fn redact_url(s: &str) -> String {
+    let Some((scheme, rest)) = s.split_once("://") else {
+        return s.to_string();
+    };
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    match rest[..authority_end].rfind('@') {
+        Some(at) => format!("{scheme}://***@{}", &rest[at + 1..]),
+        None => s.to_string(),
+    }
 }
 
 /// Map the mediator's internal [`Account`] to the wire `account/get` shape.
@@ -2228,5 +2296,44 @@ mod tsp_dispatch_tests {
         // the VID, so both must land on the same string.
         assert_eq!(vid_of("did:key:zAlice#z6Mk"), "did:key:zAlice");
         assert_eq!(vid_of("did:key:zAlice"), "did:key:zAlice");
+    }
+}
+
+#[cfg(test)]
+mod config_show_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn credentials_in_a_url_are_redacted_and_other_strings_are_not() {
+        assert_eq!(
+            redact_url("redis://:s3cret@db.internal:6379/0"),
+            "redis://***@db.internal:6379/0"
+        );
+        assert_eq!(redact_url("redis://user:pw@host/"), "redis://***@host/");
+        assert_eq!(redact_url("redis://127.0.0.1/"), "redis://127.0.0.1/");
+        assert_eq!(redact_url("did:web:example.com"), "did:web:example.com");
+        // An `@` in the path is not userinfo.
+        assert_eq!(redact_url("https://h/a@b"), "https://h/a@b");
+    }
+
+    #[test]
+    fn configuration_flattens_to_dotted_scalars() {
+        let mut out = Vec::new();
+        flatten_config(
+            "",
+            &json!({
+                "database": { "database_url": "redis://:pw@h/", "database_timeout": 2 },
+                "local_endpoints": ["a", "b"],
+                "listen_address": "0.0.0.0:7037"
+            }),
+            &mut out,
+        );
+        let get = |k: &str| out.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
+        assert_eq!(get("database.database_url"), Some(json!("redis://***@h/")));
+        assert_eq!(get("database.database_timeout"), Some(json!(2)));
+        assert_eq!(get("local_endpoints"), Some(json!("[\"a\",\"b\"]")));
+        assert_eq!(get("listen_address"), Some(json!("0.0.0.0:7037")));
+        assert!(out.iter().all(|(_, v)| !v.is_object() && !v.is_array()));
     }
 }

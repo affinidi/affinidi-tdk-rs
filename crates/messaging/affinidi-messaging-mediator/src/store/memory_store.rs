@@ -191,6 +191,9 @@ struct ConsumerGroupState {
 /// Internal state — guarded by [`MemoryStore`]'s outer `Mutex`.
 #[derive(Default)]
 struct MemoryState {
+    /// The `config/patch` overrides, a JSON object.
+    config_overrides: Option<String>,
+
     // ─── Messages ───────────────────────────────────────────────────
     messages: HashMap<String, MessageRecord>,
 
@@ -1812,6 +1815,15 @@ impl MediatorStore for MemoryStore {
     }
 
     // ─── Message expiry processor ───────────────────────────────────────────
+
+    async fn config_overrides_get(&self) -> Result<Option<String>, MediatorError> {
+        Ok(self.state.lock().await.config_overrides.clone())
+    }
+
+    async fn config_overrides_set(&self, overrides: &str) -> Result<(), MediatorError> {
+        self.state.lock().await.config_overrides = Some(overrides.to_string());
+        Ok(())
+    }
 
     async fn sweep_expired_messages(
         &self,

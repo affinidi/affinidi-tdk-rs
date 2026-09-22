@@ -74,7 +74,7 @@ pub(crate) async fn validate_peer_queue_limit(
     state: &SharedData,
     session: &Session,
 ) -> Result<(), MediatorError> {
-    let limit = state.config.limits.queued_send_messages_per_peer;
+    let limit = state.limits().queued_send_messages_per_peer;
     if limit == -1 || ephemeral {
         return Ok(());
     }
@@ -122,7 +122,7 @@ pub(crate) fn validate_sender_queue_limit(
 ) -> Result<(), MediatorError> {
     let send_limit = from_account
         .queue_send_limit
-        .unwrap_or(state.config.limits.queued_send_messages_soft);
+        .unwrap_or(state.limits().queued_send_messages_soft);
     if queue_at_capacity(
         from_account.send_queue_count,
         attachment_count,
@@ -162,7 +162,7 @@ pub(crate) fn validate_recipient_queue_limit(
 ) -> Result<(), MediatorError> {
     let recv_limit = next_account
         .queue_receive_limit
-        .unwrap_or(state.config.limits.queued_receive_messages_soft);
+        .unwrap_or(state.limits().queued_receive_messages_soft);
     if queue_at_capacity(
         next_account.receive_queue_count,
         attachment_count,

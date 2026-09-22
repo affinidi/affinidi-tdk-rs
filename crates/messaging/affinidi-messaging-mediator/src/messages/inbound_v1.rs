@@ -297,7 +297,7 @@ async fn deliver_v1_forward(
         data: WrapperType::Envelope(
             to_did.clone(),
             inner.to_string(),
-            state.clock.unix_secs() + state.config.limits.message_expiry_seconds,
+            state.clock.unix_secs() + state.limits().message_expiry_seconds,
         ),
     };
 

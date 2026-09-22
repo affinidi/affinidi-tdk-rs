@@ -18,10 +18,8 @@ use crate::{
         readiness_handler,
     },
     tasks::{
-        queue_survey::{QueueSnapshotCell, SurveyDefaults},
-        statistics::statistics_with_snapshot,
-        supervisor::TaskSupervisor,
-        websocket_streaming::StreamingTask,
+        queue_survey::QueueSnapshotCell, statistics::statistics_with_live_limits,
+        supervisor::TaskSupervisor, websocket_streaming::StreamingTask,
     },
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
@@ -440,6 +438,30 @@ pub async fn serve_internal(
         );
     }
 
+    // Stored `config/patch` overrides, layered over the file/env limits before
+    // anything below reads them. A stale override is logged and skipped, never
+    // fatal.
+    let baseline_limits = config.limits.clone();
+    match store.config_overrides_get().await {
+        Ok(stored) => {
+            let overrides = crate::common::config::overrides::parse_stored(stored.as_deref());
+            if !overrides.is_empty() {
+                let skipped =
+                    crate::common::config::overrides::overlay(&mut config.limits, &overrides);
+                info!(
+                    "Applied {} stored configuration override(s)",
+                    overrides.len() - skipped.len()
+                );
+                for (key, reason) in skipped {
+                    warn!("Stored configuration override {key} skipped: {reason}");
+                }
+            }
+        }
+        Err(e) => warn!("Couldn't read stored configuration overrides: {e}"),
+    }
+    let live_limits =
+        crate::common::config::overrides::LiveLimits::new(baseline_limits, config.limits.clone());
+
     // Statistics task — non-load-bearing (metrics only). Runs against any
     // backend via the trait. It also publishes each queue survey for the
     // `messaging/queue/list` and `messaging/stats/show` Trust Tasks.
@@ -453,17 +475,17 @@ pub async fn serve_internal(
         // set no limit of its own — the same fallback the gates themselves
         // apply in `messages::queue_limits`, so saturation reaching 1.0 means
         // the account is at the depth where it starts being refused.
-        let queue_defaults = SurveyDefaults {
-            send_soft: config.limits.queued_send_messages_soft,
-            receive_soft: config.limits.queued_receive_messages_soft,
-        };
+        // Read from the live limits on every survey, so a patched soft limit
+        // is what the next survey measures against.
+        let live_limits = live_limits.clone();
         supervisor.spawn("statistics", false, move || {
             let store = store.clone();
             let tags = tags.clone();
             let clock = stats_clock.clone();
             let queue_snapshot = queue_snapshot.clone();
+            let live_limits = live_limits.clone();
             async move {
-                statistics_with_snapshot(store, tags, clock, queue_defaults, queue_snapshot)
+                statistics_with_live_limits(store, tags, clock, live_limits, queue_snapshot)
                     .await
                     .map_err(|e| e.to_string())
             }
@@ -758,6 +780,7 @@ pub async fn serve_internal(
     }
 
     let shared_state = SharedData {
+        live_limits,
         config: config.clone(),
         service_start_timestamp: chrono::Utc::now(),
         did_resolver,

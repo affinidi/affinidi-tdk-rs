@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### 0.26.20 — `config/patch`
+
+`trust_tasks().config_patch(profile, overrides)` sends the generic
+`config/patch` Trust Task (rootAdmin only). It changes mediator limits at
+runtime; a `null` value removes a key's override. The response lists what took
+effect now (`applied`), what was stored for the next start
+(`pending_restart`), and what was refused, with the reason (`rejected`).
+Additive.
+
 ### 0.26.19 — a reply reaches the call that asked for it
 
 `send_message(.., wait_for_response = true, ..)` — which every Trust Task call

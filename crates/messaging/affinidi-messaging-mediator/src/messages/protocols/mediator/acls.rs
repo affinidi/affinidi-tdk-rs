@@ -364,7 +364,7 @@ pub(crate) async fn process(
 
                 match state
                     .database
-                    .access_list_add(state.config.limits.access_list_limit, &did_hash, &hashes)
+                    .access_list_add(state.limits().access_list_limit, &did_hash, &hashes)
                     .await
                 {
                     Ok(response) => {

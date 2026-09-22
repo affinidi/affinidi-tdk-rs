@@ -72,7 +72,7 @@ pub async fn oob_invite_handler(
     };
     let expires_at = crate::store::oob_expires_at(
         &body,
-        state.config.limits.oob_invite_ttl as u64,
+        state.limits().oob_invite_ttl as u64,
         state.clock.unix_secs(),
     );
 
