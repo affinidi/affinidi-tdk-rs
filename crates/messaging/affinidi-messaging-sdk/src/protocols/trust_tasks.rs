@@ -939,47 +939,80 @@ impl TrustTasksOps<'_> {
 
         let deadline = SystemTime::now() + TSP_REPLY_TIMEOUT;
         loop {
-            let page = self
-                .atm
-                .fetch_messages(
-                    profile,
-                    &FetchOptions {
-                        limit: TSP_REPLY_PAGE,
-                        delete_policy: crate::messages::FetchDeletePolicy::DoNotDelete,
-                        ..Default::default()
-                    },
-                )
-                .await?;
-
-            for element in &page.success {
-                // Only TSP bodies can hold the sealed reply. The mediator tags
-                // the wire protocol on pickup, so nothing has to be sniffed.
-                if element.protocol != Some(MessageProtocol::Tsp) {
-                    continue;
-                }
-                let Some(stored) = &element.msg else { continue };
-                // A body this profile cannot unpack is someone else's problem,
-                // not an error for this exchange.
-                let Ok((payload, _sender)) = self.atm.tsp().unpack(profile, stored).await else {
-                    continue;
-                };
-                let Ok(doc) = serde_json::from_slice::<Value>(&payload) else {
-                    continue;
-                };
-                if doc["threadId"].as_str() != Some(thread_id) {
-                    continue;
-                }
-                // Matched: take it out of the inbox, and only it.
-                let _ = self
+            // Walk the whole inbox, not just its first page: a reply is only
+            // ever *somewhere* in the mailbox, and traffic arriving alongside
+            // it must not be able to push it out of view and time the
+            // exchange out.
+            let mut cursor: Option<String> = None;
+            loop {
+                let page = self
                     .atm
-                    .delete_messages_direct(
+                    .fetch_messages(
                         profile,
-                        &DeleteMessageRequest {
-                            message_ids: vec![element.msg_id.clone()],
+                        &FetchOptions {
+                            limit: TSP_REPLY_PAGE,
+                            start_id: cursor.clone(),
+                            delete_policy: crate::messages::FetchDeletePolicy::DoNotDelete,
                         },
                     )
-                    .await;
-                return decode_body(&doc);
+                    .await?;
+                if page.success.is_empty() {
+                    break;
+                }
+                // Advance past this page; without a cursor to advance by, stop
+                // rather than re-read the same page for the whole deadline.
+                cursor = page.success.last().and_then(|e| e.receive_id.clone());
+
+                for element in &page.success {
+                    // Only TSP bodies can hold the sealed reply. The mediator
+                    // tags the wire protocol on pickup, so nothing has to be
+                    // sniffed.
+                    if element.protocol != Some(MessageProtocol::Tsp) {
+                        continue;
+                    }
+                    let Some(stored) = &element.msg else { continue };
+                    // A body this profile cannot unpack is someone else's
+                    // problem, not an error for this exchange.
+                    let Ok((payload, sender)) = self.atm.tsp().unpack(profile, stored).await else {
+                        continue;
+                    };
+                    // **The reply has to be the mediator's.** A thread id is
+                    // only an identifier; without this, any peer holding a
+                    // relationship could seal a document carrying it and have
+                    // it answer someone else's Trust Task.
+                    if sender != mediator_did {
+                        continue;
+                    }
+                    let Ok(doc) = serde_json::from_slice::<Value>(&payload) else {
+                        continue;
+                    };
+                    if doc["threadId"].as_str() != Some(thread_id) {
+                        continue;
+                    }
+                    // Matched: take it out of the inbox, and only it. A failed
+                    // delete leaves the reply to be re-read later, so it is
+                    // said out loud rather than swallowed.
+                    if let Err(e) = self
+                        .atm
+                        .delete_messages_direct(
+                            profile,
+                            &DeleteMessageRequest {
+                                message_ids: vec![element.msg_id.clone()],
+                            },
+                        )
+                        .await
+                    {
+                        warn!(
+                            message_id = %element.msg_id,
+                            "Trust Task reply consumed but not deleted; it stays in the inbox: {e}"
+                        );
+                    }
+                    return decode_body(&doc);
+                }
+
+                if cursor.is_none() || SystemTime::now() >= deadline {
+                    break;
+                }
             }
 
             if SystemTime::now() >= deadline {

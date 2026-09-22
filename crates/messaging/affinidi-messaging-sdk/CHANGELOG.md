@@ -17,11 +17,15 @@ chosen, by the same `TspOps::select_protocol` that `ATM::send_to` uses:
   the receiver will accept the mediator's sealed reply.
 
 Over TSP the document is the payload of a Direct message to the mediator,
-and its sealed reply is collected from the inbox **by thread id**. The inbox
-is read with `DoNotDelete` and only the matched reply is deleted, so a frame
-meant for another reader of the same mailbox stays where it is. A reply that
-doesn't arrive within 15s is an error naming the transport, never a silent
-wait.
+and its sealed reply is collected from the inbox **by thread id and by
+sender**: a thread id only identifies, so the reply must also have been
+sealed by the mediator, or a peer holding a relationship could answer
+someone else's Trust Task. The inbox is read with `DoNotDelete` and only the
+matched reply is deleted, so a frame meant for another reader of the same
+mailbox stays where it is, and a failed delete is logged rather than
+swallowed. Each sweep walks the whole mailbox, so traffic arriving alongside
+the reply cannot push it out of view. A reply that doesn't arrive within 15s
+is an error naming the transport, never a silent wait.
 
 The document and its Data Integrity proof are identical on both wires.
 
