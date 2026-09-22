@@ -8,12 +8,13 @@
 //! waits on the network.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use affinidi_messaging_mediator_admin::{
-    ConsoleError, InspectedMessage, MediatorConsole, Mode, MonitorFilter, MonitorUpdate, PurgePlan,
-    PurgeRequest, specs,
+    AddressBook, ConsoleError, InspectedMessage, MediatorConsole, Mode, MonitorFilter,
+    MonitorUpdate, PurgePlan, PurgeRequest, account_hash, specs,
 };
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
@@ -87,12 +88,32 @@ enum Popup {
         ids: Vec<String>,
     },
     ConfirmPurge(PurgePlan),
+    /// Name an account: `hash` is the selected account, if any; the user
+    /// fills in its DID (optional when `hash` is known) and a nickname.
+    Name {
+        hash: Option<String>,
+        did: String,
+        name: String,
+        /// Which field typing goes to: the name (true) or the DID.
+        on_name: bool,
+    },
+    /// The address book, with the selected entry.
+    Book {
+        selected: usize,
+    },
+}
+
+/// One line of the monitor pane. Events are kept raw and drawn on each frame,
+/// so naming an account renames it in the lines already shown.
+enum MonitorLine {
+    Event(Value),
+    Note(Line<'static>),
 }
 
 struct MonitorPane {
     visible: bool,
     failures_only: bool,
-    lines: VecDeque<Line<'static>>,
+    lines: VecDeque<MonitorLine>,
     dropped: u64,
     gaps: u64,
     last_seen: Option<Instant>,
@@ -126,6 +147,10 @@ pub struct App {
     popup: Option<Popup>,
     notice: Option<(String, bool)>,
     updated: Option<Instant>,
+
+    /// Nicknames for account hashes; saved to `book_path` when it is set.
+    book: AddressBook,
+    book_path: Option<PathBuf>,
 }
 
 const SORTS: [(&str, &str); 4] = [
@@ -178,9 +203,127 @@ impl App {
             popup: None,
             notice: None,
             updated: None,
+            book: AddressBook::new(),
+            book_path: None,
         };
+        app.know_self();
         app.refresh();
         app
+    }
+
+    /// Use `book` for account nicknames, saving changes to `path` when given.
+    /// The console's own account and the mediator are named automatically
+    /// unless the book names them.
+    pub fn with_address_book(mut self, book: AddressBook, path: Option<PathBuf>) -> Self {
+        self.book = book;
+        self.book_path = path;
+        self.know_self();
+        self
+    }
+
+    fn know_self(&mut self) {
+        let own = self.console.did().to_string();
+        self.book.know(&own, "you");
+        let mediator = self.console.mediator_did().to_string();
+        self.book.know(&mediator, "mediator");
+    }
+
+    /// Text pasted into the console (bracketed paste): goes to the field being
+    /// edited, if any. Control characters (line breaks) are dropped.
+    pub fn handle_paste(&mut self, text: &str) {
+        if let Some(Popup::Name {
+            did, name, on_name, ..
+        }) = &mut self.popup
+        {
+            let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+            if *on_name {
+                name.push_str(&clean);
+            } else {
+                did.push_str(clean.trim());
+            }
+        }
+    }
+
+    /// The account the user is looking at, to name with `n`.
+    fn account_in_view(&self) -> Option<String> {
+        match self.tab {
+            Tab::Queues | Tab::Dashboard => self.selected_queue_did(),
+            Tab::Account => self
+                .selected_message_field(if self.message_send { "to" } else { "from" })
+                .or_else(|| self.target.clone())
+                .or_else(|| Some(self.console.did_hash().to_string())),
+            Tab::Audit => None,
+        }
+    }
+
+    fn name_popup(&self, hash: Option<String>) -> Popup {
+        let entry = hash.as_deref().and_then(|h| self.book.lookup(h));
+        Popup::Name {
+            did: entry
+                .filter(|e| !e.is_bare_hash())
+                .map(|e| e.did.clone())
+                .unwrap_or_default(),
+            name: entry.map(|e| e.name.clone()).unwrap_or_default(),
+            on_name: hash.is_some(),
+            hash,
+        }
+    }
+
+    /// Save a Name popup. Returns the popup to keep open when the input needs
+    /// correcting.
+    fn save_name(&mut self, hash: Option<String>, did: String, name: String) -> Option<Popup> {
+        let (did, name) = (did.trim().to_string(), name.trim().to_string());
+        let key = match (&hash, did.is_empty()) {
+            (_, false) => {
+                if let Some(h) = &hash
+                    && account_hash(&did) != *h
+                {
+                    self.notice = Some((
+                        format!(
+                            "that DID is account {}, not {}",
+                            short(&account_hash(&did)),
+                            short(h)
+                        ),
+                        true,
+                    ));
+                    return Some(Popup::Name {
+                        hash,
+                        did,
+                        name,
+                        on_name: false,
+                    });
+                }
+                did
+            }
+            (Some(h), true) => h.clone(),
+            (None, true) => {
+                self.notice = Some(("paste a DID (or an account hash) to name".into(), true));
+                return Some(Popup::Name {
+                    hash,
+                    did,
+                    name,
+                    on_name: false,
+                });
+            }
+        };
+        let hash = account_hash(&key);
+        if name.is_empty() {
+            self.book.remove(&hash);
+            self.notice = Some((format!("{} unnamed", short(&hash)), false));
+        } else {
+            self.book.insert(&key, &name);
+            self.notice = Some((format!("{} is now {name}", short(&hash)), false));
+        }
+        self.save_book();
+        None
+    }
+
+    fn save_book(&mut self) {
+        if let Some(path) = &self.book_path
+            && let Err(e) = self.book.save(path)
+        {
+            self.notice = Some((format!("address book not saved: {e}"), true));
+        }
     }
 
     /// Show one account on the Account tab — `None` is the console's own.
@@ -383,6 +526,8 @@ impl App {
                 self.refresh();
             }
             KeyCode::Char('r') => self.refresh(),
+            KeyCode::Char('n') => self.popup = Some(self.name_popup(self.account_in_view())),
+            KeyCode::Char('b') => self.popup = Some(Popup::Book { selected: 0 }),
             KeyCode::Char('m') => self.toggle_monitor(),
             KeyCode::Char('f') => {
                 self.monitor.failures_only = !self.monitor.failures_only;
@@ -464,6 +609,70 @@ impl App {
     fn popup_key(&mut self, popup: Popup, code: KeyCode) {
         let yes = matches!(code, KeyCode::Char('y') | KeyCode::Char('Y'));
         match popup {
+            Popup::Name {
+                hash,
+                mut did,
+                mut name,
+                on_name,
+            } => match code {
+                KeyCode::Esc => self.notice = Some(("cancelled".into(), false)),
+                KeyCode::Enter => self.popup = self.save_name(hash, did, name),
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => {
+                    self.popup = Some(Popup::Name {
+                        hash,
+                        did,
+                        name,
+                        on_name: !on_name,
+                    })
+                }
+                other => {
+                    let field = if on_name { &mut name } else { &mut did };
+                    match other {
+                        KeyCode::Backspace => {
+                            field.pop();
+                        }
+                        KeyCode::Char(c) => field.push(c),
+                        _ => {}
+                    }
+                    self.popup = Some(Popup::Name {
+                        hash,
+                        did,
+                        name,
+                        on_name,
+                    });
+                }
+            },
+            Popup::Book { selected } => {
+                let len = self.book.entries().len();
+                match code {
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        self.popup = Some(Popup::Book {
+                            selected: (selected + 1).min(len.saturating_sub(1)),
+                        })
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.popup = Some(Popup::Book {
+                            selected: selected.saturating_sub(1),
+                        })
+                    }
+                    KeyCode::Char('x') | KeyCode::Delete => {
+                        if let Some(entry) = self.book.entries().get(selected).cloned() {
+                            self.book.remove(&entry.hash());
+                            self.save_book();
+                            self.notice = Some((format!("{} removed", entry.name), false));
+                        }
+                        self.popup = Some(Popup::Book {
+                            selected: selected.min(len.saturating_sub(2)),
+                        });
+                    }
+                    KeyCode::Char('n') | KeyCode::Enter => {
+                        let hash = self.book.entries().get(selected).map(|e| e.hash());
+                        self.popup = Some(self.name_popup(hash));
+                    }
+                    KeyCode::Char('a') => self.popup = Some(self.name_popup(None)),
+                    _ => {}
+                }
+            }
             Popup::Text { .. } => {}
             Popup::ConfirmDelete { target, ids } if yes => {
                 self.spawn(move |c| async move {
@@ -540,7 +749,7 @@ impl App {
             _ => None,
         };
         self.monitor.watching = match (&dids, self.admin()) {
-            (Some(d), _) => format!("account {}", short(&d[0])),
+            (Some(d), _) => format!("account {}", label(&self.book, &d[0])),
             (None, true) => "all traffic".into(),
             (None, false) => "your traffic".into(),
         };
@@ -594,24 +803,24 @@ impl App {
                 for e in events {
                     let v = serde_json::to_value(e).unwrap_or(Value::Null);
                     if !self.is_own_console_traffic(&v) {
-                        self.monitor.lines.push_back(event_line(&v));
+                        self.monitor.lines.push_back(MonitorLine::Event(v));
                     }
                 }
             }
             MonitorUpdate::Gap { missing } => {
                 self.monitor.gaps += missing;
-                self.monitor.lines.push_back(Line::styled(
+                self.monitor.lines.push_back(MonitorLine::Note(Line::styled(
                     format!("── {missing} batch(es) lost in transit ──"),
                     Style::default().fg(Color::Yellow),
-                ));
+                )));
             }
             MonitorUpdate::Heartbeat => {}
             MonitorUpdate::Ended(reason) => {
                 self.monitor.task = None;
-                self.monitor.lines.push_back(Line::styled(
+                self.monitor.lines.push_back(MonitorLine::Note(Line::styled(
                     format!("── monitor ended: {reason} ──"),
                     Style::default().fg(Color::Red),
-                ));
+                )));
             }
         }
         while self.monitor.lines.len() > MONITOR_LINES {
@@ -635,13 +844,11 @@ impl App {
         loop {
             terminal.draw(|f| self.render(f, f.area()))?;
             tokio::select! {
-                Some(Ok(event)) = events.next() => {
-                    if let Event::Key(key) = event
-                        && self.handle_key(key) == Control::Quit
-                    {
-                        break;
-                    }
-                }
+                Some(Ok(event)) = events.next() => match event {
+                    Event::Key(key) if self.handle_key(key) == Control::Quit => break,
+                    Event::Paste(text) => self.handle_paste(&text),
+                    _ => {}
+                },
                 Some(update) = self.rx.recv() => self.apply(update),
                 _ = tick.tick() => if self.popup.is_none() { self.refresh() },
             }
@@ -685,7 +892,7 @@ impl App {
         }
         self.render_footer(f, rows[3]);
         if let Some(popup) = &self.popup {
-            render_popup(f, area, popup);
+            render_popup(f, area, popup, &self.book);
         }
     }
 
@@ -749,7 +956,7 @@ impl App {
             Span::styled(badge, Style::default().fg(Color::Black).bg(color)),
             Span::raw(format!(
                 "  {} → {}  ",
-                short(self.console.did_hash()),
+                label(&self.book, self.console.did_hash()),
                 short_did(self.console.mediator_did())
             )),
             Span::styled(age, Style::default().fg(Color::DarkGray)),
@@ -796,12 +1003,12 @@ impl App {
             None => {
                 let keys = match self.tab {
                     Tab::Dashboard | Tab::Queues => {
-                        "↑↓ select  ⏎ open  s sort  x recv/send  m monitor  f failures  r refresh  q quit"
+                        "↑↓ select  ⏎ open  s sort  x recv/send  n name  b book  m monitor  f failures  q quit"
                     }
                     Tab::Account => {
-                        "↑↓ select  i inspect  d delete  p purge  P purge peer  x recv/send  o own  m monitor  q quit"
+                        "↑↓ select  i inspect  d delete  p purge  P purge peer  x recv/send  o own  n name  b book  m monitor  q quit"
                     }
-                    Tab::Audit => "m monitor  r refresh  q quit",
+                    Tab::Audit => "n name  b book  m monitor  r refresh  q quit",
                 };
                 Line::styled(format!(" {keys}"), Style::default().fg(Color::DarkGray))
             }
@@ -928,7 +1135,7 @@ impl App {
                     }
                 };
                 Row::new(vec![
-                    Cell::from(short(q["did"].as_str().unwrap_or("?"))),
+                    Cell::from(label(&self.book, q["did"].as_str().unwrap_or("?"))),
                     Cell::from(q["accountType"].as_str().unwrap_or("").to_string()),
                     Cell::from(format!("{rc}/{}", limit(rl))),
                     Cell::from(quota_line(rs, bar_width, depth)),
@@ -981,7 +1188,7 @@ impl App {
             .split(area);
         let who = self.target.as_deref().map_or_else(
             || format!("{} (you)", short(self.console.did_hash())),
-            short,
+            |t| label(&self.book, t),
         );
 
         // Two gradient bars: how full each queue is against its limit.
@@ -1026,7 +1233,7 @@ impl App {
             .iter()
             .map(|p| {
                 Row::new(vec![
-                    short(p["peer"].as_str().unwrap_or("?")),
+                    label(&self.book, p["peer"].as_str().unwrap_or("?")),
                     p["count"].as_u64().unwrap_or(0).to_string(),
                     human_bytes(p["bytes"].as_u64()),
                     human_secs(p["oldestAgeSeconds"].as_u64()),
@@ -1067,8 +1274,12 @@ impl App {
                 };
                 Row::new(vec![
                     Cell::from(m["receivedAt"].as_str().map(time_of).unwrap_or_default()),
-                    Cell::from(short(m["from"].as_str().unwrap_or("anon"))),
-                    Cell::from(short(m["to"].as_str().unwrap_or("?"))),
+                    Cell::from(
+                        m["from"]
+                            .as_str()
+                            .map_or_else(|| "anon".to_string(), |h| label(&self.book, h)),
+                    ),
+                    Cell::from(label(&self.book, m["to"].as_str().unwrap_or("?"))),
                     Cell::from(human_bytes(m["size"].as_u64())),
                     Cell::from(Span::styled(state.to_string(), Style::default().fg(color))),
                     Cell::from(short(m["msgId"].as_str().unwrap_or(""))),
@@ -1116,9 +1327,9 @@ impl App {
                 };
                 Row::new(vec![
                     pick(&["at", "timestamp", "recordedAt"]),
-                    short(&pick(&["actor"])),
+                    label(&self.book, &pick(&["actor"])),
                     pick(&["action"]),
-                    short(&pick(&["target", "subject"])),
+                    label(&self.book, &pick(&["target", "subject"])),
                     pick(&["summary", "detail", "description"]),
                 ])
             })
@@ -1170,13 +1381,29 @@ impl App {
         let inner = block.inner(area);
         let height = inner.height as usize;
         let skip = self.monitor.lines.len().saturating_sub(height);
-        let lines: Vec<Line> = self.monitor.lines.iter().skip(skip).cloned().collect();
+        let lines: Vec<Line> = self
+            .monitor
+            .lines
+            .iter()
+            .skip(skip)
+            .map(|l| match l {
+                MonitorLine::Event(v) => event_line(v, &self.book),
+                MonitorLine::Note(line) => line.clone(),
+            })
+            .collect();
         f.render_widget(Paragraph::new(lines).block(block), area);
     }
 }
 
+/// An account hash as the user knows it: its nickname, else a short hash.
+fn label(book: &AddressBook, hash: &str) -> String {
+    book.name_of(hash)
+        .map(str::to_string)
+        .unwrap_or_else(|| short(hash))
+}
+
 /// One monitor event as a coloured line.
-fn event_line(e: &Value) -> Line<'static> {
+fn event_line(e: &Value, book: &AddressBook) -> Line<'static> {
     let s = |k: &str| e[k].as_str().unwrap_or("").to_string();
     let stage = s("stage");
     let color = match stage.as_str() {
@@ -1199,8 +1426,8 @@ fn event_line(e: &Value) -> Line<'static> {
         Span::raw(format!(" {:<9} {:<9} ", s("protocol"), s("channel"))),
         Span::raw(format!(
             "{} → {} ",
-            e["from"].as_str().map_or("·".into(), short),
-            e["to"].as_str().map_or("·".into(), short)
+            e["from"].as_str().map_or("·".into(), |h| label(book, h)),
+            e["to"].as_str().map_or("·".into(), |h| label(book, h))
         )),
         Span::styled(
             human_bytes(e["size"].as_u64()),
@@ -1234,8 +1461,72 @@ fn inspect_popup(m: &InspectedMessage) -> Popup {
     }
 }
 
-fn render_popup(f: &mut Frame, area: Rect, popup: &Popup) {
+fn render_popup(f: &mut Frame, area: Rect, popup: &Popup, book: &AddressBook) {
     let (title, body, danger) = match popup {
+        Popup::Name {
+            hash,
+            did,
+            name,
+            on_name,
+        } => {
+            let cursor = |on: bool| if on { "▏" } else { "" };
+            let account = match hash {
+                Some(h) => format!("Account  {h}\n\n"),
+                None => String::new(),
+            };
+            let check = match (hash, did.trim()) {
+                (Some(h), d) if !d.is_empty() => {
+                    if account_hash(d) == *h {
+                        "      ✓ this is the account\n"
+                    } else {
+                        "      ✗ a different account\n"
+                    }
+                }
+                _ => "",
+            };
+            (
+                " Name an account ".into(),
+                format!(
+                    "{account}DID   {did}{}\n{check}Name  {name}{}\n\n\
+                     Paste or type. Tab switches field, ⏎ saves, Esc cancels.\n\
+                     The DID is optional when an account is selected. An empty name \
+                     removes the entry.",
+                    cursor(!*on_name),
+                    cursor(*on_name),
+                ),
+                false,
+            )
+        }
+        Popup::Book { selected } => {
+            let entries = book.entries();
+            let body = if entries.is_empty() {
+                "No names yet. Select an account and press n, or press a here to add one.".into()
+            } else {
+                entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| {
+                        format!(
+                            "{} {:<24} {}  {}",
+                            if i == *selected { "▶" } else { " " },
+                            e.name,
+                            short(&e.hash()),
+                            if e.is_bare_hash() {
+                                "(no DID)".to_string()
+                            } else {
+                                short_did(&e.did)
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            (
+                " Address book ".into(),
+                format!("{body}\n\n↑↓ select  n rename  a add  x remove  any other key closes"),
+                false,
+            )
+        }
         Popup::Text { title, body } => (
             title.clone(),
             format!("{body}\n\n(any key to close)"),
@@ -1259,7 +1550,7 @@ fn render_popup(f: &mut Frame, area: Rect, popup: &Popup) {
                 plan.request
                     .peer
                     .as_deref()
-                    .map(|p| format!(" exchanged with {}", short(p)))
+                    .map(|p| format!(" exchanged with {}", label(book, p)))
                     .unwrap_or_default(),
             ),
             true,
@@ -1381,12 +1672,34 @@ mod tests {
     }
 
     #[test]
+    fn a_named_account_shows_by_its_name_and_others_by_short_hash() {
+        let alice = "did:example:alice";
+        let mut book = AddressBook::new();
+        book.insert(alice, "alice");
+        let bob_hash = sha256::digest("did:example:bob");
+        let line = event_line(
+            &serde_json::json!({
+                "at": "2026-09-21T10:00:00Z", "direction": "inbound", "stage": "stored",
+                "channel": "rest", "protocol": "didcomm",
+                "from": sha256::digest(alice), "to": bob_hash,
+            }),
+            &book,
+        );
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("alice → "), "{text}");
+        assert!(text.contains(&short(&bob_hash)), "{text}");
+    }
+
+    #[test]
     fn a_refusal_event_shows_its_code_in_red() {
-        let line = event_line(&serde_json::json!({
-            "at": "2026-09-21T10:00:00Z", "direction": "inbound", "stage": "refused",
-            "channel": "rest", "protocol": "tsp", "from": "a", "size": 10,
-            "outcome": { "code": "authorization.send" },
-        }));
+        let line = event_line(
+            &serde_json::json!({
+                "at": "2026-09-21T10:00:00Z", "direction": "inbound", "stage": "refused",
+                "channel": "rest", "protocol": "tsp", "from": "a", "size": 10,
+                "outcome": { "code": "authorization.send" },
+            }),
+            &AddressBook::new(),
+        );
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("refused") && text.contains("authorization.send"));
         assert!(line.spans.iter().any(|s| s.style.fg == Some(Color::Red)));

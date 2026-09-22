@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (0.1.3) — an address book for account hashes
+
+- **New:** `AddressBook` maps an account hash, `sha256(did)` as lowercase hex
+  (`account_hash`), back to a DID and a nickname.
+  - It's kept as a JSON list of `{ name, did }` (`load` / `save`).
+  - An entry may give a bare hash when the DID isn't known.
+  - `know` adds application-supplied names that are never saved, and a saved
+    name wins over them.
+- Additive.
+
 ## Unreleased (0.1.2) — say plainly when the mediator is too old
 
 - **New:** `MediatorConsole::mediator_version()` reports the version read from

@@ -17,12 +17,14 @@
 //! [`MediatorConsole::purge`]), and the live [`MonitorFeed`] reports lost
 //! batches and dead taps rather than going quiet.
 
+pub mod address_book;
 mod console;
 mod error;
 mod identity;
 mod live;
 mod purge;
 
+pub use address_book::{AddressBook, AddressEntry, account_hash};
 pub use console::{
     Capabilities, InspectedMessage, MediatorConsole, Mode, OPERATIONS_SINCE, Target,
 };

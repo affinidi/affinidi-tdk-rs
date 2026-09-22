@@ -64,6 +64,25 @@ you choose, including its secrets:
   without a secrets file. This crate deliberately doesn't depend on the VTA
   SDK; the dependency points the other way.
 
+## Names for accounts
+
+The mediator knows an account only by `sha256(did)`, as lowercase hex.
+`AddressBook` maps that hash back to a DID and a nickname:
+
+```rust
+use affinidi_messaging_mediator_admin::{AddressBook, account_hash};
+
+let mut book = AddressBook::load(&path)?;       // a JSON list of { name, did }
+book.insert("did:peer:2.Vz6Mk…", "alice's phone"); // saved
+book.know(&vta_did, "billing context");          // supplied by the app, not saved
+assert_eq!(book.name_of(&account_hash("did:peer:2.Vz6Mk…")), Some("alice's phone"));
+book.save(&path)?;
+```
+
+A name you save wins over one the application supplies, so an embedding
+application can pre-fill names (every DID it manages, say) without writing
+over yours.
+
 ## Destructive operations are two-step
 
 ```rust

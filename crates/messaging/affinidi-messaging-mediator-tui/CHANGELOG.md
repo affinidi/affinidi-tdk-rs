@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (0.1.2) — names for accounts
+
+Accounts show by **nickname** wherever the console shows an account hash:
+queues, peers, messages, the audit log and the traffic monitor. Monitor lines
+already on screen pick up a new name at once.
+
+- **`n`** names the account in view. Paste its DID and the console checks it
+  hashes to that account; with nothing selected, paste any DID or hash.
+- **`b`** opens the address book: rename, add, remove.
+- **Filled in for you:** your own account shows as `you`, and the mediator as
+  `mediator`.
+- **Where it's kept:** `~/.config/mediator-console/address-book.json`, or
+  `--address-book <file>`. `default_address_book_path()` gives the same
+  location to other front ends, so they share the book.
+- **Pasting:** `mediator-console` turns on bracketed paste, so a pasted DID
+  arrives in one piece. Embedders can call `App::handle_paste`.
+- **For embedders:** `App::with_address_book(book, path)` supplies a book;
+  pre-fill it with `AddressBook::know`.
+
+Requires `affinidi-messaging-mediator-admin` 0.1.3.
+
 ## Unreleased (0.1.1) — a mediator too old for most screens
 
 Connected to a mediator older than 0.28.20, the console no longer shows blank

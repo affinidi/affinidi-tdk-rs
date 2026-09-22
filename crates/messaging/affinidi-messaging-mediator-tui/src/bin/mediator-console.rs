@@ -6,8 +6,10 @@
 
 use std::path::PathBuf;
 
-use affinidi_messaging_mediator_admin::{IdentitySource, MediatorConsole, Mode, ProfileFileSource};
-use affinidi_messaging_mediator_tui::App;
+use affinidi_messaging_mediator_admin::{
+    AddressBook, IdentitySource, MediatorConsole, Mode, ProfileFileSource,
+};
+use affinidi_messaging_mediator_tui::{App, default_address_book_path};
 use clap::Parser;
 
 #[derive(Parser)]
@@ -24,6 +26,11 @@ struct Args {
     /// Mediator DID, overriding the profile's (and its DID document's).
     #[arg(long)]
     mediator: Option<String>,
+
+    /// Address book of account nicknames (a JSON list of `{ name, did }`).
+    /// Defaults to `~/.config/mediator-console/address-book.json`.
+    #[arg(long)]
+    address_book: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -36,6 +43,14 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+    let book_path = args.address_book.clone().or_else(default_address_book_path);
+    let book = match &book_path {
+        Some(path) => {
+            AddressBook::load(path).map_err(|e| format!("address book {}: {e}", path.display()))?
+        }
+        None => AddressBook::new(),
+    };
+
     let source = ProfileFileSource::new(args.profiles);
     let choices = source.list().await?;
     let choice = match &args.choose {
@@ -62,7 +77,13 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let mut terminal = ratatui::init();
-    let result = App::new(console).run(&mut terminal).await;
+    // Bracketed paste: a pasted DID arrives whole, not as keystrokes.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
+    let result = App::new(console)
+        .with_address_book(book, book_path)
+        .run(&mut terminal)
+        .await;
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
     ratatui::restore();
     Ok(result?)
 }
