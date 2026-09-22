@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-admin"
-version = "0.1.2"
+version = "0.1.3"
 description = "Headless client for operating an Affinidi messaging mediator over Trust Tasks — mediator-wide administration or an account's own queues, plus the live traffic monitor. The engine behind the mediator console; embeddable in any application."
 edition.workspace = true
 authors.workspace = true

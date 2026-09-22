@@ -65,6 +65,7 @@ cargo run --release -p affinidi-messaging-mediator-tui -- \
 | `-p, --profile <file>` | A profile to connect with. Repeat it to offer several. |
 | `--as <alias or DID>` | Which of several profiles to use. The default is the first. |
 | `--mediator <DID>` | Override the mediator from the profile and the DID document. |
+| `--address-book <file>` | Where to keep account nicknames ([Names for accounts](#names-for-accounts)). |
 
 Connection errors are printed before the console takes over the screen, so a
 wrong profile, an unreachable mediator, or an account the mediator doesn't know
@@ -98,9 +99,32 @@ to 256 colours, then to three plain colours; `NO_COLOR` switches colour off.
 | `o` | Account | back to your own account |
 | `m` | anywhere | show or hide the **traffic monitor** |
 | `f` | anywhere | monitor failures only |
+| `n` | anywhere | **name** an account: the selected one, or any account by pasting its DID |
+| `b` | anywhere | the **address book**: rename (`n`), add (`a`), remove (`x`) |
 | `r` | anywhere | refresh now (screens also refresh every 5 s) |
 | `Tab` | anywhere | next screen |
 | `q` / `Esc` | anywhere | quit, or close a popup |
+
+## Names for accounts
+
+The mediator knows an account only by a hash: SHA-256 of the DID, as
+lowercase hex. That is what `36c23eba…4584` in every table is. The **address
+book** puts a name on it: give it a DID and a nickname, and the console shows
+the nickname wherever that account appears, in tables, the audit log and the
+traffic monitor.
+
+- **`n`** names the account in view: the selected queue row, the selected
+  message's counterparty, or the account on screen. Paste its DID, and the
+  console checks the DID really hashes to that account. With no account
+  selected, paste any DID (or a bare 64-hex hash) to name it.
+- **`b`** lists the book, where you can rename or remove entries.
+- **Filled in for you:** your own account shows as `you`, and the mediator as
+  `mediator`. Applications that embed the console can supply more names; for
+  example, `pnm` names every DID the VTA manages after its label.
+- **Where it's kept:** a JSON list of `{ "name", "did" }` at
+  `~/.config/mediator-console/address-book.json` (or under
+  `$XDG_CONFIG_HOME`), shared by every console front end. You can edit it by
+  hand. `--address-book <file>` points the console at another one.
 
 ## Deleting and purging
 
