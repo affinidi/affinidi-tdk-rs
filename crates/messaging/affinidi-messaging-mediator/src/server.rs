@@ -438,6 +438,14 @@ pub async fn serve_internal(
         );
     }
 
+    // The mediator's own account and the configured root admin, on every
+    // backend. The Redis bootstrap has always seeded them in
+    // `initialize_redis`; a Fjall or memory store, or one an embedding
+    // application passes in, never was. So the configured `admin_did`
+    // authenticated as a standard account, and had none of its rights.
+    // Idempotent: an existing account keeps its ACLs and only has its role set.
+    seed_privileged_accounts(store.as_ref(), &config).await?;
+
     // Stored `config/patch` overrides, layered over the file/env limits before
     // anything below reads them. A stale override is logged and skipped, never
     // fatal.
@@ -1277,6 +1285,45 @@ pub const RATE_LIMIT_SOURCE: &str = "mediator";
 fn ip_rate_limiter(limits: &LimitsConfig) -> RateLimiterState {
     RateLimiterState::new(limits.rate_limit_per_ip, limits.rate_limit_burst)
         .with_source(RATE_LIMIT_SOURCE)
+}
+
+/// Give the mediator's own DID the `Mediator` role (with the same locked-down
+/// ACLs the Redis bootstrap uses) and the configured `admin_did` the `RootAdmin`
+/// role, creating either account if it does not exist.
+pub(crate) async fn seed_privileged_accounts(
+    store: &dyn affinidi_messaging_mediator_common::store::MediatorStore,
+    config: &Config,
+) -> Result<(), MediatorError> {
+    use affinidi_messaging_mediator_common::types::accounts::AccountType;
+    use affinidi_messaging_mediator_common::types::acls::MediatorACLSet;
+
+    let mediator_acl =
+        MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,BLOCKED").map_err(|e| {
+            MediatorError::ConfigError(
+                error_codes::CONFIG_ERROR,
+                "NA".into(),
+                format!("Hardcoded mediator ACL ruleset is invalid: {e}"),
+            )
+        })?;
+    store
+        .setup_admin_account(
+            &config.mediator_did_hash,
+            AccountType::Mediator,
+            &mediator_acl,
+        )
+        .await?;
+    if !config.admin_did.is_empty() {
+        let admin_hash = sha256::digest(&config.admin_did);
+        store
+            .setup_admin_account(
+                &admin_hash,
+                AccountType::RootAdmin,
+                &config.security.global_acl_default,
+            )
+            .await?;
+        info!("Root admin account: {} ({admin_hash})", config.admin_did);
+    }
+    Ok(())
 }
 
 /// The per-DID limiter, exempting the mediator's own DID and the configured
