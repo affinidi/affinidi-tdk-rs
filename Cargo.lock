@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator"
-version = "0.28.29"
+version = "0.28.30"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-common"
-version = "0.16.19"
+version = "0.16.20"
 dependencies = [
  "aes-gcm",
  "affinidi-net-guard",
@@ -850,7 +850,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.26.21"
+version = "0.26.22"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",

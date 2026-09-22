@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 0.26.22 — `config/reload`
+
+`trust_tasks().config_reload(profile)` sends the generic `config/reload` Trust
+Task (rootAdmin). The mediator re-reads its limits from its configuration
+file and returns the keys whose running value changed. Additive.
+
 ### 0.26.21 — the legacy mediator admin client is deprecated
 
 - **Deprecated:** `protocols::mediator::administration::Mediator`, the client

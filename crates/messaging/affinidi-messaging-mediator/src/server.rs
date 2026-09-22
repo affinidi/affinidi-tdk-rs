@@ -103,6 +103,8 @@ pub async fn start(config_path: &str) -> Result<(), MediatorError> {
         error!("Couldn't initialize mediator: {e}");
         e
     })?;
+    // For `config/reload`: the file this mediator's limits come from.
+    crate::common::config::overrides::record_config_path(config_path);
 
     // Build the matching StartOpts for the binary path. TLS comes from
     // the TOML; tracing is already installed by `init`; the binary

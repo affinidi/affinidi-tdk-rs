@@ -35,7 +35,7 @@
 //!
 //! [`MediatorStore::config_overrides_get`]: affinidi_messaging_mediator_common::store::MediatorStore::config_overrides_get
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use serde_json::{Map, Value};
 
@@ -277,7 +277,7 @@ pub fn parse_stored(stored: Option<&str>) -> Map<String, Value> {
 /// which is what a key returns to when its override is removed.
 #[derive(Clone, Debug)]
 pub struct LiveLimits {
-    baseline: Arc<LimitsConfig>,
+    baseline: Arc<RwLock<Arc<LimitsConfig>>>,
     current: Arc<RwLock<Arc<LimitsConfig>>>,
     /// Held across a patch's read-modify-write of the stored overrides.
     patch: Arc<tokio::sync::Mutex<()>>,
@@ -288,7 +288,7 @@ impl LiveLimits {
     /// is in force (the baseline with the stored overrides layered over it).
     pub fn new(baseline: LimitsConfig, effective: LimitsConfig) -> Self {
         Self {
-            baseline: Arc::new(baseline),
+            baseline: Arc::new(RwLock::new(Arc::new(baseline))),
             current: Arc::new(RwLock::new(Arc::new(effective))),
             patch: Arc::new(tokio::sync::Mutex::new(())),
         }
@@ -303,8 +303,20 @@ impl LiveLimits {
     }
 
     /// The file/env limits, before any override.
-    pub fn baseline(&self) -> &LimitsConfig {
-        &self.baseline
+    pub fn baseline(&self) -> Arc<LimitsConfig> {
+        self.baseline
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+    }
+
+    /// Replace the file/env limits (`config/reload`).
+    pub fn set_baseline(&self, limits: LimitsConfig) {
+        let next = Arc::new(limits);
+        match self.baseline.write() {
+            Ok(mut g) => *g = next,
+            Err(poisoned) => *poisoned.into_inner() = next,
+        }
     }
 
     /// The limits now in effect.
@@ -322,6 +334,65 @@ impl LiveLimits {
             Ok(mut g) => *g = next,
             Err(poisoned) => *poisoned.into_inner() = next,
         }
+    }
+}
+
+/// The configuration file this mediator was started from, recorded by
+/// [`server::start`](crate::server::start). An embedded mediator (a test
+/// harness, or an application passing its own `Config`) has none, and so has
+/// nothing to reload.
+static CONFIG_PATH: OnceLock<String> = OnceLock::new();
+
+/// Record the configuration file the mediator was started from.
+pub fn record_config_path(path: &str) {
+    let _ = CONFIG_PATH.set(path.to_string());
+}
+
+/// The configuration file the mediator was started from, if any.
+pub fn config_path() -> Option<&'static str> {
+    CONFIG_PATH.get().map(String::as_str)
+}
+
+/// What a `config/reload` does, worked out without side effects: the new
+/// file/env limits `baseline`, with the stored `overrides` laid over them (and
+/// held to the same bounds), give the limits the mediator should run with.
+/// Only live keys change a running mediator, so the plan applies those to
+/// `live` and lists the ones whose value moved; restart-gated keys are left to
+/// the next start.
+pub struct ReloadPlan {
+    /// The limits to put into effect.
+    pub live: LimitsConfig,
+    /// Live keys whose value changed.
+    pub reloaded: Vec<String>,
+    /// Restart-gated keys whose value in the file changed; they apply at the
+    /// next start.
+    pub pending_restart: Vec<String>,
+    /// Stored overrides that no longer apply over the new baseline.
+    pub skipped: Vec<(String, String)>,
+}
+
+pub fn reload_plan(
+    live: &LimitsConfig,
+    baseline: &LimitsConfig,
+    overrides: &Map<String, Value>,
+) -> ReloadPlan {
+    let mut desired = baseline.clone();
+    let skipped = overlay(&mut desired, overrides);
+    let mut reloaded = Vec::new();
+    let mut pending_restart = Vec::new();
+    for p in PATCHABLE {
+        if field_value(live, p.key) != field_value(&desired, p.key) {
+            match p.class {
+                KeyClass::Live => reloaded.push(p.key.to_string()),
+                KeyClass::Restart => pending_restart.push(p.key.to_string()),
+            }
+        }
+    }
+    ReloadPlan {
+        live: with_fields_from(live, &desired, &reloaded),
+        reloaded,
+        pending_restart,
+        skipped,
     }
 }
 
@@ -455,6 +526,59 @@ mod tests {
         let out = with_fields_from(&target, &from, &["limits.listed_messages".into()]);
         assert_eq!(out.listed_messages, 9);
         assert_eq!(out.to_recipients, target.to_recipients);
+    }
+
+    #[test]
+    fn a_reload_applies_changed_live_keys_and_keeps_overrides_on_top() {
+        let running = LimitsConfig::default(); // listed 100, deleted 100
+        let file = LimitsConfig {
+            listed_messages: 80,   // changed in the file
+            deleted_messages: 90,  // changed, but overridden below
+            rate_limit_per_ip: 50, // restart-gated
+            ..LimitsConfig::default()
+        };
+        let stored = parse_stored(Some(r#"{"limits.deleted_messages": 60}"#));
+        let plan = reload_plan(&running, &file, &stored);
+
+        assert_eq!(plan.live.listed_messages, 80);
+        assert_eq!(plan.live.deleted_messages, 60, "the override still wins");
+        assert!(
+            plan.reloaded
+                .contains(&"limits.listed_messages".to_string())
+        );
+        assert!(
+            plan.reloaded
+                .contains(&"limits.deleted_messages".to_string())
+        );
+        assert_eq!(
+            plan.pending_restart,
+            vec!["limits.rate_limit_per_ip".to_string()]
+        );
+        assert_eq!(
+            plan.live.rate_limit_per_ip, running.rate_limit_per_ip,
+            "a restart-gated key is not changed on a running mediator"
+        );
+        assert!(plan.skipped.is_empty());
+
+        // Nothing changed: an empty reload.
+        let plan = reload_plan(&running, &running, &Map::new());
+        assert!(plan.reloaded.is_empty() && plan.pending_restart.is_empty());
+    }
+
+    #[test]
+    fn an_override_looser_than_the_reloaded_file_is_skipped() {
+        let running = LimitsConfig::default();
+        let file = LimitsConfig {
+            listed_messages: 10,
+            ..LimitsConfig::default()
+        };
+        let stored = parse_stored(Some(r#"{"limits.listed_messages": 50}"#));
+        let plan = reload_plan(&running, &file, &stored);
+        assert_eq!(
+            plan.live.listed_messages, 10,
+            "the operator's lower value wins"
+        );
+        assert_eq!(plan.skipped.len(), 1);
     }
 
     #[test]

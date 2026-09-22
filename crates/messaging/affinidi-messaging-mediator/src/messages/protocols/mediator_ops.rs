@@ -1332,7 +1332,7 @@ pub(crate) async fn consume_config_patch(
 
     // What the configuration should become: the baseline with every stored
     // override, then this patch's keys in turn.
-    let baseline = state.live_limits.baseline().clone();
+    let baseline = (*state.live_limits.baseline()).clone();
     let desired_from = |stored: &serde_json::Map<String, Value>| {
         let mut limits = baseline.clone();
         overrides::overlay(&mut limits, stored);
@@ -1423,6 +1423,105 @@ pub(crate) async fn consume_config_patch(
             "rejected": rejected,
         }))
         .map_err(serialize_err)?;
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// `config/reload` — re-read the limits from the configuration file (and the
+/// environment) the mediator was started from, without a restart. rootAdmin.
+///
+/// The file/env limits become the new baseline; the stored `config/patch`
+/// overrides are laid over it again, held to the same bounds (so an override
+/// looser than a newly lowered configured value no longer applies). Live keys
+/// whose value changed take effect now and are reported in `keysReloaded`;
+/// restart-gated keys that changed apply from the next start and are logged.
+pub(crate) async fn consume_config_reload(
+    typed: TrustTask<trust_tasks_rs::specs::config::reload::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: DateTime<Utc>,
+) -> Result<Value, MediatorError> {
+    use crate::common::config::limits::LimitsConfig;
+    use crate::common::config::overrides::{config_path, parse_stored, reload_plan};
+
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    if session.account_type != AccountType::RootAdmin {
+        return Err(tt_problem(
+            session,
+            "authorization.root_admin_required",
+            "config/reload changes the mediator for every account and requires a rootAdmin".into(),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+    let Some(path) = config_path() else {
+        return Err(tt_problem(
+            session,
+            "config.reload.unavailable",
+            "this mediator was not started from a configuration file, so there is nothing to \
+             reload"
+                .into(),
+            StatusCode::CONFLICT,
+        ));
+    };
+
+    let config_err = |e: String| {
+        tt_problem(
+            session,
+            "config.reload.invalid",
+            format!("the configuration could not be re-read, and nothing changed: {e}"),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        )
+    };
+    let raw = affinidi_messaging_mediator_config::env::read_config_file(path)
+        .map_err(|e| config_err(e.to_string()))?;
+    let baseline: LimitsConfig = raw
+        .limits
+        .try_into()
+        .map_err(|e: MediatorError| config_err(e.to_string()))?;
+
+    let _one_at_a_time = state.live_limits.lock_for_patch().await;
+    let stored = state
+        .database
+        .config_overrides_get()
+        .await
+        .map_err(|e| config_err(e.to_string()))?;
+    let plan = reload_plan(&state.limits(), &baseline, &parse_stored(stored.as_deref()));
+    for (key, reason) in &plan.skipped {
+        tracing::warn!("config/reload: stored override {key} no longer applies: {reason}");
+    }
+    if !plan.pending_restart.is_empty() {
+        tracing::info!(
+            "config/reload: {} changed in the configuration and apply from the next start",
+            plan.pending_restart.join(", ")
+        );
+    }
+    state.live_limits.set_baseline(baseline);
+    state.live_limits.set(plan.live);
+
+    record_audit(
+        state,
+        session,
+        &state.config.mediator_did_hash,
+        AuditAction::ConfigReload,
+        format!(
+            "reloaded {path}: now {}; at restart {}",
+            if plan.reloaded.is_empty() {
+                "nothing".to_string()
+            } else {
+                plan.reloaded.join(", ")
+            },
+            if plan.pending_restart.is_empty() {
+                "nothing".to_string()
+            } else {
+                plan.pending_restart.join(", ")
+            },
+        ),
+    )
+    .await;
+
+    let response: trust_tasks_rs::specs::config::reload::v0_1::Response =
+        serde_json::from_value(json!({ "keysReloaded": plan.reloaded })).map_err(serialize_err)?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
 }
