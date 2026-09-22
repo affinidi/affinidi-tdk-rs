@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased (0.28.30) — `config/reload`
+
+The mediator serves the generic **`config/reload`** Trust Task (rootAdmin).
+It re-reads the limits from the configuration file the mediator was started
+from, environment overrides included, without a restart:
+- **Baseline:** the file/env limits become the new baseline. Stored
+  `config/patch` overrides are laid over it again and held to the same
+  bounds, so an override looser than a newly lowered configured value stops
+  applying (logged).
+- **Live keys** whose value changed take effect now and are returned in
+  `keysReloaded`.
+- **Restart-gated keys** that changed are logged and apply from the next
+  start. Per the spec, they're never in `keysReloaded`.
+- **If the file can't be read or parsed,** nothing changes and the reason is
+  returned.
+- **Embedded mediators:** a mediator started without a file (an embedding
+  application, or the test harness) refuses with `config.reload.unavailable`.
+- **Audited:** every reload is written to the audit log (`configReload`).
+- **API change:** `LiveLimits::baseline()` now returns an
+  `Arc<LimitsConfig>`, because the baseline can be replaced (`set_baseline`).
+
+Requires `affinidi-messaging-mediator-common` 0.16.20.
+
 ## Unreleased (0.28.29) — the legacy admin surface can be switched off
 
 The `messaging/*` Trust Tasks replace the mediator's legacy administration

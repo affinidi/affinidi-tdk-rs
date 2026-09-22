@@ -305,6 +305,16 @@ pub(crate) async fn consume(
         ServedTask::AuditList => {
             consume_audit_list(downcast(&doc, session)?, state, session, &mediator_did, now).await?
         }
+        ServedTask::ConfigReload => {
+            mediator_ops::consume_config_reload(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
         ServedTask::ConfigPatch => {
             mediator_ops::consume_config_patch(
                 downcast(&doc, session)?,
@@ -474,6 +484,7 @@ served_tasks! {
     AuditList => audit::list::v0_1::Payload,
     ConfigShow => config::show::v0_1::Payload,
     ConfigPatch => config::patch::v0_1::Payload,
+    ConfigReload => config::reload::v0_1::Payload,
     StatsShow => stats::show::v0_1::Payload,
     QueueList => queue::list::v0_1::Payload,
     QueueStatus => queue::status::v0_1::Payload,
@@ -1674,6 +1685,7 @@ fn audit_action_name(a: AuditAction) -> &'static str {
         AuditAction::MonitorSubscribe => "monitorSubscribe",
         AuditAction::MonitorUnsubscribe => "monitorUnsubscribe",
         AuditAction::ConfigPatch => "configPatch",
+        AuditAction::ConfigReload => "configReload",
         // A kind added to the common crate before this mapping learns it.
         _ => "other",
     }

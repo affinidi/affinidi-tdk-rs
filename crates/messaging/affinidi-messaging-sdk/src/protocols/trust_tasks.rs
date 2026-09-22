@@ -410,6 +410,25 @@ impl TrustTasksOps<'_> {
         Ok(response.payload)
     }
 
+    /// Generic `config/reload` (rootAdmin only) — re-read the mediator's
+    /// limits from its configuration file and environment without a restart.
+    /// Returns the keys whose running value changed; keys that apply only at
+    /// a restart are never among them.
+    pub async fn config_reload(
+        &self,
+        profile: &Arc<ATMProfile>,
+    ) -> Result<config::reload::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let p: config::reload::v0_1::Payload = serde_json::from_value(serde_json::json!({}))
+            .map_err(|e| ATMError::MsgSendError(format!("config/reload payload: {e}")))?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+        let response: TrustTask<config::reload::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
     /// Generic `config/patch` (rootAdmin only) — change mediator limits at
     /// runtime. `overrides` maps keys such as `limits.queued_send_messages_hard`
     /// to their new value; `null` removes a key's override. Each key is checked

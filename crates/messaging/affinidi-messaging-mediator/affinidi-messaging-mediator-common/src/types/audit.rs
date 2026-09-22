@@ -78,6 +78,9 @@ pub enum AuditAction {
     /// (`config/patch`).
     #[serde(rename = "config_patch")]
     ConfigPatch,
+    /// A rootAdmin re-read the mediator's configuration (`config/reload`).
+    #[serde(rename = "config_reload")]
+    ConfigReload,
 }
 
 /// A single audit-log record: one privileged change, by one actor, at one time.

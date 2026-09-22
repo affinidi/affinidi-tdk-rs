@@ -1,5 +1,10 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.20) — `AuditAction::ConfigReload`
+
+`AuditAction::ConfigReload` (`config_reload`) is new. `AuditAction` is
+`#[non_exhaustive]`, so this is additive.
+
 ## Unreleased (0.16.19) — stored configuration overrides
 
 - **`MediatorStore::config_overrides_get` / `config_overrides_set`** keep the
