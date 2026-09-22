@@ -52,6 +52,9 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::SharedData;
+use affinidi_messaging_mediator_common::store::types::ForwardQueueEntry;
+use affinidi_messaging_mediator_common::tasks::forwarding::{ForwardOutcome, ForwardingObserver};
+use affinidi_messaging_mediator_common::time::unix_timestamp_millis;
 
 /// How many events the bus holds for a slow subscriber before it lags (and
 /// counts the overflow as dropped).
@@ -424,8 +427,11 @@ impl TrafficMonitor {
         });
     }
 
-    /// A message was queued for relay to another mediator.
-    pub(crate) fn forwarded(&self, from: &str, to: &str, body: &str, protocol: Protocol) {
+    /// A message was queued for relay to another mediator: `stored` on the
+    /// peer-mediator channel. It is `forwarded` only once the peer accepts it
+    /// (see the [`ForwardingObserver`] impl below) — a queued relay is not a
+    /// relayed one.
+    pub(crate) fn queued_for_relay(&self, from: &str, to: &str, body: &str, protocol: Protocol) {
         self.emit(|| TrafficEvent {
             msg_id: Some(sha256::digest(body)),
             from: Some(from.to_string()),
@@ -433,7 +439,7 @@ impl TrafficMonitor {
             size: Some(body.len() as u64),
             ..TrafficEvent::new(
                 Direction::Outbound,
-                Stage::Forwarded,
+                Stage::Stored,
                 Channel::PeerMediator,
                 protocol,
             )
@@ -563,6 +569,68 @@ struct Subscription {
     cancel: CancellationToken,
     sent: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
+}
+
+/// The forwarding processor's report of each relay attempt, correlated with
+/// the `stored` event of [`TrafficMonitor::queued_for_relay`] by `msgId`:
+///
+/// - accepted by the peer → `forwarded`, with the time spent queued;
+/// - failed, to be retried → `forwarded` with outcome `forwardingRetry`;
+/// - dropped undelivered → `forwarded` with outcome
+///   `e.p.me.res.forwarding.abandoned`, the code the sender's problem report
+///   carries;
+/// - expired in the queue → `expired`.
+///
+/// The peer's error text is not passed on: it stays in the server log.
+impl ForwardingObserver for TrafficMonitor {
+    fn observe(&self, entry: &ForwardQueueEntry, outcome: ForwardOutcome) {
+        self.emit(|| {
+            let (stage, outcome, latency_ms) = match outcome {
+                ForwardOutcome::Relayed { .. } => {
+                    let queued = unix_timestamp_millis().saturating_sub(entry.received_at_ms);
+                    (Stage::Forwarded, None, Some(queued as u64))
+                }
+                ForwardOutcome::Retrying {
+                    attempt,
+                    max_retries,
+                } => (
+                    Stage::Forwarded,
+                    Some((
+                        "forwardingRetry".to_string(),
+                        Some(format!(
+                            "attempt {attempt} failed; {} retries left",
+                            (max_retries + 1).saturating_sub(attempt)
+                        )),
+                    )),
+                    None,
+                ),
+                ForwardOutcome::Abandoned { attempts } => (
+                    Stage::Forwarded,
+                    Some((
+                        "e.p.me.res.forwarding.abandoned".to_string(),
+                        Some(format!("dropped undelivered after {attempts} attempt(s)")),
+                    )),
+                    None,
+                ),
+                ForwardOutcome::Expired => (Stage::Expired, None, None),
+                _ => (Stage::Forwarded, None, None),
+            };
+            TrafficEvent {
+                msg_id: Some(sha256::digest(entry.message.as_str())),
+                from: (!entry.from_did_hash.is_empty()).then(|| entry.from_did_hash.clone()),
+                to: Some(entry.to_did_hash.clone()),
+                size: Some(entry.message.len() as u64),
+                outcome,
+                latency_ms,
+                ..TrafficEvent::new(
+                    Direction::Outbound,
+                    stage,
+                    Channel::PeerMediator,
+                    Protocol::detect(&entry.message),
+                )
+            }
+        });
+    }
 }
 
 /// The bus and the subscriptions reading it. Cheap to clone.
@@ -1033,6 +1101,83 @@ mod tests {
         let inside = with_channel(Channel::Websocket, async { current_channel() }).await;
         assert_eq!(inside, Channel::Websocket);
         assert_eq!(current_channel(), Channel::Internal);
+    }
+
+    fn queued_entry(message: &str, received_at_ms: u128) -> ForwardQueueEntry {
+        ForwardQueueEntry {
+            stream_id: "1-0".into(),
+            message: message.into(),
+            to_did_hash: "bob".into(),
+            from_did_hash: "alice".into(),
+            from_did: "did:example:alice".into(),
+            to_did: String::new(),
+            endpoint_url: "https://peer.example/inbound".into(),
+            received_at_ms,
+            delay_milli: 0,
+            expires_at: u64::MAX,
+            retry_count: 0,
+            hop_count: 1,
+        }
+    }
+
+    /// Each forwarding outcome, as the monitor reports it.
+    #[test]
+    fn forwarding_outcomes_become_events_correlated_with_the_queued_one() {
+        let monitor = TrafficMonitor::new();
+        let mut rx = monitor.tx.subscribe();
+        let body = r#"{"ciphertext":"x"}"#;
+        let queued_at = unix_timestamp_millis() - 1_500;
+        let entry = queued_entry(body, queued_at);
+
+        monitor.queued_for_relay("alice", "bob", body, Protocol::DidComm);
+        let queued = rx.try_recv().unwrap();
+        assert_eq!(queued.stage, Stage::Stored);
+        assert_eq!(queued.channel, Channel::PeerMediator);
+
+        let outcomes = [
+            ForwardOutcome::Retrying {
+                attempt: 1,
+                max_retries: 3,
+            },
+            ForwardOutcome::Relayed {
+                transport:
+                    affinidi_messaging_mediator_common::tasks::forwarding::ForwardTransport::Rest,
+            },
+            ForwardOutcome::Abandoned { attempts: 4 },
+            ForwardOutcome::Expired,
+        ];
+        for outcome in outcomes {
+            monitor.observe(&entry, outcome);
+        }
+        let retry = rx.try_recv().unwrap();
+        let relayed = rx.try_recv().unwrap();
+        let abandoned = rx.try_recv().unwrap();
+        let expired = rx.try_recv().unwrap();
+
+        for e in [&retry, &relayed, &abandoned, &expired] {
+            assert_eq!(e.msg_id, queued.msg_id, "one message, one id");
+            assert_eq!(e.from.as_deref(), Some("alice"));
+            assert_eq!(e.to.as_deref(), Some("bob"));
+            assert_eq!(e.channel, Channel::PeerMediator);
+        }
+
+        assert_eq!(retry.stage, Stage::Forwarded);
+        let (code, detail) = retry.outcome.clone().unwrap();
+        assert_eq!(code, "forwardingRetry");
+        assert_eq!(detail.as_deref(), Some("attempt 1 failed; 3 retries left"));
+
+        assert_eq!(relayed.stage, Stage::Forwarded);
+        assert!(relayed.outcome.is_none());
+        assert!(relayed.latency_ms.unwrap() >= 1_500, "time spent queued");
+
+        assert_eq!(abandoned.stage, Stage::Forwarded);
+        assert_eq!(
+            abandoned.outcome.clone().unwrap().0,
+            "e.p.me.res.forwarding.abandoned"
+        );
+
+        assert_eq!(expired.stage, Stage::Expired);
+        assert!(expired.outcome.is_none());
     }
 
     #[test]

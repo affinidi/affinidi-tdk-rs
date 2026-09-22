@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_test_mediator::{RelayMode, TestEnvironment, TestMediator, TestUser, acl};
-use common::init_tracing;
+use common::{await_monitor_event, init_tracing};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -137,6 +137,45 @@ async fn forward_and_receive(
     text: &str,
     wait: Duration,
 ) -> Option<String> {
+    let msg_id = send_double_forward(
+        sender_env,
+        sender,
+        sender_mediator_did,
+        recipient,
+        recipient_mediator_did,
+        text,
+    )
+    .await;
+
+    // 6. Receive on the recipient's live stream. The unwrapped message id is
+    //    the original basic-message id (the mediator stores the innermost
+    //    authcrypt addressed to the recipient), so we wait on `msg_id`.
+    match recipient_env
+        .atm
+        .message_pickup()
+        .live_stream_get(&recipient.profile, &msg_id, wait, true)
+        .await
+    {
+        Ok(Some((received, _meta))) => received
+            .body
+            .get("content")
+            .and_then(|c| c.as_str())
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
+/// Steps 1–5 of [`forward_and_receive`]: wrap `text` as the routing-2.0
+/// double forward and hand it to the sender's own mediator. Returns the
+/// basic message's id.
+async fn send_double_forward(
+    sender_env: &TestEnvironment,
+    sender: &TestUser,
+    sender_mediator_did: &str,
+    recipient: &TestUser,
+    recipient_mediator_did: &str,
+    text: &str,
+) -> String {
     let now = unix_secs();
 
     // 1. Plaintext basic message, Alice → Bob.
@@ -202,23 +241,7 @@ async fn forward_and_receive(
         .send_message(&sender.profile, &outer_fwd, &msg_id, false, false)
         .await
         .expect("send outer forward to own mediator");
-
-    // 6. Receive on the recipient's live stream. The unwrapped message id is
-    //    the original basic-message id (the mediator stores the innermost
-    //    authcrypt addressed to the recipient), so we wait on `msg_id`.
-    match recipient_env
-        .atm
-        .message_pickup()
-        .live_stream_get(&recipient.profile, &msg_id, wait, true)
-        .await
-    {
-        Ok(Some((received, _meta))) => received
-            .body
-            .get("content")
-            .and_then(|c| c.as_str())
-            .map(str::to_string),
-        _ => None,
-    }
+    msg_id
 }
 
 /// Alice on mediator A sends to Bob on mediator B; the message must arrive
@@ -713,4 +736,125 @@ async fn authenticated_direct_delivery_still_enforces_session_match() {
     );
 
     env.shutdown().await.expect("shutdown mediator");
+}
+
+/// An administrator of mediator A, subscribed to A's traffic with mediator
+/// B — the relay hop's recipient.
+async fn watch_relays_to(env: &TestEnvironment, peer_mediator_did: &str) -> TestUser {
+    use affinidi_messaging_mediator_common::types::accounts::AccountType;
+    use trust_tasks_rs::specs::messaging::monitor::subscribe::v0_1::MonitorFilter;
+
+    let admin = env.add_user("admin").await.expect("admin");
+    env.mediator
+        .store()
+        .account_set_role(&admin.did_hash(), &AccountType::Admin)
+        .await
+        .expect("promote");
+    env.atm
+        .profile_add(&admin.profile, true)
+        .await
+        .expect("admin live");
+    let filter: MonitorFilter =
+        serde_json::from_value(json!({ "dids": [sha256::digest(peer_mediator_did)] })).unwrap();
+    env.atm
+        .trust_tasks()
+        .monitor_subscribe(&admin.profile, Some(filter), Some(120), None, None)
+        .await
+        .expect("admin subscribes");
+    admin
+}
+
+/// The monitor on the relaying mediator follows the relay: `stored` on the
+/// peer-mediator channel when it is queued, `forwarded` — with the time it
+/// spent queued — only once the peer has accepted it.
+#[tokio::test]
+async fn the_monitor_sees_a_relay_queued_then_forwarded() {
+    init_tracing();
+    let env_a = spawn_relay_environment().await;
+    let env_b = spawn_relay_environment().await;
+    let mediator_a_did = env_a.mediator.did().to_string();
+    let mediator_b_did = env_b.mediator.did().to_string();
+    let alice = add_live_user(&env_a, "Alice").await;
+    let bob = add_live_user(&env_b, "Bob").await;
+    let admin = watch_relays_to(&env_a, &mediator_b_did).await;
+
+    send_double_forward(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &bob,
+        &mediator_b_did,
+        "watched",
+    )
+    .await;
+
+    // Both steps can land in one batch, so collect until the relay is done.
+    let seen = std::cell::RefCell::new(Vec::new());
+    await_monitor_event(
+        &env_a,
+        &admin,
+        |e| {
+            seen.borrow_mut().push(e.clone());
+            e["stage"] == "forwarded"
+        },
+        Duration::from_secs(15),
+    )
+    .await
+    .expect("the relay is seen accepted by the peer");
+    let seen = seen.into_inner();
+    let stages: Vec<&str> = seen.iter().filter_map(|e| e["stage"].as_str()).collect();
+    assert_eq!(stages, ["stored", "forwarded"], "queued, then relayed");
+    let (queued, forwarded) = (&seen[0], &seen[1]);
+
+    assert_eq!(queued["channel"], "peerMediator");
+    assert_eq!(
+        queued["to"],
+        sha256::digest(mediator_b_did.as_str()).as_str()
+    );
+    assert_eq!(queued["from"], alice.did_hash().as_str());
+    assert_eq!(forwarded["msgId"], queued["msgId"], "one relay, one id");
+    assert!(forwarded.get("outcome").is_none(), "{forwarded}");
+    assert!(forwarded["latencyMs"].is_u64(), "{forwarded}");
+
+    env_a.shutdown().await.expect("shutdown A");
+    env_b.shutdown().await.expect("shutdown B");
+}
+
+/// A relay the peer never accepts is not reported `forwarded`: the failed
+/// attempt is, with outcome `forwardingRetry`.
+#[tokio::test]
+async fn the_monitor_reports_a_failed_relay_attempt() {
+    init_tracing();
+    let env_a = spawn_relay_environment().await;
+    let env_b = spawn_relay_environment().await;
+    let mediator_a_did = env_a.mediator.did().to_string();
+    let mediator_b_did = env_b.mediator.did().to_string();
+    let alice = add_live_user(&env_a, "Alice").await;
+    let bob = add_live_user(&env_b, "Bob").await;
+    let admin = watch_relays_to(&env_a, &mediator_b_did).await;
+    // B's DID still resolves (did:peer), to an endpoint nobody answers.
+    env_b.shutdown().await.expect("shutdown B");
+
+    send_double_forward(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &bob,
+        &mediator_b_did,
+        "lost",
+    )
+    .await;
+
+    let failed = await_monitor_event(
+        &env_a,
+        &admin,
+        |e| e["stage"] == "forwarded",
+        Duration::from_secs(20),
+    )
+    .await
+    .expect("the failed attempt is seen");
+    assert_eq!(failed["outcome"]["code"], "forwardingRetry", "{failed}");
+    assert_eq!(failed["channel"], "peerMediator");
+
+    env_a.shutdown().await.expect("shutdown A");
 }

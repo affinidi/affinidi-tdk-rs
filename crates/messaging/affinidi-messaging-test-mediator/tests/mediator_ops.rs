@@ -2,6 +2,8 @@
 //! (`messaging/stats/show`, `messaging/queue/list`), sent through the SDK to a
 //! live in-process mediator.
 
+mod common;
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use affinidi_messaging_didcomm::Message;
@@ -10,6 +12,7 @@ use uuid::Uuid;
 
 use affinidi_messaging_mediator_common::types::accounts::AccountType;
 use affinidi_messaging_test_mediator::{TestEnvironment, TestUser};
+use common::await_monitor_event;
 
 /// A mediator and an administrator connected with a live stream.
 ///
@@ -545,45 +548,6 @@ async fn a_dry_run_counts_and_the_real_purge_removes_only_the_filtered_peer() {
         1,
         "carol's message survives"
     );
-}
-
-/// Read the admin's live stream until a monitor batch shows an event matching
-/// `wanted`, or `deadline` passes.
-async fn await_monitor_event(
-    env: &TestEnvironment,
-    watcher: &TestUser,
-    wanted: impl Fn(&serde_json::Value) -> bool,
-    deadline: Duration,
-) -> Option<serde_json::Value> {
-    use affinidi_messaging_sdk::protocols::trust_tasks::decode_monitor_event;
-    let until = tokio::time::Instant::now() + deadline;
-    while tokio::time::Instant::now() < until {
-        let next = env
-            .atm
-            .message_pickup()
-            .live_stream_next(&watcher.profile, Some(Duration::from_millis(500)), false)
-            .await
-            .expect("live stream");
-        let Some((message, _)) = next else { continue };
-        let Some(batch) = decode_monitor_event(&message) else {
-            continue;
-        };
-        assert!(
-            batch.proof.is_some(),
-            "every monitor batch is signed by the mediator"
-        );
-        for event in &batch.payload.events {
-            let event = serde_json::to_value(event).unwrap();
-            assert!(
-                event.get("message").is_none(),
-                "metadata only, never a body"
-            );
-            if wanted(&event) {
-                return Some(event);
-            }
-        }
-    }
-    None
 }
 
 #[tokio::test]

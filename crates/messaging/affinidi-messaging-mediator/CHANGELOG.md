@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (0.28.23) — the monitor follows relays to their end
+
+The traffic monitor now reports what became of a message relayed to another
+mediator. Events are correlated by `msgId`, on the `peerMediator` channel:
+
+| When | Event |
+|---|---|
+| queued for relay | `stored` |
+| the peer accepted it | `forwarded`, with `latencyMs` (time spent queued) |
+| an attempt failed; it will be retried | `forwarded` with outcome `forwardingRetry` |
+| dropped undelivered | `forwarded` with outcome `e.p.me.res.forwarding.abandoned` (the code in the sender's problem report) |
+| expired in the queue | `expired` |
+
+**Changed:** queueing a relay used to be reported as `forwarded`. `forwarded`
+now means the peer has the message, because a relay that is only queued has
+not been relayed yet (R1.1). A monitor filtered on `stage: forwarded` no
+longer sees relays that never left; add `stored` to see them queued. The
+peer's error text stays in the server log.
+
+Requires `affinidi-messaging-mediator-common` 0.16.16.
+
 ## Unreleased (0.28.22) — the monitor sees every step, with both parties
 
 The traffic monitor (0.28.20) now reports a message's whole life, not just its

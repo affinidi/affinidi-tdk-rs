@@ -21,6 +21,11 @@ pub use relay_ack::{RELAY_ACK_SUBPROTOCOL, RELAY_ACK_TYPE, RelayAck, frame_id};
 pub mod packer;
 pub use packer::SystemMessagePacker;
 
+// The processor reports each forward's fate (relayed, retrying, abandoned,
+// expired) to an injected observer — the mediator's traffic monitor.
+pub mod observer;
+pub use observer::{ForwardOutcome, ForwardTransport, ForwardingObserver};
+
 // `ForwardingProcessor` is backend-agnostic: it consumes the
 // `forward_queue_*` methods on `Arc<dyn MediatorStore>`, which every
 // backend implements (Redis via Streams consumer groups; Fjall and

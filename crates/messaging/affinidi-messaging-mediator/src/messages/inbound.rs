@@ -787,7 +787,7 @@ async fn forward_tsp_remote(
             )
         })?;
 
-    state.monitor.forwarded(
+    state.monitor.queued_for_relay(
         &entry.from_did_hash,
         &entry.to_did_hash,
         &entry.message,
