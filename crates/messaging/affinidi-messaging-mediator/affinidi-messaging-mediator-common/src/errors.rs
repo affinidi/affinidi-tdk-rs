@@ -143,6 +143,25 @@ pub enum MediatorError {
 }
 
 impl MediatorError {
+    /// Name `msg_id` as the message this error answers, unless it already
+    /// names one.
+    ///
+    /// The id becomes the problem report's `pthid`, which is how a client
+    /// waiting on a reply to `msg_id` recognises the refusal as that reply.
+    /// Without it, a refusal sent over a websocket reaches the client but
+    /// matches nothing it is waiting for: the call times out and reports "no
+    /// response" in place of the real reason. Protocol handlers build most
+    /// errors without the id, so the dispatcher applies it once for all of
+    /// them.
+    pub fn threaded_to(self, msg_id: &str) -> Self {
+        match self {
+            Self::MediatorError(code, session, None, report, status, log) => {
+                Self::MediatorError(code, session, Some(msg_id.to_string()), report, status, log)
+            }
+            other => other,
+        }
+    }
+
     /// Creates a `MediatorError::MediatorError` with a DIDComm Problem Report.
     ///
     /// The `comment` is also used as the log message. For cases where the log
@@ -717,6 +736,43 @@ mod tests {
     use super::*;
     use crate::types::problem_report::{ProblemReportScope, ProblemReportSorter};
     use axum::http::StatusCode;
+
+    fn refusal(msg_id: Option<String>) -> MediatorError {
+        MediatorError::problem(
+            44,
+            "s",
+            msg_id,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "authorization.send",
+            "refused",
+            vec![],
+            StatusCode::FORBIDDEN,
+        )
+    }
+
+    fn answered(e: &MediatorError) -> Option<&str> {
+        match e {
+            MediatorError::MediatorError(_, _, msg_id, ..) => msg_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_refusal_is_threaded_to_the_request_unless_it_already_is() {
+        assert_eq!(answered(&refusal(None).threaded_to("req-1")), Some("req-1"));
+        assert_eq!(
+            answered(&refusal(Some("own".into())).threaded_to("req-1")),
+            Some("own"),
+            "an id set by the handler is kept"
+        );
+        // Errors without a problem report pass through unchanged.
+        let internal = MediatorError::InternalError(1, "s".into(), "x".into());
+        assert!(matches!(
+            internal.threaded_to("req-1"),
+            MediatorError::InternalError(..)
+        ));
+    }
 
     #[test]
     fn test_problem_creates_mediator_error() {

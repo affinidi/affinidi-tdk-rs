@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (0.28.26) — a refusal answers its request
+
+**Fixed: refusals now reach the caller.** A DIDComm request the mediator
+refused sent back a problem report with no `pthid`. Most protocol handlers
+build their errors without the request's id. Over a websocket, the report
+reached the client but matched no call it was waiting on. The call waited out
+its reply timeout (10 s in the SDK) and failed with "No response from API"
+instead of the reason. A console asking a mediator for something it refuses,
+or doesn't serve, showed exactly that.
+
+The dispatcher now threads every refusal to the request that provoked it,
+unless the handler already named one, so the caller gets the problem report
+as its answer straight away. REST callers were unaffected, because they get
+the error as the HTTP response. (The mediator's own test suite also ran
+about 6× faster: every refusal test had been waiting out the timeout.)
+
+Requires `affinidi-messaging-mediator-common` 0.16.18.
+
 ## Unreleased (0.28.25) — a monitor subscription over TSP is refused
 
 `messaging/monitor/subscribe` sent over TSP is now refused with

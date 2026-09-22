@@ -335,7 +335,10 @@ impl MessageHandler for Message {
             ));
         }
 
-        msg_type.process(self, state, session, metadata).await
+        msg_type
+            .process(self, state, session, metadata)
+            .await
+            .map_err(|e| e.threaded_to(&self.id))
     }
 
     async fn pack<S>(
