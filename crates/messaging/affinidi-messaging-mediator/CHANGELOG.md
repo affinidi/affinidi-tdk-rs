@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (0.28.28) — the configured admin is root admin on every backend
+
+**Fixed:** on the Fjall and memory stores, the configured `admin_did` was
+never made the root admin, and the mediator's own DID never got its
+`Mediator` account.
+- **Only Redis seeded them.** Redis sets up both accounts during
+  `initialize_redis`. No other backend did, and neither did a store an
+  embedding application passes in.
+- **Effect:** the configured admin authenticated as an ordinary account. It
+  had none of the administrator's rights, and the mediator console showed it
+  as `SELF` rather than `ROOT`. The startup log still named it as the admin,
+  because that line reports the configuration, not the account.
+- **Fix:** both accounts are now set up at startup on every backend, the same
+  way Redis does it. Setup is idempotent: an existing account keeps its ACLs
+  and only its role is set, so a Fjall mediator's admin becomes root on its
+  next start with nothing else to do.
+- **Startup log:** now records the root admin's DID and account hash, so the
+  hash can be compared with the one a client shows.
+
 ## Unreleased (0.28.27) — change limits at runtime with `config/patch`
 
 The mediator serves the generic **`config/patch`** Trust Task. A rootAdmin can
