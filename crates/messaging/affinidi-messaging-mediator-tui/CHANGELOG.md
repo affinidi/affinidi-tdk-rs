@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.1.3) — room for names
+
+- **Queue table:** the account column is sized to the longest name, from 15
+  to 40 characters, instead of a fixed 15. The two quota bars share the
+  remaining width, so the table fills the pane at any size, with the monitor
+  open or not.
+- **Other tables:** the recipient, message sender/recipient and audit
+  actor/target columns take the spare width instead of a fixed one.
+- **Monitor:** sender and recipient are aligned, fixed-width columns sized to
+  the pane, and an over-long name ends with `…`. Before, lines ran together
+  because names have different lengths.
+
 ## Unreleased (0.1.2) — names for accounts
 
 Accounts show by **nickname** wherever the console shows an account hash:

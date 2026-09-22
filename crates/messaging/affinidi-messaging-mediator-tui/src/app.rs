@@ -1111,7 +1111,16 @@ impl App {
 
     fn render_queue_table(&mut self, f: &mut Frame, area: Rect, title: &str) {
         let rows = queue_rows(&self.queues);
-        let bar_width = 16;
+        // The account column fits the longest name (within reason) and the two
+        // quota bars share whatever width is left, so the table uses the pane.
+        let names: Vec<String> = rows
+            .iter()
+            .map(|q| label(&self.book, q["did"].as_str().unwrap_or("?")))
+            .collect();
+        let inner = area.width.saturating_sub(2);
+        const FIXED: u16 = 9 + 11 + 11 + 8 + 6; // role, two counts, oldest, gaps
+        let account_width = fit_width(&names, 15, 40);
+        let bar_width = (inner.saturating_sub(account_width + FIXED) / 2).clamp(8, 40);
         let depth = self.depth;
         let table_rows: Vec<Row> = rows
             .iter()
@@ -1159,7 +1168,7 @@ impl App {
         let table = Table::new(
             table_rows,
             [
-                Constraint::Length(15),
+                Constraint::Length(account_width),
                 Constraint::Length(9),
                 Constraint::Length(11),
                 Constraint::Length(bar_width),
@@ -1244,7 +1253,7 @@ impl App {
             Table::new(
                 peer_rows,
                 [
-                    Constraint::Length(15),
+                    Constraint::Fill(1),
                     Constraint::Length(7),
                     Constraint::Length(9),
                     Constraint::Length(9),
@@ -1290,11 +1299,11 @@ impl App {
             rows,
             [
                 Constraint::Length(9),
-                Constraint::Length(15),
-                Constraint::Length(15),
+                Constraint::Fill(2),
+                Constraint::Fill(2),
                 Constraint::Length(9),
                 Constraint::Length(10),
-                Constraint::Min(10),
+                Constraint::Fill(1),
             ],
         )
         .header(
@@ -1339,10 +1348,10 @@ impl App {
                 rows,
                 [
                     Constraint::Length(20),
-                    Constraint::Length(15),
+                    Constraint::Fill(1),
                     Constraint::Length(20),
-                    Constraint::Length(15),
-                    Constraint::Min(20),
+                    Constraint::Fill(1),
+                    Constraint::Fill(2),
                 ],
             )
             .header(
@@ -1380,6 +1389,10 @@ impl App {
         let block = Block::default().borders(Borders::ALL).title(title);
         let inner = block.inner(area);
         let height = inner.height as usize;
+        // Sender and recipient as aligned columns, sharing what the fixed
+        // columns (time, stage, protocol, channel, size) leave.
+        const FIXED: u16 = 8 + 3 + 10 + 10 + 10 + 3 + 6;
+        let name_w = (inner.width.saturating_sub(FIXED) / 2).clamp(14, 32) as usize; // a short hash is 13
         let skip = self.monitor.lines.len().saturating_sub(height);
         let lines: Vec<Line> = self
             .monitor
@@ -1387,12 +1400,30 @@ impl App {
             .iter()
             .skip(skip)
             .map(|l| match l {
-                MonitorLine::Event(v) => event_line(v, &self.book),
+                MonitorLine::Event(v) => event_line(v, &self.book, name_w),
                 MonitorLine::Note(line) => line.clone(),
             })
             .collect();
         f.render_widget(Paragraph::new(lines).block(block), area);
     }
+}
+
+/// `s` padded or cut (with `…`) to exactly `width` characters.
+fn fit(s: &str, width: usize) -> String {
+    let n = s.chars().count();
+    if n <= width {
+        format!("{s}{}", " ".repeat(width - n))
+    } else {
+        let cut: String = s.chars().take(width.saturating_sub(1)).collect();
+        format!("{cut}…")
+    }
+}
+
+/// A column width that fits the longest of `labels` (plus a space), held
+/// between `min` and `max`.
+fn fit_width(labels: &[String], min: u16, max: u16) -> u16 {
+    let longest = labels.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+    (longest + 1).clamp(min, max)
 }
 
 /// An account hash as the user knows it: its nickname, else a short hash.
@@ -1403,7 +1434,7 @@ fn label(book: &AddressBook, hash: &str) -> String {
 }
 
 /// One monitor event as a coloured line.
-fn event_line(e: &Value, book: &AddressBook) -> Line<'static> {
+fn event_line(e: &Value, book: &AddressBook, name_w: usize) -> Line<'static> {
     let s = |k: &str| e[k].as_str().unwrap_or("").to_string();
     let stage = s("stage");
     let color = match stage.as_str() {
@@ -1426,8 +1457,14 @@ fn event_line(e: &Value, book: &AddressBook) -> Line<'static> {
         Span::raw(format!(" {:<9} {:<9} ", s("protocol"), s("channel"))),
         Span::raw(format!(
             "{} → {} ",
-            e["from"].as_str().map_or("·".into(), |h| label(book, h)),
-            e["to"].as_str().map_or("·".into(), |h| label(book, h))
+            fit(
+                &e["from"].as_str().map_or("·".into(), |h| label(book, h)),
+                name_w
+            ),
+            fit(
+                &e["to"].as_str().map_or("·".into(), |h| label(book, h)),
+                name_w
+            )
         )),
         Span::styled(
             human_bytes(e["size"].as_u64()),
@@ -1684,10 +1721,26 @@ mod tests {
                 "from": sha256::digest(alice), "to": bob_hash,
             }),
             &book,
+            14,
         );
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(text.contains("alice → "), "{text}");
+        // Aligned: the sender is padded to the column width.
+        assert!(text.contains("alice          → "), "{text}");
         assert!(text.contains(&short(&bob_hash)), "{text}");
+    }
+
+    #[test]
+    fn text_is_fitted_to_its_column() {
+        assert_eq!(fit("abc", 5), "abc  ");
+        assert_eq!(fit("abcdef", 4), "abc…");
+        assert_eq!(fit("abcd", 4), "abcd");
+        let names = vec![
+            "short".to_string(),
+            "a much longer account name".to_string(),
+        ];
+        assert_eq!(fit_width(&names, 15, 40), 27);
+        assert_eq!(fit_width(&names, 15, 20), 20);
+        assert_eq!(fit_width(&[], 15, 40), 15);
     }
 
     #[test]
@@ -1699,6 +1752,7 @@ mod tests {
                 "outcome": { "code": "authorization.send" },
             }),
             &AddressBook::new(),
+            14,
         );
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("refused") && text.contains("authorization.send"));
