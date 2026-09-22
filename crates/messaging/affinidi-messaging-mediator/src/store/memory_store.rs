@@ -331,6 +331,29 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
+    /// Publish one live-streaming record into this instance's broadcast
+    /// channel. `verbatim` marks the body as the frame itself rather than a
+    /// notification to drain the stored inbox (see
+    /// `MediatorStore::streaming_publish_verbatim`).
+    async fn publish_record(
+        &self,
+        did_hash: &str,
+        mediator_uuid: &str,
+        message: &str,
+        force_delivery: bool,
+        verbatim: bool,
+    ) -> Result<(), MediatorError> {
+        let channels = self.broadcast_channels.lock().await;
+        if let Some(sender) = channels.get(mediator_uuid) {
+            let _ = sender.send(PubSubRecord {
+                did_hash: did_hash.to_string(),
+                message: message.to_string(),
+                force_delivery,
+                verbatim,
+            });
+        }
+        Ok(())
+    }
     /// Construct an empty in-memory store.
     pub fn new() -> Self {
         Self::default()
@@ -1796,15 +1819,18 @@ impl MediatorStore for MemoryStore {
         message: &str,
         force_delivery: bool,
     ) -> Result<(), MediatorError> {
-        let channels = self.broadcast_channels.lock().await;
-        if let Some(sender) = channels.get(mediator_uuid) {
-            let _ = sender.send(PubSubRecord {
-                did_hash: did_hash.to_string(),
-                message: message.to_string(),
-                force_delivery,
-            });
-        }
-        Ok(())
+        self.publish_record(did_hash, mediator_uuid, message, force_delivery, false)
+            .await
+    }
+
+    async fn streaming_publish_verbatim(
+        &self,
+        did_hash: &str,
+        mediator_uuid: &str,
+        message: &str,
+    ) -> Result<(), MediatorError> {
+        self.publish_record(did_hash, mediator_uuid, message, true, true)
+            .await
     }
 
     async fn streaming_subscribe(

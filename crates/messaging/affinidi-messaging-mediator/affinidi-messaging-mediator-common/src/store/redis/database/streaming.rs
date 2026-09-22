@@ -124,10 +124,25 @@ impl Database {
         message: &str,
         force_delivery: bool,
     ) -> Result<(), MediatorError> {
+        self.publish_record(did_hash, stream_uuid, message, force_delivery, false)
+            .await
+    }
+
+    /// [`streaming_publish_message`](Self::streaming_publish_message), with
+    /// `verbatim` deciding whether the body is the frame or a notification.
+    pub async fn publish_record(
+        &self,
+        did_hash: &str,
+        stream_uuid: &str,
+        message: &str,
+        force_delivery: bool,
+        verbatim: bool,
+    ) -> Result<(), MediatorError> {
         let record = match serde_json::to_string(&PubSubRecord {
             did_hash: did_hash.to_string(),
             message: message.to_string(),
             force_delivery,
+            verbatim,
         }) {
             Ok(record) => record,
             Err(err) => {

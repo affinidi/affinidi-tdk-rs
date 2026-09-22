@@ -210,6 +210,16 @@ pub struct PubSubRecord {
     /// When `true`, deliver even if the client is not in the live-delivery
     /// state (used to push status messages on live-delivery transitions).
     pub force_delivery: bool,
+    /// When `true`, `message` is the frame itself and the socket sends it as
+    /// it is. When `false` (every ordinary delivery) it is a notification: a
+    /// raw-TSP socket ignores the body and drains the client's stored inbox
+    /// instead, which is the right move for a stored message and the wrong
+    /// one for a monitor batch, which is never stored.
+    ///
+    /// `#[serde(default)]`, so a record published by an instance that
+    /// predates this field still deserialises behind a shared Redis.
+    #[serde(default)]
+    pub verbatim: bool,
 }
 
 // ─── Stats ───────────────────────────────────────────────────────────────────

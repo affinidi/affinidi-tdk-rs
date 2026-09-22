@@ -1404,6 +1404,16 @@ impl MediatorStore for RedisStore {
             .await
     }
 
+    async fn streaming_publish_verbatim(
+        &self,
+        did_hash: &str,
+        mediator_uuid: &str,
+        message: &str,
+    ) -> Result<(), MediatorError> {
+        self.publish_record(did_hash, mediator_uuid, message, true, true)
+            .await
+    }
+
     async fn streaming_subscribe(
         &self,
         mediator_uuid: &str,

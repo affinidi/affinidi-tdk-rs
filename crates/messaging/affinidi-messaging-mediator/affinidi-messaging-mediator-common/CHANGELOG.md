@@ -1,5 +1,21 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.22) — verbatim live frames
+
+`MediatorStore::streaming_publish_verbatim` publishes a frame to be sent to
+the client **as it is**, rather than as a notification to go and fetch what
+is stored. It exists for a body that is stored nowhere — a monitor batch —
+where a raw-TSP socket's usual answer to a notification (drain the inbox)
+would deliver nothing.
+
+`PubSubRecord` gains `verbatim`, `#[serde(default)]` so a record published by
+an instance that predates the field still deserialises behind a shared Redis.
+
+The default implementation **refuses**, so a store that cannot carry the
+distinction makes the caller count the batch as dropped rather than report a
+frame delivered that the socket then discards. Redis, Fjall and memory all
+implement it.
+
 ## Unreleased (0.16.21) — account activity
 
 `MediatorStore` gains two methods for recording when an account was last

@@ -130,8 +130,16 @@ pub(crate) async fn process(
     })?;
 
     let now_secs = state.clock.unix_secs();
-    let Some(response_value) =
-        consume(doc, &message.body, state, session, &sender_kid, now_secs).await?
+    let Some(response_value) = consume(
+        doc,
+        &message.body,
+        state,
+        session,
+        &sender_kid,
+        now_secs,
+        TaskTransport::DidComm,
+    )
+    .await?
     else {
         // identity_mismatch with no transport sender → emit nothing.
         return Ok(ProcessMessageResponse::default());
@@ -165,6 +173,17 @@ pub(crate) fn vid_of(kid: &str) -> String {
     kid.split('#').next().unwrap_or(kid).to_string()
 }
 
+/// Which transport carried a Trust Task request in. Almost nothing cares —
+/// the framework is transport-agnostic — but a monitor subscription is served
+/// back over the transport it was opened on, because that decides how its
+/// batches are sealed and delivered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TaskTransport {
+    DidComm,
+    #[cfg(feature = "tsp")]
+    Tsp,
+}
+
 /// Consume one Trust Task document from an authenticated sender and produce the
 /// response document. `None` means "emit nothing" (a ping identity mismatch).
 ///
@@ -187,6 +206,7 @@ pub(crate) async fn consume(
     session: &Session,
     sender_kid: &str,
     now_secs: u64,
+    transport: TaskTransport,
 ) -> Result<Option<Value>, MediatorError> {
     let mediator_did = state.config.mediator_did.clone();
     let sender_kid = sender_kid.to_string();
@@ -390,6 +410,7 @@ pub(crate) async fn consume(
                 session,
                 &mediator_did,
                 now,
+                transport,
             )
             .await?
         }
@@ -2229,20 +2250,6 @@ mod tests {
     }
 }
 
-/// Whether `task` can be served to a client that asked over TSP.
-///
-/// Everything is, except `monitor/subscribe`. Monitor batches are live-only:
-/// they are pushed to the subscriber's connection and never stored. A raw-TSP
-/// socket treats every push as a signal to drain its *stored* inbox and
-/// discards the push itself, so a subscription made over TSP would be accepted
-/// and then deliver nothing. It is refused instead, and the client is told to
-/// subscribe over DIDComm (R1.1: never report success for something that
-/// will not be delivered).
-#[cfg(feature = "tsp")]
-pub(crate) fn served_over_tsp(task: ServedTask) -> bool {
-    !matches!(task, ServedTask::MonitorSubscribe)
-}
-
 #[cfg(all(test, feature = "tsp"))]
 mod tsp_dispatch_tests {
     use super::*;
@@ -2258,17 +2265,6 @@ mod tsp_dispatch_tests {
             "payload": {},
         }))
         .expect("test document serialises")
-    }
-
-    #[test]
-    fn a_monitor_subscription_is_not_served_over_tsp_and_the_rest_are() {
-        for task in ServedTask::ALL {
-            assert_eq!(
-                served_over_tsp(*task),
-                *task != ServedTask::MonitorSubscribe,
-                "{task:?}"
-            );
-        }
     }
 
     #[test]

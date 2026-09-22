@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (0.9.15) — monitor over TSP
+
+- New end-to-end test `tsp_monitor`: a subscription opened over TSP delivers
+  its batches, sealed by the mediator, onto the raw-TSP socket.
+
 ## Unreleased (0.9.14) — activity over the wire
 
 - `account_activity` now also covers the `account/get` response: the times

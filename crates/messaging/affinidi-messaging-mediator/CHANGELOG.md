@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased (0.28.34) — the traffic monitor over TSP
+
+`messaging/monitor/subscribe` is served over TSP. It used to be refused
+there, and for a real reason: monitor batches are pushed live and stored
+nowhere, while a raw-TSP socket answers a push by draining its *stored*
+inbox and discarding the body — so a subscription opened over TSP would have
+been accepted and then delivered nothing (R1.1).
+
+A subscription is now served over the transport it was opened on:
+- **Sealed as TSP.** A batch for a TSP subscriber is sealed to its VID as the
+  mediator, in the same Direct envelope a TSP Trust Task response uses, and
+  carried as base64url of the qb2 bytes like every other TSP frame. The VID
+  is resolved once, when the subscription is opened — so a VID the mediator
+  can't resolve is refused there rather than silently dropping every batch.
+- **Published verbatim.** The batch is the frame, not a notification, so the
+  raw-TSP socket sends it as the `Binary` frame its client expects instead of
+  draining an inbox that holds nothing of ours. Ordinary deliveries are
+  unchanged.
+- **Still never stored, and still live-only.** A subscriber with no live
+  connection has its batches counted as dropped, exactly as before.
+
+A TSP subscriber needs a relationship with the mediator to accept the
+batches, which §7.2.2 requires of any application message — the same
+condition a TSP Trust Task response already had.
+
+`served_over_tsp` is gone: every Trust Task is now served over TSP, so the
+predicate and its refusal were dead weight.
+
+Requires `affinidi-messaging-mediator-common` 0.16.22.
+
 ## Unreleased (0.28.33) — serving each account's activity times
 
 `messaging/account/get` and `messaging/account/list` return an account's

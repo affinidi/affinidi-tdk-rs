@@ -672,10 +672,11 @@ pub(crate) async fn consume_monitor_subscribe(
     session: &Session,
     mediator_did: &str,
     now: DateTime<Utc>,
+    transport: super::trust_tasks::TaskTransport,
 ) -> Result<Value, MediatorError> {
     use crate::monitor::{
-        DEFAULT_LEASE_SECONDS, DEFAULT_MAX_EVENTS_PER_SECOND, Filter, MAX_EVENTS_PER_SECOND,
-        MAX_LEASE_SECONDS, MonitorError,
+        DEFAULT_LEASE_SECONDS, DEFAULT_MAX_EVENTS_PER_SECOND, Delivery, Filter,
+        MAX_EVENTS_PER_SECOND, MAX_LEASE_SECONDS, MonitorError,
     };
 
     validate_tt_basic(&typed, session, mediator_did, now)?;
@@ -716,6 +717,23 @@ pub(crate) async fn consume_monitor_subscribe(
         });
     let renew = payload.subscription_id.as_ref().map(|s| s.to_string());
 
+    // Served over the transport it was opened on: a TSP subscriber's batches
+    // are sealed to its VID, which needs its encryption key. Resolving it here
+    // rather than per batch also means a VID the mediator cannot resolve is
+    // refused at subscribe time instead of quietly dropping every batch.
+    let delivery = match transport {
+        super::trust_tasks::TaskTransport::DidComm => Delivery::DidComm,
+        #[cfg(feature = "tsp")]
+        super::trust_tasks::TaskTransport::Tsp => {
+            let resolved =
+                crate::messages::inbound::resolve_tsp_vid(state, &session.did, &session.session_id)
+                    .await?;
+            Delivery::Tsp {
+                encryption_key: resolved.encryption_key,
+            }
+        }
+    };
+
     let granted = state
         .monitor
         .subscribe(
@@ -726,6 +744,7 @@ pub(crate) async fn consume_monitor_subscribe(
             filter,
             lease,
             max_eps,
+            delivery,
         )
         .await
         .map_err(|e| match e {

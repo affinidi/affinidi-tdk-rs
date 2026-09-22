@@ -7,6 +7,13 @@
 //! `messaging/monitor/event` document and pushes it **only** over the
 //! subscriber's live connection.
 //!
+//! A subscription is served over the transport it was opened on. A batch for
+//! a DIDComm subscriber is authcrypted to it; one for a TSP subscriber is
+//! sealed to its VID as the mediator and published *verbatim* — the frame
+//! itself, because a raw-TSP socket answers an ordinary push by draining its
+//! stored inbox, and a batch is never stored. Either way the subscriber needs
+//! a live connection.
+//!
 //! Three rules keep a monitor from hurting what it watches:
 //!
 //! - **Emitting is free when nobody listens.** [`TrafficMonitor::emit`] takes a
@@ -583,6 +590,25 @@ struct Settings {
     max_eps: u64,
 }
 
+/// How a subscriber's batches are sealed and pushed.
+///
+/// A subscription is served over the transport it was opened on: the batches
+/// a TSP client can read are TSP, and its socket needs the frame itself
+/// rather than a notification to drain an inbox the batch was never put in.
+#[derive(Clone, Debug)]
+pub(crate) enum Delivery {
+    /// Authcrypt to the subscriber and push over its live connection.
+    DidComm,
+    /// Seal to the subscriber's VID as the mediator, and push the frame.
+    #[cfg(feature = "tsp")]
+    Tsp {
+        /// The subscriber's X25519 public key, resolved when the subscription
+        /// was opened — sealing every batch would otherwise resolve the VID
+        /// again for each one.
+        encryption_key: [u8; 32],
+    },
+}
+
 struct Subscription {
     owner_did_hash: String,
     settings: Arc<Mutex<Settings>>,
@@ -720,6 +746,7 @@ impl TrafficMonitor {
         filter: Filter,
         lease_seconds: u64,
         max_eps: u64,
+        delivery: Delivery,
     ) -> Result<Granted, MonitorError> {
         let expires_at = Utc::now() + chrono::Duration::seconds(lease_seconds as i64);
 
@@ -778,6 +805,7 @@ impl TrafficMonitor {
             owner_did: owner_did.to_string(),
             owner_did_hash: owner_did_hash.to_string(),
             mediator_did_hash: digest(&state.config.mediator_did),
+            delivery,
             settings,
             cancel,
             sent,
@@ -830,6 +858,7 @@ struct DeliveryTask {
     owner_did: String,
     owner_did_hash: String,
     mediator_did_hash: String,
+    delivery: Delivery,
     settings: Arc<Mutex<Settings>>,
     cancel: CancellationToken,
     sent: Arc<AtomicU64>,
@@ -948,12 +977,25 @@ impl DeliveryTask {
                 return;
             }
         };
-        match self
-            .state
-            .database
-            .streaming_publish_message(&self.owner_did_hash, &uuid, &packed, true)
-            .await
-        {
+        let published = match self.delivery {
+            Delivery::DidComm => {
+                self.state
+                    .database
+                    .streaming_publish_message(&self.owner_did_hash, &uuid, &packed, true)
+                    .await
+            }
+            // The batch is the frame: it is stored nowhere, so a notification
+            // would tell a raw-TSP socket to drain an inbox that holds nothing
+            // of ours.
+            #[cfg(feature = "tsp")]
+            Delivery::Tsp { .. } => {
+                self.state
+                    .database
+                    .streaming_publish_verbatim(&self.owner_did_hash, &uuid, &packed)
+                    .await
+            }
+        };
+        match published {
             Ok(()) => {
                 *seq = next_seq;
                 *dropped = 0;
@@ -973,6 +1015,10 @@ impl DeliveryTask {
         let signed = crate::messages::protocols::trust_task_sign::sign_response(doc, &self.state)
             .await
             .map_err(|e| e.to_string())?;
+        #[cfg(feature = "tsp")]
+        if let Delivery::Tsp { encryption_key } = &self.delivery {
+            return self.seal_tsp(&signed, encryption_key).await;
+        }
         let now = Utc::now().timestamp().max(0) as u64;
         let mediator_did = &self.state.config.mediator_did;
         let message = Message::build(
@@ -995,6 +1041,31 @@ impl DeliveryTask {
         .await
         .map(|(packed, _)| packed)
         .map_err(|e| e.to_string())
+    }
+
+    /// Seal the signed batch to the subscriber's VID as the mediator, in the
+    /// same Direct envelope a TSP Trust Task response uses, and encode it the
+    /// way every TSP frame rides the live channel: base64url of the qb2 bytes.
+    #[cfg(feature = "tsp")]
+    async fn seal_tsp(&self, signed: &Value, encryption_key: &[u8; 32]) -> Result<String, String> {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+
+        let identity = self
+            .state
+            .tsp_identity()
+            .await
+            .map_err(|e| format!("mediator TSP identity: {e}"))?;
+        let payload = serde_json::to_vec(signed).map_err(|e| e.to_string())?;
+        let packed = affinidi_tsp::message::direct::pack(
+            &payload,
+            affinidi_tsp::MessageType::Direct,
+            &identity.vid,
+            &self.owner_did,
+            &identity.signing_key,
+            encryption_key,
+        )
+        .map_err(|e| format!("sealing the monitor batch: {e}"))?;
+        Ok(URL_SAFE_NO_PAD.encode(&packed.bytes))
     }
 }
 

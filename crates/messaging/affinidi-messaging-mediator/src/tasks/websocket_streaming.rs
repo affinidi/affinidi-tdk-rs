@@ -147,6 +147,13 @@ pub enum StreamingUpdateState {
 pub enum WebSocketCommands {
     /// Send a message to the client.
     Message(String),
+    /// Send this body to the client as it is.
+    ///
+    /// [`Message`](Self::Message) is a *notification*: a raw-TSP socket
+    /// answers it by draining the client's stored inbox and discards the body.
+    /// A monitor batch is never stored, so that answer would deliver nothing —
+    /// it is sent as the frame instead.
+    Verbatim(String),
     /// Close this socket for the stated reason.
     ///
     /// The reason is carried rather than assumed. It used to be a bare `Close`,
@@ -223,6 +230,18 @@ fn try_queue_message(
     did_hash: &str,
     message: String,
 ) -> bool {
+    try_queue(tx, budget, did_hash, message, false)
+}
+
+/// [`try_queue_message`], with `verbatim` choosing the command the socket
+/// handler receives.
+fn try_queue(
+    tx: &mpsc::Sender<QueuedCommand>,
+    budget: &WsSendBudget,
+    did_hash: &str,
+    message: String,
+    verbatim: bool,
+) -> bool {
     let Some(permit) = budget.try_reserve(message.len()) else {
         warn!(
             "WebSocket send buffer exhausted ({} bytes total); dropping live notification for {}. \
@@ -235,7 +254,11 @@ fn try_queue_message(
     };
 
     let queued = QueuedCommand {
-        cmd: WebSocketCommands::Message(message),
+        cmd: if verbatim {
+            WebSocketCommands::Verbatim(message)
+        } else {
+            WebSocketCommands::Message(message)
+        },
         _permit: Some(permit),
     };
 
@@ -264,8 +287,9 @@ fn deliver_live(
     budget: &WsSendBudget,
     did_hash: &str,
     message: String,
+    verbatim: bool,
 ) -> bool {
-    if try_queue_message(&entry.tx, budget, did_hash, message) {
+    if try_queue(&entry.tx, budget, did_hash, message, verbatim) {
         debug!("Sent message to client ({did_hash})");
         return true;
     }
@@ -511,6 +535,7 @@ impl StreamingTask {
             did_hash,
             message,
             force_delivery,
+            verbatim,
         } = payload;
         match clients.get(&did_hash) {
             Some(entry) => {
@@ -535,7 +560,7 @@ impl StreamingTask {
                     } else {
                         // Moved, not cloned: the body already exists in the
                         // broadcast ring slot, and `payload` is owned here.
-                        deliver_live(entry, &self.send_budget, &did_hash, message);
+                        deliver_live(entry, &self.send_budget, &did_hash, message, verbatim);
                     }
                 } else {
                     debug!("pub/sub msg received for did_hash({did_hash}) but it is not active");
@@ -1086,7 +1111,13 @@ mod tests {
         let budget = WsSendBudget::new(1_000_000);
 
         // First push fits the single slot.
-        assert!(deliver_live(&entry, &budget, "did-hash", "one".to_string()));
+        assert!(deliver_live(
+            &entry,
+            &budget,
+            "did-hash",
+            "one".to_string(),
+            false
+        ));
         assert!(
             !resync.load(Ordering::Relaxed),
             "a delivered notification must not ask the client to resync"
@@ -1098,7 +1129,8 @@ mod tests {
             &entry,
             &budget,
             "did-hash",
-            "two".to_string()
+            "two".to_string(),
+            false
         ));
         assert!(
             resync.load(Ordering::Relaxed),
@@ -1127,14 +1159,16 @@ mod tests {
             &entry,
             &budget,
             "did-hash",
-            "fills".to_string()
+            "fills".to_string(),
+            false
         ));
         for i in 0..5 {
             assert!(!deliver_live(
                 &entry,
                 &budget,
                 "did-hash",
-                format!("drop-{i}")
+                format!("drop-{i}"),
+                false
             ));
         }
 
