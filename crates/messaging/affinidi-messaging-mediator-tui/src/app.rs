@@ -30,6 +30,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::quota::{ColorDepth, QuotaBar, quota_line};
+use crate::tally::TrafficTally;
 
 /// How often the current view refreshes on its own.
 const REFRESH: Duration = Duration::from_secs(5);
@@ -126,6 +127,10 @@ struct MonitorPane {
     last_seen: Option<Instant>,
     watching: String,
     task: Option<JoinHandle<()>>,
+    /// Totals since the monitor (re)started.
+    tally: TrafficTally,
+    /// Show the per-account totals instead of the live lines.
+    show_totals: bool,
 }
 
 /// The console application.
@@ -210,6 +215,8 @@ impl App {
                 last_seen: None,
                 watching: String::new(),
                 task: None,
+                tally: TrafficTally::new(Instant::now()),
+                show_totals: false,
             },
             popup: None,
             notice: None,
@@ -563,6 +570,9 @@ impl App {
             KeyCode::Char('n') => self.popup = Some(self.name_popup(self.account_in_view())),
             KeyCode::Char('b') => self.popup = Some(Popup::Book { selected: 0 }),
             KeyCode::Char('m') => self.toggle_monitor(),
+            KeyCode::Char('t') if self.monitor.visible => {
+                self.monitor.show_totals = !self.monitor.show_totals;
+            }
             KeyCode::Char('f') => {
                 self.monitor.failures_only = !self.monitor.failures_only;
                 if self.monitor.visible {
@@ -789,6 +799,8 @@ impl App {
         if let Some(task) = self.monitor.task.take() {
             task.abort();
         }
+        // New subscription, new totals.
+        self.monitor.tally = TrafficTally::new(Instant::now());
         let dids = match (&self.target, self.tab) {
             (Some(t), Tab::Account) => Some(vec![t.clone()]),
             _ => None,
@@ -848,6 +860,7 @@ impl App {
                 for e in events {
                     let v = serde_json::to_value(e).unwrap_or(Value::Null);
                     if !self.is_own_console_traffic(&v) {
+                        self.monitor.tally.record(&v, Instant::now());
                         self.monitor.lines.push_back(MonitorLine::Event(v));
                     }
                 }
@@ -1059,7 +1072,15 @@ impl App {
                         "↑↓ select  ⏎ open  n name  b book  m monitor  r refresh  q quit"
                     }
                 };
-                Line::styled(format!(" {keys}"), Style::default().fg(Color::DarkGray))
+                let monitor_keys = match (self.monitor.visible, self.monitor.show_totals) {
+                    (true, false) => "  t totals",
+                    (true, true) => "  t live",
+                    (false, _) => "",
+                };
+                Line::styled(
+                    format!(" {keys}{monitor_keys}"),
+                    Style::default().fg(Color::DarkGray),
+                )
             }
         };
         f.render_widget(Paragraph::new(line), area);
@@ -1492,9 +1513,21 @@ impl App {
             (true, Some(_)) => Span::styled("● silent", Style::default().fg(Color::Yellow)),
             (true, None) => Span::styled("◌ connecting", Style::default().fg(Color::DarkGray)),
         };
+        let now = Instant::now();
+        let tally = &self.monitor.tally;
         let title = Line::from(vec![
             Span::raw(format!(" Traffic — {} ", self.monitor.watching)),
             alive,
+            Span::styled(
+                format!(
+                    "  {} msgs · {:.1}/s (now {:.1}/s) · {}",
+                    tally.messages,
+                    tally.rate(now),
+                    tally.rate_now(now),
+                    human_secs(Some(now.duration_since(tally.started()).as_secs())),
+                ),
+                Style::default().fg(Color::Cyan),
+            ),
             Span::raw(format!(
                 "  dropped {}  lost {}{} ",
                 self.monitor.dropped,
@@ -1503,10 +1536,14 @@ impl App {
                     "  failures only"
                 } else {
                     ""
-                }
+                },
             )),
         ]);
         let block = Block::default().borders(Borders::ALL).title(title);
+        if self.monitor.show_totals {
+            self.render_totals(f, area, block, now);
+            return;
+        }
         let inner = block.inner(area);
         let height = inner.height as usize;
         // Sender and recipient as aligned columns, sharing what the fixed
@@ -1525,6 +1562,60 @@ impl App {
             })
             .collect();
         f.render_widget(Paragraph::new(lines).block(block), area);
+    }
+
+    /// The monitor's per-account totals: the busiest accounts since it started.
+    fn render_totals(&self, f: &mut Frame, area: Rect, block: Block, now: Instant) {
+        let top = self
+            .monitor
+            .tally
+            .top(area.height.saturating_sub(3) as usize);
+        let names: Vec<String> = top.iter().map(|(h, _)| label(&self.book, h)).collect();
+        let rows: Vec<Row> = top
+            .iter()
+            .zip(&names)
+            .map(|((_, a), name)| {
+                Row::new(vec![
+                    Cell::from(name.clone()),
+                    Cell::from(a.sent.to_string()),
+                    Cell::from(a.addressed.to_string()),
+                    Cell::from(a.delivered.to_string()),
+                    Cell::from(a.refused.to_string()).style(if a.refused > 0 {
+                        Style::default().fg(Color::Red)
+                    } else {
+                        Style::default()
+                    }),
+                    Cell::from(human_bytes(Some(a.bytes))),
+                    Cell::from(human_secs(a.last.map(|t| now.duration_since(t).as_secs()))),
+                ])
+            })
+            .collect();
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Length(fit_width(&names, 14, 32)),
+                Constraint::Length(6),
+                Constraint::Length(6),
+                Constraint::Length(9),
+                Constraint::Length(7),
+                Constraint::Length(8),
+                Constraint::Fill(1),
+            ],
+        )
+        .header(
+            Row::new(vec![
+                "account",
+                "sent",
+                "to it",
+                "delivered",
+                "refused",
+                "bytes",
+                "last",
+            ])
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+        )
+        .block(block);
+        f.render_widget(table, area);
     }
 }
 

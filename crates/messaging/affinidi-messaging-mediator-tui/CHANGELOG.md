@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (0.1.4) — traffic totals
+
+The traffic monitor keeps running totals from the moment it starts:
+- **Title:** messages seen, messages per second over the whole run and over
+  the last ten seconds, and how long it has been watching.
+- **`t`:** switches the pane between the live lines and **per-account
+  totals**. For each account: messages it sent, messages addressed to it,
+  deliveries to it, refusals (in red), bytes sent and when it last appeared.
+  The busiest accounts come first, shown by their address-book names.
+
+A message is counted once, when it arrives, so the rate is messages per
+second, not monitor events per second. Totals restart when the monitor does
+(for example, on changing what it watches). They cover what the monitor saw:
+events dropped for the rate limit or lost in transit, which the title already
+counts, aren't in them. The counting lives in the `tally` module
+(`TrafficTally`).
+
 ## Unreleased (0.1.3) — room for names, and every account
 
 - **New Accounts screen** (`5`, administrators): every account on the

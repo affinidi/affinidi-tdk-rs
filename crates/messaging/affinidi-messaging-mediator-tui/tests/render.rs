@@ -190,4 +190,22 @@ async fn a_named_account_gets_room_beside_the_monitor() {
         accounts.contains("admin"),
         "the operator's role shown:\n{accounts}"
     );
+
+    // The monitor's totals: a message sent while it watches is counted, and
+    // the account it went to is listed by its name.
+    send(&env, &alice, &bob).await;
+    settle(&mut app, Duration::from_secs(3)).await;
+    app.handle_key(key(KeyCode::Char('t')));
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let totals = screen(&terminal);
+    println!("{totals}");
+    assert!(
+        totals.contains("1 msgs"),
+        "the arrival is counted:\n{totals}"
+    );
+    assert!(
+        totals.contains("delivered") && totals.contains("to it"),
+        "the totals table:\n{totals}"
+    );
+    assert!(totals.contains(name), "the recipient by name:\n{totals}");
 }

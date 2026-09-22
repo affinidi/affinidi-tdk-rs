@@ -100,6 +100,7 @@ to 256 colours, then to three plain colours; `NO_COLOR` switches colour off.
 | `o` | Account | back to your own account |
 | `m` | anywhere | show or hide the **traffic monitor** |
 | `f` | anywhere | monitor failures only |
+| `t` | monitor open | switch the monitor between live lines and **per-account totals** |
 | `n` | anywhere | **name** an account: the selected one, or any account by pasting its DID |
 | `b` | anywhere | the **address book**: rename (`n`), add (`a`), remove (`x`) |
 | `r` | anywhere | refresh now (screens also refresh every 5 s) |
@@ -164,6 +165,10 @@ everything (admin) or your own traffic (everyone else).
   live, silent or stopped, how many events the mediator dropped (because of the
   rate limit, or because the console was briefly offline), and how many batches
   were lost in transit.
+- **Totals.** The title shows how many messages the monitor has seen and
+  the rate, over the whole run and the last ten seconds. `t` switches to a
+  table of the busiest accounts: messages sent, addressed to them, delivered
+  to them, refused, and bytes, all since the monitor started.
 - **Your own polling is hidden,** so the pane shows traffic rather than the
   console talking to the mediator.
 
