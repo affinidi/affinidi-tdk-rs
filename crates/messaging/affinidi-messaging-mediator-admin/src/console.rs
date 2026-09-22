@@ -88,6 +88,10 @@ pub const OPERATIONS_SINCE: (u64, u64, u64) = (0, 28, 20);
 /// The first mediator release that serves `config/patch`.
 pub const CONFIG_PATCH_SINCE: (u64, u64, u64) = (0, 28, 27);
 
+/// The first mediator release that serves account activity times
+/// (`includeActivity` on `account/get` and `account/list`).
+pub const ACTIVITY_SINCE: (u64, u64, u64) = (0, 28, 33);
+
 impl MediatorConsole {
     /// Connect as `identity`, with a private SDK instance.
     pub async fn connect(identity: Identity) -> Result<Self> {
@@ -292,9 +296,23 @@ impl MediatorConsole {
         self.require_admin("the account list")?;
         self.atm
             .trust_tasks()
-            .account_list(&self.profile, cursor, limit, None)
+            .account_list_with_activity(&self.profile, cursor, limit, None, self.serves_activity())
             .await
             .map_err(ConsoleError::from_call)
+    }
+
+    /// Whether this mediator serves each account's last-received and
+    /// last-authenticated times.
+    ///
+    /// Unlike the other gates this one is closed when the version can't be
+    /// read: `includeActivity` is a *request* member, and a mediator that
+    /// predates it refuses the whole request rather than ignoring the member.
+    /// Asking blind would cost the account view itself.
+    pub fn serves_activity(&self) -> bool {
+        self.mediator_version
+            .as_deref()
+            .and_then(parse_version)
+            .is_some_and(|v| v >= ACTIVITY_SINCE)
     }
 
     pub async fn audit(
@@ -371,7 +389,7 @@ impl MediatorConsole {
         self.require_target(&target, "another account")?;
         self.atm
             .trust_tasks()
-            .account_get(&self.profile, target)
+            .account_get_with_activity(&self.profile, target, self.serves_activity())
             .await
             .map_err(ConsoleError::from_call)
     }

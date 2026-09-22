@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### 0.26.23 — asking for account activity
+
+`trust_tasks().account_get_with_activity(profile, did_hash, include_activity)`
+and `account_list_with_activity(..., include_activity)` request each
+account's `last_received_at` and `last_authenticated_at`. Additive: the
+existing `account_get` / `account_list` are unchanged and don't ask.
+
+**Only ask a mediator that serves it** (0.28.33 or later). `includeActivity`
+is a request member, so a mediator that predates it refuses the whole
+request as a schema violation rather than ignoring the member.
+
 ### 0.26.22 — `config/reload`
 
 `trust_tasks().config_reload(profile)` sends the generic `config/reload` Trust

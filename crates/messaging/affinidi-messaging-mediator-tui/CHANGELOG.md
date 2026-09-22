@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (0.1.7) — when each account was last active
+
+- The Accounts screen has two new columns: **msg ago** (when the mediator
+  last accepted a message for the account) and **login ago** (when it last
+  authenticated).
+- The Account screen's settings panel carries the same two times.
+- Both read "–" against a mediator that doesn't serve them, or for an
+  account with nothing recorded. The last-message time can lag by up to a
+  minute, which is how the mediator keeps recording it off the message path.
+
 ## Unreleased (0.1.6) — account settings, and notices that clear
 
 - **Account settings:** the Account screen gains a **Settings** panel showing

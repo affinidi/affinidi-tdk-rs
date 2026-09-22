@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-tui"
-version = "0.1.6"
+version = "0.1.7"
 description = "Terminal console for an Affinidi messaging mediator: statistics, queues with gradient quota bars, messages, purges and a live traffic monitor — as embeddable ratatui components and the `mediator-console` binary."
 edition.workspace = true
 authors.workspace = true
@@ -16,7 +16,7 @@ name = "mediator-console"
 path = "src/bin/mediator-console.rs"
 
 [dependencies]
-affinidi-messaging-mediator-admin = { version = "0.1.4", path = "../affinidi-messaging-mediator-admin" }
+affinidi-messaging-mediator-admin = { version = "0.1.5", path = "../affinidi-messaging-mediator-admin" }
 ratatui = "0.30"
 # Crossterm must match the version ratatui uses.
 crossterm = { version = "0.29", features = ["event-stream"] }

@@ -101,13 +101,34 @@ impl TrustTasksOps<'_> {
         profile: &Arc<ATMProfile>,
         did_hash: Option<String>,
     ) -> Result<account::get::v0_1::Account, ATMError> {
+        self.account_get_with_activity(profile, did_hash, false)
+            .await
+    }
+
+    /// [`account_get`](Self::account_get), additionally asking for the
+    /// account's activity times (`last_received_at`, `last_authenticated_at`)
+    /// when `include_activity` is set.
+    ///
+    /// **Only ask a mediator that serves it.** The member is new, and a
+    /// mediator that predates it refuses the whole request as a schema
+    /// violation rather than ignoring the member. Gate on the mediator's
+    /// version, as the console does.
+    pub async fn account_get_with_activity(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<String>,
+        include_activity: bool,
+    ) -> Result<account::get::v0_1::Account, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
         let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
 
         let did = account::get::v0_1::Vid::from_str(&target)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let p: account::get::v0_1::Payload =
-            payload(account::get::v0_1::Payload::builder().did(did))?;
+        let p: account::get::v0_1::Payload = payload(
+            account::get::v0_1::Payload::builder()
+                .did(did)
+                .include_activity(include_activity.then_some(true)),
+        )?;
         let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
@@ -130,6 +151,21 @@ impl TrustTasksOps<'_> {
         limit: Option<u32>,
         account_type: Option<account::list::v0_1::AccountType>,
     ) -> Result<account::list::v0_1::Response, ATMError> {
+        self.account_list_with_activity(profile, cursor, limit, account_type, false)
+            .await
+    }
+
+    /// [`account_list`](Self::account_list), additionally asking for each
+    /// account's activity times when `include_activity` is set. The same
+    /// caution applies: only ask a mediator that serves it.
+    pub async fn account_list_with_activity(
+        &self,
+        profile: &Arc<ATMProfile>,
+        cursor: Option<String>,
+        limit: Option<u32>,
+        account_type: Option<account::list::v0_1::AccountType>,
+        include_activity: bool,
+    ) -> Result<account::list::v0_1::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
 
         let cursor = cursor
@@ -142,6 +178,7 @@ impl TrustTasksOps<'_> {
             account::list::v0_1::Payload::builder()
                 .account_type(account_type)
                 .cursor(cursor)
+                .include_activity(include_activity.then_some(true))
                 .limit(limit),
         )?;
         let mut task = TrustTask::for_payload(new_id(), p);

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (0.28.33) — serving each account's activity times
+
+`messaging/account/get` and `messaging/account/list` return an account's
+`lastReceivedAt` and `lastAuthenticatedAt` — recorded since 0.28.32 — when
+the request sets **`includeActivity`**, and never otherwise.
+
+The flag is what keeps this compatible: the generated clients reject members
+they don't know, so a mediator that always sent the times would break every
+requester built against the older schema. A request that doesn't ask sees no
+change at all. `account/list` reads the whole page's times in one call.
+
+Requires `trust-tasks-rs` 0.21.18 (the spec version that defines the member).
+
 ## Unreleased (0.28.32) — the mediator records when each account was last active
 
 The mediator records two times for each account:

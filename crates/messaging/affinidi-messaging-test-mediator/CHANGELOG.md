@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (0.9.14) — activity over the wire
+
+- `account_activity` now also covers the `account/get` response: the times
+  are returned when the request asks and withheld when it doesn't.
+
 ## Unreleased (0.9.13) — account activity test
 
 - New end-to-end test `account_activity`: an authentication and a delivery are
