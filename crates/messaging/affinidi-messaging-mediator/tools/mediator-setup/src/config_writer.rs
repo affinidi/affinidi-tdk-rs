@@ -207,6 +207,12 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
 
     // ── [security] ─────────────────────────────────────────────────────
     if let Some(sec) = doc.get_mut("security") {
+        // A new mediator refuses Trust Tasks that fail their acceptance
+        // checks. The mediator's own default stays `warn` for existing
+        // configs whose clients predate signing; a deployment that must serve
+        // such clients (affinidi-messaging-sdk older than 0.26.13) can set
+        // `warn` here.
+        sec["trust_task_verification"] = toml_edit::value("enforce");
         // SSL
         match config.ssl_mode.as_str() {
             SSL_NONE => {
@@ -801,6 +807,16 @@ mod tests {
             ssl_key_path: None,
             did_log_jsonl_written: false,
         }
+    }
+
+    #[test]
+    fn a_new_mediator_enforces_trust_task_checks() {
+        let toml = generate_toml(&WizardConfig::default(), &test_generated()).unwrap();
+        assert!(
+            toml.contains("trust_task_verification = \"enforce\""),
+            "{toml}"
+        );
+        assert!(!toml.contains("trust_task_verification = \"warn\""));
     }
 
     #[test]

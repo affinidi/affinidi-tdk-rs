@@ -32,4 +32,9 @@ pub struct SecurityConfigRaw {
     /// without it (empty → `warn`).
     #[serde(default)]
     pub trust_task_verification: String,
+    /// `on`, `warn` or `off` — whether the legacy DIDComm admin protocols and
+    /// REST admin routes are served. `#[serde(default)]` so configs that
+    /// predate the setting deserialize without it (empty → `warn`).
+    #[serde(default)]
+    pub legacy_admin_protocols: String,
 }

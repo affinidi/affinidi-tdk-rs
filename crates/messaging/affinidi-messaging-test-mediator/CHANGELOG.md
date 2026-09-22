@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (0.9.12) — `legacy_admin_protocols`
+
+- `TestMediatorBuilder::legacy_admin_protocols(mode)` sets the mediator's
+  legacy-admin switch, and `LegacyAdminProtocols` is re-exported.
+- Doc comments no longer point at the deprecated `acls_set` client.
+- Requires `affinidi-messaging-mediator` 0.28.29.
+
 ## Unreleased (0.9.11) — test only
 
 `trust_tasks`: request/response Trust Task calls keep their replies while a

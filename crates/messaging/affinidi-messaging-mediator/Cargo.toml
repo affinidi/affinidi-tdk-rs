@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.28.28"
+version = "0.28.29"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -166,7 +166,7 @@ affinidi-messaging-mediator-common = { version = "0.16.19", path = "affinidi-mes
 # looser requirement resolves an older published config crate in
 # `cargo publish --dry-run` and fails to compile on the missing field. Bump in
 # lockstep with that crate's own version.
-affinidi-messaging-mediator-config = { version = "0.4.4", path = "affinidi-messaging-mediator-config" }
+affinidi-messaging-mediator-config = { version = "0.4.5", path = "affinidi-messaging-mediator-config" }
 ## Humantime for the VTA cache TTL (`[secrets].cache_ttl = "30d"`).
 humantime = "2"
 ## CLI parsing for the mediator binary's subcommands (`mediator`,

@@ -737,8 +737,14 @@ pub async fn serve_internal(
     // coordinate-mediation entry: v2 routing is DID-addressed and needs no
     // keylist (issue #755, `docs/mediation-and-routing.md`).
     let discover_features = Arc::new(DiscoverFeatures {
+        // With the legacy admin surface switched off, don't advertise it.
         protocols: crate::messages::protocols::discover_features::ADVERTISED_PROTOCOLS
             .iter()
+            .filter(|p| {
+                config.security.legacy_admin_protocols
+                    != crate::common::config::security::LegacyAdminProtocols::Off
+                    || !crate::common::legacy_admin::LEGACY_PROTOCOLS.contains(p)
+            })
             .map(|p| p.to_string())
             .collect(),
         ..Default::default()

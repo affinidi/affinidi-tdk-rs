@@ -1,3 +1,6 @@
+// The legacy mediator admin protocols (and `Mediator`, which sends them)
+// are deprecated; this module still implements them for existing callers.
+#![allow(deprecated)]
 /*!
  * DIDComm handling for ACLs
  */

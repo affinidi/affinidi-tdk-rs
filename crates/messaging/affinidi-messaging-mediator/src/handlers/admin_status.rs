@@ -98,6 +98,16 @@ pub async fn admin_status_handler(
     State(state): State<SharedData>,
     session: Session,
 ) -> Result<(StatusCode, Json<AdminStatus>), StatusCode> {
+    if crate::common::legacy_admin::admit(
+        &state,
+        &session,
+        "GET /admin/status",
+        "the messaging/stats/show Trust Task",
+    )
+    .is_err()
+    {
+        return Err(StatusCode::GONE);
+    }
     if !session.account_type.is_admin() {
         warn!(
             session_id = %session.session_id,

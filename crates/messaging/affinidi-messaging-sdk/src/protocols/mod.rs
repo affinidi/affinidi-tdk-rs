@@ -9,6 +9,9 @@
 //! atm.message_pickup().live_stream_get(&profile, &msg_id, dur, true).await?;
 //! atm.trust_tasks().admin_config(&profile).await?;
 //! ```
+// The legacy mediator admin protocols (and `Mediator`, which sends them)
+// are deprecated; this module still implements them for existing callers.
+#![allow(deprecated)]
 
 use mediator::administration::Mediator;
 

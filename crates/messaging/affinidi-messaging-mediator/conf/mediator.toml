@@ -274,6 +274,18 @@ block_remote_admin_msgs = "true"
 ### a later release will make "enforce" the default.
 trust_task_verification = "warn"
 
+### Env: LEGACY_ADMIN_PROTOCOLS
+### The legacy admin surface, replaced by the messaging/* Trust Tasks: the
+### DIDComm mediator/1.0 admin-management, account-management and
+### acl-management protocols, and REST GET /admin/status, DELETE /purge and
+### GET /queue/status.
+###   "on"   — serve them
+###   "warn" — serve them, log each use with its sender, count it
+###            (legacy_admin_requests_total{surface})
+###   "off"  — refuse them (HTTP 410 / a problem report naming the Trust Task)
+### Defaults to "warn"; will default to "off", then be removed.
+legacy_admin_protocols = "warn"
+
 ### Env: ADMIN_MESSAGES_EXPIRY
 ### TTL in seconds for admin messages (minimizes replay attack risk)
 admin_messages_expiry = "3"

@@ -155,6 +155,11 @@ impl ATM {
     /// you. Prefer deleting by id whenever the queue is small enough to page.
     ///
     /// Scoped to the calling DID: there is no way to purge another DID's queue.
+    #[deprecated(
+        since = "0.26.21",
+        note = "REST /purge is deprecated and will be switched off; use atm.trust_tasks().queue_purge()"
+    )]
+    #[allow(deprecated)] // delegates to the (equally deprecated) filtered form
     pub async fn purge_queue(
         &self,
         profile: &Arc<ATMProfile>,
@@ -178,6 +183,10 @@ impl ATM {
     ///
     /// With no options set this is exactly [`purge_queue`](Self::purge_queue),
     /// and takes the mediator's faster whole-folder path.
+    #[deprecated(
+        since = "0.26.21",
+        note = "REST /purge is deprecated and will be switched off; use atm.trust_tasks().queue_purge()"
+    )]
     pub async fn purge_queue_filtered(
         &self,
         profile: &Arc<ATMProfile>,
@@ -253,6 +262,10 @@ impl ATM {
     /// that slows at 0.8 never reaches it. A climbing `oldest_age_secs` beside
     /// a steady depth says the peer at the other end has stopped collecting —
     /// which depth alone cannot distinguish from a busy queue.
+    #[deprecated(
+        since = "0.26.21",
+        note = "REST /queue/status is deprecated and will be switched off; use atm.trust_tasks().queue_status()"
+    )]
     pub async fn queue_status(
         &self,
         profile: &Arc<ATMProfile>,

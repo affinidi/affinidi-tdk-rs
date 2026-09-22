@@ -115,6 +115,10 @@ pub fn apply_env_overrides(config: &mut ConfigRaw) {
         config.security.trust_task_verification,
         "TRUST_TASK_VERIFICATION"
     );
+    env_override!(
+        config.security.legacy_admin_protocols,
+        "LEGACY_ADMIN_PROTOCOLS"
+    );
 
     env_override!(config.streaming.enabled, "STREAMING_ENABLED");
     env_override!(config.streaming.uuid, "STREAMING_UUID");
