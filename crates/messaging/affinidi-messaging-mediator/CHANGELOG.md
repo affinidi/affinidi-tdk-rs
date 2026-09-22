@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (0.28.35) — a deleted message names its own protocol
+
+A `deleted` monitor event reported `other` for every delete, whatever the
+message was. `other` means "the mediator could not classify this", so a
+console showing it next to `rest` read as though REST were the protocol.
+
+The event now carries the deleted message's own wire form, derived the same
+way `delivered` derives it:
+- **Delete by id (REST)** and **fetch-and-delete (REST)** — from the body,
+  which the delete-by-id path already reads while a monitor is watching.
+- **Message pickup (DIDComm)** and **admin bulk delete** — from the element
+  just fetched.
+- **The raw-TSP socket's delete-on-send** — the frame it just sent, so `tsp`.
+
+`other` is left only where the body genuinely isn't in hand (the DIDComm v1
+mailbox path), which is what it is for. No extra store read is added: every
+site either already held the body or already looked it up.
+
 ## Unreleased (0.28.34) — the traffic monitor over TSP
 
 `messaging/monitor/subscribe` is served over TSP. It used to be refused

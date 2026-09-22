@@ -1279,6 +1279,9 @@ async fn drain_tsp_inbox(
                         parties.0.as_deref(),
                         parties.1.as_deref(),
                         Channel::Websocket,
+                        // The frame this drain just sent: a TSP body, stored
+                        // base64url, which is what `detect` reads.
+                        Some(body.as_str()),
                     ),
                     Err(err) => warn!(
                         did_hash = %session.did_hash,

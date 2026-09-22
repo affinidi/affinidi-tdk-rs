@@ -50,12 +50,53 @@ impl AccountTally {
     }
 }
 
+/// Messages that arrived, split by the wire they arrived on. The mediator
+/// reports one of `didcomm`, `didcommV1`, `tsp` or anything else; the last is
+/// counted as `other`, which is what the monitor calls a message it could not
+/// classify.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProtocolMix {
+    pub didcomm: u64,
+    pub didcomm_v1: u64,
+    pub tsp: u64,
+    pub other: u64,
+}
+
+impl ProtocolMix {
+    /// Everything counted here.
+    pub fn total(&self) -> u64 {
+        self.didcomm
+            .saturating_add(self.didcomm_v1)
+            .saturating_add(self.tsp)
+            .saturating_add(self.other)
+    }
+
+    /// TSP's share of it, as a percentage. `None` when nothing is counted yet
+    /// — a share of no messages is not zero, it is unknown.
+    pub fn tsp_share(&self) -> Option<f64> {
+        let total = self.total();
+        (total > 0).then(|| self.tsp as f64 * 100.0 / total as f64)
+    }
+
+    fn record(&mut self, protocol: Option<&str>) {
+        let slot = match protocol {
+            Some("didcomm") => &mut self.didcomm,
+            Some("didcommV1") => &mut self.didcomm_v1,
+            Some("tsp") => &mut self.tsp,
+            _ => &mut self.other,
+        };
+        *slot = slot.saturating_add(1);
+    }
+}
+
 /// Totals since the monitor started.
 #[derive(Clone, Debug)]
 pub struct TrafficTally {
     started: Instant,
     /// Messages that arrived.
     pub messages: u64,
+    /// Those messages, split by wire protocol.
+    pub protocols: ProtocolMix,
     /// Bytes of the messages that arrived.
     pub bytes: u64,
     /// Messages refused.
@@ -71,6 +112,7 @@ impl TrafficTally {
         Self {
             started: now,
             messages: 0,
+            protocols: ProtocolMix::default(),
             bytes: 0,
             refused: 0,
             recent: VecDeque::new(),
@@ -91,6 +133,7 @@ impl TrafficTally {
         match e["stage"].as_str() {
             Some("received") => {
                 self.messages = self.messages.saturating_add(1);
+                self.protocols.record(e["protocol"].as_str());
                 self.bytes = self.bytes.saturating_add(size);
                 match self.recent.back_mut() {
                     Some((start, n)) if now.duration_since(*start) < Duration::from_secs(1) => {
@@ -200,6 +243,30 @@ mod tests {
 
     fn event(stage: &str, from: &str, to: &str, size: u64) -> Value {
         json!({ "stage": stage, "from": from, "to": to, "size": size })
+    }
+
+    fn event_on(stage: &str, protocol: &str) -> Value {
+        json!({ "stage": stage, "from": "a", "to": "b", "size": 1, "protocol": protocol })
+    }
+
+    #[test]
+    fn arrivals_are_split_by_wire_protocol() {
+        let t0 = Instant::now();
+        let mut t = TrafficTally::new(t0);
+        assert_eq!(t.protocols.tsp_share(), None, "no traffic, no share");
+
+        for protocol in ["tsp", "tsp", "didcomm", "didcommV1", "something-new"] {
+            t.record(&event_on("received", protocol), t0);
+        }
+        // A stage that is not an arrival is not counted twice.
+        t.record(&event_on("delivered", "tsp"), t0);
+
+        assert_eq!(t.protocols.tsp, 2);
+        assert_eq!(t.protocols.didcomm, 1);
+        assert_eq!(t.protocols.didcomm_v1, 1);
+        assert_eq!(t.protocols.other, 1, "an unknown wire counts as other");
+        assert_eq!(t.protocols.total(), t.messages);
+        assert!((t.protocols.tsp_share().unwrap() - 40.0).abs() < 1e-9);
     }
 
     #[test]

@@ -87,6 +87,9 @@ pub async fn message_outbound_handler(
                         .monitor
                         .delivered_element(&msg, crate::monitor::Channel::Rest);
                     let parties = (msg.from_address.clone(), msg.to_address.clone());
+                    // Kept for the delete event below: `msg` moves into the
+                    // response, and the body is what names the wire protocol.
+                    let msg_body = msg.msg.clone();
                     messages.success.push(msg);
 
                     if body.delete {
@@ -108,6 +111,7 @@ pub async fn message_outbound_handler(
                                     parties.0.as_deref(),
                                     parties.1.as_deref(),
                                     crate::monitor::Channel::Rest,
+                                    msg_body.as_deref(),
                                 );
                                 debug!("Deleted message: {}", msg_id);
                             }

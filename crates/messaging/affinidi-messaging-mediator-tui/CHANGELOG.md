@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased (0.1.8) — the wire mix
+
+- The monitor header shows **TSP's share** of the traffic since the monitor
+  started, with the counts behind it (`tsp 40% · tsp 2 · didcomm 3`). It is
+  blank until something arrives — a share of no messages is unknown, not 0%.
+- `deleted` rows now show the deleted message's real protocol, against a
+  mediator 0.28.35 or later, instead of `other`.
+
 ## Unreleased (0.1.7) — when each account was last active
 
 - The Accounts screen has two new columns: **msg ago** (when the mediator

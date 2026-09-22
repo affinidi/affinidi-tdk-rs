@@ -408,6 +408,7 @@ impl TrafficMonitor {
         from: Option<&str>,
         to: Option<&str>,
         channel: Channel,
+        body: Option<&str>,
     ) {
         self.emit(|| TrafficEvent {
             msg_id: Some(msg_id.to_string()),
@@ -417,7 +418,10 @@ impl TrafficMonitor {
                 Direction::Internal,
                 Stage::Deleted,
                 channel,
-                Protocol::Other,
+                // Same derivation as `delivered`: the deleted message's own
+                // wire form. `other` is left for a caller that genuinely has
+                // no body to hand — it means unclassified, not "a REST call".
+                body.map_or(Protocol::Other, Protocol::detect),
             )
         });
     }
@@ -1146,6 +1150,33 @@ mod tests {
             ..event(Stage::Received, "a", "b")
         };
         assert!(typed.matches(&forward));
+    }
+
+    #[tokio::test]
+    async fn a_deleted_event_names_the_wire_the_message_travelled_in() {
+        let monitor = TrafficMonitor::new();
+        let mut rx = monitor.tx.subscribe();
+
+        // A TSP body (CESR qb64) and a DIDComm one (JSON), as they are stored.
+        monitor.deleted("m1", "acct", None, None, Channel::Rest, Some("-EABCD"));
+        monitor.deleted("m2", "acct", None, None, Channel::Rest, Some("{\"x\":1}"));
+        // Nothing in hand: unclassified, which is what `other` means.
+        monitor.deleted("m3", "acct", None, None, Channel::Rest, None);
+
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let event = rx.recv().await.expect("event");
+            seen.push((event.msg_id.clone().unwrap(), event.protocol));
+        }
+        assert_eq!(
+            seen,
+            vec![
+                ("m1".to_string(), Protocol::Tsp),
+                ("m2".to_string(), Protocol::DidComm),
+                ("m3".to_string(), Protocol::Other),
+            ],
+            "a delete reports the deleted message's own protocol"
+        );
     }
 
     #[test]

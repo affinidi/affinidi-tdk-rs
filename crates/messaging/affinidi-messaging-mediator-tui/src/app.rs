@@ -1864,6 +1864,10 @@ impl App {
                 ),
                 Style::default().fg(Color::Cyan),
             ),
+            Span::styled(
+                protocol_mix(&tally.protocols),
+                Style::default().fg(Color::Blue),
+            ),
             Span::raw(format!(
                 "  dropped {}  lost {}{} ",
                 self.monitor.dropped,
@@ -2348,6 +2352,26 @@ fn ago(at: Option<u64>) -> String {
     // A time slightly in the future (clock skew between mediator and console)
     // reads as "now" rather than as a wrapped-around age.
     human_secs(Some(now.as_secs().saturating_sub(at)))
+}
+
+/// The wire mix of what arrived: TSP's share, and the counts behind it.
+/// Empty until something has arrived — a share of nothing is not 0%.
+fn protocol_mix(mix: &crate::tally::ProtocolMix) -> String {
+    let Some(share) = mix.tsp_share() else {
+        return String::new();
+    };
+    let mut parts = vec![format!("tsp {share:.0}%")];
+    for (name, n) in [
+        ("tsp", mix.tsp),
+        ("didcomm", mix.didcomm),
+        ("v1", mix.didcomm_v1),
+        ("other", mix.other),
+    ] {
+        if n > 0 {
+            parts.push(format!("{name} {n}"));
+        }
+    }
+    format!("  {} ", parts.join(" · "))
 }
 
 fn human_bytes(b: Option<u64>) -> String {

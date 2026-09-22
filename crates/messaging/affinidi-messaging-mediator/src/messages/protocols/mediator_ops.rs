@@ -941,6 +941,7 @@ pub(crate) async fn consume_message_delete(
                     stored.from_address.as_deref(),
                     stored.to_address.as_deref(),
                     crate::monitor::Channel::Internal,
+                    stored.msg.as_deref(),
                 );
                 results.push(json!({ "msgId": id, "deleted": true }));
                 deleted_ids.push(id);
