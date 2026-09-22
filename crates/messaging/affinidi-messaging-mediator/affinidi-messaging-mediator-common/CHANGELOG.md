@@ -13,8 +13,10 @@ active:
 
 Both have default implementations (keep nothing, report nothing), so
 existing `MediatorStore` implementations still compile. The Redis backend
-implements both, keeping `ACTIVITY:{did_hash}` with one field per kind, and
-`account_remove` deletes it. `AccountActivity` and `ActivityKind` are
+implements both, keeping `ACTIVITY:{did_hash}` with one field per kind;
+the existence check and the write are one atomic script, `account_remove`
+deletes the record, and `account_add` clears it so a new account never
+starts life holding a predecessor's times. `AccountActivity` and `ActivityKind` are
 `#[non_exhaustive]`.
 
 ## Unreleased (0.16.20) — `AuditAction::ConfigReload`

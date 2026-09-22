@@ -918,7 +918,19 @@ impl MediatorStore for RedisStore {
         acls: &MediatorACLSet,
         queue_limit: Option<u32>,
     ) -> Result<Account, MediatorError> {
-        self.account_add(did_hash, acls, queue_limit).await
+        let account = self.account_add(did_hash, acls, queue_limit).await?;
+        // A fresh account starts with no activity. This also collects a record
+        // that a message in flight wrote between a removal's existence check
+        // and its `DEL` below.
+        let mut conn = self.get_connection().await?;
+        if let Err(e) = redis::cmd("DEL")
+            .arg(activity_key(did_hash))
+            .exec_async(&mut conn)
+            .await
+        {
+            warn!("account {did_hash} added, but its old activity record remains: {e}");
+        }
+        Ok(account)
     }
 
     async fn account_remove(

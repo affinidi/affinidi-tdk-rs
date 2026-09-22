@@ -10,9 +10,21 @@ The mediator records two times for each account:
 - **Last authenticated:** when the account last completed authentication,
   over DIDComm/REST/WebSocket or TSP.
 
-Recording is best-effort: a failed write is logged at `debug` and never fails
-the message or the login. The minute throttle is held in memory and bounded
-(50,000 accounts).
+Two bounds, not one. The per-account throttle above is easy to sidestep with
+many DIDs — a thousand accounts, one message each, is a thousand permitted
+writes — so the recorder also holds a budget of **200 writes a second across
+every account**. Past it, recording is skipped until the next second and the
+times simply lag. The throttle's own memory is bounded (50,000 accounts,
+oldest first).
+
+Recording is best-effort — a failed write never fails the message or the
+login — but it isn't silent: each failure increments the new
+`account_activity_write_failures_total` counter and warns at most once a
+minute, so a store that has stopped accepting these writes is visible rather
+than showing up as times that quietly stopped moving.
+
+Adding an account clears any activity recorded for that hash, so an account
+never starts life holding a predecessor's times.
 
 All three backends keep both times: Redis, Fjall (in `globals`) and memory.
 Removing an account removes its record.

@@ -1019,6 +1019,8 @@ impl MediatorStore for MemoryStore {
             record.queue_receive_limit = Some(limit as i32);
         }
         state.accounts.insert(did_hash.to_string(), record.clone());
+        // A fresh account starts with no activity.
+        state.activity.remove(did_hash);
         Ok(record.into_account(did_hash.to_string(), 0))
     }
 

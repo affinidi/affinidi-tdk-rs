@@ -1265,6 +1265,12 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// seconds), replacing the time recorded before. Nothing is recorded for
     /// an account that does not exist.
     ///
+    /// Adding an account clears whatever was recorded for that hash, so an
+    /// account never starts life holding a predecessor's times — including a
+    /// record written by a message that was in flight while the predecessor
+    /// was being removed, which the existence check cannot rule out on a
+    /// store without a transaction across both.
+    ///
     /// Activity is observability, not state anything depends on, so the
     /// default keeps nothing and succeeds; [`account_activity`] then reports
     /// nothing recorded. Every built-in backend overrides both. Removing the

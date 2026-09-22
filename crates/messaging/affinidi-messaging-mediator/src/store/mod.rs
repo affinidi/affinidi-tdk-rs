@@ -233,9 +233,28 @@ pub(crate) mod activity_harness {
             .await
             .expect("re-add");
         assert_eq!(
-            store.account_activity(&[alice]).await.unwrap(),
+            store
+                .account_activity(std::slice::from_ref(&alice))
+                .await
+                .unwrap(),
             vec![AccountActivity::default()],
             "removing an account removes its activity"
+        );
+
+        // Adding clears too, so a record written between a removal's existence
+        // check and its delete cannot outlive the account it belonged to.
+        store
+            .account_activity_record(&alice, ActivityKind::Received, 300)
+            .await
+            .unwrap();
+        store
+            .account_add(&alice, &MediatorACLSet::default(), None)
+            .await
+            .expect("add over an account with activity");
+        assert_eq!(
+            store.account_activity(&[alice]).await.unwrap(),
+            vec![AccountActivity::default()],
+            "adding an account clears any activity for that hash"
         );
     }
 }

@@ -51,6 +51,8 @@ pub mod names {
     pub const MESSAGES_DELETED_TOTAL: &str = "messages_deleted_total";
     /// counter: Messages removed by the expiry cleanup processor
     pub const MESSAGES_EXPIRED_TOTAL: &str = "messages_expired_total";
+    /// counter: Activity-record writes the store refused or failed
+    pub const ACCOUNT_ACTIVITY_WRITE_FAILURES_TOTAL: &str = "account_activity_write_failures_total";
     /// counter: Total inbound message bytes
     pub const MESSAGE_BYTES_INBOUND_TOTAL: &str = "message_bytes_inbound_total";
 

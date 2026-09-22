@@ -1876,8 +1876,17 @@ impl MediatorStore for FjallStore {
             record.queue_send_limit = Some(limit as i32);
             record.queue_receive_limit = Some(limit as i32);
         }
-        self.accounts
-            .insert(did_hash.as_bytes(), Self::encode(&record)?)
+        let _guard = self.write_lock.lock().await;
+        let mut batch = self.db.batch();
+        batch.insert(&self.accounts, did_hash.as_bytes(), Self::encode(&record)?);
+        // A fresh account starts with no activity, whatever was left behind.
+        for kind in [ActivityKind::Received, ActivityKind::Authenticated] {
+            if let Some(key) = activity_key(kind, did_hash) {
+                batch.remove(&self.globals, key.as_bytes());
+            }
+        }
+        batch
+            .commit()
             .map_err(|e| Self::db_err("account_add:insert", e))?;
         Ok(record.into_account(did_hash.to_string(), 0))
     }
