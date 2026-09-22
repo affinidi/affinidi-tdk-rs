@@ -119,10 +119,31 @@ $crates
 EOF
 }
 
+# Crates this change removes: their Cargo.toml existed at BASE and is deleted.
+# `cargo metadata` no longer lists them, so without this their deleted files
+# would fall through to whatever crate dir encloses them (e.g. a tool nested in
+# the publishable mediator dir) and demand a bump of a crate that did not change.
+# A removed crate has nothing left to publish, so its files are skipped.
+removed_crates=$(git diff --name-only --diff-filter=D "$BASE"...HEAD \
+  | sed -n 's|/Cargo.toml$||p')
+in_removed_crate() { # $1 = changed path
+  local rd
+  while IFS= read -r rd; do
+    [ -z "$rd" ] && continue
+    case "$1" in
+      "$rd"/*) return 0 ;;
+    esac
+  done <<EOF
+$removed_crates
+EOF
+  return 1
+}
+
 # collect publishable crates with a real source change (newline-separated "name\tdir")
 touched=""
 while IFS= read -r f; do
   [ -z "$f" ] && continue
+  in_removed_crate "$f" && continue
   hit=$(crate_of "$f") || true
   [ -z "$hit" ] && continue
   pub=$(printf '%s' "$hit" | cut -f1)

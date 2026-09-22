@@ -204,4 +204,4 @@ repository and implements `IdentitySource` from the engine crate.
 
 `mediator-monitor` polled `/admin/status` for a read-only dashboard. The
 console's Dashboard shows the same figures and much more, over signed Trust
-Tasks. `mediator-monitor` will be removed in a later release.
+Tasks, and `mediator-monitor` has been removed.

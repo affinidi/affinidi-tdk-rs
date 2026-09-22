@@ -1,5 +1,5 @@
 //! Emit a TDKProfile-shaped JSON file the operator can hand to
-//! `mediator-monitor --admin-profile <path>` (and any other tool that
+//! `mediator-console --profile <path>` (and any other tool that
 //! consumes the standard `affinidi_tdk_common::profiles::TDKProfile`
 //! shape, e.g. the mediator-administration helper).
 //!
@@ -42,7 +42,7 @@ struct WireProfile<'a> {
     alias: &'a str,
     did: &'a str,
     /// The mediator's DID — the JWT audience that
-    /// `mediator-monitor` uses when minting access tokens.
+    /// the console uses when authenticating.
     mediator: &'a str,
     secrets: Vec<&'a Secret>,
 }

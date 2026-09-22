@@ -1763,8 +1763,8 @@ fn write_config_artefacts(
 
     // Admin monitor profile (`admin-monitor.json`). Emitted only when the
     // wizard has the admin DID's secret material in memory — i.e., the
-    // `ADMIN_GENERATE` path. This is the file `mediator-monitor
-    // --admin-profile <path>` consumes. For VTA-managed admins the
+    // `ADMIN_GENERATE` path. This is the file `mediator-console
+    // --profile <path>` consumes. For VTA-managed admins the
     // secret material lives in the configured secret backend; we don't
     // re-derive a flat-file profile here (often the backend is cloud-
     // hosted specifically to keep secrets off disk).
@@ -1781,7 +1781,7 @@ fn write_config_artefacts(
         ) {
             Ok(path) => println!(
                 "  \x1b[32m\u{2714}\x1b[0m Admin monitor profile: \x1b[1m{}\x1b[0m\n    \
-                 \x1b[2mUse with: \x1b[36mmediator-monitor --admin-profile {}\x1b[0m",
+                 \x1b[2mUse with: \x1b[36mmediator-console --profile {}\x1b[0m",
                 path.display(),
                 path.display(),
             ),
@@ -1792,7 +1792,7 @@ fn write_config_artefacts(
             // wanted monitor.
             Err(e) => eprintln!(
                 "  \x1b[33mWarning:\x1b[0m could not write admin monitor profile: {e}\n    \
-                 mediator-monitor --admin-profile won't have a ready-made file; \
+                 mediator-console --profile won't have a ready-made file; \
                  reconstruct manually if needed."
             ),
         }
@@ -2826,7 +2826,7 @@ mod generate_and_write_tests {
         );
 
         // Phase: admin-monitor.json — TDKProfile-shaped JSON for
-        // `mediator-monitor --admin-profile`. Emitted by
+        // `mediator-console --profile`. Emitted by
         // `write_config_artefacts` whenever the wizard has the admin
         // DID's secret material in memory (i.e., ADMIN_GENERATE).
         let monitor_profile = dir.join("conf").join("admin-monitor.json");

@@ -71,8 +71,8 @@ async fn websocket_endpoint_rejects_unauthenticated_handshake() {
 ///
 /// A full "200 with admin auth" verification requires running the
 /// SDK auth handshake to mint a JWT, which is exercised by SDK-level
-/// integration tests and by `mediator-monitor` once it's updated to
-/// authenticate. The wire-shape of `AdminStatus` is checked there.
+/// integration tests. The route itself is legacy: `messaging/stats/show`
+/// replaces it.
 #[tokio::test]
 async fn admin_status_requires_authentication() {
     init_tracing();

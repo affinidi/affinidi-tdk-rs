@@ -769,25 +769,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "affinidi-messaging-mediator-monitor"
-version = "0.1.1"
-dependencies = [
- "affinidi-messaging-sdk",
- "affinidi-secrets-resolver",
- "affinidi-tdk-common",
- "anyhow",
- "chrono",
- "clap",
- "crossterm",
- "ratatui",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
-]
-
-[[package]]
 name = "affinidi-messaging-mediator-processors"
 version = "0.14.1"
 dependencies = [

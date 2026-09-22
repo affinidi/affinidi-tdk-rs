@@ -42,7 +42,7 @@ publish-aws = ["dep:aws-config", "dep:aws-sdk-ssm", "dep:aws-sdk-s3", "dep:aws-s
 # ── TUI Framework ────────────────────────────────────────────────────────
 ## Workspace-wide pin — ratatui 0.29 carries `unicode-width = "=0.2.0"`
 ## so every workspace consumer of ratatui (here, text-client,
-## mediator-monitor) must move together. Bumped in coordination.
+## mediator-console) must move together. Bumped in coordination.
 ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
 tui-input = { version = "0.15", features = ["ratatui-crossterm"] }

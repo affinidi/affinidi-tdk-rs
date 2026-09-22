@@ -409,7 +409,8 @@ cargo run --release -p affinidi-messaging-mediator-tui -- --profile conf/admin-m
 
 Setup and usage: [`affinidi-messaging-mediator-tui`](../affinidi-messaging-mediator-tui/).
 The console needs this mediator at 0.28.20 or later (the `messaging/*`
-operations Trust Tasks). It supersedes `tools/mediator-monitor`.
+operations Trust Tasks). It replaces the former `tools/mediator-monitor`,
+which has been removed.
 
 ## Examples
 
