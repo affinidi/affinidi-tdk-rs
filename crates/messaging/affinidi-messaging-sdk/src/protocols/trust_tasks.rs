@@ -119,6 +119,24 @@ impl TrustTasksOps<'_> {
         did_hash: Option<String>,
         include_activity: bool,
     ) -> Result<account::get::v0_1::Account, ATMError> {
+        self.account_get_detailed(profile, did_hash, include_activity, false)
+            .await
+    }
+
+    /// [`account_get`](Self::account_get), asking for the account's activity
+    /// times and/or its lifetime counters (`stats`).
+    ///
+    /// **Only ask a mediator that serves them.** Both are new request
+    /// members, and a mediator that predates one refuses the whole request as
+    /// a schema violation rather than ignoring the member. Gate on the
+    /// mediator's version, as the console does.
+    pub async fn account_get_detailed(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<String>,
+        include_activity: bool,
+        include_stats: bool,
+    ) -> Result<account::get::v0_1::Account, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
         let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
 
@@ -127,7 +145,8 @@ impl TrustTasksOps<'_> {
         let p: account::get::v0_1::Payload = payload(
             account::get::v0_1::Payload::builder()
                 .did(did)
-                .include_activity(include_activity.then_some(true)),
+                .include_activity(include_activity.then_some(true))
+                .include_stats(include_stats.then_some(true)),
         )?;
         let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
@@ -166,6 +185,30 @@ impl TrustTasksOps<'_> {
         account_type: Option<account::list::v0_1::AccountType>,
         include_activity: bool,
     ) -> Result<account::list::v0_1::Response, ATMError> {
+        self.account_list_detailed(
+            profile,
+            cursor,
+            limit,
+            account_type,
+            include_activity,
+            false,
+        )
+        .await
+    }
+
+    /// [`account_list`](Self::account_list), asking for each account's
+    /// activity times and/or its lifetime counters. The same caution applies:
+    /// only ask a mediator that serves them.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn account_list_detailed(
+        &self,
+        profile: &Arc<ATMProfile>,
+        cursor: Option<String>,
+        limit: Option<u32>,
+        account_type: Option<account::list::v0_1::AccountType>,
+        include_activity: bool,
+        include_stats: bool,
+    ) -> Result<account::list::v0_1::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
 
         let cursor = cursor
@@ -179,6 +222,7 @@ impl TrustTasksOps<'_> {
                 .account_type(account_type)
                 .cursor(cursor)
                 .include_activity(include_activity.then_some(true))
+                .include_stats(include_stats.then_some(true))
                 .limit(limit),
         )?;
         let mut task = TrustTask::for_payload(new_id(), p);

@@ -1465,7 +1465,7 @@ impl App {
         let parts = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(8),
+                Constraint::Length(9),
                 Constraint::Length(7),
                 Constraint::Min(4),
             ])
@@ -1650,6 +1650,7 @@ impl App {
                 ago(a["lastReceivedAt"].as_u64()),
                 ago(a["lastAuthenticatedAt"].as_u64())
             )),
+            Line::raw(lifetime_totals(&a["stats"])),
             Line::from(flags),
         ];
         f.render_widget(
@@ -2372,6 +2373,34 @@ fn protocol_mix(mix: &crate::tally::ProtocolMix) -> String {
         }
     }
     format!("  {} ", parts.join(" · "))
+}
+
+/// An account's lifetime totals as the mediator counted them — not the
+/// monitor's view, which only covers the current session. Empty against a
+/// mediator that doesn't serve them.
+fn lifetime_totals(stats: &Value) -> String {
+    let Some(stats) = stats.as_object() else {
+        return String::new();
+    };
+    let n = |k: &str| stats.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let mix = |k: &str| {
+        let counts = &stats[k];
+        let at = |p: &str| counts[p].as_u64().unwrap_or(0);
+        let (tsp, didcomm) = (at("tsp"), at("didcomm") + at("didcommV1"));
+        match tsp + didcomm {
+            0 => String::new(),
+            total => format!(" ({}% tsp)", tsp * 100 / total),
+        }
+    };
+    format!(
+        "lifetime  in {} / {}{}   out {} / {}{}",
+        n("messagesReceived"),
+        human_bytes(Some(n("bytesReceived"))),
+        mix("receivedByProtocol"),
+        n("messagesSent"),
+        human_bytes(Some(n("bytesSent"))),
+        mix("sentByProtocol"),
+    )
 }
 
 fn human_bytes(b: Option<u64>) -> String {

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (0.1.9) — lifetime totals from the mediator
+
+- The Account screen shows the account's **lifetime** totals as the mediator
+  counted them — messages and bytes in and out, with TSP's share of each —
+  rather than only what this monitor session has seen. Blank against a
+  mediator that doesn't serve them.
+
 ## Unreleased (0.1.8) — the wire mix
 
 - The monitor header shows **TSP's share** of the traffic since the monitor

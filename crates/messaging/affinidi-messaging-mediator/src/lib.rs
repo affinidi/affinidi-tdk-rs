@@ -22,6 +22,7 @@ use tasks::supervisor::HealthRegistry;
 use tasks::websocket_streaming::StreamingTask;
 use tokio_util::sync::CancellationToken;
 
+pub mod account_stats;
 pub mod activity;
 pub mod builder;
 pub mod commands;

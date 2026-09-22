@@ -19,7 +19,10 @@ use crate::store::redis::database::{
 };
 use crate::store::{DeliveryDecision, DeliveryMarkReport, DeliveryState};
 use crate::types::{
-    accounts::{Account, AccountActivity, AccountType, ActivityKind, MediatorAccountList},
+    accounts::{
+        Account, AccountActivity, AccountStats, AccountStatsDelta, AccountType, ActivityKind,
+        MediatorAccountList, ProtocolCounts, StatsDirection, StatsWire,
+    },
     acls::{AccessListModeType, MediatorACLSet},
     acls_handler::{
         MediatorACLGetResponse, MediatorAccessListAddResponse, MediatorAccessListGetResponse,
@@ -52,10 +55,55 @@ use tracing::{debug, warn};
 /// The key holding the mediator's `config/patch` overrides, a JSON object.
 const CONFIG_OVERRIDES_KEY: &str = "MEDIATOR_CONFIG_OVERRIDES";
 
+/// Rebuild [`AccountStats`] from the stored hash. A missing field is a
+/// counter never touched, which is zero.
+fn stats_from_hash(fields: HashMap<String, i64>) -> AccountStats {
+    let at = |name: &str| fields.get(name).copied().unwrap_or(0).max(0) as u64;
+    let counts = |side: &str| ProtocolCounts {
+        didcomm: at(&format!("{side}_DIDCOMM")),
+        didcomm_v1: at(&format!("{side}_DIDCOMM_V1")),
+        tsp: at(&format!("{side}_TSP")),
+        other: at(&format!("{side}_OTHER")),
+    };
+    AccountStats {
+        messages_received: at("RECEIVED_COUNT"),
+        messages_sent: at("SENT_COUNT"),
+        bytes_received: at("RECEIVED_BYTES"),
+        bytes_sent: at("SENT_BYTES"),
+        received_by_protocol: counts("RECEIVED"),
+        sent_by_protocol: counts("SENT"),
+    }
+}
+
 /// An account's activity times: a hash at `ACTIVITY:{did_hash}` with one field
 /// per [`ActivityKind`], so recording one never rewrites the other.
 fn activity_key(did_hash: &str) -> String {
     format!("ACTIVITY:{did_hash}")
+}
+
+/// An account's lifetime counters: a hash at `STATS:{did_hash}`, one field
+/// per counter, so each bump is an `HINCRBY` and nothing is read-modified.
+fn stats_key(did_hash: &str) -> String {
+    format!("STATS:{did_hash}")
+}
+
+/// The two field names one counted message touches: the totals and the
+/// per-protocol split.
+fn stats_fields(delta: AccountStatsDelta) -> (&'static str, &'static str, String) {
+    let (count, bytes, side) = match delta.direction {
+        StatsDirection::Received => ("RECEIVED_COUNT", "RECEIVED_BYTES", "RECEIVED"),
+        StatsDirection::Sent => ("SENT_COUNT", "SENT_BYTES", "SENT"),
+    };
+    (count, bytes, format!("{side}_{}", wire_field(delta.wire)))
+}
+
+fn wire_field(wire: StatsWire) -> &'static str {
+    match wire {
+        StatsWire::DidComm => "DIDCOMM",
+        StatsWire::DidCommV1 => "DIDCOMM_V1",
+        StatsWire::Tsp => "TSP",
+        StatsWire::Other => "OTHER",
+    }
 }
 
 fn activity_field(kind: ActivityKind) -> &'static str {
@@ -925,10 +973,11 @@ impl MediatorStore for RedisStore {
         let mut conn = self.get_connection().await?;
         if let Err(e) = redis::cmd("DEL")
             .arg(activity_key(did_hash))
+            .arg(stats_key(did_hash))
             .exec_async(&mut conn)
             .await
         {
-            warn!("account {did_hash} added, but its old activity record remains: {e}");
+            warn!("account {did_hash} added, but its old activity or counters remain: {e}");
         }
         Ok(account)
     }
@@ -949,10 +998,11 @@ impl MediatorStore for RedisStore {
             let mut conn = self.get_connection().await?;
             if let Err(e) = redis::cmd("DEL")
                 .arg(activity_key(did_hash))
+                .arg(stats_key(did_hash))
                 .exec_async(&mut conn)
                 .await
             {
-                warn!("account {did_hash} removed, but not its activity record: {e}");
+                warn!("account {did_hash} removed, but not its activity or counters: {e}");
             }
         }
         Ok(removed)
@@ -1534,6 +1584,58 @@ impl MediatorStore for RedisStore {
                 last_authenticated,
             })
             .collect())
+    }
+
+    async fn account_stats_bump(
+        &self,
+        did_hash: &str,
+        delta: AccountStatsDelta,
+    ) -> Result<(), MediatorError> {
+        // Only for an account that exists, and all of it in one round trip:
+        // this runs on the message path.
+        let (count, bytes, protocol) = stats_fields(delta);
+        let mut conn = self.get_connection().await?;
+        redis::Script::new(
+            "if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end \
+             redis.call('HINCRBY', KEYS[2], ARGV[1], 1) \
+             redis.call('HINCRBY', KEYS[2], ARGV[2], ARGV[4]) \
+             redis.call('HINCRBY', KEYS[2], ARGV[3], 1) \
+             return 1",
+        )
+        .key(format!("DID:{did_hash}"))
+        .key(stats_key(did_hash))
+        .arg(count)
+        .arg(bytes)
+        .arg(protocol)
+        .arg(delta.bytes)
+        .invoke_async::<i64>(&mut conn)
+        .await
+        .map(|_| ())
+        .map_err(|e| {
+            MediatorError::DatabaseError(
+                14,
+                did_hash.into(),
+                format!("counting a message against the account: {e}"),
+            )
+        })
+    }
+
+    async fn account_stats(
+        &self,
+        did_hashes: &[String],
+    ) -> Result<Vec<AccountStats>, MediatorError> {
+        if did_hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.get_connection().await?;
+        let mut pipe = redis::pipe();
+        for hash in did_hashes {
+            pipe.cmd("HGETALL").arg(stats_key(hash));
+        }
+        let rows: Vec<HashMap<String, i64>> = pipe.query_async(&mut conn).await.map_err(|e| {
+            MediatorError::DatabaseError(14, "NA".into(), format!("reading account stats: {e}"))
+        })?;
+        Ok(rows.into_iter().map(stats_from_hash).collect())
     }
 
     async fn config_overrides_get(&self) -> Result<Option<String>, MediatorError> {

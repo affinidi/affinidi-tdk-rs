@@ -92,6 +92,10 @@ pub const CONFIG_PATCH_SINCE: (u64, u64, u64) = (0, 28, 27);
 /// (`includeActivity` on `account/get` and `account/list`).
 pub const ACTIVITY_SINCE: (u64, u64, u64) = (0, 28, 33);
 
+/// The first mediator release that serves each account's lifetime counters
+/// (`includeStats` on `account/get` and `account/list`).
+pub const STATS_SINCE: (u64, u64, u64) = (0, 28, 36);
+
 impl MediatorConsole {
     /// Connect as `identity`, with a private SDK instance.
     pub async fn connect(identity: Identity) -> Result<Self> {
@@ -296,7 +300,14 @@ impl MediatorConsole {
         self.require_admin("the account list")?;
         self.atm
             .trust_tasks()
-            .account_list_with_activity(&self.profile, cursor, limit, None, self.serves_activity())
+            .account_list_detailed(
+                &self.profile,
+                cursor,
+                limit,
+                None,
+                self.serves_activity(),
+                self.serves_stats(),
+            )
             .await
             .map_err(ConsoleError::from_call)
     }
@@ -313,6 +324,19 @@ impl MediatorConsole {
             .as_deref()
             .and_then(parse_version)
             .is_some_and(|v| v >= ACTIVITY_SINCE)
+    }
+
+    /// Whether this mediator serves each account's lifetime counters.
+    ///
+    /// Closed when the version can't be read, for the same reason as
+    /// [`serves_activity`](Self::serves_activity): `includeStats` is a
+    /// request member, so asking a mediator that predates it would cost the
+    /// account view itself rather than just the counters.
+    pub fn serves_stats(&self) -> bool {
+        self.mediator_version
+            .as_deref()
+            .and_then(parse_version)
+            .is_some_and(|v| v >= STATS_SINCE)
     }
 
     pub async fn audit(
@@ -389,7 +413,12 @@ impl MediatorConsole {
         self.require_target(&target, "another account")?;
         self.atm
             .trust_tasks()
-            .account_get_with_activity(&self.profile, target, self.serves_activity())
+            .account_get_detailed(
+                &self.profile,
+                target,
+                self.serves_activity(),
+                self.serves_stats(),
+            )
             .await
             .map_err(ConsoleError::from_call)
     }

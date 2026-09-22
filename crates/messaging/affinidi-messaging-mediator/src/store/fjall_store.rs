@@ -55,7 +55,9 @@
 //! one key-only scan at open and maintained under `write_lock`
 //! thereafter, which is sound because this backend is single-process.
 
-use affinidi_messaging_mediator_common::types::accounts::{AccountActivity, ActivityKind};
+use affinidi_messaging_mediator_common::types::accounts::{
+    AccountActivity, AccountStats, AccountStatsDelta, ActivityKind,
+};
 use affinidi_messaging_mediator_common::{
     circuit_breaker::CircuitBreaker,
     errors::MediatorError,
@@ -196,6 +198,14 @@ const CONFIG_OVERRIDES_KEY: &str = "CONFIG_OVERRIDES";
 
 /// `globals` key holding one of an account's activity times (a big-endian
 /// `u64` of Unix seconds). One key per [`ActivityKind`], so recording one
+/// `globals` key holding an account's lifetime counters, a JSON
+/// [`AccountStats`]. One key per account: a bump is one read-modify-write
+/// under the write lock, which is also what keeps it consistent with the
+/// account's removal.
+fn stats_key(did_hash: &str) -> String {
+    format!("STATS:{did_hash}")
+}
+
 /// never rewrites the other. `None` for a kind this store does not keep.
 fn activity_key(kind: ActivityKind, did_hash: &str) -> Option<String> {
     let tag = match kind {
@@ -516,6 +526,20 @@ fn peer_queue_key(from_hash: &str, to_hash: &str) -> Vec<u8> {
 }
 
 impl FjallStore {
+    /// An account's counters as stored, or all-zeroes when it has none.
+    fn read_stats(&self, key: &str) -> Result<AccountStats, MediatorError> {
+        let Some(raw) = self
+            .globals
+            .get(key)
+            .map_err(|e| Self::db_err("account_stats:get", e))?
+        else {
+            return Ok(AccountStats::default());
+        };
+        // A record this build can't read is reported as no counters rather
+        // than failing the account view it is a footnote to.
+        Ok(serde_json::from_slice(&raw).unwrap_or_default())
+    }
+
     /// Publish one live-streaming record into this instance's broadcast
     /// channel. `verbatim` marks the body as the frame itself rather than a
     /// notification to drain the stored inbox (see
@@ -1902,12 +1926,14 @@ impl MediatorStore for FjallStore {
         let _guard = self.write_lock.lock().await;
         let mut batch = self.db.batch();
         batch.insert(&self.accounts, did_hash.as_bytes(), Self::encode(&record)?);
-        // A fresh account starts with no activity, whatever was left behind.
+        // A fresh account starts with no activity and no counters, whatever
+        // was left behind.
         for kind in [ActivityKind::Received, ActivityKind::Authenticated] {
             if let Some(key) = activity_key(kind, did_hash) {
                 batch.remove(&self.globals, key.as_bytes());
             }
         }
+        batch.remove(&self.globals, stats_key(did_hash).as_bytes());
         batch
             .commit()
             .map_err(|e| Self::db_err("account_add:insert", e))?;
@@ -1956,6 +1982,7 @@ impl MediatorStore for FjallStore {
                 batch.remove(&self.globals, key.as_bytes());
             }
         }
+        batch.remove(&self.globals, stats_key(did_hash).as_bytes());
         // Delete all access-list entries for this DID.
         let prefix = did_hash.as_bytes();
         for guard in self.access_lists.prefix(prefix) {
@@ -3153,6 +3180,42 @@ impl MediatorStore for FjallStore {
             .collect()
     }
 
+    async fn account_stats_bump(
+        &self,
+        did_hash: &str,
+        delta: AccountStatsDelta,
+    ) -> Result<(), MediatorError> {
+        let _guard = self.write_lock.lock().await;
+        if !self
+            .accounts
+            .contains_key(did_hash.as_bytes())
+            .map_err(|e| Self::db_err("account_stats_bump:accounts.get", e))?
+        {
+            return Ok(());
+        }
+        let key = stats_key(did_hash);
+        let mut stats = self.read_stats(&key)?;
+        stats.apply(delta);
+        self.globals
+            .insert(
+                key,
+                serde_json::to_vec(&stats).map_err(|e| {
+                    MediatorError::InternalError(14, did_hash.into(), e.to_string())
+                })?,
+            )
+            .map_err(|e| Self::db_err("account_stats_bump:insert", e))
+    }
+
+    async fn account_stats(
+        &self,
+        did_hashes: &[String],
+    ) -> Result<Vec<AccountStats>, MediatorError> {
+        did_hashes
+            .iter()
+            .map(|hash| self.read_stats(&stats_key(hash)))
+            .collect()
+    }
+
     async fn config_overrides_get(&self) -> Result<Option<String>, MediatorError> {
         let value = self
             .globals
@@ -3918,6 +3981,13 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let store = FjallStore::open(dir.path()).expect("open");
         crate::store::auth_flow_harness::run_auth_session_flow(&store).await;
+    }
+
+    #[tokio::test]
+    async fn account_stats() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        crate::store::activity_harness::run_account_stats(&store).await;
     }
 
     #[tokio::test]

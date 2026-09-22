@@ -43,7 +43,10 @@
 
 use crate::errors::MediatorError;
 use crate::types::{
-    accounts::{Account, AccountActivity, AccountType, ActivityKind, MediatorAccountList},
+    accounts::{
+        Account, AccountActivity, AccountStats, AccountStatsDelta, AccountType, ActivityKind,
+        MediatorAccountList,
+    },
     acls::{AccessListModeType, MediatorACLSet},
     acls_handler::{
         MediatorACLGetResponse, MediatorAccessListAddResponse, MediatorAccessListGetResponse,
@@ -1295,6 +1298,40 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         did_hashes: &[String],
     ) -> Result<Vec<AccountActivity>, MediatorError> {
         Ok(vec![AccountActivity::default(); did_hashes.len()])
+    }
+
+    // ─── Account counters ───────────────────────────────────────────────────
+
+    /// Count one message against the account `did_hash`.
+    ///
+    /// Counters are cumulative, survive restarts, and are discarded with the
+    /// account. Nothing is counted for an account that does not exist, and
+    /// adding an account clears whatever was counted for that hash — so a new
+    /// account never inherits its predecessor's totals.
+    ///
+    /// This is on the message path, so a backend should make it **one write**.
+    ///
+    /// The default keeps nothing and succeeds; [`account_stats`] then reports
+    /// zeroes. Every built-in backend overrides both.
+    ///
+    /// [`account_stats`]: Self::account_stats
+    async fn account_stats_bump(
+        &self,
+        did_hash: &str,
+        delta: AccountStatsDelta,
+    ) -> Result<(), MediatorError> {
+        let _ = (did_hash, delta);
+        Ok(())
+    }
+
+    /// The counters of each account in `did_hashes`, in the same order. An
+    /// account with nothing counted, or none at all, gets
+    /// [`AccountStats::default`].
+    async fn account_stats(
+        &self,
+        did_hashes: &[String],
+    ) -> Result<Vec<AccountStats>, MediatorError> {
+        Ok(vec![AccountStats::default(); did_hashes.len()])
     }
 
     // ─── Configuration overrides ────────────────────────────────────────────

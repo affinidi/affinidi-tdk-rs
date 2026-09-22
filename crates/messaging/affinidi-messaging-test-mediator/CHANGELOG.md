@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (0.9.17) — per-account counters
+
+- New end-to-end test `account_counters`: a delivered message is counted for
+  both accounts, on the wire it travelled in, with the sizes agreeing.
+
 ## Unreleased (0.9.16) — Trust Tasks over either transport
 
 - New end-to-end test `trust_tasks_transport`: under `TspPolicy::Required`

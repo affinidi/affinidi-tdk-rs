@@ -24,7 +24,9 @@
 //!   re-delivers messages whose owning consumer has gone idle.
 
 use crate::common::time::unix_timestamp_secs;
-use affinidi_messaging_mediator_common::types::accounts::{AccountActivity, ActivityKind};
+use affinidi_messaging_mediator_common::types::accounts::{
+    AccountActivity, AccountStats, AccountStatsDelta, ActivityKind,
+};
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{
@@ -196,6 +198,8 @@ struct MemoryState {
     config_overrides: Option<String>,
     /// Each account's recorded activity times.
     activity: HashMap<String, AccountActivity>,
+    /// Each account's lifetime counters.
+    stats: HashMap<String, AccountStats>,
 
     // ─── Messages ───────────────────────────────────────────────────
     messages: HashMap<String, MessageRecord>,
@@ -1042,8 +1046,9 @@ impl MediatorStore for MemoryStore {
             record.queue_receive_limit = Some(limit as i32);
         }
         state.accounts.insert(did_hash.to_string(), record.clone());
-        // A fresh account starts with no activity.
+        // A fresh account starts with no activity and no counters.
         state.activity.remove(did_hash);
+        state.stats.remove(did_hash);
         Ok(record.into_account(did_hash.to_string(), 0))
     }
 
@@ -1081,6 +1086,7 @@ impl MediatorStore for MemoryStore {
         let mut state = self.state.lock().await;
         state.accounts.remove(did_hash);
         state.activity.remove(did_hash);
+        state.stats.remove(did_hash);
         state.access_lists.remove(did_hash);
         state.admins.remove(did_hash);
         state.known_dids.retain(|d| d != did_hash);
@@ -1878,6 +1884,34 @@ impl MediatorStore for MemoryStore {
             .collect())
     }
 
+    async fn account_stats_bump(
+        &self,
+        did_hash: &str,
+        delta: AccountStatsDelta,
+    ) -> Result<(), MediatorError> {
+        let mut state = self.state.lock().await;
+        if !state.accounts.contains_key(did_hash) {
+            return Ok(());
+        }
+        state
+            .stats
+            .entry(did_hash.to_string())
+            .or_default()
+            .apply(delta);
+        Ok(())
+    }
+
+    async fn account_stats(
+        &self,
+        did_hashes: &[String],
+    ) -> Result<Vec<AccountStats>, MediatorError> {
+        let state = self.state.lock().await;
+        Ok(did_hashes
+            .iter()
+            .map(|h| state.stats.get(h).copied().unwrap_or_default())
+            .collect())
+    }
+
     async fn config_overrides_get(&self) -> Result<Option<String>, MediatorError> {
         Ok(self.state.lock().await.config_overrides.clone())
     }
@@ -2264,6 +2298,12 @@ mod tests {
     async fn auth_session_flow_end_to_end() {
         let store = MemoryStore::new();
         crate::store::auth_flow_harness::run_auth_session_flow(&store).await;
+    }
+
+    #[tokio::test]
+    async fn account_stats() {
+        let store = MemoryStore::new();
+        crate::store::activity_harness::run_account_stats(&store).await;
     }
 
     #[tokio::test]

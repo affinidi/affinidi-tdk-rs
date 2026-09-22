@@ -63,6 +63,7 @@ async fn _store_message(
         .monitor
         .stored(&msg_id, from_did_hash, to_did_hash, data, live);
     state.activity.received(state, to_did_hash).await;
+    crate::account_stats::count_stored(state, from_did_hash, to_did_hash, data).await;
     Ok(msg_id)
 }
 
@@ -394,6 +395,13 @@ pub(crate) async fn store_forwarded_message(
                     .monitor
                     .stored(&msg_id, sender_hash, &recipient_did_hash, message, live);
                 state.activity.received(state, &recipient_did_hash).await;
+                crate::account_stats::count_stored(
+                    state,
+                    sender_hash,
+                    &recipient_did_hash,
+                    message,
+                )
+                .await;
                 debug!(
                     "message id({}) stored successfully recipient({})",
                     msg_id, recipient
