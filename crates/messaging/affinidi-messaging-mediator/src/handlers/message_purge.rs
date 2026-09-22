@@ -76,6 +76,12 @@ pub async fn message_purge_handler(
     Path(folder): Path<Folder>,
     Query(params): Query<PurgeParams>,
 ) -> Result<(StatusCode, Json<SuccessResponse<PurgeQueueResponse>>), AppError> {
+    crate::common::legacy_admin::admit(
+        &state,
+        &session,
+        "DELETE /purge",
+        "the messaging/queue/purge Trust Task",
+    )?;
     let _span = span!(
         Level::DEBUG,
         "message_purge_handler",

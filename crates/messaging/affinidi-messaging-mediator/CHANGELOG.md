@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased (0.28.29) — the legacy admin surface can be switched off
+
+The `messaging/*` Trust Tasks replace the mediator's legacy administration
+surface. That surface is:
+- the DIDComm protocols `https://didcomm.org/mediator/1.0/admin-management`,
+  `…/account-management` and `…/acl-management`;
+- the REST routes `GET /admin/status`, `DELETE /purge/{folder}` and
+  `GET /queue/status`.
+
+A new setting, **`security.legacy_admin_protocols`** (env
+`LEGACY_ADMIN_PROTOCOLS`), controls it:
+
+| Value | Effect |
+|---|---|
+| `on` | served, silently |
+| `warn` (**default**) | served, with every use logged with its sender and counted in `legacy_admin_requests_total{surface}`, so you can see which clients still need to move |
+| `off` | refused: HTTP 410, or a problem report `legacy_admin.disabled` naming the Trust Task to use; the three protocols are no longer advertised in discover-features |
+
+- **Why the default is `warn`:** at least one shipped client (the trust
+  registry) still uses `acl-management` and `account-management`. The
+  default becomes `off` once it has moved, and a later release removes the
+  surface.
+- **Strict parsing:** an unrecognised value is a startup error, not a silent
+  default.
+
 ## Unreleased (0.28.28) — the configured admin is root admin on every backend
 
 **Fixed:** on the Fjall and memory stores, the configured `admin_did` was

@@ -28,6 +28,12 @@ pub(crate) async fn process(
     session: &Session,
     metadata: &UnpackMetadata,
 ) -> Result<ProcessMessageResponse, MediatorError> {
+    crate::common::legacy_admin::admit(
+        state,
+        session,
+        "https://didcomm.org/mediator/1.0/admin-management",
+        "the messaging/stats, audit and config Trust Tasks",
+    )?;
     let _span = span!(tracing::Level::DEBUG, "mediator_administration");
 
     async move {

@@ -1,6 +1,9 @@
 //! Handles mediator configuration and administration tasks
 //! Admin account management
 //! Global ACL management
+// The legacy mediator admin protocols (and `Mediator`, which sends them)
+// are deprecated; this module still implements them for existing callers.
+#![allow(deprecated)]
 
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};
 use affinidi_messaging_didcomm::message::Message;
@@ -23,6 +26,10 @@ pub use affinidi_messaging_mediator_common::types::audit::{
 };
 
 #[derive(Default)]
+#[deprecated(
+    since = "0.26.21",
+    note = "the legacy mediator admin protocols are deprecated and will be switched off; use atm.trust_tasks()"
+)]
 pub struct Mediator {}
 
 impl Mediator {

@@ -1,5 +1,12 @@
 # Affinidi Messaging Mediator Config
 
+## Unreleased (0.4.5) — `legacy_admin_protocols`
+
+A new `[security]` key, `legacy_admin_protocols` (`"on"` | `"warn"` |
+`"off"`, env `LEGACY_ADMIN_PROTOCOLS`). It's `#[serde(default)]`, so configs
+that predate it deserialize with it empty, which the mediator reads as
+`warn`. Additive.
+
 ## Unreleased (0.4.4) — `trust_task_verification`
 
 A new `[security]` key, `trust_task_verification` (`"warn"` | `"enforce"`),

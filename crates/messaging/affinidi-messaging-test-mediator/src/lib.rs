@@ -106,7 +106,9 @@ use affinidi_messaging_mediator_common::{
     store::MediatorStore,
 };
 // Re-exported so tests can pick the Trust Task acceptance mode.
-pub use affinidi_messaging_mediator::common::config::TrustTaskVerification;
+pub use affinidi_messaging_mediator::common::config::{
+    LegacyAdminProtocols, TrustTaskVerification,
+};
 // Re-exported so tests can build/inject a clock from one import.
 pub use affinidi_messaging_mediator_common::types::clock::{Clock, SystemClock, TestClock};
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
@@ -238,7 +240,7 @@ pub struct TestMediatorUser {
 impl TestMediatorUser {
     /// SHA-256 hash of the DID string — the canonical key shape used
     /// by the mediator's account / ACL / queue stores. Pass this to
-    /// admin-protocol calls (e.g. `acls_set`, `access_list_add`,
+    /// management Trust Tasks (e.g. `account_update`, `access_list_update`,
     /// `account_remove`) that operate on hashed DIDs.
     pub fn did_hash(&self) -> String {
         digest(&self.did)
@@ -339,6 +341,8 @@ pub struct TestMediatorBuilder {
     enable_inter_mediator_relay: Option<bool>,
     /// Override for `SecurityConfig.trust_task_verification`.
     trust_task_verification: Option<TrustTaskVerification>,
+    /// Override for `SecurityConfig.legacy_admin_protocols`.
+    legacy_admin_protocols: Option<LegacyAdminProtocols>,
     /// Override for `SecurityConfig.jwt_access_expiry` (seconds).
     jwt_access_expiry_secs: Option<u64>,
     /// Override for `SecurityConfig.jwt_refresh_expiry` (seconds).
@@ -392,6 +396,7 @@ impl Default for TestMediatorBuilder {
             block_remote_admin_msgs: None,
             enable_inter_mediator_relay: None,
             trust_task_verification: None,
+            legacy_admin_protocols: None,
             jwt_access_expiry_secs: None,
             jwt_refresh_expiry_secs: None,
             max_websocket_connections_per_did: None,
@@ -681,6 +686,13 @@ impl TestMediatorBuilder {
         self
     }
 
+    /// Override `legacy_admin_protocols`. Defaults to the production value
+    /// (`Warn`).
+    pub fn legacy_admin_protocols(mut self, mode: LegacyAdminProtocols) -> Self {
+        self.legacy_admin_protocols = Some(mode);
+        self
+    }
+
     /// Override JWT expiries. Defaults: 900 s access, 86 400 s refresh.
     /// Useful for testing token-refresh flows by shrinking access
     /// expiry to a few seconds.
@@ -887,6 +899,9 @@ impl TestMediatorBuilder {
         }
         if let Some(b) = self.enable_inter_mediator_relay {
             security.enable_inter_mediator_relay = b;
+        }
+        if let Some(mode) = self.legacy_admin_protocols {
+            security.legacy_admin_protocols = mode;
         }
         if let Some(mode) = self.trust_task_verification {
             security.trust_task_verification = mode;
@@ -1169,12 +1184,10 @@ impl TestMediatorHandle {
     /// admin protocol.
     ///
     /// Note this is the **fixture bypass** path. To validate that the
-    /// production mediator-administration protocol enforces
-    /// admin-only ACL changes correctly, drive
-    /// `env.atm.protocols().mediator().acls().acls_set(...)` from an
-    /// admin-authenticated SDK profile (see
-    /// [`TestEnvironment::add_admin`]) and use [`Self::get_acl`] to
-    /// read back the result.
+    /// production management surface enforces admin-only ACL changes
+    /// correctly, drive `env.atm.trust_tasks().account_update(...)` from an
+    /// admin-authenticated SDK profile and use [`Self::get_acl`] to read back
+    /// the result.
     pub async fn set_acl(&self, did: &str, acls: MediatorACLSet) -> Result<(), TestMediatorError> {
         let did_hash = digest(did);
         self.store.set_did_acl(&did_hash, &acls).await?;

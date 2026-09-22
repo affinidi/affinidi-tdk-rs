@@ -62,6 +62,12 @@ pub async fn queue_status_handler(
     session: Session,
     State(state): State<SharedData>,
 ) -> Result<(StatusCode, Json<SuccessResponse<QueueStatusResponse>>), AppError> {
+    crate::common::legacy_admin::admit(
+        &state,
+        &session,
+        "GET /queue/status",
+        "the messaging/queue/status Trust Task",
+    )?;
     let _span = span!(
         Level::DEBUG,
         "queue_status_handler",

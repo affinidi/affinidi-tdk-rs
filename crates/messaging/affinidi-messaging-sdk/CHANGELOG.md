@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### 0.26.21 — the legacy mediator admin client is deprecated
+
+- **Deprecated:** `protocols::mediator::administration::Mediator`, the client
+  for the legacy DIDComm `mediator/1.0` admin, account and ACL management
+  protocols. Every method on it, and on the `atm.mediator()` wrappers that
+  already were deprecated, now says to use `atm.trust_tasks()`.
+- **Also deprecated:** `ATM::purge_queue`, `purge_queue_filtered` and
+  `queue_status`, the clients for the REST `/purge` and `/queue/status`
+  routes. Use `trust_tasks().queue_purge()` and `trust_tasks().queue_status()`
+  instead.
+- **Why:** the mediator (0.28.29) can now switch these protocols and routes
+  off with `security.legacy_admin_protocols`. They still work where it
+  serves them.
+- Deprecation only: no behaviour changes.
+
 ### 0.26.20 — `config/patch`
 
 `trust_tasks().config_patch(profile, overrides)` sends the generic

@@ -4,6 +4,7 @@ pub mod config;
 pub mod did_rate_limiter;
 pub mod error_codes;
 pub mod jwt_auth;
+pub(crate) mod legacy_admin;
 /// Startup check that the Redis stored-function library matches this build.
 #[cfg(feature = "redis-backend")]
 pub mod lua_integrity;

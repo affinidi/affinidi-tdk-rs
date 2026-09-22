@@ -1,3 +1,6 @@
+// The legacy mediator admin protocols (and `Mediator`, which sends them)
+// are deprecated; this module still implements them for existing callers.
+#![allow(deprecated)]
 use affinidi_messaging_didcomm::message::Message;
 use serde_json::json;
 use sha256::digest;
