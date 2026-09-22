@@ -80,6 +80,7 @@ is reported plainly.
 | `3` | **Account** | One account's two queues with quota bars, its **send queue by recipient** (who hasn't collected yet), and its messages. For a standard account, this is the whole console. |
 | `4` | **Audit** *(admin)* | The mediator's audit log of privileged changes. Monitor subscriptions and cross-account reads are recorded here too. |
 | `5` | **Accounts** *(admin)* | Every account on the mediator: name, hash, role (coloured), receive and send depth, bytes queued, access-list size. The mediator and administrators come first, then accounts you've named, then the rest. `⏎` opens one. Works on older mediators too. |
+| `6` | **Config** *(admin)* | The mediator's configuration: key, value, source (`override` when a patch set it) and whether a change applies live or at restart. A **rootAdmin** can change a `limits.*` value (`⏎`) or reset an override (`x`); a patch can tighten a limit, not loosen it past the configuration. |
 
 **Quota bars** shade smoothly from green through amber to red along the bar,
 so how full a queue is shows as colour at its leading edge. They use 24-bit
@@ -92,6 +93,7 @@ to 256 colours, then to three plain colours; `NO_COLOR` switches colour off.
 |---|---|---|
 | `↑` `↓` / `j` `k` | tables | select a row |
 | `⏎` | Dashboard, Queues, Accounts | open the selected account |
+| `⏎` / `x` | Config (rootAdmin) | change the selected limit / remove its override |
 | `x` | Queues, Account | receive ↔ send queue |
 | `s` | Dashboard, Queues | change the ranking |
 | `i` | Account | **inspect** the selected message: its metadata and raw envelope, decrypted locally when you hold the recipient's key (your own mail) |

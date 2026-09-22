@@ -208,4 +208,20 @@ async fn a_named_account_gets_room_beside_the_monitor() {
         "the totals table:\n{totals}"
     );
     assert!(totals.contains(name), "the recipient by name:\n{totals}");
+
+    // The configuration, limits first; an admin (not root) may read it only.
+    app.handle_key(key(KeyCode::Char('6')));
+    settle(&mut app, Duration::from_secs(2)).await;
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let config = screen(&terminal);
+    println!("{config}");
+    assert!(
+        config.contains("Configuration —"),
+        "config screen:\n{config}"
+    );
+    assert!(config.contains("limits."), "limits listed:\n{config}");
+    assert!(
+        config.contains("needs a rootAdmin"),
+        "an admin is told who may change it:\n{config}"
+    );
 }

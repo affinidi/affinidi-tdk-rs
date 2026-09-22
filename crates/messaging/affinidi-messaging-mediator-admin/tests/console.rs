@@ -196,3 +196,33 @@ async fn an_admin_watches_traffic_through_a_monitor_feed() {
     .expect("a stored event for bob");
     assert_eq!(seen["from"], alice.did_hash().as_str());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_root_admin_changes_a_limit_and_an_admin_is_told_it_cannot() {
+    let env = env().await;
+    let root = env.add_user("root").await.expect("root");
+    let admin = env.add_user("admin").await.expect("admin");
+    promote(&env, &root, AccountType::RootAdmin).await;
+    promote(&env, &admin, AccountType::Admin).await;
+
+    let console = MediatorConsole::connect(identity(&env, &root))
+        .await
+        .expect("root connects");
+    assert!(console.can_patch_config());
+    let mut overrides = serde_json::Map::new();
+    overrides.insert("limits.listed_messages".into(), json!(50));
+    let answer =
+        serde_json::to_value(console.patch_config(overrides).await.expect("patch")).unwrap();
+    assert_eq!(answer["applied"], json!(["limits.listed_messages"]));
+
+    let console = MediatorConsole::connect(identity(&env, &admin))
+        .await
+        .expect("admin connects");
+    assert!(!console.can_patch_config());
+    let mut overrides = serde_json::Map::new();
+    overrides.insert("limits.listed_messages".into(), json!(40));
+    assert!(matches!(
+        console.patch_config(overrides).await,
+        Err(ConsoleError::NotPermitted(_))
+    ));
+}

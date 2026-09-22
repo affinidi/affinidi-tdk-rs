@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (0.1.4) — changing the configuration
+
+- **New:** `MediatorConsole::patch_config(overrides)` changes mediator limits
+  at runtime through `config/patch`. Keys look like
+  `limits.queued_send_messages_hard`, and a `null` value removes an
+  override. The mediator answers per key: in effect now, from its next
+  start, or refused with the reason.
+- **Refused locally:** unless the session is a rootAdmin
+  (`NotPermitted`), or when the mediator is older than
+  `CONFIG_PATCH_SINCE` (0.28.27) (`Refused(protocol.trust_task.unsupported)`).
+- **New:** `can_patch_config()` says whether either of those applies.
+- Requires `affinidi-messaging-sdk` 0.26.20.
+
 ## Unreleased (0.1.3) — an address book for account hashes
 
 - **New:** `AddressBook` maps an account hash, `sha256(did)` as lowercase hex

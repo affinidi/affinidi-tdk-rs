@@ -85,6 +85,9 @@ pub struct MediatorConsole {
 /// built on: `messaging/stats`, `queue`, `message` and `monitor`.
 pub const OPERATIONS_SINCE: (u64, u64, u64) = (0, 28, 20);
 
+/// The first mediator release that serves `config/patch`.
+pub const CONFIG_PATCH_SINCE: (u64, u64, u64) = (0, 28, 27);
+
 impl MediatorConsole {
     /// Connect as `identity`, with a private SDK instance.
     pub async fn connect(identity: Identity) -> Result<Self> {
@@ -303,6 +306,52 @@ impl MediatorConsole {
         self.atm
             .trust_tasks()
             .audit_list(&self.profile, cursor, page_size)
+            .await
+            .map_err(ConsoleError::from_call)
+    }
+
+    /// Whether this session can change the mediator's configuration:
+    /// a rootAdmin, on a mediator that serves `config/patch` (or whose version
+    /// is unknown, when the mediator answers for itself).
+    pub fn can_patch_config(&self) -> bool {
+        self.capabilities.root
+            && self
+                .mediator_version
+                .as_deref()
+                .and_then(parse_version)
+                .is_none_or(|v| v >= CONFIG_PATCH_SINCE)
+    }
+
+    /// Change mediator limits at runtime (`config/patch`, rootAdmin). Keys are
+    /// like `limits.queued_send_messages_hard`; a `null` value removes the
+    /// key's override. The mediator checks each key on its own and answers
+    /// which took effect now, which apply from its next start, and which it
+    /// refused, with the reason.
+    pub async fn patch_config(
+        &self,
+        overrides: serde_json::Map<String, Value>,
+    ) -> Result<trust_tasks_rs::specs::config::patch::v0_1::Response> {
+        if !self.capabilities.root {
+            return Err(ConsoleError::NotPermitted(
+                "changing the mediator's configuration needs a rootAdmin",
+            ));
+        }
+        if !self.can_patch_config() {
+            let (major, minor, patch) = CONFIG_PATCH_SINCE;
+            return Err(ConsoleError::Refused {
+                code: "protocol.trust_task.unsupported".into(),
+                comment: format!(
+                    "this mediator ({}) does not serve config/patch: it needs \
+                     affinidi-messaging-mediator {major}.{minor}.{patch} or later",
+                    self.mediator_version
+                        .as_deref()
+                        .unwrap_or("unknown version")
+                ),
+            });
+        }
+        self.atm
+            .trust_tasks()
+            .config_patch(&self.profile, overrides)
             .await
             .map_err(ConsoleError::from_call)
     }
