@@ -179,7 +179,9 @@ pub(crate) mod auth_flow_harness {
 #[cfg(all(test, any(feature = "fjall-backend", feature = "memory-backend")))]
 pub(crate) mod activity_harness {
     use affinidi_messaging_mediator_common::store::{MediatorStore, Session};
-    use affinidi_messaging_mediator_common::types::accounts::{AccountActivity, ActivityKind};
+    use affinidi_messaging_mediator_common::types::accounts::{
+        AccountActivity, AccountStats, AccountStatsDelta, ActivityKind, StatsDirection, StatsWire,
+    };
     use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
 
     pub(crate) async fn run_account_activity<S: MediatorStore>(store: &S) {
@@ -255,6 +257,74 @@ pub(crate) mod activity_harness {
             store.account_activity(&[alice]).await.unwrap(),
             vec![AccountActivity::default()],
             "adding an account clears any activity for that hash"
+        );
+    }
+
+    /// Cross-backend check of the lifetime counters: counted per side and per
+    /// wire, ignored for an unknown account, and discarded with the account.
+    pub(crate) async fn run_account_stats<S: MediatorStore>(store: &S) {
+        let (alice, ghost) = ("alice-hash".to_string(), "ghost-hash".to_string());
+        store
+            .account_add(&alice, &MediatorACLSet::default(), None)
+            .await
+            .expect("account_add");
+
+        assert_eq!(
+            store
+                .account_stats(std::slice::from_ref(&alice))
+                .await
+                .unwrap(),
+            vec![AccountStats::default()],
+            "nothing counted yet"
+        );
+
+        for delta in [
+            AccountStatsDelta::new(StatsDirection::Received, StatsWire::Tsp, 100),
+            AccountStatsDelta::new(StatsDirection::Received, StatsWire::DidComm, 50),
+            AccountStatsDelta::new(StatsDirection::Sent, StatsWire::Tsp, 7),
+        ] {
+            store
+                .account_stats_bump(&alice, delta)
+                .await
+                .expect("bump alice");
+        }
+        store
+            .account_stats_bump(
+                &ghost,
+                AccountStatsDelta::new(StatsDirection::Received, StatsWire::Tsp, 1),
+            )
+            .await
+            .expect("a bump for an unknown account is not an error");
+
+        let got = store
+            .account_stats(&[alice.clone(), ghost.clone()])
+            .await
+            .unwrap();
+        assert_eq!(got[0].messages_received, 2);
+        assert_eq!(got[0].bytes_received, 150, "bytes add up across wires");
+        assert_eq!(got[0].messages_sent, 1);
+        assert_eq!(got[0].bytes_sent, 7);
+        assert_eq!(got[0].received_by_protocol.tsp, 1);
+        assert_eq!(got[0].received_by_protocol.didcomm, 1);
+        assert_eq!(
+            got[0].sent_by_protocol.tsp, 1,
+            "the sent split is counted apart from the received one"
+        );
+        assert_eq!(got[0].sent_by_protocol.didcomm, 0);
+        assert_eq!(got[1], AccountStats::default(), "no account, no counters");
+
+        store
+            .account_remove(&Session::default(), &alice)
+            .await
+            .expect("account_remove");
+        store
+            .account_add(&alice, &MediatorACLSet::default(), None)
+            .await
+            .expect("re-add");
+        assert_eq!(
+            store.account_stats(&[alice]).await.unwrap(),
+            vec![AccountStats::default()],
+            "a new account never inherits its predecessor's totals"
         );
     }
 }

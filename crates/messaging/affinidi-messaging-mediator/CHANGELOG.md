@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased (0.28.36) — the mediator counts each account's traffic
+
+The mediator keeps lifetime counters per account: messages and bytes it
+accepted **from** the account and **addressed to** it, each split by the wire
+the message travelled in. A console can then read an account's totals from
+the mediator instead of adding up a live monitor feed, which only ever
+covered one session.
+
+**Counted where the message is stored**, not at ingress: that is the point at
+which the mediator has accepted the message *for an account*, and where both
+parties are known, so the two sides can never disagree about the same
+message.
+
+**The mediator's own traffic with an account is not counted.** A Trust Task
+answer is stored for the account like any other message, so counting it would
+let a console inflate the very numbers it displays — poll once a second and
+an idle account looks busy. The counters are about what an account exchanges
+with its correspondents, the same line the traffic monitor draws when it
+leaves a subscriber's own management traffic out of its feed.
+
+The split is by **stored form**, the same derivation the monitor's `stored`
+event uses, so a DIDComm v1 envelope counts as `didcomm` in both places.
+
+Counting is best-effort: a failed write is logged at `debug` and never fails
+the message. Serving the counters on `messaging/account/get` and
+`messaging/account/list` follows, once the spec change that carries them is
+published.
+
+Requires `affinidi-messaging-mediator-common` 0.16.23.
+
 ## Unreleased (0.28.35) — a deleted message names its own protocol
 
 A `deleted` monitor event reported `other` for every delete, whatever the

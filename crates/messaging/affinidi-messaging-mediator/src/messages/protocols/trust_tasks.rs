@@ -611,6 +611,15 @@ async fn consume_account_get(
         })?;
 
     let mut wire = map_account_get(&account);
+    if typed.payload.include_stats.unwrap_or(false) {
+        let stats = state
+            .database
+            .account_stats(std::slice::from_ref(&target_hash))
+            .await?;
+        if let Some(stats) = stats.first() {
+            wire.stats = Some(to_wire_stats(stats));
+        }
+    }
     if typed.payload.include_activity.unwrap_or(false) {
         let activity = state
             .database
@@ -698,6 +707,15 @@ async fn consume_account_list(
         .collect();
     // The times are read for the page as it is returned, in one call, so a
     // filtered-out account costs nothing.
+    if typed.payload.include_stats.unwrap_or(false) {
+        let hashes: Vec<String> = accounts.iter().map(|a| a.did.to_string()).collect();
+        for (account, stats) in accounts
+            .iter_mut()
+            .zip(state.database.account_stats(&hashes).await?)
+        {
+            account.stats = Some(to_wire_stats_as(&stats));
+        }
+    }
     if typed.payload.include_activity.unwrap_or(false) {
         let hashes: Vec<String> = accounts.iter().map(|a| a.did.to_string()).collect();
         for (account, activity) in accounts
@@ -1904,6 +1922,47 @@ fn map_account_get(acc: &Account) -> account::get::v0_1::Account {
         .receive_queue_bytes(Some(acc.receive_queue_bytes))
         .try_into()
         .expect("every required member of the wire Account is set above")
+}
+
+/// Map the mediator's [`AccountStats`] onto the wire shape. Every counter is
+/// reported: this mediator keeps all of them, so an absent member on the wire
+/// would say "not kept" of something it has.
+fn to_wire_stats(
+    stats: &affinidi_messaging_mediator_common::types::accounts::AccountStats,
+) -> account::get::v0_1::AccountStats {
+    use account::get::v0_1::{AccountStats as WireStats, ProtocolCounts};
+    use affinidi_messaging_mediator_common::types::accounts::ProtocolCounts as Counts;
+
+    let counts = |c: &Counts| -> ProtocolCounts {
+        ProtocolCounts::builder()
+            .didcomm(Some(c.didcomm))
+            .didcomm_v1(Some(c.didcomm_v1))
+            .tsp(Some(c.tsp))
+            .other(Some(c.other))
+            .try_into()
+            .expect("ProtocolCounts has no required member")
+    };
+    WireStats::builder()
+        .messages_received(Some(stats.messages_received))
+        .messages_sent(Some(stats.messages_sent))
+        .bytes_received(Some(stats.bytes_received))
+        .bytes_sent(Some(stats.bytes_sent))
+        .received_by_protocol(Some(counts(&stats.received_by_protocol)))
+        .sent_by_protocol(Some(counts(&stats.sent_by_protocol)))
+        .try_into()
+        .expect("AccountStats has no required member")
+}
+
+/// [`to_wire_stats`] into another `messaging/*` module's copy of the shared
+/// `AccountStats` type, the same JSON round-trip [`to_wire_account`] uses and
+/// for the same reason: typify generates one copy per spec module.
+fn to_wire_stats_as<T: serde::de::DeserializeOwned>(
+    stats: &affinidi_messaging_mediator_common::types::accounts::AccountStats,
+) -> T {
+    serde_json::from_value(
+        serde_json::to_value(to_wire_stats(stats)).expect("get AccountStats serialises"),
+    )
+    .expect("messaging AccountStats types share the one shared schema")
 }
 
 /// Re-shape [`map_account_get`]'s output into another `messaging/*` module's copy of

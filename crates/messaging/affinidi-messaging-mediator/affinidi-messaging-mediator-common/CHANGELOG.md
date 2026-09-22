@@ -1,5 +1,24 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.23) — per-account lifetime counters
+
+`MediatorStore` gains two methods for an account's own totals:
+- `account_stats_bump(did_hash, delta)` counts one message — which way it
+  went, how big it was, and the wire it travelled in.
+- `account_stats(&[did_hash])` reads them back as `AccountStats`: messages
+  and bytes received and sent, each split by protocol (`ProtocolCounts`).
+
+Both have default implementations (keep nothing, report zeroes), so existing
+`MediatorStore` implementations still compile. Redis does a bump in one round
+trip (an `EXISTS` guard plus three `HINCRBY`s in one script, so nothing is
+read-modified); Fjall keeps one `globals` record per account. Nothing is
+counted for an account that does not exist, `account_remove` discards the
+counters, and `account_add` clears them so a new account never inherits its
+predecessor's totals.
+
+`AccountStats`, `ProtocolCounts`, `AccountStatsDelta`, `StatsDirection` and
+`StatsWire` are all `#[non_exhaustive]`.
+
 ## Unreleased (0.16.22) — verbatim live frames
 
 `MediatorStore::streaming_publish_verbatim` publishes a frame to be sent to

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### 0.26.25 — asking for an account's lifetime counters
+
+`trust_tasks().account_get_detailed(profile, did_hash, include_activity,
+include_stats)` and `account_list_detailed(..., include_stats)` request each
+account's `stats` — messages and bytes sent and received, split by wire
+protocol — alongside the activity times. Additive: the existing
+`account_get` / `account_list` and their `_with_activity` forms are
+unchanged.
+
+**Only ask a mediator that serves them** (0.28.36 or later): `includeStats`
+is a request member, so a mediator that predates it refuses the whole
+request rather than ignoring the member.
+
 ### 0.26.24 — Trust Tasks over either transport
 
 Every `trust_tasks()` method now goes over whichever transport the profile
