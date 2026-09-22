@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.9.16) — Trust Tasks over either transport
+
+- New end-to-end test `trust_tasks_transport`: under `TspPolicy::Required`
+  (no DIDComm fallback) an ordinary `account_get` is answered over TSP, twice
+  in a row; under the default policy the same call stays on DIDComm.
+
 ## Unreleased (0.9.15) — monitor over TSP
 
 - New end-to-end test `tsp_monitor`: a subscription opened over TSP delivers

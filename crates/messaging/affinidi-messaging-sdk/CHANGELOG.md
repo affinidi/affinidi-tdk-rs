@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### 0.26.24 — Trust Tasks over either transport
+
+Every `trust_tasks()` method now goes over whichever transport the profile
+and mediator have in common. Callers write the same code either way: no
+TSP-specific methods, no transport argument.
+
+All of them funnel through one `exchange`, which is where the wire is now
+chosen, by the same `TspOps::select_protocol` that `ATM::send_to` uses:
+- **`TspPolicy::Off` (the default) is DIDComm**, so nothing moves wire until
+  an application opts in with `with_tsp_policy`.
+- **`Preferred` / `Required`** pick TSP for a mediator known to speak it with
+  a relationship already in place — which is also what TSP requires before
+  the receiver will accept the mediator's sealed reply.
+
+Over TSP the document is the payload of a Direct message to the mediator,
+and its sealed reply is collected from the inbox **by thread id and by
+sender**: a thread id only identifies, so the reply must also have been
+sealed by the mediator, or a peer holding a relationship could answer
+someone else's Trust Task. The inbox is read with `DoNotDelete` and only the
+matched reply is deleted, so a frame meant for another reader of the same
+mailbox stays where it is, and a failed delete is logged rather than
+swallowed. Each sweep walks the whole mailbox, so traffic arriving alongside
+the reply cannot push it out of view. A reply that doesn't arrive within 15s
+is an error naming the transport, never a silent wait.
+
+The document and its Data Integrity proof are identical on both wires.
+
 ### 0.26.23 — asking for account activity
 
 `trust_tasks().account_get_with_activity(profile, did_hash, include_activity)`
