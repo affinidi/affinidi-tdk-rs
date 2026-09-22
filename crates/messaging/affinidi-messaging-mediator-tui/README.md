@@ -96,6 +96,7 @@ to 256 colours, then to three plain colours; `NO_COLOR` switches colour off.
 | `⏎` / `x` | Config (rootAdmin) | change the selected limit / remove its override |
 | `x` | Queues, Account | receive ↔ send queue |
 | `s` | Dashboard, Queues | change the ranking |
+| `e` | Account | **edit** the account's role, ACL flags, access-list mode and queue limits (saved with `s`) |
 | `i` | Account | **inspect** the selected message: its metadata and raw envelope, decrypted locally when you hold the recipient's key (your own mail) |
 | `d` | Account | **delete** the selected message (asks for confirmation) |
 | `p` / `P` | Account | **purge** the queue, or only messages exchanged with the selected message's counterparty (see below) |

@@ -224,4 +224,28 @@ async fn a_named_account_gets_room_beside_the_monitor() {
         config.contains("needs a rootAdmin"),
         "an admin is told who may change it:\n{config}"
     );
+
+    // Alice's settings, and an edit: the first ACL flag toggled and saved.
+    app.open_account(Some(alice.did_hash()));
+    settle(&mut app, Duration::from_secs(2)).await;
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let before = screen(&terminal);
+    assert!(before.contains("Settings"), "settings panel:\n{before}");
+    assert!(before.contains("role standard"), "the role:\n{before}");
+    let anon_before = before.contains("✓anonReceive");
+
+    app.handle_key(key(KeyCode::Char('e')));
+    app.handle_key(key(KeyCode::Down)); // past the role row, to anonReceive
+    app.handle_key(key(KeyCode::Char(' ')));
+    app.handle_key(key(KeyCode::Char('s')));
+    settle(&mut app, Duration::from_secs(3)).await;
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let after = screen(&terminal);
+    println!("{after}");
+    assert!(after.contains("account updated"), "saved:\n{after}");
+    assert_eq!(
+        after.contains("✓anonReceive"),
+        !anon_before,
+        "the flag changed:\n{after}"
+    );
 }

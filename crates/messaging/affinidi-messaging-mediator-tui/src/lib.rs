@@ -11,6 +11,7 @@
 //! results to [`App::apply`], and draw with [`App::render`] — or hand a
 //! terminal to [`App::run`]. [`quota::QuotaBar`] is usable on its own.
 
+pub mod account_edit;
 pub mod app;
 pub mod quota;
 pub mod tally;

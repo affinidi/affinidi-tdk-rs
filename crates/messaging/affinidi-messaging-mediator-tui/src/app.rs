@@ -29,11 +29,15 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use crate::account_edit::{AccountEdit, Setting};
 use crate::quota::{ColorDepth, QuotaBar, quota_line};
 use crate::tally::TrafficTally;
 
 /// How often the current view refreshes on its own.
 const REFRESH: Duration = Duration::from_secs(5);
+/// How long a notice stays in the footer before the key hints come back.
+const NOTICE_FOR: Duration = Duration::from_secs(12);
+
 /// Monitor lines kept on screen.
 const MONITOR_LINES: usize = 500;
 
@@ -76,6 +80,8 @@ pub enum Update {
     Accounts(Result<Vec<Value>, ConsoleError>),
     /// The mediator's configuration fields.
     Config(Result<Value, ConsoleError>),
+    /// The account on the Account tab, as `account/get` reports it.
+    AccountInfo(Result<Value, ConsoleError>),
     /// The mediator's answer to a configuration change.
     Patched(Result<Value, ConsoleError>),
     Inspected(Box<Result<InspectedMessage, ConsoleError>>),
@@ -121,6 +127,8 @@ enum Popup {
         key: String,
         value: String,
     },
+    /// Change an account's role, ACL and queue limits.
+    EditAccount(AccountEdit),
 }
 
 /// One line of the monitor pane. Events are kept raw and drawn on each frame,
@@ -171,9 +179,13 @@ pub struct App {
     accounts_state: TableState,
     config: Vec<Value>,
     config_state: TableState,
+    /// The Account tab's account: role, ACL, limits.
+    account_info: Option<Value>,
     monitor: MonitorPane,
     popup: Option<Popup>,
     notice: Option<(String, bool)>,
+    /// When `notice` was set; it gives way to the key hints after [`NOTICE_FOR`].
+    notice_at: Option<Instant>,
     updated: Option<Instant>,
 
     /// Nicknames for account hashes; saved to `book_path` when it is set.
@@ -222,6 +234,7 @@ impl App {
             accounts_state: TableState::default().with_selected(Some(0)),
             config: Vec::new(),
             config_state: TableState::default().with_selected(Some(0)),
+            account_info: None,
             monitor: MonitorPane {
                 visible: false,
                 failures_only: false,
@@ -236,6 +249,7 @@ impl App {
             },
             popup: None,
             notice: None,
+            notice_at: None,
             updated: None,
             book: AddressBook::new(),
             book_path: None,
@@ -243,6 +257,12 @@ impl App {
         app.know_self();
         app.refresh();
         app
+    }
+
+    /// Show `notice` in the footer for a while.
+    fn set_notice(&mut self, notice: (String, bool)) {
+        self.notice = Some(notice);
+        self.notice_at = Some(Instant::now());
     }
 
     /// Use `book` for account nicknames, saving changes to `path` when given.
@@ -317,7 +337,7 @@ impl App {
                 if let Some(h) = &hash
                     && account_hash(&did) != *h
                 {
-                    self.notice = Some((
+                    self.set_notice((
                         format!(
                             "that DID is account {}, not {}",
                             short(&account_hash(&did)),
@@ -336,7 +356,7 @@ impl App {
             }
             (Some(h), true) => h.clone(),
             (None, true) => {
-                self.notice = Some(("paste a DID (or an account hash) to name".into(), true));
+                self.set_notice(("paste a DID (or an account hash) to name".into(), true));
                 return Some(Popup::Name {
                     hash,
                     did,
@@ -348,10 +368,10 @@ impl App {
         let hash = account_hash(&key);
         if name.is_empty() {
             self.book.remove(&hash);
-            self.notice = Some((format!("{} unnamed", short(&hash)), false));
+            self.set_notice((format!("{} unnamed", short(&hash)), false));
         } else {
             self.book.insert(&key, &name);
-            self.notice = Some((format!("{} is now {name}", short(&hash)), false));
+            self.set_notice((format!("{} is now {name}", short(&hash)), false));
         }
         self.save_book();
         None
@@ -361,13 +381,14 @@ impl App {
         if let Some(path) = &self.book_path
             && let Err(e) = self.book.save(path)
         {
-            self.notice = Some((format!("address book not saved: {e}"), true));
+            self.set_notice((format!("address book not saved: {e}"), true));
         }
     }
 
     /// Show one account on the Account tab — `None` is the console's own.
     pub fn open_account(&mut self, did_hash: Option<String>) {
         self.target = did_hash;
+        self.account_info = None;
         self.tab = Tab::Account;
         self.message_state.select(Some(0));
         self.refresh();
@@ -433,6 +454,10 @@ impl App {
                 self.spawn(move |c| async move {
                     Update::Status(to_value(c.queue_status(t, Some(10)).await))
                 });
+                let t = target.clone();
+                self.spawn(
+                    move |c| async move { Update::AccountInfo(to_value(c.account_of(t).await)) },
+                );
                 self.spawn(move |c| async move {
                     let queue = if send {
                         specs::message::list::v0_1::Queue::Send
@@ -528,6 +553,13 @@ impl App {
                 }
                 Err(e) => self.error(e),
             },
+            Update::AccountInfo(r) => match r {
+                Ok(v) => {
+                    self.account_info = Some(v);
+                    ok(self)
+                }
+                Err(e) => self.error(e),
+            },
             Update::Config(r) => match r {
                 Ok(v) => {
                     let mut fields = v["fields"].as_array().cloned().unwrap_or_default();
@@ -543,7 +575,7 @@ impl App {
             },
             Update::Patched(r) => {
                 match r {
-                    Ok(v) => self.notice = Some(patch_summary(&v)),
+                    Ok(v) => self.set_notice(patch_summary(&v)),
                     Err(e) => self.error(e),
                 }
                 self.refresh();
@@ -554,14 +586,14 @@ impl App {
             },
             Update::PurgePreview(r) => match r {
                 Ok(plan) if plan.matched == 0 => {
-                    self.notice = Some(("nothing to purge".into(), false))
+                    self.set_notice(("nothing to purge".into(), false))
                 }
                 Ok(plan) => self.popup = Some(Popup::ConfirmPurge(plan)),
                 Err(e) => self.error(e),
             },
             Update::Done(r) => {
                 match r {
-                    Ok(msg) => self.notice = Some((msg, false)),
+                    Ok(msg) => self.set_notice((msg, false)),
                     Err(e) => self.error(e),
                 }
                 self.refresh();
@@ -581,7 +613,7 @@ impl App {
     }
 
     fn error(&mut self, e: ConsoleError) {
-        self.notice = Some((e.to_string(), true));
+        self.set_notice((e.to_string(), true));
     }
 
     // ─── Keys ────────────────────────────────────────────────────────────
@@ -654,7 +686,7 @@ impl App {
                         let value = field["value"].to_string();
                         self.popup = Some(Popup::EditConfig { key, value });
                     } else {
-                        self.notice = Some(("only limits can be changed at runtime".into(), true));
+                        self.set_notice(("only limits can be changed at runtime".into(), true));
                     }
                 }
             }
@@ -675,6 +707,22 @@ impl App {
                 self.message_send = !self.message_send;
                 self.message_state.select(Some(0));
                 self.refresh();
+            }
+            (Tab::Account, KeyCode::Char('e')) => {
+                if let Some(info) = &self.account_info {
+                    let hash = info["did"]
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| self.target.clone())
+                        .unwrap_or_else(|| self.console.did_hash().to_string());
+                    self.popup = Some(Popup::EditAccount(AccountEdit::new(
+                        hash,
+                        info,
+                        self.admin(),
+                    )));
+                } else {
+                    self.set_notice(("the account's settings are still loading".into(), true));
+                }
             }
             (Tab::Account, KeyCode::Char('o')) => {
                 self.target = None;
@@ -729,7 +777,7 @@ impl App {
                 mut name,
                 on_name,
             } => match code {
-                KeyCode::Esc => self.notice = Some(("cancelled".into(), false)),
+                KeyCode::Esc => self.set_notice(("cancelled".into(), false)),
                 KeyCode::Enter => self.popup = self.save_name(hash, did, name),
                 KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => {
                     self.popup = Some(Popup::Name {
@@ -773,7 +821,7 @@ impl App {
                         if let Some(entry) = self.book.entries().get(selected).cloned() {
                             self.book.remove(&entry.hash());
                             self.save_book();
-                            self.notice = Some((format!("{} removed", entry.name), false));
+                            self.set_notice((format!("{} removed", entry.name), false));
                         }
                         self.popup = Some(Popup::Book {
                             selected: selected.min(len.saturating_sub(2)),
@@ -787,8 +835,29 @@ impl App {
                     _ => {}
                 }
             }
+            Popup::EditAccount(mut edit) => match code {
+                KeyCode::Esc => self.set_notice(("cancelled".into(), false)),
+                KeyCode::Char('s') => {
+                    if edit.changed() {
+                        self.save_account(edit);
+                    } else {
+                        self.set_notice(("nothing changed".into(), false));
+                    }
+                }
+                other => {
+                    match other {
+                        KeyCode::Up | KeyCode::Char('k') => edit.up(),
+                        KeyCode::Down | KeyCode::Char('j') => edit.down(),
+                        KeyCode::Char(' ') | KeyCode::Enter => edit.toggle(),
+                        KeyCode::Backspace => edit.backspace(),
+                        KeyCode::Char(c) => edit.type_char(c),
+                        _ => {}
+                    }
+                    self.popup = Some(Popup::EditAccount(edit));
+                }
+            },
             Popup::EditConfig { key, mut value } => match code {
-                KeyCode::Esc => self.notice = Some(("cancelled".into(), false)),
+                KeyCode::Esc => self.set_notice(("cancelled".into(), false)),
                 KeyCode::Enter => {
                     // A number when it reads as one; otherwise the text as given.
                     let parsed = serde_json::from_str::<Value>(value.trim())
@@ -832,7 +901,7 @@ impl App {
             }
             // Anything but "y" cancels a confirmation.
             Popup::ConfirmDelete { .. } | Popup::ConfirmPurge(_) => {
-                self.notice = Some(("cancelled".into(), false));
+                self.set_notice(("cancelled".into(), false));
             }
         }
     }
@@ -850,6 +919,32 @@ impl App {
         }
         let i = state.selected().unwrap_or(0) as i32 + delta;
         state.select(Some(i.clamp(0, len as i32 - 1) as usize));
+    }
+
+    /// Send an account edit's changes with `account/update`.
+    fn save_account(&mut self, mut edit: AccountEdit) {
+        use specs::account::update::v0_1::{AccountType, MediatorAcl, QueueLimits};
+        let (role, acl, limits) = edit.changes();
+        let role: Option<AccountType> = match role.map(serde_json::from_value).transpose() {
+            Ok(v) => v,
+            Err(e) => return self.set_notice((format!("role: {e}"), true)),
+        };
+        let acl: Option<MediatorAcl> = match acl.map(serde_json::from_value).transpose() {
+            Ok(v) => v,
+            Err(e) => return self.set_notice((format!("acl: {e}"), true)),
+        };
+        let limits: Option<QueueLimits> = match limits.map(serde_json::from_value).transpose() {
+            Ok(v) => v,
+            Err(e) => return self.set_notice((format!("limits: {e}"), true)),
+        };
+        let target = (edit.target != self.console.did_hash()).then(|| edit.target.clone());
+        self.spawn(move |c| async move {
+            Update::Done(
+                c.update_account(target, role, acl, limits)
+                    .await
+                    .map(|_| "account updated".to_string()),
+            )
+        });
     }
 
     fn selected_config(&self) -> Option<Value> {
@@ -1154,7 +1249,9 @@ impl App {
     }
 
     fn render_footer(&self, f: &mut Frame, area: Rect) {
-        let line = match &self.notice {
+        let fresh = self.notice_at.is_some_and(|t| t.elapsed() < NOTICE_FOR);
+        let notice = if fresh { self.notice.as_ref() } else { None };
+        let line = match notice {
             Some((text, true)) => {
                 Line::styled(format!(" ✗ {text}"), Style::default().fg(Color::Red))
             }
@@ -1167,7 +1264,7 @@ impl App {
                         "↑↓ select  ⏎ open  s sort  x recv/send  n name  b book  m monitor  f failures  q quit"
                     }
                     Tab::Account => {
-                        "↑↓ select  i inspect  d delete  p purge  P purge peer  x recv/send  o own  n name  b book  m monitor  q quit"
+                        "↑↓ select  e edit account  i inspect  d delete  p purge  P purge peer  x recv/send  o own  n name  b book  m monitor  q quit"
                     }
                     Tab::Audit => "n name  b book  m monitor  r refresh  q quit",
                     Tab::Accounts => {
@@ -1368,11 +1465,16 @@ impl App {
         let parts = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(6),
+                Constraint::Length(7),
                 Constraint::Length(7),
                 Constraint::Min(4),
             ])
             .split(area);
+        let top = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(parts[0]);
+        self.render_account_settings(f, top[1]);
         let who = self.target.as_deref().map_or_else(
             || format!("{} (you)", short(self.console.did_hash())),
             |t| label(&self.book, t),
@@ -1382,8 +1484,8 @@ impl App {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(format!(" Account {who} "));
-        let inner = block.inner(parts[0]);
-        f.render_widget(block, parts[0]);
+        let inner = block.inner(top[0]);
+        f.render_widget(block, top[0]);
         let lines = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(1); 4])
@@ -1495,6 +1597,62 @@ impl App {
             self.messages.len()
         )));
         f.render_stateful_widget(table, parts[2], &mut self.message_state);
+    }
+
+    /// The Account tab's settings panel: role, limits, access list, ACL flags.
+    fn render_account_settings(&self, f: &mut Frame, area: Rect) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Settings — e to edit ");
+        let Some(a) = &self.account_info else {
+            f.render_widget(Paragraph::new("loading…").block(block), area);
+            return;
+        };
+        let limit = |k: &str| match a["queueLimits"][k].as_i64() {
+            Some(-1) => "unlimited".to_string(),
+            Some(n) => n.to_string(),
+            None => "default".to_string(),
+        };
+        let role = a["accountType"].as_str().unwrap_or("?").to_string();
+        let role_style = match role.as_str() {
+            "rootAdmin" => Style::default().fg(Color::Red),
+            "admin" => Style::default().fg(Color::Yellow),
+            _ => Style::default(),
+        };
+        let mut flags: Vec<Span> = Vec::new();
+        if let Some(acl) = a["acl"].as_object() {
+            let mut entries: Vec<(&String, bool)> = acl
+                .iter()
+                .filter_map(|(k, v)| v.as_bool().map(|b| (k, b)))
+                .collect();
+            entries.sort_by(|x, y| x.0.cmp(y.0));
+            for (k, on) in entries {
+                flags.push(Span::styled(
+                    format!("{}{k} ", if on { "✓" } else { "✗" }),
+                    Style::default().fg(if on { Color::Green } else { Color::DarkGray }),
+                ));
+            }
+        }
+        let text = vec![
+            Line::from(vec![Span::raw("role "), Span::styled(role, role_style)]),
+            Line::raw(format!(
+                "limits  send {}  receive {}",
+                limit("sendQueueLimit"),
+                limit("receiveQueueLimit")
+            )),
+            Line::raw(format!(
+                "access list  {} ({} entries)",
+                a["acl"]["accessListMode"].as_str().unwrap_or("?"),
+                a["accessListCount"].as_u64().unwrap_or(0)
+            )),
+            Line::from(flags),
+        ];
+        f.render_widget(
+            Paragraph::new(text)
+                .wrap(ratatui::widgets::Wrap { trim: false })
+                .block(block),
+            area,
+        );
     }
 
     fn render_accounts(&mut self, f: &mut Frame, area: Rect) {
@@ -2015,6 +2173,30 @@ fn render_popup(f: &mut Frame, area: Rect, popup: &Popup, book: &AddressBook) {
             (
                 " Address book ".into(),
                 format!("{body}\n\n↑↓ select  n rename  a add  x remove  any other key closes"),
+                false,
+            )
+        }
+        Popup::EditAccount(edit) => {
+            let rows = edit
+                .rows
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    let here = i == edit.selected;
+                    let value = match (&edit.typing, r) {
+                        (Some(t), Setting::Limit(..)) if here => format!("{t}▏"),
+                        _ => r.shown(),
+                    };
+                    format!("{} {:<30} {value}", if here { "▶" } else { " " }, r.name())
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (
+                format!(" Edit account {} ", short(&edit.target)),
+                format!(
+                    "{rows}\n\n↑↓ select  space toggle / cycle  digits set a limit (-1 = unlimited)\n\
+                     s save  Esc cancel. The mediator decides what this session may change."
+                ),
                 false,
             )
         }

@@ -829,7 +829,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-tui"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "affinidi-messaging-didcomm",
  "affinidi-messaging-mediator-admin",
