@@ -76,7 +76,14 @@ pub struct MediatorConsole {
     mode: Mode,
     capabilities: Capabilities,
     live: LiveStream,
+    /// The mediator's release, from its `readyz` probe; `None` when it could
+    /// not be read.
+    mediator_version: Option<String>,
 }
+
+/// The first mediator release that serves the operations tasks the console is
+/// built on: `messaging/stats`, `queue`, `message` and `monitor`.
+pub const OPERATIONS_SINCE: (u64, u64, u64) = (0, 28, 20);
 
 impl MediatorConsole {
     /// Connect as `identity`, with a private SDK instance.
@@ -142,6 +149,7 @@ impl MediatorConsole {
             .await
             .map_err(ConsoleError::from_call)?;
         let (mode, capabilities) = classify(&account);
+        let mediator_version = probe_version(&atm, &profile).await;
         let live = LiveStream::start(atm.clone(), profile.clone());
 
         Ok(Self {
@@ -154,6 +162,43 @@ impl MediatorConsole {
             mode,
             capabilities,
             live,
+            mediator_version,
+        })
+    }
+
+    /// The mediator's release, when it could be read at connect time.
+    pub fn mediator_version(&self) -> Option<&str> {
+        self.mediator_version.as_deref()
+    }
+
+    /// Whether the mediator serves the operations tasks: statistics, the queue
+    /// ranking and queue status, message listing, reading, deleting and
+    /// purging, and live traffic. Assumed to when its version is unknown;
+    /// the mediator then answers for itself.
+    pub fn serves_operations(&self) -> bool {
+        self.mediator_version
+            .as_deref()
+            .and_then(parse_version)
+            .is_none_or(|v| v >= OPERATIONS_SINCE)
+    }
+
+    /// Refuse locally, with the reason, a task this mediator is too old to
+    /// serve. An older mediator doesn't answer such a request at all, so
+    /// sending it would only wait out the reply timeout.
+    fn require_operations(&self, task: &'static str) -> Result<()> {
+        if self.serves_operations() {
+            return Ok(());
+        }
+        let (major, minor, patch) = OPERATIONS_SINCE;
+        Err(ConsoleError::Refused {
+            code: "protocol.trust_task.unsupported".into(),
+            comment: format!(
+                "this mediator ({}) does not serve {task}: it needs \
+                 affinidi-messaging-mediator {major}.{minor}.{patch} or later",
+                self.mediator_version
+                    .as_deref()
+                    .unwrap_or("unknown version")
+            ),
         })
     }
 
@@ -211,6 +256,7 @@ impl MediatorConsole {
 
     pub async fn stats(&self) -> Result<stats::show::v0_1::Response> {
         self.require_admin("mediator statistics")?;
+        self.require_operations("messaging/stats/show")?;
         self.atm
             .trust_tasks()
             .stats_show(&self.profile)
@@ -227,6 +273,7 @@ impl MediatorConsole {
         limit: Option<u32>,
     ) -> Result<queue::list::v0_1::Response> {
         self.require_admin("the queue ranking")?;
+        self.require_operations("messaging/queue/list")?;
         self.atm
             .trust_tasks()
             .queue_list(&self.profile, queue, sort, None, cursor, limit)
@@ -287,6 +334,7 @@ impl MediatorConsole {
         peers: Option<u32>,
     ) -> Result<queue::status::v0_1::Response> {
         self.require_target(&target, "another account's queues")?;
+        self.require_operations("messaging/queue/status")?;
         self.atm
             .trust_tasks()
             .queue_status(&self.profile, target, peers)
@@ -304,6 +352,7 @@ impl MediatorConsole {
         limit: Option<u32>,
     ) -> Result<message::list::v0_1::Response> {
         self.require_target(&target, "another account's messages")?;
+        self.require_operations("messaging/message/list")?;
         self.atm
             .trust_tasks()
             .message_list(&self.profile, target, queue, peer, cursor, limit)
@@ -320,6 +369,7 @@ impl MediatorConsole {
                 "reading another account's message body needs a rootAdmin",
             ));
         }
+        self.require_operations("messaging/message/get")?;
         let got = self
             .atm
             .trust_tasks()
@@ -341,6 +391,7 @@ impl MediatorConsole {
         msg_ids: &[String],
     ) -> Result<message::delete::v0_1::Response> {
         self.require_target(&target, "another account's messages")?;
+        self.require_operations("messaging/message/delete")?;
         self.atm
             .trust_tasks()
             .message_delete(&self.profile, target, msg_ids)
@@ -379,6 +430,7 @@ impl MediatorConsole {
         request: &PurgeRequest,
         dry_run: bool,
     ) -> Result<queue::purge::v0_1::Response> {
+        self.require_operations("messaging/queue/purge")?;
         self.atm
             .trust_tasks()
             .queue_purge(
@@ -419,6 +471,7 @@ impl MediatorConsole {
     /// other account only its own traffic. The feed renews its lease itself
     /// and unsubscribes when dropped.
     pub async fn monitor(&self, filter: MonitorFilter) -> Result<MonitorFeed> {
+        self.require_operations("messaging/monitor/subscribe")?;
         self.live.open_feed(&self.atm, &self.profile, filter).await
     }
 
@@ -489,6 +542,31 @@ fn mediator_did_in(uri: &str) -> Option<String> {
     uri.starts_with("did:").then(|| uri.to_string())
 }
 
+/// The mediator's release from its public `readyz` endpoint, best effort: any
+/// failure (no REST endpoint, unreachable, an older mediator without a
+/// `version` member) is `None`.
+async fn probe_version(atm: &ATM, profile: &ATMProfile) -> Option<String> {
+    let base = profile.get_mediator_rest_endpoint()?;
+    let url = format!("{}/readyz", base.trim_end_matches('/'));
+    let response = atm
+        .get_tdk()
+        .client()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .ok()?;
+    let body: Value = response.json().await.ok()?;
+    body["version"].as_str().map(str::to_string)
+}
+
+/// `major.minor.patch`, ignoring any pre-release or build suffix.
+fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
+    let core = v.split(['-', '+']).next()?;
+    let mut parts = core.split('.').map(|p| p.parse::<u64>().ok());
+    Some((parts.next()??, parts.next()??, parts.next()??))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,6 +578,16 @@ mod tests {
             "acl": acl,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn versions_parse_and_compare_against_the_operations_floor() {
+        assert_eq!(parse_version("0.26.3"), Some((0, 26, 3)));
+        assert_eq!(parse_version("0.28.20-rc.1"), Some((0, 28, 20)));
+        assert_eq!(parse_version("nonsense"), None);
+        assert!(parse_version("0.26.3").unwrap() < OPERATIONS_SINCE);
+        assert!(parse_version("0.28.20").unwrap() >= OPERATIONS_SINCE);
+        assert!(parse_version("0.29.0").unwrap() >= OPERATIONS_SINCE);
     }
 
     #[test]

@@ -29,9 +29,12 @@ in another application ([Embedding](#embedding)).
 
 - **A mediator that serves the operations Trust Tasks.** You need
   `affinidi-messaging-mediator` **0.28.20 or later**, which serves the
-  `messaging/stats`, `queue`, `message` and `monitor` tasks. Older mediators
-  still work for the account views, but other screens will report the tasks as
-  unsupported.
+  `messaging/stats`, `queue`, `message` and `monitor` tasks. On an older
+  mediator the console still connects, and the header shows its version:
+  - the Audit screen (and account settings) work;
+  - the Dashboard, Queues and Account screens and the monitor explain what
+    they need instead of loading;
+  - an administrator starts on Audit.
 - **An identity:** a DID and its secrets, in a TDK profile JSON file:
   ```json
   { "alias": "operator", "did": "did:…", "mediator": "did:…", "secrets": [ … ] }
