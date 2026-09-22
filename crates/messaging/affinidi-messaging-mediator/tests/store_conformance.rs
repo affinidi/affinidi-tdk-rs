@@ -1090,6 +1090,32 @@ async fn check_expiry_sweep_reports_each_message(store: Arc<dyn MediatorStore>) 
     assert!(store.get_message(to, &kept).await.unwrap().is_some());
 }
 
+/// Configuration overrides round-trip, replace as a whole, and start absent.
+async fn check_config_overrides(store: Arc<dyn MediatorStore>) {
+    assert_eq!(store.config_overrides_get().await.unwrap(), None);
+    store
+        .config_overrides_set(r#"{"limits.listed_messages":7}"#)
+        .await
+        .expect("set");
+    assert_eq!(
+        store.config_overrides_get().await.unwrap().as_deref(),
+        Some(r#"{"limits.listed_messages":7}"#)
+    );
+    store.config_overrides_set("{}").await.expect("clear");
+    assert_eq!(
+        store.config_overrides_get().await.unwrap().as_deref(),
+        Some("{}")
+    );
+}
+
+/// Checks that share Redis DB 0, run one after another so neither flushes the
+/// other's keys mid-run.
+#[cfg(feature = "redis-backend")]
+async fn check_db0_in_sequence(store: Arc<dyn MediatorStore>) {
+    check_expiry_sweep_reports_each_message(store.clone()).await;
+    check_config_overrides(store).await;
+}
+
 /// Generate one `#[tokio::test]` per check for a backend `$ctor`.
 /// Gated to the in-process backends that use it — a Redis-only build drives the
 /// async `conformance_for_redis!` instead, so an ungated def would warn (unused)
@@ -1164,6 +1190,10 @@ macro_rules! conformance_for {
             async fn expiry_sweep_reports_each_message() {
                 check_expiry_sweep_reports_each_message(ready($ctor).await).await;
             }
+            #[tokio::test]
+            async fn config_overrides() {
+                check_config_overrides(ready($ctor).await).await;
+            }
         }
     };
 }
@@ -1212,6 +1242,7 @@ conformance_for_redis!(redis,
     delivery_decision_matches_access_list => check_delivery_decision_matches_access_list @ 13,
     v1_routing_keys          => check_v1_routing_keys          @ 14,
     trust_task_claim         => check_trust_task_claim         @ 15,
-    // DB 0: every numbered index a default Redis offers (0..=15) is in use.
-    expiry_sweep_reports_each_message => check_expiry_sweep_reports_each_message @ 0,
+    // DB 0: every numbered index a default Redis offers (0..=15) is in use, so
+    // the checks added since share it, one after another in a single test.
+    db0_checks => check_db0_in_sequence @ 0,
 );

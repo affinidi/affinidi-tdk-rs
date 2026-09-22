@@ -410,6 +410,29 @@ impl TrustTasksOps<'_> {
         Ok(response.payload)
     }
 
+    /// Generic `config/patch` (rootAdmin only) — change mediator limits at
+    /// runtime. `overrides` maps keys such as `limits.queued_send_messages_hard`
+    /// to their new value; `null` removes a key's override. Each key is checked
+    /// on its own: the response lists which took effect now (`applied`), which
+    /// were stored for the next start (`pending_restart`), and which were
+    /// refused, with the reason (`rejected`). Accepted changes are stored, so
+    /// they survive a restart.
+    pub async fn config_patch(
+        &self,
+        profile: &Arc<ATMProfile>,
+        overrides: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<config::patch::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let p: config::patch::v0_1::Payload =
+            payload(config::patch::v0_1::Payload::builder().overrides(overrides))?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+        let response: TrustTask<config::patch::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
     /// Send a `messaging/stats/show` Trust Task (admin only) and return the
     /// mediator's telemetry: version and uptime, live connections, lifetime
     /// message counters (monotonic — derive rates from successive readings),

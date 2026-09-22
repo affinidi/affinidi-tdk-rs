@@ -59,6 +59,10 @@ pub fn install_jwt_crypto_provider() {
 pub struct SharedData {
     /// Mediator configuration loaded at startup.
     pub config: Config,
+    /// The limits in effect now: `config.limits` with any live `config/patch`
+    /// changes. Read the live keys through [`SharedData::limits`]; see
+    /// [`common::config::overrides`].
+    pub live_limits: common::config::overrides::LiveLimits,
     /// Timestamp when the mediator service was started.
     pub service_start_timestamp: DateTime<Utc>,
     /// Cached DID resolver for resolving DID documents.
@@ -122,6 +126,11 @@ pub struct SharedData {
 }
 
 impl SharedData {
+    /// The limits in effect now, including live `config/patch` changes.
+    pub fn limits(&self) -> Arc<common::config::limits::LimitsConfig> {
+        self.live_limits.get()
+    }
+
     /// The mediator's TSP identity, derived (and cached) on first use from its
     /// configured DID document and operating secrets.
     #[cfg(feature = "tsp")]

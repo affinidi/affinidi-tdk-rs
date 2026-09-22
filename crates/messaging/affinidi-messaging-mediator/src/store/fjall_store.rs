@@ -190,6 +190,8 @@ const PARTITION_TRUST_TASK_CLAIMS: &str = "trust_task_claims";
 const PARTITION_FORWARD_QUEUE: &str = "forward_queue";
 const PARTITION_FORWARD_PENDING: &str = "forward_pending";
 const PARTITION_GLOBALS: &str = "globals";
+/// `globals` key holding the `config/patch` overrides, a JSON object.
+const CONFIG_OVERRIDES_KEY: &str = "CONFIG_OVERRIDES";
 const PARTITION_STREAMING_CLIENTS: &str = "streaming_clients";
 const PARTITION_AUDIT_LOG: &str = "audit_log";
 /// Separator between the two hashes in a `peer_queue` key. `0xFF` is not a
@@ -3048,6 +3050,20 @@ impl MediatorStore for FjallStore {
     }
 
     // ─── Message expiry processor ───────────────────────────────────────────
+
+    async fn config_overrides_get(&self) -> Result<Option<String>, MediatorError> {
+        let value = self
+            .globals
+            .get(CONFIG_OVERRIDES_KEY)
+            .map_err(|e| Self::db_err("config_overrides_get", e))?;
+        Ok(value.map(|v| String::from_utf8_lossy(&v).into_owned()))
+    }
+
+    async fn config_overrides_set(&self, overrides: &str) -> Result<(), MediatorError> {
+        self.globals
+            .insert(CONFIG_OVERRIDES_KEY, overrides.as_bytes())
+            .map_err(|e| Self::db_err("config_overrides_set", e))
+    }
 
     async fn sweep_expired_messages(
         &self,

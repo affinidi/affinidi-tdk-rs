@@ -1259,6 +1259,37 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         Ok(0)
     }
 
+    // ─── Configuration overrides ────────────────────────────────────────────
+
+    /// The mediator's stored configuration overrides, as a JSON object of
+    /// `key → value` (keys like `limits.queued_send_messages_hard`), or `None`
+    /// when none have been stored. Written by `config/patch` and layered over
+    /// the file/env configuration at startup.
+    ///
+    /// The default has none, which is the truth for a store that cannot keep
+    /// them.
+    async fn config_overrides_get(&self) -> Result<Option<String>, MediatorError> {
+        Ok(None)
+    }
+
+    /// Replace the stored configuration overrides with `overrides`, a JSON
+    /// object. An empty object clears them.
+    ///
+    /// This replaces the whole document, so a caller changing it must read,
+    /// modify and write under one lock; the mediator does all of that under
+    /// its patch lock (`LiveLimits::lock_for_patch`).
+    ///
+    /// **The default refuses**: a patch must not report a value as stored when
+    /// the store kept nothing. Every built-in backend overrides it.
+    async fn config_overrides_set(&self, overrides: &str) -> Result<(), MediatorError> {
+        let _ = overrides;
+        Err(MediatorError::InternalError(
+            14,
+            "NA".into(),
+            "this store cannot keep configuration overrides".into(),
+        ))
+    }
+
     // ─── Stats / counters ───────────────────────────────────────────────────
 
     /// Snapshot the global counters for the stats thread, the admin status

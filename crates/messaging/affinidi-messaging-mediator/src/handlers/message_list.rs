@@ -93,7 +93,7 @@ pub async fn message_list_handler(
                 &did_hash,
                 folder,
                 None,
-                state.config.limits.listed_messages as u32,
+                state.limits().listed_messages as u32,
             )
             .await?;
 

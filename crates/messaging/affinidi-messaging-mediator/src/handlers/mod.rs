@@ -247,7 +247,7 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
     .await
     {
         Ok(len) => {
-            let queue_status = if len >= state.config.limits.forward_task_queue {
+            let queue_status = if len >= state.limits().forward_task_queue {
                 all_ok = false;
                 "warn"
             } else {
@@ -257,7 +257,7 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
                 "name": "forward_queue",
                 "status": queue_status,
                 "length": len,
-                "limit": state.config.limits.forward_task_queue
+                "limit": state.limits().forward_task_queue
             }));
         }
         Err(e) => {
@@ -432,7 +432,7 @@ impl LoadState {
 
         // Check queue depth
         if let Ok(queue_len) = state.database.forward_queue_len().await {
-            let limit = state.config.limits.forward_task_queue;
+            let limit = state.limits().forward_task_queue;
             if queue_len >= limit {
                 return LoadState::Critical;
             }

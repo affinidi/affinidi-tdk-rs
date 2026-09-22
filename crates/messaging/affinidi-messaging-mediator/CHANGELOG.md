@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased (0.28.27) — change limits at runtime with `config/patch`
+
+The mediator serves the generic **`config/patch`** Trust Task. A rootAdmin can
+change mediator limits without editing `mediator.toml` or restarting.
+
+| Key | Takes effect |
+|---|---|
+| `limits.queued_send_messages_{soft,hard,per_peer}`, `limits.queued_receive_messages_{soft,hard}`, `limits.message_expiry_seconds`, `limits.listed_messages`, `limits.deleted_messages`, `limits.to_recipients`, `limits.to_keys_per_recipient`, `limits.attachments_max_count`, `limits.access_list_limit`, `limits.oob_invite_ttl`, `limits.forward_task_queue` | **now** (`applied`) |
+| `limits.max_websocket_connections{,_per_did}`, `limits.ws_send_buffer`, `limits.rate_limit_{per_ip,burst}`, `limits.did_rate_limit_{per_second,burst}`, `limits.http_size`, `limits.ws_size` | at the next start (`pendingRestart`) |
+
+- **A patch can tighten, never loosen.** Each key must be a whole number
+  between a floor and a ceiling:
+  - The floor keeps the protection on, so `0`/`-1` ("unlimited" or
+    "disabled") are refused. Message expiry can't go below an hour.
+  - The ceiling is the value in the configuration, or a fixed cap where the
+    configured value is itself unlimited.
+  - So a rootAdmin can make the mediator stricter than configured, or restore
+    it, but not raise a limit beyond the operator's configuration: that takes
+    a configuration change and a restart.
+  - The same bounds apply to stored overrides at startup, so an operator who
+    lowers a configured value wins over an older, looser override.
+- **Checks per key:** each key is checked on its own, including soft ≤ hard
+  for the queue limits. A bad or unknown key is reported under `rejected`
+  with the reason and doesn't block the rest. Not patchable:
+  `limits.message_size` and `limits.pubsub_buffer`, which size the store
+  before it opens; `limits.delivered_expiry_seconds`, where tightening
+  destroys uncollected messages; and everything outside `limits`.
+- **Stored:** accepted changes are kept in the store as overrides and layered
+  over the file/env configuration at every start, so they survive a restart.
+  A `null` value removes an override, and the key returns to its configured
+  value.
+- **Stale overrides:** an override that no longer applies is logged and
+  skipped at startup, never fatal.
+- **Audited:** every patch is written to the audit log (`configPatch`).
+- **How live limits work:** the request path now reads the live limits
+  through `SharedData::limits()` (backed by `SharedData::live_limits`), and
+  the queue survey reads them on each run
+  (`tasks::statistics::statistics_with_live_limits`). `statistics` and
+  `statistics_with_snapshot` keep their signatures.
+
+**`config/show` changed:**
+- Fields are now **dotted scalar keys** (`limits.listed_messages`,
+  `database.database_url`, …) instead of whole top-level objects, as the spec
+  requires of `value`. Arrays are given as their JSON text.
+- Limits show their value **in effect now**. `requiresRestart` is false for
+  the live keys, and `source` is `override` for a key a patch supplies.
+- **Credentials in URLs are redacted**, including inside arrays, as the spec
+  requires of secret-bearing values. `database.database_url` used to be
+  returned verbatim, including any password in a `redis://:password@host`
+  URL.
+
+Requires `affinidi-messaging-mediator-common` 0.16.19.
+
 ## Unreleased (0.28.26) — a refusal answers its request
 
 **Fixed: refusals now reach the caller.** A DIDComm request the mediator

@@ -56,7 +56,7 @@ async fn _store_message(
             to_did_hash,
             from_did_hash,
             expiry,
-            state.config.limits.queue_stream_maxlen(),
+            state.limits().queue_stream_maxlen(),
         )
         .await?;
     state
@@ -110,7 +110,7 @@ pub(crate) async fn store_message(
                         to_dids
                     );
 
-                    if to_dids.len() > state.config.limits.to_recipients {
+                    if to_dids.len() > state.limits().to_recipients {
                         return Err(MediatorError::problem_with_log(
                             76,
                             &session.session_id,
@@ -121,13 +121,13 @@ pub(crate) async fn store_message(
                             "Message has too many recipients ({1}). Max: {2}",
                             vec![
                                 to_dids.len().to_string(),
-                                state.config.limits.to_recipients.to_string(),
+                                state.limits().to_recipients.to_string(),
                             ],
                             StatusCode::INTERNAL_SERVER_ERROR,
                             format!(
                                 "Message has too many recipients ({}). Max: {}",
                                 to_dids.len(),
-                                state.config.limits.to_recipients
+                                state.limits().to_recipients
                             ),
                         ));
                     }
@@ -135,13 +135,13 @@ pub(crate) async fn store_message(
                     let expires_at = if let Some(expires_at) = message.expires_time {
                         let now = state.clock.unix_secs();
 
-                        if expires_at > now + state.config.limits.message_expiry_seconds {
-                            now + state.config.limits.message_expiry_seconds
+                        if expires_at > now + state.limits().message_expiry_seconds {
+                            now + state.limits().message_expiry_seconds
                         } else {
                             expires_at
                         }
                     } else {
-                        state.clock.unix_secs() + state.config.limits.message_expiry_seconds
+                        state.clock.unix_secs() + state.limits().message_expiry_seconds
                     };
 
                     for recipient in to_dids {
@@ -256,7 +256,7 @@ pub(crate) async fn store_message(
                     &*state.config.security.mediator_secrets,
                     &state.did_resolver,
                     &PackOptions {
-                        to_keys_per_recipient_limit: state.config.limits.to_keys_per_recipient,
+                        to_keys_per_recipient_limit: state.limits().to_keys_per_recipient,
                         forward: true,
                     },
                     &state.config.processors.forwarding.blocked_forwarding,
@@ -367,13 +367,13 @@ pub(crate) async fn store_forwarded_message(
         let expires_at = if let Some(expires_at) = expires_at {
             let now = state.clock.unix_secs();
 
-            if expires_at > now + state.config.limits.message_expiry_seconds {
-                now + state.config.limits.message_expiry_seconds
+            if expires_at > now + state.limits().message_expiry_seconds {
+                now + state.limits().message_expiry_seconds
             } else {
                 expires_at
             }
         } else {
-            state.clock.unix_secs() + state.config.limits.message_expiry_seconds
+            state.clock.unix_secs() + state.limits().message_expiry_seconds
         };
 
         match state
@@ -384,7 +384,7 @@ pub(crate) async fn store_forwarded_message(
                 &recipient_did_hash,
                 sender_hash,
                 expires_at,
-                state.config.limits.queue_stream_maxlen(),
+                state.limits().queue_stream_maxlen(),
             )
             .await
         {

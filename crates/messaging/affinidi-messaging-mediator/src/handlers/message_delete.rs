@@ -56,7 +56,7 @@ pub async fn message_delete_handler(
         }
 
         debug!("Deleting ({}) messages", body.message_ids.len());
-        if body.message_ids.len() > state.config.limits.deleted_messages {
+        if body.message_ids.len() > state.limits().deleted_messages {
             return Err(MediatorError::problem_with_log(
                 43,
                 session.session_id,

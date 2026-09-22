@@ -469,7 +469,7 @@ async fn deliver_forward(
 
             state
                 .database
-                .forward_queue_enqueue(&entry, state.config.limits.forward_task_queue)
+                .forward_queue_enqueue(&entry, state.limits().forward_task_queue)
                 .await
                 .map_err(|e| {
                     MediatorError::problem_with_log(
@@ -798,10 +798,10 @@ pub(crate) async fn process(
             session,
         )?;
 
-        if attachments.len() > state.config.limits.attachments_max_count {
+        if attachments.len() > state.limits().attachments_max_count {
             warn!(
                 "Too many attachments in message, limit is {}",
-                state.config.limits.attachments_max_count
+                state.limits().attachments_max_count
             );
             return Err(MediatorError::problem_with_log(
                 63,
@@ -813,13 +813,13 @@ pub(crate) async fn process(
                 "Forwarded message has too many attachments ({1}). Limit is ({2})",
                 vec![
                     attachments.len().to_string(),
-                    state.config.limits.attachments_max_count.to_string(),
+                    state.limits().attachments_max_count.to_string(),
                 ],
                 StatusCode::BAD_REQUEST,
                 format!(
                     "Forwarded message has too many attachments ({}). Limit is ({})",
                     attachments.len(),
-                    state.config.limits.attachments_max_count
+                    state.limits().attachments_max_count
                 ),
             ));
         }
@@ -832,11 +832,11 @@ pub(crate) async fn process(
                 state.database.forward_queue_len(),
             )
             .await?
-                >= state.config.limits.forward_task_queue
+                >= state.limits().forward_task_queue
         {
             warn!(
                 "Forward task queue is full, limit is {}",
-                state.config.limits.forward_task_queue
+                state.limits().forward_task_queue
             );
             return Err(MediatorError::problem(
                 64,
@@ -848,7 +848,7 @@ pub(crate) async fn process(
                 "Mediator forwarding queue is at max limit, try again later",
                 vec![
                     attachments.len().to_string(),
-                    state.config.limits.attachments_max_count.to_string(),
+                    state.limits().attachments_max_count.to_string(),
                 ],
                 StatusCode::SERVICE_UNAVAILABLE,
             ));
@@ -894,13 +894,13 @@ pub(crate) async fn process(
         let expires_at = if let Some(expires_at) = msg.expires_time {
             let now = state.clock.unix_secs();
 
-            if expires_at > now + state.config.limits.message_expiry_seconds {
-                now + state.config.limits.message_expiry_seconds
+            if expires_at > now + state.limits().message_expiry_seconds {
+                now + state.limits().message_expiry_seconds
             } else {
                 expires_at
             }
         } else {
-            state.clock.unix_secs() + state.config.limits.message_expiry_seconds
+            state.clock.unix_secs() + state.limits().message_expiry_seconds
         };
 
         deliver_forward(

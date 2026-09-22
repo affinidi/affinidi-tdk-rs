@@ -688,7 +688,7 @@ async fn deliver_opaque(
         data: WrapperType::Envelope(
             to_vid.to_string(),
             encoded,
-            state.clock.unix_secs() + state.config.limits.message_expiry_seconds,
+            state.clock.unix_secs() + state.limits().message_expiry_seconds,
         ),
     };
 
@@ -783,14 +783,14 @@ async fn forward_tsp_remote(
         endpoint_url: endpoint_url.clone(),
         received_at_ms: state.clock.unix_millis(),
         delay_milli: 0,
-        expires_at: state.clock.unix_secs() + state.config.limits.message_expiry_seconds,
+        expires_at: state.clock.unix_secs() + state.limits().message_expiry_seconds,
         retry_count: 0,
         hop_count: 1,
     };
 
     state
         .database
-        .forward_queue_enqueue(&entry, state.config.limits.forward_task_queue)
+        .forward_queue_enqueue(&entry, state.limits().forward_task_queue)
         .await
         .map_err(|e| {
             tsp_problem(
@@ -1250,7 +1250,7 @@ async fn handle_inbound_didcomm(
                             to_did.into(),
                             message.into(),
                             state.clock.unix_secs()
-                                + state.config.limits.message_expiry_seconds,
+                                + state.limits().message_expiry_seconds,
                         ),
                     };
 

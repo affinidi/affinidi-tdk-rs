@@ -80,10 +80,10 @@ pub async fn queue_status_handler(
 
         let send_limit = account
             .queue_send_limit
-            .unwrap_or(state.config.limits.queued_send_messages_soft);
+            .unwrap_or(state.limits().queued_send_messages_soft);
         let receive_limit = account
             .queue_receive_limit
-            .unwrap_or(state.config.limits.queued_receive_messages_soft);
+            .unwrap_or(state.limits().queued_receive_messages_soft);
 
         // Best-effort: a queue whose age cannot be read still reports its
         // depth. A status endpoint that fails outright because one range read
@@ -110,7 +110,7 @@ pub async fn queue_status_handler(
                 saturation: saturation(account.receive_queue_count, receive_limit),
                 oldest_age_secs: receive_age,
             },
-            send_per_peer_limit: state.config.limits.queued_send_messages_per_peer,
+            send_per_peer_limit: state.limits().queued_send_messages_per_peer,
         };
 
         Ok((

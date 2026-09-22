@@ -55,7 +55,7 @@ pub async fn message_outbound_handler(
         // Mirror the delete handler's per-request cap: each id is a database
         // round-trip, so an unbounded list lets an authenticated client tie up
         // the mediator with a single request.
-        if body.message_ids.len() > state.config.limits.listed_messages {
+        if body.message_ids.len() > state.limits().listed_messages {
             return Err(MediatorError::problem_with_log(
                 43,
                 session.session_id,
@@ -66,7 +66,7 @@ pub async fn message_outbound_handler(
                 "Invalid limit ({1}). Maximum of {2} messages can be fetched per transaction",
                 vec![
                     body.message_ids.len().to_string(),
-                    state.config.limits.listed_messages.to_string(),
+                    state.limits().listed_messages.to_string(),
                 ],
                 StatusCode::BAD_REQUEST,
                 "Invalid limit",

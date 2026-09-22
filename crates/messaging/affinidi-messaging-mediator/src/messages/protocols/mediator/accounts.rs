@@ -492,8 +492,8 @@ pub(crate) async fn process(
                         if let Some(limit) = send_queue_limit {
                             if limit == -1 || limit == -2 {
                                 send_queue_limit
-                            } else if limit > state.config.limits.queued_send_messages_hard {
-                                Some(state.config.limits.queued_send_messages_hard)
+                            } else if limit > state.limits().queued_send_messages_hard {
+                                Some(state.limits().queued_send_messages_hard)
                             } else {
                                 send_queue_limit
                             }
@@ -508,8 +508,8 @@ pub(crate) async fn process(
                         if let Some(limit) = receive_queue_limit {
                             if limit == -1 || limit == -2 {
                                 receive_queue_limit
-                            } else if limit > state.config.limits.queued_receive_messages_hard {
-                                Some(state.config.limits.queued_receive_messages_hard)
+                            } else if limit > state.limits().queued_receive_messages_hard {
+                                Some(state.limits().queued_receive_messages_hard)
                             } else {
                                 receive_queue_limit
                             }
@@ -537,7 +537,7 @@ pub(crate) async fn process(
                     && limit != -2
                     && let Some(msg) =
                         affinidi_messaging_mediator_config::validate::warn_per_peer_not_below_receive_limit(
-                            state.config.limits.queued_send_messages_per_peer,
+                            state.limits().queued_send_messages_per_peer,
                             limit,
                             &format!("account {did_hash}"),
                         )

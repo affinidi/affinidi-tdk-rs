@@ -872,3 +872,178 @@ async fn a_monitor_subscription_over_tsp_is_refused_not_silent() {
         .await
         .expect("account/get over TSP is still served");
 }
+
+/// Patch a mediator's limits as `user` (who must be live).
+async fn patch(
+    env: &TestEnvironment,
+    user: &TestUser,
+    overrides: serde_json::Value,
+) -> Result<serde_json::Value, affinidi_messaging_sdk::errors::ATMError> {
+    env.atm
+        .trust_tasks()
+        .config_patch(&user.profile, overrides.as_object().unwrap().clone())
+        .await
+        .map(|r| serde_json::to_value(r).unwrap())
+}
+
+/// One key's field from `config/show`.
+async fn shown(env: &TestEnvironment, user: &TestUser, key: &str) -> serde_json::Value {
+    let fields = env
+        .atm
+        .trust_tasks()
+        .config_show(&user.profile, Some(vec![key.to_string()]))
+        .await
+        .expect("config/show");
+    serde_json::to_value(&fields.fields[0]).unwrap()
+}
+
+/// A live key takes effect at once; a restart-gated one is stored for the next
+/// start; a bad or unknown one is refused with its reason — each on its own.
+#[tokio::test]
+async fn a_root_admin_patches_limits_and_each_key_is_answered() {
+    use affinidi_messaging_sdk::messages::{DeleteMessageRequest, fetch::FetchOptions};
+
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let bob = env.add_user("bob").await.expect("bob");
+    let root = promoted(&env, "root", AccountType::RootAdmin).await;
+    send_direct(&env, &alice, &bob).await;
+    send_direct(&env, &alice, &bob).await;
+
+    let answer = patch(
+        &env,
+        &root,
+        json!({
+            "limits.deleted_messages": 1,
+            "limits.rate_limit_per_ip": 50,
+            "limits.queued_send_messages_hard": 1,
+            "limits.listed_messages": 100_000,
+            "limits.message_size": 10,
+            "security.use_ssl": true,
+        }),
+    )
+    .await
+    .expect("config/patch");
+    assert_eq!(answer["applied"], json!(["limits.deleted_messages"]));
+    assert_eq!(
+        answer["pendingRestart"],
+        json!(["limits.rate_limit_per_ip"])
+    );
+    let rejected: Vec<&str> = answer["rejected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(rejected.len(), 4, "{answer}");
+    for key in [
+        "limits.queued_send_messages_hard", // below its soft limit
+        "limits.listed_messages",           // looser than configured
+        "limits.message_size",              // not patchable
+        "security.use_ssl",                 // not a limit
+    ] {
+        assert!(rejected.contains(&key), "{key} must be rejected: {answer}");
+    }
+
+    // The live change is enforced now: bob may delete one message per request.
+    let ids: Vec<String> = env
+        .atm
+        .fetch_messages(&bob.profile, &FetchOptions::default())
+        .await
+        .expect("fetch")
+        .success
+        .iter()
+        .map(|m| m.msg_id.clone())
+        .collect();
+    assert_eq!(ids.len(), 2);
+    let too_many = env
+        .atm
+        .delete_messages_direct(
+            &bob.profile,
+            &DeleteMessageRequest {
+                message_ids: ids.clone(),
+            },
+        )
+        .await;
+    assert!(too_many.is_err(), "two ids exceed the patched limit of one");
+
+    // config/show reports the override, live.
+    let field = shown(&env, &root, "limits.deleted_messages").await;
+    assert_eq!(field["value"], 1);
+    assert_eq!(field["source"], "override");
+    assert_eq!(field["requiresRestart"], false);
+    let field = shown(&env, &root, "limits.rate_limit_per_ip").await;
+    assert_eq!(field["requiresRestart"], true);
+
+    // null removes the override: the limit is back to the configured value.
+    patch(&env, &root, json!({ "limits.deleted_messages": null }))
+        .await
+        .expect("reset");
+    env.atm
+        .delete_messages_direct(&bob.profile, &DeleteMessageRequest { message_ids: ids })
+        .await
+        .expect("two ids are within the configured limit again");
+    assert_eq!(
+        shown(&env, &root, "limits.deleted_messages").await["source"],
+        "mediator"
+    );
+
+    // Every patch is on the record.
+    let audit = format!(
+        "{:?}",
+        env.atm
+            .trust_tasks()
+            .audit_list(&root.profile, None, None)
+            .await
+            .expect("audit")
+    );
+    assert!(audit.contains("configPatch"), "{audit}");
+}
+
+/// Changing the mediator for every account is a rootAdmin's call.
+#[tokio::test]
+async fn an_admin_may_not_patch_the_configuration() {
+    let env = direct_env().await;
+    let admin = promoted(&env, "admin", AccountType::Admin).await;
+    let refused = patch(&env, &admin, json!({ "limits.deleted_messages": 1 })).await;
+    assert!(refused.is_err(), "{refused:?}");
+}
+
+/// A stored override is applied when the mediator next starts on the same
+/// store, restart-gated keys included.
+#[tokio::test]
+async fn a_patch_survives_a_restart() {
+    use affinidi_messaging_test_mediator::TestMediator;
+
+    let first = direct_env().await;
+    let root = promoted(&first, "root", AccountType::RootAdmin).await;
+    patch(
+        &first,
+        &root,
+        json!({ "limits.listed_messages": 7, "limits.rate_limit_per_ip": 32 }),
+    )
+    .await
+    .expect("patch");
+    let store = first.mediator.store();
+    first.shutdown().await.expect("shutdown");
+
+    let second = TestEnvironment::new(
+        TestMediator::builder()
+            .local_direct_delivery(true, false)
+            .store(store)
+            .spawn()
+            .await
+            .expect("restart on the same store"),
+    )
+    .await
+    .expect("environment");
+    let root = promoted(&second, "root2", AccountType::RootAdmin).await;
+    let listed = shown(&second, &root, "limits.listed_messages").await;
+    assert_eq!(listed["value"], 7);
+    assert_eq!(listed["source"], "override");
+    assert_eq!(
+        shown(&second, &root, "limits.rate_limit_per_ip").await["value"],
+        32,
+        "a restart-gated override is in force after the restart"
+    );
+}

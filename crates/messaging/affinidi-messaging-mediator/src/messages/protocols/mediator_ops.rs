@@ -87,7 +87,7 @@ pub(crate) async fn consume_stats_show(
         },
         "forwarding": {
             "queueLength": forward_queue_length,
-            "queueLimit": state.config.limits.forward_task_queue,
+            "queueLimit": state.limits().forward_task_queue,
             "circuitBreaker": match state.database.circuit_breaker_state() {
                 "open" => "open",
                 "half_open" => "halfOpen",
@@ -234,7 +234,7 @@ pub(crate) async fn consume_queue_status(
         )
     })?;
 
-    let limits = &state.config.limits;
+    let limits = state.limits();
     let receive_limit = account
         .queue_receive_limit
         .unwrap_or(limits.queued_receive_messages_soft);
@@ -1276,6 +1276,155 @@ fn from_json<T: DeserializeOwned>(value: Value) -> Result<T, MediatorError> {
             format!("couldn't build Trust Task response: {e}"),
         )
     })
+}
+
+/// `config/patch` — change mediator limits at runtime. rootAdmin only.
+///
+/// Each key is checked on its own (see
+/// [`overrides::with_override`](crate::common::config::overrides::with_override));
+/// a bad one is reported under `rejected` and does not stop the rest. The
+/// accepted keys are stored as overrides, so they survive a restart, and then:
+///
+/// - a **live** key takes effect now and is reported `applied`;
+/// - a **restart** key applies from the next start and is reported
+///   `pendingRestart`.
+///
+/// A `null` value removes a key's override, returning it to the file/env value.
+/// Nothing is applied unless the store kept the overrides.
+pub(crate) async fn consume_config_patch(
+    typed: TrustTask<trust_tasks_rs::specs::config::patch::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: DateTime<Utc>,
+) -> Result<Value, MediatorError> {
+    use crate::common::config::overrides::{
+        self, KeyClass, class_of, parse_stored, with_fields_from, with_override,
+    };
+
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    if session.account_type != AccountType::RootAdmin {
+        return Err(tt_problem(
+            session,
+            "authorization.root_admin_required",
+            "config/patch changes the mediator for every account and requires a rootAdmin".into(),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    // One change at a time: this reads the stored overrides, adds to them and
+    // writes them back, and interleaved patches would lose each other's keys.
+    let _one_at_a_time = state.live_limits.lock_for_patch().await;
+    let storage_err = |e: MediatorError| {
+        tt_problem(
+            session,
+            "config.storage",
+            format!("the mediator could not keep configuration overrides: {e}"),
+            StatusCode::SERVICE_UNAVAILABLE,
+        )
+    };
+    let stored = state
+        .database
+        .config_overrides_get()
+        .await
+        .map_err(storage_err)?;
+    let mut stored = parse_stored(stored.as_deref());
+
+    // What the configuration should become: the baseline with every stored
+    // override, then this patch's keys in turn.
+    let baseline = state.live_limits.baseline().clone();
+    let desired_from = |stored: &serde_json::Map<String, Value>| {
+        let mut limits = baseline.clone();
+        overrides::overlay(&mut limits, stored);
+        limits
+    };
+    let mut desired = desired_from(&stored);
+
+    let mut accepted: Vec<(String, KeyClass, Value)> = Vec::new();
+    let mut rejected: Vec<Value> = Vec::new();
+    for (key, value) in &typed.payload.overrides {
+        let Some(class) = class_of(key) else {
+            rejected.push(json!({ "key": key, "reason": "not a patchable configuration key" }));
+            continue;
+        };
+        if value.is_null() {
+            let mut without = stored.clone();
+            without.remove(key);
+            desired = desired_from(&without);
+            stored = without;
+            accepted.push((key.clone(), class, Value::Null));
+            continue;
+        }
+        match with_override(&desired, &baseline, key, value) {
+            Ok(next) => {
+                desired = next;
+                stored.insert(key.clone(), value.clone());
+                accepted.push((key.clone(), class, value.clone()));
+            }
+            Err(reason) => rejected.push(json!({ "key": key, "reason": reason })),
+        }
+    }
+
+    if !accepted.is_empty() {
+        state
+            .database
+            .config_overrides_set(&Value::Object(stored).to_string())
+            .await
+            .map_err(storage_err)?;
+    }
+
+    let keys_of = |wanted: KeyClass| -> Vec<String> {
+        accepted
+            .iter()
+            .filter(|(_, class, _)| *class == wanted)
+            .map(|(key, ..)| key.clone())
+            .collect()
+    };
+    let applied = keys_of(KeyClass::Live);
+    let pending_restart = keys_of(KeyClass::Restart);
+    if !applied.is_empty() {
+        let live = state.limits();
+        state
+            .live_limits
+            .set(with_fields_from(&live, &desired, &applied));
+    }
+
+    if !accepted.is_empty() {
+        let detail = accepted
+            .iter()
+            .map(|(key, class, value)| {
+                let when = if *class == KeyClass::Live {
+                    "now"
+                } else {
+                    "at restart"
+                };
+                if value.is_null() {
+                    format!("{key} reset ({when})")
+                } else {
+                    format!("{key}={value} ({when})")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        record_audit(
+            state,
+            session,
+            &state.config.mediator_did_hash,
+            AuditAction::ConfigPatch,
+            detail,
+        )
+        .await;
+    }
+
+    let response: trust_tasks_rs::specs::config::patch::v0_1::Response =
+        serde_json::from_value(json!({
+            "applied": applied,
+            "pendingRestart": pending_restart,
+            "rejected": rejected,
+        }))
+        .map_err(serialize_err)?;
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
 }
 
 #[cfg(test)]
