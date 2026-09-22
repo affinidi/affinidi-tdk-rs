@@ -26,7 +26,8 @@ mod purge;
 
 pub use address_book::{AddressBook, AddressEntry, account_hash};
 pub use console::{
-    Capabilities, InspectedMessage, MediatorConsole, Mode, OPERATIONS_SINCE, Target,
+    CONFIG_PATCH_SINCE, Capabilities, InspectedMessage, MediatorConsole, Mode, OPERATIONS_SINCE,
+    Target,
 };
 pub use error::{ConsoleError, Result};
 pub use identity::{Identity, IdentityChoice, IdentitySource, ProfileFileSource, StaticIdentities};

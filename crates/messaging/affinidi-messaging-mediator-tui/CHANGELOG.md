@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (0.1.5) — a Config screen
+
+A new **Config** screen (`6`, administrators) lists the mediator's
+configuration: key, value, where it comes from (`override` in yellow when a
+patch set it) and when a change applies (`live` or `restart`). Limits come
+first.
+
+For a **rootAdmin**:
+- `⏎` changes a `limits.*` value, and `x` removes an override.
+- The mediator's answer shows as a notice: in effect now, applies after a
+  restart, or refused with its reason. For example, a patch can tighten a
+  limit but not loosen it past the configuration.
+
+For other admins the screen is read-only, and the footer says who may change
+it. It works on older mediators too, which serve `config/show`.
+
+Requires `affinidi-messaging-mediator-admin` 0.1.4.
+
 ## Unreleased (0.1.4) — traffic totals
 
 The traffic monitor keeps running totals from the moment it starts:

@@ -47,6 +47,8 @@ pub enum Tab {
     Audit,
     /// Every account on the mediator (administrators).
     Accounts,
+    /// The mediator's configuration; a rootAdmin can change its limits.
+    Config,
 }
 
 impl Tab {
@@ -57,6 +59,7 @@ impl Tab {
             Tab::Account => "Account",
             Tab::Audit => "Audit",
             Tab::Accounts => "Accounts",
+            Tab::Config => "Config",
         }
     }
 }
@@ -71,6 +74,10 @@ pub enum Update {
     Audit(Result<Value, ConsoleError>),
     /// Every account, all pages.
     Accounts(Result<Vec<Value>, ConsoleError>),
+    /// The mediator's configuration fields.
+    Config(Result<Value, ConsoleError>),
+    /// The mediator's answer to a configuration change.
+    Patched(Result<Value, ConsoleError>),
     Inspected(Box<Result<InspectedMessage, ConsoleError>>),
     PurgePreview(Result<PurgePlan, ConsoleError>),
     /// A finished action: what to tell the user.
@@ -108,6 +115,11 @@ enum Popup {
     /// The address book, with the selected entry.
     Book {
         selected: usize,
+    },
+    /// Change one configuration key.
+    EditConfig {
+        key: String,
+        value: String,
     },
 }
 
@@ -157,6 +169,8 @@ pub struct App {
     audit: Vec<Value>,
     accounts: Vec<Value>,
     accounts_state: TableState,
+    config: Vec<Value>,
+    config_state: TableState,
     monitor: MonitorPane,
     popup: Option<Popup>,
     notice: Option<(String, bool)>,
@@ -206,6 +220,8 @@ impl App {
             audit: Vec::new(),
             accounts: Vec::new(),
             accounts_state: TableState::default().with_selected(Some(0)),
+            config: Vec::new(),
+            config_state: TableState::default().with_selected(Some(0)),
             monitor: MonitorPane {
                 visible: false,
                 failures_only: false,
@@ -249,6 +265,10 @@ impl App {
     /// Text pasted into the console (bracketed paste): goes to the field being
     /// edited, if any. Control characters (line breaks) are dropped.
     pub fn handle_paste(&mut self, text: &str) {
+        if let Some(Popup::EditConfig { value, .. }) = &mut self.popup {
+            value.push_str(text.trim());
+            return;
+        }
         if let Some(Popup::Name {
             did, name, on_name, ..
         }) = &mut self.popup
@@ -271,7 +291,7 @@ impl App {
                 .selected_message_field(if self.message_send { "to" } else { "from" })
                 .or_else(|| self.target.clone())
                 .or_else(|| Some(self.console.did_hash().to_string())),
-            Tab::Audit => None,
+            Tab::Audit | Tab::Config => None,
         }
     }
 
@@ -371,6 +391,7 @@ impl App {
                 Tab::Account,
                 Tab::Audit,
                 Tab::Accounts,
+                Tab::Config,
             ]
         } else {
             vec![Tab::Account]
@@ -393,7 +414,9 @@ impl App {
     pub fn refresh(&mut self) {
         // On a mediator too old to serve them, these screens explain that
         // instead of asking (see `render_unsupported`).
-        if !self.console.serves_operations() && !matches!(self.tab, Tab::Audit | Tab::Accounts) {
+        if !self.console.serves_operations()
+            && !matches!(self.tab, Tab::Audit | Tab::Accounts | Tab::Config)
+        {
             self.updated = Some(Instant::now());
             return;
         }
@@ -428,6 +451,9 @@ impl App {
             }
             Tab::Accounts => {
                 self.spawn(|c| async move { Update::Accounts(all_accounts(&c).await) })
+            }
+            Tab::Config => {
+                self.spawn(|c| async move { Update::Config(to_value(c.config().await)) })
             }
         }
     }
@@ -502,6 +528,26 @@ impl App {
                 }
                 Err(e) => self.error(e),
             },
+            Update::Config(r) => match r {
+                Ok(v) => {
+                    let mut fields = v["fields"].as_array().cloned().unwrap_or_default();
+                    // Limits first (they are what can be changed), then the rest.
+                    fields.sort_by_key(|f| {
+                        let key = f["key"].as_str().unwrap_or("").to_string();
+                        (!key.starts_with("limits."), key)
+                    });
+                    self.config = fields;
+                    ok(self)
+                }
+                Err(e) => self.error(e),
+            },
+            Update::Patched(r) => {
+                match r {
+                    Ok(v) => self.notice = Some(patch_summary(&v)),
+                    Err(e) => self.error(e),
+                }
+                self.refresh();
+            }
             Update::Inspected(r) => match *r {
                 Ok(m) => self.popup = Some(inspect_popup(&m)),
                 Err(e) => self.error(e),
@@ -554,7 +600,7 @@ impl App {
         }
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Control::Quit,
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='6') => {
                 if let Some(tab) = self.tabs().get((c as u8 - b'1') as usize) {
                     self.tab = *tab;
                     self.refresh();
@@ -599,6 +645,25 @@ impl App {
             (Tab::Queues | Tab::Dashboard, KeyCode::Enter) => {
                 if let Some(did) = self.selected_queue_did() {
                     self.open_account(Some(did));
+                }
+            }
+            (Tab::Config, KeyCode::Enter) if self.console.can_patch_config() => {
+                if let Some(field) = self.selected_config() {
+                    let key = field["key"].as_str().unwrap_or("").to_string();
+                    if key.starts_with("limits.") {
+                        let value = field["value"].to_string();
+                        self.popup = Some(Popup::EditConfig { key, value });
+                    } else {
+                        self.notice = Some(("only limits can be changed at runtime".into(), true));
+                    }
+                }
+            }
+            (Tab::Config, KeyCode::Char('x')) if self.console.can_patch_config() => {
+                if let Some(field) = self.selected_config()
+                    && field["source"] == "override"
+                {
+                    let key = field["key"].as_str().unwrap_or("").to_string();
+                    self.patch(key, Value::Null);
                 }
             }
             (Tab::Accounts, KeyCode::Enter) => {
@@ -722,6 +787,25 @@ impl App {
                     _ => {}
                 }
             }
+            Popup::EditConfig { key, mut value } => match code {
+                KeyCode::Esc => self.notice = Some(("cancelled".into(), false)),
+                KeyCode::Enter => {
+                    // A number when it reads as one; otherwise the text as given.
+                    let parsed = serde_json::from_str::<Value>(value.trim())
+                        .unwrap_or_else(|_| Value::String(value.trim().to_string()));
+                    self.patch(key, parsed);
+                }
+                other => {
+                    match other {
+                        KeyCode::Backspace => {
+                            value.pop();
+                        }
+                        KeyCode::Char(c) => value.push(c),
+                        _ => {}
+                    }
+                    self.popup = Some(Popup::EditConfig { key, value });
+                }
+            },
             Popup::Text { .. } => {}
             Popup::ConfirmDelete { target, ids } if yes => {
                 self.spawn(move |c| async move {
@@ -758,6 +842,7 @@ impl App {
             Tab::Queues | Tab::Dashboard => (&mut self.queue_state, queue_rows(&self.queues).len()),
             Tab::Account => (&mut self.message_state, self.messages.len()),
             Tab::Accounts => (&mut self.accounts_state, self.accounts.len()),
+            Tab::Config => (&mut self.config_state, self.config.len()),
             Tab::Audit => return,
         };
         if len == 0 {
@@ -765,6 +850,20 @@ impl App {
         }
         let i = state.selected().unwrap_or(0) as i32 + delta;
         state.select(Some(i.clamp(0, len as i32 - 1) as usize));
+    }
+
+    fn selected_config(&self) -> Option<Value> {
+        let i = self.config_state.selected()?;
+        self.config.get(i).cloned()
+    }
+
+    /// Ask the mediator to set `key` to `value` (`null` removes its override).
+    fn patch(&self, key: String, value: Value) {
+        self.spawn(move |c| async move {
+            let mut overrides = serde_json::Map::new();
+            overrides.insert(key, value);
+            Update::Patched(to_value(c.patch_config(overrides).await))
+        });
     }
 
     fn selected_account_did(&self) -> Option<String> {
@@ -943,7 +1042,9 @@ impl App {
         } else {
             rows[2]
         };
-        if !self.console.serves_operations() && !matches!(self.tab, Tab::Audit | Tab::Accounts) {
+        if !self.console.serves_operations()
+            && !matches!(self.tab, Tab::Audit | Tab::Accounts | Tab::Config)
+        {
             self.render_unsupported(f, body);
         } else {
             self.render_screen(f, body);
@@ -961,6 +1062,7 @@ impl App {
             Tab::Account => self.render_account(f, body),
             Tab::Audit => self.render_audit(f, body),
             Tab::Accounts => self.render_accounts(f, body),
+            Tab::Config => self.render_config(f, body),
         }
     }
 
@@ -1070,6 +1172,12 @@ impl App {
                     Tab::Audit => "n name  b book  m monitor  r refresh  q quit",
                     Tab::Accounts => {
                         "↑↓ select  ⏎ open  n name  b book  m monitor  r refresh  q quit"
+                    }
+                    Tab::Config if self.console.can_patch_config() => {
+                        "↑↓ select  ⏎ change a limit  x reset override  r refresh  q quit"
+                    }
+                    Tab::Config => {
+                        "↑↓ select  r refresh  q quit  (changing limits needs a rootAdmin)"
                     }
                 };
                 let monitor_keys = match (self.monitor.visible, self.monitor.show_totals) {
@@ -1460,6 +1568,65 @@ impl App {
         f.render_stateful_widget(table, area, &mut self.accounts_state);
     }
 
+    fn render_config(&mut self, f: &mut Frame, area: Rect) {
+        let keys: Vec<String> = self
+            .config
+            .iter()
+            .map(|c| c["key"].as_str().unwrap_or("").to_string())
+            .collect();
+        let rows: Vec<Row> = self
+            .config
+            .iter()
+            .zip(&keys)
+            .map(|(c, key)| {
+                let value = match &c["value"] {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                let source = c["source"].as_str().unwrap_or("").to_string();
+                let applies = if c["requiresRestart"] == false {
+                    "live"
+                } else {
+                    "restart"
+                };
+                Row::new(vec![
+                    Cell::from(key.clone()),
+                    Cell::from(value),
+                    Cell::from(source.clone()).style(if source == "override" {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default()
+                    }),
+                    Cell::from(applies),
+                ])
+            })
+            .collect();
+        let overrides = self
+            .config
+            .iter()
+            .filter(|c| c["source"] == "override")
+            .count();
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Length(fit_width(&keys, 20, 48)),
+                Constraint::Fill(2),
+                Constraint::Length(10),
+                Constraint::Length(8),
+            ],
+        )
+        .header(
+            Row::new(vec!["key", "value", "from", "applies"])
+                .style(Style::default().add_modifier(Modifier::BOLD)),
+        )
+        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .block(Block::default().borders(Borders::ALL).title(format!(
+            " Configuration — {} keys, {overrides} overridden ",
+            self.config.len()
+        )));
+        f.render_stateful_widget(table, area, &mut self.config_state);
+    }
+
     fn render_audit(&self, f: &mut Frame, area: Rect) {
         let rows: Vec<Row> = self
             .audit
@@ -1617,6 +1784,46 @@ impl App {
         .block(block);
         f.render_widget(table, area);
     }
+}
+
+/// A one-line account of the mediator's answer to a `config/patch`.
+fn patch_summary(v: &Value) -> (String, bool) {
+    let list = |k: &str| -> Vec<String> {
+        v[k].as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let rejected: Vec<String> = v["rejected"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|r| {
+                    format!(
+                        "{}: {}",
+                        r["key"].as_str().unwrap_or("?"),
+                        r["reason"].as_str().unwrap_or("?")
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !rejected.is_empty() {
+        return (format!("refused — {}", rejected.join("; ")), true);
+    }
+    let applied = list("applied");
+    let pending = list("pendingRestart");
+    let mut parts = Vec::new();
+    if !applied.is_empty() {
+        parts.push(format!("in effect now: {}", applied.join(", ")));
+    }
+    if !pending.is_empty() {
+        parts.push(format!("applies after a restart: {}", pending.join(", ")));
+    }
+    (parts.join("; "), false)
 }
 
 /// Every account on the mediator, reading all pages of `account/list`.
@@ -1811,6 +2018,16 @@ fn render_popup(f: &mut Frame, area: Rect, popup: &Popup, book: &AddressBook) {
                 false,
             )
         }
+        Popup::EditConfig { key, value } => (
+            " Change a limit ".into(),
+            format!(
+                "{key}\n\nNew value  {value}▏\n\n\
+                 ⏎ applies, Esc cancels. A patch can make a limit stricter than the\n\
+                 configuration, not looser; the mediator says which keys apply now,\n\
+                 which from its next start, and why any are refused."
+            ),
+            false,
+        ),
         Popup::Text { title, body } => (
             title.clone(),
             format!("{body}\n\n(any key to close)"),
@@ -1974,6 +2191,31 @@ mod tests {
         // Aligned: the sender is padded to the column width.
         assert!(text.contains("alice          → "), "{text}");
         assert!(text.contains(&short(&bob_hash)), "{text}");
+    }
+
+    #[test]
+    fn a_patch_answer_is_summarised_in_one_line() {
+        let (text, bad) = patch_summary(&serde_json::json!({
+            "applied": ["limits.listed_messages"],
+            "pendingRestart": ["limits.rate_limit_per_ip"],
+            "rejected": [],
+        }));
+        assert!(!bad);
+        assert!(
+            text.contains("in effect now: limits.listed_messages"),
+            "{text}"
+        );
+        assert!(
+            text.contains("after a restart: limits.rate_limit_per_ip"),
+            "{text}"
+        );
+
+        let (text, bad) = patch_summary(&serde_json::json!({
+            "applied": [], "pendingRestart": [],
+            "rejected": [{ "key": "limits.listed_messages", "reason": "above the configured value" }],
+        }));
+        assert!(bad);
+        assert!(text.contains("above the configured value"), "{text}");
     }
 
     #[test]
