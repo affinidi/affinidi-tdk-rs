@@ -174,4 +174,20 @@ async fn a_named_account_gets_room_beside_the_monitor() {
         account.contains(name),
         "the whole nickname fits beside the monitor:\n{account}"
     );
+
+    // Every account on the mediator, the named one by its name.
+    app.handle_key(key(KeyCode::Char('5')));
+    settle(&mut app, Duration::from_secs(2)).await;
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let accounts = screen(&terminal);
+    println!("{accounts}");
+    assert!(
+        accounts.contains("Accounts —"),
+        "accounts screen:\n{accounts}"
+    );
+    assert!(accounts.contains(name), "named account listed:\n{accounts}");
+    assert!(
+        accounts.contains("admin"),
+        "the operator's role shown:\n{accounts}"
+    );
 }

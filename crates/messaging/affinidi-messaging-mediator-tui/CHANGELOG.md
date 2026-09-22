@@ -1,7 +1,17 @@
 # Changelog
 
-## Unreleased (0.1.3) — room for names
+## Unreleased (0.1.3) — room for names, and every account
 
+- **New Accounts screen** (`5`, administrators): every account on the
+  mediator, read through all pages of `account/list`.
+  - It shows each account's name, hash, role (coloured), receive and send
+    depth, bytes queued and access-list size.
+  - Order: the mediator and administrators first, then accounts you've named,
+    then the rest. `⏎` opens one and `n` names it.
+  - It also works on mediators older than 0.28.20.
+- **Now `#[non_exhaustive]`:** `Tab` and `Update`, so future screens aren't
+  breaking changes. Embedders pass `Update` from `next_update` to `apply` and
+  don't match on either enum, so no known caller is affected.
 - **Queue table:** the account column is sized to the longest name, from 15
   to 40 characters, instead of a fixed 15. The two quota bars share the
   remaining width, so the table fills the pane at any size, with the monitor
