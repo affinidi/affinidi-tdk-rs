@@ -815,6 +815,22 @@ impl TrustTasksOps<'_> {
     /// `proof` whenever the profile holds an Ed25519 key it can sign with — see
     /// [`Self::sign`]. Most `messaging/*` specs require both on the request, and a
     /// mediator that enforces them refuses a document that lacks them.
+    /// Send one Trust Task document and return the mediator's response,
+    /// over whichever transport this profile and mediator have in common.
+    ///
+    /// Every `trust_tasks()` method funnels through here, so this is the only
+    /// place the wire is chosen. [`TspOps::select_protocol`] makes that choice
+    /// from the configured [`TspPolicy`]: the default (`Off`) is DIDComm, so
+    /// nothing moves wire until an application opts in, and `Preferred` picks
+    /// TSP only for a mediator known to speak it with a relationship already
+    /// in place — which is also what TSP requires before it will accept the
+    /// reply.
+    ///
+    /// The document and its proof are identical either way. Only the envelope
+    /// around it and the way the reply is collected differ.
+    ///
+    /// [`TspOps::select_protocol`]: crate::protocols::tsp::TspOps::select_protocol
+    /// [`TspPolicy`]: crate::protocols::tsp::TspPolicy
     async fn exchange<P, R>(
         &self,
         profile: &Arc<ATMProfile>,
@@ -824,13 +840,44 @@ impl TrustTasksOps<'_> {
         P: Serialize,
         R: DeserializeOwned,
     {
-        let atm = self.atm;
-        let (profile_did, mediator_did) = profile.dids()?;
+        let (profile_did, _) = profile.dids()?;
 
         task.issued_at = Some(chrono::Utc::now());
+        let thread_id = task.id.clone();
         let body = serde_json::to_value(&task)
             .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))?;
         let body = self.sign(profile_did, body).await?;
+
+        #[cfg(feature = "tsp")]
+        {
+            use crate::protocols::tsp::SendProtocol;
+            let (_, mediator_did) = profile.dids()?;
+            if self
+                .atm
+                .tsp()
+                .select_protocol(profile, mediator_did)
+                .await?
+                == SendProtocol::Tsp
+            {
+                return self.exchange_tsp(profile, body, &thread_id).await;
+            }
+        }
+        let _ = &thread_id;
+        self.exchange_didcomm(profile, body).await
+    }
+
+    /// The DIDComm arm: the document rides the Trust Tasks envelope, and the
+    /// mediator's reply comes back on the same request.
+    async fn exchange_didcomm<R>(
+        &self,
+        profile: &Arc<ATMProfile>,
+        body: Value,
+    ) -> Result<TrustTask<R>, ATMError>
+    where
+        R: DeserializeOwned,
+    {
+        let atm = self.atm;
+        let (profile_did, mediator_did) = profile.dids()?;
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -859,6 +906,89 @@ impl TrustTasksOps<'_> {
             _ => Err(ATMError::MsgReceiveError(
                 "no response from mediator for the Trust Task".to_owned(),
             )),
+        }
+    }
+
+    /// The TSP arm: the document is the payload of a TSP Direct message to the
+    /// mediator, which seals its reply back and delivers it like any other
+    /// message. The reply is collected from the inbox by thread id.
+    ///
+    /// **Nothing else's mail is touched.** The inbox is read with
+    /// `DoNotDelete` and only the matched reply is deleted, so a frame meant
+    /// for another reader of the same mailbox stays where it is — a
+    /// request/response that consumed what it read would destroy exactly the
+    /// unsolicited traffic a client is otherwise waiting for.
+    #[cfg(feature = "tsp")]
+    async fn exchange_tsp<R>(
+        &self,
+        profile: &Arc<ATMProfile>,
+        body: Value,
+        thread_id: &str,
+    ) -> Result<TrustTask<R>, ATMError>
+    where
+        R: DeserializeOwned,
+    {
+        use affinidi_messaging_mediator_common::types::messages::MessageProtocol;
+
+        use crate::messages::{DeleteMessageRequest, fetch::FetchOptions};
+
+        let (_, mediator_did) = profile.dids()?;
+        let payload = serde_json::to_vec(&body)
+            .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))?;
+        self.atm.tsp().send(profile, mediator_did, &payload).await?;
+
+        let deadline = SystemTime::now() + TSP_REPLY_TIMEOUT;
+        loop {
+            let page = self
+                .atm
+                .fetch_messages(
+                    profile,
+                    &FetchOptions {
+                        limit: TSP_REPLY_PAGE,
+                        delete_policy: crate::messages::FetchDeletePolicy::DoNotDelete,
+                        ..Default::default()
+                    },
+                )
+                .await?;
+
+            for element in &page.success {
+                // Only TSP bodies can hold the sealed reply. The mediator tags
+                // the wire protocol on pickup, so nothing has to be sniffed.
+                if element.protocol != Some(MessageProtocol::Tsp) {
+                    continue;
+                }
+                let Some(stored) = &element.msg else { continue };
+                // A body this profile cannot unpack is someone else's problem,
+                // not an error for this exchange.
+                let Ok((payload, _sender)) = self.atm.tsp().unpack(profile, stored).await else {
+                    continue;
+                };
+                let Ok(doc) = serde_json::from_slice::<Value>(&payload) else {
+                    continue;
+                };
+                if doc["threadId"].as_str() != Some(thread_id) {
+                    continue;
+                }
+                // Matched: take it out of the inbox, and only it.
+                let _ = self
+                    .atm
+                    .delete_messages_direct(
+                        profile,
+                        &DeleteMessageRequest {
+                            message_ids: vec![element.msg_id.clone()],
+                        },
+                    )
+                    .await;
+                return decode_body(&doc);
+            }
+
+            if SystemTime::now() >= deadline {
+                return Err(ATMError::MsgReceiveError(format!(
+                    "no response from mediator for the Trust Task over TSP within {}s",
+                    TSP_REPLY_TIMEOUT.as_secs()
+                )));
+            }
+            tokio::time::sleep(TSP_REPLY_POLL).await;
         }
     }
 }
@@ -933,6 +1063,16 @@ pub fn decode_monitor_event(message: &Message) -> Option<TrustTask<monitor::even
 fn new_id() -> String {
     format!("urn:uuid:{}", Uuid::new_v4())
 }
+
+/// How long a Trust Task sent over TSP waits for its reply.
+#[cfg(feature = "tsp")]
+const TSP_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// How often the inbox is read while waiting for it.
+#[cfg(feature = "tsp")]
+const TSP_REPLY_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+/// How much of the inbox one read looks at.
+#[cfg(feature = "tsp")]
+const TSP_REPLY_PAGE: usize = 20;
 
 fn decode_body<R: DeserializeOwned>(body: &Value) -> Result<TrustTask<R>, ATMError> {
     serde_json::from_value(body.clone()).map_err(|e| {
