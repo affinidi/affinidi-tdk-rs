@@ -1424,9 +1424,19 @@ impl InviteRateLimiter {
 pub struct IncomingControl {
     /// The relationship state after applying the message.
     pub state: RelationshipState,
-    /// The peer cancelled a relationship we held in both directions, so Rev 3
-    /// §7.3 asks us to answer with a cancellation of our own before forgetting
-    /// it. False for every other control message.
+    /// Rev 3 §7.3 answer to a cancellation is still owed, and the caller has to
+    /// send it.
+    ///
+    /// A cancellation of a relationship held in both directions is answered
+    /// with a cancellation of our own. [`TspOps::record_incoming_control`]
+    /// sends that answer itself, so this is `false` once it has gone out — the
+    /// state is `None` by then, and a caller that answered anyway through
+    /// [`TspOps::cancel_relationship`] would only be refused. It is `true` only
+    /// when the answer was due and could not be sent; retry it with
+    /// [`TspOps::answer_cancellation`], naming the digest the peer's
+    /// cancellation carried (`ControlMessage::reply`).
+    ///
+    /// `false` for every other control message.
     pub reply_expected: bool,
     /// The `Reply_Path` an invite carried — the route its accept is to travel
     /// back over (§7.2.4). Empty for a direct invite and for every other
@@ -2315,6 +2325,47 @@ impl TspOps<'_> {
         Ok(next)
     }
 
+    /// Answer a peer's cancellation (Rev 3 §7.3) with one of our own, naming
+    /// `relationship_digest` — the digest the peer's cancellation named.
+    ///
+    /// §7.3 has an endpoint that held the relationship in both directions reply
+    /// with a `TSP_RFD` and then forget it. By the time anyone can answer,
+    /// [`record_incoming_control`](Self::record_incoming_control) has already
+    /// applied `ReceiveCancel` and the relationship is gone, so this sends the
+    /// cancellation **without** running the state machine — which is exactly
+    /// why [`cancel_relationship`](Self::cancel_relationship) cannot be used
+    /// for it (`SendCancel` is not a transition out of `None`).
+    ///
+    /// `record_incoming_control` calls this itself. It is public so a caller
+    /// told [`IncomingControl::reply_expected`] (the answer could not be sent)
+    /// can retry.
+    ///
+    /// Refused unless the stored state for the pair is
+    /// [`RelationshipState::None`]: a relationship still held is cancelled with
+    /// `cancel_relationship`, which also forgets it. Returns the answer's own
+    /// thread digest.
+    pub async fn answer_cancellation(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+        relationship_digest: [u8; 32],
+    ) -> Result<[u8; 32], ATMError> {
+        let (our_did, _) = profile.dids()?;
+        let state = self.relationship_store().get(our_did, their_did).await?;
+        if state != RelationshipState::None {
+            return Err(ATMError::MsgSendError(format!(
+                "no §7.3 answer to send: {our_did} still holds a relationship with {their_did} \
+                 ({state:?}); cancel it with cancel_relationship"
+            )));
+        }
+        self.send_control(
+            profile,
+            their_did,
+            &ControlMessage::cancel(relationship_digest),
+        )
+        .await
+    }
+
     /// The current relationship state for the `(profile, their_did)` pair, read
     /// from the configured [`RelationshipStore`]. Returns
     /// [`RelationshipState::None`] for an unknown pair.
@@ -2571,8 +2622,8 @@ impl TspOps<'_> {
         // hold. One naming a relationship we do not hold at all — or naming a
         // digest that is not either half of the one we do hold — is ignored
         // rather than answered, so it cannot be used to probe which
-        // relationships exist. The other two are handled by the caller, which
-        // reads `IncomingControl::reply_expected`.
+        // relationships exist. The other two — forget it, or answer and forget
+        // it — are handled below.
         if control.control_type == ControlType::RelationshipCancel {
             if prior == RelationshipState::None {
                 return Err(ATMError::MsgReceiveError(format!(
@@ -2588,6 +2639,9 @@ impl TspOps<'_> {
             }
         }
 
+        // What the relationship was known by, for the §7.3 answer below — the
+        // record is cleared before it is sent.
+        let cancelled_digest = digests.invite.or(digests.accept);
         let new_state = advance_state(store, our_did, peer_did, event).await?;
 
         // Record the digests as the handshake produces them: the invite's
@@ -2632,10 +2686,44 @@ impl TspOps<'_> {
         }
 
         // §7.3: a cancellation of a relationship we held in both directions is
-        // answered with a cancellation of our own before we forget it. Sending
-        // it is the caller's business, so report it rather than doing it here.
-        let reply_expected = control.control_type == ControlType::RelationshipCancel
-            && prior == RelationshipState::Bidirectional;
+        // answered with a cancellation of our own. It is sent here, not left to
+        // the caller: there is no policy in it — nothing to accept or refuse —
+        // and by the time a caller could act the relationship is already gone,
+        // so `cancel_relationship` refuses to send it (`SendCancel` from
+        // `None`). Every consumer that was left to answer it got that error and
+        // the peer was never answered (Keyring VTI-38).
+        //
+        // It names the relationship the peer's cancellation named, so both
+        // sides agree which one was torn down. A send that fails does not undo
+        // the recording — the relationship is gone either way — and is reported
+        // through `reply_expected` so the caller can retry.
+        let mut reply_expected = false;
+        if control.control_type == ControlType::RelationshipCancel
+            && prior == RelationshipState::Bidirectional
+        {
+            let named = control.reply.or(cancelled_digest);
+            match named {
+                Some(named) => {
+                    if let Err(e) = self.answer_cancellation(profile, peer_did, named).await {
+                        tracing::warn!(
+                            peer = %peer_did,
+                            error = %e,
+                            "could not send the TSP §7.3 answer to a cancellation; the \
+                             relationship is forgotten regardless",
+                        );
+                        reply_expected = true;
+                    }
+                }
+                // Unreachable for a decoded cancellation — `reply` is its one
+                // required field — but a relationship with no digest on either
+                // side leaves nothing to name, so there is nothing to answer.
+                None => tracing::warn!(
+                    peer = %peer_did,
+                    "TSP cancellation named no relationship and none was recorded; no §7.3 \
+                     answer sent",
+                ),
+            }
+        }
 
         Ok(IncomingControl {
             state: new_state,

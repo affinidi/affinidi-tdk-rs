@@ -172,9 +172,14 @@ pub enum InboundKind {
         /// What the peer asked for.
         request: RelationshipRequest,
         /// The digest an answer must echo back (TSP `TSP_Digest`, §7.2.2).
+        /// For a cancellation, the relationship digest the cancellation named.
         thread_digest: [u8; 32],
-        /// The peer cancelled a relationship held in both directions, so §7.3
-        /// asks for a cancellation back before forgetting it. `false` for
+        /// A §7.3 answer to a cancellation is still owed by the consumer.
+        ///
+        /// A cancellation of a relationship held in both directions is
+        /// answered with a cancellation back. A transport that sends that
+        /// answer itself reports `false` once it has; `true` means the answer
+        /// was due and the transport could not send it. `false` for
         /// everything else.
         reply_expected: bool,
         /// A VID this request introduces (TSP §7.2.5 referral), already

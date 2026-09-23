@@ -488,6 +488,17 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
                 verified: true,
                 encrypted: true,
             };
+            // The digest an answer echoes. For an invite that is the invite's
+            // own digest; for a cancellation it is the relationship the
+            // cancellation *names* — the frame's own digest identifies nothing
+            // a reply could refer to. The §7.3 answer to a cancellation has
+            // already been sent by `record_incoming_control`, so a consumer
+            // only needs this to retry one that failed (`reply_expected`),
+            // through `answer_cancellation`.
+            let thread_digest = match control.control_type {
+                ControlType::RelationshipCancel => control.reply.unwrap_or(thread_digest),
+                _ => thread_digest,
+            };
             return Some(Inbound::new(received, None, InboundAck(ack)).with_kind(
                 InboundKind::RelationshipControl {
                     request,

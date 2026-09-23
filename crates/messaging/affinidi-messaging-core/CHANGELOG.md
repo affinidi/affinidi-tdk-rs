@@ -1,6 +1,13 @@
 # Affinidi Messaging Core Changelog
 
 ## Unreleased
+### 0.1.10 — `reply_expected` means an answer is still owed
+
+Documentation only. `InboundKind::RelationshipControl::reply_expected` is
+`true` when a TSP §7.3 answer to a cancellation is still owed by the consumer
+— a transport that sends the answer itself reports `false` once it has — and
+`thread_digest` on a cancellation is the relationship digest it named.
+
 ### 0.1.9 — a queue-full refusal is a distinguishable thing
 
 `MessagingError::queue_full()` and `HttpStatusError::queue_full()` return which

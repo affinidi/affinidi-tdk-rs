@@ -475,7 +475,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-core"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -531,7 +531,7 @@ dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-core",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.27.0",
+ "affinidi-messaging-sdk 0.27.1",
  "affinidi-messaging-test-mediator",
  "affinidi-secrets-resolver",
  "affinidi-tdk 0.17.0",
@@ -585,7 +585,7 @@ dependencies = [
  "affinidi-crypto",
  "affinidi-messaging-core",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.27.0",
+ "affinidi-messaging-sdk 0.27.1",
  "affinidi-tdk 0.17.0",
  "affinidi-tsp",
  "ahash",
@@ -617,7 +617,7 @@ dependencies = [
  "affinidi-messaging-didcomm-v1",
  "affinidi-messaging-mediator-common",
  "affinidi-messaging-mediator-config",
- "affinidi-messaging-sdk 0.27.0",
+ "affinidi-messaging-sdk 0.27.1",
  "affinidi-rate-limit",
  "affinidi-secrets-resolver",
  "affinidi-task-utils",
@@ -685,7 +685,7 @@ version = "0.2.0"
 dependencies = [
  "affinidi-messaging-didcomm",
  "affinidi-messaging-mediator-common",
- "affinidi-messaging-sdk 0.27.0",
+ "affinidi-messaging-sdk 0.27.1",
  "affinidi-messaging-test-mediator",
  "affinidi-secrets-resolver",
  "affinidi-tdk-common",
@@ -888,7 +888,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.27.0"
+version = "0.27.1"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",
@@ -940,7 +940,7 @@ dependencies = [
  "affinidi-messaging-didcomm-v1",
  "affinidi-messaging-mediator",
  "affinidi-messaging-mediator-common",
- "affinidi-messaging-sdk 0.27.0",
+ "affinidi-messaging-sdk 0.27.1",
  "affinidi-secrets-resolver",
  "affinidi-tdk 0.17.0",
  "affinidi-tsp",
@@ -971,7 +971,7 @@ version = "0.12.7"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.27.0",
+ "affinidi-messaging-sdk 0.27.1",
  "affinidi-tdk 0.17.0",
  "ahash",
  "anyhow",
@@ -1211,7 +1211,7 @@ dependencies = [
  "affinidi-mdoc",
  "affinidi-meeting-place",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.27.0",
+ "affinidi-messaging-sdk 0.27.1",
  "affinidi-oid4vc-core",
  "affinidi-openid4vci",
  "affinidi-openid4vp",

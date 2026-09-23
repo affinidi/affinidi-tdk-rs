@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### 0.27.1 — a mutual TSP cancellation is answered
+
+Rev 3 §7.3: a cancellation (`TSP_RFD`) of a relationship held in both
+directions is answered with a cancellation before it is forgotten.
+`TspOps::record_incoming_control` now sends that answer itself, naming the
+relationship digest the peer's cancellation named. Until now it only reported
+`IncomingControl::reply_expected` and left the answer to the caller — but by
+then it had already moved the relationship to `None`, so the only answering
+API, `cancel_relationship`, refused with "invalid transition: SendCancel in
+state None" and the peer was never answered (Keyring VTI-38).
+
+- New `TspOps::answer_cancellation(profile, their_did, relationship_digest)`
+  sends a cancellation without running the state machine, and is refused
+  unless the pair's state is `None`. It is what `record_incoming_control`
+  uses, and what a caller retries with.
+- `IncomingControl::reply_expected` (and `InboundKind::RelationshipControl`'s
+  `reply_expected` from the transport adapter) now means *the answer is still
+  owed*: `false` once the SDK has sent it, `true` only when the send failed.
+- For a cancellation, `InboundKind::RelationshipControl::thread_digest` is the
+  relationship digest the cancellation named, not the cancellation frame's own
+  digest — the one a reply can refer to.
+
+A consumer that answered on `reply_expected` with `cancel_relationship` now
+simply stops being asked to; nothing is sent twice.
+
 ### 0.27.0 — trust-tasks-rs 0.22
 
 Dependency bump, no code change. 0.22 renamed part of the `persona/*` family;
