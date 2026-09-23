@@ -55,3 +55,32 @@
 # across 65 call sites, so gating the feature alone does not clear the
 # duplicate. Tested 2026-09-16.
 
+
+
+# ---------------------------------------------------------------------------
+#
+# Re-added 2026-09-23 for trust-tasks-rs 0.22 — the fifth crossing, and the
+# same one the notes above describe, after 0.20, 0.21 and 0.22 (of this
+# workspace's own lines) and Rev 3.
+#
+# 0.22 makes affinidi-messaging-sdk 0.27 and affinidi-tdk 0.17. The published
+# vta-sdk 0.43 requires "0.26" and "0.16", which the local copies no longer
+# satisfy, so `[patch.crates-io]` declines to apply and the registry copies
+# enter the graph beside them.
+#
+# It clears the same way every previous crossing did, and the order is forced:
+#
+#   1. this PR publishes the messaging crates on 0.27 / 0.17
+#   2. verifiable-trust-infrastructure takes trust-tasks-rs 0.22 — which it
+#      cannot do until (1), because `MediatorAcl` crosses this SDK's API and a
+#      graph holding two trust-tasks-rs fails to compile on it — and publishes
+#      a vta-sdk built against 0.27 / 0.17
+#   3. the mediator's vta-sdk requirement moves to that version, the patches
+#      apply again, and both registry copies drop out
+#
+# Until (3) these two are duplicated, which is what the note above means by
+# freezing this workspace's API against the registry: a required field added to
+# a patched crate's type breaks the frozen registry copy of the SDK, which
+# nobody can edit. Step (2) is unblocked the moment this merges and publishes.
+affinidi-messaging-sdk
+affinidi-tdk

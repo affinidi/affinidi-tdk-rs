@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.28.36) — the mediator counts each account's traffic
+## Unreleased (0.29.0) — the mediator counts each account's traffic
 
 The mediator keeps lifetime counters per account: messages and bytes it
 accepted **from** the account and **addressed to** it, each split by the wire
@@ -29,6 +29,15 @@ the message. Serving the counters on `messaging/account/get` and
 published.
 
 Requires `affinidi-messaging-mediator-common` 0.16.23.
+
+**trust-tasks-rs 0.22.** A dependency bump with no code change: 0.22 renamed
+part of the `persona/*` family, nothing here uses those tasks, and the
+messaging specifications these crates do use are unchanged.
+
+It carries a minor rather than a patch because `trust_tasks_rs` types cross
+this crate's API — `MediatorAcl` among them — so a consumer combining it with
+another `trust-tasks-rs` user has to move in step. A graph holding both
+versions does not merely carry a duplicate; it fails to compile on those types.
 
 ## Unreleased (0.28.35) — a deleted message names its own protocol
 

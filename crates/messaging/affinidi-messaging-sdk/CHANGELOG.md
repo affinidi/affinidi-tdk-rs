@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### 0.27.0 — trust-tasks-rs 0.22
+
+Dependency bump, no code change. 0.22 renamed part of the `persona/*` family;
+nothing here uses those tasks, and the messaging specifications these crates do
+use are unchanged.
+
+A minor rather than a patch because `trust_tasks_rs` types cross this crate's
+public API — `MediatorAcl` among them — so a consumer combining it with another
+`trust-tasks-rs` user has to move in step. A graph holding both versions does
+not merely carry a duplicate; it fails to compile on those types.
+
 ### 0.26.27 — TSP relationships across two mediators
 
 A routed TSP message now goes out through this profile's own mediator even

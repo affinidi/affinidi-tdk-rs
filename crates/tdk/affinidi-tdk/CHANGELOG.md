@@ -1,10 +1,15 @@
 # Changelog — `affinidi-tdk`
 
-## Unreleased (0.16.0) — `trust-tasks-rs` 0.21
+## Unreleased (0.17.0) — `trust-tasks-rs` 0.21
 
 The facade re-exports the messaging family, so it moves with it. A re-export
 makes the re-exported crate's version part of this crate's public API — which
 is precisely why this is a minor and not a patch.
+
+**trust-tasks-rs 0.22.** Carried through from the messaging crates, which move
+a minor for it — `trust_tasks_rs` types cross their API, so a consumer has to
+move in step rather than resolve two versions. No code change here; the pins
+follow.
 
 ## Unreleased (0.15.0) — TSP Rev 3
 

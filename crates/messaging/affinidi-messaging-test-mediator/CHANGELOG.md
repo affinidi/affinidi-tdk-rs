@@ -1,9 +1,18 @@
 # Changelog
 
-## Unreleased (0.9.17) — per-account counters
+## Unreleased (0.10.0) — per-account counters
 
 - New end-to-end test `account_counters`: a delivered message is counted for
   both accounts, on the wire it travelled in, with the sizes agreeing.
+
+**trust-tasks-rs 0.22.** A dependency bump with no code change: 0.22 renamed
+part of the `persona/*` family, nothing here uses those tasks, and the
+messaging specifications these crates do use are unchanged.
+
+It carries a minor rather than a patch because `trust_tasks_rs` types cross
+this crate's API — `MediatorAcl` among them — so a consumer combining it with
+another `trust-tasks-rs` user has to move in step. A graph holding both
+versions does not merely carry a duplicate; it fails to compile on those types.
 
 ## Unreleased (0.9.16) — Trust Tasks over either transport
 
