@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.26.25"
+version = "0.26.26"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -21,6 +21,7 @@ default = []
 tsp = [
   "dep:affinidi-tsp",
   "dep:affinidi-did-resolver-cache-sdk",
+  "dep:hyper",
 ]
 
 [dependencies]
@@ -47,6 +48,10 @@ async-trait = "0.1"
 affinidi-did-resolver-cache-sdk = { version = "0.8", optional = true }
 ## The HTTP client type `affinidi-tdk-common` hands out. Named directly so a
 ## non-success response can be read into `HttpStatusError` with its headers.
+## Named only to recognise hyper's `IncompleteMessage` / closed-connection
+## errors inside a failed reqwest send (TSP `/inbound` retry). Already in the
+## graph via reqwest; no features.
+hyper = { version = "1", default-features = false, optional = true }
 reqwest = { version = "0.13", features = [
   "rustls",
   "json",
@@ -87,6 +92,7 @@ tracing = { version = "0.1", features = ["valuable"] }
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util"] }
 clap = { version = "4", features = ["derive"] }
 console = "0.16"
 dialoguer = "0.12"
