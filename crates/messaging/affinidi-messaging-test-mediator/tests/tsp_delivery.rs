@@ -76,6 +76,53 @@ async fn tsp_direct_message_round_trips_through_the_mediator() {
     assert_eq!(sender, alice.did, "sender VID is recovered");
 }
 
+/// A re-POST of the **identical** sealed bytes is stored once (Keyring VTI-39).
+/// `TspOps::send_raw` re-sends the same bytes when a connection closes before
+/// the mediator's answer arrives — including when the first POST was in fact
+/// stored. That is only safe if the mediator's store is idempotent on the
+/// message hash; this pins it on the path `send_raw` takes.
+#[tokio::test]
+async fn tsp_identical_bytes_posted_twice_are_stored_once() {
+    let env = TestEnvironment::spawn_with_direct_delivery()
+        .await
+        .expect("spawn test environment");
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+    env.relate(&alice, &bob)
+        .await
+        .expect("alice and bob relate");
+    // Clear the relationship handshake from bob's mailbox.
+    env.atm
+        .fetch_messages(&bob.profile, &FetchOptions::default())
+        .await
+        .expect("bob drains the handshake");
+
+    let sealed = env
+        .atm
+        .tsp()
+        .pack(&alice.profile, &bob.did, b"sent once, posted twice")
+        .await
+        .expect("alice seals a message to bob");
+    for _ in 0..2 {
+        env.atm
+            .tsp()
+            .send_raw(&alice.profile, &sealed)
+            .await
+            .expect("the mediator accepts the POST");
+    }
+
+    let fetched = env
+        .atm
+        .fetch_messages(&bob.profile, &FetchOptions::default())
+        .await
+        .expect("bob fetches messages");
+    assert_eq!(
+        fetched.success.len(),
+        1,
+        "the same bytes posted twice are stored once"
+    );
+}
+
 /// End-to-end TSP **Routed** relay: Alice sends through the mediator as a relay
 /// hop to Bob. The payload is sealed end-to-end to Bob; the outer routing layer
 /// is sealed to the mediator, which unwraps it and forwards the opaque inner to
