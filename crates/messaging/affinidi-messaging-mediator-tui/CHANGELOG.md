@@ -1,11 +1,16 @@
 # Changelog
 
-## Unreleased (0.1.9) — lifetime totals from the mediator
+## Unreleased (0.2.0) — lifetime totals from the mediator
 
 - The Account screen shows the account's **lifetime** totals as the mediator
   counted them — messages and bytes in and out, with TSP's share of each —
   rather than only what this monitor session has seen. Blank against a
   mediator that doesn't serve them.
+
+**trust-tasks-rs 0.22.** Carried through from the messaging crates, which move
+a minor for it — `trust_tasks_rs` types cross their API, so a consumer has to
+move in step rather than resolve two versions. No code change here; the pins
+follow.
 
 ## Unreleased (0.1.8) — the wire mix
 

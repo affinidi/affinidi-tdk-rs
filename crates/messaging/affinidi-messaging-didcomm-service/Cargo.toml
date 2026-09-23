@@ -54,7 +54,7 @@ affinidi-messaging-test-mediator = { version = "0.10", path = "../affinidi-messa
 # `affinidi_tdk::messaging::ATM`. A workspace build supplied it through feature
 # unification, so this was only wrong when the crate is built on its own —
 # which is how CI builds it.
-affinidi-tdk = { version = "0.16", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer", "messaging"] }
+affinidi-tdk = { version = "0.17", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer", "messaging"] }
 affinidi-messaging-core = { version = "0.1", path = "../affinidi-messaging-core" }
 futures-util = "0.3"
 
