@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.29.3) — a browser the mediator admits can read its health routes
+## Unreleased (0.29.4) — a browser the mediator admits can read its health routes
 
 `/readyz`, `/livez`, `/healthchecker` and `/admin/status` were added to the
 router after the CORS layer, and a route added after `.layer()` is not wrapped
@@ -11,6 +11,22 @@ WebSocket and run Trust Tasks, yet read neither the mediator's release from
 same CORS policy as the rest of the API, and still sit outside the rate limiter
 and the body limit, so an orchestrator's probes are answered as before.
 `build_cors_layer` is public, for an embedding harness.
+
+**vta-sdk 0.43 -> 0.51, and the duplicate it was holding open is gone.** A
+patch: `vta-sdk` is this crate's own dependency and none of its types cross the
+mediator's API, unlike the `trust-tasks-rs` move that took a minor.
+
+It is the third step of the crossing `scripts/workspace-duplicates-allow.txt`
+describes, and the one that ends it. 0.51 is the first vta-sdk built against
+affinidi-messaging-sdk 0.27 and affinidi-tdk 0.17, so `[patch.crates-io]`
+applies to them again and the registry copies leave the graph:
+
+    Removing affinidi-messaging-sdk v0.26.27
+    Removing affinidi-tdk v0.16.0
+    Removing trust-tasks-rs v0.21.21
+    Removing trust-tasks-proof v0.21.21
+
+The allowlist is empty again.
 
 ## Unreleased (0.29.2) — a role change reaches a socket that is already open
 
