@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.29.2) — a role change reaches a socket that is already open
+
+A WebSocket's session was built once, at upgrade, and authorisation read the
+account's role and ACLs off it until the access token expired
+(`jwt_access_expiry`, 15 minutes by default). REST re-joins the account on
+every request, so the two disagreed: an account promoted to admin was refused
+on the socket it already had, and — the case that matters — an account
+**demoted or blocked** kept its previous authority on its live socket for the
+rest of the token's life. The socket now re-reads the account's role and ACLs
+before handling each inbound frame, the same join `get_session` does for REST.
+A store failure keeps what the session had, as that join does.
+
 ## Unreleased (0.29.1) — the mediator warns about config keys it ignores
 
 At startup the mediator logs a warning for every key in `mediator.toml` that

@@ -506,7 +506,7 @@ fn close_with(code: u16, reason: &'static str) -> Message {
 async fn handle_socket(
     mut socket: WebSocket,
     state: SharedData,
-    session: Session,
+    mut session: Session,
     // An anonymous inter-mediator relay socket: it may push frames and
     // receives nothing but the `RelayAck` answers to them.
     is_relay: bool,
@@ -761,6 +761,9 @@ async fn handle_socket(
                                         continue;
                                     }
 
+                                    if !is_relay {
+                                        refresh_standing(&state, &mut session).await;
+                                    }
                                     // Process the message, which also takes care of any storing and live-streaming of the message
                                     state.monitor.received(&session.did_hash, Channel::Websocket, Protocol::DidComm, msg.as_bytes());
                                     let outcome = crate::monitor::with_channel(Channel::Websocket, handle_inbound(&state, &session, &msg)).await;
@@ -864,6 +867,9 @@ async fn handle_socket(
                                     // A binary frame leading with the TSP magic byte (0xF8) is a
                                     // TSP message; route it to the TSP handler. Other binary frames
                                     // are UTF-8-decoded and handled as DIDComm exactly as before.
+                                    if !is_relay {
+                                        refresh_standing(&state, &mut session).await;
+                                    }
                                     #[cfg(feature = "tsp")]
                                     if affinidi_tsp::is_tsp(&msg) {
                                         state.monitor.received(&session.did_hash, Channel::Websocket, Protocol::Tsp, &msg);
@@ -1378,6 +1384,34 @@ fn _close_frame_reason(why: CloseReason) -> (u16, &'static str) {
         CloseReason::Replaced => (close_code::POLICY, "replaced by a newer connection"),
         CloseReason::Refused => (close_code::POLICY, "this DID already has a live connection"),
         CloseReason::Unauthenticated => (close_code::POLICY, "session has no authenticated DID"),
+    }
+}
+
+/// Re-read the account's role and ACLs before a frame is handled.
+///
+/// A socket's `Session` is built once, at upgrade, and lives until its access
+/// token expires (`jwt_access_expiry`, 15 minutes by default). Authorisation
+/// reads `session.account_type` and `session.acls`, so without this a change to
+/// the account reached a REST request at once — `get_session` re-joins the
+/// account on every call — and a live socket not at all: an account promoted
+/// to admin was refused on the socket it already had, and, the case that
+/// matters, one **demoted or blocked** kept its old authority for the rest of
+/// the token's life. This is the same join `get_session` does, applied per
+/// frame. A store failure keeps what the session had, as that join does.
+async fn refresh_standing(state: &SharedData, session: &mut Session) {
+    match state.database.account_get(&session.did_hash).await {
+        Ok(Some(account)) => {
+            session.account_type = account._type;
+            session.acls =
+                affinidi_messaging_mediator_common::types::acls::MediatorACLSet::from_u64(
+                    account.acls,
+                );
+        }
+        Ok(None) => {}
+        Err(e) => warn!(
+            "couldn't refresh the account behind session {}: {e}",
+            session.session_id
+        ),
     }
 }
 

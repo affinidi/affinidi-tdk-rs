@@ -17,7 +17,7 @@ use common::await_monitor_event;
 /// A mediator and an administrator connected with a live stream.
 ///
 /// The admin is an ordinary test user promoted to `Admin` in the store before
-/// it authenticates (a session takes its role at authentication). An
+/// it authenticates. An
 /// `add_admin` identity would not do: it authenticates by DID resolution but
 /// has no streaming-registered account, so the synchronous reply path that
 /// request/response Trust Tasks use cannot be established on this harness.
@@ -114,6 +114,51 @@ async fn a_standard_account_cannot_read_mediator_wide_views() {
         .queue_list(&alice.profile, None, None, None, None, None)
         .await;
     assert!(queues.is_err(), "queue/list must be refused: {queues:?}");
+}
+
+/// A role change reaches a socket that is already open — both ways.
+///
+/// A socket's session is built at upgrade and lives until its token expires,
+/// and authorisation reads the role off it. REST re-joins the account on every
+/// request; a socket did not, so a promotion was refused on the socket the
+/// account already had, and a demotion left an ex-administrator with its old
+/// authority until the token ran out.
+#[tokio::test]
+async fn a_role_change_reaches_a_live_socket() {
+    let env = TestEnvironment::spawn().await.expect("environment");
+    let alice = env.add_user("alice").await.expect("alice");
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("alice live");
+    let tasks = env.atm.trust_tasks();
+
+    assert!(
+        tasks.stats_show(&alice.profile).await.is_err(),
+        "a standard account is refused"
+    );
+
+    // Promoted while the socket is open: served on that same socket.
+    env.mediator
+        .store()
+        .account_set_role(&alice.did_hash(), &AccountType::Admin)
+        .await
+        .expect("promote");
+    tasks
+        .stats_show(&alice.profile)
+        .await
+        .expect("a promotion is honoured without reconnecting");
+
+    // Demoted while the socket is open: refused on that same socket.
+    env.mediator
+        .store()
+        .account_set_role(&alice.did_hash(), &AccountType::Standard)
+        .await
+        .expect("demote");
+    assert!(
+        tasks.stats_show(&alice.profile).await.is_err(),
+        "a demotion must take effect on a live socket, not when its token expires"
+    );
 }
 
 /// A refusal comes back as the answer to the request that provoked it — at
