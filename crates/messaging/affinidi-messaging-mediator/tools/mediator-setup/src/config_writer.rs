@@ -914,6 +914,29 @@ mod tests {
     /// The `[didcomm_v1]` section is written only when enabled, and a re-run
     /// that turns it off strips it — leaving a stale `enabled = true` behind
     /// would keep the mediator accepting v1 traffic the operator just disabled.
+    /// Every key the wizard writes is one the mediator reads — the mediator
+    /// warns on any it does not recognise (Keyring VTI-06), so a wizard that
+    /// wrote one would greet every new operator with a false alarm.
+    #[test]
+    fn generated_config_has_no_unknown_keys() {
+        let variants = [
+            WizardConfig::default(),
+            WizardConfig {
+                cors_mode: crate::consts::CORS_MODE_LIST.into(),
+                cors_domains: "https://app.example.com".into(),
+                didcomm_v1_enabled: true,
+                network_mode: crate::consts::NETWORK_MODE_CLOSED.into(),
+                ..WizardConfig::default()
+            },
+        ];
+        for config in variants {
+            let toml = generate_toml(&config, &test_generated()).unwrap();
+            let (_, unknown) = affinidi_messaging_mediator_config::env::parse_config(&toml)
+                .expect("generated config parses");
+            assert!(unknown.is_empty(), "wizard wrote unknown keys: {unknown:?}");
+        }
+    }
+
     #[test]
     fn didcomm_v1_section_is_written_only_when_enabled() {
         let base = WizardConfig {

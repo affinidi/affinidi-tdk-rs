@@ -11,7 +11,7 @@ use std::{
     path::Path,
 };
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::ConfigRaw;
 use crate::error::ConfigError;
@@ -307,22 +307,85 @@ pub fn apply_env_overrides(config: &mut ConfigRaw) {
 
 /// Read the primary configuration file for the mediator.
 /// Returns a [`ConfigRaw`] with env var overrides applied.
+///
+/// Keys the schema does not recognise are logged as warnings (see
+/// [`warn_unknown_keys`]). That only reaches an operator once a tracing
+/// subscriber is installed; a caller that reads the file *before* installing
+/// one — the mediator's own startup — should use
+/// [`read_config_file_with_unknown_keys`] and warn once logging is up.
 pub fn read_config_file(file_name: &str) -> Result<ConfigRaw, ConfigError> {
+    let (config, unknown_keys) = read_config_file_with_unknown_keys(file_name)?;
+    warn_unknown_keys(file_name, &unknown_keys);
+    Ok(config)
+}
+
+/// [`read_config_file`], also returning the dotted path of every key in the
+/// file that the schema does not recognise, instead of logging them.
+///
+/// Unknown keys are reported, never rejected: a config that boots today must
+/// keep booting. The usual cause is not a typo but TOML's table scoping — a
+/// key appended at the end of the file lands in whichever `[table]` header
+/// precedes it, so `cors_allow_origin` written below
+/// `[processors.session_expiry_cleanup]` is
+/// `processors.session_expiry_cleanup.cors_allow_origin`, which nothing reads.
+pub fn read_config_file_with_unknown_keys(
+    file_name: &str,
+) -> Result<(ConfigRaw, Vec<String>), ConfigError> {
     info!("Config file({file_name})");
     let raw_config = read_file_lines(file_name)?;
 
-    let mut config: ConfigRaw = toml::from_str(&raw_config.join("\n")).map_err(|err| {
-        error!("Could not parse configuration settings. {err:?}");
-        ConfigError::Parse(format!("{err:?}"))
+    let (mut config, unknown_keys) = parse_config(&raw_config.join("\n")).map_err(|err| {
+        error!("Could not parse configuration settings. {err}");
+        err
     })?;
 
     apply_env_overrides(&mut config);
 
-    Ok(config)
+    Ok((config, unknown_keys))
+}
+
+/// Deserialize `mediator.toml` contents into a [`ConfigRaw`] (no env
+/// overrides), collecting the dotted path of every key the schema ignored.
+pub fn parse_config(contents: &str) -> Result<(ConfigRaw, Vec<String>), ConfigError> {
+    // `Display`, not `Debug`: toml's rendering names the line, the key and the
+    // expected type — e.g. an array given for the comma-separated
+    // `cors_allow_origin` reads "invalid type: sequence, expected a string".
+    let parse_err = |err: toml::de::Error| ConfigError::Parse(err.to_string());
+    let de = toml::Deserializer::parse(contents).map_err(parse_err)?;
+    let mut unknown_keys = Vec::new();
+    let config = serde_ignored::deserialize(de, |path| unknown_keys.push(path.to_string()))
+        .map_err(parse_err)?;
+    Ok((config, unknown_keys))
+}
+
+/// The operator-facing warning for one unrecognised key.
+pub fn unknown_key_message(file_name: &str, key: &str) -> String {
+    match key.rsplit_once('.') {
+        Some((table, leaf)) => format!(
+            "unknown configuration key `{key}` in {file_name} — ignored. The mediator \
+             has no `{leaf}` setting in [{table}]. Check for a typo or a removed \
+             setting; if `{leaf}` belongs to another section, note that a key \
+             placed after a [table] header belongs to that table, so a key \
+             appended at the end of the file lands in its last section. Move it \
+             under its own section header."
+        ),
+        None => format!(
+            "unknown configuration key `{key}` in {file_name} — ignored. Check for a \
+             typo or a removed/renamed setting."
+        ),
+    }
+}
+
+/// Log one warning per unrecognised key, naming its full dotted path.
+pub fn warn_unknown_keys(file_name: &str, unknown_keys: &[String]) {
+    for key in unknown_keys {
+        warn!("{}", unknown_key_message(file_name, key));
+    }
 }
 
 /// Reads a file and returns a vector of strings, one for each line in the file.
-/// Strips lines starting with `#` (comments).
+/// Lines starting with `#` (comments) are blanked rather than dropped, so a
+/// parse error's line number still points at the line in the file.
 fn read_file_lines<P>(file_name: P) -> Result<Vec<String>, ConfigError>
 where
     P: AsRef<Path>,
@@ -338,7 +401,9 @@ where
 
     let mut lines = Vec::new();
     for line in io::BufReader::new(file).lines().map_while(Result::ok) {
-        if !line.starts_with('#') {
+        if line.starts_with('#') {
+            lines.push(String::new());
+        } else {
             lines.push(line);
         }
     }
@@ -348,7 +413,75 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::split_list;
+    use super::{parse_config, split_list, unknown_key_message};
+
+    const SHIPPED: &str = include_str!("../../conf/mediator.toml");
+
+    /// A valid config reports nothing — a warning that always fires is one
+    /// operators learn to ignore.
+    #[test]
+    fn the_shipped_config_has_no_unknown_keys() {
+        let (_, unknown) = parse_config(SHIPPED).expect("shipped config parses");
+        assert!(unknown.is_empty(), "unexpected unknown keys: {unknown:?}");
+    }
+
+    /// Keyring VTI-06: a key appended below the last table header is filed
+    /// under that table. It used to vanish without a word; now it is reported
+    /// with the path it actually landed at.
+    #[test]
+    fn a_key_appended_after_the_last_table_is_reported_with_its_dotted_path() {
+        let toml = format!("{SHIPPED}\ncors_allow_origin = \"*\"\n");
+        let (config, unknown) = parse_config(&toml).expect("still parses");
+        assert_eq!(
+            unknown,
+            vec!["processors.session_expiry_cleanup.cors_allow_origin".to_string()]
+        );
+        // And it did not take effect — which is exactly why it is reported.
+        assert!(config.security.cors_allow_origin.is_none());
+
+        let msg = unknown_key_message("mediator.toml", &unknown[0]);
+        assert!(msg.contains("`processors.session_expiry_cleanup.cors_allow_origin`"));
+        assert!(msg.contains("a key placed after a [table] header belongs to that table"));
+    }
+
+    /// The same key appended as an array (the shape the Keyring report used)
+    /// is still just an unknown key when misplaced — its type is never checked
+    /// because nothing reads it.
+    #[test]
+    fn a_misplaced_array_is_reported_not_rejected() {
+        let toml = format!("{SHIPPED}\ncors_allow_origin = [\"*\"]\n");
+        let (_, unknown) = parse_config(&toml).expect("still parses");
+        assert_eq!(
+            unknown,
+            vec!["processors.session_expiry_cleanup.cors_allow_origin".to_string()]
+        );
+    }
+
+    /// In the right section, an array is the wrong type for the
+    /// comma-separated `cors_allow_origin`, and the error says so by name.
+    #[test]
+    fn an_array_cors_allow_origin_in_security_is_a_clear_error() {
+        let toml = SHIPPED.replacen(
+            "\n[security]\n",
+            "\n[security]\ncors_allow_origin = [\"*\"]\n",
+            1,
+        );
+        assert_ne!(toml, SHIPPED, "fixture must actually inject the key");
+        let err = parse_config(&toml)
+            .expect_err("an array is not a string")
+            .to_string();
+        assert!(err.contains("cors_allow_origin"), "{err}");
+        assert!(err.contains("expected a string"), "{err}");
+    }
+
+    /// A top-level typo has no table to blame; the message does not invent one.
+    #[test]
+    fn a_top_level_unknown_key_is_reported_plainly() {
+        let toml = format!("log_levle = \"debug\"\n{SHIPPED}");
+        let (_, unknown) = parse_config(&toml).expect("still parses");
+        assert_eq!(unknown, vec!["log_levle".to_string()]);
+        assert!(!unknown_key_message("m.toml", "log_levle").contains("[table]"));
+    }
 
     #[test]
     fn split_list_trims_entries_and_drops_empties() {

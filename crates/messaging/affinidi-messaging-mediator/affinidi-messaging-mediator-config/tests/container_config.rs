@@ -15,7 +15,7 @@
 
 use std::path::PathBuf;
 
-use affinidi_messaging_mediator_config::ConfigRaw;
+use affinidi_messaging_mediator_config::{ConfigRaw, env::parse_config};
 
 /// `docker/conf/mediator.toml`, relative to this crate's manifest.
 fn container_config_path() -> PathBuf {
@@ -36,8 +36,15 @@ fn container_mediator_toml_parses() {
     }
 
     let toml = std::fs::read_to_string(&path).expect("read docker/conf/mediator.toml");
-    let raw: ConfigRaw =
-        toml::from_str(&toml).expect("docker/conf/mediator.toml parses as ConfigRaw");
+    let (raw, unknown): (ConfigRaw, _) =
+        parse_config(&toml).expect("docker/conf/mediator.toml parses as ConfigRaw");
+
+    // Every key in the image's config is one the mediator reads; an unknown one
+    // would warn on every container start (Keyring VTI-06).
+    assert!(
+        unknown.is_empty(),
+        "unknown keys in image config: {unknown:?}"
+    );
 
     // A published image must carry no identity: both DIDs come from the
     // environment at run time (MEDIATOR_DID / ADMIN_DID).

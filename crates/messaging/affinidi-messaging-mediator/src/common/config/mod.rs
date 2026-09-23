@@ -1208,14 +1208,17 @@ fn resolve_configured_paths(config: &mut ConfigRaw, config_file: &Path) {
 pub async fn init(config_file: &str, with_ansi: bool) -> Result<Config, MediatorError> {
     // Read configuration file parameters. `read_config_file` lives in the config
     // crate now (returns its lean `ConfigError`); map it back to MediatorError.
-    let config =
-        affinidi_messaging_mediator_config::env::read_config_file(config_file).map_err(|e| {
-            MediatorError::ConfigError(
-                crate::common::error_codes::CONFIG_ERROR,
-                "NA".into(),
-                e.to_string(),
-            )
-        })?;
+    // Unknown keys are held until the tracing subscriber below exists — a
+    // warning logged now would be dropped (Keyring VTI-06).
+    let (config, unknown_keys) =
+        affinidi_messaging_mediator_config::env::read_config_file_with_unknown_keys(config_file)
+            .map_err(|e| {
+                MediatorError::ConfigError(
+                    crate::common::error_codes::CONFIG_ERROR,
+                    "NA".into(),
+                    e.to_string(),
+                )
+            })?;
 
     // setup logging/tracing framework
     let filter = if env::var("RUST_LOG").is_ok() {
@@ -1263,6 +1266,10 @@ pub async fn init(config_file: &str, with_ansi: bool) -> Result<Config, Mediator
             MediatorError::ConfigError(12, "NA".into(), format!("Couldn't setup logging: {e}"))
         })?;
     }
+
+    // A key the schema does not recognise — typo'd, removed, or filed under the
+    // wrong `[table]` — silently took no effect; say so now that it is heard.
+    affinidi_messaging_mediator_config::env::warn_unknown_keys(config_file, &unknown_keys);
 
     // Here and nowhere earlier: the subscriber above now exists, so the
     // deprecation warning is seen rather than dropped, and the conversion

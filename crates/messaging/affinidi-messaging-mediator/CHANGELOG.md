@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (0.29.1) — the mediator warns about config keys it ignores
+
+At startup the mediator logs a warning for every key in `mediator.toml` that
+it does not recognise, naming the key's full dotted path — for example
+`processors.session_expiry_cleanup.cors_allow_origin` for a CORS setting
+appended below the file's last table, where it used to take no effect in
+silence (Keyring VTI-06). The warnings are held until the tracing subscriber
+is installed, so they reach the log rather than being dropped. A config reload
+(`config.reload`) reports the same way. Nothing is rejected.
+
 ## Unreleased (0.29.0) — the mediator counts each account's traffic
 
 The mediator keeps lifetime counters per account: messages and bytes it
