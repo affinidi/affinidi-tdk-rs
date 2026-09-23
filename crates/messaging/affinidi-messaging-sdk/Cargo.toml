@@ -34,10 +34,10 @@ affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version =
 affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.8" }
 ## Trust Tasks framework — typed request/response documents for the messaging
 ## tasks (ping / account / acl / access-list), carried over the binding envelope.
-trust-tasks-rs = "0.21.20"
+trust-tasks-rs = "0.22.1"
 # Signs every outgoing Trust Task (eddsa-jcs-2022 Data Integrity proof) — the
 # sign-side counterpart of the verifier consumers run.
-trust-tasks-proof = { version = "0.21", default-features = false, features = ["affinidi"] }
+trust-tasks-proof = { version = "0.22", default-features = false, features = ["affinidi"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
 affinidi-tsp = { path = "../affinidi-tsp", version = "0.2", optional = true }

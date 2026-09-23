@@ -16,7 +16,7 @@ affinidi-messaging-sdk = { version = "0.26.25", path = "../affinidi-messaging-sd
 affinidi-messaging-didcomm = { version = "0.15", path = "../affinidi-messaging-didcomm" }
 affinidi-tdk-common = "0.6"
 affinidi-secrets-resolver = "0.5"
-trust-tasks-rs = "0.21.20"
+trust-tasks-rs = "0.22.1"
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 serde = { version = "1", features = ["derive"] }
