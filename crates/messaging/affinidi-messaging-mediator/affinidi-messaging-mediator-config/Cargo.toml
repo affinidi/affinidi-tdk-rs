@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-config"
-version = "0.4.5"
+version = "0.4.6"
 description = "Raw TOML configuration schema for the Affinidi Messaging Mediator (shared by the mediator and its setup tool)"
 edition.workspace = true
 authors.workspace = true
@@ -17,6 +17,9 @@ repository.workspace = true
 serde = { version = "1", features = ["derive"] }
 # TOML parsing for `read_config_file`.
 toml = "1"
+# Records every key the schema does not recognise (typo'd, removed, or filed
+# under the wrong `[table]`) so the mediator can warn instead of dropping it.
+serde_ignored = "0.1"
 # Lean error type for config loading (`ConfigError`).
 thiserror = "2"
 # Structured logging in the file-reading helpers, matching the mediator.

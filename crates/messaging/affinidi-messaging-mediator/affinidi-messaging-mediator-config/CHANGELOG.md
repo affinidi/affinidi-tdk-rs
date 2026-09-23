@@ -1,5 +1,28 @@
 # Affinidi Messaging Mediator Config
 
+## Unreleased (0.4.6) — unknown keys are reported, not dropped
+
+A key in `mediator.toml` that the schema does not recognise used to be dropped
+without a word. The usual cause is TOML's table scoping rather than a typo: a
+key appended at the end of the file belongs to whichever `[table]` header
+precedes it, so `cors_allow_origin` written below
+`[processors.session_expiry_cleanup]` becomes
+`processors.session_expiry_cleanup.cors_allow_origin`, which nothing reads
+(Keyring VTI-06). Parsing now goes through `serde_ignored`, and every such key
+is reported by its full dotted path with a hint about table scoping.
+
+Reported, never rejected: a config that boots today keeps booting.
+`read_config_file` logs the warnings itself; the new
+`read_config_file_with_unknown_keys` returns them instead, for a caller that
+reads the file before its tracing subscriber exists. `parse_config`,
+`warn_unknown_keys` and `unknown_key_message` are the pieces underneath.
+
+Parse errors now use toml's `Display` rather than `Debug`, so they name the
+line, the key and the expected type — an array given for the comma-separated
+`cors_allow_origin` reads "invalid type: sequence, expected a string". Comment
+lines are blanked rather than removed before parsing, so that line number is
+the line in the file. Additive.
+
 ## Unreleased (0.4.5) — `legacy_admin_protocols`
 
 A new `[security]` key, `legacy_admin_protocols` (`"on"` | `"warn"` |
