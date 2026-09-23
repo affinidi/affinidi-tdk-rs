@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### 0.26.27 — TSP relationships across two mediators
+
+A routed TSP message now goes out through this profile's own mediator even
+when its route starts somewhere else. `send_routed_opaque` (and so
+`send_routed`, `send_nested_routed` and the routed relationship accept) puts
+the profile's mediator in front of a route whose first hop is another
+intermediary. Before, the routing layer was sealed to that first hop but
+posted to our own mediator, which took the frame for Direct delivery to a
+local account and refused it with 403 "recipient is not local to this
+mediator". Rev 3 §7.2.4 lets a responder add hops of its own, and this is
+the one it needs. A route that already starts at our mediator, and a
+single-hop route, are sent exactly as before.
+
+The case this fixes is Keyring VTI-41: a client on mediator A invites a peer
+on mediator B with a `Reply_Path` of `[A, client]`, and the peer's accept
+never left B. It now travels `[B, A, client]`.
+
+`send_control` also routes when the peer's mediator is known and is not ours
+(learned from a routed invite, or set with `set_peer_mediator`): invites,
+accepts without a reply path and cancellations go
+`[own, peer_mediator, peer]`, as `ATM::send_to` already did for application
+messages. With the peer's mediator unknown or shared, it is Direct as
+before.
+
+The receiving mediator has to admit the relayed hop, which arrives with no
+Authorization header: `enable_inter_mediator_relay = true` (or the legacy
+`SEND_FORWARDED` in `global_acl_default`), and `relay_trusted_mediators`
+either empty or listing the relaying mediator.
+
 ### 0.26.26 — a TSP send survives a connection closed under it
 
 `TspOps::send_raw` — the POST behind every TSP send, including a VTA's
