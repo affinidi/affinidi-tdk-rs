@@ -1,12 +1,21 @@
 # Changelog
 
-## Unreleased (0.1.6) — account counters
+## Unreleased (0.2.0) — account counters
 
 `account_of` and `accounts` ask for each account's lifetime counters on a
 mediator that serves them (`STATS_SINCE`, 0.28.36), and `serves_stats()`
 reports whether this one does. Like `serves_activity`, the gate is closed
 when the mediator's version can't be read: `includeStats` is a request
 member, so asking blind would cost the account view itself.
+
+**trust-tasks-rs 0.22.** A dependency bump with no code change: 0.22 renamed
+part of the `persona/*` family, nothing here uses those tasks, and the
+messaging specifications these crates do use are unchanged.
+
+It carries a minor rather than a patch because `trust_tasks_rs` types cross
+this crate's API — `MediatorAcl` among them — so a consumer combining it with
+another `trust-tasks-rs` user has to move in step. A graph holding both
+versions does not merely carry a duplicate; it fails to compile on those types.
 
 ## Unreleased (0.1.5) — account activity
 

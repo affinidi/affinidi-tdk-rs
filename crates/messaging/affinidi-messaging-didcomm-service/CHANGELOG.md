@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.11.0) — TSP relationship persistence + ensure
+## Unreleased (0.12.0) — TSP relationship persistence + ensure
 
 Lets a facade consumer form and persist TSP relationships, which the framework
 otherwise could not reach because it builds the ATM internally (design note
@@ -18,6 +18,15 @@ already depended on:
   admits application messages, so it is safe to call at every reconnect and does
   not raise an invalid `SendInvite` once a durable store makes reconnect start
   non-`None`). The invite is routed (§7.2.4). Both are `#[cfg(feature = "tsp")]`.
+
+**trust-tasks-rs 0.22.** A dependency bump with no code change: 0.22 renamed
+part of the `persona/*` family, nothing here uses those tasks, and the
+messaging specifications these crates do use are unchanged.
+
+It carries a minor rather than a patch because `trust_tasks_rs` types cross
+this crate's API — `MediatorAcl` among them — so a consumer combining it with
+another `trust-tasks-rs` user has to move in step. A graph holding both
+versions does not merely carry a duplicate; it fails to compile on those types.
 
 ## Unreleased (0.10.0) — `trust-tasks-rs` 0.21
 
