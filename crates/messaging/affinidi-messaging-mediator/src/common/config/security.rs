@@ -227,7 +227,9 @@ fn note_refused_origin(seen: &Mutex<HashSet<String>>, origin: &HeaderValue) {
 
 /// Build the mediator's [`CorsLayer`] for the given origin policy. The
 /// allowed methods/headers are fixed; only the origin matching varies.
-fn build_cors_layer(policy: &CorsOriginPolicy) -> CorsLayer {
+/// Public so an embedding harness can set the same policy a `mediator.toml`
+/// would, without parsing one.
+pub fn build_cors_layer(policy: &CorsOriginPolicy) -> CorsLayer {
     let base = CorsLayer::new()
         .allow_headers([AUTHORIZATION, CONTENT_TYPE])
         .allow_methods([

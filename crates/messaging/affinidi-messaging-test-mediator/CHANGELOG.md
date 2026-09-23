@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.10.1) — set the CORS policy
+
+`TestMediatorBuilder::cors_allow_origin(CorsOriginPolicy)` sets the origin
+policy `security.cors_allow_origin` would, for tests of what a browser client
+can read. `CorsOriginPolicy` is re-exported.
+
 ## Unreleased (0.10.0) — per-account counters
 
 - New end-to-end test `account_counters`: a delivered message is counted for

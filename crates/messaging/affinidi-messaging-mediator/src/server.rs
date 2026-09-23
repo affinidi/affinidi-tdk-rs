@@ -898,22 +898,11 @@ pub async fn serve_internal(
         .layer(RequestBodyLimitLayer::new(config.limits.http_size))
         .layer(RateLimitLayer::new(rate_limiter))
         .layer(RequestIdLayer::new())
-        .route(
-            join_api_path(&api_prefix, "healthchecker").as_str(),
-            get(health_checker_handler).with_state(shared_state.clone()),
-        )
-        .route(
-            join_api_path(&api_prefix, "readyz").as_str(),
-            get(readiness_handler).with_state(shared_state.clone()),
-        )
-        .route(
-            join_api_path(&api_prefix, "livez").as_str(),
-            get(liveness_handler),
-        )
-        .route(
-            join_api_path(&api_prefix, "admin/status").as_str(),
-            get(admin_status::admin_status_handler).with_state(shared_state),
-        );
+        .merge(probe_routes(
+            &api_prefix,
+            shared_state,
+            config.security.cors_allow_origin.clone(),
+        ));
 
     let app = if let Some(handle) = metrics_handle {
         app.route(
@@ -1073,6 +1062,42 @@ pub async fn serve_internal(
         shutdown_token,
         server_task,
     ))
+}
+
+/// The health, readiness and status routes.
+///
+/// Kept outside the rate limiter and the body limit — an orchestrator probing
+/// a busy mediator must not be refused as if it were traffic — but **inside the
+/// CORS policy**. They used to be added after the CORS layer, and a route added
+/// after `.layer()` is not wrapped by it, so they never sent
+/// `Access-Control-Allow-Origin`: a browser client whose origin the mediator
+/// allows everywhere else could authenticate, hold a WebSocket and run Trust
+/// Tasks, yet read neither `readyz` (the release a console reports) nor
+/// `admin/status`, and saw only "Failed to fetch". A probe without an `Origin`
+/// header is answered exactly as before.
+fn probe_routes(
+    api_prefix: &str,
+    shared_state: SharedData,
+    cors: tower_http::cors::CorsLayer,
+) -> Router {
+    Router::new()
+        .route(
+            join_api_path(api_prefix, "healthchecker").as_str(),
+            get(health_checker_handler).with_state(shared_state.clone()),
+        )
+        .route(
+            join_api_path(api_prefix, "readyz").as_str(),
+            get(readiness_handler).with_state(shared_state.clone()),
+        )
+        .route(
+            join_api_path(api_prefix, "livez").as_str(),
+            get(liveness_handler),
+        )
+        .route(
+            join_api_path(api_prefix, "admin/status").as_str(),
+            get(admin_status::admin_status_handler).with_state(shared_state),
+        )
+        .layer(cors)
 }
 
 fn install_production_tracing(
