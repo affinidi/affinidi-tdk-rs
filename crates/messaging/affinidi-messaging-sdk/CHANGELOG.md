@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### 0.26.26 — a TSP send survives a connection closed under it
+
+`TspOps::send_raw` — the POST behind every TSP send, including a VTA's
+Trust Task replies — made one attempt. When a pooled keep-alive connection
+was closed under the request (by an ngrok tunnel or a load balancer, seen as
+hyper `IncompleteMessage`), the message was lost with nothing retrying or
+recording it, and the caller waited out its own timeout for a task that had
+completed (Keyring VTI-39).
+
+It now re-POSTs the **identical bytes** up to twice more (after 100 ms, then
+400 ms) when no HTTP answer came back: a failed connect, a closed, reset or
+incomplete connection, or the new 30 s per-request timeout. It never
+re-seals, and it never retries an HTTP status — a 4xx or 5xx is the
+mediator's answer. The re-send is safe because the mediator stores a message
+idempotently on the hash of its bytes (mediator 0.28.10 and later), so a
+retry of a POST that was in fact stored is a no-op. The timeout is set on
+this request only; the shared TDK client is unchanged.
+
 ### 0.26.25 — asking for an account's lifetime counters
 
 `trust_tasks().account_get_detailed(profile, did_hash, include_activity,

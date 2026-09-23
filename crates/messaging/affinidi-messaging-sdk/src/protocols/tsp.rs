@@ -797,6 +797,113 @@ enum ProtocolChoice {
     Deny,
 }
 
+/// Per-request bound on a TSP `/inbound` POST. The shared TDK HTTP client
+/// carries no request timeout (it also serves long-lived calls), so without
+/// this a POST onto a half-dead connection waits for the OS to give up.
+const SEND_RAW_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Delay before each re-POST of the same bytes after a connection-level
+/// failure: two retries, three attempts in all.
+const SEND_RAW_RETRY_BACKOFF: &[Duration] =
+    &[Duration::from_millis(100), Duration::from_millis(400)];
+
+/// POST packed TSP bytes to a mediator `/inbound`, re-POSTing the **identical
+/// bytes** after a connection-level failure (Keyring VTI-39: a pooled
+/// keep-alive connection closed by an intermediary under the request surfaced
+/// as hyper `IncompleteMessage`, and the reply was lost with nothing retrying
+/// it).
+///
+/// Re-POSTing is safe because the mediator stores a message idempotently on
+/// the sha256 of its stored form, and that form is a pure function of these
+/// bytes (`deliver_opaque` stores `base64url(qb2)`; `FjallStore::store_message`
+/// keys it on `digest(message)`; the memory store and the Redis
+/// `store_message` in `conf/atm-functions.lua` short-circuit the same way when
+/// the hash is already stored for that recipient). So when the first attempt
+/// was in fact stored and only its response was lost, the retry is a no-op.
+/// That is also why this never re-seals: a fresh HPKE seal is different bytes
+/// and would be stored — and delivered — twice.
+///
+/// Only failures where no HTTP answer was received are retried. Any status,
+/// 4xx or 5xx, is the mediator's answer and is returned as-is.
+async fn post_tsp_inbound(
+    client: &reqwest::Client,
+    url: &str,
+    access_token: &str,
+    bytes: &[u8],
+    backoff: &[Duration],
+) -> Result<(), ATMError> {
+    let mut attempt = 0;
+    let res = loop {
+        let sent = client
+            .post(url)
+            .header("Content-Type", "application/tsp")
+            .header("Authorization", format!("Bearer {access_token}"))
+            .timeout(SEND_RAW_TIMEOUT)
+            .body(bytes.to_vec())
+            .send()
+            .await;
+        match sent {
+            Ok(res) => break res,
+            Err(e) if attempt < backoff.len() && is_retryable_send_error(&e) => {
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    error = %e,
+                    "TSP /inbound POST failed before a response; re-sending the same bytes"
+                );
+                tokio::time::sleep(backoff[attempt]).await;
+                attempt += 1;
+            }
+            Err(e) => {
+                return Err(ATMError::TransportError(format!(
+                    "Could not send TSP message: {e:?}"
+                )));
+            }
+        }
+    };
+
+    // An accepted message is not re-read: a body that fails to arrive after a
+    // 2xx must not turn a delivered message into an error the caller retries.
+    if !res.status().is_success() {
+        crate::errors::check_response("send TSP message", res).await?;
+    }
+    Ok(())
+}
+
+/// Whether a failed send never got an HTTP answer and may be re-sent: a failed
+/// connect, the per-request timeout, or a connection that closed or reset
+/// under the request (hyper `IncompleteMessage` / a closed or canceled
+/// connection, or an I/O reset, abort, broken pipe or early EOF). Anything else
+/// — a request that could not be built, a redirect loop, a body error — is not.
+fn is_retryable_send_error(e: &reqwest::Error) -> bool {
+    if e.is_status() || e.is_builder() || e.is_redirect() {
+        return false;
+    }
+    if e.is_connect() || e.is_timeout() {
+        return true;
+    }
+    let mut source = std::error::Error::source(e);
+    while let Some(err) = source {
+        if let Some(h) = err.downcast_ref::<hyper::Error>()
+            && (h.is_incomplete_message() || h.is_closed() || h.is_canceled())
+        {
+            return true;
+        }
+        if let Some(io) = err.downcast_ref::<std::io::Error>()
+            && matches!(
+                io.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::UnexpectedEof
+            )
+        {
+            return true;
+        }
+        source = err.source();
+    }
+    false
+}
+
 /// Pure protocol-selection precedence, factored out of
 /// [`TspOps::select_protocol`] so the full truth table is unit-testable without
 /// a live `ATM`. `fresh_cap` is the cached capability (if any, already
@@ -2718,11 +2825,22 @@ impl TspOps<'_> {
     /// `/inbound`, reusing the profile's existing (DIDComm) authenticated session
     /// for the bearer token. The mediator sniffs the TSP magic byte and routes it
     /// to its TSP handler.
+    ///
+    /// A connection-level failure (a pooled keep-alive connection closed under
+    /// the request, a reset, a refused connect, the per-request timeout) is
+    /// retried twice more with the **same bytes**; the mediator stores a message
+    /// idempotently on its hash, so a retry of a POST that was in fact stored is
+    /// a no-op. The message is never re-sealed, which would defeat that. An HTTP status is an answer and is never
+    /// retried.
     pub async fn send_raw(&self, profile: &Arc<ATMProfile>, bytes: &[u8]) -> Result<(), ATMError> {
         let mediator_url = profile.get_mediator_rest_endpoint().ok_or_else(|| {
             ATMError::MsgSendError("Profile is missing a valid mediator URL".into())
         })?;
         let (profile_did, mediator_did) = profile.dids()?;
+        // Authenticated once: the retries below are sub-second, well inside the
+        // access token's lifetime, and a connection-level failure says nothing
+        // about the token. A token the mediator does refuse comes back as a 401
+        // status, which is an answer and is not retried here.
         let tokens = self
             .atm
             .get_tdk()
@@ -2730,25 +2848,14 @@ impl TspOps<'_> {
             .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
             .await?;
 
-        let res = self
-            .atm
-            .inner
-            .tdk_common
-            .client()
-            .post([&mediator_url, "/inbound"].concat())
-            .header("Content-Type", "application/tsp")
-            .header("Authorization", format!("Bearer {}", tokens.access_token))
-            .body(bytes.to_vec())
-            .send()
-            .await
-            .map_err(|e| ATMError::TransportError(format!("Could not send TSP message: {e:?}")))?;
-
-        // An accepted message is not re-read: a body that fails to arrive after a
-        // 2xx must not turn a delivered message into an error the caller retries.
-        if !res.status().is_success() {
-            crate::errors::check_response("send TSP message", res).await?;
-        }
-        Ok(())
+        post_tsp_inbound(
+            self.atm.inner.tdk_common.client(),
+            &[&mediator_url, "/inbound"].concat(),
+            &tokens.access_token,
+            bytes,
+            SEND_RAW_RETRY_BACKOFF,
+        )
+        .await
     }
 
     /// Unpack a fetched TSP message (stored `base64url(qb2)`): decode, resolve the
@@ -4770,5 +4877,150 @@ mod tests {
         assert!(limiter.allow(A, B, 10_000).await); // exactly 10 s — allowed
         // A different peer is tracked independently.
         assert!(limiter.allow(A, C, 5_000).await);
+    }
+}
+
+/// `post_tsp_inbound` against a raw local HTTP/1.1 server that misbehaves the
+/// way an intermediary does (Keyring VTI-39).
+#[cfg(test)]
+mod send_raw_retry_tests {
+    use super::post_tsp_inbound;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    const OK: &[u8] = b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n";
+    const FAST: &[Duration] = &[Duration::from_millis(1), Duration::from_millis(1)];
+
+    /// Read one HTTP/1.1 request (headers + `content-length` body) and return
+    /// its body, or `None` when the peer closed first.
+    async fn read_request(sock: &mut TcpStream) -> Option<Vec<u8>> {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let head_end = loop {
+            if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break i + 4;
+            }
+            let n = sock.read(&mut chunk).await.ok()?;
+            if n == 0 {
+                return None;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        };
+        let head = String::from_utf8_lossy(&buf[..head_end]).to_ascii_lowercase();
+        let len: usize = head
+            .lines()
+            .find_map(|l| l.strip_prefix("content-length:"))
+            .map(|v| v.trim().parse().unwrap())
+            .unwrap_or(0);
+        while buf.len() < head_end + len {
+            let n = sock.read(&mut chunk).await.ok()?;
+            if n == 0 {
+                return None;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        Some(buf[head_end..head_end + len].to_vec())
+    }
+
+    /// The VTI-39 shape: the first request on a keep-alive connection is
+    /// answered, the second is read in full and then the connection is closed
+    /// without a response (hyper `IncompleteMessage`). The retry, on a fresh
+    /// connection, is answered. Every body must be the same bytes.
+    #[tokio::test]
+    async fn retries_same_bytes_after_keepalive_connection_closed_mid_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/inbound", listener.local_addr().unwrap());
+        let bodies = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+        let connections = Arc::new(Mutex::new(0usize));
+
+        let (b, c) = (bodies.clone(), connections.clone());
+        tokio::spawn(async move {
+            // Connection 1: answer one request, then drop the next mid-flight.
+            let (mut sock, _) = listener.accept().await.unwrap();
+            *c.lock().unwrap() += 1;
+            let body = read_request(&mut sock).await.unwrap();
+            b.lock().unwrap().push(body);
+            sock.write_all(OK).await.unwrap();
+            let body = read_request(&mut sock).await.unwrap();
+            b.lock().unwrap().push(body);
+            drop(sock);
+            // Connection 2: the retry.
+            let (mut sock, _) = listener.accept().await.unwrap();
+            *c.lock().unwrap() += 1;
+            let body = read_request(&mut sock).await.unwrap();
+            b.lock().unwrap().push(body);
+            sock.write_all(OK).await.unwrap();
+            // Hold the connection open so the client reads the response.
+            let _ = read_request(&mut sock).await;
+        });
+
+        let client = reqwest::Client::new();
+        post_tsp_inbound(&client, &url, "tok", b"warm-up", FAST)
+            .await
+            .expect("first request is answered");
+        let sealed = b"\xf8sealed-tsp-bytes".to_vec();
+        post_tsp_inbound(&client, &url, "tok", &sealed, FAST)
+            .await
+            .expect("the retry after the dropped connection is answered");
+
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 3, "warm-up, dropped attempt, retry");
+        assert_eq!(bodies[1], sealed);
+        assert_eq!(bodies[2], sealed, "the retry re-sends the identical bytes");
+        assert_eq!(*connections.lock().unwrap(), 2);
+    }
+
+    /// Every attempt dropped: gives up after the backoff runs out (three
+    /// attempts) with a transport error rather than looping.
+    #[tokio::test]
+    async fn gives_up_after_bounded_retries() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/inbound", listener.local_addr().unwrap());
+        let attempts = Arc::new(Mutex::new(0usize));
+        let a = attempts.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                if read_request(&mut sock).await.is_some() {
+                    *a.lock().unwrap() += 1;
+                }
+                drop(sock);
+            }
+        });
+
+        let err = post_tsp_inbound(&reqwest::Client::new(), &url, "tok", b"x", FAST)
+            .await
+            .expect_err("every attempt is dropped");
+        assert!(matches!(err, crate::errors::ATMError::TransportError(_)));
+        assert_eq!(*attempts.lock().unwrap(), 3);
+    }
+
+    /// A 5xx is the mediator's answer: returned once, never re-sent.
+    #[tokio::test]
+    async fn does_not_retry_an_http_status() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/inbound", listener.local_addr().unwrap());
+        let attempts = Arc::new(Mutex::new(0usize));
+        let a = attempts.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                while read_request(&mut sock).await.is_some() {
+                    *a.lock().unwrap() += 1;
+                    sock.write_all(
+                        b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+        });
+
+        post_tsp_inbound(&reqwest::Client::new(), &url, "tok", b"x", FAST)
+            .await
+            .expect_err("503 is an error");
+        assert_eq!(*attempts.lock().unwrap(), 1);
     }
 }
