@@ -415,3 +415,216 @@ async fn a_relayed_endpoint_to_endpoint_vid_is_not_persisted() {
 
     topology.shutdown().await.expect("shutdown");
 }
+
+/// Alice on mediator A invites bob on mediator B with a routed invite, and
+/// bob accepts over the reply path `[A, alice]` it carries — returning the
+/// accept from B, a mediator the path does not start at.
+///
+/// Keyring VTI-41. Before the fix the SDK sealed the routing layer to the
+/// path's first hop, A, and posted it to bob's own mediator B, which is the
+/// only place `send_raw` posts to. B saw a frame not addressed to itself,
+/// took it for Direct delivery to a local account, and refused it with 403
+/// "recipient is not local to this mediator". Now B is prepended — Rev 3
+/// §7.2.4 lets the responder add hops of its own — so the accept travels
+/// `[B, A, alice]`: B relays it to A over the wire, and A delivers it.
+///
+/// The invite leg crosses mediators too. Alice knows bob's mediator (set out
+/// of band here), so her invite is routed `[A, B, bob]` rather than sent
+/// Direct to an account A does not hold.
+///
+/// Relay admission is set explicitly rather than left to the topology's
+/// defaults: the hop from B arrives at A with no Authorization header, and A
+/// admits it only because `enable_inter_mediator_relay` is on. The topology
+/// also grants `SEND_FORWARDED` in `global_acl_default`, which is the legacy
+/// implicit way to the same thing; naming the flag keeps the dependency
+/// visible. The next test turns it off.
+#[tokio::test]
+async fn an_accept_crosses_mediators_over_the_reply_path() {
+    let topology = TestTopology::builder()
+        .mediators(2)
+        .tsp_policy(TspPolicy::Preferred)
+        .configure_each(|b| b.enable_inter_mediator_relay(true))
+        .spawn()
+        .await
+        .expect("spawn two relay-enabled mediators");
+    let mediator_a = topology.mediator_did(0).expect("mediator A").to_string();
+    let mediator_b = topology.mediator_did(1).expect("mediator B").to_string();
+    let alice = topology.add_user(0, "alice").await.expect("add alice on A");
+    let bob = topology.add_user(1, "bob").await.expect("add bob on B");
+    let a = topology.node(0).unwrap();
+    let b = topology.node(1).unwrap();
+
+    let bob_accepts = invite_and_accept(a, b, &alice, &bob, &mediator_a, &mediator_b).await;
+    bob_accepts.expect("bob accepts over the reply path");
+
+    // The accept came back B → A and completes alice's side.
+    let stored = poll_inbox(a, &alice.profile).await;
+    let accept_qb2 = a.atm.tsp().decode(&stored).expect("decode accept");
+    let (accept, accept_sender, _) = a
+        .atm
+        .tsp()
+        .unpack_control(&alice.profile, &accept_qb2)
+        .await
+        .expect("alice unpacks the accept");
+    assert_eq!(accept_sender, bob.did);
+    let recorded = a
+        .atm
+        .tsp()
+        .record_incoming_control(&alice.profile, &bob.did, &accept)
+        .await
+        .expect("alice records the accept");
+    assert_eq!(
+        recorded.state,
+        affinidi_messaging_sdk::protocols::tsp::RelationshipState::Bidirectional
+    );
+
+    topology.shutdown().await.expect("shutdown");
+}
+
+/// The operator-side half of VTI-41: the receiving mediator has to admit the
+/// relayed hop. With A not configured as a relay (`enable_inter_mediator_relay`
+/// off, and no `SEND_FORWARDED` in its `global_acl_default`), the accept bob's
+/// mediator relays to A is refused, and the refusal is a clear one — an HTTP
+/// 401 at A's `/inbound` — rather than a delivery that silently happens.
+///
+/// B's forwarding processor is turned off so the relayed frame stays in its
+/// queue, where the test can pick it up and present it to A exactly as the
+/// processor would (unauthenticated `application/tsp` POST to the queued
+/// endpoint). With the processor running, the refusal would surface only as
+/// an abandoned forward on B — reported to B itself, since B re-sealed the
+/// layer as its own sender — so bob's `accept_relationship` returning `Ok`
+/// means "B took it", not "alice has it".
+#[tokio::test]
+async fn an_accept_is_refused_when_the_inviters_mediator_does_not_admit_relays() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let node = Arc::new(AtomicUsize::new(0));
+    let topology = TestTopology::builder()
+        .mediators(2)
+        .tsp_policy(TspPolicy::Preferred)
+        .configure_each(move |b| match node.fetch_add(1, Ordering::SeqCst) {
+            // A: not a relay. Its users are registered with their own
+            // allow-all ACL, so only anonymous inbound is affected.
+            0 => b
+                .global_acl_default(affinidi_messaging_test_mediator::acl::deny_all())
+                .enable_inter_mediator_relay(false),
+            // B: a relay, with its forwarding processor off so the accept
+            // it relays towards A stays queued.
+            _ => b.enable_inter_mediator_relay(true).enable_forwarding(false),
+        })
+        .spawn()
+        .await
+        .expect("spawn the two mediators");
+    let mediator_a = topology.mediator_did(0).expect("mediator A").to_string();
+    let mediator_b = topology.mediator_did(1).expect("mediator B").to_string();
+    let alice = topology.add_user(0, "alice").await.expect("add alice on A");
+    let bob = topology.add_user(1, "bob").await.expect("add bob on B");
+    let a = topology.node(0).unwrap();
+    let b = topology.node(1).unwrap();
+
+    // B accepts the routed accept from its own authenticated user and queues
+    // it for A. This is not the failure point, and not proof of delivery.
+    invite_and_accept(a, b, &alice, &bob, &mediator_a, &mediator_b)
+        .await
+        .expect("B queues bob's accept for A");
+
+    let store = b.mediator.store();
+    let mut entries = Vec::new();
+    for _ in 0..40 {
+        entries = store
+            .forward_queue_read("vti41", "test", 10, Duration::from_millis(100))
+            .await
+            .expect("read B's forward queue");
+        if !entries.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(entries.len(), 1, "B queued exactly one forward, to A");
+    let entry = &entries[0];
+    assert_eq!(entry.to_did, mediator_a, "the next hop is alice's mediator");
+
+    let qb2 = base64::Engine::decode(
+        &base64::prelude::BASE64_URL_SAFE_NO_PAD,
+        entry.message.as_bytes(),
+    )
+    .expect("a TSP forward is queued as base64url(qb2)");
+    let inbound = format!("{}/inbound", entry.endpoint_url.trim_end_matches('/'));
+    let response = reqwest::Client::new()
+        .post(&inbound)
+        .header("Content-Type", "application/tsp")
+        .body(qb2)
+        .send()
+        .await
+        .expect("POST the relayed hop to A");
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "A must refuse an unauthenticated relay hop when relay admission is off"
+    );
+
+    // And nothing reached alice.
+    let fetched = a
+        .atm
+        .fetch_messages(&alice.profile, &FetchOptions::default())
+        .await
+        .expect("alice fetches");
+    assert!(
+        fetched.success.is_empty(),
+        "no accept may reach alice through a mediator that refuses relays"
+    );
+
+    topology.shutdown().await.expect("shutdown");
+}
+
+/// The shared first half of the two VTI-41 tests: alice (on A) sends bob (on
+/// B) a routed invite; bob receives it, checks the reply path, records it and
+/// accepts. Returns the result of bob's `accept_relationship`.
+async fn invite_and_accept(
+    a: &TestEnvironment,
+    b: &TestEnvironment,
+    alice: &affinidi_messaging_test_mediator::TestUser,
+    bob: &affinidi_messaging_test_mediator::TestUser,
+    mediator_a: &str,
+    mediator_b: &str,
+) -> Result<
+    affinidi_messaging_sdk::protocols::tsp::RelationshipState,
+    affinidi_messaging_sdk::errors::ATMError,
+> {
+    // Alice knows where bob lives, so her invite is routed to B.
+    a.atm
+        .tsp()
+        .set_peer_mediator(&alice.profile, &bob.did, Some(mediator_b.to_string()))
+        .await
+        .expect("alice learns bob's mediator");
+    a.atm
+        .tsp()
+        .form_relationship_routed(&alice.profile, &bob.did)
+        .await
+        .expect("alice sends a routed invite across mediators");
+
+    let stored = poll_inbox(b, &bob.profile).await;
+    let invite_qb2 = b.atm.tsp().decode(&stored).expect("decode invite");
+    let (invite, sender, invite_digest) = b
+        .atm
+        .tsp()
+        .unpack_control(&bob.profile, &invite_qb2)
+        .await
+        .expect("bob unpacks the invite");
+    assert_eq!(sender, alice.did);
+    assert_eq!(
+        invite.route,
+        vec![mediator_a.to_string(), alice.did.clone()],
+        "the reply path starts at alice's mediator, not bob's"
+    );
+    b.atm
+        .tsp()
+        .record_incoming_control(&bob.profile, &alice.did, &invite)
+        .await
+        .expect("bob records the invite");
+
+    b.atm
+        .tsp()
+        .accept_relationship(&bob.profile, &alice.did, invite_digest)
+        .await
+}

@@ -784,6 +784,37 @@ impl ATM {
     }
 }
 
+/// The hop list to seal a routed message over, given that it is posted to
+/// `own_mediator`.
+///
+/// The SDK always hands a routed message to its own mediator, and that mediator
+/// only relays a routing layer addressed to itself — anything else it treats as
+/// Direct delivery to one of its own accounts, and refuses when the addressee is
+/// not one ("recipient is not local"). So a route whose first hop is some other
+/// intermediary — the `Reply_Path` a peer on another mediator supplied is the
+/// common case — has to be extended with `own_mediator` in front. Rev 3 §7.2.4
+/// lets the responder add hops of its own, and the minimal condition it sets is
+/// met: our mediator knows how to reach the first hop of the peer's list.
+///
+/// Unchanged when the route already starts at `own_mediator` (the same-mediator
+/// case, byte-identical to before) and when it is a single hop — then `route[0]`
+/// is the final recipient, not an intermediary, and the message goes to it
+/// through our mediator's Direct delivery as it always has.
+fn route_via_own_mediator<'a>(
+    own_mediator: &str,
+    route: &'a [String],
+) -> std::borrow::Cow<'a, [String]> {
+    match route.first() {
+        Some(first) if route.len() > 1 && first != own_mediator => {
+            let mut extended = Vec::with_capacity(route.len() + 1);
+            extended.push(own_mediator.to_string());
+            extended.extend_from_slice(route);
+            std::borrow::Cow::Owned(extended)
+        }
+        _ => std::borrow::Cow::Borrowed(route),
+    }
+}
+
 /// The outcome of the pure [`classify_protocol`] precedence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProtocolChoice {
@@ -1601,9 +1632,15 @@ impl TspOps<'_> {
             )));
         }
 
+        let (from_did, own_mediator) = profile.dids()?;
+        // `send_raw` always posts to this profile's own mediator, so the routing
+        // layer has to be addressed to it. A route that starts somewhere else —
+        // the reply path a peer on another mediator supplied, say — gets our
+        // mediator put in front (see `route_via_own_mediator`).
+        let route = route_via_own_mediator(own_mediator, route);
+        let route = route.as_ref();
         let first_hop = &route[0];
 
-        let (from_did, _) = profile.dids()?;
         let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
         let first_vid = self.resolve_vid(first_hop).await?;
         let routed = affinidi_tsp::message::routed::pack_routed(
@@ -1734,12 +1771,25 @@ impl TspOps<'_> {
     /// message type `Control`; the mediator relays it to the recipient like a Direct
     /// message (it never inspects the control payload), and the recipient applies the
     /// relationship transition on receipt.
+    ///
+    /// When `to_did`'s mediator is known (learned from a routed invite, or set
+    /// with [`set_peer_mediator`](Self::set_peer_mediator)) and is not ours, a
+    /// Direct message cannot reach it — our mediator delivers Direct only to its
+    /// own accounts — so the control message is routed
+    /// `[own_mediator, peer_mediator, to_did]` instead, as
+    /// [`ATM::send_to`](crate::ATM::send_to) does for application messages. The
+    /// returned digest is the same either way: it is the inner message's.
     pub async fn send_control(
         &self,
         profile: &Arc<ATMProfile>,
         to_did: &str,
         control: &affinidi_tsp::message::control::ControlMessage,
     ) -> Result<[u8; 32], ATMError> {
+        if let Some(route) = self.cross_mediator_route(profile, to_did).await? {
+            return self
+                .send_control_routed(profile, to_did, control, &route)
+                .await;
+        }
         let (from_did, _) = profile.dids()?;
         let (signing_key, _) = self.profile_tsp_keys(from_did).await?;
         let to_vid = self.resolve_vid(to_did).await?;
@@ -1768,11 +1818,15 @@ impl TspOps<'_> {
     /// indistinguishable from any other routed message.
     ///
     /// `route` is the path as the inviter supplied it, and §5.3.3 has it ending
-    /// at the inviter's own VID rather than its intermediary's, so it is used
-    /// as given. §7.2.4 allows a responder to prepend hops of its own; this
-    /// does not, which is permitted — "the minimal required condition is that
-    /// the last intermediary in `B`'s hop list knows how to reach the first hop
-    /// in `A`'s list", and with no hops of its own that is B's own intermediary.
+    /// at the inviter's own VID rather than its intermediary's. §7.2.4 allows a
+    /// responder to prepend hops of its own — "the minimal required condition
+    /// is that the last intermediary in `B`'s hop list knows how to reach the
+    /// first hop in `A`'s list" — and when the path starts at a mediator other
+    /// than ours, ours is prepended ([`send_routed_opaque`] does it), because
+    /// the message is posted to our own mediator and it must be the first hop.
+    /// When the inviter shares our mediator the path is used exactly as given.
+    ///
+    /// [`send_routed_opaque`]: Self::send_routed_opaque
     async fn send_control_routed(
         &self,
         profile: &Arc<ATMProfile>,
@@ -1803,6 +1857,30 @@ impl TspOps<'_> {
     /// The configured [`RelationshipStore`] backing relationship state.
     fn relationship_store(&self) -> &Arc<dyn RelationshipStore> {
         self.atm.inner.config.relationship_store()
+    }
+
+    /// The route to `their_did` when its mediator is known and is not ours:
+    /// `[peer_mediator, their_did]`, which [`send_routed_opaque`] then extends
+    /// with our own mediator in front. `None` when the peer's mediator is
+    /// unknown or is our own, where a Direct message is what reaches it.
+    ///
+    /// [`send_routed_opaque`]: Self::send_routed_opaque
+    async fn cross_mediator_route(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+    ) -> Result<Option<Vec<String>>, ATMError> {
+        let (_, own_mediator) = profile.dids()?;
+        let peer_mediator = self
+            .peer_capability(profile, their_did)
+            .await?
+            .and_then(|c| c.mediator);
+        Ok(match peer_mediator {
+            Some(peer_mediator) if peer_mediator != own_mediator => {
+                Some(vec![peer_mediator, their_did.to_string()])
+            }
+            _ => None,
+        })
     }
 
     /// Begin forming a relationship with `their_did`: advance the FSM with
@@ -2182,6 +2260,9 @@ impl TspOps<'_> {
         // direct would disclose to the inviter, and to anyone watching, an
         // endpoint the route exists to keep out of view — so the path is
         // honoured here rather than left to the caller to remember.
+        //
+        // With no reply path, `send_control` still routes the accept when the
+        // inviter's mediator is known and is not ours.
         let reply_path = store.reply_path(our_did, their_did).await?;
         let digest = if reply_path.is_empty() {
             self.send_control(profile, their_did, &accept).await?
@@ -3645,6 +3726,7 @@ mod tests {
         RelationshipState, RelationshipStore, SendReadiness, TSP_DISCOVER_FEATURE_URI, TspPolicy,
         TspSupport, advance_state, classify_protocol, disclosure_advertises_tsp, full_jitter,
         invite_refusal_is_benign, next_state, readiness_for, readiness_for_pair,
+        route_via_own_mediator,
     };
     use crate::errors::ATMError;
     use crate::protocols::discover_features::{
@@ -4164,6 +4246,53 @@ mod tests {
 
         // Per pair and per direction.
         assert!(store.reply_path(ALICE, BOB).await.unwrap().is_empty());
+    }
+
+    /// Keyring VTI-41: a reply path that starts at the inviter's mediator is
+    /// sent from a different mediator. The message is posted to our own
+    /// mediator, which relays only a routing layer addressed to itself, so ours
+    /// goes in front (§7.2.4 lets the responder add hops).
+    #[test]
+    fn a_route_starting_at_another_mediator_gets_ours_prepended() {
+        let own = "did:example:mediator-b";
+        let route = vec!["did:example:mediator-a".to_string(), ALICE.to_string()];
+
+        let sent = route_via_own_mediator(own, &route);
+        assert_eq!(
+            sent.as_ref(),
+            [
+                own.to_string(),
+                "did:example:mediator-a".to_string(),
+                ALICE.to_string()
+            ]
+        );
+    }
+
+    /// The same-mediator case is untouched: a route that already starts at our
+    /// mediator is sent exactly as given, so what goes on the wire is
+    /// byte-identical to before.
+    #[test]
+    fn a_route_starting_at_our_mediator_is_left_alone() {
+        let own = "did:example:mediator-a";
+        let route = vec![own.to_string(), ALICE.to_string()];
+
+        let sent = route_via_own_mediator(own, &route);
+        assert!(matches!(sent, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(sent.as_ref(), route.as_slice());
+    }
+
+    /// A one-hop route names the final recipient, not an intermediary, so there
+    /// is nothing to put a mediator in front of. And an empty one is the
+    /// caller's error to report, not this function's to repair.
+    #[test]
+    fn a_single_hop_or_empty_route_is_left_alone() {
+        let own = "did:example:mediator-a";
+        let single = vec![BOB.to_string()];
+        assert_eq!(
+            route_via_own_mediator(own, &single).as_ref(),
+            single.as_slice()
+        );
+        assert!(route_via_own_mediator(own, &[]).is_empty());
     }
 
     /// §5.3.3: a hop list ends at the destination's own VID, not its
