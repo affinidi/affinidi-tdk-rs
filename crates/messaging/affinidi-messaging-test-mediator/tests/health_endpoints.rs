@@ -13,7 +13,7 @@ mod common;
 
 use std::time::Duration;
 
-use affinidi_messaging_test_mediator::TestMediator;
+use affinidi_messaging_test_mediator::{CorsOriginPolicy, TestMediator};
 use common::init_tracing;
 use serde_json::Value;
 
@@ -101,6 +101,62 @@ async fn readyz_reports_supervised_component_health() {
     assert_eq!(
         fwd["load_bearing"], true,
         "forwarding processor is load-bearing"
+    );
+
+    mediator.shutdown();
+    let _ = mediator.join().await;
+}
+
+/// A browser client the mediator admits can read `readyz` — the release a
+/// console reports. The health routes used to be added after the CORS layer,
+/// which does not wrap them, so they answered without
+/// `Access-Control-Allow-Origin` and a browser saw only "Failed to fetch",
+/// while the same origin authenticated and held a WebSocket without trouble.
+#[tokio::test]
+async fn a_browser_the_mediator_admits_can_read_readyz() {
+    init_tracing();
+    let mediator = TestMediator::builder()
+        .cors_allow_origin(CorsOriginPolicy::Any)
+        .spawn()
+        .await
+        .expect("spawn");
+    let client = http_client();
+
+    for path in ["readyz", "livez"] {
+        let resp = client
+            .get(format!("{}{path}", mediator.endpoint()))
+            .header("origin", "chrome-extension://abcdefghijklmnop")
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("*"),
+            "/{path} must carry the CORS policy the rest of the API does"
+        );
+    }
+
+    mediator.shutdown();
+    let _ = mediator.join().await;
+}
+
+/// …and one it does not admit still cannot: the probes follow the policy,
+/// they are not opened wider than the API.
+#[tokio::test]
+async fn a_browser_the_mediator_does_not_admit_still_cannot() {
+    init_tracing();
+    let mediator = TestMediator::spawn().await.expect("spawn");
+    let resp = http_client()
+        .get(format!("{}readyz", mediator.endpoint()))
+        .header("origin", "https://elsewhere.example")
+        .send()
+        .await
+        .expect("request");
+    assert!(
+        resp.headers().get("access-control-allow-origin").is_none(),
+        "the default policy admits no origin"
     );
 
     mediator.shutdown();

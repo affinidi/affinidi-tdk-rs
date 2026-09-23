@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.29.3) — a browser the mediator admits can read its health routes
+
+`/readyz`, `/livez`, `/healthchecker` and `/admin/status` were added to the
+router after the CORS layer, and a route added after `.layer()` is not wrapped
+by it — so they never sent `Access-Control-Allow-Origin`. A browser client
+whose origin `security.cors_allow_origin` admits could authenticate, hold a
+WebSocket and run Trust Tasks, yet read neither the mediator's release from
+`readyz` nor `admin/status`, and saw only "Failed to fetch". They now follow the
+same CORS policy as the rest of the API, and still sit outside the rate limiter
+and the body limit, so an orchestrator's probes are answered as before.
+`build_cors_layer` is public, for an embedding harness.
+
 ## Unreleased (0.29.2) — a role change reaches a socket that is already open
 
 A WebSocket's session was built once, at upgrade, and authorisation read the

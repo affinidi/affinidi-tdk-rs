@@ -107,7 +107,7 @@ use affinidi_messaging_mediator_common::{
 };
 // Re-exported so tests can pick the Trust Task acceptance mode.
 pub use affinidi_messaging_mediator::common::config::{
-    LegacyAdminProtocols, TrustTaskVerification,
+    CorsOriginPolicy, LegacyAdminProtocols, TrustTaskVerification,
 };
 // Re-exported so tests can build/inject a clock from one import.
 pub use affinidi_messaging_mediator_common::types::clock::{Clock, SystemClock, TestClock};
@@ -341,6 +341,8 @@ pub struct TestMediatorBuilder {
     enable_inter_mediator_relay: Option<bool>,
     /// Override for `SecurityConfig.trust_task_verification`.
     trust_task_verification: Option<TrustTaskVerification>,
+    /// Override for the CORS origin policy (`security.cors_allow_origin`).
+    cors_origins: Option<CorsOriginPolicy>,
     /// Override for `SecurityConfig.legacy_admin_protocols`.
     legacy_admin_protocols: Option<LegacyAdminProtocols>,
     /// Override for `SecurityConfig.jwt_access_expiry` (seconds).
@@ -396,6 +398,7 @@ impl Default for TestMediatorBuilder {
             block_remote_admin_msgs: None,
             enable_inter_mediator_relay: None,
             trust_task_verification: None,
+            cors_origins: None,
             legacy_admin_protocols: None,
             jwt_access_expiry_secs: None,
             jwt_refresh_expiry_secs: None,
@@ -679,6 +682,14 @@ impl TestMediatorBuilder {
         self
     }
 
+    /// Set the CORS origin policy, as `security.cors_allow_origin` would —
+    /// for tests of what a browser client can and cannot read. Default: none,
+    /// as in production.
+    pub fn cors_allow_origin(mut self, policy: CorsOriginPolicy) -> Self {
+        self.cors_origins = Some(policy);
+        self
+    }
+
     /// Override `trust_task_verification`. Defaults to the production value
     /// (`Warn`); tests of proof enforcement set `Enforce`.
     pub fn trust_task_verification(mut self, mode: TrustTaskVerification) -> Self {
@@ -876,6 +887,11 @@ impl TestMediatorBuilder {
         // Apply Option-typed overrides — `None` keeps the headless
         // default, so behavior for callers that don't touch these
         // setters is unchanged from earlier releases.
+        if let Some(policy) = self.cors_origins.clone() {
+            security.cors_allow_origin =
+                affinidi_messaging_mediator::common::config::build_cors_layer(&policy);
+            security.cors_origins = policy;
+        }
         if let Some(mode) = self.acl_mode {
             security.mediator_acl_mode = mode;
         }
