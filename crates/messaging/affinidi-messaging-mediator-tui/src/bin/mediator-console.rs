@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use affinidi_messaging_mediator_admin::{
     AddressBook, IdentitySource, MediatorConsole, Mode, ProfileFileSource,
 };
-use affinidi_messaging_mediator_tui::{App, default_address_book_path};
+use affinidi_messaging_mediator_tui::{App, LogCapture, default_address_book_path};
 use clap::Parser;
 
 #[derive(Parser)]
@@ -36,13 +36,25 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    if let Err(e) = run(args).await {
+    // Log output goes to stderr until the console opens, then into its log
+    // (`l`), where it can't draw over the screen.
+    let logs = LogCapture::new();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_target(false)
+        .without_time()
+        .with_writer(logs.make_writer())
+        .init();
+    if let Err(e) = run(args, logs).await {
         eprintln!("mediator-console: {e}");
         std::process::exit(1);
     }
 }
 
-async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(args: Args, logs: LogCapture) -> Result<(), Box<dyn std::error::Error>> {
     let book_path = args.address_book.clone().or_else(default_address_book_path);
     let book = match &book_path {
         Some(path) => {
@@ -81,6 +93,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
     let result = App::new(console)
         .with_address_book(book, book_path)
+        .with_logs(logs)
         .run(&mut terminal)
         .await;
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);

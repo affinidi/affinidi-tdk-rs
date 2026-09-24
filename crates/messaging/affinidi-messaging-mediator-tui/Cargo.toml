@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-tui"
-version = "0.2.0"
+version = "0.2.1"
 description = "Terminal console for an Affinidi messaging mediator: statistics, queues with gradient quota bars, messages, purges and a live traffic monitor — as embeddable ratatui components and the `mediator-console` binary."
 edition.workspace = true
 authors.workspace = true
@@ -28,6 +28,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
+# The `mediator-console` binary's log output, captured into the console.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi"] }
 
 [dev-dependencies]
 affinidi-messaging-test-mediator = { path = "../affinidi-messaging-test-mediator" }

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (0.2.1) — logs off the screen, and a monitor that scrolls
+
+- **Log output no longer draws over the console.** A host's `tracing` output
+  written to the terminal landed on top of the screen and stayed there. With
+  the mediator unreachable, the SDK's repeated errors buried everything. New
+  `LogCapture` writer: give it to the subscriber and to `App::with_logs`, and
+  while the console runs the lines are kept, not printed. The header counts
+  unread errors and warnings; `l` shows the log, wrapped, with repeats
+  collapsed into a count. `mediator-console` now installs a subscriber
+  (`warn`, or `RUST_LOG`) wired this way. It printed nothing before, so SDK
+  errors were lost. `Ctrl-L` repaints the whole screen.
+- **The monitor scrolls back.** It keeps 2,000 lines (up from 500, which were
+  kept but only the newest were ever visible). `PgUp`/`PgDn` (or `⇧↑`/`⇧↓`)
+  scroll, `Home` goes to the oldest line and `End` follows again. While you're
+  scrolled back, new traffic doesn't move the view, and the pane's bottom edge
+  shows how many lines are newer.
+
 ## Unreleased (0.2.0) — lifetime totals from the mediator
 
 - The Account screen shows the account's **lifetime** totals as the mediator

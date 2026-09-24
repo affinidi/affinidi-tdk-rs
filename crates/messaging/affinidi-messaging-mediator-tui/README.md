@@ -104,6 +104,9 @@ to 256 colours, then to three plain colours; `NO_COLOR` switches colour off.
 | `m` | anywhere | show or hide the **traffic monitor** |
 | `f` | anywhere | monitor failures only |
 | `t` | monitor open | switch the monitor between live lines and **per-account totals** |
+| `PgUp` `PgDn` / `⇧↑` `⇧↓` | monitor open | **scroll back** through traffic that has left the pane; `Home` goes to the oldest kept, `End` follows new traffic again |
+| `l` | anywhere | the **log**: errors and warnings the console captured (see below) |
+| `Ctrl-L` | anywhere | repaint the whole screen |
 | `n` | anywhere | **name** an account: the selected one, or any account by pasting its DID |
 | `b` | anywhere | the **address book**: rename (`n`), add (`a`), remove (`x`) |
 | `r` | anywhere | refresh now (screens also refresh every 5 s) |
@@ -174,6 +177,22 @@ everything (admin) or your own traffic (everyone else).
   to them, refused, and bytes, all since the monitor started.
 - **Your own polling is hidden,** so the pane shows traffic rather than the
   console talking to the mediator.
+- **Scroll back.** The pane keeps the last 2,000 lines. `PgUp` stops following
+  and pages back; new traffic keeps arriving below without moving what you're
+  reading, and the bottom edge says how much is newer. `End` follows again.
+
+## Log output
+
+The console keeps log output off the screen. A full-screen terminal program
+redraws only the cells it changed, so anything else printed to the terminal
+stays on top of it. While the mediator is unreachable the SDK logs an error
+every few seconds, which is enough to bury the screen.
+
+Instead, the console keeps those lines. The header shows how many errors and
+warnings you haven't read; `l` opens the log, newest last, wrapped to the
+width, with a line printed several times in a row shown once with its count.
+`mediator-console` logs at `warn` unless `RUST_LOG` says otherwise. When you
+quit, logging goes back to stderr.
 
 ## Embedding
 
@@ -195,6 +214,18 @@ app.run(&mut terminal).await?;
 //   app.render(frame, area)              to draw into any area of your layout
 ```
 
+- `App::with_logs(capture)` keeps your log output off the console's screen.
+  Give the same `LogCapture` to your `tracing` subscriber as its writer. It
+  prints to stderr as usual, except while a console holds it:
+
+  ```rust
+  let logs = LogCapture::new();
+  tracing_subscriber::fmt().with_writer(logs.make_writer()).init();
+  // …
+  App::new(console).with_logs(logs.clone()).run(&mut terminal).await?;
+  ```
+
+  A host with its own loop redraws when `app.log_changed()` resolves.
 - `App::open_account(did_hash)` jumps straight to one account.
 - The gradient `QuotaBar` widget (and `quota_line` for table cells) works on
   its own.

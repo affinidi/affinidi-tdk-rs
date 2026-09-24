@@ -13,10 +13,12 @@
 
 pub mod account_edit;
 pub mod app;
+pub mod logs;
 pub mod quota;
 pub mod tally;
 
 pub use app::{App, Control, Tab, Update};
+pub use logs::{LogCapture, LogLevel, LogLine};
 pub use quota::{ColorDepth, QuotaBar, quota_line};
 
 /// Where the console keeps its address book unless told otherwise:
