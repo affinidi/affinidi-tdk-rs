@@ -33,6 +33,10 @@ pub type MonitorEvent = monitor::event::v0_1::MonitorEvent;
 const LEASE_SECONDS: u32 = 300;
 /// Renew this long before expiry.
 const RENEW_MARGIN: Duration = Duration::from_secs(60);
+/// First wait before retrying a renewal that failed in transit; it doubles.
+const RENEW_RETRY: Duration = Duration::from_secs(2);
+/// Longest wait between renewal retries.
+const RENEW_RETRY_MAX: Duration = Duration::from_secs(15);
 /// Batches buffered per feed before the oldest are dropped (and counted).
 const FEED_BUFFER: usize = 64;
 
@@ -129,8 +133,10 @@ impl LiveStream {
             let id = id.clone();
             let mut expires_at = granted.expires_at;
             async move {
+                let mut wait = until_renewal(expires_at);
+                let mut failures = 0;
                 loop {
-                    tokio::time::sleep(until_renewal(expires_at)).await;
+                    tokio::time::sleep(wait).await;
                     match atm
                         .trust_tasks()
                         .monitor_subscribe(
@@ -141,12 +147,27 @@ impl LiveStream {
                             Some(id.clone()),
                         )
                         .await
+                        .map_err(ConsoleError::from_call)
                     {
-                        Ok(renewed) => expires_at = renewed.expires_at,
-                        Err(e) => {
-                            let _ = end_tx.send(format!("lease renewal failed: {e}")).await;
-                            return;
+                        Ok(renewed) => {
+                            expires_at = renewed.expires_at;
+                            wait = until_renewal(expires_at);
+                            failures = 0;
                         }
+                        // The renewal runs a minute ahead of expiry, so a
+                        // connection that drops and comes back inside that
+                        // minute keeps the subscription.
+                        Err(e) => match retry_renewal(&e, failures, expires_at, Utc::now()) {
+                            Some(after) => {
+                                tracing::debug!("monitor lease renewal failed, retrying: {e}");
+                                wait = after;
+                                failures += 1;
+                            }
+                            None => {
+                                let _ = end_tx.send(format!("lease renewal failed: {e}")).await;
+                                return;
+                            }
+                        },
                     }
                 }
             }
@@ -172,6 +193,29 @@ fn until_renewal(expires_at: DateTime<Utc>) -> Duration {
     let left = (expires_at - Utc::now()).to_std().unwrap_or_default();
     left.saturating_sub(RENEW_MARGIN)
         .max(Duration::from_secs(5))
+}
+
+/// When to try a failed renewal again: after a backoff, while the lease has
+/// not lapsed and the failure was in transit. `None` for a refusal (the
+/// mediator's answer won't change) or once the retry would land after expiry
+/// (the subscription is gone by then).
+fn retry_renewal(
+    error: &ConsoleError,
+    failures: u32,
+    expires_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<Duration> {
+    if matches!(
+        error,
+        ConsoleError::Refused { .. } | ConsoleError::NotPermitted(_)
+    ) {
+        return None;
+    }
+    let after = RENEW_RETRY
+        .saturating_mul(2u32.saturating_pow(failures.min(8)))
+        .min(RENEW_RETRY_MAX);
+    let left = (expires_at - now).to_std().ok()?;
+    (after < left).then_some(after)
 }
 
 /// A live traffic-monitor subscription.
@@ -304,6 +348,36 @@ mod tests {
             updates[1],
             MonitorUpdate::Events { dropped: 4, .. }
         ));
+    }
+
+    #[test]
+    fn a_renewal_lost_in_transit_is_retried_until_the_lease_lapses() {
+        let now = Utc::now();
+        let transit = ConsoleError::Connect("socket closed".into());
+        let lease = now + chrono::Duration::seconds(60);
+        let waits: Vec<_> = (0..5)
+            .map(|n| retry_renewal(&transit, n, lease, now))
+            .collect();
+        assert_eq!(
+            waits,
+            [2, 4, 8, 15, 15].map(|s| Some(Duration::from_secs(s)))
+        );
+        // Too close to expiry to be worth it, or already past it.
+        let closing = now + chrono::Duration::seconds(10);
+        assert_eq!(retry_renewal(&transit, 3, closing, now), None);
+        let lapsed = now - chrono::Duration::seconds(1);
+        assert_eq!(retry_renewal(&transit, 0, lapsed, now), None);
+    }
+
+    #[test]
+    fn a_refused_renewal_is_not_retried() {
+        let now = Utc::now();
+        let refused = ConsoleError::Refused {
+            code: "e.p.req.not-found".into(),
+            comment: "no such subscription".into(),
+        };
+        let lease = now + chrono::Duration::seconds(60);
+        assert_eq!(retry_renewal(&refused, 0, lease, now), None);
     }
 
     #[test]

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.2.1) — a monitor lease survives a blip
+
+A monitor feed renews its lease a minute before it runs out. Before, a
+renewal that failed ended the feed at once, even when the failure was only
+the connection dropping for a moment. Now a renewal that fails in transit is
+retried, backing off from 2 s to 15 s, for as long as the lease is still
+running. The feed ends only once the lease has run out, or when the mediator
+refuses the renewal, which retrying wouldn't change.
+
 ## Unreleased (0.2.0) — account counters
 
 `account_of` and `accounts` ask for each account's lifetime counters on a
