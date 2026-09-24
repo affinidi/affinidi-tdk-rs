@@ -4,9 +4,9 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use affinidi_messaging_didcomm::message::Message;
-use affinidi_messaging_mediator_admin::{Identity, MediatorConsole};
+use affinidi_messaging_mediator_admin::{Identity, MediatorConsole, MonitorUpdate};
 use affinidi_messaging_mediator_common::types::accounts::AccountType;
-use affinidi_messaging_mediator_tui::{App, ColorDepth, Control};
+use affinidi_messaging_mediator_tui::{App, ColorDepth, Control, Update};
 use affinidi_messaging_test_mediator::{TestEnvironment, TestUser};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
@@ -372,6 +372,35 @@ async fn logs_stay_off_the_screen_and_the_monitor_scrolls_back() {
     terminal.draw(|f| app.render(f, f.area())).unwrap();
     let followed = screen(&terminal);
     assert!(!followed.contains("⏸"), "following again:\n{followed}");
+
+    // An interrupted feed says so, once however many attempts it takes, and
+    // the title shows it's resubscribing until traffic comes back.
+    for _ in 0..2 {
+        app.apply(Update::MonitorRetrying {
+            reason: "lease renewal failed: dns error".into(),
+            after: Duration::from_secs(4),
+        });
+    }
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let retrying = screen(&terminal);
+    println!("{retrying}");
+    assert!(
+        retrying.contains("↻ resubscribing in"),
+        "the title says so:\n{retrying}"
+    );
+    assert_eq!(
+        retrying.matches("monitor interrupted").count(),
+        1,
+        "one line for both attempts:\n{retrying}"
+    );
+    assert!(retrying.contains("interrupted ×2:"), "{retrying}");
+    app.apply(Update::Monitor(MonitorUpdate::Heartbeat));
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let back_up = screen(&terminal);
+    assert!(
+        back_up.contains("● live") && !back_up.contains("resubscribing in"),
+        "live again:\n{back_up}"
+    );
 }
 
 /// The messages the monitor's title says it has seen.

@@ -177,6 +177,11 @@ everything (admin) or your own traffic (everyone else).
   to them, refused, and bytes, all since the monitor started.
 - **Your own polling is hidden,** so the pane shows traffic rather than the
   console talking to the mediator.
+- **Comes back on its own.** If the feed is interrupted (a lease renewal
+  failed with the connection down, or nothing, not even the 30 s heartbeat,
+  for 90 s), the pane resubscribes, backing off up to 30 s between attempts.
+  The title shows `↻ resubscribing`. It stops only when the mediator refuses
+  the subscription, and then says why.
 - **Scroll back.** The pane keeps the last 2,000 lines. `PgUp` stops following
   and pages back; new traffic keeps arriving below without moving what you're
   reading, and the bottom edge says how much is newer. `End` follows again.

@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (0.2.2) — the monitor comes back on its own
+
+- **The monitor resubscribes after an interruption.** Before, a lease renewal
+  that failed during a network drop ended the feed ("monitor ended: lease
+  renewal failed"), and it stayed stopped until you pressed `m` twice. Now the
+  pane resubscribes, backing off from 2 s to 30 s between attempts. The title
+  shows `↻ resubscribing in Ns` and the pane gets one yellow line for the
+  interruption, with a count if it takes several attempts. Totals carry on
+  across it.
+- **A silent feed is replaced.** The mediator sends a heartbeat every 30 s. A
+  feed with nothing for 90 s is taken as gone, which is what a mediator
+  restart leaves behind, and resubscribed.
+- **Only a refusal stops it.** If the mediator turns the subscribe down, or the
+  session may not watch, the pane stops and says why, in the pane as well as
+  the footer.
+- New `Update::MonitorRetrying { reason, after }`, which `App::apply` takes
+  like any other update.
+
 ## Unreleased (0.2.1) — logs off the screen, and a monitor that scrolls
 
 - **Log output no longer draws over the console.** A host's `tracing` output

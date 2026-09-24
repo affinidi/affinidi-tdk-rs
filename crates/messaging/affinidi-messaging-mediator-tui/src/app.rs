@@ -39,6 +39,13 @@ const REFRESH: Duration = Duration::from_secs(5);
 /// How long a notice stays in the footer before the key hints come back.
 const NOTICE_FOR: Duration = Duration::from_secs(12);
 
+/// A feed this long without even a heartbeat (the mediator sends one every
+/// 30 s) is taken as gone, the way a mediator restart leaves it, and replaced.
+const MONITOR_SILENCE: Duration = Duration::from_secs(90);
+/// First wait before resubscribing the monitor; it doubles up to the cap.
+const RESUBSCRIBE: Duration = Duration::from_secs(2);
+const RESUBSCRIBE_MAX: Duration = Duration::from_secs(30);
+
 /// Monitor lines kept for scrolling back; older ones are dropped.
 const MONITOR_LINES: usize = 2000;
 
@@ -90,7 +97,13 @@ pub enum Update {
     /// A finished action: what to tell the user.
     Done(Result<String, ConsoleError>),
     Monitor(MonitorUpdate),
+    /// The monitor could not start, or was refused: it stays stopped.
     MonitorFailed(ConsoleError),
+    /// The monitor's feed ended or went silent; it resubscribes `after` this.
+    MonitorRetrying {
+        reason: String,
+        after: Duration,
+    },
 }
 
 /// What the host should do after a key.
@@ -141,6 +154,11 @@ enum Popup {
 enum MonitorLine {
     Event(Value),
     Note(Line<'static>),
+    /// The feed was interrupted; one line however many attempts it takes.
+    Retry {
+        reason: String,
+        attempts: u32,
+    },
 }
 
 struct MonitorPane {
@@ -160,6 +178,8 @@ struct MonitorPane {
     back: usize,
     /// Rows the pane showed last frame: a page, for scrolling.
     page: usize,
+    /// When the monitor resubscribes, while it's between feeds.
+    retry_at: Option<Instant>,
 }
 
 /// The console application.
@@ -260,6 +280,7 @@ impl App {
                 show_totals: false,
                 back: 0,
                 page: 0,
+                retry_at: None,
             },
             popup: None,
             notice: None,
@@ -634,7 +655,26 @@ impl App {
             Update::Monitor(u) => self.monitor_update(u),
             Update::MonitorFailed(e) => {
                 self.monitor.task = None;
+                self.monitor.retry_at = None;
+                self.monitor.lines.push_back(MonitorLine::Note(Line::styled(
+                    format!("── monitor stopped: {e} ──"),
+                    Style::default().fg(Color::Red),
+                )));
                 self.error(e);
+            }
+            Update::MonitorRetrying { reason, after } => {
+                self.monitor.retry_at = Some(Instant::now() + after);
+                let attempts = match self.monitor.lines.back() {
+                    Some(MonitorLine::Retry { attempts, .. }) => {
+                        let n = *attempts;
+                        self.monitor.lines.pop_back();
+                        n + 1
+                    }
+                    _ => 1,
+                };
+                self.monitor
+                    .lines
+                    .push_back(MonitorLine::Retry { reason, attempts });
             }
         }
     }
@@ -1096,20 +1136,8 @@ impl App {
             serde_json::from_value(serde_json::json!({})).expect("empty filter")
         });
         let (console, tx) = (self.console.clone(), self.tx.clone());
-        self.monitor.task = Some(tokio::spawn(async move {
-            match console.monitor(filter).await {
-                Ok(mut feed) => {
-                    while let Some(update) = feed.next().await {
-                        if tx.send(Update::Monitor(update)).is_err() {
-                            return;
-                        }
-                    }
-                }
-                Err(e) => {
-                    let _ = tx.send(Update::MonitorFailed(e));
-                }
-            }
-        }));
+        self.monitor.retry_at = None;
+        self.monitor.task = Some(tokio::spawn(watch(console, filter, tx)));
     }
 
     /// This console's own requests to the mediator, and the clean-up of their
@@ -1140,6 +1168,7 @@ impl App {
 
     fn monitor_update(&mut self, update: MonitorUpdate) {
         self.monitor.last_seen = Some(Instant::now());
+        self.monitor.retry_at = None;
         let before = self.monitor.lines.len();
         match update {
             MonitorUpdate::Events { events, dropped } => {
@@ -2034,6 +2063,13 @@ impl App {
     fn render_monitor(&mut self, f: &mut Frame, area: Rect) {
         let alive = match (self.monitor.task.is_some(), self.monitor.last_seen) {
             (false, _) => Span::styled("○ stopped", Style::default().fg(Color::Red)),
+            (true, _) if let Some(at) = self.monitor.retry_at => Span::styled(
+                format!(
+                    "↻ resubscribing in {}s",
+                    at.saturating_duration_since(Instant::now()).as_secs()
+                ),
+                Style::default().fg(Color::Yellow),
+            ),
             (true, Some(t)) if t.elapsed() < Duration::from_secs(45) => {
                 Span::styled("● live", Style::default().fg(Color::Green))
             }
@@ -2106,6 +2142,15 @@ impl App {
             .map(|l| match l {
                 MonitorLine::Event(v) => event_line(v, &self.book, name_w),
                 MonitorLine::Note(line) => line.clone(),
+                // The count ahead of the reason, which is often a long error
+                // the pane cuts off.
+                MonitorLine::Retry { reason, attempts } => Line::styled(
+                    match attempts {
+                        1 => format!("── monitor interrupted: {reason} ──"),
+                        n => format!("── monitor interrupted ×{n}: {reason} ──"),
+                    },
+                    Style::default().fg(Color::Yellow),
+                ),
             })
             .collect();
         f.render_widget(Paragraph::new(lines).block(block), area);
@@ -2490,6 +2535,67 @@ fn render_popup(f: &mut Frame, area: Rect, popup: &Popup, book: &AddressBook) {
     );
 }
 
+/// The monitor's feed, kept up for as long as the pane is open: a feed that
+/// ends (its lease renewal failed, say, with the connection down) or goes
+/// silent is replaced, after a backoff. Only a refusal stops it, since asking
+/// again would get the same answer.
+async fn watch(
+    console: Arc<MediatorConsole>,
+    filter: MonitorFilter,
+    tx: mpsc::UnboundedSender<Update>,
+) {
+    let mut failures = 0;
+    loop {
+        let reason = match console.monitor(filter.clone()).await {
+            Ok(mut feed) => loop {
+                match tokio::time::timeout(MONITOR_SILENCE, feed.next()).await {
+                    Ok(Some(MonitorUpdate::Ended(reason))) => break reason,
+                    Ok(Some(update)) => {
+                        failures = 0;
+                        if tx.send(Update::Monitor(update)).is_err() {
+                            return;
+                        }
+                    }
+                    Ok(None) => break "the feed closed".to_string(),
+                    Err(_) => {
+                        break format!(
+                            "nothing from the mediator for {}s",
+                            MONITOR_SILENCE.as_secs()
+                        );
+                    }
+                }
+                // Dropping the feed on the way out unsubscribes it.
+            },
+            Err(e) if is_refusal(&e) => {
+                let _ = tx.send(Update::MonitorFailed(e));
+                return;
+            }
+            Err(e) => e.to_string(),
+        };
+        let after = resubscribe_after(failures);
+        failures += 1;
+        if tx.send(Update::MonitorRetrying { reason, after }).is_err() {
+            return;
+        }
+        tokio::time::sleep(after).await;
+    }
+}
+
+/// A subscribe the mediator (or the console, knowing its answer) turned down.
+fn is_refusal(e: &ConsoleError) -> bool {
+    matches!(
+        e,
+        ConsoleError::Refused { .. } | ConsoleError::NotPermitted(_)
+    )
+}
+
+/// How long to wait before the next subscribe, after `failures` in a row.
+fn resubscribe_after(failures: u32) -> Duration {
+    RESUBSCRIBE
+        .saturating_mul(2u32.saturating_pow(failures.min(8)))
+        .min(RESUBSCRIBE_MAX)
+}
+
 /// `text` cut into rows of at most `width` characters.
 fn wrap_hard(text: &str, width: usize) -> Vec<String> {
     let chars: Vec<char> = text.chars().collect();
@@ -2635,6 +2741,23 @@ fn human_bytes(b: Option<u64>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resubscribing_backs_off_to_a_ceiling() {
+        let waits: Vec<u64> = (0..6).map(|n| resubscribe_after(n).as_secs()).collect();
+        assert_eq!(waits, [2, 4, 8, 16, 30, 30]);
+        assert_eq!(resubscribe_after(u32::MAX), RESUBSCRIBE_MAX);
+    }
+
+    #[test]
+    fn only_a_refusal_stops_the_monitor() {
+        assert!(is_refusal(&ConsoleError::Refused {
+            code: "e.p.req.unauthorized".into(),
+            comment: "no".into(),
+        }));
+        assert!(is_refusal(&ConsoleError::NotPermitted("monitor")));
+        assert!(!is_refusal(&ConsoleError::Connect("dns error".into())));
+    }
 
     #[test]
     fn short_keeps_ends_of_a_hash() {
