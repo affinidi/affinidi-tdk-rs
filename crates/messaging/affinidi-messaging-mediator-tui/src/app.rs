@@ -30,6 +30,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::account_edit::{AccountEdit, Setting};
+use crate::logs::{CaptureGuard, LogCapture, LogLevel};
 use crate::quota::{ColorDepth, QuotaBar, quota_line};
 use crate::tally::TrafficTally;
 
@@ -38,8 +39,8 @@ const REFRESH: Duration = Duration::from_secs(5);
 /// How long a notice stays in the footer before the key hints come back.
 const NOTICE_FOR: Duration = Duration::from_secs(12);
 
-/// Monitor lines kept on screen.
-const MONITOR_LINES: usize = 500;
+/// Monitor lines kept for scrolling back; older ones are dropped.
+const MONITOR_LINES: usize = 2000;
 
 /// The console's screens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +130,10 @@ enum Popup {
     },
     /// Change an account's role, ACL and queue limits.
     EditAccount(AccountEdit),
+    /// The captured log, `back` rows up from its newest.
+    Logs {
+        back: usize,
+    },
 }
 
 /// One line of the monitor pane. Events are kept raw and drawn on each frame,
@@ -151,6 +156,10 @@ struct MonitorPane {
     tally: TrafficTally,
     /// Show the per-account totals instead of the live lines.
     show_totals: bool,
+    /// Lines scrolled back from the newest; 0 follows new traffic.
+    back: usize,
+    /// Rows the pane showed last frame: a page, for scrolling.
+    page: usize,
 }
 
 /// The console application.
@@ -191,6 +200,9 @@ pub struct App {
     /// Nicknames for account hashes; saved to `book_path` when it is set.
     book: AddressBook,
     book_path: Option<PathBuf>,
+
+    /// The host's log output, kept off the terminal while the console runs.
+    logs: Option<(LogCapture, CaptureGuard)>,
 }
 
 const SORTS: [(&str, &str); 4] = [
@@ -246,6 +258,8 @@ impl App {
                 task: None,
                 tally: TrafficTally::new(Instant::now()),
                 show_totals: false,
+                back: 0,
+                page: 0,
             },
             popup: None,
             notice: None,
@@ -253,10 +267,29 @@ impl App {
             updated: None,
             book: AddressBook::new(),
             book_path: None,
+            logs: None,
         };
         app.know_self();
         app.refresh();
         app
+    }
+
+    /// Keep the host's log output off the screen while the console runs, and
+    /// show it on request (`l`) instead. Give the same capture to the host's
+    /// `tracing` subscriber as its writer; see [`LogCapture`].
+    pub fn with_logs(mut self, logs: LogCapture) -> Self {
+        let guard = logs.hold();
+        self.logs = Some((logs, guard));
+        self
+    }
+
+    /// Resolves when a log line was captured, so a host running its own loop
+    /// knows to redraw. Never resolves without [`App::with_logs`].
+    pub async fn log_changed(&self) {
+        match &self.logs {
+            Some((logs, _)) => logs.changed().await,
+            None => std::future::pending().await,
+        }
     }
 
     /// Show `notice` in the footer for a while.
@@ -648,6 +681,29 @@ impl App {
             KeyCode::Char('n') => self.popup = Some(self.name_popup(self.account_in_view())),
             KeyCode::Char('b') => self.popup = Some(Popup::Book { selected: 0 }),
             KeyCode::Char('m') => self.toggle_monitor(),
+            KeyCode::Char('l') => match &self.logs {
+                Some((logs, _)) => {
+                    logs.mark_seen();
+                    self.popup = Some(Popup::Logs { back: 0 });
+                }
+                None => self.set_notice(("this console isn't keeping a log".into(), true)),
+            },
+            KeyCode::PageUp if self.monitor.visible => {
+                self.scroll_monitor(self.monitor.page as i64)
+            }
+            KeyCode::PageDown if self.monitor.visible => {
+                self.scroll_monitor(-(self.monitor.page as i64))
+            }
+            KeyCode::Up if self.monitor.visible && key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.scroll_monitor(1)
+            }
+            KeyCode::Down
+                if self.monitor.visible && key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.scroll_monitor(-1)
+            }
+            KeyCode::Home if self.monitor.visible => self.scroll_monitor(i64::MAX),
+            KeyCode::End if self.monitor.visible => self.monitor.back = 0,
             KeyCode::Char('t') if self.monitor.visible => {
                 self.monitor.show_totals = !self.monitor.show_totals;
             }
@@ -771,6 +827,31 @@ impl App {
     fn popup_key(&mut self, popup: Popup, code: KeyCode) {
         let yes = matches!(code, KeyCode::Char('y') | KeyCode::Char('Y'));
         match popup {
+            Popup::Logs { back } => {
+                const PAGE: usize = 10;
+                let back = match code {
+                    KeyCode::Up | KeyCode::Char('k') => back.saturating_add(1),
+                    KeyCode::Down | KeyCode::Char('j') => back.saturating_sub(1),
+                    KeyCode::PageUp => back.saturating_add(PAGE),
+                    KeyCode::PageDown => back.saturating_sub(PAGE),
+                    KeyCode::Home => usize::MAX,
+                    KeyCode::End => 0,
+                    KeyCode::Char('c') => {
+                        if let Some((logs, _)) = &self.logs {
+                            logs.clear();
+                        }
+                        0
+                    }
+                    // Esc, q, l or anything else closes it.
+                    _ => {
+                        if let Some((logs, _)) = &self.logs {
+                            logs.mark_seen();
+                        }
+                        return;
+                    }
+                };
+                self.popup = Some(Popup::Logs { back });
+            }
             Popup::Name {
                 hash,
                 mut did,
@@ -1046,8 +1127,20 @@ impl App {
         own_request || own_reply_cleanup
     }
 
+    /// Scroll the monitor `by` lines towards older traffic (negative: newer).
+    fn scroll_monitor(&mut self, by: i64) {
+        let oldest = self
+            .monitor
+            .lines
+            .len()
+            .saturating_sub(self.monitor.page.max(1));
+        let back = (self.monitor.back as i64).saturating_add(by);
+        self.monitor.back = back.clamp(0, oldest as i64) as usize;
+    }
+
     fn monitor_update(&mut self, update: MonitorUpdate) {
         self.monitor.last_seen = Some(Instant::now());
+        let before = self.monitor.lines.len();
         match update {
             MonitorUpdate::Events { events, dropped } => {
                 self.monitor.dropped += dropped;
@@ -1075,9 +1168,15 @@ impl App {
                 )));
             }
         }
+        // Scrolled back, the view stays on the lines being read while new
+        // ones arrive below.
+        if self.monitor.back > 0 {
+            self.monitor.back += self.monitor.lines.len() - before;
+        }
         while self.monitor.lines.len() > MONITOR_LINES {
             self.monitor.lines.pop_front();
         }
+        self.scroll_monitor(0);
     }
 
     // ─── Loop ────────────────────────────────────────────────────────────
@@ -1093,15 +1192,31 @@ impl App {
         let mut events = EventStream::new();
         let mut tick = tokio::time::interval(REFRESH);
         tick.tick().await;
+        let logs = self.logs.as_ref().map(|(logs, _)| logs.clone());
         loop {
             terminal.draw(|f| self.render(f, f.area()))?;
+            let log_changed = async {
+                match &logs {
+                    Some(logs) => logs.changed().await,
+                    None => std::future::pending().await,
+                }
+            };
             tokio::select! {
                 Some(Ok(event)) = events.next() => match event {
+                    // Repaint every cell, whatever wrote over them.
+                    Event::Key(key)
+                        if key.kind == KeyEventKind::Press
+                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                            && key.code == KeyCode::Char('l') =>
+                    {
+                        terminal.clear()?;
+                    }
                     Event::Key(key) if self.handle_key(key) == Control::Quit => break,
                     Event::Paste(text) => self.handle_paste(&text),
                     _ => {}
                 },
                 Some(update) = self.rx.recv() => self.apply(update),
+                _ = log_changed => {}
                 _ = tick.tick() => if self.popup.is_none() { self.refresh() },
             }
         }
@@ -1145,8 +1260,15 @@ impl App {
             self.render_screen(f, body);
         }
         self.render_footer(f, rows[3]);
-        if let Some(popup) = &self.popup {
-            render_popup(f, area, popup, &self.book);
+        match &self.popup {
+            Some(Popup::Logs { back }) => {
+                // Keep the position in range, so scrolling from the top
+                // moves at once.
+                let back = self.render_logs(f, area, *back);
+                self.popup = Some(Popup::Logs { back });
+            }
+            Some(popup) => render_popup(f, area, popup, &self.book),
+            None => {}
         }
     }
 
@@ -1229,7 +1351,75 @@ impl App {
             )),
             None => {}
         }
+        if let Some((logs, _)) = &self.logs {
+            let unseen = logs.unseen();
+            if unseen > 0 {
+                line.push_span(Span::styled(
+                    format!("  ⚠ {unseen} log warning(s) — l to read"),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+        }
         f.render_widget(Paragraph::new(line), area);
+    }
+
+    /// The captured log over the screen, newest at the bottom, each line
+    /// wrapped to the width so none of it is cut off. Returns `back` within
+    /// what there is to scroll.
+    fn render_logs(&self, f: &mut Frame, area: Rect, back: usize) -> usize {
+        let w = area.width.saturating_sub(4);
+        let h = area.height.saturating_sub(2);
+        let rect = Rect::new(
+            area.x + (area.width - w) / 2,
+            area.y + (area.height - h) / 2,
+            w,
+            h,
+        );
+        let inner_w = w.saturating_sub(2).max(1) as usize;
+        let inner_h = h.saturating_sub(2) as usize;
+        let mut rows: Vec<Line> = Vec::new();
+        let lines = self
+            .logs
+            .as_ref()
+            .map(|(logs, _)| logs.lines())
+            .unwrap_or_default();
+        for line in &lines {
+            let color = match line.level {
+                Some(LogLevel::Error) => Color::Red,
+                Some(LogLevel::Warn) => Color::Yellow,
+                Some(LogLevel::Info) => Color::Reset,
+                _ => Color::DarkGray,
+            };
+            let text = match line.repeats {
+                1 => line.text.clone(),
+                n => format!("{}  ×{n}", line.text),
+            };
+            for chunk in wrap_hard(&text, inner_w) {
+                rows.push(Line::styled(chunk, Style::default().fg(color)));
+            }
+        }
+        let back = back.min(rows.len().saturating_sub(inner_h));
+        let skip = rows.len().saturating_sub(inner_h + back);
+        let shown: Vec<Line> = rows.into_iter().skip(skip).take(inner_h).collect();
+        let position = if back > 0 {
+            format!(" {back} row(s) newer below · End ")
+        } else {
+            String::new()
+        };
+        f.render_widget(Clear, rect);
+        f.render_widget(
+            Paragraph::new(shown).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(format!(" Log — {} line(s) ", lines.len()))
+                    .title_bottom(Line::from(format!(
+                        "{position} ↑↓ PgUp PgDn Home End scroll  c clear  Esc close "
+                    ))),
+            ),
+            rect,
+        );
+        back
     }
 
     fn render_tabs(&self, f: &mut Frame, area: Rect) {
@@ -1278,7 +1468,7 @@ impl App {
                     }
                 };
                 let monitor_keys = match (self.monitor.visible, self.monitor.show_totals) {
-                    (true, false) => "  t totals",
+                    (true, false) => "  t totals  PgUp PgDn End scroll",
                     (true, true) => "  t live",
                     (false, _) => "",
                 };
@@ -1841,7 +2031,7 @@ impl App {
         );
     }
 
-    fn render_monitor(&self, f: &mut Frame, area: Rect) {
+    fn render_monitor(&mut self, f: &mut Frame, area: Rect) {
         let alive = match (self.monitor.task.is_some(), self.monitor.last_seen) {
             (false, _) => Span::styled("○ stopped", Style::default().fg(Color::Red)),
             (true, Some(t)) if t.elapsed() < Duration::from_secs(45) => {
@@ -1880,23 +2070,39 @@ impl App {
                 },
             )),
         ]);
-        let block = Block::default().borders(Borders::ALL).title(title);
+        let mut block = Block::default().borders(Borders::ALL).title(title);
+        // On the bottom edge: the title is often wider than the pane.
+        if self.monitor.back > 0 && !self.monitor.show_totals {
+            block = block.title_bottom(
+                Line::styled(
+                    format!(" ⏸ {} newer · End to follow ", self.monitor.back),
+                    Style::default().fg(Color::Black).bg(Color::Yellow),
+                )
+                .right_aligned(),
+            );
+        }
         if self.monitor.show_totals {
             self.render_totals(f, area, block, now);
             return;
         }
         let inner = block.inner(area);
         let height = inner.height as usize;
+        self.monitor.page = height;
         // Sender and recipient as aligned columns, sharing what the fixed
         // columns (time, stage, protocol, channel, size) leave.
         const FIXED: u16 = 8 + 3 + 10 + 10 + 10 + 3 + 6;
         let name_w = (inner.width.saturating_sub(FIXED) / 2).clamp(14, 32) as usize; // a short hash is 13
-        let skip = self.monitor.lines.len().saturating_sub(height);
+        let back = self
+            .monitor
+            .back
+            .min(self.monitor.lines.len().saturating_sub(height));
+        let skip = self.monitor.lines.len().saturating_sub(height + back);
         let lines: Vec<Line> = self
             .monitor
             .lines
             .iter()
             .skip(skip)
+            .take(height)
             .map(|l| match l {
                 MonitorLine::Event(v) => event_line(v, &self.book, name_w),
                 MonitorLine::Note(line) => line.clone(),
@@ -2192,6 +2398,8 @@ fn render_popup(f: &mut Frame, area: Rect, popup: &Popup, book: &AddressBook) {
                 false,
             )
         }
+        // Drawn by `App::render_logs`, which has the log.
+        Popup::Logs { .. } => return,
         Popup::EditAccount(edit) => {
             let rows = edit
                 .rows
@@ -2280,6 +2488,18 @@ fn render_popup(f: &mut Frame, area: Rect, popup: &Popup, book: &AddressBook) {
             ),
         rect,
     );
+}
+
+/// `text` cut into rows of at most `width` characters.
+fn wrap_hard(text: &str, width: usize) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return vec![String::new()];
+    }
+    chars
+        .chunks(width.max(1))
+        .map(|c| c.iter().collect())
+        .collect()
 }
 
 fn sha256_hex(s: &str) -> String {

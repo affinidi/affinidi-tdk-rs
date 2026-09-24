@@ -249,3 +249,139 @@ async fn a_named_account_gets_room_beside_the_monitor() {
         "the flag changed:\n{after}"
     );
 }
+
+/// Log output from the host is kept off the screen and shown on request, and
+/// the monitor scrolls back through traffic that has left the pane.
+#[tokio::test(flavor = "multi_thread")]
+async fn logs_stay_off_the_screen_and_the_monitor_scrolls_back() {
+    use std::io::Write;
+
+    use affinidi_messaging_mediator_tui::LogCapture;
+
+    let env = TestEnvironment::spawn_with_direct_delivery().await.unwrap();
+    let alice = env.add_user("alice").await.unwrap();
+    let bob = env.add_user("bob").await.unwrap();
+    let op = env.add_user("operator").await.unwrap();
+    env.mediator
+        .store()
+        .account_set_role(&op.did_hash(), &AccountType::Admin)
+        .await
+        .unwrap();
+    let console = MediatorConsole::connect(Identity {
+        alias: "operator".into(),
+        did: op.did.clone(),
+        secrets: op.secrets.clone(),
+        mediator_did: Some(env.mediator.did().to_string()),
+    })
+    .await
+    .unwrap();
+    let logs = LogCapture::new();
+    let mut app = App::new(console)
+        .with_color_depth(ColorDepth::TrueColor)
+        .with_logs(logs.clone());
+    let mut terminal = Terminal::new(TestBackend::new(160, 16)).unwrap();
+
+    // An error logged while the console runs is counted, not printed.
+    let mut writer = logs.make_writer()();
+    for _ in 0..3 {
+        writer
+            .write_all(b"\x1b[31mERROR\x1b[0m could not reach the mediator\n")
+            .unwrap();
+    }
+    settle(&mut app, Duration::from_secs(1)).await;
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let flagged = screen(&terminal);
+    println!("{flagged}");
+    assert!(
+        flagged.contains("3 log warning(s)"),
+        "the header counts it:\n{flagged}"
+    );
+
+    app.handle_key(key(KeyCode::Char('l')));
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let log = screen(&terminal);
+    println!("{log}");
+    assert!(
+        log.contains("ERROR could not reach the mediator  ×3"),
+        "the log, colour codes gone and repeats counted:\n{log}"
+    );
+    app.handle_key(key(KeyCode::Esc));
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let read = screen(&terminal);
+    assert!(!read.contains("log warning"), "read, so cleared:\n{read}");
+
+    // More traffic than the pane holds. The subscription goes live at its
+    // own pace, so send until the monitor has seen enough rather than for a
+    // fixed time: a burst sent before it is live is never shown.
+    app.handle_key(key(KeyCode::Char('m')));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let live = loop {
+        send(&env, &alice, &bob).await;
+        settle(&mut app, Duration::from_millis(300)).await;
+        terminal.draw(|f| app.render(f, f.area())).unwrap();
+        let s = screen(&terminal);
+        // Two lines a message (received, stored) against an 11-row pane.
+        if seen(&s) >= 12 {
+            break s;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the monitor never filled:\n{s}"
+        );
+    };
+    println!("{live}");
+    assert!(!live.contains("⏸"), "following new traffic:\n{live}");
+
+    app.handle_key(key(KeyCode::PageUp));
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let back = screen(&terminal);
+    println!("{back}");
+    assert_ne!(back, live, "an earlier page");
+    let newer = |s: &str| -> usize {
+        let at = s
+            .find("⏸ ")
+            .unwrap_or_else(|| panic!("scrolled back:\n{s}"));
+        s[at + "⏸ ".len()..]
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let before = newer(&back);
+
+    // What arrives while scrolled back lands below, out of view.
+    let had = seen(&back);
+    send(&env, &alice, &bob).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let still = loop {
+        settle(&mut app, Duration::from_millis(300)).await;
+        terminal.draw(|f| app.render(f, f.area())).unwrap();
+        let s = screen(&terminal);
+        if seen(&s) > had {
+            break s;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the arrival never showed:\n{s}"
+        );
+    };
+    assert!(newer(&still) > before, "the view held its place:\n{still}");
+
+    app.handle_key(key(KeyCode::End));
+    terminal.draw(|f| app.render(f, f.area())).unwrap();
+    let followed = screen(&terminal);
+    assert!(!followed.contains("⏸"), "following again:\n{followed}");
+}
+
+/// The messages the monitor's title says it has seen.
+fn seen(screen: &str) -> u64 {
+    let at = screen
+        .find(" msgs ·")
+        .unwrap_or_else(|| panic!("the monitor's count:\n{screen}"));
+    screen[..at]
+        .rsplit(' ')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("the monitor's count:\n{screen}"))
+}
