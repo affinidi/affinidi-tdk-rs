@@ -310,15 +310,25 @@ async fn logs_stay_off_the_screen_and_the_monitor_scrolls_back() {
     let read = screen(&terminal);
     assert!(!read.contains("log warning"), "read, so cleared:\n{read}");
 
-    // More traffic than the pane holds.
+    // More traffic than the pane holds. The subscription goes live at its
+    // own pace, so send until the monitor has seen enough rather than for a
+    // fixed time: a burst sent before it is live is never shown.
     app.handle_key(key(KeyCode::Char('m')));
-    settle(&mut app, Duration::from_secs(1)).await;
-    for _ in 0..12 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let live = loop {
         send(&env, &alice, &bob).await;
-    }
-    settle(&mut app, Duration::from_secs(3)).await;
-    terminal.draw(|f| app.render(f, f.area())).unwrap();
-    let live = screen(&terminal);
+        settle(&mut app, Duration::from_millis(300)).await;
+        terminal.draw(|f| app.render(f, f.area())).unwrap();
+        let s = screen(&terminal);
+        // Two lines a message (received, stored) against an 11-row pane.
+        if seen(&s) >= 12 {
+            break s;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the monitor never filled:\n{s}"
+        );
+    };
     println!("{live}");
     assert!(!live.contains("⏸"), "following new traffic:\n{live}");
 
@@ -341,14 +351,37 @@ async fn logs_stay_off_the_screen_and_the_monitor_scrolls_back() {
     let before = newer(&back);
 
     // What arrives while scrolled back lands below, out of view.
+    let had = seen(&back);
     send(&env, &alice, &bob).await;
-    settle(&mut app, Duration::from_secs(2)).await;
-    terminal.draw(|f| app.render(f, f.area())).unwrap();
-    let still = screen(&terminal);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let still = loop {
+        settle(&mut app, Duration::from_millis(300)).await;
+        terminal.draw(|f| app.render(f, f.area())).unwrap();
+        let s = screen(&terminal);
+        if seen(&s) > had {
+            break s;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the arrival never showed:\n{s}"
+        );
+    };
     assert!(newer(&still) > before, "the view held its place:\n{still}");
 
     app.handle_key(key(KeyCode::End));
     terminal.draw(|f| app.render(f, f.area())).unwrap();
     let followed = screen(&terminal);
     assert!(!followed.contains("⏸"), "following again:\n{followed}");
+}
+
+/// The messages the monitor's title says it has seen.
+fn seen(screen: &str) -> u64 {
+    let at = screen
+        .find(" msgs ·")
+        .unwrap_or_else(|| panic!("the monitor's count:\n{screen}"));
+    screen[..at]
+        .rsplit(' ')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("the monitor's count:\n{screen}"))
 }
