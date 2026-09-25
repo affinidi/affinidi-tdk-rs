@@ -66,17 +66,15 @@ pub fn authcrypt_sender_kid(jwe_str: &str) -> Result<Option<String>, DIDCommErro
     Ok(header.authcrypt_sender_kid()?.map(str::to_string))
 }
 
-/// Decrypt a JWE string, given the sender public key alone.
+/// Decrypt an anoncrypt JWE; see [`decrypt_bound`].
 ///
-/// For authcrypt the key is taken to be the one named by the JWE `skid`, and
-/// the same checks as [`decrypt_bound`] apply: `skid` and `apu` must both be
-/// present and name the same `did#fragment` key id, or the message is refused.
-/// `sender_kid` in the result is that `skid`.
+/// An authcrypt JWE cannot be opened this way: with no key id there is no way
+/// to tell whose key `sender_public` is, so passing one for an ECDH-1PU JWE is
+/// refused with [`DIDCommError::SenderKeyBinding`].
 #[deprecated(
     since = "0.15.9",
-    note = "use `decrypt_bound` with a `SenderKey`. The key passed here must be the one \
-            resolved for the JWE's `skid` (see `authcrypt_sender_kid`); nothing checks that \
-            it is"
+    note = "use `decrypt_bound` with a `SenderKey`. An authcrypt JWE is refused here when a \
+            sender key is passed, since nothing ties the key to the JWE's `skid`"
 )]
 pub fn decrypt(
     jwe_str: &str,
@@ -84,12 +82,10 @@ pub fn decrypt(
     recipient_private: &PrivateKeyAgreement,
     sender_public: Option<&PublicKeyAgreement>,
 ) -> Result<DecryptedJwe, DIDCommError> {
-    let skid = authcrypt_sender_kid(jwe_str)?;
-    let sender = skid
-        .as_deref()
-        .zip(sender_public)
-        .map(|(kid, public)| SenderKey::new(kid, public));
-    decrypt_bound(jwe_str, recipient_kid, recipient_private, sender)
+    if sender_public.is_some() && authcrypt_sender_kid(jwe_str)?.is_some() {
+        return Err(crate::message::unpack::unbound_sender_key());
+    }
+    decrypt_bound(jwe_str, recipient_kid, recipient_private, None)
 }
 
 /// Decrypt a JWE string.
@@ -931,32 +927,26 @@ mod tests {
         }
     }
 
-    /// The deprecated key-only entry point applies the same binding.
+    /// The deprecated key-only entry point cannot tell whose key it is given,
+    /// so it refuses any authcrypt JWE a sender key is passed for; anoncrypt
+    /// still decrypts.
     #[test]
     #[allow(deprecated)]
-    fn deprecated_decrypt_binds_the_sender_too() {
+    fn deprecated_decrypt_refuses_authcrypt_with_an_unbound_key() {
         let alice = PrivateKeyAgreement::generate(Curve::X25519);
         let mallory = PrivateKeyAgreement::generate(Curve::X25519);
         let bob = PrivateKeyAgreement::generate(Curve::X25519);
 
         let jwe = encrypt::authcrypt(b"hi", ALICE, &alice, &[(BOB, &bob.public_key())]).unwrap();
-        let result = decrypt(&jwe, BOB, &bob, Some(&alice.public_key())).unwrap();
-        assert!(result.authenticated);
-        assert_eq!(result.sender_kid.as_deref(), Some(ALICE));
-        assert!(!result.legacy_kek_used);
+        assert_sender_binding_error(decrypt(&jwe, BOB, &bob, Some(&alice.public_key())));
+        assert_sender_binding_error(decrypt(&jwe, BOB, &bob, None));
 
-        let forged = encrypt::authcrypt_with_party_info(
-            b"hi",
-            Some(MALLORY),
-            Some(ALICE),
-            &mallory,
-            BOB,
-            &bob.public_key(),
-        )
-        .unwrap();
-        assert_sender_binding_error(decrypt(&forged, BOB, &bob, Some(&mallory.public_key())));
+        let jwe = encrypt::authcrypt(b"hi", ALICE, &mallory, &[(BOB, &bob.public_key())]).unwrap();
+        assert_sender_binding_error(decrypt(&jwe, BOB, &bob, Some(&mallory.public_key())));
 
         let anon = encrypt::anoncrypt(b"anon", &[(BOB, &bob.public_key())]).unwrap();
-        assert!(!decrypt(&anon, BOB, &bob, None).unwrap().authenticated);
+        let result = decrypt(&anon, BOB, &bob, Some(&mallory.public_key())).unwrap();
+        assert!(!result.authenticated);
+        assert!(!result.legacy_kek_used);
     }
 }

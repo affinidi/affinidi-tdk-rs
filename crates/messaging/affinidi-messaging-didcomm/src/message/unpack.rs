@@ -2,6 +2,7 @@
 
 use crate::error::DIDCommError;
 use crate::jwe::decrypt::SenderKey;
+use crate::jws::verify::{SignerKey, VerifiedJws, verify_bound};
 use crate::message::Message;
 use affinidi_crypto::jose::key_agreement::{PrivateKeyAgreement, PublicKeyAgreement};
 
@@ -43,15 +44,18 @@ pub enum UnpackResult {
     Plaintext(Message),
 }
 
-/// [`unpack_bound`], given the authcrypt sender public key alone.
+/// [`unpack_bound`] for callers that hold keys without their key ids.
 ///
-/// For authcrypt the key is taken to be the one named by the JWE `skid`, and
-/// the same checks as [`unpack_bound`] apply.
+/// An authcrypt JWE cannot be opened this way: with no key id there is no way
+/// to tell whose key `sender_public` is, so passing one for an ECDH-1PU JWE is
+/// refused with [`DIDCommError::SenderKeyBinding`]. Anoncrypt and plaintext
+/// unpack as before. `signer_public` is taken to be the Ed25519 key of the
+/// signature's `kid`, which is reported as `signer_kid`.
 #[deprecated(
     since = "0.15.9",
-    note = "use `unpack_bound` with a `SenderKey`. The key passed here must be the one \
-            resolved for the JWE's `skid` (see `jwe::decrypt::authcrypt_sender_kid`); nothing \
-            checks that it is"
+    note = "use `unpack_bound` with a `SenderKey` / `SignerKey`. An authcrypt JWE is refused \
+            here when a sender key is passed, since nothing ties the key to the JWE's `skid`; \
+            `signer_public` must be the key resolved for the JWS `kid`"
 )]
 pub fn unpack(
     input: &str,
@@ -60,19 +64,25 @@ pub fn unpack(
     sender_public: Option<&PublicKeyAgreement>,
     signer_public: Option<&[u8; 32]>,
 ) -> Result<UnpackResult, DIDCommError> {
-    let skid = crate::jwe::decrypt::authcrypt_sender_kid(input)
-        .ok()
-        .flatten();
-    let sender = skid
-        .as_deref()
-        .zip(sender_public)
-        .map(|(kid, public)| SenderKey::new(kid, public));
-    unpack_bound(
+    if sender_public.is_some()
+        && let Ok(Some(_)) = crate::jwe::decrypt::authcrypt_sender_kid(input)
+    {
+        return Err(unbound_sender_key());
+    }
+    unpack_with(
         input,
         recipient_kid,
         recipient_private,
-        sender,
-        signer_public,
+        None,
+        signer_public.map(Signer::HeaderKid),
+    )
+}
+
+pub(crate) fn unbound_sender_key() -> DIDCommError {
+    DIDCommError::SenderKeyBinding(
+        "an authcrypt JWE needs the sender key bound to its `skid`; \
+         use `decrypt_bound` / `unpack_bound` with a `SenderKey`"
+            .into(),
     )
 }
 
@@ -86,25 +96,61 @@ pub fn unpack(
 /// For encrypted messages, both `recipient_kid`/`recipient_private` are required.
 /// For authcrypt, `sender` is also required and must be the key named by the
 /// JWE `skid` (see [`crate::jwe::decrypt::authcrypt_sender_kid`]).
-/// For signed messages, `signer_public` is required.
+/// For signed messages, `signer` is required: the message is refused unless
+/// it carries a signature by `signer.kid()` that verifies under its key, and
+/// `signer_kid` is that key id.
 ///
 /// If a decrypted JWE turns out to wrap a JWS (DIDComm v2.1
 /// sign-then-encrypt for non-repudiation), the inner signature is
-/// verified too — `signer_public` is then also required, and the result
+/// verified too — `signer` is then also required, and the result
 /// is [`UnpackResult::Encrypted`] with `non_repudiation = true`.
-#[allow(deprecated)]
 pub fn unpack_bound(
     input: &str,
     recipient_kid: Option<&str>,
     recipient_private: Option<&PrivateKeyAgreement>,
     sender: Option<SenderKey<'_>>,
-    signer_public: Option<&[u8; 32]>,
+    signer: Option<SignerKey<'_>>,
+) -> Result<UnpackResult, DIDCommError> {
+    unpack_with(
+        input,
+        recipient_kid,
+        recipient_private,
+        sender,
+        signer.map(Signer::Bound),
+    )
+}
+
+/// How a JWS signature is checked: against a key bound to its key id, or —
+/// for the deprecated key-only entry point — against an Ed25519 key taken to
+/// be that of whatever `kid` the signature names.
+enum Signer<'a> {
+    Bound(SignerKey<'a>),
+    HeaderKid(&'a [u8; 32]),
+}
+
+fn verify_signed(jws: &str, signer: Option<&Signer<'_>>) -> Result<VerifiedJws, DIDCommError> {
+    match signer {
+        Some(Signer::Bound(signer)) => verify_bound(jws, *signer),
+        #[allow(deprecated)]
+        Some(Signer::HeaderKid(public)) => crate::jws::verify::verify_ed25519(jws, public),
+        None => Err(DIDCommError::InvalidMessage(
+            "a signer key is required to verify a signed (JWS) message".into(),
+        )),
+    }
+}
+
+#[allow(deprecated)]
+fn unpack_with(
+    input: &str,
+    recipient_kid: Option<&str>,
+    recipient_private: Option<&PrivateKeyAgreement>,
+    sender: Option<SenderKey<'_>>,
+    signer: Option<Signer<'_>>,
 ) -> Result<UnpackResult, DIDCommError> {
     let value: serde_json::Value = serde_json::from_str(input)
         .map_err(|e| DIDCommError::InvalidMessage(format!("invalid JSON: {e}")))?;
 
     if value.get("ciphertext").is_some() && value.get("recipients").is_some() {
-        // JWE — encrypted message
         let kid = recipient_kid
             .ok_or_else(|| DIDCommError::InvalidMessage("recipient_kid required for JWE".into()))?;
         let private = recipient_private.ok_or_else(|| {
@@ -124,17 +170,10 @@ pub fn unpack_bound(
             .is_some_and(|v| v.get("payload").is_some() && v.get("signatures").is_some());
 
         if inner_is_jws {
-            let pk = signer_public.ok_or_else(|| {
-                DIDCommError::InvalidMessage(
-                    "decrypted payload is a signed JWS (sign-then-encrypt); \
-                     signer_public is required to verify it"
-                        .into(),
-                )
-            })?;
             let inner = std::str::from_utf8(&decrypted.plaintext).map_err(|e| {
                 DIDCommError::InvalidMessage(format!("inner JWS is not valid UTF-8: {e}"))
             })?;
-            let verified = crate::jws::verify::verify_ed25519(inner, pk)?;
+            let verified = verify_signed(inner, signer.as_ref())?;
             let message = Message::from_json(&verified.payload)?;
 
             return Ok(UnpackResult::Encrypted {
@@ -160,11 +199,7 @@ pub fn unpack_bound(
             signer_kid: None,
         })
     } else if value.get("payload").is_some() && value.get("signatures").is_some() {
-        // JWS — signed message
-        let pk = signer_public
-            .ok_or_else(|| DIDCommError::InvalidMessage("signer_public required for JWS".into()))?;
-
-        let verified = crate::jws::verify::verify_ed25519(input, pk)?;
+        let verified = verify_signed(input, signer.as_ref())?;
         let message = Message::from_json(&verified.payload)?;
 
         Ok(UnpackResult::Signed {
@@ -172,7 +207,6 @@ pub fn unpack_bound(
             signer_kid: verified.signer_kid,
         })
     } else if value.get("type").is_some() {
-        // Plaintext DIDComm message
         let message = Message::from_json(input.as_bytes())?;
         Ok(UnpackResult::Plaintext(message))
     } else {
@@ -185,6 +219,7 @@ pub fn unpack_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jws::verify::VerifyKey;
     use crate::message::pack;
     use affinidi_crypto::jose::key_agreement::Curve;
 
@@ -231,12 +266,19 @@ mod tests {
     #[test]
     fn unpack_signed() {
         let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
-        let pk = sk.verifying_key().to_bytes();
+        let key = VerifyKey::Ed25519(sk.verifying_key().to_bytes());
 
         let msg = Message::new("test", serde_json::json!({}));
         let packed = pack::pack_signed(&msg, "did:example:alice#key-1", &sk.to_bytes()).unwrap();
 
-        let result = unpack_bound(&packed, None, None, None, Some(&pk)).unwrap();
+        let result = unpack_bound(
+            &packed,
+            None,
+            None,
+            None,
+            Some(SignerKey::new("did:example:alice#key-1", &key)),
+        )
+        .unwrap();
         match result {
             UnpackResult::Signed { signer_kid, .. } => {
                 assert_eq!(signer_kid.as_deref(), Some("did:example:alice#key-1"));
@@ -266,7 +308,7 @@ mod tests {
     #[test]
     fn unpack_sign_then_encrypt() {
         let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
-        let signer_pk = sk.verifying_key().to_bytes();
+        let signer_key = VerifyKey::Ed25519(sk.verifying_key().to_bytes());
         let sender = PrivateKeyAgreement::generate(Curve::X25519);
         let recipient = PrivateKeyAgreement::generate(Curve::X25519);
 
@@ -290,7 +332,7 @@ mod tests {
                 "did:example:alice#key-1",
                 &sender.public_key(),
             )),
-            Some(&signer_pk),
+            Some(SignerKey::new("did:example:alice#sign-1", &signer_key)),
         )
         .unwrap();
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (0.10.2) — the embedded mediator binds the authcrypt sender
+
+- Requires `affinidi-messaging-mediator` 0.29.5, so a test built on this
+  fixture runs against the mediator that takes a message's sender from the key
+  that authenticated it.
+- New end-to-end test `authcrypt_forgery`: envelopes whose `skid`, `apu` or
+  `from` name a DID other than the sending key's are refused by the mediator,
+  with and without `force_session_did_match`, and nothing reaches the
+  recipient; honest forwards still deliver.
+
 ## Unreleased (0.10.1) — set the CORS policy
 
 `TestMediatorBuilder::cors_allow_origin(CorsOriginPolicy)` sets the origin

@@ -138,6 +138,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn pack_signed_roundtrip() {
         let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
 
@@ -341,6 +342,7 @@ mod tests {
     /// Test signed-then-encrypted: sign a message first, then encrypt the JWS
     /// as an attachment in a wrapper message.
     #[test]
+    #[allow(deprecated)]
     fn pack_signed_then_authcrypt() {
         let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
         let sender_ka = PrivateKeyAgreement::generate(Curve::X25519);

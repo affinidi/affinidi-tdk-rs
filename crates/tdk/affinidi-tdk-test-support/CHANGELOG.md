@@ -3,9 +3,9 @@
 ## Unreleased (0.8.6) — authcrypt fixtures name their sender key id
 
 - `didcomm_fuzz::PackedEnvelope::sender_kid()` returns the envelope's bound
-  `skid`, for building the `SenderKey` that `affinidi-messaging-didcomm`
-  0.15.9's `unpack_bound` / `decrypt_bound` take. Additive; the struct is
-  unchanged.
+  `skid`, and `signer_kid()` a signed envelope's signature `kid`, for building
+  the `SenderKey` / `SignerKey` that `affinidi-messaging-didcomm` 0.15.9's
+  `unpack_bound` / `decrypt_bound` take. Additive; the struct is unchanged.
 
 ## Unreleased (0.8.5) — document the did:webvh host policy
 

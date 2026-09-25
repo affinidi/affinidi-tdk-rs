@@ -23,7 +23,7 @@ use affinidi_messaging_didcomm::{
         decrypt::{SenderKey, decrypt_bound},
         envelope::ProtectedHeader,
     },
-    jws::verify::{VerifiedJws, verify_ed25519, verify_p256, verify_secp256k1},
+    jws::verify::{SignerKey, VerifiedJws, VerifyKey, verify_bound},
     message::{
         Message,
         pack::{pack_encrypted_anoncrypt, pack_encrypted_authcrypt},
@@ -560,7 +560,7 @@ async fn verify_inner_jws(
                             "Could not resolve Ed25519 verification key for signer {signer_kid}"
                         )
                     })?;
-            verify_ed25519(jws_str, &pubkey).map_err(|e| e.to_string())
+            verify_signed_by(jws_str, signer_kid, VerifyKey::Ed25519(pubkey))
         }
         "ES256" => {
             let pubkey = resolve_did_p256_verification(signer_did, Some(signer_kid), did_resolver)
@@ -568,7 +568,7 @@ async fn verify_inner_jws(
                 .ok_or_else(|| {
                     format!("Could not resolve P-256 verification key for signer {signer_kid}")
                 })?;
-            verify_p256(jws_str, &pubkey).map_err(|e| e.to_string())
+            verify_signed_by(jws_str, signer_kid, VerifyKey::P256(pubkey))
         }
         "ES256K" => {
             let pubkey =
@@ -579,12 +579,22 @@ async fn verify_inner_jws(
                             "Could not resolve secp256k1 verification key for signer {signer_kid}"
                         )
                     })?;
-            verify_secp256k1(jws_str, &pubkey).map_err(|e| e.to_string())
+            verify_signed_by(jws_str, signer_kid, VerifyKey::Secp256k1(pubkey))
         }
         other => Err(format!(
             "Unsupported JWS signature algorithm {other:?} (expected EdDSA/Ed25519, ES256, or ES256K)"
         )),
     }
+}
+
+/// Verify the signature by `signer_kid` under the key resolved for it; the
+/// reported signer is `signer_kid`.
+fn verify_signed_by(
+    jws_str: &str,
+    signer_kid: &str,
+    key: VerifyKey,
+) -> Result<VerifiedJws, String> {
+    verify_bound(jws_str, SignerKey::new(signer_kid, &key)).map_err(|e| e.to_string())
 }
 
 /// The inner JWE's sender DID, from its bound `skid`.

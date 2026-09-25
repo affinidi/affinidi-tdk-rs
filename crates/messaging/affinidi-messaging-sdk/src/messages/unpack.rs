@@ -234,8 +234,9 @@ impl SharedState {
                 encrypted = true;
                 if kind == EncLayerKind::Authcrypt {
                     authenticated = true;
-                    // Innermost authcrypt is the authoritative sender key; only
-                    // set it once (the first authcrypt layer encountered).
+                    // The first (outermost) authcrypt layer sets the sender
+                    // key. No accepted wrapping has more than one authcrypt
+                    // layer, so a stack with another is refused by the policy.
                     if encrypted_from_kid.is_none() {
                         encrypted_from_kid = skid.clone();
                     }

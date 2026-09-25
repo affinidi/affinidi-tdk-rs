@@ -22,8 +22,10 @@ No public API change; the following tighten what is accepted.
   that signed or authcrypted the forward, never a bare `from`; an anonymous
   forward takes the anonymous path. The re-wrap relay's trusted-peer check
   uses the same authenticated DID.
+- A JWS the mediator verifies is attributed to the key id its key was
+  resolved for (`verify_bound`).
 - Built on `affinidi-messaging-didcomm` 0.15.9 and `affinidi-messaging-sdk`
-  0.27.2.
+  0.27.2, which it now requires.
 
 ## Unreleased (0.29.4) — a browser the mediator admits can read its health routes
 
