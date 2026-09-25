@@ -48,7 +48,7 @@ affinidi-crypto = { version = "0.2", path = "../../core/affinidi-crypto" }
 # ── #477: deterministic DIDComm envelope fixtures for fuzzing ──────────────
 ## pack/unpack + Message types the didcomm_fuzz seed corpus packs against. A
 ## dev-only edge — didcomm does not depend on test-support, so this is acyclic.
-affinidi-messaging-didcomm = { version = "0.15", path = "../../messaging/affinidi-messaging-didcomm" }
+affinidi-messaging-didcomm = { version = "0.15.9", path = "../../messaging/affinidi-messaging-didcomm" }
 
 # ── TI4a: seeded did:peer generation (determinism module) ─────────────────
 ## Seeded `Secret` constructors (generate_ed25519(.., Some(seed)) etc.) +
