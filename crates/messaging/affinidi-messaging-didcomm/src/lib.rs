@@ -33,10 +33,13 @@ mod arbitrary_support;
 
 // Re-export core types at crate root for convenience and legacy API compat.
 pub use crate::error::DIDCommError;
+pub use crate::jwe::decrypt::SenderKey;
+pub use crate::jws::verify::SignerKey;
 pub use crate::message::unpack::UnpackResult;
 pub use crate::message::{Attachment, AttachmentData, Message, MessageBuilder};
 
 use crate::identity::{PrivateIdentity, ResolvedIdentity};
+use crate::jws::verify::VerifyKey;
 use crate::message::forward;
 use crate::message::pack;
 use crate::message::unpack;
@@ -207,8 +210,11 @@ impl DIDCommAgent {
     /// Unpack a received message.
     ///
     /// Tries to detect the format (JWE, JWS, plaintext) and unpack accordingly.
-    /// For JWE, tries each local identity until one matches.
-    /// For JWS, requires the sender's resolved identity.
+    /// For JWE, tries each local identity until one matches. An authcrypt JWE
+    /// needs `sender_did`, and its `skid` must be that peer's key agreement
+    /// key id, or it is refused.
+    /// For JWS, requires the sender's resolved identity, and the message is
+    /// refused unless it is signed by that identity's signing key id.
     pub fn unpack(
         &self,
         input: &str,
@@ -219,11 +225,11 @@ impl DIDCommAgent {
 
         if value.get("ciphertext").is_some() && value.get("recipients").is_some() {
             // JWE — try to find a matching local identity
-            let sender_public = sender_did
+            let sender = sender_did
                 .map(|did| {
                     self.store
                         .get_resolved(did)
-                        .map(|r| &r.key_agreement_public)
+                        .map(|r| SenderKey::new(&r.key_agreement_kid, &r.key_agreement_public))
                 })
                 .transpose()?;
 
@@ -239,11 +245,11 @@ impl DIDCommAgent {
                         if let Ok(local) = self.store.get_local(local_did)
                             && local.key_agreement_kid == kid
                         {
-                            return unpack::unpack(
+                            return unpack::unpack_bound(
                                 input,
                                 Some(kid),
                                 Some(&local.key_agreement_private),
-                                sender_public,
+                                sender,
                                 None,
                             );
                         }
@@ -260,13 +266,18 @@ impl DIDCommAgent {
                 DIDCommError::InvalidMessage("sender_did required for JWS verification".into())
             })?;
             let resolved = self.store.get_resolved(signer_did)?;
-            let vk = resolved.verifying_key.as_ref().ok_or_else(|| {
-                DIDCommError::NoKeyAgreement("no verifying key for sender".into())
-            })?;
-            unpack::unpack(input, None, None, None, Some(vk))
+            let (kid, vk) = resolved
+                .signing_kid
+                .as_deref()
+                .zip(resolved.verifying_key)
+                .ok_or_else(|| {
+                    DIDCommError::NoKeyAgreement("no verifying key for sender".into())
+                })?;
+            let key = VerifyKey::Ed25519(vk);
+            unpack::unpack_bound(input, None, None, None, Some(SignerKey::new(kid, &key)))
         } else {
             // Plaintext
-            unpack::unpack(input, None, None, None, None)
+            unpack::unpack_bound(input, None, None, None, None)
         }
     }
 }
@@ -517,5 +528,59 @@ mod tests {
             }
             _ => panic!("expected Signed"),
         }
+    }
+
+    /// The caller expects Alice, but the message is Mallory's own authcrypt:
+    /// Alice's key is refused for a JWE whose `skid` is Mallory's.
+    #[test]
+    fn agent_unpack_refuses_a_sender_other_than_the_expected_one() {
+        let mut mallory_agent = DIDCommAgent::new();
+        let mut bob_agent = DIDCommAgent::new();
+
+        let alice = PrivateIdentity::generate("did:example:alice");
+        let mallory = PrivateIdentity::generate("did:example:mallory");
+        let bob = PrivateIdentity::generate("did:example:bob");
+
+        mallory_agent.add_peer(bob.to_resolved());
+        bob_agent.add_peer(alice.to_resolved());
+        bob_agent.add_peer(mallory.to_resolved());
+        mallory_agent.add_identity(mallory);
+        bob_agent.add_identity(bob);
+
+        let msg = Message::new("https://example.com/test", serde_json::json!({}))
+            .from("did:example:alice")
+            .to(vec!["did:example:bob".into()]);
+        let packed = mallory_agent
+            .pack_authcrypt(&msg, "did:example:mallory", "did:example:bob")
+            .unwrap();
+
+        assert!(matches!(
+            bob_agent.unpack(&packed, Some("did:example:alice")),
+            Err(DIDCommError::SenderKeyBinding(_))
+        ));
+    }
+
+    /// A JWS naming Alice's key id but signed by Mallory is refused when the
+    /// caller expects Mallory, and when it expects Alice.
+    #[test]
+    fn agent_unpack_refuses_a_signature_by_a_key_other_than_the_expected_one() {
+        let alice = PrivateIdentity::generate("did:example:alice");
+        let mallory = PrivateIdentity::generate("did:example:mallory");
+        let alice_kid = alice.signing_kid.clone().unwrap();
+
+        let mut bob_agent = DIDCommAgent::new();
+        bob_agent.add_peer(alice.to_resolved());
+        bob_agent.add_peer(mallory.to_resolved());
+
+        let msg = Message::new("https://example.com/test", serde_json::json!({}))
+            .from("did:example:alice");
+        let jws =
+            pack::pack_signed(&msg, &alice_kid, mallory.signing_private.as_ref().unwrap()).unwrap();
+
+        assert!(matches!(
+            bob_agent.unpack(&jws, Some("did:example:mallory")),
+            Err(DIDCommError::SignerKeyBinding(_))
+        ));
+        assert!(bob_agent.unpack(&jws, Some("did:example:alice")).is_err());
     }
 }

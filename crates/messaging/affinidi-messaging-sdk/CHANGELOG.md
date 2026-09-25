@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### 0.26.28 — the authcrypt sender is the key that decrypted the message
+
+Backport of 0.27.2 to the 0.26 line. No public API change.
+
+**Security.** `unpack` resolves the authcrypt sender key for exactly the
+envelope's `skid` and hands `affinidi-messaging-didcomm` 0.15.9's
+`decrypt_bound` the key together with that key id; the key id reported as
+`UnpackMetadata::encrypted_from_kid`, and used by the addressing-consistency
+check, is the same `skid`. Messages refused as a result:
+
+- an authcrypt JWE whose `skid` and `apu` differ, or that lacks either —
+  refused before any DID resolution;
+- a `skid` that is a bare DID (it was resolved to the sender's first
+  key-agreement key) or that names a verification method outside the sender's
+  `keyAgreement` (embedded or referenced, absolute or `#fragment`, are
+  accepted);
+- a JWE from a sender still on the pre-0.14 ECDH-1PU KEK.
+
+`transport_adapter`: an `encrypted_from_kid` without a `#fragment` yields no
+authenticated sender.
+
+Requires `affinidi-messaging-didcomm` 0.15.9. 0.26.27 and earlier call the
+key-only `decrypt`, which in didcomm 0.15.9 refuses every authcrypt message
+given a sender key, so a 0.26 consumer whose lock takes didcomm 0.15.9 needs
+this release.
+
 ### 0.26.27 — TSP relationships across two mediators
 
 A routed TSP message now goes out through this profile's own mediator even

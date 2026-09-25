@@ -97,8 +97,9 @@ impl MessagingProtocol for DIDCommAdapter {
         let input = std::str::from_utf8(packed)
             .map_err(|e| MessagingError::Unpack(format!("invalid UTF-8: {e}")))?;
 
-        // Try to detect sender from the JWE header (skid field)
-        let sender_did = self.detect_sender(input);
+        let sender_did = self
+            .detect_sender(input)
+            .map_err(|e| MessagingError::Unpack(e.to_string()))?;
 
         let result = self
             .agent
@@ -111,7 +112,7 @@ impl MessagingProtocol for DIDCommAdapter {
                 authenticated,
                 sender_kid,
                 recipient_kid,
-                // New fields (legacy_kek_used / non_repudiation /
+                // New fields (non_repudiation /
                 // signer_kid) aren't surfaced through this adapter yet —
                 // adopting non-repudiation here is follow-up work.
                 ..
@@ -240,15 +241,18 @@ impl MessagingProtocol for DIDCommAdapter {
 }
 
 impl DIDCommAdapter {
-    /// Try to detect the sender DID from the JWE protected header's skid field.
-    fn detect_sender(&self, input: &str) -> Option<String> {
-        let value: serde_json::Value = serde_json::from_str(input).ok()?;
-        let protected_b64 = value.get("protected")?.as_str()?;
-        let header_bytes = Base64UrlUnpadded::decode_vec(protected_b64).ok()?;
-        let header: serde_json::Value = serde_json::from_slice(&header_bytes).ok()?;
-        let skid = header.get("skid")?.as_str()?;
-        // Extract DID from DID URL (strip fragment)
-        Some(skid.split('#').next().unwrap_or(skid).to_string())
+    /// The sender DID of an authcrypt JWE, from its `skid` once the header
+    /// binds `skid` and `apu` together. `None` for anything else.
+    fn detect_sender(&self, input: &str) -> Result<Option<String>, crate::DIDCommError> {
+        let value: serde_json::Value = match serde_json::from_str(input) {
+            Ok(value) => value,
+            Err(_) => return Ok(None),
+        };
+        if value.get("ciphertext").is_none() || value.get("recipients").is_none() {
+            return Ok(None);
+        }
+        let skid = crate::jwe::decrypt::authcrypt_sender_kid(input)?;
+        Ok(skid.map(|skid| skid.split('#').next().unwrap_or(&skid).to_string()))
     }
 }
 

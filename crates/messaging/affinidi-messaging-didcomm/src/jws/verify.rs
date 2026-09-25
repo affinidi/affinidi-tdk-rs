@@ -94,6 +94,12 @@ fn verify_jws(
 /// # Arguments
 /// * `jws_str` - The JWS JSON string
 /// * `public_key` - The signer's Ed25519 public key (32 bytes)
+#[deprecated(
+    since = "0.15.9",
+    note = "use `verify_bound` with a `SignerKey`. The key passed here must be the one \
+            resolved for the signature's `kid`; nothing checks that it is, and `signer_kid` \
+            is reported from the header"
+)]
 pub fn verify_ed25519(jws_str: &str, public_key: &[u8; 32]) -> Result<VerifiedJws, DIDCommError> {
     verify_jws(
         jws_str,
@@ -108,6 +114,12 @@ pub fn verify_ed25519(jws_str: &str, public_key: &[u8; 32]) -> Result<VerifiedJw
 /// # Arguments
 /// * `jws_str` - The JWS JSON string
 /// * `public_key` - The signer's SEC1-encoded P-256 public key (compressed 33 bytes or uncompressed 65 bytes)
+#[deprecated(
+    since = "0.15.9",
+    note = "use `verify_bound` with a `SignerKey`. The key passed here must be the one \
+            resolved for the signature's `kid`; nothing checks that it is, and `signer_kid` \
+            is reported from the header"
+)]
 pub fn verify_p256(jws_str: &str, public_key: &[u8]) -> Result<VerifiedJws, DIDCommError> {
     verify_jws(
         jws_str,
@@ -122,6 +134,12 @@ pub fn verify_p256(jws_str: &str, public_key: &[u8]) -> Result<VerifiedJws, DIDC
 /// # Arguments
 /// * `jws_str` - The JWS JSON string
 /// * `public_key` - The signer's SEC1-encoded secp256k1 public key (compressed 33 bytes or uncompressed 65 bytes)
+#[deprecated(
+    since = "0.15.9",
+    note = "use `verify_bound` with a `SignerKey`. The key passed here must be the one \
+            resolved for the signature's `kid`; nothing checks that it is, and `signer_kid` \
+            is reported from the header"
+)]
 pub fn verify_secp256k1(jws_str: &str, public_key: &[u8]) -> Result<VerifiedJws, DIDCommError> {
     verify_jws(
         jws_str,
@@ -129,6 +147,57 @@ pub fn verify_secp256k1(jws_str: &str, public_key: &[u8]) -> Result<VerifiedJws,
         "ES256K",
         |input, sig| signing::verify_secp256k1(input, sig, public_key).map_err(DIDCommError::from),
     )
+}
+
+/// A signer's verification key together with the key id it was resolved for.
+///
+/// [`verify_bound`] refuses a JWS unless one of its signatures carries this
+/// `kid` and verifies under this key, so a key resolved for one signer cannot
+/// be reported as another's.
+#[derive(Clone, Copy)]
+pub struct SignerKey<'a> {
+    kid: &'a str,
+    key: &'a VerifyKey,
+}
+
+impl<'a> SignerKey<'a> {
+    pub fn new(kid: &'a str, key: &'a VerifyKey) -> Self {
+        Self { kid, key }
+    }
+
+    pub fn kid(&self) -> &'a str {
+        self.kid
+    }
+
+    pub fn key(&self) -> &'a VerifyKey {
+        self.key
+    }
+}
+
+/// Verify the signature `signer` made on a JWS (General JSON Serialization).
+///
+/// The signature is the one whose `kid` (protected header, else the
+/// per-signature header) is exactly `signer.kid()`; it must verify under
+/// `signer.key()`, whose type must match its `alg`. `signer_kid` in the result
+/// is `signer.kid()`. A JWS with no signature by that `kid` is refused with
+/// [`DIDCommError::SignerKeyBinding`].
+pub fn verify_bound(jws_str: &str, signer: SignerKey<'_>) -> Result<VerifiedJws, DIDCommError> {
+    let parsed = parse_jws(jws_str)?;
+    let signature = parsed
+        .signatures
+        .iter()
+        .find(|sig| sig.kid.as_deref() == Some(signer.kid()))
+        .ok_or_else(|| {
+            DIDCommError::SignerKeyBinding(format!(
+                "no signature in the JWS is by {}",
+                signer.kid()
+            ))
+        })?;
+    verify_parsed_signature(signature, signer.key())?;
+    Ok(VerifiedJws {
+        payload: parsed.payload,
+        signer_kid: Some(signer.kid().to_string()),
+    })
 }
 
 /// A single signature entry parsed from a JWS but **not yet verified**.
@@ -284,9 +353,45 @@ pub fn verify_parsed_signature(sig: &ParsedSignature, key: &VerifyKey) -> Result
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::jws::sign;
+
+    #[test]
+    fn verify_bound_reports_the_bound_kid() {
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
+        let key = VerifyKey::Ed25519(sk.verifying_key().to_bytes());
+        let jws = sign::sign_ed25519(b"{}", "did:example:alice#key-1", &sk.to_bytes()).unwrap();
+
+        let verified = verify_bound(&jws, SignerKey::new("did:example:alice#key-1", &key)).unwrap();
+        assert_eq!(
+            verified.signer_kid.as_deref(),
+            Some("did:example:alice#key-1")
+        );
+    }
+
+    /// Mallory signs, but names Alice's key in the header. Verifying with
+    /// Mallory's key bound to Mallory's kid finds no signature by that kid;
+    /// with Alice's kid the signature does not verify.
+    #[test]
+    fn verify_bound_refuses_a_kid_naming_another_signer() {
+        let mallory = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
+        let alice = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
+        let mallory_key = VerifyKey::Ed25519(mallory.verifying_key().to_bytes());
+        let alice_key = VerifyKey::Ed25519(alice.verifying_key().to_bytes());
+        let jws =
+            sign::sign_ed25519(b"{}", "did:example:alice#key-1", &mallory.to_bytes()).unwrap();
+
+        assert!(matches!(
+            verify_bound(
+                &jws,
+                SignerKey::new("did:example:mallory#key-1", &mallory_key)
+            ),
+            Err(DIDCommError::SignerKeyBinding(_))
+        ));
+        assert!(verify_bound(&jws, SignerKey::new("did:example:alice#key-1", &alice_key)).is_err());
+    }
 
     #[test]
     fn sign_verify_roundtrip() {

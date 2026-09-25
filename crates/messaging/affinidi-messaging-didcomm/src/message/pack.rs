@@ -70,7 +70,10 @@ pub fn pack_plaintext(msg: &Message) -> Result<String, DIDCommError> {
 }
 
 /// Unpack an encrypted message (convenience re-export of decrypt).
+pub use decrypt::SenderKey;
+#[allow(deprecated)]
 pub use decrypt::decrypt as unpack_encrypted;
+pub use decrypt::decrypt_bound as unpack_encrypted_bound;
 
 #[cfg(test)]
 mod tests {
@@ -97,11 +100,14 @@ mod tests {
         )
         .unwrap();
 
-        let decrypted = unpack_encrypted(
+        let decrypted = unpack_encrypted_bound(
             &packed,
             "did:example:bob#key-1",
             &recipient,
-            Some(&sender.public_key()),
+            Some(SenderKey::new(
+                "did:example:alice#key-1",
+                &sender.public_key(),
+            )),
         )
         .unwrap();
 
@@ -124,7 +130,7 @@ mod tests {
                 .unwrap();
 
         let decrypted =
-            unpack_encrypted(&packed, "did:example:bob#key-1", &recipient, None).unwrap();
+            unpack_encrypted_bound(&packed, "did:example:bob#key-1", &recipient, None).unwrap();
 
         let unpacked = Message::from_json(&decrypted.plaintext).unwrap();
         assert_eq!(unpacked.body["content"], "Anonymous!");
@@ -132,6 +138,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn pack_signed_roundtrip() {
         let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
 
@@ -238,11 +245,14 @@ mod tests {
         )
         .unwrap();
 
-        let decrypted = unpack_encrypted(
+        let decrypted = unpack_encrypted_bound(
             &packed,
             "did:example:bob#p256",
             &recipient,
-            Some(&sender.public_key()),
+            Some(SenderKey::new(
+                "did:example:alice#p256",
+                &sender.public_key(),
+            )),
         )
         .unwrap();
 
@@ -271,11 +281,14 @@ mod tests {
         )
         .unwrap();
 
-        let decrypted = unpack_encrypted(
+        let decrypted = unpack_encrypted_bound(
             &packed,
             "did:example:bob#k256",
             &recipient,
-            Some(&sender.public_key()),
+            Some(SenderKey::new(
+                "did:example:alice#k256",
+                &sender.public_key(),
+            )),
         )
         .unwrap();
 
@@ -298,7 +311,7 @@ mod tests {
                 .unwrap();
 
         let decrypted =
-            unpack_encrypted(&packed, "did:example:bob#p256", &recipient, None).unwrap();
+            unpack_encrypted_bound(&packed, "did:example:bob#p256", &recipient, None).unwrap();
 
         let unpacked = Message::from_json(&decrypted.plaintext).unwrap();
         assert_eq!(unpacked.body["content"], "P-256 anon");
@@ -319,7 +332,7 @@ mod tests {
                 .unwrap();
 
         let decrypted =
-            unpack_encrypted(&packed, "did:example:bob#k256", &recipient, None).unwrap();
+            unpack_encrypted_bound(&packed, "did:example:bob#k256", &recipient, None).unwrap();
 
         let unpacked = Message::from_json(&decrypted.plaintext).unwrap();
         assert_eq!(unpacked.body["content"], "K-256 anon");
@@ -329,6 +342,7 @@ mod tests {
     /// Test signed-then-encrypted: sign a message first, then encrypt the JWS
     /// as an attachment in a wrapper message.
     #[test]
+    #[allow(deprecated)]
     fn pack_signed_then_authcrypt() {
         let sk = ed25519_dalek::SigningKey::generate(&mut rand_10::rng());
         let sender_ka = PrivateKeyAgreement::generate(Curve::X25519);
@@ -355,11 +369,14 @@ mod tests {
         .unwrap();
 
         // Step 3: Decrypt
-        let decrypted = unpack_encrypted(
+        let decrypted = unpack_encrypted_bound(
             &packed,
             "did:example:bob#ka-1",
             &recipient_ka,
-            Some(&sender_ka.public_key()),
+            Some(SenderKey::new(
+                "did:example:alice#ka-1",
+                &sender_ka.public_key(),
+            )),
         )
         .unwrap();
         assert!(decrypted.authenticated);
