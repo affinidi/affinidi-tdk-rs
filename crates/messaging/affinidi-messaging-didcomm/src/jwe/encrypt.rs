@@ -175,8 +175,8 @@ pub fn anoncrypt(
 
 /// Test-only authcrypt that wraps the CEK under the **legacy** (pre-0.14,
 /// unprefixed-tag) ECDH-1PU KEK — i.e. a JWE exactly as an unpatched peer
-/// would emit it. Used to exercise the recipient-side decrypt fallback
-/// (issue #322). Mirrors [`authcrypt`] but for a single recipient.
+/// would emit it. Used to check the recipient refuses it (issue #322).
+/// Mirrors [`authcrypt`] but for a single recipient.
 #[cfg(test)]
 pub(crate) fn authcrypt_legacy(
     plaintext: &[u8],
@@ -211,6 +211,68 @@ pub(crate) fn authcrypt_legacy(
         content_encryption::encrypt(plaintext, &cek, &iv, protected_b64.as_bytes())?;
 
     let kek = ecdh::derive_sender_key_1pu_legacy(
+        &ephemeral,
+        sender_private,
+        recipient_pub,
+        apu_raw,
+        &apv_raw,
+        &tag,
+    )?;
+    let wrapped = aes_kw::wrap(&kek, &cek)?;
+
+    let jwe = Jwe {
+        protected: protected_b64,
+        recipients: vec![Recipient {
+            header: PerRecipientHeader {
+                kid: recipient_kid.to_string(),
+            },
+            encrypted_key: Base64UrlUnpadded::encode_string(&wrapped),
+        }],
+        iv: Base64UrlUnpadded::encode_string(&iv),
+        ciphertext: Base64UrlUnpadded::encode_string(&ciphertext),
+        tag: Base64UrlUnpadded::encode_string(&tag),
+    };
+
+    serde_json::to_string(&jwe).map_err(|e| DIDCommError::Serialization(format!("JWE: {e}")))
+}
+
+/// Test-only authcrypt that writes `skid` and `apu` independently, so a
+/// header naming two different senders (or omitting one) can be built. The
+/// KEK is derived over `apu`, as a sender choosing these headers would.
+#[cfg(test)]
+pub(crate) fn authcrypt_with_party_info(
+    plaintext: &[u8],
+    skid: Option<&str>,
+    apu: Option<&str>,
+    sender_private: &PrivateKeyAgreement,
+    recipient_kid: &str,
+    recipient_pub: &PublicKeyAgreement,
+) -> Result<String, DIDCommError> {
+    let ephemeral = EphemeralKeyPair::generate(recipient_pub.curve());
+
+    let apu_raw = apu.map(str::as_bytes).unwrap_or_default();
+    let apv_raw = compute_apv(std::iter::once(recipient_kid));
+
+    let cek = content_encryption::generate_cek();
+    let iv = content_encryption::generate_iv();
+
+    let protected_header = ProtectedHeader {
+        typ: Some("application/didcomm-encrypted+json".into()),
+        alg: "ECDH-1PU+A256KW".into(),
+        enc: "A256CBC-HS512".into(),
+        skid: skid.map(str::to_string),
+        apu: apu.map(|apu| Base64UrlUnpadded::encode_string(apu.as_bytes())),
+        apv: Base64UrlUnpadded::encode_string(&apv_raw),
+        epk: ephemeral.public.to_jwk(),
+    };
+    let protected_str = serde_json::to_string(&protected_header)
+        .map_err(|e| DIDCommError::Serialization(format!("protected header: {e}")))?;
+    let protected_b64 = Base64UrlUnpadded::encode_string(protected_str.as_bytes());
+
+    let (ciphertext, tag) =
+        content_encryption::encrypt(plaintext, &cek, &iv, protected_b64.as_bytes())?;
+
+    let kek = ecdh::derive_sender_key_1pu(
         &ephemeral,
         sender_private,
         recipient_pub,
