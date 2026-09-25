@@ -3,7 +3,7 @@ pub mod extractor;
 mod message_pickup;
 mod trust_ping;
 
-pub use context::HandlerContext;
+pub use context::{HandlerContext, authenticated_sender_did};
 pub use extractor::{Extension, Extensions, FromMessageParts, MessageParts};
 pub use message_pickup::MESSAGE_PICKUP_STATUS_TYPE;
 pub use trust_ping::{TRUST_PING_TYPE, TRUST_PONG_TYPE, trust_ping_handler};

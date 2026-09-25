@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased (0.12.1) — `sender_did` is the authenticated sender
+
+- `HandlerContext::sender_did` is now the DID of the message's verified signer,
+  else its authcrypt sender (`None` when those differ or nothing authenticated
+  the message). It was the plaintext `from`.
+- `MessagePolicy::require_sender_did` (and `allow_anonymous_sender(false)`)
+  now require such an authenticated sender; a `from` alone no longer
+  satisfies them.
+- New `handler::authenticated_sender_did(&UnpackMetadata)`.
+- Built on `affinidi-messaging-sdk` 0.27.2.
+
 ## Unreleased (0.12.0) — TSP relationship persistence + ensure
 
 Lets a facade consumer form and persist TSP relationships, which the framework

@@ -611,7 +611,7 @@ impl Listener {
         // off.
         ack_id: Option<String>,
     ) {
-        let sender_did = message.from.clone();
+        let sender_did = crate::handler::authenticated_sender_did(&meta);
         let thread_id = get_thread_id(&message);
         let parent_thread_id = get_parent_thread_id(&message, false);
 

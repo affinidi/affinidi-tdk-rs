@@ -58,11 +58,7 @@ impl MessagePolicy {
         self
     }
 
-    pub(crate) fn check(
-        &self,
-        message: &Message,
-        meta: &UnpackMetadata,
-    ) -> Result<(), PolicyViolation> {
+    pub(crate) fn check(&self, meta: &UnpackMetadata) -> Result<(), PolicyViolation> {
         if self.require_encrypted && !meta.encrypted {
             return Err(PolicyViolation::NotEncrypted);
         }
@@ -75,7 +71,7 @@ impl MessagePolicy {
         if !self.allow_anonymous_sender && meta.anonymous_sender {
             return Err(PolicyViolation::AnonymousSender);
         }
-        if self.require_sender_did && message.from.is_none() {
+        if self.require_sender_did && crate::handler::authenticated_sender_did(meta).is_none() {
             return Err(PolicyViolation::MissingSenderDid);
         }
         Ok(())
@@ -97,7 +93,7 @@ impl MiddlewareHandler for MessagePolicy {
         meta: UnpackMetadata,
         next: Next,
     ) -> MiddlewareResult {
-        if let Err(violation) = self.check(&message, &meta) {
+        if let Err(violation) = self.check(&meta) {
             tracing::info!(
                 message_id = %message.id,
                 sender = ctx.sender_did.as_deref().unwrap_or("<anon>"),
@@ -113,15 +109,6 @@ impl MiddlewareHandler for MessagePolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    fn msg_with_from(from: Option<&str>) -> Message {
-        let mut b = Message::build("id".to_string(), "test".to_string(), json!({}));
-        if let Some(f) = from {
-            b = b.from(f.to_string());
-        }
-        b.finalize()
-    }
 
     fn meta(
         encrypted: bool,
@@ -141,67 +128,62 @@ mod tests {
     #[test]
     fn default_policy_allows_everything() {
         let policy = MessagePolicy::new();
-        let m = msg_with_from(None);
-        let mt = UnpackMetadata::default();
-        assert!(policy.check(&m, &mt).is_ok());
+        assert!(policy.check(&UnpackMetadata::default()).is_ok());
     }
 
     #[test]
     fn require_encrypted_rejects_plaintext() {
         let policy = MessagePolicy::new().require_encrypted(true);
-        let result = policy.check(&msg_with_from(None), &meta(false, false, false, false));
+        let result = policy.check(&meta(false, false, false, false));
         assert!(matches!(result, Err(PolicyViolation::NotEncrypted)));
     }
 
     #[test]
     fn require_encrypted_accepts_encrypted() {
         let policy = MessagePolicy::new().require_encrypted(true);
-        assert!(
-            policy
-                .check(&msg_with_from(None), &meta(true, false, false, false))
-                .is_ok()
-        );
+        assert!(policy.check(&meta(true, false, false, false)).is_ok());
     }
 
     #[test]
     fn require_authenticated_rejects_unauthenticated() {
         let policy = MessagePolicy::new().require_authenticated(true);
-        let result = policy.check(&msg_with_from(None), &meta(false, false, false, false));
+        let result = policy.check(&meta(false, false, false, false));
         assert!(matches!(result, Err(PolicyViolation::NotAuthenticated)));
     }
 
     #[test]
     fn require_authenticated_accepts_authenticated() {
         let policy = MessagePolicy::new().require_authenticated(true);
-        assert!(
-            policy
-                .check(&msg_with_from(None), &meta(false, true, false, false))
-                .is_ok()
-        );
+        assert!(policy.check(&meta(false, true, false, false)).is_ok());
     }
 
     #[test]
     fn require_non_repudiation_rejects_unsigned() {
         let policy = MessagePolicy::new().require_non_repudiation(true);
-        let result = policy.check(&msg_with_from(None), &meta(false, false, false, false));
+        let result = policy.check(&meta(false, false, false, false));
         assert!(matches!(result, Err(PolicyViolation::NoNonRepudiation)));
     }
 
     #[test]
     fn require_non_repudiation_accepts_signed() {
         let policy = MessagePolicy::new().require_non_repudiation(true);
-        assert!(
-            policy
-                .check(&msg_with_from(None), &meta(false, false, true, false))
-                .is_ok()
-        );
+        assert!(policy.check(&meta(false, false, true, false)).is_ok());
     }
 
     #[test]
     fn disallow_anonymous_rejects_anonymous() {
         let policy = MessagePolicy::new().allow_anonymous_sender(false);
-        let result = policy.check(&msg_with_from(None), &meta(false, false, false, true));
+        let result = policy.check(&meta(false, false, false, true));
         assert!(matches!(result, Err(PolicyViolation::AnonymousSender)));
+    }
+
+    fn authcrypt_meta(sender_kid: &str) -> UnpackMetadata {
+        UnpackMetadata {
+            encrypted: true,
+            authenticated: true,
+            encrypted_from_kid: Some(sender_kid.to_string()),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -209,10 +191,7 @@ mod tests {
         let policy = MessagePolicy::new().allow_anonymous_sender(false);
         assert!(
             policy
-                .check(
-                    &msg_with_from(Some("did:example:sender")),
-                    &meta(false, false, false, false)
-                )
+                .check(&authcrypt_meta("did:example:sender#key-1"))
                 .is_ok()
         );
     }
@@ -221,35 +200,40 @@ mod tests {
     fn disallow_anonymous_implies_require_sender_did() {
         let policy = MessagePolicy::new().allow_anonymous_sender(false);
         // With no sender DID, MissingSenderDid is checked (require_sender_did was set implicitly)
-        let result = policy.check(&msg_with_from(None), &meta(false, false, false, false));
+        let result = policy.check(&meta(false, false, false, false));
         assert!(matches!(result, Err(PolicyViolation::MissingSenderDid)));
     }
 
     #[test]
     fn require_sender_did_implies_disallow_anonymous() {
         let policy = MessagePolicy::new().require_sender_did(true);
-        let result = policy.check(&msg_with_from(None), &meta(false, false, false, true));
+        let result = policy.check(&meta(false, false, false, true));
         assert!(matches!(result, Err(PolicyViolation::AnonymousSender)));
     }
 
     #[test]
     fn require_sender_did_rejects_missing_from() {
         let policy = MessagePolicy::new().require_sender_did(true);
-        let result = policy.check(&msg_with_from(None), &UnpackMetadata::default());
+        let result = policy.check(&UnpackMetadata::default());
         assert!(matches!(result, Err(PolicyViolation::MissingSenderDid)));
     }
 
     #[test]
-    fn require_sender_did_accepts_present_from() {
+    fn require_sender_did_accepts_an_authenticated_sender() {
         let policy = MessagePolicy::new().require_sender_did(true);
         assert!(
             policy
-                .check(
-                    &msg_with_from(Some("did:example:sender")),
-                    &UnpackMetadata::default()
-                )
+                .check(&authcrypt_meta("did:example:sender#key-1"))
                 .is_ok()
         );
+    }
+
+    /// A plaintext `from` that nothing authenticated is not a sender DID.
+    #[test]
+    fn require_sender_did_rejects_an_unauthenticated_from() {
+        let policy = MessagePolicy::new().require_sender_did(true);
+        let result = policy.check(&UnpackMetadata::default());
+        assert!(matches!(result, Err(PolicyViolation::MissingSenderDid)));
     }
 
     #[test]
@@ -257,7 +241,7 @@ mod tests {
         let policy = MessagePolicy::new()
             .require_encrypted(true)
             .require_authenticated(true);
-        let result = policy.check(&msg_with_from(None), &meta(false, false, false, false));
+        let result = policy.check(&meta(false, false, false, false));
         assert!(matches!(result, Err(PolicyViolation::NotEncrypted)));
     }
 }

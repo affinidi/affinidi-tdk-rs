@@ -33,6 +33,7 @@ mod arbitrary_support;
 
 // Re-export core types at crate root for convenience and legacy API compat.
 pub use crate::error::DIDCommError;
+pub use crate::jwe::decrypt::SenderKey;
 pub use crate::message::unpack::UnpackResult;
 pub use crate::message::{Attachment, AttachmentData, Message, MessageBuilder};
 
@@ -207,7 +208,9 @@ impl DIDCommAgent {
     /// Unpack a received message.
     ///
     /// Tries to detect the format (JWE, JWS, plaintext) and unpack accordingly.
-    /// For JWE, tries each local identity until one matches.
+    /// For JWE, tries each local identity until one matches. An authcrypt JWE
+    /// needs `sender_did`, and its `skid` must be that peer's key agreement
+    /// key id, or it is refused.
     /// For JWS, requires the sender's resolved identity.
     pub fn unpack(
         &self,
@@ -219,11 +222,11 @@ impl DIDCommAgent {
 
         if value.get("ciphertext").is_some() && value.get("recipients").is_some() {
             // JWE — try to find a matching local identity
-            let sender_public = sender_did
+            let sender = sender_did
                 .map(|did| {
                     self.store
                         .get_resolved(did)
-                        .map(|r| &r.key_agreement_public)
+                        .map(|r| SenderKey::new(&r.key_agreement_kid, &r.key_agreement_public))
                 })
                 .transpose()?;
 
@@ -243,7 +246,7 @@ impl DIDCommAgent {
                                 input,
                                 Some(kid),
                                 Some(&local.key_agreement_private),
-                                sender_public,
+                                sender,
                                 None,
                             );
                         }
@@ -517,5 +520,35 @@ mod tests {
             }
             _ => panic!("expected Signed"),
         }
+    }
+
+    /// The caller expects Alice, but the message is Mallory's own authcrypt:
+    /// Alice's key is refused for a JWE whose `skid` is Mallory's.
+    #[test]
+    fn agent_unpack_refuses_a_sender_other_than_the_expected_one() {
+        let mut mallory_agent = DIDCommAgent::new();
+        let mut bob_agent = DIDCommAgent::new();
+
+        let alice = PrivateIdentity::generate("did:example:alice");
+        let mallory = PrivateIdentity::generate("did:example:mallory");
+        let bob = PrivateIdentity::generate("did:example:bob");
+
+        mallory_agent.add_peer(bob.to_resolved());
+        bob_agent.add_peer(alice.to_resolved());
+        bob_agent.add_peer(mallory.to_resolved());
+        mallory_agent.add_identity(mallory);
+        bob_agent.add_identity(bob);
+
+        let msg = Message::new("https://example.com/test", serde_json::json!({}))
+            .from("did:example:alice")
+            .to(vec!["did:example:bob".into()]);
+        let packed = mallory_agent
+            .pack_authcrypt(&msg, "did:example:mallory", "did:example:bob")
+            .unwrap();
+
+        assert!(matches!(
+            bob_agent.unpack(&packed, Some("did:example:alice")),
+            Err(DIDCommError::SenderKeyBinding(_))
+        ));
     }
 }

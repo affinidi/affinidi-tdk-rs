@@ -1,5 +1,11 @@
 # Affinidi TDK Test Support
 
+## Unreleased (0.8.6) — authcrypt fixtures carry the sender key id
+
+- `didcomm_fuzz::PackedEnvelope` gains `sender_kid`, and `sender_key()` returns
+  the `SenderKey` that `affinidi-messaging-didcomm` 0.15.9's `unpack` /
+  `decrypt` take.
+
 ## Unreleased (0.8.5) — document the did:webvh host policy
 
 - Documentation only. A DID minted with `MockDidWebServer::webvh_authority`

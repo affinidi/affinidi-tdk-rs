@@ -7,7 +7,9 @@
 
 use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement};
 use affinidi_messaging_didcomm::message::Message;
-use affinidi_messaging_didcomm::message::pack::{pack_encrypted_authcrypt, unpack_encrypted};
+use affinidi_messaging_didcomm::message::pack::{
+    SenderKey, pack_encrypted_authcrypt, unpack_encrypted,
+};
 use affinidi_messaging_didcomm::message::unpack;
 use affinidi_messaging_sdk::errors::ATMError;
 use serde_json::json;
@@ -81,6 +83,7 @@ async fn main() -> Result<(), ATMError> {
         (bob_device3_kid, &bob_device3_pub),
     ];
 
+    let alice_public = alice_private.public_key();
     let packed_msg = pack_encrypted_authcrypt(&msg, alice_kid, &alice_private, &recipients_ref)
         .map_err(|e| ATMError::DidcommError("pack".to_string(), format!("{e}")))?;
 
@@ -95,7 +98,7 @@ async fn main() -> Result<(), ATMError> {
         &packed_msg,
         bob_device1_kid,
         &bob_device1_private,
-        Some(&alice_private.public_key()),
+        Some(SenderKey::new(alice_kid, &alice_public)),
     )
     .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{e}")))?;
 
@@ -112,7 +115,7 @@ async fn main() -> Result<(), ATMError> {
         &packed_msg,
         bob_device2_kid,
         &bob_device2_private,
-        Some(&alice_private.public_key()),
+        Some(SenderKey::new(alice_kid, &alice_public)),
     )
     .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{e}")))?;
 
@@ -129,7 +132,7 @@ async fn main() -> Result<(), ATMError> {
         &packed_msg,
         bob_device3_kid,
         &bob_device3_private,
-        Some(&alice_private.public_key()),
+        Some(SenderKey::new(alice_kid, &alice_public)),
     )
     .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{e}")))?;
 
@@ -146,7 +149,7 @@ async fn main() -> Result<(), ATMError> {
         &packed_msg,
         Some(bob_device1_kid),
         Some(&bob_device1_private),
-        Some(&alice_private.public_key()),
+        Some(SenderKey::new(alice_kid, &alice_public)),
         None,
     )
     .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{e}")))?;

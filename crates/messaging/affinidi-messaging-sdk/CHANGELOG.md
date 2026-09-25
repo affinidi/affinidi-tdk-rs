@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### 0.27.2 — the authcrypt sender is the key that decrypted the message
+
+`unpack` resolves the authcrypt sender key for exactly the envelope's `skid`
+and hands `affinidi-messaging-didcomm` 0.15.9 the key together with that key
+id; the key id reported as `UnpackMetadata::encrypted_from_kid`, and used by
+the addressing-consistency check, is the same `skid`.
+
+Behaviour changes a caller may see:
+
+- An authcrypt JWE whose `skid` and `apu` differ, or that lacks either, is
+  refused before any DID resolution.
+- `skid` must be a DID URL naming a key in the sender's `keyAgreement`
+  (embedded or referenced, absolute or `#fragment`). A bare-DID `skid` is no
+  longer resolved to the sender's first key-agreement key, and a verification
+  method outside `keyAgreement` is no longer used; both are refused.
+- A JWE from a sender still on the pre-0.14 ECDH-1PU KEK no longer decrypts.
+- `transport_adapter`: an `encrypted_from_kid` without a `#fragment` yields no
+  authenticated sender.
+
 ### 0.27.1 — a mutual TSP cancellation is answered
 
 Rev 3 §7.3: a cancellation (`TSP_RFD`) of a relationship held in both

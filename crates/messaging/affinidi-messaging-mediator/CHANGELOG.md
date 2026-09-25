@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (0.29.5) — a message's sender is the DID that authenticated it
+
+- **Authcrypt envelopes bind `skid` to `apu`.** `MetaEnvelope::new` refuses an
+  ECDH-1PU envelope that lacks `skid` or `apu`, whose `apu` does not encode its
+  `skid`, or that uses another ECDH-1PU `alg`. The `apu` fallback for the
+  sender is removed, for the outer envelope and for a nested JWE. The sender
+  key is resolved for exactly the `skid` and must be a `keyAgreement` key; the
+  fallback to the sender's first key-agreement key is removed.
+  `encrypted_from_kid` is that `skid`.
+- **`from` must name the authenticated sender.** A message addressed to the
+  mediator is refused (`authorization.sender.mismatch`, 403) when its `from`
+  differs from the DID of its verified signer or authcrypt sender, when those
+  two differ, or when it carries a `from` that nothing authenticated.
+- **Forwards are attributed to the authenticated sender.** The forward sender
+  whose account, ACL and the next hop's access list are checked is the DID
+  that signed or authcrypted the forward, never a bare `from`; an anonymous
+  forward takes the anonymous path. The re-wrap relay's trusted-peer check
+  uses the same authenticated DID.
+- Built on `affinidi-messaging-didcomm` 0.15.9 and `affinidi-messaging-sdk`
+  0.27.2.
+
 ## Unreleased (0.29.4) — a browser the mediator admits can read its health routes
 
 `/readyz`, `/livez`, `/healthchecker` and `/admin/status` were added to the

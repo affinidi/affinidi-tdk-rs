@@ -35,7 +35,7 @@
  *         &env.envelope,
  *         env.recipient_kid.as_deref(),
  *         env.recipient_private.as_ref(),
- *         env.sender_public.as_ref(),
+ *         env.sender_key(),
  *         env.signer_public.as_ref(),
  *     )
  *     .expect("seed corpus envelope should unpack");
@@ -44,10 +44,10 @@
  */
 
 use affinidi_crypto::CryptoError;
-use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_didcomm::message::pack::{
     pack_encrypted_anoncrypt, pack_encrypted_authcrypt, pack_signed,
 };
+use affinidi_messaging_didcomm::{Message, SenderKey};
 
 // Re-exported so callers can name the curve / key types without depending on
 // affinidi-crypto directly.
@@ -90,7 +90,8 @@ impl FixtureKey {
 ///
 /// The field shape mirrors `unpack`'s argument list one-to-one so a harness can
 /// forward them directly. Which fields are populated depends on the envelope:
-/// authcrypt fills recipient + `sender_public`; anoncrypt fills recipient only;
+/// authcrypt fills recipient + `sender_kid`/`sender_public`; anoncrypt fills
+/// recipient only;
 /// a signed envelope fills `signer_public` only; plaintext fills none.
 pub struct PackedEnvelope {
     /// The serialized JWE / JWS / plaintext envelope — the fuzzer's seed input.
@@ -99,10 +100,22 @@ pub struct PackedEnvelope {
     pub recipient_kid: Option<String>,
     /// Recipient private key, for encrypted envelopes.
     pub recipient_private: Option<PrivateKeyAgreement>,
+    /// Sender key id (the JWE `skid`), for authcrypt (ECDH-1PU) envelopes.
+    pub sender_kid: Option<String>,
     /// Sender public key, for authcrypt (ECDH-1PU) envelopes.
     pub sender_public: Option<PublicKeyAgreement>,
     /// Signer Ed25519 public key, for signed (JWS) envelopes.
     pub signer_public: Option<[u8; 32]>,
+}
+
+impl PackedEnvelope {
+    /// The authcrypt sender key in the form `unpack`/`decrypt` take it.
+    pub fn sender_key(&self) -> Option<SenderKey<'_>> {
+        match (&self.sender_kid, &self.sender_public) {
+            (Some(kid), Some(public)) => Some(SenderKey::new(kid, public)),
+            _ => None,
+        }
+    }
 }
 
 /// Derive a deterministic key-agreement keypair from `seed` on `curve`.
@@ -151,6 +164,7 @@ pub fn authcrypt_envelope(seed: u64, msg: &Message) -> Result<PackedEnvelope, Di
         recipient_kid: Some(recipient.kid),
         recipient_private: Some(recipient.private),
         sender_public: Some(sender.public()),
+        sender_kid: Some(sender.kid),
         signer_public: None,
     })
 }
@@ -167,6 +181,7 @@ pub fn anoncrypt_envelope(seed: u64, msg: &Message) -> Result<PackedEnvelope, Di
         envelope,
         recipient_kid: Some(recipient.kid),
         recipient_private: Some(recipient.private),
+        sender_kid: None,
         sender_public: None,
         signer_public: None,
     })
@@ -184,6 +199,7 @@ pub fn signed_envelope(seed: u64, msg: &Message) -> Result<PackedEnvelope, Didco
         envelope,
         recipient_kid: None,
         recipient_private: None,
+        sender_kid: None,
         sender_public: None,
         signer_public: Some(public),
     })
@@ -221,6 +237,7 @@ fn plaintext_envelope(msg: &Message) -> PackedEnvelope {
         envelope,
         recipient_kid: None,
         recipient_private: None,
+        sender_kid: None,
         sender_public: None,
         signer_public: None,
     }
@@ -292,7 +309,7 @@ mod tests {
             &env.envelope,
             env.recipient_kid.as_deref(),
             env.recipient_private.as_ref(),
-            env.sender_public.as_ref(),
+            env.sender_key(),
             env.signer_public.as_ref(),
         )
         .expect("envelope should unpack")

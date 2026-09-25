@@ -51,6 +51,53 @@ pub(crate) fn delivery_refused(
     )
 }
 
+/// The DID that authenticated a message the mediator unpacked, checked
+/// against the message's `from`.
+///
+/// A message is authenticated by a verified JWS signer (`sign_from`) or by its
+/// authcrypt sender (`encrypted_from_kid`), each a key id `did#fragment`. It is
+/// refused when those two name different DIDs, when `from` names a DID other
+/// than the authenticated one, or when `from` is set but nothing authenticated
+/// the message. Returns the authenticated DID, or `None` for an anonymous
+/// message without a `from`.
+#[cfg(feature = "didcomm")]
+pub(crate) fn authenticated_sender(
+    msg: &Message,
+    metadata: &UnpackMetadata,
+) -> Result<Option<String>, String> {
+    fn key_did(kid: &str) -> Result<&str, String> {
+        match kid.split_once('#') {
+            Some((did, fragment)) if !did.is_empty() && !fragment.is_empty() => Ok(did),
+            _ => Err(format!("sender key id {kid:?} is not a DID URL")),
+        }
+    }
+
+    let signer = metadata.sign_from.as_deref().map(key_did).transpose()?;
+    let encrypter = match metadata.encrypted_from_kid.as_deref() {
+        Some(kid) if metadata.authenticated => Some(key_did(kid)?),
+        _ => None,
+    };
+    let sender = match (signer, encrypter) {
+        (Some(signer), Some(encrypter)) if signer != encrypter => {
+            return Err(format!(
+                "signer ({signer}) and authcrypt sender ({encrypter}) are different DIDs"
+            ));
+        }
+        (signer, encrypter) => signer.or(encrypter),
+    };
+
+    match (msg.from.as_deref(), sender) {
+        (Some(from), Some(sender)) if from == sender => Ok(Some(sender.to_string())),
+        (Some(from), Some(sender)) => Err(format!(
+            "message `from` ({from}) does not match the authenticated sender ({sender})"
+        )),
+        (Some(from), None) => Err(format!(
+            "message `from` ({from}) is not backed by a signature or authcrypt"
+        )),
+        (None, sender) => Ok(sender.map(str::to_string)),
+    }
+}
+
 #[cfg(feature = "didcomm")]
 use self::protocols::ping;
 #[cfg(feature = "didcomm")]
@@ -518,5 +565,102 @@ mod delivery_refusal_tests {
             delivery_refused(&session(), Some("msg-1".to_string()), "any reason")
         );
         assert!(with_id.contains("msg-1"));
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "didcomm")]
+mod authenticated_sender_tests {
+    use super::{Message, UnpackMetadata, authenticated_sender};
+
+    fn message_from(from: Option<&str>) -> Message {
+        let mut builder = Message::build(
+            "m".to_string(),
+            "https://didcomm.org/routing/2.0/forward".to_string(),
+            serde_json::json!({}),
+        );
+        if let Some(from) = from {
+            builder = builder.from(from.to_string());
+        }
+        builder.finalize()
+    }
+
+    fn authcrypt_meta(kid: &str) -> UnpackMetadata {
+        let mut meta = UnpackMetadata::default();
+        meta.authenticated = true;
+        meta.encrypted_from_kid = Some(kid.to_string());
+        meta
+    }
+
+    #[test]
+    fn from_matching_the_authcrypt_sender_is_the_sender() {
+        let sender = authenticated_sender(
+            &message_from(Some("did:example:alice")),
+            &authcrypt_meta("did:example:alice#key-1"),
+        );
+        assert_eq!(sender.unwrap().as_deref(), Some("did:example:alice"));
+    }
+
+    /// Mallory authenticates as herself but names Alice — whom the next hop's
+    /// access list admits — in `from`. Refused, so the forward is never
+    /// attributed to Alice.
+    #[test]
+    fn from_naming_another_did_is_refused() {
+        assert!(
+            authenticated_sender(
+                &message_from(Some("did:example:alice")),
+                &authcrypt_meta("did:example:mallory#key-1"),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn from_on_an_anonymous_message_is_refused() {
+        assert!(
+            authenticated_sender(
+                &message_from(Some("did:example:alice")),
+                &UnpackMetadata::default()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn anonymous_message_without_from_has_no_sender() {
+        assert_eq!(
+            authenticated_sender(&message_from(None), &UnpackMetadata::default()).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn signer_and_authcrypt_sender_must_agree() {
+        let mut meta = authcrypt_meta("did:example:mallory#key-1");
+        meta.sign_from = Some("did:example:alice#key-2".to_string());
+        assert!(authenticated_sender(&message_from(Some("did:example:alice")), &meta).is_err());
+    }
+
+    #[test]
+    fn signer_alone_is_the_sender() {
+        let mut meta = UnpackMetadata::default();
+        meta.sign_from = Some("did:example:alice#key-2".to_string());
+        assert_eq!(
+            authenticated_sender(&message_from(Some("did:example:alice")), &meta)
+                .unwrap()
+                .as_deref(),
+            Some("did:example:alice")
+        );
+    }
+
+    #[test]
+    fn sender_key_id_without_fragment_is_refused() {
+        assert!(
+            authenticated_sender(
+                &message_from(Some("did:example:alice")),
+                &authcrypt_meta("did:example:alice"),
+            )
+            .is_err()
+        );
     }
 }

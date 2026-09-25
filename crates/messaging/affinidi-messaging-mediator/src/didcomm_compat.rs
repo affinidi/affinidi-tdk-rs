@@ -19,7 +19,10 @@ use affinidi_did_common::{
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_didcomm::{
-    jwe::decrypt::decrypt,
+    jwe::{
+        decrypt::{SenderKey, decrypt},
+        envelope::ProtectedHeader,
+    },
     jws::verify::{VerifiedJws, verify_ed25519, verify_p256, verify_secp256k1},
     message::{
         Message,
@@ -49,8 +52,6 @@ pub struct MetaEnvelope {
     pub metadata: EnvelopeMetadata,
     /// Pre-parsed JSON value (shared with unpack to avoid re-parsing)
     parsed: serde_json::Value,
-    /// Pre-resolved sender DID (if authcrypt detected)
-    sender_did: Option<String>,
     /// The sender's specific key id (full `skid`) for ECDH-1PU key resolution
     sender_kid: Option<String>,
 }
@@ -77,7 +78,6 @@ impl MetaEnvelope {
             // JWE envelope
             let mut to_did = None;
             let mut from_did = None;
-            let mut sender_did = None;
             let mut sender_kid: Option<String> = None;
             let mut authenticated = false;
 
@@ -95,7 +95,9 @@ impl MetaEnvelope {
                 }
             }
 
-            // Decode protected header once and extract sender info
+            // An authcrypt envelope names its sender by `skid`, which must be
+            // bound to the `apu` the key derivation uses; one naming two
+            // senders, or none, is refused here rather than routed on.
             if let Some(protected_b64) = value.get("protected").and_then(|p| p.as_str())
                 && let Ok(protected_bytes) = BASE64_URL_SAFE_NO_PAD.decode(protected_b64)
                 && let Ok(header) = serde_json::from_slice::<serde_json::Value>(&protected_bytes)
@@ -103,30 +105,9 @@ impl MetaEnvelope {
                 && alg.contains("1PU")
             {
                 authenticated = true;
-                // Extract sender DID from skid
-                if let Some(skid) = header.get("skid").and_then(|s| s.as_str()) {
-                    let did = if let Some(hash_pos) = skid.find('#') {
-                        skid[..hash_pos].to_string()
-                    } else {
-                        skid.to_string()
-                    };
-                    from_did = Some(did.clone());
-                    sender_did = Some(did);
-                    sender_kid = Some(skid.to_string());
-                }
-
-                // Fallback: try apu header for sender DID
-                if from_did.is_none()
-                    && let Some(apu) = header.get("apu").and_then(|a| a.as_str())
-                    && let Ok(apu_bytes) = BASE64_URL_SAFE_NO_PAD.decode(apu)
-                    && let Ok(apu_str) = String::from_utf8(apu_bytes)
-                    && let Some(hash_pos) = apu_str.find('#')
-                {
-                    let did = apu_str[..hash_pos].to_string();
-                    from_did = Some(did.clone());
-                    sender_did = Some(did);
-                    sender_kid = Some(apu_str.clone());
-                }
+                let skid = authcrypt_skid(protected_b64)?;
+                from_did = Some(did_part(&skid));
+                sender_kid = Some(skid);
             }
 
             Ok(MetaEnvelope {
@@ -139,7 +120,6 @@ impl MetaEnvelope {
                     authenticated,
                 },
                 parsed: value,
-                sender_did,
                 sender_kid,
             })
         } else if value.get("payload").is_some() && value.get("signatures").is_some() {
@@ -154,7 +134,6 @@ impl MetaEnvelope {
                     authenticated: false,
                 },
                 parsed: value,
-                sender_did: None,
                 sender_kid: None,
             })
         } else if value.get("type").is_some() {
@@ -180,7 +159,6 @@ impl MetaEnvelope {
                     authenticated: false,
                 },
                 parsed: value,
-                sender_did: None,
                 sender_kid: None,
             })
         } else {
@@ -245,29 +223,21 @@ impl MetaEnvelope {
         let recipient_private =
             recipient_private.ok_or("No local secret matches any JWE recipient")?;
 
-        // Resolve the sender's *specific* key-agreement key named by the JWE
-        // `skid`, not merely the sender's first advertised key. A sender that
-        // advertises e.g. secp256k1 before P-256 would otherwise pair the wrong
-        // curve here and fail ECDH-1PU with "curve mismatch between private and
-        // public keys" even though the authcrypt itself used P-256.
-        let sender_public = if let Some(skid) = &self.sender_kid {
-            resolve_did_key_agreement_by_skid(skid, did_resolver).await
-        } else if let Some(sender_did) = &self.sender_did {
-            resolve_did_key_agreement(sender_did, did_resolver).await
-        } else {
-            None
+        // The sender key is resolved for exactly the `skid` the header binds,
+        // and `decrypt` is told which key id it belongs to, so the key used and
+        // the sender reported are the same.
+        let sender_public = match &self.sender_kid {
+            Some(skid) => resolve_did_key_agreement_by_skid(skid, did_resolver).await,
+            None => None,
         };
+        let sender = self
+            .sender_kid
+            .as_deref()
+            .zip(sender_public.as_ref())
+            .map(|(kid, public)| SenderKey::new(kid, public));
 
-        // The decrypt() function will re-parse the JWE string internally.
-        // This is unavoidable since decrypt() takes &str, not a pre-parsed struct.
-        // However, we've eliminated the extra parse that was in try_resolve_sender_public().
-        let decrypted = decrypt(
-            &self.raw,
-            &recipient_kid_str,
-            &recipient_private,
-            sender_public.as_ref(),
-        )
-        .map_err(|e| format!("Couldn't decrypt message: {e}"))?;
+        let decrypted = decrypt(&self.raw, &recipient_kid_str, &recipient_private, sender)
+            .map_err(|e| format!("Couldn't decrypt message: {e}"))?;
 
         // Seed metadata from the OUTER JWE layer. `authenticated`/`sign_from`
         // may be promoted below if the decrypted plaintext is itself a signed
@@ -443,19 +413,17 @@ async fn recurse_decrypted_plaintext(
         // key-agreement key (from skid/apu) so ECDH-1PU authcrypt is recovered.
         let inner_str = std::str::from_utf8(plaintext)
             .map_err(|e| format!("Inner JWE is not valid UTF-8: {e}"))?;
-        let inner_sender_kid = inner_jwe_sender_kid(&value);
-        let inner_sender_public = if let Some(skid) = &inner_sender_kid {
-            resolve_did_key_agreement_by_skid(skid, did_resolver).await
-        } else {
-            None
+        let inner_sender_kid = inner_jwe_sender_kid(&value)?;
+        let inner_sender_public = match &inner_sender_kid {
+            Some(skid) => resolve_did_key_agreement_by_skid(skid, did_resolver).await,
+            None => None,
         };
-        let inner = decrypt(
-            inner_str,
-            recipient_kid,
-            recipient_private,
-            inner_sender_public.as_ref(),
-        )
-        .map_err(|e| format!("Couldn't decrypt nested JWE: {e}"))?;
+        let inner_sender = inner_sender_kid
+            .as_deref()
+            .zip(inner_sender_public.as_ref())
+            .map(|(kid, public)| SenderKey::new(kid, public));
+        let inner = decrypt(inner_str, recipient_kid, recipient_private, inner_sender)
+            .map_err(|e| format!("Couldn't decrypt nested JWE: {e}"))?;
 
         layers.push(CryptoLayer::Encrypted(if inner.authenticated {
             EncLayerKind::Authcrypt
@@ -619,31 +587,38 @@ async fn verify_inner_jws(
     }
 }
 
-/// Extract the inner JWE's sender DID from its protected header (`skid`, or
-/// `apu` fallback), mirroring the outer-layer logic in `MetaEnvelope::new`.
+/// The inner JWE's sender DID, from its bound `skid`.
 #[cfg(test)]
-fn inner_jwe_sender_did(jwe: &serde_json::Value) -> Option<String> {
-    inner_jwe_sender_kid(jwe).map(|kid| did_part(&kid))
+fn inner_jwe_sender_did(jwe: &serde_json::Value) -> Result<Option<String>, String> {
+    Ok(inner_jwe_sender_kid(jwe)?.map(|kid| did_part(&kid)))
 }
 
-/// Extract the inner JWE's sender key id (full `skid`, with `#fragment`, or the
-/// `apu` fallback). Used to resolve the exact sender key-agreement key.
-fn inner_jwe_sender_kid(jwe: &serde_json::Value) -> Option<String> {
-    let protected_b64 = jwe.get("protected").and_then(|p| p.as_str())?;
-    let bytes = BASE64_URL_SAFE_NO_PAD.decode(protected_b64).ok()?;
-    let header: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+/// The inner JWE's sender key id: its `skid` for authcrypt, once bound to its
+/// `apu`; `None` for anoncrypt.
+fn inner_jwe_sender_kid(jwe: &serde_json::Value) -> Result<Option<String>, String> {
+    let protected_b64 = jwe
+        .get("protected")
+        .and_then(|p| p.as_str())
+        .ok_or("Nested JWE has no protected header")?;
+    let header =
+        ProtectedHeader::from_base64url(protected_b64).map_err(|e| format!("Nested JWE: {e}"))?;
+    header
+        .authcrypt_sender_kid()
+        .map(|skid| skid.map(str::to_string))
+        .map_err(|e| format!("Nested JWE: {e}"))
+}
 
-    if let Some(skid) = header.get("skid").and_then(|s| s.as_str()) {
-        return Some(skid.to_string());
-    }
-    if let Some(apu) = header.get("apu").and_then(|a| a.as_str())
-        && let Ok(apu_bytes) = BASE64_URL_SAFE_NO_PAD.decode(apu)
-        && let Ok(apu_str) = String::from_utf8(apu_bytes)
-        && apu_str.contains('#')
-    {
-        return Some(apu_str);
-    }
-    None
+/// The `skid` of an authcrypt protected header, once checked against its
+/// `apu`. Any other authcrypt `alg` is refused.
+fn authcrypt_skid(protected_b64: &str) -> Result<String, String> {
+    ProtectedHeader::from_base64url(protected_b64)
+        .and_then(|header| {
+            header
+                .authcrypt_sender_kid()
+                .map(|skid| skid.map(str::to_string))
+        })
+        .map_err(|e| format!("Rejected authcrypt envelope: {e}"))?
+        .ok_or_else(|| "Rejected authcrypt envelope: unsupported authcrypt alg".to_string())
 }
 
 /// Strip the `#fragment` from a DID URL, yielding the bare DID.
@@ -835,56 +810,39 @@ async fn resolve_did_secp256k1_verification(
     .await
 }
 
-/// Resolve a DID's first key agreement public key.
-async fn resolve_did_key_agreement(
-    did: &str,
-    did_resolver: &DIDCacheClient,
-) -> Option<PublicKeyAgreement> {
-    let doc = did_resolver.resolve(did).await.ok()?;
-    let ka_kids = doc.doc.find_key_agreement(None);
-    let kid = ka_kids.first()?;
-    resolve_public_key(&doc.doc, kid)
-}
-
 /// Resolve the sender's key-agreement public key named by `skid` (a full DID
-/// URL with `#fragment`). This honors the exact key the sender used for
-/// ECDH-1PU instead of assuming the sender's first advertised key-agreement
-/// key, which breaks when the sender lists keys on multiple curves (e.g.
-/// secp256k1 before P-256). Falls back to the first key-agreement key only
-/// when the exact key can't be resolved.
+/// URL with `#fragment`). Only a key listed in the sender's `keyAgreement` is
+/// accepted, and there is no fallback to another key: the key returned is the
+/// one `skid` names, or none.
 async fn resolve_did_key_agreement_by_skid(
     skid: &str,
     did_resolver: &DIDCacheClient,
 ) -> Option<PublicKeyAgreement> {
-    let doc = did_resolver.resolve(&did_part(skid)).await.ok()?;
-    if let Some(pk) = resolve_public_key(&doc.doc, skid) {
-        return Some(pk);
+    let (did, fragment) = skid.split_once('#')?;
+    if did.is_empty() || fragment.is_empty() {
+        return None;
     }
-    tracing::warn!(
-        "JWE skid {skid} not found in the sender's DID document; falling back to the \
-         first key-agreement key (its curve may not match the authcrypt)"
-    );
-    let kid = doc.doc.find_key_agreement(None).first().copied()?;
-    resolve_public_key(&doc.doc, kid)
+    let doc = did_resolver.resolve(did).await.ok()?;
+    resolve_public_key(&doc.doc, skid)
 }
 
-/// Resolve a public key from a DID document verification method.
+/// The public key of the `keyAgreement` entry `kid` names, embedded or by
+/// reference, absolute or as a `#fragment` relative to the document.
 fn resolve_public_key(
     doc: &affinidi_did_common::Document,
     kid: &str,
 ) -> Option<PublicKeyAgreement> {
-    let vm = doc
-        .key_agreement
-        .iter()
-        .filter_map(|ka| match ka {
-            VerificationRelationship::VerificationMethod(vm) if vm.id.as_str() == kid => {
-                Some(vm.as_ref())
-            }
-            _ => None,
-        })
-        .next()
-        .or_else(|| doc.get_verification_method(kid))?;
-
+    let relative = kid.find('#').map(|pos| &kid[pos..]);
+    let names_kid = |id: &str| id == kid || Some(id) == relative;
+    let vm = doc.key_agreement.iter().find_map(|ka| match ka {
+        VerificationRelationship::VerificationMethod(vm) if names_kid(vm.id.as_str()) => {
+            Some(vm.as_ref())
+        }
+        VerificationRelationship::Reference(id) if names_kid(id) => doc
+            .get_verification_method(kid)
+            .or_else(|| relative.and_then(|relative| doc.get_verification_method(relative))),
+        _ => None,
+    })?;
     if let Some(jwk_value) = vm.property_set.get("publicKeyJwk") {
         return PublicKeyAgreement::from_jwk(jwk_value).ok();
     }
@@ -1163,33 +1121,85 @@ mod tests {
         assert_eq!(extract_jws_alg(&jws), None);
     }
 
+    fn jwe_header(alg: &str, skid: Option<&str>, apu: Option<&str>) -> serde_json::Value {
+        let mut header = json!({
+            "alg": alg,
+            "enc": "A256CBC-HS512",
+            "apv": "YXB2",
+            "epk": {"kty": "OKP", "crv": "X25519", "x": "AA"},
+        });
+        if let Some(skid) = skid {
+            header["skid"] = json!(skid);
+        }
+        if let Some(apu) = apu {
+            header["apu"] = json!(BASE64_URL_SAFE_NO_PAD.encode(apu));
+        }
+        json!({"protected": protected_b64(&header), "ciphertext": "x", "recipients": []})
+    }
+
     #[test]
-    fn inner_jwe_sender_did_from_skid() {
-        let protected =
-            protected_b64(&json!({"alg": "ECDH-1PU+A256KW", "skid": "did:example:bob#key-x25519"}));
-        let jwe = json!({"protected": protected, "ciphertext": "x", "recipients": []});
+    fn inner_jwe_sender_did_from_bound_skid() {
+        let kid = "did:example:bob#key-x25519";
+        let jwe = jwe_header("ECDH-1PU+A256KW", Some(kid), Some(kid));
         assert_eq!(
-            inner_jwe_sender_did(&jwe).as_deref(),
+            inner_jwe_sender_did(&jwe).unwrap().as_deref(),
             Some("did:example:bob")
         );
     }
 
     #[test]
-    fn inner_jwe_sender_did_from_apu_fallback() {
-        let apu = BASE64_URL_SAFE_NO_PAD.encode("did:example:carol#key-1");
-        let protected = protected_b64(&json!({"alg": "ECDH-1PU+A256KW", "apu": apu}));
-        let jwe = json!({"protected": protected});
-        assert_eq!(
-            inner_jwe_sender_did(&jwe).as_deref(),
-            Some("did:example:carol")
+    fn inner_jwe_without_skid_is_rejected() {
+        let jwe = jwe_header("ECDH-1PU+A256KW", None, Some("did:example:carol#key-1"));
+        assert!(inner_jwe_sender_did(&jwe).is_err());
+    }
+
+    #[test]
+    fn inner_jwe_without_apu_is_rejected() {
+        let jwe = jwe_header("ECDH-1PU+A256KW", Some("did:example:carol#key-1"), None);
+        assert!(inner_jwe_sender_did(&jwe).is_err());
+    }
+
+    #[test]
+    fn inner_jwe_with_skid_and_apu_naming_different_senders_is_rejected() {
+        let jwe = jwe_header(
+            "ECDH-1PU+A256KW",
+            Some("did:example:mallory#key-1"),
+            Some("did:example:alice#key-1"),
         );
+        assert!(inner_jwe_sender_did(&jwe).is_err());
     }
 
     #[test]
     fn inner_jwe_sender_did_none_for_anoncrypt() {
-        let protected = protected_b64(&json!({"alg": "ECDH-ES+A256KW"}));
-        let jwe = json!({"protected": protected});
-        assert_eq!(inner_jwe_sender_did(&jwe), None);
+        let jwe = jwe_header("ECDH-ES+A256KW", None, None);
+        assert_eq!(inner_jwe_sender_did(&jwe).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn envelope_with_skid_and_apu_naming_different_senders_is_rejected() {
+        let jwe = jwe_header(
+            "ECDH-1PU+A256KW",
+            Some("did:example:mallory#key-1"),
+            Some("did:example:alice#key-1"),
+        );
+        let resolver = example_resolver(&[]).await;
+        assert!(
+            MetaEnvelope::new(&jwe.to_string(), &resolver)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn envelope_reports_the_bound_skid_as_sender() {
+        let kid = "did:example:alice#key-1";
+        let jwe = jwe_header("ECDH-1PU+A256KW", Some(kid), Some(kid));
+        let resolver = example_resolver(&[]).await;
+        let envelope = MetaEnvelope::new(&jwe.to_string(), &resolver)
+            .await
+            .unwrap();
+        assert_eq!(envelope.from_did.as_deref(), Some("did:example:alice"));
+        assert!(envelope.metadata.authenticated);
     }
 
     // ---------------------------------------------------------------------
@@ -1650,6 +1660,120 @@ mod tests {
 
         assert_eq!(out.from.as_deref(), Some(sender));
         assert!(meta.authenticated, "both layers were authcrypt");
+    }
+
+    /// An authcrypt JWE whose `skid` and `apu` are written independently, with
+    /// the key derivation run over `apu` as the header claims.
+    fn authcrypt_with_party_info(
+        plaintext: &[u8],
+        skid: &str,
+        apu: &str,
+        sender_private: &PrivateKeyAgreement,
+        recipient_kid: &str,
+        recipient_public: &PublicKeyAgreement,
+    ) -> String {
+        use affinidi_crypto::jose::{
+            aes_kw, content_encryption, ecdh, key_agreement::EphemeralKeyPair,
+        };
+
+        let ephemeral = EphemeralKeyPair::generate(recipient_public.curve());
+        let apv = b"apv";
+        let protected = protected_b64(&json!({
+            "typ": "application/didcomm-encrypted+json",
+            "alg": "ECDH-1PU+A256KW",
+            "enc": "A256CBC-HS512",
+            "skid": skid,
+            "apu": BASE64_URL_SAFE_NO_PAD.encode(apu),
+            "apv": BASE64_URL_SAFE_NO_PAD.encode(apv),
+            "epk": ephemeral.public.to_jwk(),
+        }));
+        let cek = content_encryption::generate_cek();
+        let iv = content_encryption::generate_iv();
+        let (ciphertext, tag) =
+            content_encryption::encrypt(plaintext, &cek, &iv, protected.as_bytes()).unwrap();
+        let kek = ecdh::derive_sender_key_1pu(
+            &ephemeral,
+            sender_private,
+            recipient_public,
+            apu.as_bytes(),
+            apv,
+            &tag,
+        )
+        .unwrap();
+        json!({
+            "protected": protected,
+            "recipients": [{
+                "header": { "kid": recipient_kid },
+                "encrypted_key": BASE64_URL_SAFE_NO_PAD.encode(aes_kw::wrap(&kek, &cek).unwrap()),
+            }],
+            "iv": BASE64_URL_SAFE_NO_PAD.encode(iv),
+            "ciphertext": BASE64_URL_SAFE_NO_PAD.encode(ciphertext),
+            "tag": BASE64_URL_SAFE_NO_PAD.encode(tag),
+        })
+        .to_string()
+    }
+
+    /// Mallory authcrypts with her own key but writes Alice into `apu` and
+    /// `from`. Refused both as the outer envelope and nested inside an
+    /// anoncrypt layer; Alice is never reported as the sender.
+    #[tokio::test]
+    async fn authcrypt_with_apu_naming_another_did_is_rejected() {
+        use affinidi_messaging_didcomm::jwe::encrypt::anoncrypt;
+
+        let mediator = "did:example:medforge";
+        let med_kid = format!("{mediator}#key-x25519");
+        let med = Secret::generate_x25519(Some(&med_kid), None).unwrap();
+        let mallory = "did:example:mallory";
+        let mal_kid = format!("{mallory}#key-x25519");
+        let mal = Secret::generate_x25519(Some(&mal_kid), None).unwrap();
+        let alice = "did:example:alice";
+        let alice_kid = format!("{alice}#key-x25519");
+        let ali = Secret::generate_x25519(Some(&alice_kid), None).unwrap();
+
+        let resolver = example_resolver(&[
+            json!({
+                "id": mediator,
+                "verificationMethod": [ka_vm(&med_kid, mediator, &med)],
+                "keyAgreement": [med_kid.clone()],
+            }),
+            json!({
+                "id": mallory,
+                "verificationMethod": [ka_vm(&mal_kid, mallory, &mal)],
+                "keyAgreement": [mal_kid.clone()],
+            }),
+            json!({
+                "id": alice,
+                "verificationMethod": [ka_vm(&alice_kid, alice, &ali)],
+                "keyAgreement": [alice_kid.clone()],
+            }),
+        ])
+        .await;
+        let med_pub = resolve_did_key_agreement_by_skid(&med_kid, &resolver)
+            .await
+            .expect("mediator key agreement key");
+        let mal_priv =
+            PrivateKeyAgreement::from_raw_bytes(Curve::X25519, mal.get_private_bytes()).unwrap();
+        let mediator_secrets = SimpleSecretsResolver::new(&[med]).await;
+
+        let msg = serde_json::to_string(&status_message(alice, mediator, "forged")).unwrap();
+        let forged = authcrypt_with_party_info(
+            msg.as_bytes(),
+            &mal_kid,
+            &alice_kid,
+            &mal_priv,
+            &med_kid,
+            &med_pub,
+        );
+
+        assert!(MetaEnvelope::new(&forged, &resolver).await.is_err());
+
+        let wrapped = anoncrypt(forged.as_bytes(), &[(&med_kid, &med_pub)]).unwrap();
+        let envelope = MetaEnvelope::new(&wrapped, &resolver).await.unwrap();
+        let err = envelope
+            .unpack(&resolver, &mediator_secrets)
+            .await
+            .unwrap_err();
+        assert!(err.contains("apu"), "unexpected error: {err}");
     }
 
     // ---------------------------------------------------------------------

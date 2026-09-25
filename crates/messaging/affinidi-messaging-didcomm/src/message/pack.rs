@@ -70,6 +70,7 @@ pub fn pack_plaintext(msg: &Message) -> Result<String, DIDCommError> {
 }
 
 /// Unpack an encrypted message (convenience re-export of decrypt).
+pub use decrypt::SenderKey;
 pub use decrypt::decrypt as unpack_encrypted;
 
 #[cfg(test)]
@@ -101,7 +102,10 @@ mod tests {
             &packed,
             "did:example:bob#key-1",
             &recipient,
-            Some(&sender.public_key()),
+            Some(SenderKey::new(
+                "did:example:alice#key-1",
+                &sender.public_key(),
+            )),
         )
         .unwrap();
 
@@ -242,7 +246,10 @@ mod tests {
             &packed,
             "did:example:bob#p256",
             &recipient,
-            Some(&sender.public_key()),
+            Some(SenderKey::new(
+                "did:example:alice#p256",
+                &sender.public_key(),
+            )),
         )
         .unwrap();
 
@@ -275,7 +282,10 @@ mod tests {
             &packed,
             "did:example:bob#k256",
             &recipient,
-            Some(&sender.public_key()),
+            Some(SenderKey::new(
+                "did:example:alice#k256",
+                &sender.public_key(),
+            )),
         )
         .unwrap();
 
@@ -359,7 +369,10 @@ mod tests {
             &packed,
             "did:example:bob#ka-1",
             &recipient_ka,
-            Some(&sender_ka.public_key()),
+            Some(SenderKey::new(
+                "did:example:alice#ka-1",
+                &sender_ka.public_key(),
+            )),
         )
         .unwrap();
         assert!(decrypted.authenticated);

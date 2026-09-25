@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.15.9] - Unreleased
+
+### Changed (breaking)
+
+- **Authcrypt decryption binds the sender key id to the key used.** An
+  ECDH-1PU JWE is now accepted only when its protected header carries both
+  `skid` and `apu`, `skid` is a DID URL with a `#fragment`, and `apu` decodes
+  to exactly the bytes of `skid`. The caller passes the sender key together
+  with the key id it was resolved for, and `decrypt` refuses the message
+  unless that key id is the `skid`. `DecryptedJwe::sender_kid` (and
+  `UnpackResult::Encrypted::sender_kid`) is that `skid`. Previously the sender
+  key id was reported from `apu` while callers resolved the key from `skid`,
+  and nothing required the two to agree. Anoncrypt (ECDH-ES) is unchanged.
+- `jwe::decrypt::decrypt` and `message::unpack::unpack` take
+  `sender: Option<SenderKey<'_>>` in place of
+  `sender_public: Option<&PublicKeyAgreement>`. Build it with
+  `SenderKey::new(kid, &public)`. New `jwe::decrypt::authcrypt_sender_kid`
+  returns the key id to resolve (the checked `skid`, `None` for anoncrypt),
+  and `ProtectedHeader::authcrypt_sender_kid` does the same for a parsed
+  header. `SenderKey` is re-exported at the crate root and from
+  `message::pack`. Callers that pass `None` compile unchanged.
+- `DIDCommAgent::unpack` passes the expected peer's key agreement key id with
+  its key, so an authcrypt JWE from any other key id is refused.
+- The pre-0.14 ECDH-1PU KEK fallback (issue #322) is removed: a JWE from a
+  sender still deriving the unprefixed-tag KEK no longer decrypts.
+  `DecryptedJwe::legacy_kek_used` and `UnpackResult::Encrypted::legacy_kek_used`
+  are removed.
+- `DecryptedJwe` is `#[non_exhaustive]`.
+- New `DIDCommError::SenderKeyBinding` for the refusals above.
+
+Released as a patch within 0.15 per ADR 0003 point 3 (`vta-sdk` pins
+`affinidi-messaging-didcomm = "0.15"`); callers that pass a sender key must
+move to `SenderKey`.
+
 ## [0.15.8] - 2026-08-04
 
 > Renumbered from the `0.15.6`/`0.15.7` this work originally carried: those

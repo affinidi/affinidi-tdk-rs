@@ -5,7 +5,8 @@
 #![no_main]
 
 use affinidi_messaging_didcomm::message::unpack::unpack;
-use affinidi_messaging_didcomm_fuzz::{recipient, sender_public, signer, RECIPIENT_KID};
+use affinidi_messaging_didcomm::SenderKey;
+use affinidi_messaging_didcomm_fuzz::{recipient, sender_public, signer, RECIPIENT_KID, SENDER_KID};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -20,7 +21,7 @@ fuzz_target!(|data: &[u8]| {
         input,
         Some(RECIPIENT_KID),
         Some(recipient()),
-        Some(sender_public()),
+        Some(SenderKey::new(SENDER_KID, sender_public())),
         Some(&signer_pub),
     );
 });

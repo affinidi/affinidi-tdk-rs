@@ -1,8 +1,9 @@
 //! Message unpacking — detect format and dispatch to appropriate handler.
 
 use crate::error::DIDCommError;
+use crate::jwe::decrypt::SenderKey;
 use crate::message::Message;
-use affinidi_crypto::jose::key_agreement::{PrivateKeyAgreement, PublicKeyAgreement};
+use affinidi_crypto::jose::key_agreement::PrivateKeyAgreement;
 
 /// The result of unpacking a DIDComm message.
 ///
@@ -15,13 +16,10 @@ pub enum UnpackResult {
         message: Message,
         /// Sender was cryptographically bound via authcrypt (ECDH-1PU).
         authenticated: bool,
-        /// Authcrypt sender KID (from the JWE `apu`/`skid`).
+        /// Authcrypt sender KID: the JWE `skid`, which the supplied sender key
+        /// was checked against. `None` for anoncrypt.
         sender_kid: Option<String>,
         recipient_kid: String,
-        /// `true` if decryption only succeeded under the legacy
-        /// (pre-0.14, issue #322) ECDH-1PU KEK — i.e. an unpatched
-        /// sender. A migration signal; see [`crate::jwe`].
-        legacy_kek_used: bool,
         /// `true` if the encrypted payload was itself a signed JWS
         /// (DIDComm v2.1 sign-then-encrypt) that was verified — i.e. the
         /// message carries non-repudiation, not just authentication.
@@ -46,7 +44,8 @@ pub enum UnpackResult {
 /// - Has "type" → plaintext DIDComm message
 ///
 /// For encrypted messages, both `recipient_kid`/`recipient_private` are required.
-/// For authcrypt, `sender_public` is also required.
+/// For authcrypt, `sender` is also required and must be the key named by the
+/// JWE `skid` (see [`crate::jwe::decrypt::authcrypt_sender_kid`]).
 /// For signed messages, `signer_public` is required.
 ///
 /// If a decrypted JWE turns out to wrap a JWS (DIDComm v2.1
@@ -57,7 +56,7 @@ pub fn unpack(
     input: &str,
     recipient_kid: Option<&str>,
     recipient_private: Option<&PrivateKeyAgreement>,
-    sender_public: Option<&PublicKeyAgreement>,
+    sender: Option<SenderKey<'_>>,
     signer_public: Option<&[u8; 32]>,
 ) -> Result<UnpackResult, DIDCommError> {
     let value: serde_json::Value = serde_json::from_str(input)
@@ -71,7 +70,7 @@ pub fn unpack(
             DIDCommError::InvalidMessage("recipient_private required for JWE".into())
         })?;
 
-        let decrypted = crate::jwe::decrypt::decrypt(input, kid, private, sender_public)?;
+        let decrypted = crate::jwe::decrypt::decrypt(input, kid, private, sender)?;
 
         // DIDComm v2.1 sign-then-encrypt (non-repudiation): the decrypted
         // payload is itself a JWS, not a bare Message. Detect that and
@@ -102,7 +101,6 @@ pub fn unpack(
                 authenticated: decrypted.authenticated,
                 sender_kid: decrypted.sender_kid,
                 recipient_kid: decrypted.recipient_kid,
-                legacy_kek_used: decrypted.legacy_kek_used,
                 non_repudiation: true,
                 signer_kid: verified.signer_kid,
             });
@@ -115,7 +113,6 @@ pub fn unpack(
             authenticated: decrypted.authenticated,
             sender_kid: decrypted.sender_kid,
             recipient_kid: decrypted.recipient_kid,
-            legacy_kek_used: decrypted.legacy_kek_used,
             non_repudiation: false,
             signer_kid: None,
         })
@@ -167,7 +164,10 @@ mod tests {
             &packed,
             Some("did:example:bob#key-1"),
             Some(&recipient),
-            Some(&sender.public_key()),
+            Some(SenderKey::new(
+                "did:example:alice#key-1",
+                &sender.public_key(),
+            )),
             None,
         )
         .unwrap();
@@ -243,7 +243,10 @@ mod tests {
             &jwe,
             Some("did:example:bob#key-1"),
             Some(&recipient),
-            Some(&sender.public_key()),
+            Some(SenderKey::new(
+                "did:example:alice#key-1",
+                &sender.public_key(),
+            )),
             Some(&signer_pk),
         )
         .unwrap();
@@ -292,7 +295,10 @@ mod tests {
             &jwe,
             Some("did:example:bob#key-1"),
             Some(&recipient),
-            Some(&sender.public_key()),
+            Some(SenderKey::new(
+                "did:example:alice#key-1",
+                &sender.public_key(),
+            )),
             None,
         );
         assert!(result.is_err());
