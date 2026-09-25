@@ -564,16 +564,34 @@ async fn resolve_next_account(
     }
 }
 
-/// Resolve the account a forward is *from*: the message's `from` DID
-/// (auto-registering it with a minimal relay ACL on first contact), or — for
+/// Resolve the account a forward is *from*: the DID that signed or authcrypted
+/// it (auto-registering it with a minimal relay ACL on first contact), or — for
 /// an anonymous forward — a synthetic account carrying the global default ACL.
 /// Enforces the `SEND_FORWARDED` capability on the resolved sender.
+///
+/// The plaintext `from` is never used on its own: it is accepted only when it
+/// names that same authenticated DID.
 async fn resolve_forward_sender(
     state: &SharedData,
     session: &Session,
     msg: &Message,
+    metadata: &UnpackMetadata,
 ) -> Result<Account, MediatorError> {
-    if let Some(from) = &msg.from {
+    let sender = crate::messages::authenticated_sender(msg, metadata).map_err(|reason| {
+        MediatorError::problem_with_log(
+            96,
+            &session.session_id,
+            Some(msg.id.to_string()),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "authorization.sender.mismatch",
+            "Message sender is not the authenticated sender: {1}",
+            vec![reason.clone()],
+            StatusCode::FORBIDDEN,
+            format!("Message sender is not the authenticated sender: {reason}"),
+        )
+    })?;
+    if let Some(from) = &sender {
         let from_account = match state.database.account_get(&digest(from.as_str())).await {
             Ok(Some(from_account)) => from_account,
             Ok(None) => {
@@ -747,7 +765,7 @@ pub(crate) async fn process(
         // Determine who the from did is
         // If message is anonymous, then use the session DID
 
-        let from_account = resolve_forward_sender(state, session, msg).await?;
+        let from_account = resolve_forward_sender(state, session, msg, metadata).await?;
 
         // ****************************************************
 

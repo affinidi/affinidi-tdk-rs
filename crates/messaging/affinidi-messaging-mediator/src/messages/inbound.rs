@@ -1104,6 +1104,12 @@ async fn handle_inbound_didcomm(
                         ));
                     }
 
+                    // `from` must name the DID that authenticated the message;
+                    // the routing and ACL checks below rely on it.
+                    if let Err(reason) = crate::messages::authenticated_sender(&msg, &metadata) {
+                        return Err(sender_mismatch(session, &msg.id, &reason));
+                    }
+
                     // Does the sender identity match the session DID?
                     // The sender can be identified by JWS signing (sign_from) or
                     // authcrypt encryption (encrypted_from_kid).
@@ -1299,7 +1305,7 @@ async fn peel_relay_rewrap_layers(
         if envelope.to_did.as_deref() != Some(state.config.mediator_did.as_str()) {
             return Ok(current);
         }
-        let (msg, _meta) = match envelope
+        let (msg, meta) = match envelope
             .unpack(
                 &state.did_resolver,
                 &*state.config.security.mediator_secrets,
@@ -1313,10 +1319,13 @@ async fn peel_relay_rewrap_layers(
             return Ok(current);
         };
 
-        // Authenticate the relaying peer mediator before peeling its layer.
+        // Authenticate the relaying peer mediator before peeling its layer:
+        // the DID that signed or authcrypted the layer, never a bare `from`.
+        let peer = crate::messages::authenticated_sender(&msg, &meta)
+            .map_err(|reason| sender_mismatch(session, &msg.id, &reason))?;
         if !relay_peer_trusted(
             &state.config.processors.forwarding.relay_trusted_mediators,
-            msg.from.as_deref(),
+            peer.as_deref(),
         ) {
             return Err(MediatorError::problem(
                 60,
@@ -1352,6 +1361,23 @@ async fn peel_relay_rewrap_layers(
         );
         current = inner;
     }
+}
+
+/// Refusal for a message whose `from` is not the DID that authenticated it.
+#[cfg(feature = "didcomm")]
+fn sender_mismatch(session: &Session, msg_id: &str, reason: &str) -> MediatorError {
+    MediatorError::problem_with_log(
+        96,
+        &session.session_id,
+        Some(msg_id.to_string()),
+        ProblemReportSorter::Error,
+        ProblemReportScope::Protocol,
+        "authorization.sender.mismatch",
+        "Message sender is not the authenticated sender: {1}",
+        vec![reason.to_string()],
+        StatusCode::FORBIDDEN,
+        format!("Message sender is not the authenticated sender: {reason}"),
+    )
 }
 
 /// Ensure the Session DID and the message sender DID match.

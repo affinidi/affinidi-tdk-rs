@@ -644,8 +644,9 @@ fn authenticated_sender(message: &Message, meta: &UnpackMetadata) -> Option<Stri
         return None;
     }
     let kid = meta.encrypted_from_kid.as_deref()?;
-    // The DID that owns the authcrypt key (strip the `#key` fragment).
-    let key_did = kid.split_once('#').map(|(did, _)| did).unwrap_or(kid);
+    // The DID that owns the authcrypt key. A key id without a `#fragment`
+    // names no key, so it authenticates no one.
+    let (key_did, _) = kid.split_once('#')?;
     match message.from.as_deref() {
         Some(from) if from == key_did => Some(from.to_string()),
         _ => None,
@@ -854,6 +855,21 @@ mod tests {
             ..Default::default()
         };
         let inbound = to_inbound(message, &anon).unwrap();
+        assert_eq!(inbound.message.sender, None);
+        assert!(!inbound.message.verified);
+    }
+
+    #[test]
+    fn a_sender_kid_without_a_fragment_is_not_an_authenticated_sender() {
+        let message = msg_from("did:example:alice");
+        let meta = UnpackMetadata {
+            authenticated: true,
+            encrypted: true,
+            encrypted_from_kid: Some("did:example:alice".to_string()),
+            sha256_hash: "q".to_string(),
+            ..Default::default()
+        };
+        let inbound = to_inbound(message, &meta).unwrap();
         assert_eq!(inbound.message.sender, None);
         assert!(!inbound.message.verified);
     }

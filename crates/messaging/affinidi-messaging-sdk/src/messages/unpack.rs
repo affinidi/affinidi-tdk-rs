@@ -234,8 +234,9 @@ impl SharedState {
                 encrypted = true;
                 if kind == EncLayerKind::Authcrypt {
                     authenticated = true;
-                    // Innermost authcrypt is the authoritative sender key; only
-                    // set it once (the first authcrypt layer encountered).
+                    // The first (outermost) authcrypt layer sets the sender
+                    // key. No accepted wrapping has more than one authcrypt
+                    // layer, so a stack with another is refused by the policy.
                     if encrypted_from_kid.is_none() {
                         encrypted_from_kid = skid.clone();
                     }
@@ -304,7 +305,9 @@ impl SharedState {
         budget: &mut usize,
     ) -> Result<(String, EncLayerKind, Option<String>, String), ATMError> {
         use affinidi_crypto::jose::key_agreement::PrivateKeyAgreement;
-        use affinidi_messaging_didcomm::jwe::decrypt::decrypt;
+        use affinidi_messaging_didcomm::jwe::decrypt::{
+            SenderKey, authcrypt_sender_kid, decrypt_bound,
+        };
 
         // Extract recipient KIDs from the JWE
         let recipients = value["recipients"].as_array().ok_or_else(|| {
@@ -351,19 +354,32 @@ impl SharedState {
             )
         })?;
 
-        // Try to detect sender for authcrypt
-        // Check if there is a skid (sender key ID) in the protected header
-        let sender_public = self.try_resolve_sender_public(jwe_str, budget).await;
-
-        let decrypted = decrypt(
-            jwe_str,
-            &recipient_kid_str,
-            &recipient_private,
-            sender_public.as_ref(),
-        )
-        .map_err(|e| {
+        // For authcrypt, the sender key id the header binds (`skid` ==
+        // `apu`); a header naming two senders is refused here, before any
+        // resolution. The key resolved for that id is handed to `decrypt`
+        // together with the id, and `decrypt` reports the same id back.
+        let skid = authcrypt_sender_kid(jwe_str).map_err(|e| {
             ATMError::DidcommError("Couldn't unpack incoming message".into(), e.to_string())
         })?;
+        let sender_public = match &skid {
+            Some(skid) => self.resolve_sender_key_agreement(skid, budget).await,
+            None => None,
+        };
+        let sender = skid
+            .as_deref()
+            .zip(sender_public.as_ref())
+            .map(|(kid, public)| SenderKey::new(kid, public));
+
+        let decrypted = decrypt_bound(jwe_str, &recipient_kid_str, &recipient_private, sender)
+            .map_err(|e| {
+                ATMError::DidcommError("Couldn't unpack incoming message".into(), e.to_string())
+            })?;
+        if decrypted.sender_kid != skid {
+            return Err(ATMError::DidcommError(
+                "Couldn't unpack incoming message".into(),
+                "decrypted sender key id differs from the envelope `skid`".into(),
+            ));
+        }
 
         let plaintext = String::from_utf8(decrypted.plaintext).map_err(|e| {
             ATMError::DidcommError("Decrypted payload is not valid UTF-8".into(), e.to_string())
@@ -383,34 +399,20 @@ impl SharedState {
         ))
     }
 
-    /// Try to resolve the sender's public key from the JWE protected header's `skid` field
-    async fn try_resolve_sender_public(
+    /// Resolve the key-agreement public key an authcrypt `skid` names.
+    ///
+    /// `skid` must be a DID URL naming a key listed in the sender DID
+    /// document's `keyAgreement`; there is no fallback to another key, so the
+    /// key returned is always the one `skid` identifies.
+    async fn resolve_sender_key_agreement(
         &self,
-        jwe_str: &str,
+        skid: &str,
         budget: &mut usize,
     ) -> Option<affinidi_crypto::jose::key_agreement::PublicKeyAgreement> {
-        use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-
-        // Parse to get the protected header
-        let jwe: serde_json::Value = serde_json::from_str(jwe_str).ok()?;
-        let protected_b64 = jwe.get("protected")?.as_str()?;
-        let protected_bytes = BASE64_URL_SAFE_NO_PAD.decode(protected_b64).ok()?;
-        let header: serde_json::Value = serde_json::from_slice(&protected_bytes).ok()?;
-
-        // Check algorithm — only authcrypt (ECDH-1PU) has a sender key
-        let alg = header.get("alg")?.as_str()?;
-        if !alg.contains("1PU") {
+        let (sender_did, fragment) = skid.split_once('#')?;
+        if sender_did.is_empty() || fragment.is_empty() {
             return None;
         }
-
-        let skid = header.get("skid")?.as_str()?;
-
-        // Extract the DID from the skid (everything before the #fragment)
-        let sender_did = if let Some(hash_pos) = skid.find('#') {
-            &skid[..hash_pos]
-        } else {
-            skid
-        };
 
         // Charge the per-message resolution budget before the (networked for
         // `did:web`) sender-DID resolution. On exhaustion, behave as "no sender
@@ -421,7 +423,6 @@ impl SharedState {
         }
         *budget -= 1;
 
-        // Resolve the sender DID document
         let sender_doc = self
             .tdk_common
             .did_resolver()
@@ -433,32 +434,27 @@ impl SharedState {
             document::DocumentExt, verification_method::VerificationRelationship,
         };
 
-        // Use the full skid (with fragment) to look up the specific key that was
-        // used to encrypt. Only fall back to the first key_agreement key when the
-        // skid has no fragment (bare DID).
-        let sender_kid_owned: String;
-        let sender_kid: &str = if skid.contains('#') {
-            skid
-        } else {
-            let kids = sender_doc.doc.find_key_agreement(None);
-            sender_kid_owned = kids.first()?.to_string();
-            &sender_kid_owned
-        };
-
+        let relative = format!("#{fragment}");
         let vm = sender_doc
             .doc
             .key_agreement
             .iter()
-            .filter_map(|ka| match ka {
+            .find_map(|ka| match ka {
                 VerificationRelationship::VerificationMethod(vm)
-                    if vm.id.as_str() == sender_kid =>
+                    if vm.id.as_str() == skid || vm.id.as_str() == relative =>
                 {
                     Some(vm.as_ref())
                 }
+                VerificationRelationship::Reference(id)
+                    if id.as_str() == skid || id.as_str() == relative =>
+                {
+                    sender_doc
+                        .doc
+                        .get_verification_method(skid)
+                        .or_else(|| sender_doc.doc.get_verification_method(&relative))
+                }
                 _ => None,
-            })
-            .next()
-            .or_else(|| sender_doc.doc.get_verification_method(sender_kid))?;
+            })?;
 
         // Single source of truth for verification-material parsing lives
         // in `affinidi-did-common` (`decode_public_key`); map its
@@ -1085,7 +1081,7 @@ mod tests {
     /// unpack must use the specific key from the JWE skid header, not blindly
     /// pick the first key_agreement key from the resolved DID document.
     ///
-    /// This test would FAIL before the fix because try_resolve_sender_public()
+    /// This test would FAIL before the fix because resolve_sender_key_agreement()
     /// stripped the #fragment from skid and picked the first key_agreement key,
     /// which could be a different key than the one actually used to encrypt.
     #[tokio::test]
@@ -1256,7 +1252,7 @@ mod tests {
         );
 
         // NOW: unpack on recipient side. This is where the bug manifests.
-        // If try_resolve_sender_public strips the fragment and picks first key,
+        // If resolve_sender_key_agreement strips the fragment and picks first key,
         // it would use #key-1's public key (DIFFERENT from #key-2 that was used
         // to encrypt), causing a key mismatch in ECDH-1PU derivation.
         let result = recipient_atm.unpack(&packed).await;
@@ -1268,7 +1264,7 @@ mod tests {
             }
             Err(e) => {
                 panic!(
-                    "BUG CONFIRMED: unpack failed because try_resolve_sender_public \
+                    "BUG CONFIRMED: unpack failed because resolve_sender_key_agreement \
                      picks the wrong key when sender has multiple encryption keys. \
                      Error: {e}"
                 );
@@ -2232,6 +2228,174 @@ mod tests {
             matches!(err, ATMError::AddressingMismatch(_)),
             "forged `from` must be an AddressingMismatch, got: {err:?}"
         );
+    }
+
+    /// An authcrypt JWE whose `skid` and `apu` are written independently, with
+    /// the key derivation run over `apu` as the header claims.
+    fn authcrypt_with_party_info(
+        plaintext: &[u8],
+        skid: &str,
+        apu: &str,
+        sender_private: &PrivateKeyAgreement,
+        recipient_kid: &str,
+        recipient_public: &PublicKeyAgreement,
+    ) -> String {
+        use affinidi_crypto::jose::{
+            aes_kw, content_encryption, ecdh, key_agreement::EphemeralKeyPair,
+        };
+        use base64::prelude::BASE64_URL_SAFE_NO_PAD as B64;
+
+        let ephemeral = EphemeralKeyPair::generate(recipient_public.curve());
+        let apv = b"apv";
+        let header = json!({
+            "typ": "application/didcomm-encrypted+json",
+            "alg": "ECDH-1PU+A256KW",
+            "enc": "A256CBC-HS512",
+            "skid": skid,
+            "apu": B64.encode(apu),
+            "apv": B64.encode(apv),
+            "epk": ephemeral.public.to_jwk(),
+        });
+        let protected = B64.encode(serde_json::to_vec(&header).unwrap());
+        let cek = content_encryption::generate_cek();
+        let iv = content_encryption::generate_iv();
+        let (ciphertext, tag) =
+            content_encryption::encrypt(plaintext, &cek, &iv, protected.as_bytes()).unwrap();
+        let kek = ecdh::derive_sender_key_1pu(
+            &ephemeral,
+            sender_private,
+            recipient_public,
+            apu.as_bytes(),
+            apv,
+            &tag,
+        )
+        .unwrap();
+        json!({
+            "protected": protected,
+            "recipients": [{
+                "header": { "kid": recipient_kid },
+                "encrypted_key": B64.encode(aes_kw::wrap(&kek, &cek).unwrap()),
+            }],
+            "iv": B64.encode(iv),
+            "ciphertext": B64.encode(ciphertext),
+            "tag": B64.encode(tag),
+        })
+        .to_string()
+    }
+
+    /// Authcrypted with the sender's own key (`skid`), while `apu` and `from`
+    /// name another DID. The message decrypts under the `skid` key, so only
+    /// the `skid`/`apu` binding keeps the other DID from being reported as the
+    /// authenticated sender. Refused under every policy.
+    #[tokio::test]
+    async fn authcrypt_apu_naming_another_did_is_rejected() {
+        let (sender_did, _sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+        let (victim_did, _ved, _vx) = generate_peer_did_full();
+
+        let plaintext = build_plaintext(&victim_did, &recipient_did);
+        let jwe = authcrypt_with_party_info(
+            plaintext.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &format!("{victim_did}#key-2"),
+            &x25519_priv(&sx),
+            &format!("{recipient_did}#key-2"),
+            &x25519_pub(&rx),
+        );
+
+        for policy in [
+            UnpackPolicy::default(),
+            UnpackPolicy {
+                validate_addressing_consistency: false,
+                ..UnpackPolicy::default()
+            },
+        ] {
+            let recipient = create_atm_with_policy(vec![rx.clone()], policy).await;
+            let err = recipient.unpack(&jwe).await.unwrap_err();
+            assert!(
+                matches!(&err, ATMError::DidcommError(_, detail) if detail.contains("apu")),
+                "a skid/apu mismatch must be refused, got: {err:?}"
+            );
+        }
+    }
+
+    /// The reverse: `skid` names another DID, `apu` the actual sender.
+    #[tokio::test]
+    async fn authcrypt_skid_naming_another_did_is_rejected() {
+        let (sender_did, _sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+        let (victim_did, _ved, _vx) = generate_peer_did_full();
+        let recipient = create_atm_with_policy(vec![rx.clone()], UnpackPolicy::default()).await;
+
+        let plaintext = build_plaintext(&victim_did, &recipient_did);
+        let jwe = authcrypt_with_party_info(
+            plaintext.as_bytes(),
+            &format!("{victim_did}#key-2"),
+            &format!("{sender_did}#key-2"),
+            &x25519_priv(&sx),
+            &format!("{recipient_did}#key-2"),
+            &x25519_pub(&rx),
+        );
+
+        let err = recipient.unpack(&jwe).await.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::DidcommError(_, detail) if detail.contains("apu")),
+            "a skid/apu mismatch must be refused, got: {err:?}"
+        );
+    }
+
+    /// A bare-DID `skid` names no specific key, so no key is resolved for it
+    /// and the message is refused rather than decrypted under a guessed key.
+    #[tokio::test]
+    async fn authcrypt_bare_did_skid_is_rejected() {
+        let (sender_did, _sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+        let recipient = create_atm_with_policy(
+            vec![rx.clone()],
+            UnpackPolicy {
+                validate_addressing_consistency: false,
+                ..UnpackPolicy::default()
+            },
+        )
+        .await;
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let jwe = authcrypt(
+            plaintext.as_bytes(),
+            &sender_did,
+            &x25519_priv(&sx),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        assert!(recipient.unpack(&jwe).await.is_err());
+    }
+
+    /// A `skid` naming a key that is not in the sender's `keyAgreement` is
+    /// refused, even when the DID has a verification method by that id.
+    #[tokio::test]
+    async fn authcrypt_skid_outside_key_agreement_is_rejected() {
+        let (sender_did, _sed, sx) = generate_peer_did_full();
+        let (recipient_did, _red, rx) = generate_peer_did_full();
+        let recipient = create_atm_with_policy(
+            vec![rx.clone()],
+            UnpackPolicy {
+                validate_addressing_consistency: false,
+                ..UnpackPolicy::default()
+            },
+        )
+        .await;
+
+        let plaintext = build_plaintext(&sender_did, &recipient_did);
+        let jwe = authcrypt(
+            plaintext.as_bytes(),
+            &format!("{sender_did}#key-1"),
+            &x25519_priv(&sx),
+            &[(&format!("{recipient_did}#key-2"), &x25519_pub(&rx))],
+        )
+        .unwrap();
+
+        assert!(recipient.unpack(&jwe).await.is_err());
     }
 
     /// The impostor wrapping `sign(authcrypt(plaintext))` — signature *outside*

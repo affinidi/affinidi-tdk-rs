@@ -26,17 +26,30 @@
  *
  * ```
  * use affinidi_tdk_test_support::didcomm_fuzz::seed_corpus;
- * use affinidi_messaging_didcomm::message::unpack::unpack;
+ * use affinidi_messaging_didcomm::jws::verify::VerifyKey;
+ * use affinidi_messaging_didcomm::{SenderKey, SignerKey};
+ * use affinidi_messaging_didcomm::message::unpack::unpack_bound;
  *
  * // Every seed envelope opens cleanly under the keys it ships with — exactly
  * // what a fuzz harness needs as a starting corpus before it mutates.
  * for env in seed_corpus() {
- *     unpack(
+ *     let sender_kid = env.sender_kid();
+ *     let sender = sender_kid
+ *         .as_deref()
+ *         .zip(env.sender_public.as_ref())
+ *         .map(|(kid, public)| SenderKey::new(kid, public));
+ *     let signer_kid = env.signer_kid();
+ *     let signer_key = env.signer_public.map(VerifyKey::Ed25519);
+ *     let signer = signer_kid
+ *         .as_deref()
+ *         .zip(signer_key.as_ref())
+ *         .map(|(kid, key)| SignerKey::new(kid, key));
+ *     unpack_bound(
  *         &env.envelope,
  *         env.recipient_kid.as_deref(),
  *         env.recipient_private.as_ref(),
- *         env.sender_public.as_ref(),
- *         env.signer_public.as_ref(),
+ *         sender,
+ *         signer,
  *     )
  *     .expect("seed corpus envelope should unpack");
  * }
@@ -45,6 +58,8 @@
 
 use affinidi_crypto::CryptoError;
 use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::jwe::decrypt::authcrypt_sender_kid;
+use affinidi_messaging_didcomm::jws::verify::parse_jws;
 use affinidi_messaging_didcomm::message::pack::{
     pack_encrypted_anoncrypt, pack_encrypted_authcrypt, pack_signed,
 };
@@ -103,6 +118,25 @@ pub struct PackedEnvelope {
     pub sender_public: Option<PublicKeyAgreement>,
     /// Signer Ed25519 public key, for signed (JWS) envelopes.
     pub signer_public: Option<[u8; 32]>,
+}
+
+impl PackedEnvelope {
+    /// The authcrypt sender key id: the envelope's `skid`, once bound to its
+    /// `apu`. `None` for anything that is not a well-formed authcrypt JWE.
+    pub fn sender_kid(&self) -> Option<String> {
+        authcrypt_sender_kid(&self.envelope).ok().flatten()
+    }
+
+    /// The signer key id of a signed envelope: its (single) signature's `kid`.
+    /// `None` for anything that is not a JWS.
+    pub fn signer_kid(&self) -> Option<String> {
+        parse_jws(&self.envelope)
+            .ok()?
+            .signatures
+            .into_iter()
+            .next()?
+            .kid
+    }
 }
 
 /// Derive a deterministic key-agreement keypair from `seed` on `curve`.
@@ -284,16 +318,28 @@ fn signer_kid(seed: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use affinidi_messaging_didcomm::UnpackResult;
-    use affinidi_messaging_didcomm::message::unpack::unpack;
+    use affinidi_messaging_didcomm::jws::verify::VerifyKey;
+    use affinidi_messaging_didcomm::message::unpack::unpack_bound;
+    use affinidi_messaging_didcomm::{SenderKey, SignerKey, UnpackResult};
 
     fn unpack_envelope(env: &PackedEnvelope) -> UnpackResult {
-        unpack(
+        let sender_kid = env.sender_kid();
+        let sender = sender_kid
+            .as_deref()
+            .zip(env.sender_public.as_ref())
+            .map(|(kid, public)| SenderKey::new(kid, public));
+        let signer_kid = env.signer_kid();
+        let signer_key = env.signer_public.map(VerifyKey::Ed25519);
+        let signer = signer_kid
+            .as_deref()
+            .zip(signer_key.as_ref())
+            .map(|(kid, key)| SignerKey::new(kid, key));
+        unpack_bound(
             &env.envelope,
             env.recipient_kid.as_deref(),
             env.recipient_private.as_ref(),
-            env.sender_public.as_ref(),
-            env.signer_public.as_ref(),
+            sender,
+            signer,
         )
         .expect("envelope should unpack")
     }

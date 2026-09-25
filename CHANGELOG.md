@@ -9,6 +9,24 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
+### Changed
+
+- **Authcrypt sender binding (security).** **`affinidi-messaging-didcomm` 0.15.9**,
+  **`affinidi-messaging-sdk` 0.27.2**, **`affinidi-messaging-mediator` 0.29.5**,
+  **`affinidi-messaging-didcomm-service` 0.12.1**,
+  **`affinidi-tdk-test-support` 0.8.6**, **`affinidi-messaging-test-mediator` 0.10.2**.
+
+  An ECDH-1PU JWE is accepted only when `skid` and `apu` are both present, name
+  the same key id, and that key id is the one whose public key decrypted it; that
+  key id is the reported sender. New `decrypt_bound` / `unpack_bound` take the
+  sender key with its key id (`SenderKey`); the key-only functions are deprecated
+  and refuse authcrypt when given a sender key. A signed message's signer is
+  likewise the key id it was verified under (`SignerKey`, `verify_bound`). The pre-0.14 ECDH-1PU KEK fallback is removed. The
+  mediator and `affinidi-messaging-didcomm-service` take the sender from the
+  authenticated key rather than from the plaintext `from`. Patch releases: the
+  public APIs are unchanged apart from additions and deprecations. See each
+  crate's changelog.
+
 ### Added
 
 - **`affinidi-net-guard` 0.1.0: one egress guard for URLs an attacker can

@@ -36,6 +36,17 @@ pub enum DIDCommError {
 
     #[error("no compatible key agreement key: {0}")]
     NoKeyAgreement(String),
+
+    /// An authcrypt sender key id is missing, is named inconsistently by the
+    /// JWE header (`skid` vs `apu`), or is not the key id the caller supplied
+    /// the sender public key for.
+    #[error("authcrypt sender key binding failed: {0}")]
+    SenderKeyBinding(String),
+
+    /// A JWS has no signature by the key id the caller supplied the
+    /// verification key for.
+    #[error("JWS signer key binding failed: {0}")]
+    SignerKeyBinding(String),
 }
 
 /// Map `affinidi-crypto`'s JOSE errors onto the envelope-layer error so

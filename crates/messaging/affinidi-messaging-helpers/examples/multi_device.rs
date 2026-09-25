@@ -7,7 +7,9 @@
 
 use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement};
 use affinidi_messaging_didcomm::message::Message;
-use affinidi_messaging_didcomm::message::pack::{pack_encrypted_authcrypt, unpack_encrypted};
+use affinidi_messaging_didcomm::message::pack::{
+    SenderKey, pack_encrypted_authcrypt, unpack_encrypted_bound,
+};
 use affinidi_messaging_didcomm::message::unpack;
 use affinidi_messaging_sdk::errors::ATMError;
 use serde_json::json;
@@ -81,6 +83,7 @@ async fn main() -> Result<(), ATMError> {
         (bob_device3_kid, &bob_device3_pub),
     ];
 
+    let alice_public = alice_private.public_key();
     let packed_msg = pack_encrypted_authcrypt(&msg, alice_kid, &alice_private, &recipients_ref)
         .map_err(|e| ATMError::DidcommError("pack".to_string(), format!("{e}")))?;
 
@@ -91,11 +94,11 @@ async fn main() -> Result<(), ATMError> {
 
     // Unpack message using all keys/secrets from Bob (device 1)
     info!("Unpack message using Bob's device 1 key");
-    let decrypted1 = unpack_encrypted(
+    let decrypted1 = unpack_encrypted_bound(
         &packed_msg,
         bob_device1_kid,
         &bob_device1_private,
-        Some(&alice_private.public_key()),
+        Some(SenderKey::new(alice_kid, &alice_public)),
     )
     .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{e}")))?;
 
@@ -108,11 +111,11 @@ async fn main() -> Result<(), ATMError> {
 
     // Test using 2nd key only
     info!("Unpack message using Bob's device 2 key");
-    let decrypted2 = unpack_encrypted(
+    let decrypted2 = unpack_encrypted_bound(
         &packed_msg,
         bob_device2_kid,
         &bob_device2_private,
-        Some(&alice_private.public_key()),
+        Some(SenderKey::new(alice_kid, &alice_public)),
     )
     .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{e}")))?;
 
@@ -125,11 +128,11 @@ async fn main() -> Result<(), ATMError> {
 
     // Test using 3rd key only
     info!("Unpack message using Bob's device 3 key");
-    let decrypted3 = unpack_encrypted(
+    let decrypted3 = unpack_encrypted_bound(
         &packed_msg,
         bob_device3_kid,
         &bob_device3_private,
-        Some(&alice_private.public_key()),
+        Some(SenderKey::new(alice_kid, &alice_public)),
     )
     .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{e}")))?;
 
@@ -142,11 +145,11 @@ async fn main() -> Result<(), ATMError> {
 
     // Also test the generic unpack function
     info!("Test generic unpack with device 1");
-    let result = unpack::unpack(
+    let result = unpack::unpack_bound(
         &packed_msg,
         Some(bob_device1_kid),
         Some(&bob_device1_private),
-        Some(&alice_private.public_key()),
+        Some(SenderKey::new(alice_kid, &alice_public)),
         None,
     )
     .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{e}")))?;

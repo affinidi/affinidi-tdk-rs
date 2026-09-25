@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.27.1"
+version = "0.27.2"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -28,7 +28,7 @@ tsp = [
 # Affinidi Crates
 affinidi-tdk-common = "0.6"
 affinidi-crypto = { version = "0.2", features = ["jose"] }
-affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15" }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15.9" }
 # Protocol-agnostic messaging vocabulary (ConnState, the future MessageTransport
 # trait). The websocket transport publishes ConnState over a watch channel.
 affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.8" }

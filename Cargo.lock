@@ -503,7 +503,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "affinidi-crypto",
  "affinidi-messaging-core",
@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-service"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-core",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator"
-version = "0.29.4"
+version = "0.29.5"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -852,7 +852,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.27.1"
+version = "0.27.2"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",
@@ -896,9 +896,11 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-test-mediator"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
+ "affinidi-crypto",
  "affinidi-data-integrity",
+ "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
  "affinidi-messaging-didcomm-v1",
@@ -1204,7 +1206,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk-test-support"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
