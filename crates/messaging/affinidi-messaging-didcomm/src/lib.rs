@@ -242,7 +242,7 @@ impl DIDCommAgent {
                         if let Ok(local) = self.store.get_local(local_did)
                             && local.key_agreement_kid == kid
                         {
-                            return unpack::unpack(
+                            return unpack::unpack_bound(
                                 input,
                                 Some(kid),
                                 Some(&local.key_agreement_private),
@@ -266,10 +266,10 @@ impl DIDCommAgent {
             let vk = resolved.verifying_key.as_ref().ok_or_else(|| {
                 DIDCommError::NoKeyAgreement("no verifying key for sender".into())
             })?;
-            unpack::unpack(input, None, None, None, Some(vk))
+            unpack::unpack_bound(input, None, None, None, Some(vk))
         } else {
             // Plaintext
-            unpack::unpack(input, None, None, None, None)
+            unpack::unpack_bound(input, None, None, None, None)
         }
     }
 }

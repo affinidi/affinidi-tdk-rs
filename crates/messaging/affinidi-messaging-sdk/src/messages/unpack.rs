@@ -304,7 +304,9 @@ impl SharedState {
         budget: &mut usize,
     ) -> Result<(String, EncLayerKind, Option<String>, String), ATMError> {
         use affinidi_crypto::jose::key_agreement::PrivateKeyAgreement;
-        use affinidi_messaging_didcomm::jwe::decrypt::{SenderKey, authcrypt_sender_kid, decrypt};
+        use affinidi_messaging_didcomm::jwe::decrypt::{
+            SenderKey, authcrypt_sender_kid, decrypt_bound,
+        };
 
         // Extract recipient KIDs from the JWE
         let recipients = value["recipients"].as_array().ok_or_else(|| {
@@ -367,8 +369,8 @@ impl SharedState {
             .zip(sender_public.as_ref())
             .map(|(kid, public)| SenderKey::new(kid, public));
 
-        let decrypted =
-            decrypt(jwe_str, &recipient_kid_str, &recipient_private, sender).map_err(|e| {
+        let decrypted = decrypt_bound(jwe_str, &recipient_kid_str, &recipient_private, sender)
+            .map_err(|e| {
                 ATMError::DidcommError("Couldn't unpack incoming message".into(), e.to_string())
             })?;
         if decrypted.sender_kid != skid {

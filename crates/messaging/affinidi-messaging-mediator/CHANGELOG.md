@@ -2,6 +2,10 @@
 
 ## Unreleased (0.29.5) — a message's sender is the DID that authenticated it
 
+### Security
+
+No public API change; the following tighten what is accepted.
+
 - **Authcrypt envelopes bind `skid` to `apu`.** `MetaEnvelope::new` refuses an
   ECDH-1PU envelope that lacks `skid` or `apu`, whose `apu` does not encode its
   `skid`, or that uses another ECDH-1PU `alg`. The `apu` fallback for the

@@ -2,37 +2,45 @@
 
 ## [0.15.9] - Unreleased
 
-### Changed (breaking)
+### Security
 
 - **Authcrypt decryption binds the sender key id to the key used.** An
   ECDH-1PU JWE is now accepted only when its protected header carries both
   `skid` and `apu`, `skid` is a DID URL with a `#fragment`, and `apu` decodes
-  to exactly the bytes of `skid`. The caller passes the sender key together
-  with the key id it was resolved for, and `decrypt` refuses the message
-  unless that key id is the `skid`. `DecryptedJwe::sender_kid` (and
-  `UnpackResult::Encrypted::sender_kid`) is that `skid`. Previously the sender
-  key id was reported from `apu` while callers resolved the key from `skid`,
-  and nothing required the two to agree. Anoncrypt (ECDH-ES) is unchanged.
-- `jwe::decrypt::decrypt` and `message::unpack::unpack` take
-  `sender: Option<SenderKey<'_>>` in place of
-  `sender_public: Option<&PublicKeyAgreement>`. Build it with
-  `SenderKey::new(kid, &public)`. New `jwe::decrypt::authcrypt_sender_kid`
-  returns the key id to resolve (the checked `skid`, `None` for anoncrypt),
-  and `ProtectedHeader::authcrypt_sender_kid` does the same for a parsed
-  header. `SenderKey` is re-exported at the crate root and from
-  `message::pack`. Callers that pass `None` compile unchanged.
-- `DIDCommAgent::unpack` passes the expected peer's key agreement key id with
-  its key, so an authcrypt JWE from any other key id is refused.
+  to exactly the bytes of `skid`; `sender_kid` in the result is that `skid`.
+  Previously the sender key id was reported from `apu` while callers resolved
+  the key from `skid`, and nothing required the two to agree. Anything else is
+  refused with the new `DIDCommError::SenderKeyBinding`. This applies to every
+  entry point, including the existing `jwe::decrypt::decrypt`,
+  `message::unpack::unpack` and `message::pack::unpack_encrypted`.
 - The pre-0.14 ECDH-1PU KEK fallback (issue #322) is removed: a JWE from a
   sender still deriving the unprefixed-tag KEK no longer decrypts.
-  `DecryptedJwe::legacy_kek_used` and `UnpackResult::Encrypted::legacy_kek_used`
-  are removed.
-- `DecryptedJwe` is `#[non_exhaustive]`.
-- New `DIDCommError::SenderKeyBinding` for the refusals above.
+- `DIDCommAgent::unpack` passes the expected peer's key agreement key id with
+  its key, so an authcrypt JWE from any other key id is refused.
+- Anoncrypt (ECDH-ES) is unchanged.
 
-Released as a patch within 0.15 per ADR 0003 point 3 (`vta-sdk` pins
-`affinidi-messaging-didcomm = "0.15"`); callers that pass a sender key must
-move to `SenderKey`.
+### Added
+
+- `jwe::decrypt::decrypt_bound`, `message::unpack::unpack_bound` and
+  `message::pack::unpack_encrypted_bound` take `Option<SenderKey<'_>>` — the
+  sender public key together with the key id it was resolved for
+  (`SenderKey::new(kid, &public)`) — and refuse the message unless that key id
+  is the `skid`. `SenderKey` is re-exported at the crate root and from
+  `message::pack`.
+- `jwe::decrypt::authcrypt_sender_kid(jwe)` and
+  `ProtectedHeader::authcrypt_sender_kid()` return the checked key id to
+  resolve (`None` for anoncrypt); `ProtectedHeader::from_base64url`;
+  `jwe::envelope::{ALG_AUTHCRYPT, ALG_ANONCRYPT}`.
+- `DIDCommError::SenderKeyBinding`.
+
+### Deprecated
+
+- `jwe::decrypt::decrypt`, `message::unpack::unpack` and
+  `message::pack::unpack_encrypted`, which take the sender public key alone.
+  They still apply the binding above, but nothing can check that the key
+  passed is the one resolved for the `skid`; use the `_bound` functions.
+- `DecryptedJwe::legacy_kek_used` and `UnpackResult::Encrypted::legacy_kek_used`
+  are always `false` and will be removed in the next minor.
 
 ## [0.15.8] - 2026-08-04
 

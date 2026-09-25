@@ -20,7 +20,7 @@ use affinidi_did_common::{
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_didcomm::{
     jwe::{
-        decrypt::{SenderKey, decrypt},
+        decrypt::{SenderKey, decrypt_bound},
         envelope::ProtectedHeader,
     },
     jws::verify::{VerifiedJws, verify_ed25519, verify_p256, verify_secp256k1},
@@ -236,7 +236,7 @@ impl MetaEnvelope {
             .zip(sender_public.as_ref())
             .map(|(kid, public)| SenderKey::new(kid, public));
 
-        let decrypted = decrypt(&self.raw, &recipient_kid_str, &recipient_private, sender)
+        let decrypted = decrypt_bound(&self.raw, &recipient_kid_str, &recipient_private, sender)
             .map_err(|e| format!("Couldn't decrypt message: {e}"))?;
 
         // Seed metadata from the OUTER JWE layer. `authenticated`/`sign_from`
@@ -422,7 +422,7 @@ async fn recurse_decrypted_plaintext(
             .as_deref()
             .zip(inner_sender_public.as_ref())
             .map(|(kid, public)| SenderKey::new(kid, public));
-        let inner = decrypt(inner_str, recipient_kid, recipient_private, inner_sender)
+        let inner = decrypt_bound(inner_str, recipient_kid, recipient_private, inner_sender)
             .map_err(|e| format!("Couldn't decrypt nested JWE: {e}"))?;
 
         layers.push(CryptoLayer::Encrypted(if inner.authenticated {

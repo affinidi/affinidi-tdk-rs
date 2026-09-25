@@ -1,10 +1,11 @@
 # Affinidi TDK Test Support
 
-## Unreleased (0.8.6) — authcrypt fixtures carry the sender key id
+## Unreleased (0.8.6) — authcrypt fixtures name their sender key id
 
-- `didcomm_fuzz::PackedEnvelope` gains `sender_kid`, and `sender_key()` returns
-  the `SenderKey` that `affinidi-messaging-didcomm` 0.15.9's `unpack` /
-  `decrypt` take.
+- `didcomm_fuzz::PackedEnvelope::sender_kid()` returns the envelope's bound
+  `skid`, for building the `SenderKey` that `affinidi-messaging-didcomm`
+  0.15.9's `unpack_bound` / `decrypt_bound` take. Additive; the struct is
+  unchanged.
 
 ## Unreleased (0.8.5) — document the did:webvh host policy
 

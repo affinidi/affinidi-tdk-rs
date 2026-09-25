@@ -4,7 +4,7 @@
 //! gates; mutation explores from there.
 #![no_main]
 
-use affinidi_messaging_didcomm::message::unpack::unpack;
+use affinidi_messaging_didcomm::message::unpack::unpack_bound;
 use affinidi_messaging_didcomm::SenderKey;
 use affinidi_messaging_didcomm_fuzz::{recipient, sender_public, signer, RECIPIENT_KID, SENDER_KID};
 use libfuzzer_sys::fuzz_target;
@@ -17,7 +17,7 @@ fuzz_target!(|data: &[u8]| {
     // Supply every key the parser might need (recipient + authcrypt sender +
     // JWS signer) so all three protected paths are reachable, not just the
     // anoncrypt one. The result is discarded — we fuzz for panics / UB.
-    let _ = unpack(
+    let _ = unpack_bound(
         input,
         Some(RECIPIENT_KID),
         Some(recipient()),

@@ -7,9 +7,6 @@ use crate::jwe::envelope::*;
 use affinidi_crypto::jose::{aes_kw, content_encryption, ecdh, key_agreement::*};
 
 /// Result of decrypting a JWE.
-///
-/// `#[non_exhaustive]`: read the fields, but build it only through [`decrypt`].
-#[non_exhaustive]
 pub struct DecryptedJwe {
     /// The decrypted plaintext.
     pub plaintext: Vec<u8>,
@@ -22,12 +19,19 @@ pub struct DecryptedJwe {
     pub sender_kid: Option<String>,
     /// The recipient KID that was used to decrypt.
     pub recipient_kid: String,
+    /// Always `false`: the pre-0.14 (issue #322) ECDH-1PU KEK is no longer
+    /// accepted, so no message decrypts under it.
+    #[deprecated(
+        since = "0.15.9",
+        note = "always false: the pre-0.14 ECDH-1PU KEK is no longer accepted"
+    )]
+    pub legacy_kek_used: bool,
 }
 
 /// The sender key an authcrypt JWE is decrypted against: a key id and the
 /// public key that key id resolves to.
 ///
-/// [`decrypt`] refuses the message unless this `kid` is the JWE's `skid`, so a
+/// [`decrypt_bound`] refuses the message unless this `kid` is the JWE's `skid`, so a
 /// key resolved for one sender cannot authenticate a message naming another.
 #[derive(Clone, Copy, Debug)]
 pub struct SenderKey<'a> {
@@ -54,12 +58,38 @@ impl<'a> SenderKey<'a> {
 /// `Some(skid)` for authcrypt (ECDH-1PU), after checking the header binds
 /// `skid` and `apu` together (see [`ProtectedHeader::authcrypt_sender_kid`]);
 /// `None` for anoncrypt. Resolve exactly this key id and pass it back to
-/// [`decrypt`] as a [`SenderKey`].
+/// [`decrypt_bound`] as a [`SenderKey`].
 pub fn authcrypt_sender_kid(jwe_str: &str) -> Result<Option<String>, DIDCommError> {
     let jwe: Jwe = serde_json::from_str(jwe_str)
         .map_err(|e| DIDCommError::InvalidMessage(format!("invalid JWE JSON: {e}")))?;
     let header = ProtectedHeader::from_base64url(&jwe.protected)?;
     Ok(header.authcrypt_sender_kid()?.map(str::to_string))
+}
+
+/// Decrypt a JWE string, given the sender public key alone.
+///
+/// For authcrypt the key is taken to be the one named by the JWE `skid`, and
+/// the same checks as [`decrypt_bound`] apply: `skid` and `apu` must both be
+/// present and name the same `did#fragment` key id, or the message is refused.
+/// `sender_kid` in the result is that `skid`.
+#[deprecated(
+    since = "0.15.9",
+    note = "use `decrypt_bound` with a `SenderKey`. The key passed here must be the one \
+            resolved for the JWE's `skid` (see `authcrypt_sender_kid`); nothing checks that \
+            it is"
+)]
+pub fn decrypt(
+    jwe_str: &str,
+    recipient_kid: &str,
+    recipient_private: &PrivateKeyAgreement,
+    sender_public: Option<&PublicKeyAgreement>,
+) -> Result<DecryptedJwe, DIDCommError> {
+    let skid = authcrypt_sender_kid(jwe_str)?;
+    let sender = skid
+        .as_deref()
+        .zip(sender_public)
+        .map(|(kid, public)| SenderKey::new(kid, public));
+    decrypt_bound(jwe_str, recipient_kid, recipient_private, sender)
 }
 
 /// Decrypt a JWE string.
@@ -75,7 +105,7 @@ pub fn authcrypt_sender_kid(jwe_str: &str) -> Result<Option<String>, DIDCommErro
 /// For authcrypt, [`DIDCommError::SenderKeyBinding`] when the header lacks
 /// `skid` or `apu`, when `apu` is not `BASE64URL(skid)`, or when `sender` is
 /// missing or is for a different key id than `skid`.
-pub fn decrypt(
+pub fn decrypt_bound(
     jwe_str: &str,
     recipient_kid: &str,
     recipient_private: &PrivateKeyAgreement,
@@ -186,12 +216,14 @@ pub fn decrypt(
     let plaintext =
         content_encryption::decrypt(&ciphertext, &cek, &iv, jwe.protected.as_bytes(), &tag)?;
 
+    #[allow(deprecated)]
     Ok(DecryptedJwe {
         plaintext,
         header,
         authenticated,
         sender_kid,
         recipient_kid: recipient_kid.to_string(),
+        legacy_kek_used: false,
     })
 }
 
@@ -213,7 +245,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = decrypt(
+        let result = decrypt_bound(
             &jwe_str,
             "did:example:bob#key-1",
             &recipient,
@@ -239,7 +271,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = decrypt(&jwe_str, "did:example:bob#key-1", &recipient, None).unwrap();
+        let result = decrypt_bound(&jwe_str, "did:example:bob#key-1", &recipient, None).unwrap();
 
         assert_eq!(result.plaintext, b"Hello anoncrypt!");
         assert!(!result.authenticated);
@@ -262,7 +294,7 @@ mod tests {
             )
             .unwrap();
 
-            let result = decrypt(
+            let result = decrypt_bound(
                 &jwe_str,
                 "did:example:bob#ec",
                 &recipient,
@@ -286,7 +318,7 @@ mod tests {
             )
             .unwrap();
 
-            let result = decrypt(&jwe_str, "did:example:bob#ec", &recipient, None).unwrap();
+            let result = decrypt_bound(&jwe_str, "did:example:bob#ec", &recipient, None).unwrap();
 
             assert_eq!(result.plaintext, b"big-curve anoncrypt", "curve {curve:?}");
             assert!(!result.authenticated, "curve {curve:?}");
@@ -306,7 +338,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = decrypt(
+        let result = decrypt_bound(
             &jwe_str,
             "did:example:bob#p256-key",
             &recipient,
@@ -330,7 +362,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = decrypt(&jwe_str, "did:example:bob#k256-key", &recipient, None).unwrap();
+        let result = decrypt_bound(&jwe_str, "did:example:bob#k256-key", &recipient, None).unwrap();
 
         assert_eq!(result.plaintext, b"K-256 anoncrypt");
     }
@@ -348,7 +380,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = decrypt(
+        let result = decrypt_bound(
             &jwe_str,
             "did:example:bob#k256-key",
             &recipient,
@@ -373,7 +405,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = decrypt(&jwe_str, "did:example:bob#p256-key", &recipient, None).unwrap();
+        let result = decrypt_bound(&jwe_str, "did:example:bob#p256-key", &recipient, None).unwrap();
 
         assert_eq!(result.plaintext, b"P-256 anoncrypt");
         assert!(!result.authenticated);
@@ -394,11 +426,11 @@ mod tests {
         .unwrap();
 
         // Both recipients should be able to decrypt
-        let result1 = decrypt(&jwe_str, "did:example:bob#key-1", &r1, None).unwrap();
+        let result1 = decrypt_bound(&jwe_str, "did:example:bob#key-1", &r1, None).unwrap();
         assert_eq!(result1.plaintext, b"multi-recipient anoncrypt");
         assert!(!result1.authenticated);
 
-        let result2 = decrypt(&jwe_str, "did:example:carol#key-1", &r2, None).unwrap();
+        let result2 = decrypt_bound(&jwe_str, "did:example:carol#key-1", &r2, None).unwrap();
         assert_eq!(result2.plaintext, b"multi-recipient anoncrypt");
     }
 
@@ -419,7 +451,7 @@ mod tests {
         )
         .unwrap();
 
-        let result1 = decrypt(
+        let result1 = decrypt_bound(
             &jwe_str,
             "did:example:bob#p256",
             &r1,
@@ -432,7 +464,7 @@ mod tests {
         assert_eq!(result1.plaintext, b"multi P-256 authcrypt");
         assert!(result1.authenticated);
 
-        let result2 = decrypt(
+        let result2 = decrypt_bound(
             &jwe_str,
             "did:example:carol#p256",
             &r2,
@@ -463,7 +495,7 @@ mod tests {
         )
         .unwrap();
 
-        let result1 = decrypt(
+        let result1 = decrypt_bound(
             &jwe_str,
             "did:example:bob#k256",
             &r1,
@@ -475,7 +507,7 @@ mod tests {
         .unwrap();
         assert_eq!(result1.plaintext, b"multi K-256 authcrypt");
 
-        let result2 = decrypt(
+        let result2 = decrypt_bound(
             &jwe_str,
             "did:example:carol#k256",
             &r2,
@@ -509,7 +541,7 @@ mod tests {
             ("did:example:b#p256", &r2),
             ("did:example:c#p256", &r3),
         ] {
-            let result = decrypt(&jwe_str, kid, key, None).unwrap();
+            let result = decrypt_bound(&jwe_str, kid, key, None).unwrap();
             assert_eq!(result.plaintext, b"triple P-256 anoncrypt");
         }
     }
@@ -528,10 +560,10 @@ mod tests {
         )
         .unwrap();
 
-        let result1 = decrypt(&jwe_str, "did:example:bob#k256", &r1, None).unwrap();
+        let result1 = decrypt_bound(&jwe_str, "did:example:bob#k256", &r1, None).unwrap();
         assert_eq!(result1.plaintext, b"multi K-256 anoncrypt");
 
-        let result2 = decrypt(&jwe_str, "did:example:carol#k256", &r2, None).unwrap();
+        let result2 = decrypt_bound(&jwe_str, "did:example:carol#k256", &r2, None).unwrap();
         assert_eq!(result2.plaintext, b"multi K-256 anoncrypt");
     }
 
@@ -583,7 +615,7 @@ mod tests {
         .unwrap();
 
         // Decrypt with wrong sender public key should fail
-        let result = decrypt(
+        let result = decrypt_bound(
             &jwe_str,
             "did:example:bob#key-1",
             &recipient,
@@ -609,7 +641,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = decrypt(
+        let result = decrypt_bound(
             &jwe_str,
             "did:example:bob#key-1",
             &recipient,
@@ -638,7 +670,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            decrypt(
+            decrypt_bound(
                 &jwe_str,
                 "did:example:bob#key-1",
                 &wrong,
@@ -667,7 +699,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            decrypt(
+            decrypt_bound(
                 &jwe_str,
                 "did:example:bob#key-1",
                 &recipient,
@@ -727,7 +759,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_sender_binding_error(decrypt(
+        assert_sender_binding_error(decrypt_bound(
             &jwe,
             BOB,
             &bob,
@@ -759,7 +791,7 @@ mod tests {
             SenderKey::new(ALICE, &alice.public_key()),
             SenderKey::new(MALLORY, &mallory.public_key()),
         ] {
-            assert_sender_binding_error(decrypt(&jwe, BOB, &bob, Some(sender)));
+            assert_sender_binding_error(decrypt_bound(&jwe, BOB, &bob, Some(sender)));
         }
         assert!(authcrypt_sender_kid(&jwe).is_err());
     }
@@ -779,7 +811,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_sender_binding_error(decrypt(
+        assert_sender_binding_error(decrypt_bound(
             &jwe,
             BOB,
             &bob,
@@ -803,7 +835,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_sender_binding_error(decrypt(
+        assert_sender_binding_error(decrypt_bound(
             &jwe,
             BOB,
             &bob,
@@ -827,7 +859,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_sender_binding_error(decrypt(
+        assert_sender_binding_error(decrypt_bound(
             &jwe,
             BOB,
             &bob,
@@ -844,7 +876,7 @@ mod tests {
 
         let jwe = encrypt::authcrypt(b"hi", ALICE, &alice, &[(BOB, &bob.public_key())]).unwrap();
 
-        assert_sender_binding_error(decrypt(
+        assert_sender_binding_error(decrypt_bound(
             &jwe,
             BOB,
             &bob,
@@ -859,7 +891,7 @@ mod tests {
 
         let jwe = encrypt::authcrypt(b"hi", ALICE, &alice, &[(BOB, &bob.public_key())]).unwrap();
 
-        assert_sender_binding_error(decrypt(&jwe, BOB, &bob, None));
+        assert_sender_binding_error(decrypt_bound(&jwe, BOB, &bob, None));
     }
 
     #[test]
@@ -870,7 +902,7 @@ mod tests {
         let jwe = encrypt::authcrypt(b"hi", ALICE, &alice, &[(BOB, &bob.public_key())]).unwrap();
 
         assert_eq!(authcrypt_sender_kid(&jwe).unwrap().as_deref(), Some(ALICE));
-        let result = decrypt(
+        let result = decrypt_bound(
             &jwe,
             BOB,
             &bob,
@@ -892,10 +924,39 @@ mod tests {
 
         assert_eq!(authcrypt_sender_kid(&jwe).unwrap(), None);
         for sender in [None, Some(SenderKey::new(MALLORY, &alice.public_key()))] {
-            let result = decrypt(&jwe, BOB, &bob, sender).unwrap();
+            let result = decrypt_bound(&jwe, BOB, &bob, sender).unwrap();
             assert_eq!(result.plaintext, b"anon");
             assert!(!result.authenticated);
             assert_eq!(result.sender_kid, None);
         }
+    }
+
+    /// The deprecated key-only entry point applies the same binding.
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_decrypt_binds_the_sender_too() {
+        let alice = PrivateKeyAgreement::generate(Curve::X25519);
+        let mallory = PrivateKeyAgreement::generate(Curve::X25519);
+        let bob = PrivateKeyAgreement::generate(Curve::X25519);
+
+        let jwe = encrypt::authcrypt(b"hi", ALICE, &alice, &[(BOB, &bob.public_key())]).unwrap();
+        let result = decrypt(&jwe, BOB, &bob, Some(&alice.public_key())).unwrap();
+        assert!(result.authenticated);
+        assert_eq!(result.sender_kid.as_deref(), Some(ALICE));
+        assert!(!result.legacy_kek_used);
+
+        let forged = encrypt::authcrypt_with_party_info(
+            b"hi",
+            Some(MALLORY),
+            Some(ALICE),
+            &mallory,
+            BOB,
+            &bob.public_key(),
+        )
+        .unwrap();
+        assert_sender_binding_error(decrypt(&forged, BOB, &bob, Some(&mallory.public_key())));
+
+        let anon = encrypt::anoncrypt(b"anon", &[(BOB, &bob.public_key())]).unwrap();
+        assert!(!decrypt(&anon, BOB, &bob, None).unwrap().authenticated);
     }
 }

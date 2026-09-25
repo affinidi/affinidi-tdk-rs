@@ -71,7 +71,9 @@ pub fn pack_plaintext(msg: &Message) -> Result<String, DIDCommError> {
 
 /// Unpack an encrypted message (convenience re-export of decrypt).
 pub use decrypt::SenderKey;
+#[allow(deprecated)]
 pub use decrypt::decrypt as unpack_encrypted;
+pub use decrypt::decrypt_bound as unpack_encrypted_bound;
 
 #[cfg(test)]
 mod tests {
@@ -98,7 +100,7 @@ mod tests {
         )
         .unwrap();
 
-        let decrypted = unpack_encrypted(
+        let decrypted = unpack_encrypted_bound(
             &packed,
             "did:example:bob#key-1",
             &recipient,
@@ -128,7 +130,7 @@ mod tests {
                 .unwrap();
 
         let decrypted =
-            unpack_encrypted(&packed, "did:example:bob#key-1", &recipient, None).unwrap();
+            unpack_encrypted_bound(&packed, "did:example:bob#key-1", &recipient, None).unwrap();
 
         let unpacked = Message::from_json(&decrypted.plaintext).unwrap();
         assert_eq!(unpacked.body["content"], "Anonymous!");
@@ -242,7 +244,7 @@ mod tests {
         )
         .unwrap();
 
-        let decrypted = unpack_encrypted(
+        let decrypted = unpack_encrypted_bound(
             &packed,
             "did:example:bob#p256",
             &recipient,
@@ -278,7 +280,7 @@ mod tests {
         )
         .unwrap();
 
-        let decrypted = unpack_encrypted(
+        let decrypted = unpack_encrypted_bound(
             &packed,
             "did:example:bob#k256",
             &recipient,
@@ -308,7 +310,7 @@ mod tests {
                 .unwrap();
 
         let decrypted =
-            unpack_encrypted(&packed, "did:example:bob#p256", &recipient, None).unwrap();
+            unpack_encrypted_bound(&packed, "did:example:bob#p256", &recipient, None).unwrap();
 
         let unpacked = Message::from_json(&decrypted.plaintext).unwrap();
         assert_eq!(unpacked.body["content"], "P-256 anon");
@@ -329,7 +331,7 @@ mod tests {
                 .unwrap();
 
         let decrypted =
-            unpack_encrypted(&packed, "did:example:bob#k256", &recipient, None).unwrap();
+            unpack_encrypted_bound(&packed, "did:example:bob#k256", &recipient, None).unwrap();
 
         let unpacked = Message::from_json(&decrypted.plaintext).unwrap();
         assert_eq!(unpacked.body["content"], "K-256 anon");
@@ -365,7 +367,7 @@ mod tests {
         .unwrap();
 
         // Step 3: Decrypt
-        let decrypted = unpack_encrypted(
+        let decrypted = unpack_encrypted_bound(
             &packed,
             "did:example:bob#ka-1",
             &recipient_ka,

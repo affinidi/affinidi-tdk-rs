@@ -3,7 +3,7 @@
 use crate::error::DIDCommError;
 use crate::jwe::decrypt::SenderKey;
 use crate::message::Message;
-use affinidi_crypto::jose::key_agreement::PrivateKeyAgreement;
+use affinidi_crypto::jose::key_agreement::{PrivateKeyAgreement, PublicKeyAgreement};
 
 /// The result of unpacking a DIDComm message.
 ///
@@ -20,6 +20,13 @@ pub enum UnpackResult {
         /// was checked against. `None` for anoncrypt.
         sender_kid: Option<String>,
         recipient_kid: String,
+        /// Always `false`: the pre-0.14 (issue #322) ECDH-1PU KEK is no
+        /// longer accepted.
+        #[deprecated(
+            since = "0.15.9",
+            note = "always false: the pre-0.14 ECDH-1PU KEK is no longer accepted"
+        )]
+        legacy_kek_used: bool,
         /// `true` if the encrypted payload was itself a signed JWS
         /// (DIDComm v2.1 sign-then-encrypt) that was verified — i.e. the
         /// message carries non-repudiation, not just authentication.
@@ -34,6 +41,39 @@ pub enum UnpackResult {
     },
     /// A plaintext message (no crypto protection).
     Plaintext(Message),
+}
+
+/// [`unpack_bound`], given the authcrypt sender public key alone.
+///
+/// For authcrypt the key is taken to be the one named by the JWE `skid`, and
+/// the same checks as [`unpack_bound`] apply.
+#[deprecated(
+    since = "0.15.9",
+    note = "use `unpack_bound` with a `SenderKey`. The key passed here must be the one \
+            resolved for the JWE's `skid` (see `jwe::decrypt::authcrypt_sender_kid`); nothing \
+            checks that it is"
+)]
+pub fn unpack(
+    input: &str,
+    recipient_kid: Option<&str>,
+    recipient_private: Option<&PrivateKeyAgreement>,
+    sender_public: Option<&PublicKeyAgreement>,
+    signer_public: Option<&[u8; 32]>,
+) -> Result<UnpackResult, DIDCommError> {
+    let skid = crate::jwe::decrypt::authcrypt_sender_kid(input)
+        .ok()
+        .flatten();
+    let sender = skid
+        .as_deref()
+        .zip(sender_public)
+        .map(|(kid, public)| SenderKey::new(kid, public));
+    unpack_bound(
+        input,
+        recipient_kid,
+        recipient_private,
+        sender,
+        signer_public,
+    )
 }
 
 /// Detect the message format from JSON and unpack accordingly.
@@ -52,7 +92,8 @@ pub enum UnpackResult {
 /// sign-then-encrypt for non-repudiation), the inner signature is
 /// verified too — `signer_public` is then also required, and the result
 /// is [`UnpackResult::Encrypted`] with `non_repudiation = true`.
-pub fn unpack(
+#[allow(deprecated)]
+pub fn unpack_bound(
     input: &str,
     recipient_kid: Option<&str>,
     recipient_private: Option<&PrivateKeyAgreement>,
@@ -70,7 +111,7 @@ pub fn unpack(
             DIDCommError::InvalidMessage("recipient_private required for JWE".into())
         })?;
 
-        let decrypted = crate::jwe::decrypt::decrypt(input, kid, private, sender)?;
+        let decrypted = crate::jwe::decrypt::decrypt_bound(input, kid, private, sender)?;
 
         // DIDComm v2.1 sign-then-encrypt (non-repudiation): the decrypted
         // payload is itself a JWS, not a bare Message. Detect that and
@@ -101,6 +142,7 @@ pub fn unpack(
                 authenticated: decrypted.authenticated,
                 sender_kid: decrypted.sender_kid,
                 recipient_kid: decrypted.recipient_kid,
+                legacy_kek_used: false,
                 non_repudiation: true,
                 signer_kid: verified.signer_kid,
             });
@@ -113,6 +155,7 @@ pub fn unpack(
             authenticated: decrypted.authenticated,
             sender_kid: decrypted.sender_kid,
             recipient_kid: decrypted.recipient_kid,
+            legacy_kek_used: false,
             non_repudiation: false,
             signer_kid: None,
         })
@@ -160,7 +203,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = unpack(
+        let result = unpack_bound(
             &packed,
             Some("did:example:bob#key-1"),
             Some(&recipient),
@@ -193,7 +236,7 @@ mod tests {
         let msg = Message::new("test", serde_json::json!({}));
         let packed = pack::pack_signed(&msg, "did:example:alice#key-1", &sk.to_bytes()).unwrap();
 
-        let result = unpack(&packed, None, None, None, Some(&pk)).unwrap();
+        let result = unpack_bound(&packed, None, None, None, Some(&pk)).unwrap();
         match result {
             UnpackResult::Signed { signer_kid, .. } => {
                 assert_eq!(signer_kid.as_deref(), Some("did:example:alice#key-1"));
@@ -207,7 +250,7 @@ mod tests {
         let msg = Message::new("test", serde_json::json!({"x": true}));
         let packed = pack::pack_plaintext(&msg).unwrap();
 
-        let result = unpack(&packed, None, None, None, None).unwrap();
+        let result = unpack_bound(&packed, None, None, None, None).unwrap();
         match result {
             UnpackResult::Plaintext(m) => {
                 assert_eq!(m.body["x"], true);
@@ -217,7 +260,7 @@ mod tests {
     }
 
     /// #324: DIDComm v2.1 sign-then-encrypt — a JWS wrapped in an
-    /// authcrypt JWE (credo-ts `packSignedAndEncrypted`). unpack() must
+    /// authcrypt JWE (credo-ts `packSignedAndEncrypted`). unpack_bound() must
     /// decrypt, verify the inner signature, and report non-repudiation +
     /// the inner signer kid.
     #[test]
@@ -239,7 +282,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = unpack(
+        let result = unpack_bound(
             &jwe,
             Some("did:example:bob#key-1"),
             Some(&recipient),
@@ -272,7 +315,7 @@ mod tests {
     }
 
     /// A sign-then-encrypt message decrypts but cannot be verified
-    /// without the signer's public key — unpack() must surface that
+    /// without the signer's public key — unpack_bound() must surface that
     /// rather than returning an unverified message.
     #[test]
     fn unpack_sign_then_encrypt_requires_signer_public() {
@@ -291,7 +334,7 @@ mod tests {
         .unwrap();
 
         // signer_public = None → must error, not return an unverified message.
-        let result = unpack(
+        let result = unpack_bound(
             &jwe,
             Some("did:example:bob#key-1"),
             Some(&recipient),
