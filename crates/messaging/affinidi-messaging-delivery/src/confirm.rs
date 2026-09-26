@@ -305,6 +305,10 @@ pub async fn poll_outbox_drain(
 /// report them. `None` when it cannot, and the caller falls back to inferring
 /// pickup from the outbox listing.
 ///
+/// Receipts carry the same trust as the listing they replace — the mediator's
+/// word (see [`MessageTransport::outbox_status`]) — and remove the two ways the
+/// listing misread it.
+///
 /// Receipts replace that inference rather than supplement it. "Drained after
 /// being observed" reads an expiry as a delivery, and a recipient that
 /// collects before the first poll is never observed at all. A receipt says who
@@ -331,17 +335,23 @@ async fn poll_outbox_status(
             .iter()
             .filter_map(|entry| entry.hop_id.clone())
             .collect();
-        let statuses = match transport
+        let Some(statuses) = transport
             .outbox_status(&hop_ids)
             .await
             .map_err(|e| OutboxError::Backend(format!("outbox status failed: {e}")))?
-        {
-            Some(statuses) if statuses.len() == hop_ids.len() => statuses,
-            // No signal, or an answer that does not line up with the question:
-            // use the outbox listing instead.
-            _ => return Ok(None),
+        else {
+            // No signal: use the outbox listing instead.
+            return Ok(None);
         };
-        for (entry, status) in batch.iter().cloned().zip(statuses) {
+        // Each entry takes the status recorded under its own hop id, and
+        // nothing else: an id the answer omits is no evidence, and a status
+        // under an id not asked about settles nothing.
+        for entry in batch.iter().cloned() {
+            let status = entry
+                .hop_id
+                .as_ref()
+                .and_then(|hop| statuses.get(hop).copied())
+                .unwrap_or(OutboxStatus::Unknown);
             settle_from_status(store, entry, status, &mut report).await?;
         }
     }
@@ -651,14 +661,12 @@ mod tests {
         }
         async fn outbox_status(
             &self,
-            hop_ids: &[String],
-        ) -> Result<Option<Vec<OutboxStatus>>, affinidi_messaging_core::MessagingError> {
-            Ok(self.status.lock().unwrap().as_ref().map(|receipts| {
-                hop_ids
-                    .iter()
-                    .map(|id| receipts.get(id).copied().unwrap_or(OutboxStatus::Unknown))
-                    .collect()
-            }))
+            _hop_ids: &[String],
+        ) -> Result<
+            Option<std::collections::HashMap<String, OutboxStatus>>,
+            affinidi_messaging_core::MessagingError,
+        > {
+            Ok(self.status.lock().unwrap().clone())
         }
     }
 
@@ -794,6 +802,25 @@ mod tests {
         let unknown = store.get("k3").await.unwrap().unwrap();
         assert_eq!(unknown.state, OutboxState::Sent);
         assert!(!unknown.outbox_observed);
+    }
+
+    /// A status can only settle the message it names: one recorded under an
+    /// id nobody asked about, or an answer that omits the entry, leaves it as
+    /// it was — whatever the order or count of the answer.
+    #[tokio::test]
+    async fn a_status_under_another_id_settles_nothing() {
+        let store = InMemoryOutboxStore::new();
+        sent_with_hop(&store, "k1", "h1").await;
+        let transport = DrainMockTransport::with_status(
+            Some(vec![]),
+            &[("someone-else", OutboxStatus::Collected)],
+        );
+
+        let r = poll_outbox_drain(&transport, &store).await.unwrap();
+        assert_eq!((r.delivered, r.lost, r.observed), (0, 0, 0), "{r:?}");
+        let e = store.get("k1").await.unwrap().unwrap();
+        assert_eq!(e.state, OutboxState::Sent);
+        assert!(!e.outbox_observed);
     }
 
     /// A mediator without receipts answers `None`, and the outbox listing is

@@ -9,6 +9,7 @@ use crate::error::MessagingError;
 use crate::types::ReceivedMessage;
 use futures_util::stream::BoxStream;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tokio::sync::watch;
 
 /// Re-falsifiable connection / reachability state of a messaging transport.
@@ -272,8 +273,8 @@ pub trait MessageTransport: Send + Sync {
         Ok(None)
     }
 
-    /// Where each of `hop_ids` stands, as the sender's mediator records it, in
-    /// the order asked (`messaging/message/status/0.1`).
+    /// Where each of `hop_ids` stands, as the sender's mediator records it
+    /// (`messaging/message/status/0.1`), keyed by hop id.
     ///
     /// Stronger evidence than [`outbox_message_ids`](Self::outbox_message_ids).
     /// "Gone from the outbox" cannot tell a recipient's pickup from an expiry,
@@ -282,12 +283,25 @@ pub trait MessageTransport: Send + Sync {
     /// layer prefers this and falls back to the outbox listing when it answers
     /// `None`.
     ///
+    /// Keyed rather than positional so a status can only ever settle the
+    /// message it names: an id the answer omits, or one it names that was not
+    /// asked about, is ignored rather than applied to a neighbour.
+    ///
+    /// # Trust
+    ///
+    /// This is the mediator's own account, like the outbox listing it
+    /// replaces — transport evidence (VTI-TRN-041 class 3), not proof from the
+    /// recipient. A mediator that lies about collection can equally drop a
+    /// message and delete it from the outbox, and it is the party entrusted
+    /// with the delivery either way. A sender that needs evidence independent
+    /// of its mediator asks the recipient for a receipt.
+    ///
     /// The default returns `None`: no such signal (a stateless transport, or a
     /// mediator that predates receipts).
     async fn outbox_status(
         &self,
         _hop_ids: &[String],
-    ) -> Result<Option<Vec<OutboxStatus>>, MessagingError> {
+    ) -> Result<Option<HashMap<String, OutboxStatus>>, MessagingError> {
         Ok(None)
     }
 }

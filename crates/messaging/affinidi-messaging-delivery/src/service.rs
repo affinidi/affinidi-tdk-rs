@@ -772,7 +772,7 @@ impl MessageTransport for PrimaryTransport {
     async fn outbox_status(
         &self,
         hop_ids: &[String],
-    ) -> Result<Option<Vec<OutboxStatus>>, MessagingError> {
+    ) -> Result<Option<std::collections::HashMap<String, OutboxStatus>>, MessagingError> {
         let transport = self
             .inner
             .primary_transport()
