@@ -613,7 +613,9 @@ async fn a_trust_task_response_is_signed_by_the_mediator() {
     use affinidi_messaging_sdk::protocols::trust_tasks::ENVELOPE_TYPE;
     use affinidi_messaging_sdk::transports::SendMessageResponse;
     use std::sync::Arc;
-    use trust_tasks_proof::affinidi::{CachedDidResolver, parse_data_integrity_proof};
+    use trust_tasks_proof::affinidi::{
+        CachedDidResolver, ProofPurpose, PurposeBound, parse_data_integrity_proof,
+    };
 
     let env = TestEnvironment::spawn()
         .await
@@ -674,11 +676,16 @@ async fn a_trust_task_response_is_signed_by_the_mediator() {
 
     let mut unsigned = body.as_object().unwrap().clone();
     unsigned.remove("proof");
-    let resolver = CachedDidResolver::new(Arc::new(
-        DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap(),
-    ));
+    // Bound to the purpose the proof declares, so the mediator's key must be
+    // listed under that relationship in its DID document.
+    let resolver = PurposeBound::new(
+        CachedDidResolver::new(Arc::new(
+            DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+                .await
+                .unwrap(),
+        )),
+        ProofPurpose::parse(&proof.proof_purpose).expect("a known proofPurpose"),
+    );
     proof
         .verify(
             &serde_json::Value::Object(unsigned),
