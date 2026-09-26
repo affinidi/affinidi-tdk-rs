@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.19 — delivery is settled on the mediator's receipt, not on the outbox draining
+
+`poll_outbox_drain` inferred pickup from the sender's outbox: a hop-id seen
+queued and later gone settled `Delivered`. That was wrong both ways.
+
+**Collected messages produced no evidence.** A live recipient takes a message
+within milliseconds, before the first poll has seen it queued. It was never
+observed, so it never settled, ran out its window `Unconfirmed` — and an
+escalator bound to another transport sent it again.
+
+**Lost messages read as delivered.** The mediator removes a message the same
+way when it expires or its account is removed. An entry observed queued and
+then expired settled `Delivered`.
+
+When the transport reports the mediator's receipts
+(`MessageTransport::outbox_status`), they now settle each entry instead:
+`Collected` → `Delivered`; `Discarded` or `Withdrawn` → `Failed`, so an
+escalator can send it another way; `Queued` or `Delivered` → observed;
+`Unknown` → left to its window. Receipts replace the inference rather than
+supplement it — an entry the mediator answered for is never settled by the
+outbox draining. A transport or mediator without receipts answers `None`, and
+the outbox listing is used exactly as before. `DrainPollReport` gains `lost`.
+See affinidi-tdk-rs#896.
+
 ## 0.1.18 — the drain backs off per destination, not per message
 
 The drain discarded the send error entirely (`Err(_e)`), so a queue-full

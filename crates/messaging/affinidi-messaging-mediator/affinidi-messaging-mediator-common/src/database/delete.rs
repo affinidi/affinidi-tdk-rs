@@ -4,6 +4,8 @@
  */
 use super::DatabaseHandler;
 use crate::errors::MediatorError;
+use crate::store::types::{DeletionAuthority, OutboxReceipt};
+use crate::store::{OUTBOX_RECEIPT_TTL, ops};
 use crate::types::problem_report::{ProblemReportScope, ProblemReportSorter};
 use axum::http::StatusCode;
 use tracing::{Instrument, Level, debug, info, span, warn};
@@ -33,6 +35,27 @@ impl DatabaseHandler {
         );
         async move {
             let mut conn = self.get_async_connection().await?;
+
+            // Read before the delete, because the delete removes the metadata.
+            // The receipt is written here in Rust rather than in the stored
+            // function for the reason `mark_delivered` gives: a stale function
+            // library loads without complaint and would silently never write
+            // it. A metadata read that fails only costs the receipt.
+            let parties: Option<(String, String)> = redis::cmd("HMGET")
+                .arg(["MSG:META:", message_hash].concat())
+                .arg("TO")
+                .arg("FROM")
+                .arg("SEND_ID")
+                .query_async::<Vec<Option<String>>>(&mut conn)
+                .await
+                .ok()
+                .and_then(|fields| match fields.as_slice() {
+                    // `SEND_ID` is present exactly when the message sits in
+                    // a sender's outbox, i.e. has a recorded sender.
+                    [Some(to), Some(from), Some(_)] => Some((to.clone(), from.clone())),
+                    _ => None,
+                });
+
             let mut cmd = redis::cmd("FCALL");
             cmd.arg("delete_message")
                 .arg(1)
@@ -46,6 +69,17 @@ impl DatabaseHandler {
             match result {
                 Ok(response) if response == "OK" => {
                     info!("Successfully deleted message_hash({})", message_hash);
+                    if let Some((to, from)) = parties {
+                        self.record_outbox_receipt(
+                            &mut conn,
+                            message_hash,
+                            did_hash,
+                            admin_did_hash.is_some(),
+                            &to,
+                            &from,
+                        )
+                        .await;
+                    }
                     Ok(())
                 }
                 Ok(response) => {
@@ -124,4 +158,59 @@ impl DatabaseHandler {
         .instrument(_span)
         .await
     }
+
+    /// Leave `from` a receipt saying why `message_hash` left its outbox.
+    ///
+    /// Best-effort: the message is already gone, and a receipt that could not
+    /// be written reads as `Unknown` to the sender, which it treats as no
+    /// evidence. Never as delivery.
+    async fn record_outbox_receipt(
+        &self,
+        conn: &mut redis::aio::ConnectionManager,
+        message_hash: &str,
+        did_hash: &str,
+        as_admin: bool,
+        to: &str,
+        from: &str,
+    ) {
+        let authority = if as_admin {
+            DeletionAuthority::Admin {
+                admin_did_hash: did_hash.to_string(),
+            }
+        } else {
+            DeletionAuthority::Owner {
+                did_hash: did_hash.to_string(),
+            }
+        };
+        let Some(reason) = ops::removal_reason(&authority, to, Some(from)) else {
+            return;
+        };
+        let receipt = OutboxReceipt {
+            reason,
+            at_ms: now_ms(),
+        };
+        let written: Result<(), redis::RedisError> = redis::cmd("SET")
+            .arg(outbox_receipt_key(from, message_hash))
+            .arg(receipt.encode())
+            .arg("EX")
+            .arg(OUTBOX_RECEIPT_TTL.as_secs())
+            .query_async(conn)
+            .await;
+        if let Err(err) = written {
+            warn!("Couldn't record the outbox receipt for message_hash({message_hash}): {err}");
+        }
+    }
+}
+
+/// Where a sender's receipt for one removed message lives. Keyed under the
+/// sender so no other account's lookup can reach it.
+pub(crate) fn outbox_receipt_key(from: &str, message_hash: &str) -> String {
+    ["RECEIPT:", from, ":", message_hash].concat()
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }

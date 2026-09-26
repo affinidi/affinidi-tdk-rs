@@ -271,6 +271,53 @@ pub trait MessageTransport: Send + Sync {
     async fn outbox_message_ids(&self) -> Result<Option<Vec<String>>, MessagingError> {
         Ok(None)
     }
+
+    /// Where each of `hop_ids` stands, as the sender's mediator records it, in
+    /// the order asked (`messaging/message/status/0.1`).
+    ///
+    /// Stronger evidence than [`outbox_message_ids`](Self::outbox_message_ids).
+    /// "Gone from the outbox" cannot tell a recipient's pickup from an expiry,
+    /// and a recipient that collects before the first poll never appears at
+    /// all. A mediator that keeps receipts says which it was. The delivery
+    /// layer prefers this and falls back to the outbox listing when it answers
+    /// `None`.
+    ///
+    /// The default returns `None`: no such signal (a stateless transport, or a
+    /// mediator that predates receipts).
+    async fn outbox_status(
+        &self,
+        _hop_ids: &[String],
+    ) -> Result<Option<Vec<OutboxStatus>>, MessagingError> {
+        Ok(None)
+    }
+}
+
+/// Where a sent message stands at the sender's mediator.
+///
+/// # Why this exists
+///
+/// A message leaves the sender's outbox in the same way whether the recipient
+/// took it or the mediator discarded it, so the outbox alone can only say
+/// "gone". The removal reason is what separates delivery from loss, and it is
+/// decided by who removed the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OutboxStatus {
+    /// Held for the recipient, not yet handed over.
+    Queued,
+    /// Handed to the recipient, not yet removed by it. Not yet evidence of
+    /// collection: the recipient may still fail to process it.
+    Delivered,
+    /// Removed by the recipient. Evidence of delivery.
+    Collected,
+    /// Removed by the sender.
+    Withdrawn,
+    /// Removed by the mediator before the recipient took it: expired, or the
+    /// account was removed. Evidence of loss.
+    Discarded,
+    /// The mediator holds neither the message nor a receipt for it. No
+    /// evidence either way.
+    Unknown,
 }
 
 #[cfg(test)]

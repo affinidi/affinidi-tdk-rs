@@ -17,7 +17,9 @@ use crate::store::redis::database::{
     forwarding::ForwardQueueEntry as InnerForwardEntry, stats::MetadataStats as InnerMetadataStats,
     store::MessageMetaData as InnerMessageMetaData,
 };
-use crate::store::{DeliveryDecision, DeliveryMarkReport, DeliveryState};
+use crate::store::{
+    DeliveryDecision, DeliveryMarkReport, DeliveryState, OutboxReceipt, SentMessageState, ops,
+};
 use crate::types::{
     accounts::{
         Account, AccountActivity, AccountStats, AccountStatsDelta, AccountType, ActivityKind,
@@ -541,6 +543,63 @@ impl MediatorStore for RedisStore {
             report.expiry_advanced = 0;
         }
         Ok(report)
+    }
+
+    async fn sent_message_states(
+        &self,
+        sender_did_hash: &str,
+        msg_ids: &[String],
+    ) -> Result<Vec<SentMessageState>, MediatorError> {
+        if msg_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.get_connection().await?;
+
+        // One round trip: each message's sender and first-delivery stamp, and
+        // the requester's receipt for it.
+        let mut pipe = redis::pipe();
+        for id in msg_ids {
+            pipe.cmd("HMGET")
+                .arg(["MSG:META:", id].concat())
+                .arg("FROM")
+                .arg("FIRST_DELIVERED_AT");
+            pipe.cmd("GET")
+                .arg(crate::database::delete::outbox_receipt_key(
+                    sender_did_hash,
+                    id,
+                ));
+        }
+        let replies: Vec<redis::Value> = pipe.query_async(&mut conn).await.map_err(|err| {
+            MediatorError::DatabaseError(
+                14,
+                "NA".into(),
+                format!("Couldn't read sent-message states: {err}"),
+            )
+        })?;
+
+        let mut states = Vec::with_capacity(msg_ids.len());
+        let mut replies = replies.into_iter();
+        while let (Some(meta), Some(receipt)) = (replies.next(), replies.next()) {
+            let fields: Vec<Option<String>> = redis::from_redis_value(meta).unwrap_or_default();
+            let receipt: Option<String> = redis::from_redis_value(receipt).unwrap_or(None);
+            // `HMGET` on a missing key answers with nulls, so no `FROM` is how
+            // a removed message presents.
+            let held = fields
+                .first()
+                .cloned()
+                .flatten()
+                .map(|from| (from, fields.get(1).cloned().flatten()));
+            let state = ops::sent_message_state(
+                sender_did_hash,
+                held.as_ref().map(|(from, first)| ops::HeldMessage {
+                    from_did_hash: Some(from.as_str()),
+                    first_delivered_at_ms: first.as_ref().and_then(|v| v.parse().ok()),
+                }),
+                receipt.as_deref().and_then(OutboxReceipt::decode),
+            );
+            states.push(state);
+        }
+        Ok(states)
     }
 
     async fn delivery_state(&self, msg_id: &str) -> Result<Option<DeliveryState>, MediatorError> {

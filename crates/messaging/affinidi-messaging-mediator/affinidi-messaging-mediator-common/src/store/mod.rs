@@ -278,9 +278,19 @@ pub mod redis;
 
 pub use types::{
     DeletionAuthority, DeliveryDecision, DeliveryState, ExpiryReport, ForwardQueueEntry,
-    InboxStatusReply, MessageMetaData, MetadataStats, PubSubRecord, Session, SessionClaims,
-    SessionState, SessionSweepReport, StatCounter, StoreHealth, StreamingClientState,
+    InboxStatusReply, MessageMetaData, MetadataStats, OutboxReceipt, PubSubRecord, RemovalReason,
+    SentMessageState, Session, SessionClaims, SessionState, SessionSweepReport, StatCounter,
+    StoreHealth, StreamingClientState,
 };
+
+/// How long a sender's [`OutboxReceipt`] is kept after its message leaves the
+/// queue (`messaging/message/status/0.1` asks for at least 24 hours).
+///
+/// Long enough that a sender polling on a delivery window of minutes or hours
+/// reliably finds it; bounded because a receipt is one record per removed
+/// message. After it, the sender's answer for that message is `Unknown`, which
+/// it must treat as no evidence either way.
+pub const OUTBOX_RECEIPT_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Fail-closed session rename used by the default
 /// [`MediatorStore::update_session_authenticated`]: delete the old session
@@ -397,11 +407,38 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     ///
     /// Removes the message body, both stream entries (inbox + outbox),
     /// and the metadata record atomically.
+    ///
+    /// When the message has a recorded sender, also leaves that sender an
+    /// [`OutboxReceipt`] saying why it left ([`ops::removal_reason`]), kept for
+    /// [`OUTBOX_RECEIPT_TTL`] and read by
+    /// [`sent_message_states`](Self::sent_message_states). Every removal goes
+    /// through here — a recipient's acknowledgement, a fetch with delete, a
+    /// purge, the expiry sweep, account removal — which is what makes the
+    /// receipt a complete record rather than a sample.
     async fn delete_message(
         &self,
         message_hash: &str,
         by: DeletionAuthority,
     ) -> Result<(), MediatorError>;
+
+    /// Where each of `msg_ids` stands for `sender_did_hash`, in the order asked
+    /// (`messaging/message/status/0.1`).
+    ///
+    /// A held message answers `Queued` or `Delivered`, and a removed one
+    /// answers from its receipt, but only when `sender_did_hash` is the
+    /// message's recorded sender: anything else is `Unknown`, identically, so
+    /// the answer cannot be used to learn whether another account's message
+    /// exists. See [`ops::sent_message_state`].
+    ///
+    /// The default answers `Unknown` for everything — true of a backend that
+    /// keeps no receipts, and a sender treats it as no evidence.
+    async fn sent_message_states(
+        &self,
+        _sender_did_hash: &str,
+        msg_ids: &[String],
+    ) -> Result<Vec<SentMessageState>, MediatorError> {
+        Ok(vec![SentMessageState::Unknown; msg_ids.len()])
+    }
 
     /// Retrieve one message by ID with the body and metadata.
     ///

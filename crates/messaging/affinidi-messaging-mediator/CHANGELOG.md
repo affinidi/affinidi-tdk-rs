@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased (0.30.1) — the in-process stores keep a sender's receipts
+
+The memory and Fjall stores implement `mediator-common` 0.16.24's outbox
+receipts: a removed message leaves its sender a receipt saying whether the
+recipient collected it, the sender withdrew it or the mediator discarded it,
+and `sent_message_states` answers from it. Fjall writes the receipt in the
+same batch as the delete, so a removal never commits without it, and keeps it
+in two additive partitions — `outbox_receipts`, and its expiry index
+`outbox_receipt_expiry`, which the message-expiry sweep drains. A database
+written before them simply has none.
+
+The store conformance suite checks the reasons, the sender-only visibility and
+the anonymous case against every backend, and retention against the
+in-process ones. See affinidi-tdk-rs#896.
+
 ## Unreleased (0.30.0) — trust-tasks-rs 0.23
 
 trust-tasks-rs and trust-tasks-proof 0.22 -> 0.23. A minor rather than a patch, as for 0.21 and 0.22: the public API carries generated Trust Task types, so a consumer must move in the same change. 0.23 also resolves a proof's key only when the issuer lists it under the relationship the proof declares (proofPurpose, VTI-KEY-022), so a Trust Task signed with a key its DID document does not list for that purpose is now refused.
