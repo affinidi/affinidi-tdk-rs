@@ -1,5 +1,34 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.16.24) — a sender's receipts for its removed messages
+
+`MediatorStore::delete_message` now leaves the message's sender an
+`OutboxReceipt` saying why the message left the queue, and the new
+`MediatorStore::sent_message_states` answers from it
+(`messaging/message/status/0.1`).
+
+The delete used to leave no trace, and it runs for a recipient's
+acknowledgement, a fetch with delete, a purge, the expiry sweep and account
+removal alike. So a sender could only ever learn that a message had gone —
+never whether its recipient took it or the mediator discarded it. The reason
+is now recorded, decided by **who** removed the message
+(`store::ops::removal_reason`): `Collected` when the recipient did, `Withdrawn`
+when the sender did, `Discarded` for an admin removal. `Collected` is never
+recorded for a removal the recipient did not make.
+
+- Receipts are keyed under the sender alone and kept for
+  `OUTBOX_RECEIPT_TTL` (24 hours). A message with no recorded sender leaves
+  none.
+- `sent_message_states` answers only for the requester's own sending, and
+  `Unknown` for anything else, so it cannot be used to learn whether another
+  account's message exists. The default implementation answers `Unknown` for
+  everything.
+- Redis writes the receipt in Rust, beside the stored `delete_message`, not in
+  `atm-functions.lua`: a stale function library loads without complaint and
+  would silently never write it. No Lua change, so no function reload.
+
+See affinidi-tdk-rs#896.
+
 ## Unreleased (0.16.23) — per-account lifetime counters
 
 `MediatorStore` gains two methods for an account's own totals:

@@ -475,7 +475,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-core"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-delivery"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "affinidi-messaging-core",
  "async-trait",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator"
-version = "0.30.0"
+version = "0.30.1"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-common"
-version = "0.16.23"
+version = "0.16.24"
 dependencies = [
  "aes-gcm",
  "affinidi-net-guard",

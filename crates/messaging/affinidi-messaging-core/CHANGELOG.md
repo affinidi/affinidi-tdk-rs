@@ -1,6 +1,24 @@
 # Affinidi Messaging Core Changelog
 
 ## Unreleased
+### 0.1.11 — a transport can say why a message left the outbox
+
+`MessageTransport::outbox_status(hop_ids)` reports where each sent message
+stands at the sender's mediator, as an `OutboxStatus` keyed by hop id:
+`Queued`, `Delivered` (handed over, not yet removed), `Collected` (removed by
+the recipient), `Withdrawn` (by the sender), `Discarded` (by the mediator —
+expired, or the account removed) or `Unknown`. Keyed rather than positional,
+so a status can only settle the message it names. It is the mediator's own
+account — the same trust as the outbox listing, not proof from the recipient.
+It defaults to `Ok(None)`, so existing transports are unaffected.
+
+`outbox_message_ids` could only say a message had gone, and a message goes the
+same way whether its recipient took it or the mediator expired it — so a
+delivery layer inferring pickup from it read expiries as deliveries, and never
+saw a recipient that collected before its first poll. Who removed the message
+is what separates delivery from loss, and this is how a transport reports it.
+See affinidi-tdk-rs#896.
+
 ### 0.1.10 — `reply_expected` means an answer is still owed
 
 Documentation only. `InboundKind::RelationshipControl::reply_expected` is

@@ -64,8 +64,9 @@ use affinidi_messaging_mediator_common::{
     store::{
         DeletionAuthority, DeliveryDecision, DeliveryMarkReport, DeliveryState, ExpiryReport,
         ForwardQueueEntry, InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats,
-        OnExpired, POISON_ATTEMPTS, PubSubRecord, Session, SessionState, SessionSweepReport,
-        StatCounter, StoreHealth, StreamingClientState, TrustTaskClaim, ops,
+        OUTBOX_RECEIPT_TTL, OnExpired, OutboxReceipt, POISON_ATTEMPTS, PubSubRecord,
+        SentMessageState, Session, SessionState, SessionSweepReport, StatCounter, StoreHealth,
+        StreamingClientState, TrustTaskClaim, ops,
     },
     types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
@@ -227,6 +228,37 @@ const PEER_QUEUE_SEP: u8 = 0xFF;
 /// and `peer_queue_count` reads 0 until traffic repopulates it.
 const PARTITION_PEER_QUEUE: &str = "peer_queue";
 
+/// `<sender_hash> 0xFF <msg_id>` -> [`StoredOutboxReceipt`]: why a sent
+/// message left the queue (`messaging/message/status/0.1`). Additive: a
+/// database written before it existed has none, and every sender's answer for
+/// an older removal is `Unknown`.
+const PARTITION_OUTBOX_RECEIPTS: &str = "outbox_receipts";
+
+/// `expires_at_be_8 || <receipt key>` -> empty. The receipts' expiry index, so
+/// the sweep range-scans what is due rather than every receipt.
+const PARTITION_OUTBOX_RECEIPT_EXPIRY: &str = "outbox_receipt_expiry";
+
+fn outbox_receipt_key(from: &str, msg_id: &str) -> Vec<u8> {
+    let mut key = Vec::with_capacity(from.len() + 1 + msg_id.len());
+    key.extend_from_slice(from.as_bytes());
+    key.push(PEER_QUEUE_SEP);
+    key.extend_from_slice(msg_id.as_bytes());
+    key
+}
+
+fn outbox_receipt_expiry_key(expires_at: u64, receipt_key: &[u8]) -> Vec<u8> {
+    let mut key = expires_at.to_be_bytes().to_vec();
+    key.extend_from_slice(receipt_key);
+    key
+}
+
+/// Wire format for the `outbox_receipts` partition.
+#[derive(Serialize, Deserialize)]
+struct StoredOutboxReceipt {
+    receipt: OutboxReceipt,
+    expires_at: u64,
+}
+
 /// Fjall-backed [`MediatorStore`].
 ///
 /// Construct with [`FjallStore::open`] and a path to a directory the
@@ -262,6 +294,9 @@ pub struct FjallStore {
     /// row is removed when it reaches zero, so the partition holds only pairs
     /// with messages actually in flight.
     peer_queue: Keyspace,
+    /// Senders' receipts for removed messages, and their expiry index.
+    outbox_receipts: Keyspace,
+    outbox_receipt_expiry: Keyspace,
 
     // ─── In-process state ───────────────────────────────────────────
     /// Serializes writes across multiple partitions so composite ops
@@ -526,6 +561,47 @@ fn peer_queue_key(from_hash: &str, to_hash: &str) -> Vec<u8> {
 }
 
 impl FjallStore {
+    /// Remove the receipts whose retention ended at or before `now_secs`.
+    ///
+    /// Range-scans the expiry index, then removes each receipt with its index
+    /// entry under the write lock. A receipt re-recorded for the same message
+    /// since the scan carries a later expiry and a different index key, so it
+    /// survives.
+    async fn sweep_expired_outbox_receipts(&self, now_secs: u64) -> Result<usize, MediatorError> {
+        let end = (now_secs.saturating_add(1)).to_be_bytes().to_vec();
+        let mut due: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for guard in self.outbox_receipt_expiry.range(..end) {
+            let (key, _) = guard
+                .into_inner()
+                .map_err(|e| Self::db_err("sweep_expired_outbox_receipts:range", e))?;
+            if key.len() > 8 {
+                due.push((key.as_ref().to_vec(), key[8..].to_vec()));
+            }
+        }
+        if due.is_empty() {
+            return Ok(0);
+        }
+        let _guard = self.write_lock.lock().await;
+        let mut batch = self.db.batch();
+        let mut removed = 0;
+        for (index_key, receipt_key) in due {
+            batch.remove(&self.outbox_receipt_expiry, index_key);
+            if let Some(raw) = self
+                .outbox_receipts
+                .get(&receipt_key)
+                .map_err(|e| Self::db_err("sweep_expired_outbox_receipts:get", e))?
+                && Self::decode::<StoredOutboxReceipt>(&raw)?.expires_at <= now_secs
+            {
+                batch.remove(&self.outbox_receipts, receipt_key);
+                removed += 1;
+            }
+        }
+        batch
+            .commit()
+            .map_err(|e| Self::db_err("sweep_expired_outbox_receipts:commit", e))?;
+        Ok(removed)
+    }
+
     /// An account's counters as stored, or all-zeroes when it has none.
     fn read_stats(&self, key: &str) -> Result<AccountStats, MediatorError> {
         let Some(raw) = self
@@ -719,6 +795,8 @@ impl FjallStore {
             globals: open_partition(PARTITION_GLOBALS)?,
             streaming_clients: open_partition(PARTITION_STREAMING_CLIENTS)?,
             peer_queue: open_partition(PARTITION_PEER_QUEUE)?,
+            outbox_receipts: open_partition(PARTITION_OUTBOX_RECEIPTS)?,
+            outbox_receipt_expiry: open_partition(PARTITION_OUTBOX_RECEIPT_EXPIRY)?,
             audit_log,
             db,
             path,
@@ -1199,6 +1277,30 @@ impl MediatorStore for FjallStore {
         if stored.expires_at > 0 {
             batch.remove(&self.expiry, expiry_key(stored.expires_at, message_hash));
         }
+        // The sender's receipt, in the same batch as the delete, so a removal
+        // never commits without it.
+        if let (Some(from), Some(_)) = (&stored.from_did_hash, stored.send_id)
+            && let Some(reason) = ops::removal_reason(&by, &stored.to_did_hash, Some(from))
+        {
+            let expires_at = now_ms() / 1_000 + OUTBOX_RECEIPT_TTL.as_secs();
+            let key = outbox_receipt_key(from, message_hash);
+            batch.insert(
+                &self.outbox_receipt_expiry,
+                outbox_receipt_expiry_key(expires_at, &key),
+                Vec::<u8>::new(),
+            );
+            batch.insert(
+                &self.outbox_receipts,
+                key,
+                Self::encode(&StoredOutboxReceipt {
+                    receipt: OutboxReceipt {
+                        reason,
+                        at_ms: now_ms(),
+                    },
+                    expires_at,
+                })?,
+            );
+        }
 
         batch
             .commit()
@@ -1207,6 +1309,44 @@ impl MediatorStore for FjallStore {
         let _ = self.bump_global("DELETED_BYTES", stored.bytes as i64);
         let _ = self.bump_global("DELETED_COUNT", 1);
         Ok(())
+    }
+
+    async fn sent_message_states(
+        &self,
+        sender_did_hash: &str,
+        msg_ids: &[String],
+    ) -> Result<Vec<SentMessageState>, MediatorError> {
+        let now = now_ms() / 1_000;
+        let mut states = Vec::with_capacity(msg_ids.len());
+        for id in msg_ids {
+            let held: Option<StoredMessage> = match self
+                .messages
+                .get(id.as_bytes())
+                .map_err(|e| Self::db_err("sent_message_states:messages.get", e))?
+            {
+                Some(raw) => Some(Self::decode(&raw)?),
+                None => None,
+            };
+            let receipt = match self
+                .outbox_receipts
+                .get(outbox_receipt_key(sender_did_hash, id))
+                .map_err(|e| Self::db_err("sent_message_states:receipts.get", e))?
+            {
+                Some(raw) => Some(Self::decode::<StoredOutboxReceipt>(&raw)?)
+                    .filter(|stored| stored.expires_at > now)
+                    .map(|stored| stored.receipt),
+                None => None,
+            };
+            states.push(ops::sent_message_state(
+                sender_did_hash,
+                held.as_ref().map(|message| ops::HeldMessage {
+                    from_did_hash: message.from_did_hash.as_deref(),
+                    first_delivered_at_ms: message.first_delivered_at_ms,
+                }),
+                receipt,
+            ));
+        }
+        Ok(states)
     }
 
     async fn mark_delivered(
@@ -3299,6 +3439,7 @@ impl MediatorStore for FjallStore {
                 Err(_) => report.already_deleted += 1,
             }
         }
+        self.sweep_expired_outbox_receipts(now_secs).await?;
         Ok(report)
     }
 

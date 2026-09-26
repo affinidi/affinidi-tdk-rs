@@ -9,6 +9,7 @@ use crate::error::MessagingError;
 use crate::types::ReceivedMessage;
 use futures_util::stream::BoxStream;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tokio::sync::watch;
 
 /// Re-falsifiable connection / reachability state of a messaging transport.
@@ -271,6 +272,66 @@ pub trait MessageTransport: Send + Sync {
     async fn outbox_message_ids(&self) -> Result<Option<Vec<String>>, MessagingError> {
         Ok(None)
     }
+
+    /// Where each of `hop_ids` stands, as the sender's mediator records it
+    /// (`messaging/message/status/0.1`), keyed by hop id.
+    ///
+    /// Stronger evidence than [`outbox_message_ids`](Self::outbox_message_ids).
+    /// "Gone from the outbox" cannot tell a recipient's pickup from an expiry,
+    /// and a recipient that collects before the first poll never appears at
+    /// all. A mediator that keeps receipts says which it was. The delivery
+    /// layer prefers this and falls back to the outbox listing when it answers
+    /// `None`.
+    ///
+    /// Keyed rather than positional so a status can only ever settle the
+    /// message it names: an id the answer omits, or one it names that was not
+    /// asked about, is ignored rather than applied to a neighbour.
+    ///
+    /// # Trust
+    ///
+    /// This is the mediator's own account, like the outbox listing it
+    /// replaces — transport evidence (VTI-TRN-041 class 3), not proof from the
+    /// recipient. A mediator that lies about collection can equally drop a
+    /// message and delete it from the outbox, and it is the party entrusted
+    /// with the delivery either way. A sender that needs evidence independent
+    /// of its mediator asks the recipient for a receipt.
+    ///
+    /// The default returns `None`: no such signal (a stateless transport, or a
+    /// mediator that predates receipts).
+    async fn outbox_status(
+        &self,
+        _hop_ids: &[String],
+    ) -> Result<Option<HashMap<String, OutboxStatus>>, MessagingError> {
+        Ok(None)
+    }
+}
+
+/// Where a sent message stands at the sender's mediator.
+///
+/// # Why this exists
+///
+/// A message leaves the sender's outbox in the same way whether the recipient
+/// took it or the mediator discarded it, so the outbox alone can only say
+/// "gone". The removal reason is what separates delivery from loss, and it is
+/// decided by who removed the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OutboxStatus {
+    /// Held for the recipient, not yet handed over.
+    Queued,
+    /// Handed to the recipient, not yet removed by it. Not yet evidence of
+    /// collection: the recipient may still fail to process it.
+    Delivered,
+    /// Removed by the recipient. Evidence of delivery.
+    Collected,
+    /// Removed by the sender.
+    Withdrawn,
+    /// Removed by the mediator before the recipient took it: expired, or the
+    /// account was removed. Evidence of loss.
+    Discarded,
+    /// The mediator holds neither the message nor a receipt for it. No
+    /// evidence either way.
+    Unknown,
 }
 
 #[cfg(test)]

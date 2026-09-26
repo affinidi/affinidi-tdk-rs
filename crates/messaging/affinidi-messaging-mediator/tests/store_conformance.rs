@@ -1090,6 +1090,196 @@ async fn check_expiry_sweep_reports_each_message(store: Arc<dyn MediatorStore>) 
     assert!(store.get_message(to, &kept).await.unwrap().is_some());
 }
 
+/// Store four messages for the outbox-receipt checks: three from `from` and one
+/// anonymous, all to `to`.
+async fn receipt_fixture(
+    store: &Arc<dyn MediatorStore>,
+    to: &str,
+    from: &str,
+    tag: &str,
+) -> [String; 4] {
+    store
+        .account_add(to, &allow_all(), None)
+        .await
+        .expect("account_add recipient");
+    store
+        .account_add(from, &allow_all(), None)
+        .await
+        .expect("account_add sender");
+    let mut ids = Vec::new();
+    for (label, sender) in [
+        ("collected", Some(from)),
+        ("withdrawn", Some(from)),
+        ("discarded", Some(from)),
+        ("anonymous", None),
+    ] {
+        let body = format!("{{\"protected\":\"receipts-{tag}-{label}\"}}");
+        ids.push(
+            store
+                .store_message("s", &body, to, sender, NEVER, 1000)
+                .await
+                .expect("store_message"),
+        );
+    }
+    ids.try_into().expect("four ids")
+}
+
+/// Remove the fixture's messages: the first by the recipient, the second by
+/// the sender, the third by the mediator, the fourth (anonymous) by the
+/// recipient.
+async fn remove_receipt_fixture(
+    store: &Arc<dyn MediatorStore>,
+    ids: &[String; 4],
+    to: &str,
+    from: &str,
+    admin: &str,
+) {
+    use affinidi_messaging_mediator_common::store::DeletionAuthority;
+    let owner = |did: &str| DeletionAuthority::Owner {
+        did_hash: did.to_string(),
+    };
+    let admin = DeletionAuthority::Admin {
+        admin_did_hash: admin.to_string(),
+    };
+    for (id, by) in [
+        (&ids[0], owner(to)),
+        (&ids[1], owner(from)),
+        (&ids[2], admin),
+        (&ids[3], owner(to)),
+    ] {
+        store.delete_message(id, by).await.expect("delete_message");
+    }
+}
+
+/// Outbox receipts (`messaging/message/status/0.1`): a sender learns why each
+/// of its messages left the queue, from who removed it, and nobody else learns
+/// anything.
+async fn check_outbox_receipts(store: Arc<dyn MediatorStore>) {
+    use affinidi_messaging_mediator_common::store::{RemovalReason, SentMessageState};
+    let (to, from, admin) = (
+        "did_hash_recipient_receipts",
+        "did_hash_sender_receipts",
+        "did_hash_admin_receipts",
+    );
+    let fixture = receipt_fixture(&store, to, from, "reasons").await;
+    let mut ids = fixture.to_vec();
+    ids.push("no-such-message".to_string());
+    let reason = |state: SentMessageState| match state {
+        SentMessageState::Removed(receipt) => Some(receipt.reason),
+        _ => None,
+    };
+
+    // Held: queued to its sender, unknown to everyone else — the recipient
+    // included, since it did not send it.
+    let states = store.sent_message_states(from, &ids).await.expect("states");
+    assert_eq!(states[0], SentMessageState::Queued, "{states:?}");
+    assert_eq!(
+        states[3],
+        SentMessageState::Unknown,
+        "anonymous: {states:?}"
+    );
+    assert_eq!(states[4], SentMessageState::Unknown, "{states:?}");
+    let recipient_view = store.sent_message_states(to, &ids).await.expect("states");
+    assert!(
+        recipient_view
+            .iter()
+            .all(|s| *s == SentMessageState::Unknown),
+        "{recipient_view:?}"
+    );
+
+    // Handed over, not yet removed.
+    store
+        .mark_delivered(&ids[..1], 1_700_000_000_000, 0)
+        .await
+        .expect("mark_delivered");
+    let states = store.sent_message_states(from, &ids).await.expect("states");
+    assert_eq!(
+        states[0],
+        SentMessageState::Delivered {
+            at_ms: 1_700_000_000_000
+        },
+        "{states:?}"
+    );
+
+    // Removed: the reason is who removed it.
+    remove_receipt_fixture(&store, &fixture, to, from, admin).await;
+    let states = store.sent_message_states(from, &ids).await.expect("states");
+    assert_eq!(
+        reason(states[0]),
+        Some(RemovalReason::Collected),
+        "{states:?}"
+    );
+    assert_eq!(
+        reason(states[1]),
+        Some(RemovalReason::Withdrawn),
+        "{states:?}"
+    );
+    assert_eq!(
+        reason(states[2]),
+        Some(RemovalReason::Discarded),
+        "{states:?}"
+    );
+    assert_eq!(
+        states[3],
+        SentMessageState::Unknown,
+        "an anonymous message leaves no receipt: {states:?}"
+    );
+    assert_eq!(states[4], SentMessageState::Unknown, "{states:?}");
+
+    // The receipts are the sender's alone.
+    let recipient_view = store.sent_message_states(to, &ids).await.expect("states");
+    assert!(
+        recipient_view
+            .iter()
+            .all(|s| *s == SentMessageState::Unknown),
+        "{recipient_view:?}"
+    );
+}
+
+/// Receipts are dropped once their retention has passed. In-process backends
+/// only: Redis expires them on the key's own TTL, which a sweep with a
+/// far-future clock cannot advance.
+#[cfg(any(feature = "memory-backend", feature = "fjall-backend"))]
+async fn check_outbox_receipt_retention(store: Arc<dyn MediatorStore>) {
+    use affinidi_messaging_mediator_common::store::{OUTBOX_RECEIPT_TTL, SentMessageState};
+    let (to, from, admin) = (
+        "did_hash_recipient_retention",
+        "did_hash_sender_retention",
+        "did_hash_admin_retention",
+    );
+    let fixture = receipt_fixture(&store, to, from, "retention").await;
+    remove_receipt_fixture(&store, &fixture, to, from, admin).await;
+    let states = store
+        .sent_message_states(from, &fixture)
+        .await
+        .expect("states");
+    assert!(
+        matches!(states[0], SentMessageState::Removed(_)),
+        "{states:?}"
+    );
+
+    let after_retention = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + OUTBOX_RECEIPT_TTL.as_secs()
+        + 60;
+    store
+        .sweep_expired_messages(after_retention, admin)
+        .await
+        .expect("sweep");
+    // The sweep removed them; a lookup now would also filter them by expiry,
+    // but only at wall-clock time, so this reads what the sweep left.
+    let states = store
+        .sent_message_states(from, &fixture)
+        .await
+        .expect("states");
+    assert!(
+        states.iter().all(|s| *s == SentMessageState::Unknown),
+        "{states:?}"
+    );
+}
+
 /// Configuration overrides round-trip, replace as a whole, and start absent.
 async fn check_config_overrides(store: Arc<dyn MediatorStore>) {
     assert_eq!(store.config_overrides_get().await.unwrap(), None);
@@ -1113,7 +1303,8 @@ async fn check_config_overrides(store: Arc<dyn MediatorStore>) {
 #[cfg(feature = "redis-backend")]
 async fn check_db0_in_sequence(store: Arc<dyn MediatorStore>) {
     check_expiry_sweep_reports_each_message(store.clone()).await;
-    check_config_overrides(store).await;
+    check_config_overrides(store.clone()).await;
+    check_outbox_receipts(store).await;
 }
 
 /// Generate one `#[tokio::test]` per check for a backend `$ctor`.
@@ -1193,6 +1384,14 @@ macro_rules! conformance_for {
             #[tokio::test]
             async fn config_overrides() {
                 check_config_overrides(ready($ctor).await).await;
+            }
+            #[tokio::test]
+            async fn outbox_receipts() {
+                check_outbox_receipts(ready($ctor).await).await;
+            }
+            #[tokio::test]
+            async fn outbox_receipt_retention() {
+                check_outbox_receipt_retention(ready($ctor).await).await;
             }
         }
     };

@@ -437,6 +437,103 @@ impl DeliveryState {
     }
 }
 
+/// Why a message left its sender's outbox (`messaging/message/status/0.1`).
+///
+/// # Why this exists
+///
+/// A message leaves the send queue in the same way whether its recipient took
+/// it, the mediator expired it, or its account was removed, and the delete
+/// leaves no trace. A sender watching its outbox could therefore only infer
+/// "gone", which cannot tell collection from loss — and a live recipient
+/// collects before any poll has seen the message queued, so a collected
+/// message often produced no evidence at all.
+///
+/// The reason is decided by **who removed the message**, never by the path
+/// the removal took ([`crate::store::ops::removal_reason`]). `Collected` must
+/// never be recorded for a removal the recipient did not make: a sender that
+/// settles delivery on it must never be told a lost message arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum RemovalReason {
+    /// The recipient removed it: acknowledged it after pickup, fetched it with
+    /// delete, or deleted or purged it.
+    Collected,
+    /// The sender removed it before the recipient did.
+    Withdrawn,
+    /// The mediator removed it before the recipient did: expiry, account
+    /// removal, or an administrator.
+    Discarded,
+}
+
+impl RemovalReason {
+    /// The stored and wire form.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RemovalReason::Collected => "collected",
+            RemovalReason::Withdrawn => "withdrawn",
+            RemovalReason::Discarded => "discarded",
+        }
+    }
+
+    /// Parse [`as_str`](Self::as_str)'s output.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "collected" => Some(RemovalReason::Collected),
+            "withdrawn" => Some(RemovalReason::Withdrawn),
+            "discarded" => Some(RemovalReason::Discarded),
+            _ => None,
+        }
+    }
+}
+
+/// A receipt left for a message's sender when the message left the queue.
+///
+/// Keyed under the sender and nothing else, so no other account can read it,
+/// and kept for [`OUTBOX_RECEIPT_TTL`](crate::store::OUTBOX_RECEIPT_TTL).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboxReceipt {
+    pub reason: RemovalReason,
+    /// Unix milliseconds when the message was removed.
+    pub at_ms: u64,
+}
+
+impl OutboxReceipt {
+    /// The compact stored form, `<reason>:<at_ms>`.
+    pub fn encode(&self) -> String {
+        format!("{}:{}", self.reason.as_str(), self.at_ms)
+    }
+
+    /// Parse [`encode`](Self::encode)'s output. `None` for anything else, so a
+    /// corrupt or foreign value reads as no receipt rather than a wrong one.
+    pub fn decode(value: &str) -> Option<Self> {
+        let (reason, at_ms) = value.split_once(':')?;
+        Some(OutboxReceipt {
+            reason: RemovalReason::parse(reason)?,
+            at_ms: at_ms.parse().ok()?,
+        })
+    }
+}
+
+/// Where a message the requester sent now stands, as
+/// [`MediatorStore::sent_message_states`](crate::store::MediatorStore::sent_message_states)
+/// answers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SentMessageState {
+    /// Held for the recipient and not yet handed over.
+    Queued,
+    /// Handed to the recipient and not yet removed by it.
+    Delivered { at_ms: u64 },
+    /// Removed, for the reason and at the time its receipt records.
+    Removed(OutboxReceipt),
+    /// Neither the message nor a receipt is held under the requester — never
+    /// sent by it, sent anonymously, never held here, or its receipt expired.
+    /// Not evidence of either delivery or loss.
+    Unknown,
+}
+
 /// The recipient-side facts a delivery gate needs, resolved in one lookup.
 ///
 /// Returned by [`MediatorStore::delivery_decision`]. Existence is carried by

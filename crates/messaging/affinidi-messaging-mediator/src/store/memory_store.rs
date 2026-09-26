@@ -32,8 +32,9 @@ use affinidi_messaging_mediator_common::{
     store::{
         DeletionAuthority, DeliveryDecision, DeliveryMarkReport, DeliveryState, ExpiryReport,
         ForwardQueueEntry, InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats,
-        OnExpired, POISON_ATTEMPTS, PubSubRecord, Session, SessionSweepReport, StatCounter,
-        StoreHealth, StreamingClientState, TrustTaskClaim, ops,
+        OUTBOX_RECEIPT_TTL, OnExpired, OutboxReceipt, POISON_ATTEMPTS, PubSubRecord,
+        SentMessageState, Session, SessionSweepReport, StatCounter, StoreHealth,
+        StreamingClientState, TrustTaskClaim, ops,
     },
     types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
@@ -212,6 +213,11 @@ struct MemoryState {
     /// `expires_at_secs -> set of msg_ids`. Drained by
     /// `sweep_expired_messages`.
     expiry: BTreeMap<u64, HashSet<String>>,
+
+    // ─── Outbox receipts ────────────────────────────────────────────
+    /// `(sender_hash, msg_id) -> (receipt, expires_at_secs)`: why a sent
+    /// message left the queue. Pruned by `sweep_expired_messages`.
+    receipts: HashMap<(String, String), (OutboxReceipt, u64)>,
 
     // ─── Sessions ───────────────────────────────────────────────────
     sessions: HashMap<String, SessionRecord>,
@@ -618,12 +624,50 @@ impl MediatorStore for MemoryStore {
         // Expiry index
         state.unindex_expiry(record.expires_at, message_hash);
 
+        // The sender's receipt, when the message sat in a sender's outbox.
+        if let (Some(from), Some(_)) = (record.from_did_hash.as_ref(), record.send_id)
+            && let Some(reason) = ops::removal_reason(&by, &record.to_did_hash, Some(from.as_str()))
+        {
+            let receipt = OutboxReceipt {
+                reason,
+                at_ms: now_ms(),
+            };
+            let expires = unix_timestamp_secs() + OUTBOX_RECEIPT_TTL.as_secs();
+            state
+                .receipts
+                .insert((from.clone(), message_hash.to_string()), (receipt, expires));
+        }
+
         // Counters + body
         state.incr_counter("DELETED_BYTES", record.bytes as i64);
         state.incr_counter("DELETED_COUNT", 1);
         state.messages.remove(message_hash);
 
         Ok(())
+    }
+
+    async fn sent_message_states(
+        &self,
+        sender_did_hash: &str,
+        msg_ids: &[String],
+    ) -> Result<Vec<SentMessageState>, MediatorError> {
+        let now = unix_timestamp_secs();
+        let state = self.state.lock().await;
+        Ok(msg_ids
+            .iter()
+            .map(|id| {
+                let held = state.messages.get(id).map(|record| ops::HeldMessage {
+                    from_did_hash: record.from_did_hash.as_deref(),
+                    first_delivered_at_ms: record.first_delivered_at_ms,
+                });
+                let receipt = state
+                    .receipts
+                    .get(&(sender_did_hash.to_string(), id.clone()))
+                    .filter(|(_, expires)| *expires > now)
+                    .map(|(receipt, _)| *receipt);
+                ops::sent_message_state(sender_did_hash, held, receipt)
+            })
+            .collect())
     }
 
     async fn mark_delivered(
@@ -1979,6 +2023,11 @@ impl MediatorStore for MemoryStore {
             let mut state = self.state.lock().await;
             state.expiry.remove(&ts);
         }
+        self.state
+            .lock()
+            .await
+            .receipts
+            .retain(|_, (_, expires)| *expires > now_secs);
         Ok(report)
     }
 

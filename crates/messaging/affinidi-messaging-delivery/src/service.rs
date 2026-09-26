@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use affinidi_messaging_core::{
-    ConnState, Inbound, InboundAck, MessageTransport, MessagingError, ReceivedMessage, SendReceipt,
-    TransportKind,
+    ConnState, Inbound, InboundAck, MessageTransport, MessagingError, OutboxStatus,
+    ReceivedMessage, SendReceipt, TransportKind,
 };
 use futures_util::stream::{self, BoxStream, StreamExt};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -767,6 +767,17 @@ impl MessageTransport for PrimaryTransport {
             .primary_transport()
             .ok_or_else(|| MessagingError::Transport("no primary transport".into()))?;
         transport.outbox_message_ids().await
+    }
+
+    async fn outbox_status(
+        &self,
+        hop_ids: &[String],
+    ) -> Result<Option<std::collections::HashMap<String, OutboxStatus>>, MessagingError> {
+        let transport = self
+            .inner
+            .primary_transport()
+            .ok_or_else(|| MessagingError::Transport("no primary transport".into()))?;
+        transport.outbox_status(hop_ids).await
     }
 }
 
