@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.30.2) — a sender can ask whether its messages were collected
+
+The mediator serves `messaging/message/status/0.1`: for each message the
+requester sent, whether it is still queued, handed over (`delivered`), or
+removed and by whom — `collected` by the recipient, `withdrawn` by the sender,
+`discarded` by the mediator — answered from the receipts 0.30.1 records.
+
+It answers only for the requester's own sending, and `unknown` for anything
+else, so it cannot be used to learn whether another account's message exists;
+there is no administrative form. The `local` capability is required, as for
+the account's other queue operations. See affinidi-tdk-rs#896.
+
 ## Unreleased (0.30.1) — the in-process stores keep a sender's receipts
 
 The memory and Fjall stores implement `mediator-common` 0.16.24's outbox

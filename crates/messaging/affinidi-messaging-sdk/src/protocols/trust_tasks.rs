@@ -776,6 +776,39 @@ impl TrustTasksOps<'_> {
         Ok(response.payload)
     }
 
+    /// Send a `messaging/message/status` Trust Task: where each message this
+    /// profile sent now stands at its mediator — `queued`, `delivered`,
+    /// `collected` (removed by the recipient), `withdrawn`, `discarded` (removed
+    /// by the mediator before the recipient took it) or `unknown` — one entry
+    /// per id, in the order asked. At most 100 ids per call.
+    ///
+    /// The ids are the mediator's message identifiers — for a DIDComm send, the
+    /// `sha256` of the packed message this SDK returns as a `SendReceipt`
+    /// `hop_id`. The mediator answers only for messages this profile sent, and
+    /// `unknown` for anything else.
+    pub async fn message_status(
+        &self,
+        profile: &Arc<ATMProfile>,
+        msg_ids: &[String],
+    ) -> Result<message::status::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+
+        let ids = msg_ids
+            .iter()
+            .map(|id| message::status::v0_1::PayloadMsgIdsItem::from_str(id))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid message id: {e}")))?;
+        let p: message::status::v0_1::Payload =
+            payload(message::status::v0_1::Payload::builder().msg_ids(ids))?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<message::status::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
     /// Send a `messaging/queue/status` Trust Task and return one account's two
     /// queues, live: depth, bytes, effective limit, saturation and the age of
     /// the oldest message. `did_hash` names the account; `None` is the caller's

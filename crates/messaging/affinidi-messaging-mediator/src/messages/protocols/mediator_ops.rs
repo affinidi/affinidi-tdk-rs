@@ -11,7 +11,9 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_mediator_common::store::types::{DeletionAuthority, DeliveryState};
+use affinidi_messaging_mediator_common::store::types::{
+    DeletionAuthority, DeliveryState, SentMessageState,
+};
 use affinidi_messaging_mediator_common::store::{PurgeFilter, PurgeReport};
 use affinidi_messaging_mediator_common::types::accounts::AccountType;
 use affinidi_messaging_mediator_common::types::audit::AuditAction;
@@ -655,6 +657,67 @@ pub(crate) async fn consume_message_get(
 
     let response: message::get::v0_1::Response =
         from_json(json!({ "meta": meta, "message": body }))?;
+    serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
+        .map_err(serialize_err)
+}
+
+/// Handle `messaging/message/status`: where each message the requester sent
+/// now stands — queued, delivered, or removed and why.
+///
+/// Answers only for the requester's own sending: the store says `unknown` for
+/// any message it did not send, identically to one that never existed, so
+/// there is no administrative form and nothing to learn about another
+/// account's traffic. A removed message answers from the receipt its removal
+/// left (`MediatorStore::delete_message`). The `local` capability is required,
+/// as for every other operation on the account's own queues.
+pub(crate) async fn consume_message_status(
+    typed: TrustTask<message::status::v0_1::Payload>,
+    state: &SharedData,
+    session: &Session,
+    mediator_did: &str,
+    now: DateTime<Utc>,
+) -> Result<Value, MediatorError> {
+    validate_tt_basic(&typed, session, mediator_did, now)?;
+    if authz::require_capability(&session.acls, Capability::Local).is_err() {
+        return Err(tt_problem(
+            session,
+            "authorization.local",
+            "the account is not local to this mediator".into(),
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    let ids: Vec<String> = typed
+        .payload
+        .msg_ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+    let states = state
+        .database
+        .sent_message_states(&session.did_hash, &ids)
+        .await?;
+    let statuses: Vec<Value> = ids
+        .iter()
+        .zip(states)
+        .map(|(id, sent)| {
+            let (name, at_ms) = match sent {
+                SentMessageState::Queued => ("queued", None),
+                SentMessageState::Delivered { at_ms } => ("delivered", Some(at_ms)),
+                SentMessageState::Removed(receipt) => {
+                    (receipt.reason.as_str(), Some(receipt.at_ms))
+                }
+                _ => ("unknown", None),
+            };
+            let mut status = json!({ "msgId": id, "state": name });
+            if let Some(at_ms) = at_ms {
+                status["at"] = json!(millis_to_datetime(at_ms));
+            }
+            status
+        })
+        .collect();
+
+    let response: message::status::v0_1::Response = from_json(json!({ "statuses": statuses }))?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
 }

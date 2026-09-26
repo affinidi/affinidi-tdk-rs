@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased (0.28.1) — delivery can be settled on the mediator's receipt
+
+- `atm.trust_tasks().message_status(profile, msg_ids)` sends a
+  `messaging/message/status/0.1` Trust Task and returns where each message the
+  profile sent stands at its mediator: `queued`, `delivered`, `collected`,
+  `withdrawn`, `discarded` or `unknown`.
+- `DidCommTransport` implements `MessageTransport::outbox_status` over it,
+  keyed by hop id and limited to the ids asked about. `affinidi-messaging-
+  delivery` 0.1.19 settles an outbox entry on that answer instead of inferring
+  pickup from the outbox listing, so a message a live recipient collects before
+  the first poll is confirmed rather than re-sent, and one the mediator
+  discards is not read as delivered. Against a mediator that does not serve the
+  task, it answers `None` and the listing is used as before.
+
+Requires `affinidi-messaging-core` 0.1.11. See affinidi-tdk-rs#896.
+
 ## Unreleased (0.28.0) — trust-tasks-rs 0.23
 
 trust-tasks-rs and trust-tasks-proof 0.22 -> 0.23. A minor rather than a patch, as for 0.21 and 0.22: the public API carries generated Trust Task types, so a consumer must move in the same change. 0.23 also resolves a proof's key only when the issuer lists it under the relationship the proof declares (proofPurpose, VTI-KEY-022), so a Trust Task signed with a key its DID document does not list for that purpose is now refused.
