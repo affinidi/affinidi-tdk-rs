@@ -381,6 +381,16 @@ pub(crate) async fn consume(
             )
             .await?
         }
+        ServedTask::MessageStatus => {
+            mediator_ops::consume_message_status(
+                downcast(&doc, session)?,
+                state,
+                session,
+                &mediator_did,
+                now,
+            )
+            .await?
+        }
         ServedTask::MessageDelete => {
             mediator_ops::consume_message_delete(
                 downcast(&doc, session)?,
@@ -512,6 +522,7 @@ served_tasks! {
     MessageList => message::list::v0_1::Payload,
     MessageGet => message::get::v0_1::Payload,
     MessageDelete => message::delete::v0_1::Payload,
+    MessageStatus => message::status::v0_1::Payload,
     QueuePurge => queue::purge::v0_1::Payload,
     MonitorSubscribe => monitor::subscribe::v0_1::Payload,
     MonitorUnsubscribe => monitor::unsubscribe::v0_1::Payload,

@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use affinidi_messaging_core::{
-    ConnState, Inbound, InboundAck, MessageTransport, MessagingError, Protocol, ReceivedMessage,
-    SendReceipt, TransportKind,
+    ConnState, Inbound, InboundAck, MessageTransport, MessagingError, OutboxStatus, Protocol,
+    ReceivedMessage, SendReceipt, TransportKind,
 };
 #[cfg(feature = "tsp")]
 use affinidi_messaging_core::{InboundKind, RelationshipRequest};
@@ -221,6 +221,56 @@ impl MessageTransport for DidCommTransport {
             .await
             .map_err(|e| transport_error("list outbox failed", e))?;
         Ok(Some(list.into_iter().map(|m| m.msg_id).collect()))
+    }
+
+    async fn outbox_status(
+        &self,
+        hop_ids: &[String],
+    ) -> Result<Option<std::collections::HashMap<String, OutboxStatus>>, MessagingError> {
+        use trust_tasks_rs::specs::messaging::message::status::v0_1::MessageState;
+
+        if hop_ids.is_empty() {
+            return Ok(Some(std::collections::HashMap::new()));
+        }
+        // A mediator that predates receipts refuses the task. That is not a
+        // failure of this send: answer `None`, and the delivery layer falls back
+        // to inferring pickup from the outbox listing.
+        let response = match self
+            .atm
+            .trust_tasks()
+            .message_status(&self.profile, hop_ids)
+            .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                tracing::debug!(error = %e, "message status unavailable; using the outbox listing");
+                return Ok(None);
+            }
+        };
+        // Keyed by the id each status names, and only for ids that were asked
+        // about, so an answer can never settle a message it does not name.
+        Ok(Some(
+            response
+                .statuses
+                .into_iter()
+                .filter(|status| {
+                    hop_ids
+                        .iter()
+                        .any(|id| id.as_str() == status.msg_id.as_str())
+                })
+                .map(|status| {
+                    let state = match status.state {
+                        MessageState::Queued => OutboxStatus::Queued,
+                        MessageState::Delivered => OutboxStatus::Delivered,
+                        MessageState::Collected => OutboxStatus::Collected,
+                        MessageState::Withdrawn => OutboxStatus::Withdrawn,
+                        MessageState::Discarded => OutboxStatus::Discarded,
+                        _ => OutboxStatus::Unknown,
+                    };
+                    (status.msg_id.to_string(), state)
+                })
+                .collect(),
+        ))
     }
 }
 

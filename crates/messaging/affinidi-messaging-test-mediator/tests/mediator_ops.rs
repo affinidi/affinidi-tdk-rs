@@ -1089,3 +1089,88 @@ async fn a_patch_survives_a_restart() {
         "a restart-gated override is in force after the restart"
     );
 }
+
+/// `messaging/message/status`: a sender learns, on evidence, which of its
+/// messages its recipient collected — and nobody else learns anything.
+#[tokio::test]
+async fn a_sender_learns_which_of_its_messages_were_collected() {
+    use trust_tasks_rs::specs::messaging::message::status::v0_1::MessageState;
+
+    let env = direct_env().await;
+    let alice = env.add_user("alice").await.expect("alice");
+    let bob = env.add_user("bob").await.expect("bob");
+    for user in [&alice, &bob] {
+        env.atm
+            .profile_add(&user.profile, true)
+            .await
+            .expect("live stream");
+    }
+    send_direct(&env, &alice, &bob).await;
+    send_direct(&env, &alice, &bob).await;
+    let ids = receive_ids(&env, &bob).await;
+    assert_eq!(ids.len(), 2);
+
+    let states = |user: &TestUser| {
+        let (env, profile, ids) = (&env, user.profile.clone(), ids.clone());
+        async move {
+            env.atm
+                .trust_tasks()
+                .message_status(&profile, &ids)
+                .await
+                .expect("message status")
+                .statuses
+                .into_iter()
+                .map(|s| s.state)
+                .collect::<Vec<_>>()
+        }
+    };
+
+    assert_eq!(
+        states(&alice).await,
+        vec![MessageState::Queued, MessageState::Queued]
+    );
+    // Bob holds them, but did not send them.
+    assert_eq!(
+        states(&bob).await,
+        vec![MessageState::Unknown, MessageState::Unknown]
+    );
+
+    // Bob takes the first; Alice withdraws the second.
+    env.atm
+        .trust_tasks()
+        .message_delete(&bob.profile, None, &ids[..1])
+        .await
+        .expect("bob removes the first");
+    env.atm
+        .trust_tasks()
+        .message_delete(&alice.profile, None, &ids[1..])
+        .await
+        .expect("alice withdraws the second");
+
+    assert_eq!(
+        states(&alice).await,
+        vec![MessageState::Collected, MessageState::Withdrawn]
+    );
+    assert_eq!(
+        states(&bob).await,
+        vec![MessageState::Unknown, MessageState::Unknown],
+        "the receipts are alice's alone"
+    );
+
+    // The same answer through the transport the delivery layer reads it from,
+    // keyed by the id each status names.
+    use affinidi_messaging_core::{MessageTransport, OutboxStatus};
+    let transport = affinidi_messaging_sdk::transport_adapter::DidCommTransport::new(
+        env.atm.clone(),
+        alice.profile.clone(),
+    )
+    .await
+    .expect("alice's transport");
+    let reported = transport
+        .outbox_status(&ids)
+        .await
+        .expect("outbox status")
+        .expect("the mediator keeps receipts");
+    assert_eq!(reported.get(&ids[0]), Some(&OutboxStatus::Collected));
+    assert_eq!(reported.get(&ids[1]), Some(&OutboxStatus::Withdrawn));
+}
