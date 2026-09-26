@@ -92,20 +92,8 @@
 
 # ---------------------------------------------------------------------------
 #
-# Re-added 2026-09-26 for trust-tasks-rs 0.23 — the sixth crossing, the same
-# one the notes above describe.
-#
-# 0.23 makes affinidi-messaging-sdk 0.28 and affinidi-tdk 0.18. The published
-# vta-sdk 0.51 requires "0.27" and "0.17", which the local copies no longer
-# satisfy, so `[patch.crates-io]` declines to apply and the registry copies
-# enter the graph beside them.
-#
-# The order is forced, as before:
-#
-#   1. this PR publishes the messaging crates on 0.28 / 0.18
-#   2. verifiable-trust-infrastructure takes trust-tasks-rs 0.23 (prepared, and
-#      held on (1)) and publishes a vta-sdk built against 0.28 / 0.18
-#   3. the mediator's vta-sdk requirement moves to that version, the patches
-#      apply again, and both registry copies drop out
-affinidi-messaging-sdk
-affinidi-tdk
+# The affinidi-messaging-sdk and affinidi-tdk entries re-added 2026-09-26 for
+# trust-tasks-rs 0.23 — the sixth crossing — were cleared the same day, by the
+# step their note named: verifiable-trust-infrastructure took trust-tasks-rs
+# 0.23 and published vta-sdk 0.53 on affinidi-messaging-sdk 0.28 / affinidi-tdk
+# 0.18, and the mediator's requirement moved to it.

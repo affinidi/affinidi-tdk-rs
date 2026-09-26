@@ -1,5 +1,11 @@
 # Affinidi Messaging Mediator Setup
 
+## Unreleased (0.1.36) — vta-sdk 0.53
+
+`vta-sdk` 0.51 → 0.53, alongside the mediator, so the workspace resolves one
+affinidi-messaging-sdk and one affinidi-tdk again (0.53 is built on 0.28 /
+0.18). No source change.
+
 ## Unreleased (0.1.35) — TSP on by default, and wizard builds keep `vta`
 
 **TSP is on by default.** The protocol step pre-selects TSP beside DIDComm and
