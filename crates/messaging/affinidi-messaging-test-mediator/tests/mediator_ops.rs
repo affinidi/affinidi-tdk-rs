@@ -1099,14 +1099,20 @@ async fn a_sender_learns_which_of_its_messages_were_collected() {
     let env = direct_env().await;
     let alice = env.add_user("alice").await.expect("alice");
     let bob = env.add_user("bob").await.expect("bob");
-    for user in [&alice, &bob] {
-        env.atm
-            .profile_add(&user.profile, true)
-            .await
-            .expect("live stream");
-    }
+    env.atm
+        .profile_add(&bob.profile, true)
+        .await
+        .expect("bob live");
+    // Sent before Alice's live stream is on, so each send goes over REST and
+    // returns once the mediator has stored the message. Over the websocket a
+    // send returns on writing the frame, and the listing below could run
+    // before the second message is stored.
     send_direct(&env, &alice, &bob).await;
     send_direct(&env, &alice, &bob).await;
+    env.atm
+        .profile_add(&alice.profile, true)
+        .await
+        .expect("alice live");
     let ids = receive_ids(&env, &bob).await;
     assert_eq!(ids.len(), 2);
 
