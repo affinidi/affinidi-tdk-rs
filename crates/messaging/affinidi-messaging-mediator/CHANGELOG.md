@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased (0.30.3) — vta-sdk 0.53, and the duplicate SDK copies drop out
+
+`vta-sdk` 0.51 → 0.53, the release built against affinidi-messaging-sdk 0.28
+and affinidi-tdk 0.18. The published 0.51 required 0.27 / 0.17, so since the
+trust-tasks-rs 0.23 move (#898) this workspace resolved a registry copy of each
+beside its local one. With 0.53 the `[patch.crates-io]` entries apply again and
+each crate resolves to one copy. No source change.
+
 ## Unreleased (0.30.2) — a sender can ask whether its messages were collected
 
 The mediator serves `messaging/message/status/0.1`: for each message the
