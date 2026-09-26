@@ -318,12 +318,13 @@ pub(crate) fn proof_verifier(resolver: DIDCacheClient) -> Verifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use affinidi_data_integrity::VerificationMethodResolver;
     use affinidi_did_common::DocumentExt;
     use affinidi_did_resolver_cache_sdk::config::DIDCacheConfigBuilder;
     use affinidi_secrets_resolver::secrets::Secret;
     use chrono::TimeDelta;
-    use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
+    use trust_tasks_proof::affinidi::{
+        ProofPurpose, ProofPurposeResolver, SignOptions, sign_trust_task,
+    };
 
     const ACCOUNT_UPDATE: &str = "https://trusttasks.org/spec/messaging/account/update/0.1";
     const ACCOUNT_GET: &str = "https://trusttasks.org/spec/messaging/account/get/0.1";
@@ -509,12 +510,12 @@ mod tests {
         let ka = resolver.resolve(&did).await.unwrap().doc;
         let ka_kid = ka.find_key_agreement(None)[0].to_string();
         let err = CachedDidResolver::new(Arc::new(resolver))
-            .resolve_vm(&ka_kid)
+            .resolve_vm_for_purpose(&ka_kid, ProofPurpose::AssertionMethod)
             .await
             .expect_err("a keyAgreement key must not resolve as a signing key");
         assert!(
-            err.to_string()
-                .contains("not an authentication or assertionMethod key")
+            err.to_string().contains("not listed under assertionMethod"),
+            "{err}"
         );
         // …and the ordinary signing key still resolves.
         let _ = secret;

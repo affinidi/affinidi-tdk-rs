@@ -1,5 +1,9 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.18.0) — trust-tasks-rs 0.23
+
+Carries the messaging crates' move to trust-tasks-rs 0.23: a pin on a bumped 0.x crate does not admit its new line, so this crate moves a minor with it.
+
 ## Unreleased (0.17.0) — `trust-tasks-rs` 0.21
 
 The facade re-exports the messaging family, so it moves with it. A re-export
