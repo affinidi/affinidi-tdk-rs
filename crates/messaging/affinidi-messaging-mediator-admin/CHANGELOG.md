@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.3.0) — trust-tasks-rs 0.23
+
+trust-tasks-rs and trust-tasks-proof 0.22 -> 0.23. A minor rather than a patch, as for 0.21 and 0.22: the public API carries generated Trust Task types, so a consumer must move in the same change. 0.23 also resolves a proof's key only when the issuer lists it under the relationship the proof declares (proofPurpose, VTI-KEY-022), so a Trust Task signed with a key its DID document does not list for that purpose is now refused.
+
 ## Unreleased (0.2.1) — a monitor lease survives a blip
 
 A monitor feed renews its lease a minute before it runs out. Before, a

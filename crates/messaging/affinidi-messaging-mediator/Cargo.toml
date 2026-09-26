@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.29.5"
+version = "0.30.0"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -128,16 +128,16 @@ aws = ["dep:aws-config", "dep:aws-sdk-ssm", "dep:aws-sdk-s3", "dep:aws-smithy-ty
 # dry-run guard cannot tell from "this crate uses an API that does not exist".
 # Naming the version turns it into an unmet requirement the guard recognises as
 # waiting on a sibling this release publishes, which is what it is.
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.27.2" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.28" }
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15.9", optional = true }
 ## Optional: DIDComm v1 (Aries RFC 0019) implementation (activated by `didcomm-v1`)
 affinidi-messaging-didcomm-v1 = { path = "../affinidi-messaging-didcomm-v1", version = "0.2", optional = true }
 ## Trust Tasks framework core — consumes Trust Task documents (the messaging
 ## ping / account / acl / access-list tasks) carried over the binding envelope.
-trust-tasks-rs = { version = "0.22.1", optional = true }
+trust-tasks-rs = { version = "0.23", optional = true }
 # Verifies Trust Task proofs (eddsa-jcs-2022) before any handler runs.
-trust-tasks-proof = { version = "0.22.1", default-features = false, features = ["affinidi"], optional = true }
+trust-tasks-proof = { version = "0.23", default-features = false, features = ["affinidi"], optional = true }
 affinidi-data-integrity = { version = "0.7", optional = true }
 ## Optional: JOSE key-agreement types for the didcomm compat layer (#327)
 affinidi-crypto = { version = "0.2", features = ["jose"], optional = true }

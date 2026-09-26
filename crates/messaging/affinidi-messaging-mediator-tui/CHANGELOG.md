@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.3.0) — trust-tasks-rs 0.23
+
+Carries the messaging crates' move to trust-tasks-rs 0.23: a pin on a bumped 0.x crate does not admit its new line, so this crate moves a minor with it.
+
 ## Unreleased (0.2.2) — the monitor comes back on its own
 
 - **The monitor resubscribes after an interruption.** Before, a lease renewal

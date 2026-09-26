@@ -88,3 +88,24 @@
 # them holds a stale copy until the other lands. The standing fix above — gating
 # `vta-sdk` out of the mediator — would end it rather than re-time it, and
 # `mediator-setup`'s 65 call sites are still what stands in the way.
+
+
+# ---------------------------------------------------------------------------
+#
+# Re-added 2026-09-26 for trust-tasks-rs 0.23 — the sixth crossing, the same
+# one the notes above describe.
+#
+# 0.23 makes affinidi-messaging-sdk 0.28 and affinidi-tdk 0.18. The published
+# vta-sdk 0.51 requires "0.27" and "0.17", which the local copies no longer
+# satisfy, so `[patch.crates-io]` declines to apply and the registry copies
+# enter the graph beside them.
+#
+# The order is forced, as before:
+#
+#   1. this PR publishes the messaging crates on 0.28 / 0.18
+#   2. verifiable-trust-infrastructure takes trust-tasks-rs 0.23 (prepared, and
+#      held on (1)) and publishes a vta-sdk built against 0.28 / 0.18
+#   3. the mediator's vta-sdk requirement moves to that version, the patches
+#      apply again, and both registry copies drop out
+affinidi-messaging-sdk
+affinidi-tdk
