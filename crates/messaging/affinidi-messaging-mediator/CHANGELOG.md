@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased (0.33.0) — vta-sdk 0.56, and the crossing's duplicate crates drop out
+
+`vta-sdk` 0.53 -> 0.56, the release built against trust-tasks-rs 0.24,
+affinidi-messaging-sdk 0.30 and affinidi-tdk 0.20. The published 0.53 required
+0.23 / 0.28 / 0.18, so since the legacy admin surface was removed (0.31.0) and
+trust-tasks-rs 0.24 was taken (0.32.0) this workspace resolved a registry copy
+of affinidi-messaging-sdk, affinidi-tdk, affinidi-messaging-mediator-common,
+trust-tasks-rs and trust-tasks-proof beside its own. With 0.56 the
+`[patch.crates-io]` entries apply again and each resolves to one copy.
+
+A minor rather than a patch: `vta-sdk` types are in this crate's public API
+under the default `vta` feature (`tasks::vta_refresh::VtaRefresher::service_config`
+is a `VtaServiceConfig`; `MediatorSecretCache` implements `vta_sdk`'s
+`SecretCache`), so a consumer must move to vta-sdk 0.56 in the same change.
+No source change.
+
 ## Unreleased (0.32.0) — trust-tasks-rs 0.24
 
 trust-tasks-rs and trust-tasks-proof 0.23 -> 0.24. A minor rather than a patch, as for 0.21, 0.22 and 0.23: the public API carries generated Trust Task types, so a consumer must move in the same change. 0.24 changes how a `oneOf` branch that uses a compound `not` is generated (trust-tasks-rs #665: `auth/passkey/enroll/invite/update/0.1` and `auth/revoke-session/0.2` become structs with optional members instead of uninhabited enums); this crate uses neither, and trust-tasks-proof is unchanged. Takes SDK 0.30. No source change.

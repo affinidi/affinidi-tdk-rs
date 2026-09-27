@@ -1,5 +1,12 @@
 # Affinidi Messaging Mediator Setup
 
+## Unreleased (0.1.37) — vta-sdk 0.56
+
+`vta-sdk` 0.53 -> 0.56, alongside the mediator, so the workspace resolves one
+affinidi-messaging-sdk, affinidi-tdk, affinidi-messaging-mediator-common and
+trust-tasks-rs again (0.56 is built on SDK 0.30 / tdk 0.20 / trust-tasks-rs
+0.24). No source change.
+
 ## Unreleased (0.1.36) — vta-sdk 0.53
 
 `vta-sdk` 0.51 → 0.53, alongside the mediator, so the workspace resolves one

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased (0.14.0) — embeds mediator 0.33
+
+Embeds mediator 0.33 (vta-sdk 0.56). A minor rather than a patch because this
+crate re-exports mediator types (`CorsOriginPolicy`, `TrustTaskVerification`),
+so a consumer holding them must move with it. This crate depends on the
+mediator with `default-features = false` and never pulls `vta-sdk`. No source
+change.
+
 ## Unreleased (0.13.0) — trust-tasks-rs 0.24
 
 trust-tasks-rs and trust-tasks-proof 0.23 -> 0.24. A minor rather than a patch, as for 0.21, 0.22 and 0.23: the public API carries generated Trust Task types, so a consumer must move in the same change. 0.24 changes how a `oneOf` branch that uses a compound `not` is generated (trust-tasks-rs #665: `auth/passkey/enroll/invite/update/0.1` and `auth/revoke-session/0.2` become structs with optional members instead of uninhabited enums); this crate uses neither, and trust-tasks-proof is unchanged. Embeds mediator 0.32 and takes SDK 0.30. No source change.
