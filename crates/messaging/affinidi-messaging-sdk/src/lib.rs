@@ -196,9 +196,9 @@ pub use crate::protocols::tsp::{
 #[cfg(feature = "tsp")]
 pub use crate::protocols::tsp_auth::TspAuthHandler;
 use crate::protocols::{
-    discover_features::DiscoverfeaturesOps, mediator::administration::MediatorOps,
-    message_pickup::MessagePickupOps, oob_discovery::OOBDiscoveryOps, routing::RoutingOps,
-    trust_ping::TrustPingOps, trust_tasks::TrustTasksOps,
+    discover_features::DiscoverfeaturesOps, message_pickup::MessagePickupOps,
+    oob_discovery::OOBDiscoveryOps, routing::RoutingOps, trust_ping::TrustPingOps,
+    trust_tasks::TrustTasksOps,
 };
 use affinidi_task_utils::CancellationToken;
 use affinidi_tdk_common::TDKSharedState;
@@ -397,11 +397,6 @@ impl ATM {
     /// Access Routing protocol methods
     pub fn routing(&self) -> RoutingOps<'_> {
         RoutingOps { atm: self }
-    }
-
-    /// Access Mediator administration protocol methods
-    pub fn mediator(&self) -> MediatorOps<'_> {
-        MediatorOps { atm: self }
     }
 
     /// Access OOB Discovery protocol methods

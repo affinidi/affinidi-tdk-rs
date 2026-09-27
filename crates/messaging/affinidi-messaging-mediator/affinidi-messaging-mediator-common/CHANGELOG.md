@@ -1,5 +1,16 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.17.0) — the legacy admin vocabulary is removed
+
+The request and response types of the removed DIDComm admin protocols are
+gone: `MediatorAdminRequest`, `MediatorAccountRequest`,
+`AccountChangeQueueLimitsResponse`, `MediatorACLRequest`,
+`MediatorACLSetResponse`, and the `types::administration` module
+(`MediatorAdminList`, `AdminAccount`). `MediatorStore::list_admin_accounts`,
+whose only caller was the removed `admin_list`, is removed from the trait and
+the Redis backend; `messaging/account/list` with an `accountType` filter
+replaces it.
+
 ## Unreleased (0.16.24) — a sender's receipts for its removed messages
 
 `MediatorStore::delete_message` now leaves the message's sender an

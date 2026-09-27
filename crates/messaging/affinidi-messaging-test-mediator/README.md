@@ -246,17 +246,18 @@ Other security flags exposed on the builder for completeness:
 [`jwt_expiry`](TestMediatorBuilder::jwt_expiry),
 [`local_endpoints`](TestMediatorBuilder::local_endpoints).
 
-## Admin protocol tests
+## Administration tests
 
 The mediator's admin DID is configured at startup via
 `MediatorBuilder::admin_did`. By default the fixture mints an opaque
 `did:key:z6Mk{uuid}` shape with no usable secrets — fine for tests that
-don't authenticate as admin. To drive the mediator-administration
-protocol from a real SDK client, mint a usable admin identity and
+don't authenticate as admin. To drive the `messaging/*` administration
+Trust Tasks from a real SDK client, mint a usable admin identity and
 attach it to the builder:
 
 ```rust,ignore
-use affinidi_messaging_test_mediator::{TestEnvironment, TestMediator, acl};
+use affinidi_messaging_test_mediator::{TestEnvironment, TestMediator};
+use trust_tasks_rs::specs::messaging::account;
 
 // Step 1 — mint admin DID + secrets. The same `AdminIdentity` value
 // can drive multiple test-mediator instances if needed.
@@ -276,27 +277,31 @@ let env = TestEnvironment::new(mediator).await.expect("env new");
 // own server-side resolver.
 let admin_user = env.add_admin(admin).await.expect("add_admin");
 
-// Step 4 — drive the admin-protocol surface. The protocol takes
-// hashed DIDs, exposed on TestUser / TestMediatorUser as
-// `did_hash()`.
+// Step 4 — drive the admin surface through the `messaging/account/update`
+// Trust Task. Accounts are addressed by hashed DID, exposed on
+// TestUser / TestMediatorUser as `did_hash()`.
 let alice = env.add_user("alice").await.expect("add alice");
+let acl: account::update::v0_1::MediatorAcl = account::update::v0_1::MediatorAcl::builder()
+    .send_messages(Some(false))
+    .receive_messages(Some(false))
+    .try_into()
+    .expect("MediatorAcl has no required member");
 env.atm
-    .protocols()
-    .mediator()
-    .acls()
-    .acls_set(&env.atm, &admin_user.profile, &alice.did_hash(), &acl::deny_all())
+    .trust_tasks()
+    .account_update(&admin_user.profile, Some(alice.did_hash()), None, Some(acl), None)
     .await
-    .expect("admin acls_set");
+    .expect("admin account_update");
 
 // Step 5 — verify via the fixture-bypass read path. Independent
-// verification of a write that went through the protocol.
+// verification of a write that went through the Trust Task.
 let observed = env
     .mediator
     .get_acl(&alice.did)
     .await
     .expect("get_acl")
     .expect("alice has ACL record");
-assert_eq!(observed.to_u64(), acl::deny_all().to_u64());
+assert!(!observed.get_send_messages().0);
+assert!(!observed.get_receive_messages().0);
 ```
 
 **Secrets ownership.** `AdminIdentity::secrets` stays with the caller.

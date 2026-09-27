@@ -1,5 +1,9 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.19.0) — SDK 0.29
+
+The facade re-exports the messaging SDK, which removes the legacy mediator admin senders in 0.29, so this crate moves a minor with it. No source change.
+
 ## Unreleased (0.18.0) — trust-tasks-rs 0.23
 
 Carries the messaging crates' move to trust-tasks-rs 0.23: a pin on a bumped 0.x crate does not admit its new line, so this crate moves a minor with it.

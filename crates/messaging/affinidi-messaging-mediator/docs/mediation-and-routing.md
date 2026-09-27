@@ -29,9 +29,6 @@ https://didcomm.org/trust-ping/2.0
 https://didcomm.org/out-of-band/2.0
 https://didcomm.org/messagepickup/3.0
 https://affinidi.com/atm/1.0/authenticate
-https://didcomm.org/mediator/1.0/admin-management
-https://didcomm.org/mediator/1.0/account-management
-https://didcomm.org/mediator/1.0/acl-management
 https://didcomm.org/report-problem/2.0
 ```
 

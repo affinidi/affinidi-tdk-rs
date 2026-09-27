@@ -1,5 +1,15 @@
 # Affinidi Messaging Mediator Config
 
+## Unreleased (0.5.0) — two retired security keys
+
+`SecurityConfigRaw` loses `legacy_admin_protocols` and
+`admin_messages_expiry`, and the `LEGACY_ADMIN_PROTOCOLS` /
+`ADMIN_MESSAGES_EXPIRY` environment overrides are gone: the mediator no longer
+serves the legacy admin surface either governed. A file that still sets them
+keeps loading, as for any unknown key, but the warning names them as retired
+and says what replaced them rather than suggesting a typo. Takes
+mediator-common 0.17.
+
 ## Unreleased (0.4.6) — unknown keys are reported, not dropped
 
 A key in `mediator.toml` that the schema does not recognise used to be dropped

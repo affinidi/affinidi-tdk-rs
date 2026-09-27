@@ -27,9 +27,9 @@ use trust_tasks_rs::specs::messaging::{message, monitor, queue, stats};
 use uuid::Uuid;
 
 use crate::SharedData;
+use crate::common::authz::check_permissions;
 use crate::common::authz::{self, Capability};
 use crate::common::session::Session;
-use crate::messages::protocols::mediator::acls::check_permissions;
 use crate::messages::protocols::mediator::record_audit;
 use crate::messages::protocols::trust_tasks::{
     require_admin, serialize_err, tt_problem, validate_tt_basic,
@@ -371,8 +371,8 @@ const MESSAGE_GET_MAX_BYTES: u64 = 10 * 1024 * 1024;
 /// Resolve the account a self-or-admin message task targets, and authorise it.
 ///
 /// An omitted `did` is the requester's own account, which additionally needs
-/// the `local` capability — the same gate as the REST `/list`, `/delete` and
-/// `/purge` routes, since only a locally served account has queues here.
+/// the `local` capability — the same gate as the REST `/list` and `/delete`
+/// routes, since only a locally served account has queues here.
 /// Another account needs admin standing.
 fn message_target(
     did: Option<String>,

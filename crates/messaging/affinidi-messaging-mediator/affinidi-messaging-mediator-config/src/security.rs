@@ -21,7 +21,6 @@ pub struct SecurityConfigRaw {
     pub block_anonymous_outer_envelope: String,
     pub block_remote_admin_msgs: String,
     pub force_session_did_match: String,
-    pub admin_messages_expiry: String,
     /// Explicit inter-mediator relay switch. `#[serde(default)]` so configs
     /// that predate the flag deserialize without it (empty → `false`).
     #[serde(default)]
@@ -32,9 +31,4 @@ pub struct SecurityConfigRaw {
     /// without it (empty → `warn`).
     #[serde(default)]
     pub trust_task_verification: String,
-    /// `on`, `warn` or `off` — whether the legacy DIDComm admin protocols and
-    /// REST admin routes are served. `#[serde(default)]` so configs that
-    /// predate the setting deserialize without it (empty → `warn`).
-    #[serde(default)]
-    pub legacy_admin_protocols: String,
 }

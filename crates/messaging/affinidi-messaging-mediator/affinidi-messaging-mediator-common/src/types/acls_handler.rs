@@ -1,7 +1,5 @@
-//! Wire-shape types for the mediator ACL DIDComm protocol — request
-//! enums and response structs. The client-side handler methods that
-//! send these messages live in the SDK; the mediator's storage trait
-//! and request handlers reference these types directly.
+//! Result types for ACL and access-list reads, returned by the mediator's
+//! storage trait.
 
 use super::acls::{AccessListModeType, MediatorACLSet};
 use serde::{Deserialize, Serialize};
@@ -14,50 +12,12 @@ pub struct MediatorACLExpanded {
     pub acls: MediatorACLSet,
 }
 
-/// DIDComm message body for requesting ACLs for a list of DID Hashes
-#[derive(Serialize, Deserialize)]
-pub enum MediatorACLRequest {
-    #[serde(rename = "acl_get")]
-    GetACL(Vec<String>),
-    #[serde(rename = "acl_set")]
-    SetACL { did_hash: String, acls: u64 },
-    #[serde(rename = "access_list_list")]
-    AccessListList {
-        did_hash: String,
-        cursor: Option<u64>,
-    },
-    #[serde(rename = "access_list_get")]
-    AccessListGet {
-        did_hash: String,
-        hashes: Vec<String>,
-    },
-    #[serde(rename = "access_list_add")]
-    AccessListAdd {
-        did_hash: String,
-        hashes: Vec<String>,
-    },
-    #[serde(rename = "access_list_remove")]
-    AccessListRemove {
-        did_hash: String,
-        hashes: Vec<String>,
-    },
-    #[serde(rename = "access_list_clear")]
-    AccessListClear { did_hash: String },
-}
-
 /// DIDComm message body for responding with a set of ACLs for a list of DID Hashes
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename = "acl_get_response")]
 pub struct MediatorACLGetResponse {
     pub acl_response: Vec<MediatorACLExpanded>,
     pub mediator_acl_mode: AccessListModeType,
-}
-
-/// DIDComm message body for responding with a set of ACLs for a list of DID Hashes
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename = "acl_set_response")]
-pub struct MediatorACLSetResponse {
-    pub acls: MediatorACLSet,
 }
 
 /// DIDComm message body for responding with Access List List for a given DID

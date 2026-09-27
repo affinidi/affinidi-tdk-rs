@@ -341,8 +341,8 @@ impl MediatorBuilder {
     }
 
     /// Set a human-readable URL for the secrets backend. Surfaced in
-    /// startup logs and the authenticated `/admin/status` endpoint so
-    /// operators can see which backend the mediator is using. Not
+    /// startup logs so operators can see which backend the mediator is
+    /// using. Not
     /// echoed in `/readyz` (unauthenticated). Defaults to
     /// `"(programmatic)"` when not set.
     pub fn secrets_backend_url(mut self, url: impl Into<String>) -> Self {
@@ -580,8 +580,8 @@ impl MediatorBuilder {
             self.config.listen_address = default.to_string();
         }
 
-        // Default secrets_backend_url so startup logs and /admin/status
-        // have something to show. Not exposed in /readyz.
+        // Default secrets_backend_url so startup logs have something to
+        // show. Not exposed in /readyz.
         if self.config.secrets_backend_url.is_empty() {
             self.config.secrets_backend_url = "(programmatic)".to_string();
         }
@@ -595,7 +595,7 @@ impl MediatorBuilder {
 
         // Preserve the hostname-tag convention used by the TOML path.
         // Failures here are non-fatal — the tag is only used in metric
-        // exports and `/admin/status`, and embedded callers can pass
+        // exports, and embedded callers can pass
         // their own via `tag()` if they care.
         if !self.config.tags.contains_key("hostname")
             && let Ok(host) = hostname::get()

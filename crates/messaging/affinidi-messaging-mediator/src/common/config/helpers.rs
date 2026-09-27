@@ -431,7 +431,7 @@ pub fn normalize_api_prefix(input: &str) -> String {
 /// assert_eq!(join_api_path("",         "/readyz"), "/readyz");
 /// assert_eq!(join_api_path("/foo",     "readyz"),  "/foo/readyz");
 /// assert_eq!(join_api_path("/foo",     "/readyz"), "/foo/readyz");
-/// assert_eq!(join_api_path("/mediator/v1", "admin/status"), "/mediator/v1/admin/status");
+/// assert_eq!(join_api_path("/mediator/v1", "stats/show"), "/mediator/v1/stats/show");
 /// ```
 pub fn join_api_path(prefix: &str, suffix: &str) -> String {
     let suffix = suffix.trim_start_matches('/');
@@ -679,7 +679,7 @@ mod tests {
     fn join_api_path_handles_empty_prefix() {
         assert_eq!(join_api_path("", "readyz"), "/readyz");
         assert_eq!(join_api_path("", "/readyz"), "/readyz");
-        assert_eq!(join_api_path("", "admin/status"), "/admin/status");
+        assert_eq!(join_api_path("", "stats/show"), "/stats/show");
     }
 
     #[test]
@@ -687,15 +687,15 @@ mod tests {
         assert_eq!(join_api_path("/foo", "readyz"), "/foo/readyz");
         assert_eq!(join_api_path("/foo", "/readyz"), "/foo/readyz");
         assert_eq!(
-            join_api_path("/mediator/v1", "admin/status"),
-            "/mediator/v1/admin/status"
+            join_api_path("/mediator/v1", "stats/show"),
+            "/mediator/v1/stats/show"
         );
     }
 
     #[test]
     fn join_api_path_always_returns_leading_slash() {
         for prefix in ["", "/foo", "/mediator/v1"] {
-            for suffix in ["readyz", "/readyz", "admin/status"] {
+            for suffix in ["readyz", "/readyz", "stats/show"] {
                 let joined = join_api_path(prefix, suffix);
                 assert!(
                     joined.starts_with('/'),

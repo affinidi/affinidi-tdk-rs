@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (0.12.0) — the legacy admin switch is removed
+
+`TestMediatorBuilder::legacy_admin_protocols` and the `LegacyAdminProtocols`
+re-export are removed with the setting itself. Embeds mediator 0.31, which
+serves no legacy admin surface. The README's admin example drives
+`trust_tasks().account_update`.
+
 ## Unreleased (0.11.1) — embeds a mediator that serves message status
 
 Takes mediator 0.30.2, so an embedded test mediator answers

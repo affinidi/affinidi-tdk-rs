@@ -107,7 +107,7 @@ pub struct AuditLogEntry {
 ///
 /// `cursor` is an opaque offset to feed back into the next `audit_log_list`
 /// call; `0` means there are no more pages (the same convention as
-/// `MediatorAccountList` / `MediatorAdminList`).
+/// `MediatorAccountList`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MediatorAuditLogList {
     /// The entries on this page, ordered newest-first.

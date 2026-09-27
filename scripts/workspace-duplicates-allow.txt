@@ -97,3 +97,29 @@
 # step their note named: verifiable-trust-infrastructure took trust-tasks-rs
 # 0.23 and published vta-sdk 0.53 on affinidi-messaging-sdk 0.28 / affinidi-tdk
 # 0.18, and the mediator's requirement moved to it.
+
+
+# ---------------------------------------------------------------------------
+#
+# Re-added 2026-09-27 for the removal of the legacy mediator admin surface —
+# the seventh crossing, the same one the notes above describe.
+#
+# Removing `Mediator` / `atm.mediator()`, the legacy `MessageType` variants and
+# the REST purge / queue-status senders makes affinidi-messaging-sdk 0.29, and
+# removing the legacy request types and `list_admin_accounts` makes
+# affinidi-messaging-mediator-common 0.17; affinidi-tdk re-exports the SDK and
+# moves to 0.19. The published vta-sdk 0.53 requires "0.28" and "0.18", which
+# the local copies no longer satisfy, so `[patch.crates-io]` declines to apply
+# and the registry copies enter the graph beside them — the registry SDK 0.28
+# bringing its own mediator-common 0.16.
+#
+# The order is forced, as before:
+#
+#   1. this PR publishes the messaging crates on 0.29 / 0.19 / common 0.17
+#   2. verifiable-trust-infrastructure publishes a vta-sdk built against them
+#      (no source change there: nothing in it uses what was removed)
+#   3. the mediator's vta-sdk requirement moves to that version, the patches
+#      apply again, and the registry copies drop out
+affinidi-messaging-mediator-common
+affinidi-messaging-sdk
+affinidi-tdk

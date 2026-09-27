@@ -21,11 +21,11 @@ path = "src/mediator_administration/main.rs"
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
 ## SDK for connecting to and communicating with a running mediator
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.28" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.29" }
 ## Trust Tasks payload types (the atm.trust_tasks() surface returns/accepts these).
 trust-tasks-rs = "0.23"
 ## TDK for DID resolution and crypto utilities
-affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.18" }
+affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.19" }
 ## DIDComm message types — used by example binaries
 affinidi-crypto = { version = "0.2", features = ["jose"] }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", features = ["messaging-core"] }
@@ -60,6 +60,10 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 ## UUIDs — used by example binaries (alice_bob, multi_device, etc.)
 uuid = { version = "1", features = ["v4", "fast-rng"] }
+
+[dev-dependencies]
+## Stamps `issuedAt` on the Trust Tasks the `hijack_admin` example builds by hand
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [lints]
 workspace = true

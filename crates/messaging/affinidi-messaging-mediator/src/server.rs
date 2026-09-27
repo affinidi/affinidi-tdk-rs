@@ -13,10 +13,7 @@ use crate::{
         request_id::RequestIdLayer,
         ws_budget::WsSendBudget,
     },
-    handlers::{
-        admin_status, application_routes, health_checker_handler, liveness_handler,
-        readiness_handler,
-    },
+    handlers::{application_routes, health_checker_handler, liveness_handler, readiness_handler},
     tasks::{
         queue_survey::QueueSnapshotCell, statistics::statistics_with_live_limits,
         supervisor::TaskSupervisor, websocket_streaming::StreamingTask,
@@ -739,14 +736,8 @@ pub async fn serve_internal(
     // coordinate-mediation entry: v2 routing is DID-addressed and needs no
     // keylist (issue #755, `docs/mediation-and-routing.md`).
     let discover_features = Arc::new(DiscoverFeatures {
-        // With the legacy admin surface switched off, don't advertise it.
         protocols: crate::messages::protocols::discover_features::ADVERTISED_PROTOCOLS
             .iter()
-            .filter(|p| {
-                config.security.legacy_admin_protocols
-                    != crate::common::config::security::LegacyAdminProtocols::Off
-                    || !crate::common::legacy_admin::LEGACY_PROTOCOLS.contains(p)
-            })
             .map(|p| p.to_string())
             .collect(),
         ..Default::default()
@@ -1064,7 +1055,7 @@ pub async fn serve_internal(
     ))
 }
 
-/// The health, readiness and status routes.
+/// The health and readiness routes.
 ///
 /// Kept outside the rate limiter and the body limit — an orchestrator probing
 /// a busy mediator must not be refused as if it were traffic — but **inside the
@@ -1072,8 +1063,8 @@ pub async fn serve_internal(
 /// after `.layer()` is not wrapped by it, so they never sent
 /// `Access-Control-Allow-Origin`: a browser client whose origin the mediator
 /// allows everywhere else could authenticate, hold a WebSocket and run Trust
-/// Tasks, yet read neither `readyz` (the release a console reports) nor
-/// `admin/status`, and saw only "Failed to fetch". A probe without an `Origin`
+/// Tasks, yet could not read `readyz` (the release a console reports) and saw
+/// only "Failed to fetch". A probe without an `Origin`
 /// header is answered exactly as before.
 fn probe_routes(
     api_prefix: &str,
@@ -1087,15 +1078,11 @@ fn probe_routes(
         )
         .route(
             join_api_path(api_prefix, "readyz").as_str(),
-            get(readiness_handler).with_state(shared_state.clone()),
+            get(readiness_handler).with_state(shared_state),
         )
         .route(
             join_api_path(api_prefix, "livez").as_str(),
             get(liveness_handler),
-        )
-        .route(
-            join_api_path(api_prefix, "admin/status").as_str(),
-            get(admin_status::admin_status_handler).with_state(shared_state),
         )
         .layer(cors)
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.4.0) — mediator-admin 0.4
+
+Carries the messaging crates' removal of the legacy mediator admin surface: a pin on a bumped 0.x crate does not admit its new line, so this crate moves a minor with it. No source change.
+
 ## Unreleased (0.3.0) — trust-tasks-rs 0.23
 
 Carries the messaging crates' move to trust-tasks-rs 0.23: a pin on a bumped 0.x crate does not admit its new line, so this crate moves a minor with it.

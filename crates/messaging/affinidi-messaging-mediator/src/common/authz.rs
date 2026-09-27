@@ -13,7 +13,8 @@
 //! - [`authentication_check`] — the pre-auth "can this DID connect?" check
 //!   (resolves the ACL set from the session, the store, or the configured
 //!   default, then applies the blocked gate).
-//! - [`acl_change_ok`] — may a non-admin apply this ACL change to itself?
+//! - [`check_permissions`] — may this session act on these DIDs (admin, or
+//!   its own DID only), with the admin-signature check where configured?
 //!
 //! Every handler, routing and storage ACL gate now resolves through this
 //! module; see `docs/acls.md` for the operator-facing model these functions
@@ -23,7 +24,8 @@
 
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_mediator_common::store::MediatorStore;
-use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
+use affinidi_messaging_sdk::protocols::mediator::{accounts::AccountType, acls::MediatorACLSet};
+use subtle::ConstantTimeEq;
 use tracing::debug;
 
 use crate::{SharedData, common::session::Session};
@@ -175,180 +177,49 @@ pub(crate) async fn authentication_check(
     Ok((grants(&acls, Capability::NotBlocked), known))
 }
 
-/// A capability whose ACL entry is a `(value, self_change)` pair.
-type CapabilityPair = (&'static str, fn(&MediatorACLSet) -> (bool, bool));
-
-/// A flag with no self-change bit of its own — admin-only, always.
-type AdminOnlyFlag = (&'static str, fn(&MediatorACLSet) -> bool);
-
-/// The capabilities a DID may change itself when the matching `self_change`
-/// bit is set. `access_list_mode` is the same shape but its value is an enum
-/// rather than a `bool`, so it is checked separately below.
-const SELF_CHANGEABLE: &[CapabilityPair] = &[
-    ("send_messages", |a| a.get_send_messages()),
-    ("receive_messages", |a| a.get_receive_messages()),
-    ("send_forwarded", |a| a.get_send_forwarded()),
-    ("receive_forwarded", |a| a.get_receive_forwarded()),
-    ("create_invites", |a| a.get_create_invites()),
-    ("anon_receive", |a| a.get_anon_receive()),
-];
-
-/// Flags with no `self_change` bit of their own: only an admin may ever
-/// change them. `blocked` and `local` are the mediator's own gates (a DID
-/// must not be able to unblock itself or grant itself an inbox), and the
-/// `self_manage_*` flags are what *delegate* self-service in the first
-/// place — a DID that could set them would be granting itself the authority
-/// the operator withheld.
-const ADMIN_ONLY: &[AdminOnlyFlag] = &[
-    ("blocked", |a| a.get_blocked()),
-    ("local", |a| a.get_local()),
-    ("self_manage_list", |a| a.get_self_manage_list()),
-    ("self_manage_send_queue_limit", |a| {
-        a.get_self_manage_send_queue_limit()
-    }),
-    ("self_manage_receive_queue_limit", |a| {
-        a.get_self_manage_receive_queue_limit()
-    }),
-];
-
-/// Validate a self-initiated ACL change: for each capability, a DID may
-/// only flip the value when its `self_change` flag is set, may never flip
-/// the `self_change` flag itself, and may never touch an admin-only flag
-/// (only an admin can do either). Returns `None` when the change is
-/// permitted, or `Some(errors)` describing each disallowed modification.
-///
-/// The tables above are deliberately exhaustive over `MediatorACLSet`: every
-/// field is either self-changeable under its own bit or admin-only. The
-/// `every_acl_field_is_classified` test pins that, because an unclassified
-/// field silently becomes self-service — which is exactly how `local`,
-/// `blocked` and the three `self_manage_*` flags went unchecked here while
-/// the Trust Task path (`ensure_self_manageable`) refused them.
-///
-/// (Relocated from the mediator admin-protocol handler so every permission
-/// decision — capability gates and self-change authorization alike — lives
-/// in this module.)
-pub(crate) fn acl_change_ok(
-    current_acls: &MediatorACLSet,
-    new_acls: &MediatorACLSet,
-) -> Option<Vec<String>> {
-    let mut errors = Vec::new();
-
-    for (name, get) in SELF_CHANGEABLE {
-        let (current_value, current_self_change) = get(current_acls);
-        let (new_value, new_self_change) = get(new_acls);
-
-        if current_value != new_value && !current_self_change {
-            errors.push(format!("{name} not allowed to change"));
-        }
-        if current_self_change != new_self_change {
-            errors.push(format!("{name}:self_change can't modify!"));
-        }
-    }
-
-    let (current_mode, current_mode_self_change) = current_acls.get_access_list_mode();
-    let (new_mode, new_mode_self_change) = new_acls.get_access_list_mode();
-    if current_mode != new_mode && !current_mode_self_change {
-        errors.push("access_list_mode not allowed to change".to_string());
-    }
-    if current_mode_self_change != new_mode_self_change {
-        errors.push("access_list_mode:self_change can't modify!".to_string());
-    }
-
-    for (name, get) in ADMIN_ONLY {
-        if get(current_acls) != get(new_acls) {
-            errors.push(format!("{name} is admin-only and can't be changed"));
-        }
-    }
-
-    if errors.is_empty() {
-        None
-    } else {
-        Some(errors)
+/// Check that the sender (identified by JWS signature or authcrypt key ID)
+/// matches the session DID. The `sender_kid` is a key ID like `did:...#key-N`.
+pub(crate) fn check_admin_signature(session: &Session, sender_kid: &Option<String>) -> bool {
+    match sender_kid {
+        Some(kid) => kid
+            .split_once('#')
+            .is_some_and(|(did, _)| did == session.did),
+        None => false,
     }
 }
 
-/// Outcome of checking an admin message's `created_time` against the
-/// admin-message TTL.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum AdminTtlStatus {
-    /// Within the allowed window — accept.
-    Ok,
-    /// `created_time` is too old (or in the future) — reject as expired; the
-    /// value is carried for the problem report.
-    Expired(u64),
-    /// No `created_time` header — reject as missing.
-    Missing,
-}
-
-/// Validate an admin message's `created_time` against `admin_messages_expiry`,
-/// bounding replay of captured admin messages.
-///
-/// This is deliberately independent of `block_remote_admin_msgs`: admin
-/// messages are *always* subject to the replay-bounding TTL, whether or not
-/// the mediator also requires a signature on remote admin messages. A
-/// `created_time` in the future is rejected too (clock skew / forgery).
-pub(crate) fn admin_message_ttl_status(
-    created_time: Option<u64>,
-    expiry: u64,
-    now: u64,
-) -> AdminTtlStatus {
-    match created_time {
-        Some(ct) if ct.saturating_add(expiry) <= now || ct > now => AdminTtlStatus::Expired(ct),
-        Some(_) => AdminTtlStatus::Ok,
-        None => AdminTtlStatus::Missing,
+/// Whether a session may act on `dids`: an admin account may act on any DID,
+/// any other account only on its own (exactly one DID hash, its own). With
+/// `check_admin_signing`, an admin must also have signed as the session DID.
+pub(crate) fn check_permissions(
+    session: &Session,
+    dids: &[String],
+    check_admin_signing: bool,
+    sign_by: &Option<String>,
+) -> bool {
+    // If we need to check message signature for an admin request
+    if check_admin_signing
+        && (session.account_type == AccountType::Admin
+            || session.account_type == AccountType::RootAdmin)
+        && !check_admin_signature(session, sign_by)
+    {
+        return false;
     }
+
+    session.account_type == AccountType::RootAdmin
+        || session.account_type == AccountType::Admin
+        || dids.len() == 1
+            && dids[0]
+                .as_bytes()
+                .ct_eq(session.did_hash.as_bytes())
+                .unwrap_u8()
+                == 1
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
-
-    #[test]
-    fn admin_ttl_accepts_fresh_and_rejects_stale_future_and_missing() {
-        let now = 1_000_000;
-        let expiry = 3;
-
-        // Fresh: created within the window.
-        assert_eq!(
-            admin_message_ttl_status(Some(now), expiry, now),
-            AdminTtlStatus::Ok
-        );
-        assert_eq!(
-            admin_message_ttl_status(Some(now - 2), expiry, now),
-            AdminTtlStatus::Ok
-        );
-
-        // Stale: created_time + expiry <= now (the boundary is inclusive).
-        assert_eq!(
-            admin_message_ttl_status(Some(now - 3), expiry, now),
-            AdminTtlStatus::Expired(now - 3)
-        );
-        assert_eq!(
-            admin_message_ttl_status(Some(now - 100), expiry, now),
-            AdminTtlStatus::Expired(now - 100)
-        );
-
-        // Future created_time is rejected (clock skew / forgery).
-        assert_eq!(
-            admin_message_ttl_status(Some(now + 1), expiry, now),
-            AdminTtlStatus::Expired(now + 1)
-        );
-
-        // Missing header.
-        assert_eq!(
-            admin_message_ttl_status(None, expiry, now),
-            AdminTtlStatus::Missing
-        );
-
-        // The verdict never depends on `block_remote_admin_msgs` — it isn't an
-        // input here, so admin replay is bounded regardless of that flag. With
-        // `expiry == 0` every admin message (created_time == now) is expired.
-        assert_eq!(
-            admin_message_ttl_status(Some(now), 0, now),
-            AdminTtlStatus::Expired(now)
-        );
-    }
+    use sha256::digest;
 
     /// Build an ACL set granting everything (ALLOW_ALL), then we revoke
     /// individual capabilities to test the gate.
@@ -421,149 +292,6 @@ mod tests {
         assert!(grants(&acls, Capability::SendMessages));
     }
 
-    // ─── acl_change_ok (non-admin self-service) ──────────────────────────────
-
-    /// The highest bit position `MediatorACLSet` assigns a meaning to
-    /// (`self_manage_receive_queue_limit`).
-    const HIGHEST_ACL_BIT: u32 = 18;
-
-    #[test]
-    fn identical_acls_are_never_a_change() {
-        let acls = MediatorACLSet::from_u64(0);
-        assert_eq!(acl_change_ok(&acls, &acls), None);
-        let allow = allow_all();
-        assert_eq!(acl_change_ok(&allow, &allow), None);
-    }
-
-    /// Every meaningful bit must be refused for an account holding no
-    /// self-change rights. This is the exhaustiveness guard: a field that
-    /// falls out of both `SELF_CHANGEABLE` and `ADMIN_ONLY` becomes silently
-    /// self-service, which is the bug this test exists to prevent.
-    #[test]
-    fn every_acl_field_is_classified() {
-        // Base: all bits clear — no capability, no self-change right.
-        let current = MediatorACLSet::from_u64(0);
-        for bit in 0..=HIGHEST_ACL_BIT {
-            let new_acls = MediatorACLSet::from_u64(1_u64 << bit);
-            assert!(
-                acl_change_ok(&current, &new_acls).is_some(),
-                "bit {bit} is not gated for a non-admin — it is in neither \
-                 SELF_CHANGEABLE nor ADMIN_ONLY"
-            );
-        }
-    }
-
-    /// A non-admin may never change `blocked`, `local`, or the three
-    /// `self_manage_*` flags: none of them has a self-change bit, so the
-    /// only authority that can flip them is an admin. Regression test —
-    /// these five were unchecked here while the Trust Task path refused
-    /// them, letting a standard DID grant itself an inbox (`local`), the
-    /// right to edit its own access list (`self_manage_list`), or clear its
-    /// own `blocked` bit.
-    #[test]
-    fn non_admin_cannot_change_admin_only_flags() {
-        // Start from ALLOW_ALL so every *self-change* bit is set: the only
-        // thing that can refuse these flags is the admin-only rule itself.
-        let current = allow_all();
-
-        for (name, get) in ADMIN_ONLY {
-            let mut new_acls = current.clone();
-            match *name {
-                "blocked" => new_acls.set_blocked(!get(&current)),
-                "local" => new_acls.set_local(!get(&current)),
-                "self_manage_list" => new_acls.set_self_manage_list(!get(&current)),
-                "self_manage_send_queue_limit" => {
-                    new_acls.set_self_manage_send_queue_limit(!get(&current))
-                }
-                "self_manage_receive_queue_limit" => {
-                    new_acls.set_self_manage_receive_queue_limit(!get(&current))
-                }
-                other => panic!("unclassified admin-only flag: {other}"),
-            }
-
-            let errors = acl_change_ok(&current, &new_acls)
-                .unwrap_or_else(|| panic!("{name} must be refused for a non-admin"));
-            assert!(
-                errors.iter().any(|e| e.contains(name)),
-                "expected an error naming {name}, got {errors:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn capability_flips_only_when_its_self_change_bit_is_set() {
-        // ALLOW_ALL grants every capability *and* every self-change bit, so
-        // revoking a capability from oneself is permitted.
-        let current = allow_all();
-        let mut new_acls = current.clone();
-        new_acls.set_send_messages(false, true, false).unwrap();
-        assert_eq!(acl_change_ok(&current, &new_acls), None);
-
-        // The shipped default grants capabilities but no self-change bits,
-        // so the same flip is refused.
-        let current =
-            MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES")
-                .expect("shipped default ruleset");
-        let mut new_acls = current.clone();
-        new_acls.set_send_messages(false, false, true).unwrap();
-        let errors = acl_change_ok(&current, &new_acls).expect("must be refused");
-        assert!(
-            errors
-                .iter()
-                .any(|e| e == "send_messages not allowed to change"),
-            "got {errors:?}"
-        );
-    }
-
-    /// A DID may never widen its own authority by setting the self-change
-    /// bits, even when it currently holds them.
-    #[test]
-    fn self_change_bits_are_never_self_modifiable() {
-        let current = allow_all();
-        let mut new_acls = current.clone();
-        // Keep the value, drop the self-change right.
-        new_acls
-            .set_receive_messages(current.get_receive_messages().0, false, true)
-            .unwrap();
-        let errors = acl_change_ok(&current, &new_acls).expect("must be refused");
-        assert!(
-            errors
-                .iter()
-                .any(|e| e == "receive_messages:self_change can't modify!"),
-            "got {errors:?}"
-        );
-    }
-
-    /// The access-list mode is a self-changeable capability like the others,
-    /// but its value is an enum rather than a `bool` so it is checked on its
-    /// own path — cover it explicitly.
-    #[test]
-    fn access_list_mode_follows_its_self_change_bit() {
-        let current = MediatorACLSet::from_u64(0);
-        let mut new_acls = current.clone();
-        new_acls
-            .set_access_list_mode(AccessListModeType::ExplicitDeny, false, true)
-            .unwrap();
-        let errors = acl_change_ok(&current, &new_acls).expect("must be refused");
-        assert!(
-            errors
-                .iter()
-                .any(|e| e == "access_list_mode not allowed to change"),
-            "got {errors:?}"
-        );
-
-        // With the self-change bit set, the same flip is allowed.
-        let mut current = MediatorACLSet::from_u64(0);
-        current
-            .set_access_list_mode(AccessListModeType::ExplicitAllow, true, true)
-            .unwrap();
-        let mut new_acls = current.clone();
-        new_acls
-            .set_access_list_mode(AccessListModeType::ExplicitDeny, true, true)
-            .unwrap();
-        assert_eq!(acl_change_ok(&current, &new_acls), None);
-    }
-
     #[test]
     fn each_capability_is_gated_independently() {
         // Granting exactly one capability (from DENY_ALL) must satisfy only
@@ -604,5 +332,212 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- check_admin_signature tests ---
+
+    #[test]
+    fn admin_sig_jws_matching_did() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            ..Default::default()
+        };
+        assert!(check_admin_signature(
+            &session,
+            &Some("did:example:alice#key-0".to_string())
+        ));
+    }
+
+    #[test]
+    fn admin_sig_authcrypt_kid_matching_did() {
+        // Authcrypt sender identified by encrypted_from_kid (same format as JWS)
+        let session = Session {
+            did: "did:webvh:Qmc572jbs:webvh.example.com:vta".to_string(),
+            ..Default::default()
+        };
+        assert!(check_admin_signature(
+            &session,
+            &Some("did:webvh:Qmc572jbs:webvh.example.com:vta#key-1".to_string())
+        ));
+    }
+
+    #[test]
+    fn admin_sig_mismatched_did() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            ..Default::default()
+        };
+        assert!(!check_admin_signature(
+            &session,
+            &Some("did:example:mallory#key-0".to_string())
+        ));
+    }
+
+    #[test]
+    fn admin_sig_none_is_anonymous() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            ..Default::default()
+        };
+        assert!(!check_admin_signature(&session, &None));
+    }
+
+    #[test]
+    fn admin_sig_kid_without_fragment_rejected() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            ..Default::default()
+        };
+        // A key ID without a # fragment is malformed and should be rejected
+        assert!(!check_admin_signature(
+            &session,
+            &Some("did:example:alice".to_string())
+        ));
+    }
+
+    // --- check_permissions tests ---
+
+    #[test]
+    fn perms_admin_any_dids_no_signing_check() {
+        let session = Session {
+            did: "did:example:admin".to_string(),
+            account_type: AccountType::Admin,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:someone_else")];
+        assert!(check_permissions(&session, &dids, false, &None));
+    }
+
+    #[test]
+    fn perms_root_admin_any_dids() {
+        let session = Session {
+            did: "did:example:root".to_string(),
+            did_hash: digest("did:example:root"),
+            account_type: AccountType::RootAdmin,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:other")];
+        assert!(check_permissions(&session, &dids, false, &None));
+    }
+
+    #[test]
+    fn perms_standard_own_did() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            did_hash: digest("did:example:alice"),
+            account_type: AccountType::Standard,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:alice")];
+        assert!(check_permissions(&session, &dids, false, &None));
+    }
+
+    #[test]
+    fn perms_standard_wrong_did_rejected() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            did_hash: digest("did:example:alice"),
+            account_type: AccountType::Standard,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:bob")];
+        assert!(!check_permissions(&session, &dids, false, &None));
+    }
+
+    #[test]
+    fn perms_standard_multiple_dids_rejected() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            did_hash: digest("did:example:alice"),
+            account_type: AccountType::Standard,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:alice"), digest("did:example:bob")];
+        assert!(!check_permissions(&session, &dids, false, &None));
+    }
+
+    #[test]
+    fn perms_admin_with_jws_signing_check_matching() {
+        let session = Session {
+            did: "did:example:admin".to_string(),
+            did_hash: digest("did:example:admin"),
+            account_type: AccountType::Admin,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:admin")];
+        assert!(check_permissions(
+            &session,
+            &dids,
+            true,
+            &Some("did:example:admin#key-0".to_string())
+        ));
+    }
+
+    #[test]
+    fn perms_admin_with_authcrypt_kid_signing_check() {
+        // When check_admin_signing is true and sender is identified by authcrypt kid
+        let session = Session {
+            did: "did:example:admin".to_string(),
+            did_hash: digest("did:example:admin"),
+            account_type: AccountType::Admin,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:admin")];
+        // This simulates passing encrypted_from_kid as the sender identity
+        assert!(check_permissions(
+            &session,
+            &dids,
+            true,
+            &Some("did:example:admin#key-1".to_string())
+        ));
+    }
+
+    #[test]
+    fn perms_admin_signing_check_wrong_did_rejected() {
+        let session = Session {
+            did: "did:example:admin".to_string(),
+            did_hash: digest("did:example:admin"),
+            account_type: AccountType::Admin,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:admin")];
+        assert!(!check_permissions(
+            &session,
+            &dids,
+            true,
+            &Some("did:example:mallory#key-0".to_string())
+        ));
+    }
+
+    #[test]
+    fn perms_admin_signing_check_none_rejected() {
+        // Anonymous message to admin endpoint should fail when signing check enabled
+        let session = Session {
+            did: "did:example:admin".to_string(),
+            did_hash: digest("did:example:admin"),
+            account_type: AccountType::Admin,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:admin")];
+        assert!(!check_permissions(&session, &dids, true, &None));
+    }
+
+    #[test]
+    fn perms_standard_no_signing_check_ignores_sender() {
+        // Standard account with check_admin_signing=false: sender_kid is irrelevant
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            did_hash: digest("did:example:alice"),
+            account_type: AccountType::Standard,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:alice")];
+        assert!(check_permissions(&session, &dids, false, &None));
+        assert!(check_permissions(
+            &session,
+            &dids,
+            false,
+            &Some("did:example:mallory#key-0".to_string())
+        ));
     }
 }

@@ -4,8 +4,8 @@
 //! A Trust Task request arrives as a DIDComm message whose `type` is the binding
 //! envelope URI and whose `body` is the full `TrustTask<P>` document. This module
 //! is the *single core*: it runs the framework's `consume_inbound` pipeline and
-//! the per-task handlers (which delegate to the same `state.database.*` methods
-//! the legacy DIDComm protocols use). The response is a `TrustTask<R>` packed back
+//! the per-task handlers (which delegate to the `state.database.*` store
+//! methods). The response is a `TrustTask<R>` packed back
 //! through the mediator's existing outbound path — exactly like the trust-ping
 //! pong — so no separate binding/agent plumbing is needed here.
 //!
@@ -48,8 +48,8 @@ use trust_tasks_rs::{
 use uuid::Uuid;
 
 use crate::SharedData;
+use crate::common::authz::check_permissions;
 use crate::common::session::Session;
-use crate::messages::protocols::mediator::acls::check_permissions;
 use crate::messages::protocols::mediator::record_audit;
 use crate::messages::protocols::{mediator_ops, trust_task_sign, trust_task_verify};
 use crate::messages::{ProcessMessageResponse, WrapperType};

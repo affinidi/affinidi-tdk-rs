@@ -82,7 +82,6 @@ use affinidi_messaging_sdk::{
             MediatorACLGetResponse, MediatorAccessListAddResponse, MediatorAccessListGetResponse,
             MediatorAccessListListResponse,
         },
-        administration::MediatorAdminList,
     },
 };
 use async_trait::async_trait;
@@ -2614,56 +2613,6 @@ impl MediatorStore for FjallStore {
         ))
     }
 
-    async fn list_admin_accounts(
-        &self,
-        cursor: u32,
-        limit: u32,
-    ) -> Result<MediatorAdminList, MediatorError> {
-        let limit = limit.min(100) as usize;
-        let mut accounts: Vec<
-            affinidi_messaging_sdk::protocols::mediator::administration::AdminAccount,
-        > = Vec::with_capacity(limit);
-        let mut seen: u32 = 0;
-        let mut more = false;
-        for guard in self.admins.iter() {
-            let (key, _) = guard
-                .into_inner()
-                .map_err(|e| Self::db_err("list_admin_accounts:iter", e))?;
-            if seen < cursor {
-                seen += 1;
-                continue;
-            }
-            if accounts.len() >= limit {
-                more = true;
-                break;
-            }
-            let did = String::from_utf8(key.as_ref().to_vec()).unwrap_or_default();
-            let role = self
-                .accounts
-                .get(did.as_bytes())
-                .map_err(|e| Self::db_err("list_admin_accounts:role.get", e))?
-                .map(|v| Self::decode::<StoredAccount>(&v).map(|a| a.role))
-                .transpose()?
-                .unwrap_or(AccountType::Unknown);
-            accounts.push(
-                affinidi_messaging_sdk::protocols::mediator::administration::AdminAccount {
-                    did_hash: did,
-                    _type: role,
-                },
-            );
-            seen += 1;
-        }
-        let next = if more {
-            cursor + accounts.len() as u32
-        } else {
-            0
-        };
-        Ok(MediatorAdminList {
-            accounts,
-            cursor: next,
-        })
-    }
-
     async fn audit_log_record(&self, entry: &AuditLogEntry) -> Result<(), MediatorError> {
         let _guard = self.write_lock.lock().await;
         let id = self.alloc_stream_id();
@@ -4260,8 +4209,7 @@ mod tests {
             .expect("present");
         assert_eq!(got.did_hash, did);
         assert!(store.check_admin_account(&did).await.unwrap());
-        let list = store.list_admin_accounts(0, 10).await.expect("list");
-        assert!(list.accounts.iter().any(|a| a.did_hash == did));
+        assert_eq!(got._type, AccountType::Admin);
     }
 
     #[tokio::test]

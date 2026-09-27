@@ -299,7 +299,6 @@ pub struct SecurityConfig {
     pub block_anonymous_outer_envelope: bool,
     pub force_session_did_match: bool,
     pub block_remote_admin_msgs: bool,
-    pub admin_messages_expiry: u64,
     /// When `true`, this mediator explicitly acts as an inter-mediator relay
     /// (accepts anonymous `/inbound` forwards). Defaults to `false`. Today
     /// relay is still permitted when `global_acl_default` grants
@@ -309,47 +308,6 @@ pub struct SecurityConfig {
     /// Whether a Trust Task failing its acceptance checks is refused or only
     /// logged. See [`TrustTaskVerification`].
     pub trust_task_verification: TrustTaskVerification,
-    /// Whether the legacy admin protocols are served. See
-    /// [`LegacyAdminProtocols`].
-    pub legacy_admin_protocols: LegacyAdminProtocols,
-}
-
-/// Whether the mediator serves its **legacy** administration surface, which
-/// the `messaging/*` Trust Tasks replace:
-///
-/// - the DIDComm protocols `https://didcomm.org/mediator/1.0/admin-management`,
-///   `…/account-management` and `…/acl-management`;
-/// - the REST routes `GET /admin/status`, `DELETE /purge/{folder}` and
-///   `GET /queue/status`.
-///
-/// `Warn` (the default) serves them, logs each use with who made it, and counts
-/// it in `legacy_admin_requests_total{surface}`, so an operator can see which
-/// clients still need to move. `Off` refuses them (HTTP 410, or a problem
-/// report naming the Trust Task to use) and stops advertising the protocols.
-/// `On` serves them silently. The default becomes `Off` once the remaining
-/// clients have moved, and a later release removes them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LegacyAdminProtocols {
-    On,
-    #[default]
-    Warn,
-    Off,
-}
-
-impl std::str::FromStr for LegacyAdminProtocols {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "on" => Ok(Self::On),
-            "" | "warn" => Ok(Self::Warn),
-            "off" => Ok(Self::Off),
-            other => Err(format!(
-                "security.legacy_admin_protocols must be \"on\", \"warn\" or \"off\", not {other:?}"
-            )),
-        }
-    }
 }
 
 /// What the mediator does with a Trust Task that fails its acceptance checks —
@@ -412,9 +370,7 @@ impl Debug for SecurityConfig {
             )
             .field("force_session_did_match", &self.force_session_did_match)
             .field("block_remote_admin_msgs", &self.block_remote_admin_msgs)
-            .field("admin_messages_expiry", &self.admin_messages_expiry)
             .field("trust_task_verification", &self.trust_task_verification)
-            .field("legacy_admin_protocols", &self.legacy_admin_protocols)
             .field(
                 "enable_inter_mediator_relay",
                 &self.enable_inter_mediator_relay,
@@ -492,8 +448,6 @@ impl SecurityConfig {
             force_session_did_match: true,
             block_remote_admin_msgs: true,
             trust_task_verification: TrustTaskVerification::Warn,
-            legacy_admin_protocols: LegacyAdminProtocols::Warn,
-            admin_messages_expiry: 3,
             enable_inter_mediator_relay: false,
         }
     }
@@ -723,10 +677,6 @@ impl SecurityConfigRawExt for SecurityConfigRaw {
                 );
                 true
             }),
-            admin_messages_expiry: self.admin_messages_expiry.parse().unwrap_or_else(|_| {
-                warn_default("admin_messages_expiry", &self.admin_messages_expiry, "3");
-                3
-            }),
             // Absent (legacy configs) → false silently; a non-empty but
             // unparseable value is a typo worth warning about.
             enable_inter_mediator_relay: if self.enable_inter_mediator_relay.is_empty() {
@@ -751,10 +701,6 @@ impl SecurityConfigRawExt for SecurityConfigRaw {
                     MediatorError::ConfigError(12, "NA".into(), e)
                 },
             )?,
-            legacy_admin_protocols: self.legacy_admin_protocols.parse().map_err(|e: String| {
-                tracing::error!("{e}");
-                MediatorError::ConfigError(12, "NA".into(), e)
-            })?,
             ..SecurityConfig::default(secrets_resolver)
         };
 
