@@ -120,6 +120,38 @@
 #      (no source change there: nothing in it uses what was removed)
 #   3. the mediator's vta-sdk requirement moves to that version, the patches
 #      apply again, and the registry copies drop out
+
+
+# ---------------------------------------------------------------------------
+#
+# 2026-09-27, trust-tasks-rs 0.24 — the eighth crossing, taken before the
+# seventh has cleared, so the same three entries now stand for both.
+#
+# trust-tasks-rs 0.24 is a breaking minor, and its types cross this SDK's API,
+# so affinidi-messaging-sdk moves to 0.30 and affinidi-tdk to 0.20. The newest
+# published vta-sdk (0.54) still requires affinidi-messaging-sdk "0.28",
+# affinidi-tdk "0.18" and trust-tasks-rs "0.23", so the registry copies stay
+# in the graph, now with a registry trust-tasks-rs / trust-tasks-proof 0.23
+# beside the workspace's 0.24. Those two are not workspace members, so this
+# guard does not list them, but they are the same debt:
+#
+#     trust-tasks-rs v0.23.0  <- affinidi-messaging-sdk 0.28.1, vta-sdk 0.53.0
+#     trust-tasks-rs v0.24.0  <- every workspace crate
+#
+# It compiles because no trust-tasks-rs type crosses between vta-sdk and the
+# mediator (or mediator-setup): the workspace builds, with the mediator's
+# default `vta` feature on, without a mismatched-type error. If that stops
+# being true, the error reads `expected MediatorAcl, found a different
+# MediatorAcl` (or similar), and the fix is the order below, not a cast.
+#
+# The order is forced, as before:
+#
+#   1. this workspace publishes the messaging crates on trust-tasks-rs 0.24
+#      (affinidi-messaging-sdk 0.30, affinidi-tdk 0.20)
+#   2. verifiable-trust-infrastructure takes trust-tasks-rs 0.24 and publishes
+#      a vta-sdk built against 0.30 / 0.20
+#   3. the mediator's vta-sdk requirement moves to that version, the patches
+#      apply again, and all five registry copies drop out
 affinidi-messaging-mediator-common
 affinidi-messaging-sdk
 affinidi-tdk

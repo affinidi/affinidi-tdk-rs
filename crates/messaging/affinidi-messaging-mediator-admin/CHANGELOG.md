@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.5.0) — trust-tasks-rs 0.24
+
+trust-tasks-rs and trust-tasks-proof 0.23 -> 0.24. A minor rather than a patch, as for 0.21, 0.22 and 0.23: the public API re-exports the generated `messaging` Trust Task types, so a consumer must move in the same change. 0.24 changes how a `oneOf` branch that uses a compound `not` is generated (trust-tasks-rs #665: `auth/passkey/enroll/invite/update/0.1` and `auth/revoke-session/0.2` become structs with optional members instead of uninhabited enums); this crate uses neither, and trust-tasks-proof is unchanged. No source change.
+
 ## Unreleased (0.4.0) — SDK 0.29
 
 Carries the messaging crates' removal of the legacy mediator admin surface: a pin on a bumped 0.x crate does not admit its new line, so this crate moves a minor with it. No source change.
