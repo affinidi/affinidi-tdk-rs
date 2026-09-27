@@ -130,10 +130,7 @@ use ahash::AHashSet as HashSet;
 #[cfg(feature = "didcomm")]
 use http::StatusCode;
 #[cfg(feature = "didcomm")]
-use protocols::{
-    mediator::{accounts, acls, administration},
-    message_pickup, routing,
-};
+use protocols::{message_pickup, routing};
 #[cfg(feature = "didcomm")]
 use serde_json::Value;
 
@@ -165,15 +162,6 @@ impl MessageType {
         metadata: &UnpackMetadata,
     ) -> Result<ProcessMessageResponse, MediatorError> {
         match self.0 {
-            SDKMessageType::MediatorAdministration => {
-                administration::process(message, state, session, metadata).await
-            }
-            SDKMessageType::MediatorAccountManagement => {
-                accounts::process(message, state, session, metadata).await
-            }
-            SDKMessageType::MediatorACLManagement => {
-                acls::process(message, state, session, metadata).await
-            }
             SDKMessageType::TrustPing => ping::process(message, session, state.clock.unix_secs()),
             SDKMessageType::TrustTaskEnvelope => {
                 trust_tasks::process(message, state, session, metadata).await

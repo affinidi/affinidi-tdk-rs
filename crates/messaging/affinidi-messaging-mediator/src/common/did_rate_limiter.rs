@@ -6,7 +6,7 @@
 //! [`authenticate_token`](crate::common::jwt_auth::authenticate_token), once the
 //! token has been fully validated. That covers every route that authenticates a
 //! caller — `/inbound` (DIDComm and TSP), `/outbound`, `/fetch`, `/list`,
-//! `/delete`, `/whoami`, `/oob`, `/admin/status` and the `/ws` upgrade — and a
+//! `/delete`, `/whoami`, `/oob` and the `/ws` upgrade — and a
 //! refusal is a `429` carrying the mediator's rate-limit attribution contract
 //! (see [`refusal_response`]).
 //!

@@ -173,9 +173,8 @@ pub struct Config {
     pub tags: HashMap<String, String>,
     /// URL of the unified secret backend (`[secrets].backend` from
     /// the config file). Used by the secret-backend probe and surfaced
-    /// in startup logs and the authenticated `/admin/status` endpoint
-    /// so operators can confirm the mediator is talking to the backend
-    /// they expect. Intentionally NOT echoed in `/readyz`, which is
+    /// in startup logs so operators can confirm the mediator is talking
+    /// to the backend they expect. Intentionally NOT echoed in `/readyz`, which is
     /// unauthenticated and must not leak backend identity.
     #[serde(skip_serializing)]
     pub secrets_backend_url: String,

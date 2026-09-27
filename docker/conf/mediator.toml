@@ -73,7 +73,6 @@ jwt_refresh_expiry = "86400"
 block_anonymous_outer_envelope = "true"
 force_session_did_match = "true"
 block_remote_admin_msgs = "true"
-admin_messages_expiry = "3"
 enable_inter_mediator_relay = "false"
 
 [streaming]

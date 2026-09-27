@@ -50,7 +50,6 @@ use affinidi_messaging_sdk::{
             MediatorACLExpanded, MediatorACLGetResponse, MediatorAccessListAddResponse,
             MediatorAccessListGetResponse, MediatorAccessListListResponse,
         },
-        administration::{AdminAccount, MediatorAdminList},
     },
 };
 use async_trait::async_trait;
@@ -1479,44 +1478,6 @@ impl MediatorStore for MemoryStore {
             role,
             Some(AccountType::Admin) | Some(AccountType::RootAdmin)
         ))
-    }
-
-    async fn list_admin_accounts(
-        &self,
-        cursor: u32,
-        limit: u32,
-    ) -> Result<MediatorAdminList, MediatorError> {
-        let limit = limit.min(100) as usize;
-        let state = self.state.lock().await;
-        let mut admin_dids: Vec<String> = state.admins.iter().cloned().collect();
-        admin_dids.sort();
-        let page: Vec<String> = admin_dids
-            .iter()
-            .skip(cursor as usize)
-            .take(limit)
-            .cloned()
-            .collect();
-        let next = if cursor as usize + page.len() >= admin_dids.len() {
-            0
-        } else {
-            cursor + page.len() as u32
-        };
-        let mut accounts = Vec::with_capacity(page.len());
-        for did in &page {
-            let role = state
-                .accounts
-                .get(did)
-                .map(|r| r.role)
-                .unwrap_or(AccountType::Unknown);
-            accounts.push(AdminAccount {
-                did_hash: did.clone(),
-                _type: role,
-            });
-        }
-        Ok(MediatorAdminList {
-            accounts,
-            cursor: next,
-        })
     }
 
     async fn audit_log_record(&self, entry: &AuditLogEntry) -> Result<(), MediatorError> {

@@ -1,7 +1,3 @@
-pub(crate) mod accounts;
-pub(crate) mod acls;
-pub(crate) mod administration;
-
 use crate::{SharedData, common::session::Session};
 use affinidi_messaging_mediator_common::types::audit::{AuditAction, AuditLogEntry};
 use tracing::warn;

@@ -9,12 +9,6 @@
 //! atm.message_pickup().live_stream_get(&profile, &msg_id, dur, true).await?;
 //! atm.trust_tasks().admin_config(&profile).await?;
 //! ```
-// The legacy mediator admin protocols (and `Mediator`, which sends them)
-// are deprecated; this module still implements them for existing callers.
-#![allow(deprecated)]
-
-use mediator::administration::Mediator;
-
 /// **Deprecated**: Use `atm.trust_ping()`, `atm.message_pickup()`, etc. instead.
 #[deprecated(
     note = "Use ATM accessor methods instead: atm.trust_ping(), atm.message_pickup(), etc."
@@ -24,7 +18,6 @@ pub struct Protocols {
     pub message_pickup: message_pickup::MessagePickup,
     pub trust_ping: trust_ping::TrustPing,
     pub routing: routing::Routing,
-    pub mediator: Mediator,
     pub oob_discovery: oob_discovery::OOBDiscovery,
 }
 
@@ -57,7 +50,6 @@ impl Protocols {
             message_pickup: message_pickup::MessagePickup::default(),
             trust_ping: trust_ping::TrustPing::default(),
             routing: routing::Routing::default(),
-            mediator: Mediator::default(),
             oob_discovery: oob_discovery::OOBDiscovery::default(),
         }
     }

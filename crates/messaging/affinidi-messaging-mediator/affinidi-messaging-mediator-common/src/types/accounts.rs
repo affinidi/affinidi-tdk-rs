@@ -5,30 +5,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
-#[derive(Debug, Serialize, Deserialize)]
-pub enum MediatorAccountRequest {
-    #[serde(rename = "account_get")]
-    AccountGet(String),
-    #[serde(rename = "account_list")]
-    AccountList { cursor: u32, limit: u32 },
-    #[serde(rename = "account_add")]
-    AccountAdd { did_hash: String, acls: Option<u64> },
-    #[serde(rename = "account_remove")]
-    AccountRemove(String),
-    #[serde(rename = "account_change_type")]
-    AccountChangeType {
-        did_hash: String,
-        #[serde(alias = "type")]
-        _type: AccountType,
-    },
-    #[serde(rename = "account_change_queue_limits")]
-    AccountChangeQueueLimits {
-        did_hash: String,
-        send_queue_limit: Option<i32>,
-        receive_queue_limit: Option<i32>,
-    },
-}
-
 /// Different levels of accounts in the mediator
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub enum AccountType {
@@ -294,10 +270,4 @@ pub enum ActivityKind {
 pub struct MediatorAccountList {
     pub accounts: Vec<Account>,
     pub cursor: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AccountChangeQueueLimitsResponse {
-    pub send_queue_limit: Option<i32>,
-    pub receive_queue_limit: Option<i32>,
 }

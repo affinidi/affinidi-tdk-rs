@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use affinidi_messaging_test_mediator::{TestEnvironment, TestMediator};
 use common::{init_tracing, skip_if_no_redis};
-use serde_json::Value as JsonValue;
 
 /// The `/ws` endpoint requires JWT auth — without a Bearer token,
 /// the handshake fails before the upgrade. This test verifies the
@@ -58,52 +57,6 @@ async fn websocket_endpoint_rejects_unauthenticated_handshake() {
         }
         Err(e) => panic!("unexpected ws handshake error: {e:?}"),
     }
-
-    mediator.shutdown();
-    let _ = mediator.join().await;
-}
-
-/// `/admin/status` is gated behind admin auth. Operational metrics
-/// (uptime, message counts, queue depth, masked Redis URL) are
-/// fingerprintable infra detail and historically were exposed
-/// publicly; this test verifies the auth gate is in place by
-/// asserting an unauthenticated GET returns 401.
-///
-/// A full "200 with admin auth" verification requires running the
-/// SDK auth handshake to mint a JWT, which is exercised by SDK-level
-/// integration tests. The route itself is legacy: `messaging/stats/show`
-/// replaces it.
-#[tokio::test]
-async fn admin_status_requires_authentication() {
-    init_tracing();
-    if skip_if_no_redis() {
-        return;
-    }
-
-    let mediator = TestMediator::spawn().await.expect("spawn");
-    let url = format!("{}admin/status", mediator.endpoint());
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("client");
-    let resp = client.get(&url).send().await.expect("admin status");
-    assert_eq!(
-        resp.status().as_u16(),
-        401,
-        "/admin/status must reject unauthenticated GETs (got {})",
-        resp.status()
-    );
-
-    // The 401 body comes from the JWT auth extractor's IntoResponse
-    // and is JSON. Confirm it's well-formed so we catch accidental
-    // changes that produce empty / HTML bodies.
-    let body: JsonValue = resp.json().await.expect("json body");
-    assert!(
-        body.as_object()
-            .is_some_and(|obj| obj.contains_key("error_code") || obj.contains_key("message")),
-        "401 body must be a structured ErrorResponse, got: {body}"
-    );
 
     mediator.shutdown();
     let _ = mediator.join().await;

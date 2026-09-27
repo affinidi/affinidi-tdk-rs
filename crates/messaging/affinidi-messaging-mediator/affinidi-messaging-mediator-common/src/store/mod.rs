@@ -52,7 +52,6 @@ use crate::types::{
         MediatorACLGetResponse, MediatorAccessListAddResponse, MediatorAccessListGetResponse,
         MediatorAccessListListResponse,
     },
-    administration::MediatorAdminList,
     audit::{AuditLogEntry, MediatorAuditLogList},
     messages::{
         FetchDeletePolicy, FetchOptions, Folder, GetMessagesResponse, MessageList,
@@ -1195,13 +1194,6 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
 
     /// Whether the given DID is an Admin or RootAdmin account.
     async fn check_admin_account(&self, did_hash: &str) -> Result<bool, MediatorError>;
-
-    /// Page through admin accounts with role-type info.
-    async fn list_admin_accounts(
-        &self,
-        cursor: u32,
-        limit: u32,
-    ) -> Result<MediatorAdminList, MediatorError>;
 
     // ─── Audit log ───────────────────────────────────────────────────────────
 

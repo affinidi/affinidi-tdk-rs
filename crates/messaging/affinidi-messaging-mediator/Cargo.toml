@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.30.3"
+version = "0.31.0"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -128,7 +128,7 @@ aws = ["dep:aws-config", "dep:aws-sdk-ssm", "dep:aws-sdk-s3", "dep:aws-smithy-ty
 # dry-run guard cannot tell from "this crate uses an API that does not exist".
 # Naming the version turns it into an unmet requirement the guard recognises as
 # waiting on a sibling this release publishes, which is what it is.
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.28" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.29" }
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15.9", optional = true }
 ## Optional: DIDComm v1 (Aries RFC 0019) implementation (activated by `didcomm-v1`)
@@ -158,7 +158,7 @@ affinidi-encoding = { version = "0.1", optional = true }
 # names a version that no longer exists locally either, so the guard's "waiting
 # on a sibling" exemption — which requires the requirement to match the local
 # sibling exactly — stops applying and a `wait` becomes a `FAIL`.
-affinidi-messaging-mediator-common = { version = "0.16.24", path = "affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-common = { version = "0.17", path = "affinidi-messaging-mediator-common" }
 ## Raw TOML config schema — the `*ConfigRaw` types are defined here and the
 ## mediator re-exports them; the runtime `Config` + conversions stay local.
 # An EXACT version, not `0.4`: the runtime config reads
@@ -166,7 +166,7 @@ affinidi-messaging-mediator-common = { version = "0.16.24", path = "affinidi-mes
 # looser requirement resolves an older published config crate in
 # `cargo publish --dry-run` and fails to compile on the missing field. Bump in
 # lockstep with that crate's own version.
-affinidi-messaging-mediator-config = { version = "0.4.6", path = "affinidi-messaging-mediator-config" }
+affinidi-messaging-mediator-config = { version = "0.5", path = "affinidi-messaging-mediator-config" }
 ## Humantime for the VTA cache TTL (`[secrets].cache_ttl = "30d"`).
 humantime = "2"
 ## CLI parsing for the mediator binary's subcommands (`mediator`,

@@ -13,7 +13,6 @@ use axum::{
 use http::StatusCode;
 use tracing::warn;
 
-pub mod admin_status;
 #[cfg(feature = "didcomm")]
 pub mod authenticate;
 pub mod inbox_fetch;
@@ -22,10 +21,8 @@ pub mod message_delete;
 pub mod message_inbound;
 pub mod message_list;
 pub mod message_outbound;
-pub mod message_purge;
 #[cfg(feature = "didcomm")]
 pub(crate) mod oob_discovery;
-pub mod queue_status;
 pub mod websocket;
 pub mod well_known_did_fetch;
 
@@ -45,17 +42,6 @@ pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router 
         )
         // Delete/remove messages stored in ATM
         .route("/delete", delete(message_delete::message_delete_handler))
-        // Empty one of the caller's own queues in a single call. The paged
-        // `/list` + `/delete` route is unusable exactly when it is needed —
-        // when the node is already being rate-limited — and `purge_folder`
-        // existed in every store, reachable only by deleting the account.
-        .route(
-            "/purge/{folder}",
-            delete(message_purge::message_purge_handler),
-        )
-        // A DID's own queue depth, limits and age. Without it a sender learned
-        // its queue was full by being refused, which is already the failure.
-        .route("/queue/status", get(queue_status::queue_status_handler))
         // Websocket endpoint for ATM clients
         .route("/ws", get(websocket::websocket_handler))
         // Helps to test if you are who you think you are
@@ -397,7 +383,7 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
         // The secrets backend URL is intentionally NOT exposed here —
         // /readyz is unauthenticated and an attacker scraping it should
         // not learn the backend's identity. Operators can read the URL
-        // from logs or the authenticated /admin/status endpoint.
+        // from logs.
         "secrets_backend_reachable": backend_reachable,
         "vta_cache_age_secs": vta_cache_age_secs,
         "operating_keys_loaded": state.config.operating_keys_loaded,

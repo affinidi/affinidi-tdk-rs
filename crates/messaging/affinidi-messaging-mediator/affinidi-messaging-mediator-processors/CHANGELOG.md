@@ -1,5 +1,9 @@
 # Affinidi Messaging Mediator Processors
 
+## Unreleased (0.15.0) — mediator-common 0.17
+
+Takes mediator-common 0.17, whose types this crate's API carries. No source change.
+
 ## Unreleased (0.14.1) — `functions_file` resolves against the config file
 
 Both processors resolve `functions_file` the way the mediator now does:

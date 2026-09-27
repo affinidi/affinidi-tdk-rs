@@ -108,16 +108,8 @@ pub fn apply_env_overrides(config: &mut ConfigRaw) {
         "ENABLE_INTER_MEDIATOR_RELAY"
     );
     env_override!(
-        config.security.admin_messages_expiry,
-        "ADMIN_MESSAGES_EXPIRY"
-    );
-    env_override!(
         config.security.trust_task_verification,
         "TRUST_TASK_VERIFICATION"
-    );
-    env_override!(
-        config.security.legacy_admin_protocols,
-        "LEGACY_ADMIN_PROTOCOLS"
     );
 
     env_override!(config.streaming.enabled, "STREAMING_ENABLED");
@@ -358,8 +350,34 @@ pub fn parse_config(contents: &str) -> Result<(ConfigRaw, Vec<String>), ConfigEr
     Ok((config, unknown_keys))
 }
 
+/// Settings the mediator used to read and no longer does, with why.
+///
+/// A retired key is reported like any other unknown key — a config that boots
+/// today keeps booting — but the warning names it as retired rather than
+/// suggesting a typo or a misplaced table.
+const RETIRED_KEYS: &[(&str, &str)] = &[
+    (
+        "security.legacy_admin_protocols",
+        "the legacy admin surface it switched (the DIDComm mediator/1.0 \
+         admin-management, account-management and acl-management protocols, and \
+         REST GET /admin/status, DELETE /purge and GET /queue/status) has been \
+         removed; the mediator is administered over the messaging/* Trust Tasks",
+    ),
+    (
+        "security.admin_messages_expiry",
+        "it bounded replay of the removed legacy admin protocols; a Trust Task's \
+         freshness is checked from its issuedAt under trust_task_verification",
+    ),
+];
+
 /// The operator-facing warning for one unrecognised key.
 pub fn unknown_key_message(file_name: &str, key: &str) -> String {
+    if let Some((_, why)) = RETIRED_KEYS.iter().find(|(retired, _)| *retired == key) {
+        return format!(
+            "configuration key `{key}` in {file_name} is retired and ignored: {why}. \
+             Remove it."
+        );
+    }
     match key.rsplit_once('.') {
         Some((table, leaf)) => format!(
             "unknown configuration key `{key}` in {file_name} — ignored. The mediator \
@@ -475,6 +493,36 @@ mod tests {
     }
 
     /// A top-level typo has no table to blame; the message does not invent one.
+    /// A config written for an earlier release still boots, and each retired
+    /// key is reported as retired rather than as a typo.
+    #[test]
+    fn a_retired_key_is_reported_as_retired() {
+        let toml = SHIPPED.replacen(
+            "\n[security]\n",
+            "\n[security]\nlegacy_admin_protocols = \"warn\"\nadmin_messages_expiry = \"3\"\n",
+            1,
+        );
+        assert_ne!(toml, SHIPPED, "fixture must actually inject the keys");
+        let (_, mut unknown) = parse_config(&toml).expect("still parses");
+        unknown.sort();
+        assert_eq!(
+            unknown,
+            vec![
+                "security.admin_messages_expiry".to_string(),
+                "security.legacy_admin_protocols".to_string(),
+            ]
+        );
+        for key in &unknown {
+            let msg = unknown_key_message("mediator.toml", key);
+            assert!(msg.contains("is retired and ignored"), "{msg}");
+            assert!(!msg.contains("typo"), "{msg}");
+        }
+        assert!(
+            unknown_key_message("mediator.toml", "security.legacy_admin_protocols")
+                .contains("messaging/* Trust Tasks")
+        );
+    }
+
     #[test]
     fn a_top_level_unknown_key_is_reported_plainly() {
         let toml = format!("log_levle = \"debug\"\n{SHIPPED}");

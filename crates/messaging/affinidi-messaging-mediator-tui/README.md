@@ -246,6 +246,7 @@ repository and implements `IdentitySource` from the engine crate.
 
 ## Replaces `mediator-monitor`
 
-`mediator-monitor` polled `/admin/status` for a read-only dashboard. The
+`mediator-monitor` polled the mediator's REST `/admin/status` route (since
+removed) for a read-only dashboard. The
 console's Dashboard shows the same figures and much more, over signed Trust
 Tasks, and `mediator-monitor` has been removed.

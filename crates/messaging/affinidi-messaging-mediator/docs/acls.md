@@ -49,8 +49,8 @@ mediator_acl_mode = "explicit_deny"   # or "explicit_allow"
 
 It has two effects: who may authenticate, and who may add accounts.
 
-| Mode | Authentication | `messaging/account/add` (DIDComm admin protocol and Trust Tasks) |
-|------|----------------|------------------------------------------------------------------|
+| Mode | Authentication | `messaging/account/add` |
+|------|----------------|-------------------------|
 | `explicit_allow` | **Closed.** Only DIDs that already hold an account record may authenticate. An unknown DID is rejected at `/authenticate/challenge` with `403 authentication.blocked` and no account is created for it. | Only `Admin` / `RootAdmin` accounts may add accounts. |
 | `explicit_deny` | **Open.** Any DID may authenticate; an unknown DID is auto-registered with `global_acl_default` when it requests a challenge. | Any authenticated DID may add accounts. |
 
@@ -325,19 +325,15 @@ RootAdmin.
 
 ### Admin message hardening
 
-- `block_remote_admin_msgs = "true"` (default) requires admin messages to
-  be signed by a key belonging to the session DID, so admin operations
-  cannot be relayed in from elsewhere.
-- `admin_messages_expiry` bounds replay of captured admin messages. It is
-  enforced for every admin account regardless of the setting above, and
-  rejects future-dated `created_time` as well as stale ones.
+- `block_remote_admin_msgs = "true"` (default) requires an admin's Trust
+  Task to be sent by a key belonging to the session DID, so admin
+  operations cannot be relayed in from elsewhere.
+- Replay of a captured Trust Task is bounded by its `issuedAt`, checked
+  under `trust_task_verification`.
 
 ### Changing ACLs
 
-Two equivalent surfaces, with identical rules:
-
-- DIDComm admin protocol: `messaging/acls/set`
-- Trust Task: `messaging/account/acl-set`
+Through the `messaging/account/update` Trust Task, with an `acl` member.
 
 An admin may set anything. A non-admin may only target its own DID, may
 only change capabilities whose self-change bit is set, may never change a

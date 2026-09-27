@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (0.29.0) — the legacy mediator admin senders are removed
+
+Removed, with what replaces each (all on `atm.trust_tasks()`):
+
+- `Mediator`, `MediatorOps`, `ATM::mediator()` and `Protocols::mediator`: the
+  senders of the removed DIDComm admin protocols. Use `account_get`,
+  `account_list`, `account_add`, `account_update`, `account_remove`,
+  `acl_get`, `access_list_list`, `access_list_update`, `audit_list` and
+  `config_show`.
+- `MessageType::{MediatorAdministration, MediatorAccountManagement,
+  MediatorACLManagement}`; those type URIs now parse as `MessageType::Other`.
+- `ATM::purge_queue`, `ATM::purge_queue_filtered` and `ATM::queue_status`, the
+  REST senders, with `PurgeOptions`, `PurgeQueueResponse`,
+  `QueueStatusResponse` and `QueueSideStatus`. Use `queue_purge` and
+  `queue_status`.
+- `protocols::mediator::administration`, and the re-exports of the removed
+  mediator-common request types from `accounts` and `acls_handler`.
+- The `regex` dependency, which only the removed code used.
+
+Takes mediator-common 0.17.
+
 ## Unreleased (0.28.1) — delivery can be settled on the mediator's receipt
 
 - `atm.trust_tasks().message_status(profile, msg_ids)` sends a

@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased (0.31.0) — the legacy admin surface is removed
+
+The mediator is administered only over Trust Tasks. Removed, with what replaces each:
+
+- The DIDComm protocols `https://didcomm.org/mediator/1.0/admin-management`,
+  `…/account-management` and `…/acl-management`: no longer dispatched or
+  advertised in discover-features. Use `messaging/account/{get,list,add,update,remove}`,
+  `messaging/acl/get`, `messaging/access-list/{list,update}`, `audit/list` and
+  `config/show`. A message of a retired type is not recognised.
+- REST `GET /admin/status`: use `messaging/stats/show` (and `messaging/ping`).
+  It does not carry the masked database URL and timeout, and it requires an
+  `Admin` or `RootAdmin` account; a `Mediator`-typed account could read
+  `/admin/status` and cannot read `stats/show`.
+- REST `DELETE /purge/{folder}`: use `messaging/queue/purge`.
+- REST `GET /queue/status`: use `messaging/queue/status`. An account the
+  mediator does not hold is refused (404, `account.not_found`) where the REST route
+  answered zeroes.
+- `security.legacy_admin_protocols` (and `LEGACY_ADMIN_PROTOCOLS`), with the
+  `legacy_admin_requests_total` metric, and `security.admin_messages_expiry`
+  (and `ADMIN_MESSAGES_EXPIRY`), which bounded replay of the removed protocols
+  only; a Trust Task's freshness is checked from its `issuedAt`. A
+  `mediator.toml` that still sets either still loads, and each is reported at
+  startup as a retired key (mediator-config 0.5.0).
+
+The admin-signature and self-or-admin checks the Trust Task handlers share
+(`check_admin_signature`, `check_permissions`) move to `common::authz`;
+`acl_change_ok` and `admin_message_ttl_status`, used only by the removed
+protocols, are gone. Takes mediator-common 0.17, mediator-config 0.5 and SDK 0.29.
+
 ## Unreleased (0.30.3) — vta-sdk 0.53, and the duplicate SDK copies drop out
 
 `vta-sdk` 0.51 → 0.53, the release built against affinidi-messaging-sdk 0.28

@@ -30,7 +30,6 @@ use crate::types::{
         MediatorACLGetResponse, MediatorAccessListAddResponse, MediatorAccessListGetResponse,
         MediatorAccessListListResponse,
     },
-    administration::MediatorAdminList,
     audit::{AuditLogEntry, MediatorAuditLogList},
     messages::{FetchOptions, Folder, GetMessagesResponse, MessageList, MessageListElement},
 };
@@ -223,7 +222,7 @@ impl RedisStore {
         }
     }
 
-    /// Circuit breaker state, surfaced in `/admin/status`.
+    /// Circuit breaker state, surfaced in `messaging/stats/show` and `/readyz`.
     pub fn circuit_breaker_state(&self) -> &'static str {
         self.circuit_breaker.state_str()
     }
@@ -1205,14 +1204,6 @@ impl MediatorStore for RedisStore {
 
     async fn check_admin_account(&self, did_hash: &str) -> Result<bool, MediatorError> {
         self.check_admin_account(did_hash).await
-    }
-
-    async fn list_admin_accounts(
-        &self,
-        cursor: u32,
-        limit: u32,
-    ) -> Result<MediatorAdminList, MediatorError> {
-        self.list_admin_accounts(cursor, limit).await
     }
 
     async fn audit_log_record(&self, entry: &AuditLogEntry) -> Result<(), MediatorError> {
