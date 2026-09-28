@@ -110,33 +110,13 @@ impl DatabaseHandler {
                             "Message not found for deletion: message_hash({})",
                             message_hash
                         );
-                        Err(MediatorError::problem(
-                            10,
-                            "NA",
-                            request_msg_id.map(|s| s.to_string()),
-                            ProblemReportSorter::Warning,
-                            ProblemReportScope::Message,
-                            "database.message.delete.not_found",
-                            "Message ({1}) not found",
-                            vec![message_hash.to_string()],
-                            StatusCode::NOT_FOUND,
-                        ))
+                        Err(ops::delete_not_found(message_hash, request_msg_id))
                     } else if err_str.contains("PERMISSION_DENIED") {
                         warn!(
                             "Permission denied deleting message_hash({}) by did_hash({})",
                             message_hash, did_hash
                         );
-                        Err(MediatorError::problem(
-                            10,
-                            "NA",
-                            request_msg_id.map(|s| s.to_string()),
-                            ProblemReportSorter::Warning,
-                            ProblemReportScope::Message,
-                            "database.message.delete.permission_denied",
-                            "Not authorized to delete message ({1})",
-                            vec![message_hash.to_string()],
-                            StatusCode::FORBIDDEN,
-                        ))
+                        Err(ops::delete_permission_denied(message_hash, request_msg_id))
                     } else {
                         // Generic database error
                         Err(MediatorError::problem_with_log(
