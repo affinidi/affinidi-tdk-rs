@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-didcomm-service"
-version = "0.15.1"
+version = "0.15.2"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
 authors.workspace = true
@@ -17,7 +17,7 @@ rust-version.workspace = true
 ## Enables the SDK's TSP surface (`atm.tsp().unpack_bytes`) used to route
 ## inbound TSP frames to a `TspHandler`. Off by default — a DIDComm-only build
 ## is unaffected.
-tsp = ["affinidi-messaging-sdk/tsp"]
+tsp = ["affinidi-messaging-sdk/tsp", "dep:affinidi-tsp"]
 
 [dependencies]
 affinidi-tdk-common = "0.6"
@@ -31,6 +31,9 @@ affinidi-messaging-didcomm = "0.15.9"
 ## Trust Tasks payload types (the atm.trust_tasks() surface accepts these).
 trust-tasks-rs = "0.24"
 affinidi-secrets-resolver = "0.5"
+## Reads the cleartext sender VID off a TSP envelope, to keep each peer's
+## inbound frames in order (`tsp` feature only).
+affinidi-tsp = { version = "0.2", path = "../affinidi-tsp", optional = true }
 
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }

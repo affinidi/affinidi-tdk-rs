@@ -5,6 +5,8 @@ use affinidi_messaging_sdk::config::ATMConfigBuilder;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_tdk_common::TDKSharedState;
+#[cfg(feature = "tsp")]
+use tokio::sync::oneshot;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -70,6 +72,10 @@ pub(crate) struct Listener {
     pub(crate) connection_tx: watch::Sender<Option<ConnectionHandle>>,
     /// Broadcast sender for lifecycle events.
     pub(crate) events_tx: broadcast::Sender<ListenerEvent>,
+    /// Keeps each peer's inbound TSP frames in arrival order through unpack.
+    /// Only touched by `process_next_frame`, on the listener loop.
+    #[cfg(feature = "tsp")]
+    tsp_order: std::sync::Mutex<SenderOrder>,
 }
 
 impl Listener {
@@ -90,6 +96,8 @@ impl Listener {
             profile: None,
             connection_tx,
             events_tx,
+            #[cfg(feature = "tsp")]
+            tsp_order: std::sync::Mutex::new(SenderOrder::default()),
         }
     }
 
@@ -368,12 +376,61 @@ impl Listener {
             }
             Some(InboundFrame::Tsp(packed)) => {
                 if let Some(tsp_handler) = self.tsp_handler.clone() {
+                    let qb2 = match atm.tsp().decode(&packed) {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            warn!(profile = %profile.inner.alias, error = %e, "Failed to decode TSP frame");
+                            return Ok(());
+                        }
+                    };
+                    // Each frame is handled on its own task, but one peer's
+                    // frames must be unpacked in the order they arrived: an
+                    // invite admits the payload sent right behind it only once
+                    // it is recorded, and a payload unpacked first is discarded
+                    // by the relationship gate. So a frame waits for the
+                    // previous frame *from the same sender* to be unpacked
+                    // (and, for a control message, recorded) — not for its
+                    // handler to run. Frames from different peers never wait on
+                    // each other.
+                    //
+                    // The key is the envelope's cleartext sender, read before
+                    // any key is used. A frame that lies about it only queues
+                    // behind that VID's unpack, which is cheap, and is refused
+                    // at unpack anyway.
+                    let slot = affinidi_tsp::MetaEnvelope::parse(&qb2).ok().map(|meta| {
+                        self.tsp_order
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .enqueue(&meta.sender)
+                    });
                     let listener_id = self.config.id.clone();
                     let atm = atm.clone();
                     let profile = profile.clone();
                     tasks.spawn(async move {
-                        Self::dispatch_tsp(&listener_id, &atm, &profile, &tsp_handler, *packed)
-                            .await;
+                        let (prev, done) = match slot {
+                            Some((prev, done)) => (prev, Some(done)),
+                            None => (None, None),
+                        };
+                        if let Some(prev) = prev
+                            && tokio::time::timeout(TSP_ORDER_WAIT, prev).await.is_err()
+                        {
+                            warn!(
+                                profile = %profile.inner.alias,
+                                wait_secs = TSP_ORDER_WAIT.as_secs(),
+                                "The previous TSP frame from this sender is still being unpacked; \
+                                 handling this one without waiting further, so it may be \
+                                 unpacked out of order"
+                            );
+                        }
+                        Self::dispatch_tsp_bytes(
+                            &listener_id,
+                            &atm,
+                            &profile,
+                            &tsp_handler,
+                            &qb2,
+                            done,
+                        )
+                        .await;
                     });
                 } else {
                     warn!(
@@ -423,10 +480,35 @@ impl Listener {
                 return;
             }
         };
-        let inbound = match atm.tsp().unpack_message(profile, &qb2).await {
+        Self::dispatch_tsp_bytes(listener_id, atm, profile, handler, &qb2, None).await;
+    }
+
+    /// [`dispatch_tsp`](Self::dispatch_tsp) on an already-decoded frame.
+    ///
+    /// `order` is this frame's place in its sender's queue (see
+    /// [`SenderOrder`]). It is released — dropped — as soon as the frame is
+    /// unpacked and, for a control message, recorded: that is the point after
+    /// which the sender's next frame sees this one's effect on the relationship
+    /// gate. The handler then runs without holding up the next frame.
+    #[cfg(feature = "tsp")]
+    async fn dispatch_tsp_bytes(
+        listener_id: &str,
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        handler: &Arc<dyn TspHandler>,
+        qb2: &[u8],
+        order: Option<oneshot::Sender<()>>,
+    ) {
+        let inbound = match atm.tsp().unpack_message(profile, qb2).await {
             Ok(v) => v,
             Err(e) => {
-                warn!(profile = %profile.inner.alias, error = %e, "Failed to unpack TSP frame");
+                // Includes an application message the relationship gate
+                // discarded (§7.2.2) — the one case where a peer's data is lost.
+                warn!(
+                    profile = %profile.inner.alias,
+                    error = %e,
+                    "Dropped an inbound TSP frame: it could not be unpacked"
+                );
                 return;
             }
         };
@@ -477,11 +559,13 @@ impl Listener {
                 // decision, not the framework's — so the invite is surfaced to
                 // the handler, which may call `accept_relationship` with the
                 // digest carried here.
-                match atm
+                let recorded = atm
                     .tsp()
                     .record_incoming_control(profile, &sender, &control)
-                    .await
-                {
+                    .await;
+                // Recorded (or refused): the sender's next frame may go ahead.
+                drop(order);
+                match recorded {
                     Ok(incoming) => {
                         debug!(
                             profile = %profile.inner.alias,
@@ -537,6 +621,10 @@ impl Listener {
                 return;
             }
         };
+
+        // Unpacked and admitted: the sender's next frame may go ahead while the
+        // handler runs.
+        drop(order);
 
         let ctx = HandlerContext {
             listener_id: listener_id.to_string(),
@@ -659,6 +747,58 @@ impl Listener {
     }
 }
 
+/// How long a TSP frame waits for the previous frame from the same sender to
+/// be unpacked before it goes ahead anyway. That step is one unpack and one
+/// relationship-store write, so reaching this means the store is stuck; waiting
+/// forever would stall that peer for good.
+#[cfg(feature = "tsp")]
+const TSP_ORDER_WAIT: Duration = Duration::from_secs(30);
+
+/// Per-sender ordering for inbound TSP frames.
+///
+/// Holds, for each sender VID, the completion signal of the latest frame taken
+/// from it. A new frame is handed that signal to wait on and a fresh one to
+/// release, so one sender's frames form a chain while different senders' frames
+/// run side by side. A signal is released when its sender half is dropped,
+/// which also happens if the task holding it panics or is cancelled, so a
+/// failed frame never wedges the chain.
+///
+/// Entries whose frame is done are pruned once the map has doubled since the
+/// last prune, so it stays bounded by the senders with frames in flight at
+/// amortised O(1) per frame.
+#[cfg(feature = "tsp")]
+#[derive(Default)]
+pub(crate) struct SenderOrder {
+    tails: std::collections::HashMap<String, oneshot::Receiver<()>>,
+    prune_at: usize,
+}
+
+#[cfg(feature = "tsp")]
+impl SenderOrder {
+    const MIN_PRUNE_AT: usize = 64;
+
+    /// Take the next place in `sender`'s queue: the signal to wait on (none if
+    /// nothing from `sender` is in flight) and the one to release when done.
+    pub(crate) fn enqueue(
+        &mut self,
+        sender: &str,
+    ) -> (Option<oneshot::Receiver<()>>, oneshot::Sender<()>) {
+        let (done_tx, done_rx) = oneshot::channel();
+        let prev = self.tails.insert(sender.to_string(), done_rx);
+        if self.tails.len() >= self.prune_at.max(Self::MIN_PRUNE_AT) {
+            self.tails
+                .retain(|_, rx| matches!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+            self.prune_at = self.tails.len() * 2;
+        }
+        (prev, done_tx)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.tails.len()
+    }
+}
+
 /// A stable id for a TSP control message, derived from its thread digest.
 ///
 /// A control message carries no DIDComm message or thread id, so handlers and
@@ -672,4 +812,48 @@ fn control_message_id(digest: &[u8; 32]) -> String {
             let _ = write!(acc, "{b:02x}");
             acc
         })
+}
+
+#[cfg(all(test, feature = "tsp"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn one_senders_frames_chain_and_another_senders_do_not_wait() {
+        let mut order = SenderOrder::default();
+        let (first, a1) = order.enqueue("did:a");
+        assert!(first.is_none(), "nothing from did:a in flight yet");
+        let (after_a1, a2) = order.enqueue("did:a");
+        let (other, _b1) = order.enqueue("did:b");
+        assert!(other.is_none(), "did:b does not wait on did:a");
+
+        let mut after_a1 = after_a1.expect("did:a's second frame waits on its first");
+        assert!(
+            after_a1.try_recv().is_err(),
+            "still waiting while the first is in flight"
+        );
+        drop(a1);
+        assert!(
+            matches!(
+                after_a1.try_recv(),
+                Err(oneshot::error::TryRecvError::Closed)
+            ),
+            "released once the first is done"
+        );
+        drop(a2);
+    }
+
+    #[tokio::test]
+    async fn finished_senders_are_pruned() {
+        let mut order = SenderOrder::default();
+        for i in 0..1000 {
+            let (_prev, done) = order.enqueue(&format!("did:{i}"));
+            drop(done);
+        }
+        assert!(
+            order.len() <= 2 * SenderOrder::MIN_PRUNE_AT,
+            "len {}",
+            order.len()
+        );
+    }
 }
