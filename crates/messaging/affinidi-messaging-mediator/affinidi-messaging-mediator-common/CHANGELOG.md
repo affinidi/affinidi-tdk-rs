@@ -1,5 +1,16 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.17.1) — one shape for a refused delete
+
+`store::ops` gains `delete_not_found`, `delete_permission_denied` and
+`is_delete_not_found`, with the descriptors `DELETE_NOT_FOUND` and
+`DELETE_PERMISSION_DENIED`. The Redis `DatabaseHandler::delete_message` builds
+its refusals with them (unchanged on the wire), so the mediator's Fjall and
+in-memory stores can return exactly the same errors. The filtered folder purge
+recognises an already-gone message through `is_delete_not_found`; it matched
+`NOT_FOUND` in the error text, which the Redis problem report never contained,
+so on Redis it counted an already-gone message as a failure.
+
 ## Unreleased (0.17.0) — the legacy admin vocabulary is removed
 
 The request and response types of the removed DIDComm admin protocols are

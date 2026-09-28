@@ -1203,11 +1203,7 @@ impl MediatorStore for FjallStore {
         {
             Some(v) => Self::decode(&v)?,
             None => {
-                return Err(MediatorError::InternalError(
-                    404,
-                    "fjall".into(),
-                    format!("NOT_FOUND: message_hash ({message_hash})"),
-                ));
+                return Err(ops::delete_not_found(message_hash, None));
             }
         };
 
@@ -1219,11 +1215,7 @@ impl MediatorStore for FjallStore {
             stored.from_did_hash.as_deref(),
         );
         if !permitted {
-            return Err(MediatorError::InternalError(
-                403,
-                "fjall".into(),
-                "PERMISSION_DENIED: requesting DID does not own this message".into(),
-            ));
+            return Err(ops::delete_permission_denied(message_hash, None));
         }
 
         // Read-modify-write the recipient and (if non-anonymous) the
@@ -3661,7 +3653,10 @@ mod tests {
             )
             .await
             .expect_err("non-owner delete must fail");
-        assert!(format!("{err}").contains("PERMISSION_DENIED"));
+        assert!(
+            format!("{err}").contains(ops::DELETE_PERMISSION_DENIED),
+            "got: {err}"
+        );
     }
 
     #[tokio::test]

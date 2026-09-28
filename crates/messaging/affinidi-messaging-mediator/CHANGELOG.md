@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (0.33.1) — every storage backend refuses a delete the same way
+
+A delete of a message that is not there, or that the requester is not a party
+to, now returns the same problem report on the Fjall and in-memory stores as on
+Redis (`database.message.delete.not_found` / `…permission_denied`). The Fjall
+and in-memory stores returned a bare `InternalError` (`NOT_FOUND: message_hash
+(…)`, `PERMISSION_DENIED: …`), and the per-id error text is what `DELETE
+/messages` hands the client. So the same already-gone message looked different
+depending on the backend, and SDK clients, which drop redelivered duplicates
+quietly by that descriptor, logged every one from a Fjall mediator as a real
+refusal.
+
+The purge paths (`messaging/queue/purge` by id and the filtered folder purge),
+which tell an already-gone message from a failure, now match on the descriptor
+through `ops::is_delete_not_found` instead of on `NOT_FOUND` in the rendered
+text. The Redis problem report never contained that text, so on Redis an
+already-gone message was counted as a failed purge; it is now skipped, as on
+the other backends.
+
+Takes mediator-common 0.17.1.
+
 ## Unreleased (0.33.0) — vta-sdk 0.56, and the crossing's duplicate crates drop out
 
 `vta-sdk` 0.53 -> 0.56, the release built against trust-tasks-rs 0.24,

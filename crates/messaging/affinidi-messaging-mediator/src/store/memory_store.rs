@@ -564,13 +564,11 @@ impl MediatorStore for MemoryStore {
     ) -> Result<(), MediatorError> {
         let mut state = self.state.lock().await;
 
-        let record = state.messages.get(message_hash).cloned().ok_or_else(|| {
-            MediatorError::InternalError(
-                404,
-                "memory".into(),
-                format!("NOT_FOUND: message_hash ({message_hash})"),
-            )
-        })?;
+        let record = state
+            .messages
+            .get(message_hash)
+            .cloned()
+            .ok_or_else(|| ops::delete_not_found(message_hash, None))?;
 
         // Authorisation. Owner must be TO or FROM. Admin bypasses. Shared with
         // the Fjall backend via `store::ops` so the two can't drift.
@@ -580,11 +578,7 @@ impl MediatorStore for MemoryStore {
             record.from_did_hash.as_deref(),
         );
         if !permitted {
-            return Err(MediatorError::InternalError(
-                403,
-                "memory".into(),
-                "PERMISSION_DENIED: requesting DID does not own this message".into(),
-            ));
+            return Err(ops::delete_permission_denied(message_hash, None));
         }
 
         // Stream entries
@@ -2218,7 +2212,10 @@ mod tests {
             )
             .await
             .expect_err("non-owner delete must fail");
-        assert!(format!("{err}").contains("PERMISSION_DENIED"));
+        assert!(
+            format!("{err}").contains(ops::DELETE_PERMISSION_DENIED),
+            "got: {err}"
+        );
     }
 
     #[tokio::test]
@@ -2726,7 +2723,7 @@ mod tests {
             .await;
         let err = refused.expect_err("carol may not delete alice's message");
         assert!(
-            !err.to_string().contains("NOT_FOUND"),
+            !ops::is_delete_not_found(&err),
             "this must be a refusal, not an already-gone, or the test proves \
              nothing about the failure path. Got: {err}"
         );
@@ -2752,9 +2749,10 @@ mod tests {
 
     /// The already-gone case is NOT a failure: the caller asked for the message
     /// to be absent and it is. The filtered purge tells it apart from a real
-    /// refusal by this marker, so the wording is pinned — if it changes, an
-    /// already-gone message starts being counted as a failure, which is the
-    /// safe direction but should be deliberate rather than silent.
+    /// refusal by the problem report's descriptor, and clients read the same
+    /// descriptor out of the per-id error text `DELETE /messages` returns —
+    /// the SDK's deletion handler logs anything else as a refusal. So both are
+    /// pinned here, and must match what the Redis backend produces.
     #[tokio::test]
     async fn an_already_gone_message_reports_not_found() {
         use affinidi_messaging_mediator_common::store::DeletionAuthority;
@@ -2769,7 +2767,11 @@ mod tests {
             )
             .await
             .expect_err("deleting an absent message reports not-found");
-        assert!(err.to_string().contains("NOT_FOUND"), "got: {err}");
+        assert!(ops::is_delete_not_found(&err), "got: {err}");
+        assert!(
+            err.to_string().contains(ops::DELETE_NOT_FOUND),
+            "clients match the descriptor in the error text. Got: {err}"
+        );
     }
 
     /// A dry run is the difference between a recovery tool and a second

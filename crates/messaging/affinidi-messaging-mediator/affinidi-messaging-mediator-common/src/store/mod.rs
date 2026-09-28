@@ -153,19 +153,6 @@ fn publish_delivery_metrics(report: &DeliveryMarkReport) {
 /// shorter.
 pub const MAX_PURGE_SCAN: usize = 10_000;
 
-/// Whether a delete failed because the message was already gone.
-///
-/// Every backend signals this the same way — the in-memory and Fjall stores and
-/// the Redis stored function all produce a `NOT_FOUND:` message — but it is
-/// matched on text, which is fragile. It is safe fragility: if the wording ever
-/// changes, an already-gone message is counted as a *failure* rather than a
-/// success, so a purge would under-report what it removed rather than
-/// over-report it. The test in `memory_store` pins the current wording so the
-/// change is noticed rather than merely survived.
-fn is_not_found(err: &MediatorError) -> bool {
-    err.to_string().contains("NOT_FOUND")
-}
-
 /// Which messages a [`purge_folder_filtered`](MediatorStore::purge_folder_filtered)
 /// call should remove.
 ///
@@ -859,7 +846,7 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
                     // expiry sweeper — is not a failure: the caller asked for
                     // it to be absent and it is. It is not counted as removed
                     // either, because this call did not remove it.
-                    Err(e) if is_not_found(&e) => {}
+                    Err(e) if ops::is_delete_not_found(&e) => {}
                     // Anything else is a message still sitting in the queue.
                     // Counting it as purged would report the queue emptier
                     // than it is, to an operator who is reaching for this

@@ -50,6 +50,18 @@ const DELETE_RETRY_BASE: Duration = Duration::from_millis(500);
 /// not silently turn this back into a warning.
 const DELETE_NOT_FOUND: &str = "database.message.delete.not_found";
 
+/// The same answer as [`DELETE_NOT_FOUND`] from a mediator on its Fjall or
+/// in-memory store, which — until the mediator gave every backend the Redis
+/// backend's problem report — returned a bare `NOT_FOUND: message_hash (…)`
+/// instead. Deployed mediators still do, and without this every redelivered
+/// duplicate they answer reaches the logs as a refusal.
+const DELETE_NOT_FOUND_LOCAL_STORE: &str = "NOT_FOUND: message_hash";
+
+/// Whether a per-id delete refusal only means the message is already gone.
+fn is_already_gone(err: &str) -> bool {
+    err.contains(DELETE_NOT_FOUND) || err.contains(DELETE_NOT_FOUND_LOCAL_STORE)
+}
+
 /// How long a deleted id is remembered, so a redelivered copy of the same
 /// message does not produce a second `DELETE` for an id the mediator has
 /// already dropped.
@@ -224,7 +236,7 @@ async fn delete_batch(
                 let (gone, refused): (Vec<_>, Vec<_>) = response
                     .errors
                     .into_iter()
-                    .partition(|(_, err)| err.contains(DELETE_NOT_FOUND));
+                    .partition(|(_, err)| is_already_gone(err));
 
                 if !gone.is_empty() {
                     debug!(
@@ -710,7 +722,21 @@ mod batch_tests {
                       w.m.database.message.delete.permission_denied, comment: Not authorized to \
                       delete message (abc), escalate_to: None): 403";
 
-        assert!(not_found.contains(DELETE_NOT_FOUND));
-        assert!(!denied.contains(DELETE_NOT_FOUND));
+        assert!(is_already_gone(not_found));
+        assert!(!is_already_gone(denied));
+    }
+
+    /// A mediator on its Fjall or in-memory store answers an already-gone id
+    /// with a bare internal error rather than the problem report, and still
+    /// refuses a non-party with an equally bare one. Both are what deployed
+    /// mediators send, so they are pinned verbatim.
+    #[test]
+    fn a_local_store_mediator_not_found_is_already_gone() {
+        let not_found = "NOT_FOUND: message_hash \
+                         (61b6af2e9969984d45d2a33ad73fbbaa42acdb752983d389329956b2d9cbf0dc)";
+        let denied = "PERMISSION_DENIED: requesting DID does not own this message";
+
+        assert!(is_already_gone(not_found));
+        assert!(!is_already_gone(denied));
     }
 }

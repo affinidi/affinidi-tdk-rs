@@ -10,8 +10,11 @@
 //! in-process Rust backends; the conformance suite (`store_conformance`) is
 //! what keeps Redis aligned with them.
 
+use crate::errors::MediatorError;
 use crate::store::types::{DeletionAuthority, OutboxReceipt, RemovalReason, SentMessageState};
 use crate::types::acls::{AccessListModeType, MediatorACLSet};
+use crate::types::problem_report::{ProblemReportScope, ProblemReportSorter};
+use axum::http::StatusCode;
 
 /// Whether `authority` may delete a message addressed to `to_did_hash` and
 /// (optionally) from `from_did_hash`.
@@ -114,6 +117,71 @@ pub fn sent_message_state(
         },
         _ => receipt.map_or(SentMessageState::Unknown, SentMessageState::Removed),
     }
+}
+
+/// Problem-report descriptor for "delete: there is no such message".
+///
+/// A client told this deletes nothing and loses nothing — the message is
+/// already gone — so it is the one refusal a client may treat as success.
+/// Clients recognise it by this descriptor, which is why every backend must
+/// produce exactly it (see [`delete_not_found`]).
+pub const DELETE_NOT_FOUND: &str = "database.message.delete.not_found";
+
+/// Problem-report descriptor for "delete: this DID is not a party to it".
+pub const DELETE_PERMISSION_DENIED: &str = "database.message.delete.permission_denied";
+
+/// The error every backend returns for a delete of a message that is not there.
+///
+/// # Why one constructor
+///
+/// The Redis backend has always answered with a problem report under
+/// [`DELETE_NOT_FOUND`]; the Fjall and memory stores answered with a bare
+/// `InternalError` reading `NOT_FOUND: message_hash (…)`. The per-id error
+/// text is what `DELETE /messages` hands back to the client, so the same
+/// already-gone message looked different depending on the storage backend —
+/// and a client that recognises the descriptor (the SDK's deletion handler,
+/// which drops redelivered duplicates quietly) logged every one from a Fjall
+/// mediator as a real refusal.
+pub fn delete_not_found(message_hash: &str, request_msg_id: Option<&str>) -> MediatorError {
+    MediatorError::problem(
+        10,
+        "NA",
+        request_msg_id.map(str::to_string),
+        ProblemReportSorter::Warning,
+        ProblemReportScope::Message,
+        DELETE_NOT_FOUND,
+        "Message ({1}) not found",
+        vec![message_hash.to_string()],
+        StatusCode::NOT_FOUND,
+    )
+}
+
+/// The error every backend returns when the requester may not delete a
+/// message — see [`delete_message_permitted`].
+pub fn delete_permission_denied(message_hash: &str, request_msg_id: Option<&str>) -> MediatorError {
+    MediatorError::problem(
+        10,
+        "NA",
+        request_msg_id.map(str::to_string),
+        ProblemReportSorter::Warning,
+        ProblemReportScope::Message,
+        DELETE_PERMISSION_DENIED,
+        "Not authorized to delete message ({1})",
+        vec![message_hash.to_string()],
+        StatusCode::FORBIDDEN,
+    )
+}
+
+/// Whether a delete failed only because the message was already gone.
+///
+/// Matched on the problem report's descriptor, not on its rendered text, so a
+/// rewording of the comment cannot turn an already-gone message into a failure.
+pub fn is_delete_not_found(err: &MediatorError) -> bool {
+    matches!(
+        err,
+        MediatorError::MediatorError(_, _, _, report, _, _)
+            if report.code.ends_with(DELETE_NOT_FOUND)
+    )
 }
 
 #[cfg(test)]

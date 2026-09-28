@@ -14,7 +14,7 @@ use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_mediator_common::store::types::{
     DeletionAuthority, DeliveryState, SentMessageState,
 };
-use affinidi_messaging_mediator_common::store::{PurgeFilter, PurgeReport};
+use affinidi_messaging_mediator_common::store::{PurgeFilter, PurgeReport, ops};
 use affinidi_messaging_mediator_common::types::accounts::AccountType;
 use affinidi_messaging_mediator_common::types::audit::AuditAction;
 use affinidi_messaging_mediator_common::types::messages::{Folder, MessageProtocol};
@@ -1011,7 +1011,7 @@ pub(crate) async fn consume_message_delete(
             }
             // Gone between the lookup and the delete (a concurrent pickup or
             // expiry): not deleted by us, so not reported as deleted.
-            Err(e) if is_not_found(&e) => {
+            Err(e) if ops::is_delete_not_found(&e) => {
                 results.push(json!({ "msgId": id, "deleted": false, "reason": "notFound" }));
             }
             Err(e) => return Err(e),
@@ -1168,12 +1168,6 @@ pub(crate) async fn consume_queue_purge(
     }))?;
     serde_json::to_value(typed.respond_with(Uuid::new_v4().to_string(), response))
         .map_err(serialize_err)
-}
-
-/// Whether a store error means "no such message". The backends report it as
-/// an internal error with code 404 and a `NOT_FOUND` marker.
-fn is_not_found(e: &MediatorError) -> bool {
-    matches!(e, MediatorError::InternalError(404, ..)) || e.to_string().contains("NOT_FOUND")
 }
 
 /// The first few ids for an audit line, with a count of the rest.

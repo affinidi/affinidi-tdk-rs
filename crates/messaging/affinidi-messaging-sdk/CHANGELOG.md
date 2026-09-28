@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (0.30.1) — an already-gone delete from a Fjall or in-memory mediator is no longer a warning
+
+The deletion handler treats a `not_found` refusal as "already deleted": it logs
+it at debug and remembers the id so a redelivered copy is not deleted again. It
+recognised that refusal only by the Redis backend's problem-report descriptor
+(`database.message.delete.not_found`). A mediator on its Fjall or in-memory
+store answers the same case with a bare `NOT_FOUND: message_hash (…)`, so every
+redelivered duplicate it answered was logged as
+
+```
+WARN deletion_handler: the mediator refused some ids: [("…", "NOT_FOUND: message_hash (…)")] deleted=0 failed=1
+```
+
+and was never recorded as deleted. Both forms are now recognised. Mediator
+0.33.1 answers with the descriptor on every backend; this is for the mediators
+already deployed.
+
 ## Unreleased (0.30.0) — trust-tasks-rs 0.24
 
 trust-tasks-rs and trust-tasks-proof 0.23 -> 0.24. A minor rather than a patch, as for 0.21, 0.22 and 0.23: the public API carries generated Trust Task types, so a consumer must move in the same change. 0.24 changes how a `oneOf` branch that uses a compound `not` is generated (trust-tasks-rs #665: `auth/passkey/enroll/invite/update/0.1` and `auth/revoke-session/0.2` become structs with optional members instead of uninhabited enums); this crate uses neither, and trust-tasks-proof is unchanged. No source change.
