@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased (0.15.2) — a payload sent right behind an invite is delivered
+
+### Fixed
+
+- A TSP payload a peer sends immediately after its relationship invite is no
+  longer dropped. The listener handed each inbound frame to its own task with
+  nothing ordering them, so the payload could be unpacked before the invite
+  was recorded, and the relationship gate (§7.2.2) then discarded it. Only a
+  peer's first exchange was exposed. Frames from one sender are now unpacked
+  in arrival order: each waits for the previous frame from the same sender to
+  be unpacked and, for a control message, recorded. Handlers still run
+  concurrently, and frames from different peers never wait on each other.
+- A TSP frame that cannot be unpacked, including an application message the
+  relationship gate discards, is logged at warn as a dropped frame with the
+  reason.
+
 ## Unreleased (0.15.1) — test-mediator 0.14 in dev-dependencies
 
 The `affinidi-messaging-test-mediator` dev-dependency moves 0.13 -> 0.14, which

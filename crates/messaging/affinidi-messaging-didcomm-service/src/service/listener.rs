@@ -5,6 +5,8 @@ use affinidi_messaging_sdk::config::ATMConfigBuilder;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_tdk_common::TDKSharedState;
+#[cfg(feature = "tsp")]
+use tokio::sync::oneshot;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -70,6 +72,10 @@ pub(crate) struct Listener {
     pub(crate) connection_tx: watch::Sender<Option<ConnectionHandle>>,
     /// Broadcast sender for lifecycle events.
     pub(crate) events_tx: broadcast::Sender<ListenerEvent>,
+    /// Keeps each peer's inbound TSP frames in arrival order through unpack.
+    /// Only touched by `process_next_frame`, on the listener loop.
+    #[cfg(feature = "tsp")]
+    tsp_order: std::sync::Mutex<SenderOrder>,
 }
 
 impl Listener {
@@ -90,6 +96,8 @@ impl Listener {
             profile: None,
             connection_tx,
             events_tx,
+            #[cfg(feature = "tsp")]
+            tsp_order: std::sync::Mutex::new(SenderOrder::default()),
         }
     }
 
@@ -368,12 +376,67 @@ impl Listener {
             }
             Some(InboundFrame::Tsp(packed)) => {
                 if let Some(tsp_handler) = self.tsp_handler.clone() {
+                    let qb2 = match atm.tsp().decode(&packed) {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            warn!(profile = %profile.inner.alias, error = %e, "Failed to decode TSP frame");
+                            return Ok(());
+                        }
+                    };
+                    // Each frame is handled on its own task, but one peer's
+                    // frames must be unpacked in the order they arrived: an
+                    // invite admits the payload sent right behind it only once
+                    // it is recorded, and a payload unpacked first is discarded
+                    // by the relationship gate. So a frame waits for the
+                    // previous frame *from the same sender* to be unpacked
+                    // (and, for a control message, recorded) — not for its
+                    // handler to run. Frames from different peers never wait on
+                    // each other.
+                    //
+                    // The key is the envelope's cleartext sender, read before
+                    // any key is used, so it can be forged. Ordering only ever
+                    // makes a frame wait; it never admits one. A frame that lies
+                    // about its sender queues behind that VID's unpack, which is
+                    // cheap, and is refused at unpack anyway. What forged
+                    // senders could cost is memory and head-of-line delay, so
+                    // `SenderOrder` bounds both: past its limits a frame is
+                    // handled unordered, as it was before ordering existed.
+                    let slot = affinidi_tsp::MetaEnvelope::parse(&qb2)
+                        .ok()
+                        .and_then(|meta| {
+                            self.tsp_order
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .enqueue(&meta.sender)
+                        });
                     let listener_id = self.config.id.clone();
                     let atm = atm.clone();
                     let profile = profile.clone();
                     tasks.spawn(async move {
-                        Self::dispatch_tsp(&listener_id, &atm, &profile, &tsp_handler, *packed)
-                            .await;
+                        let (prev, done) = match slot {
+                            Some((prev, done)) => (prev, Some(done)),
+                            None => (None, None),
+                        };
+                        if let Some(prev) = prev
+                            && tokio::time::timeout(TSP_ORDER_WAIT, prev).await.is_err()
+                        {
+                            warn!(
+                                profile = %profile.inner.alias,
+                                wait_secs = TSP_ORDER_WAIT.as_secs(),
+                                "The previous TSP frame from this sender is still being unpacked; \
+                                 handling this one without waiting further, so it may be \
+                                 unpacked out of order"
+                            );
+                        }
+                        Self::dispatch_tsp_bytes(
+                            &listener_id,
+                            &atm,
+                            &profile,
+                            &tsp_handler,
+                            &qb2,
+                            done,
+                        )
+                        .await;
                     });
                 } else {
                     warn!(
@@ -423,10 +486,35 @@ impl Listener {
                 return;
             }
         };
-        let inbound = match atm.tsp().unpack_message(profile, &qb2).await {
+        Self::dispatch_tsp_bytes(listener_id, atm, profile, handler, &qb2, None).await;
+    }
+
+    /// [`dispatch_tsp`](Self::dispatch_tsp) on an already-decoded frame.
+    ///
+    /// `order` is this frame's place in its sender's queue (see
+    /// [`SenderOrder`]). It is released — dropped — as soon as the frame is
+    /// unpacked and, for a control message, recorded: that is the point after
+    /// which the sender's next frame sees this one's effect on the relationship
+    /// gate. The handler then runs without holding up the next frame.
+    #[cfg(feature = "tsp")]
+    async fn dispatch_tsp_bytes(
+        listener_id: &str,
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        handler: &Arc<dyn TspHandler>,
+        qb2: &[u8],
+        order: Option<OrderSlot>,
+    ) {
+        let inbound = match atm.tsp().unpack_message(profile, qb2).await {
             Ok(v) => v,
             Err(e) => {
-                warn!(profile = %profile.inner.alias, error = %e, "Failed to unpack TSP frame");
+                // Includes an application message the relationship gate
+                // discarded (§7.2.2) — the one case where a peer's data is lost.
+                warn!(
+                    profile = %profile.inner.alias,
+                    error = %e,
+                    "Dropped an inbound TSP frame: it could not be unpacked"
+                );
                 return;
             }
         };
@@ -477,11 +565,13 @@ impl Listener {
                 // decision, not the framework's — so the invite is surfaced to
                 // the handler, which may call `accept_relationship` with the
                 // digest carried here.
-                match atm
+                let recorded = atm
                     .tsp()
                     .record_incoming_control(profile, &sender, &control)
-                    .await
-                {
+                    .await;
+                // Recorded (or refused): the sender's next frame may go ahead.
+                drop(order);
+                match recorded {
                     Ok(incoming) => {
                         debug!(
                             profile = %profile.inner.alias,
@@ -537,6 +627,10 @@ impl Listener {
                 return;
             }
         };
+
+        // Unpacked and admitted: the sender's next frame may go ahead while the
+        // handler runs.
+        drop(order);
 
         let ctx = HandlerContext {
             listener_id: listener_id.to_string(),
@@ -659,6 +753,131 @@ impl Listener {
     }
 }
 
+/// How long a TSP frame waits for the previous frame from the same sender to
+/// be unpacked before it goes ahead anyway. That step is one unpack and one
+/// relationship-store write, so reaching this means the store is stuck; waiting
+/// forever would stall that peer for good.
+///
+/// Going ahead is safe: ordering never admits a frame, it only delays it. A
+/// payload that overtakes its invite this way meets the relationship gate
+/// unrecorded and is refused and logged — the loss this ordering exists to
+/// avoid, confined to a store that has stopped answering for 30 seconds.
+#[cfg(feature = "tsp")]
+const TSP_ORDER_WAIT: Duration = Duration::from_secs(30);
+
+/// Per-sender ordering for inbound TSP frames.
+///
+/// Holds, for each sender VID, the completion signal of the latest frame taken
+/// from it. A new frame is handed that signal to wait on and a fresh one to
+/// release, so one sender's frames form a chain while different senders' frames
+/// run side by side. A signal is released when its sender half is dropped,
+/// which also happens if the task holding it panics or is cancelled, so a
+/// failed frame never wedges the chain.
+///
+/// The sender VID is read from the cleartext envelope before anything is
+/// verified, so the map is sized against forged senders: a VID longer than
+/// [`MAX_SENDER_LEN`](Self::MAX_SENDER_LEN), a sender with
+/// [`MAX_DEPTH`](Self::MAX_DEPTH) frames already queued, or a new sender once
+/// [`MAX_SENDERS`](Self::MAX_SENDERS) have frames in flight, gets no place and
+/// is handled unordered. Capping one sender's depth also caps how long a flood
+/// under a victim's VID can hold the victim's own frames back.
+///
+/// Entries with no frame in flight are pruned once the map has doubled since
+/// the last prune, so it stays bounded by the senders with frames in flight at
+/// amortised O(1) per frame.
+#[cfg(feature = "tsp")]
+#[derive(Default)]
+pub(crate) struct SenderOrder {
+    tails: std::collections::HashMap<String, SenderTail>,
+    prune_at: usize,
+}
+
+/// A sender's latest frame, and a count of its frames in flight: every
+/// [`OrderSlot`] holds a clone of `in_flight`.
+#[cfg(feature = "tsp")]
+struct SenderTail {
+    done: oneshot::Receiver<()>,
+    in_flight: Arc<()>,
+}
+
+/// A frame's place in its sender's queue. Dropping it lets the sender's next
+/// frame go ahead.
+#[cfg(feature = "tsp")]
+pub(crate) struct OrderSlot {
+    _done: oneshot::Sender<()>,
+    _in_flight: Arc<()>,
+}
+
+#[cfg(feature = "tsp")]
+impl SenderOrder {
+    const MIN_PRUNE_AT: usize = 64;
+    /// Senders with frames in flight that get ordering; the rest go unordered.
+    const MAX_SENDERS: usize = 4096;
+    /// Frames one sender may have queued before the next goes unordered.
+    const MAX_DEPTH: usize = 64;
+    /// Longest sender VID that is tracked.
+    const MAX_SENDER_LEN: usize = 2048;
+
+    /// Take the next place in `sender`'s queue: the signal to wait on (none if
+    /// nothing from `sender` is in flight) and the slot to drop when done.
+    /// `None` when a limit is reached and the frame should go unordered.
+    pub(crate) fn enqueue(
+        &mut self,
+        sender: &str,
+    ) -> Option<(Option<oneshot::Receiver<()>>, OrderSlot)> {
+        if sender.len() > Self::MAX_SENDER_LEN {
+            return None;
+        }
+        if !self.tails.contains_key(sender) {
+            if self.tails.len() >= self.prune_at.max(Self::MIN_PRUNE_AT)
+                || self.tails.len() >= Self::MAX_SENDERS
+            {
+                self.tails
+                    .retain(|_, t| Arc::strong_count(&t.in_flight) > 1);
+                self.prune_at = self.tails.len() * 2;
+            }
+            if self.tails.len() >= Self::MAX_SENDERS {
+                return None;
+            }
+        }
+        let (done_tx, done_rx) = oneshot::channel();
+        let (prev, in_flight) = match self.tails.get_mut(sender) {
+            Some(tail) => {
+                if Arc::strong_count(&tail.in_flight) > Self::MAX_DEPTH {
+                    return None;
+                }
+                (
+                    Some(std::mem::replace(&mut tail.done, done_rx)),
+                    tail.in_flight.clone(),
+                )
+            }
+            None => {
+                let in_flight = Arc::new(());
+                self.tails.insert(
+                    sender.to_string(),
+                    SenderTail {
+                        done: done_rx,
+                        in_flight: in_flight.clone(),
+                    },
+                );
+                (None, in_flight)
+            }
+        };
+        Some((
+            prev,
+            OrderSlot {
+                _done: done_tx,
+                _in_flight: in_flight,
+            },
+        ))
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.tails.len()
+    }
+}
+
 /// A stable id for a TSP control message, derived from its thread digest.
 ///
 /// A control message carries no DIDComm message or thread id, so handlers and
@@ -672,4 +891,87 @@ fn control_message_id(digest: &[u8; 32]) -> String {
             let _ = write!(acc, "{b:02x}");
             acc
         })
+}
+
+#[cfg(all(test, feature = "tsp"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn one_senders_frames_chain_and_another_senders_do_not_wait() {
+        let mut order = SenderOrder::default();
+        let (first, a1) = order.enqueue("did:a").unwrap();
+        assert!(first.is_none(), "nothing from did:a in flight yet");
+        let (after_a1, a2) = order.enqueue("did:a").unwrap();
+        let (other, _b1) = order.enqueue("did:b").unwrap();
+        assert!(other.is_none(), "did:b does not wait on did:a");
+
+        let mut after_a1 = after_a1.expect("did:a's second frame waits on its first");
+        assert!(
+            after_a1.try_recv().is_err(),
+            "still waiting while the first is in flight"
+        );
+        drop(a1);
+        assert!(
+            matches!(
+                after_a1.try_recv(),
+                Err(oneshot::error::TryRecvError::Closed)
+            ),
+            "released once the first is done"
+        );
+        drop(a2);
+    }
+
+    #[tokio::test]
+    async fn finished_senders_are_pruned() {
+        let mut order = SenderOrder::default();
+        for i in 0..10_000 {
+            let (_prev, done) = order.enqueue(&format!("did:{i}")).unwrap();
+            drop(done);
+        }
+        assert!(
+            order.len() <= 2 * SenderOrder::MIN_PRUNE_AT,
+            "len {}",
+            order.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn forged_senders_cannot_grow_the_map_past_its_cap() {
+        let mut order = SenderOrder::default();
+        let mut held = Vec::new();
+        for i in 0..SenderOrder::MAX_SENDERS {
+            held.push(order.enqueue(&format!("did:{i}")).unwrap());
+        }
+        assert!(order.enqueue("did:one-too-many").is_none());
+        assert_eq!(order.len(), SenderOrder::MAX_SENDERS);
+        assert!(
+            order.enqueue("did:0").is_some(),
+            "a sender already tracked keeps its ordering"
+        );
+        held.clear();
+        assert!(
+            order.enqueue("did:after-drain").is_some(),
+            "room again once frames finish"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_sender_cannot_queue_past_the_depth_cap() {
+        let mut order = SenderOrder::default();
+        let held: Vec<_> = (0..SenderOrder::MAX_DEPTH)
+            .map(|_| order.enqueue("did:victim").unwrap())
+            .collect();
+        assert!(order.enqueue("did:victim").is_none());
+        drop(held);
+        assert!(order.enqueue("did:victim").is_some());
+    }
+
+    #[tokio::test]
+    async fn an_oversized_sender_is_not_tracked() {
+        let mut order = SenderOrder::default();
+        let long = "x".repeat(SenderOrder::MAX_SENDER_LEN + 1);
+        assert!(order.enqueue(&long).is_none());
+        assert_eq!(order.len(), 0);
+    }
 }

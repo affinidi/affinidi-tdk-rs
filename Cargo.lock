@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-service"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-core",
@@ -536,6 +536,7 @@ dependencies = [
  "affinidi-secrets-resolver",
  "affinidi-tdk",
  "affinidi-tdk-common",
+ "affinidi-tsp",
  "async-trait",
  "futures-util",
  "regex",
