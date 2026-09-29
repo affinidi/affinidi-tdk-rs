@@ -62,7 +62,7 @@ affinidi-did-resolver-traits = { version = "0.1.4", path = "../affinidi-did-reso
 affinidi-task-utils = { version = "0.1", optional = true }
 did-example = { version = "0.5", optional = true }
 # `default-features = false` selects only the did:webvh backend of did-scid.
-did-scid = { version = "0.2.8", optional = true, default-features = false, features = [
+did-scid = { version = "0.2.8", path = "../did-methods/did-scid", optional = true, default-features = false, features = [
   "did-webvh",
 ] }
 did-ebsi = { version = "0.1", path = "../did-methods/did-ebsi", optional = true }
