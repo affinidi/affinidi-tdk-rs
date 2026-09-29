@@ -429,6 +429,26 @@ impl SecretStore for VaultStore {
         }
     }
 
+    /// Reachability + credential check via `auth/token/lookup-self`.
+    ///
+    /// The default probe reads a sentinel key that is never written, so
+    /// every call is a 404 that `vaultrs`/`rustify` log at `ERROR` (three
+    /// lines per `/readyz` hit) even though the result is healthy.
+    /// `lookup-self` succeeds whenever the token is valid — it is part of
+    /// Vault's `default` policy — and needs no KV grant on a sentinel path.
+    async fn probe_readonly(&self) -> Result<()> {
+        let label = "token::lookup_self";
+        self.run(label, |client| {
+            Box::pin(async move { vaultrs::token::lookup_self(client).await })
+        })
+        .await?
+        .map(|_| ())
+        .map_err(|err| SecretStoreError::Unreachable {
+            backend: BACKEND_LABEL,
+            reason: format!("{label} failed: {err}"),
+        })
+    }
+
     /// List the keys directly under the configured mount root (a single
     /// LIST call — no recursion). Folders end with `/`; leaves don't.
     /// The caller (wizard discovery) decides whether to recurse or
