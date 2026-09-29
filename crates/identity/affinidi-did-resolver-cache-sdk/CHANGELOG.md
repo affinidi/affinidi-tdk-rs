@@ -1,5 +1,25 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.39) — a deactivated did:webvh no longer resolves
+
+### Changed
+
+- **BEHAVIOUR (security):** resolving a `did:webvh` whose log ends in a
+  deactivation now fails, with a `DIDCacheError::DIDError` whose message names
+  the DID and says it `has been deactivated`. `didwebvh-rs` resolves such a log
+  `Ok`, returning the last document unchanged — keys and all — and flagging the
+  deactivation only in its metadata, which this client discarded. A retired DID
+  therefore kept authenticating and verifying signatures with its last keys,
+  indefinitely. This now matches `did:web`, where deactivation is a 404 and
+  already failed. (SEC-4045 / VGI-04.)
+- Covers all three paths: the local `WebvhResolver`; `did:scid:vh` through
+  `did-scid` 0.2.8 (now the minimum); and network mode. A cache server built
+  on this release refuses the DID itself; a client talking to an older server
+  refuses it when the server sends the did:webvh log alongside the document
+  (it fetches it best-effort). Upgrade the server to close the gap entirely.
+- Code that deliberately resolves deactivated DIDs (to show history, say) must
+  use `didwebvh-rs` directly and read `MetaData::deactivated`.
+
 ## Unreleased (0.8.38) — a rate-limited DID host is typed, and does not multiply
 
 ### Added

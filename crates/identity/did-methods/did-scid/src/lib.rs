@@ -97,6 +97,14 @@ pub async fn resolve(
                 )
                 .await
             {
+                // didwebvh-rs resolves a deactivated DID `Ok` and flags it in
+                // the metadata only; this returns a bare `Document`, so refuse
+                // it here or the retired keys stay usable.
+                Ok((_, metadata)) if metadata.deactivated => Err(DIDSCIDError::WebVHError(
+                    didwebvh_rs::DIDWebVHError::DeactivatedError(format!(
+                        "{webvh_did} has been deactivated"
+                    )),
+                )),
                 Ok((log_entry, _)) => Ok(serde_json::from_value(log_entry.get_did_document()?)?),
                 Err(e) => {
                     error!("Error: {e:?}");
