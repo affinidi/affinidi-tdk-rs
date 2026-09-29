@@ -1,5 +1,15 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.17.2) — Vault's read-only probe stops logging 404 errors
+
+`VaultStore` overrides `probe_readonly` to call `auth/token/lookup-self`. The
+default reads the never-written `mediator_probe_readonly` sentinel, which on
+Vault is a 404 that `vaultrs`/`rustify` log at `ERROR` (three lines per
+`/readyz` hit) even though the result is healthy. The new probe still proves the
+backend is reachable and the token valid, and keeps the retry and
+re-authentication behaviour. It no longer needs a grant on a `mediator_probe_*`
+path, but it does need `lookup-self`, which Vault's `default` policy provides.
+
 ## Unreleased (0.17.1) — one shape for a refused delete
 
 `store::ops` gains `delete_not_found`, `delete_permission_denied` and

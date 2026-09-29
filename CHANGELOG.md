@@ -11,6 +11,17 @@ Per-crate version history is summarised here; for the full code history see
 
 ### Changed
 
+- **`/readyz` no longer logs three `ERROR` lines per hit on the Vault backend.**
+  **`affinidi-messaging-mediator-common` 0.17.2**.
+
+  The default read-only secrets probe reads a sentinel key that is never written,
+  so on Vault every probe was a 404 that `vaultrs`/`rustify` log at `ERROR`, even
+  though the result is healthy. With a 2s readiness probe that is constant noise.
+  The Vault backend now probes with `auth/token/lookup-self`, which still proves
+  the backend is reachable and the token valid. The probe no longer needs a grant
+  on a `mediator_probe_*` path, but it does need `lookup-self`, which Vault's
+  `default` policy provides. Patch release; no API change.
+
 - **Authcrypt sender binding (security).** **`affinidi-messaging-didcomm` 0.15.9**,
   **`affinidi-messaging-sdk` 0.27.2**, **`affinidi-messaging-mediator` 0.29.5**,
   **`affinidi-messaging-didcomm-service` 0.12.1**,
