@@ -1,5 +1,14 @@
 # did:scid
 
+## Unreleased (0.2.8) — a deactivated `did:scid:vh` no longer resolves
+
+- **Behaviour (security):** `resolve` for a `did:scid:vh` DID whose webvh log
+  ends in a deactivation now returns `DIDSCIDError::WebVHError` wrapping
+  `DIDWebVHError::DeactivatedError`. `didwebvh-rs` resolves such a log `Ok`
+  with the last document and flags the deactivation only in metadata, which
+  `resolve` discarded, so the retired DID's keys stayed usable. No API change.
+  (SEC-4045 / VGI-04.)
+
 ## Unreleased (0.2.7) — `didwebvh-rs` 0.7
 
 - Bumps `didwebvh-rs` 0.6 → 0.7. Only the manifest changes.

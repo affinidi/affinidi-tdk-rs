@@ -33,6 +33,19 @@ fn webvh_network_error(url: String, status_code: Option<u16>, message: String) -
     ResolverError::NetworkFetch(fetch)
 }
 
+/// The error for a did:webvh whose log ends in a deactivation.
+///
+/// `didwebvh-rs` resolves a cleanly deactivated DID `Ok`, as DID Resolution
+/// says it should: the last document comes back unchanged, keys and all, and
+/// only `MetaData::deactivated` says it is retired. The resolver contract here
+/// returns a bare `Document`, so a caller has nowhere to see that flag — a
+/// retired DID would go on authenticating and verifying signatures with its
+/// last keys. Refusing it matches `did:web`, whose deactivation is a 404.
+#[cfg(feature = "did-webvh")]
+pub(crate) fn webvh_deactivated(did: &str) -> didwebvh_rs::DIDWebVHError {
+    didwebvh_rs::DIDWebVHError::DeactivatedError(format!("{did} has been deactivated"))
+}
+
 fn did_web_error(err: affinidi_did_web::DidWebError) -> ResolverError {
     match err {
         affinidi_did_web::DidWebError::ResolutionFailed { status, url, .. } => {
@@ -296,6 +309,12 @@ impl AsyncResolver for WebvhResolver {
 
             let resolution = method.resolve(&did_str, self.resolve_options()).await;
             Some(match resolution {
+                Ok((_, metadata)) if metadata.deactivated => {
+                    tracing::warn!("did:webvh {did_str} is deactivated; refusing its document");
+                    Err(ResolverError::ResolutionFailed(
+                        webvh_deactivated(&did_str).to_string(),
+                    ))
+                }
                 Ok((log_entry, _)) => {
                     let doc_value = log_entry.get_did_document().map_err(|e| {
                         ResolverError::InvalidDocument(format!(

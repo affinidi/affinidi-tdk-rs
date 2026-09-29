@@ -399,6 +399,14 @@ impl DIDCacheClient {
                         ))
                     })?;
 
+                // A cache server that predates the deactivation check still
+                // serves the retired document; the log it sent says otherwise.
+                if result.1.deactivated {
+                    return Err(DIDCacheError::DIDError(
+                        crate::resolver::network_resolvers::webvh_deactivated(did).to_string(),
+                    ));
+                }
+
                 let verified_doc_value = result.0.get_did_document().map_err(|e| {
                     DIDCacheError::DIDError(format!(
                         "Failed to extract document from verified WebVH log: {e}"

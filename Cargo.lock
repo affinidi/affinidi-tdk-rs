@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.38"
+version = "0.8.39"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -239,6 +239,7 @@ dependencies = [
  "agent-names",
  "ahash",
  "base64 0.23.1",
+ "chrono",
  "clap",
  "did-ebsi",
  "did-example",
@@ -3788,7 +3789,7 @@ dependencies = [
 
 [[package]]
 name = "did-scid"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-webs",
