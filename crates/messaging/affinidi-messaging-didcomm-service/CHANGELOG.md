@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.16.0) — trust-tasks-rs 0.25
+
+Moves to `trust-tasks-rs` 0.25, with the rest of the `trust-tasks-*` family at 0.25. That release conforms the Trust Task vetting, member and endorsement specs to the DTG Credentials v1 statement and authority credentials (trustoverip/dtgwg-trust-tasks-tf#691). A public dependency moving a minor is breaking, so this crate moves a minor. No source change.
+
 ## Unreleased (0.15.2) — a payload sent right behind an invite is delivered
 
 ### Fixed
