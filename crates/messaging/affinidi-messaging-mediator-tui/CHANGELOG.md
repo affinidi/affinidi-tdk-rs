@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.6.0) — trust-tasks-rs 0.25
+
+Moves to `trust-tasks-rs` 0.25, with the rest of the `trust-tasks-*` family at 0.25. That release conforms the Trust Task vetting, member and endorsement specs to the DTG Credentials v1 statement and authority credentials (trustoverip/dtgwg-trust-tasks-tf#691). A public dependency moving a minor is breaking, so this crate moves a minor. No source change.
+
 ## Unreleased (0.5.0) — mediator-admin 0.5
 
 Carries the messaging crates' move to trust-tasks-rs 0.24: a pin on a bumped 0.x crate does not admit its new line, so this crate moves a minor with it. No source change.

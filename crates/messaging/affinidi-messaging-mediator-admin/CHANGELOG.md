@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.6.0) — trust-tasks-rs 0.25
+
+Moves to `trust-tasks-rs` 0.25, with the rest of the `trust-tasks-*` family at 0.25. That release conforms the Trust Task vetting, member and endorsement specs to the DTG Credentials v1 statement and authority credentials (trustoverip/dtgwg-trust-tasks-tf#691). A public dependency moving a minor is breaking, so this crate moves a minor. No source change.
+
 ## Unreleased (0.5.0) — trust-tasks-rs 0.24
 
 trust-tasks-rs and trust-tasks-proof 0.23 -> 0.24. A minor rather than a patch, as for 0.21, 0.22 and 0.23: the public API re-exports the generated `messaging` Trust Task types, so a consumer must move in the same change. 0.24 changes how a `oneOf` branch that uses a compound `not` is generated (trust-tasks-rs #665: `auth/passkey/enroll/invite/update/0.1` and `auth/revoke-session/0.2` become structs with optional members instead of uninhabited enums); this crate uses neither, and trust-tasks-proof is unchanged. No source change.
