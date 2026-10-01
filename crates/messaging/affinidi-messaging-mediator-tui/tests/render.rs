@@ -192,17 +192,30 @@ async fn a_named_account_gets_room_beside_the_monitor() {
     );
 
     // The monitor's totals: a message sent while it watches is counted, and
-    // the account it went to is listed by its name.
-    send(&env, &alice, &bob).await;
-    settle(&mut app, Duration::from_secs(3)).await;
+    // the account it went to is listed by its name. The subscription goes live
+    // at its own pace, and a message sent before then is never counted, so send
+    // until the monitor has counted one rather than for a fixed time. A fixed
+    // 3 s missed it under a loaded full-workspace run, with the monitor still
+    // "◌ connecting".
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        send(&env, &alice, &bob).await;
+        settle(&mut app, Duration::from_millis(500)).await;
+        terminal.draw(|f| app.render(f, f.area())).unwrap();
+        let s = screen(&terminal);
+        if seen(&s) >= 1 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the monitor never counted an arrival:\n{s}"
+        );
+    }
     app.handle_key(key(KeyCode::Char('t')));
     terminal.draw(|f| app.render(f, f.area())).unwrap();
     let totals = screen(&terminal);
     println!("{totals}");
-    assert!(
-        totals.contains("1 msgs"),
-        "the arrival is counted:\n{totals}"
-    );
+    assert!(seen(&totals) >= 1, "the arrival is counted:\n{totals}");
     assert!(
         totals.contains("delivered") && totals.contains("to it"),
         "the totals table:\n{totals}"
@@ -351,10 +364,18 @@ async fn logs_stay_off_the_screen_and_the_monitor_scrolls_back() {
     let before = newer(&back);
 
     // What arrives while scrolled back lands below, out of view.
+    // Resend every few seconds rather than waiting on one message. Under four
+    // concurrent runs of this binary, a single arrival once failed to show
+    // within 30 s even though the monitor was live. Any arrival proves the
+    // point here, which is scroll position, not delivery.
     let had = seen(&back);
-    send(&env, &alice, &bob).await;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut next_send = tokio::time::Instant::now();
     let still = loop {
+        if tokio::time::Instant::now() >= next_send {
+            send(&env, &alice, &bob).await;
+            next_send = tokio::time::Instant::now() + Duration::from_secs(3);
+        }
         settle(&mut app, Duration::from_millis(300)).await;
         terminal.draw(|f| app.render(f, f.area())).unwrap();
         let s = screen(&terminal);
