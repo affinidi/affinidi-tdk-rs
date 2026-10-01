@@ -16,7 +16,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use rand::Rng;
+use rand::RngExt;
 use std::io::{Read, Write};
 
 use crate::error::{Result, StatusListError};

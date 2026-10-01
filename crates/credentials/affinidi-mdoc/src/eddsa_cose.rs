@@ -47,12 +47,7 @@ impl EdDsaCoseSigner {
 
     /// Generate a new random Ed25519 key pair for signing.
     pub fn generate() -> Self {
-        // Generate 32 random bytes and construct the key, avoiding
-        // rand_core version conflicts (ed25519-dalek uses 0.6, rand uses 0.9).
-        let mut rng = rand::rng();
-        let mut bytes = [0u8; 32];
-        rand::Fill::fill(&mut bytes, &mut rng);
-        let signing_key = SigningKey::from_bytes(&bytes);
+        let signing_key = SigningKey::generate(&mut rand::rng());
         Self {
             signing_key,
             x5chain: None,

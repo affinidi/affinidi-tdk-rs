@@ -1,5 +1,11 @@
 # Affinidi Secrets Manager
 
+## Unreleased (0.5.13) — `getrandom` 0.4 on wasm
+
+No behaviour change. The wasm32 `getrandom` pin moves from 0.3 to 0.4
+(`wasm_js`), the version `rand` 0.10 uses; the 0.3 pin was waiting on
+ed25519-dalek, which has since moved.
+
 ## Unreleased (0.5.12) — ML-DSA secrets can be written down
 
 `Secret::generate_ml_dsa_{44,65,87}` produced a secret whose `secret_material`

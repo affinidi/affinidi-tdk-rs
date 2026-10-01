@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-secrets-resolver"
 description = "Common utilities for Affinidi Trust Development Kit."
-version = "0.5.12"
+version = "0.5.13"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -43,8 +43,7 @@ x25519-dalek = { version = "3", features = ["static_secrets"] }
 zeroize = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# This can be updated to 0.3 when other dependencies are updated to getrandom 0.3 (mainly ed25519-dalek crate)
-getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive"] }

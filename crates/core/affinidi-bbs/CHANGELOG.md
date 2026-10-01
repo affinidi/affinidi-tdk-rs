@@ -1,5 +1,21 @@
 # Affinidi BBS
 
+## Unreleased (0.4.0) — `bls12_381_plus` 0.9, `rand` 0.10
+
+**Breaking:** `bls12_381_plus` 0.9 moves its primary curve stack to the
+RustCrypto 0.14 generation (`elliptic-curve` / `ff` / `group` 0.14), so the
+re-exported `Scalar` is a different type from 0.3's. Callers that name it must
+move to `bls12_381_plus` 0.9 too.
+
+Hash-to-curve still runs on the 0.13 `ExpandMsg` — 0.9 keeps that API on
+`elliptic_curve_013` — so `ExpandMsgXmd` is now imported from
+`bls12_381_plus::elliptic_curve_013::hash2curve`, and `sha2` stays on 0.10
+because that `ExpandMsg` is typed over digest 0.10. Output is unchanged: the
+IETF BBS test vectors pass.
+
+`rand` 0.10: the per-proof and commitment RNGs seed `StdRng` from `SysRng`
+(the renamed `OsRng`); scalars are drawn through `RngExt`.
+
 ## Unreleased (0.3.3) — take the curve stack from `bls12_381_plus`'s re-exports
 
 No behaviour change. `elliptic-curve`, `ff` and `group` are no longer declared

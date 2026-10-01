@@ -1,5 +1,12 @@
 # Affinidi Crypto Changelog
 
+## Unreleased (0.2.10) — drop `rand_core` 0.6, `getrandom` 0.4 on wasm
+
+No behaviour change and no public API change. `rand_core` 0.6 was declared but
+no longer imported — every RNG call already goes through `rand` 0.10 — so it is
+removed. The wasm32 `getrandom` pin moves from 0.2 (`js`) to 0.4 (`wasm_js`),
+the version `rand` 0.10 actually uses.
+
 ## Unreleased (0.2.9) — RustCrypto digest 0.11 generation
 
 `sha2` 0.11, `hmac` 0.13, `aes` 0.9, `cbc` 0.2.

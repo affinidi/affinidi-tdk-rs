@@ -1,5 +1,10 @@
 # Affinidi SIOPv2 Changelog
 
+## Unreleased (0.1.4) — `sha2` 0.11
+
+No behaviour change and no public API change: this is a private dependencies here.
+Verified by the crate's test suite.
+
 ## Unreleased (0.1.3) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

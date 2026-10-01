@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (0.15.10) — `sha2` 0.11, drop `rand_core` 0.6
+
+No behaviour change and no public API change. `sha2` is a private dependency;
+`rand_core` 0.6 was declared but unused and is removed.
+
 ## [0.15.9] - Unreleased
 
 ### Security

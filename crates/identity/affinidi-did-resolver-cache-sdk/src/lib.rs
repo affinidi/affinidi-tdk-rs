@@ -516,10 +516,10 @@ impl DIDCacheClient {
         let response = self.resolve_document(did).await?;
 
         #[cfg(feature = "agent-names")]
-        if self.config.resolve_shortcuts {
-            if let Some(shortcut) = self.derive_shortcut(&response.did, &response.doc).await {
-                return Ok(response.with_shortcut(shortcut));
-            }
+        if self.config.resolve_shortcuts
+            && let Some(shortcut) = self.derive_shortcut(&response.did, &response.doc).await
+        {
+            return Ok(response.with_shortcut(shortcut));
         }
 
         Ok(response)

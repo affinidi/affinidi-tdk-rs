@@ -1,5 +1,10 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.40) — clippy `collapsible_if`
+
+No behaviour change. The shortcut check in `resolve` is written as a let-chain
+so `cargo clippy -D warnings` passes on Rust 1.95.
+
 ## Unreleased (0.8.39) — a deactivated did:webvh no longer resolves
 
 ### Changed

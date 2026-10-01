@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-didcomm-v1"
 description = "DIDComm v1 (Aries RFC 0019) messaging implementation for the Affinidi TDK"
-version = "0.2.1"
+version = "0.2.2"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -41,10 +41,10 @@ ed25519-dalek = { version = "3", features = ["rand_core"] }
 # `crypto_secretbox` supplies XSalsa20-Poly1305 for the sealed CEK;
 # `blake2` supplies the sealed-box nonce; `chacha20poly1305` supplies the
 # content-encryption AEAD (see `crypto::content` for the naming trap).
-salsa20 = "0.10"
+salsa20 = "0.11"
 crypto_secretbox = { version = "0.1", default-features = false, features = ["salsa20"] }
-chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
-blake2 = "0.10"
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
+blake2 = "0.11"
 
 # Encoding / serialization. Note `bs58`, not base64: v1 key identifiers are
 # base58btc-encoded Ed25519 verkeys.

@@ -12,7 +12,7 @@
 
 use std::sync::LazyLock;
 
-use bls12_381_plus::elliptic_curve::hash2curve::ExpandMsgXmd;
+use bls12_381_plus::elliptic_curve_013::hash2curve::ExpandMsgXmd;
 use bls12_381_plus::{G1Affine, G1Projective, Scalar};
 use sha2::Sha256;
 
