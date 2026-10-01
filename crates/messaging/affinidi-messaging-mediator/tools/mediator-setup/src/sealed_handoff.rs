@@ -1196,6 +1196,22 @@ mod tests {
         AssertionProof, InMemoryNonceStore, ProducerAssertion, SealedPayloadV1, seal_payload,
     };
 
+    /// `finalize_request` writes the request JSON to the current directory.
+    /// Run it in a fresh temp CWD while holding `crate::cwd_lock()`. Without
+    /// that, the file lands wherever another test has moved the process-wide
+    /// CWD, which made `mint_artefacts_did_peer_returns_value_only_bag_no_io`
+    /// see a `bootstrap-request.json` it never wrote. It also stops these
+    /// tests leaving the file in the crate directory.
+    fn finalize_in_temp_cwd(state: &mut SealedHandoffState) -> Result<(), SealedHandoffError> {
+        let _lock = crate::cwd_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let result = state.finalize_request();
+        std::env::set_current_dir(&prev).unwrap();
+        result
+    }
+
     fn assertion_for(ed_pub: &[u8; 32]) -> ProducerAssertion {
         ProducerAssertion {
             producer_did: affinidi_crypto::did_key::ed25519_pub_to_did_key(ed_pub),
@@ -1239,7 +1255,7 @@ mod tests {
         // rendered from partway down.
         let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
         state.scroll_request_down(20);
-        state.finalize_request().expect("finalize succeeds");
+        finalize_in_temp_cwd(&mut state).expect("finalize succeeds");
         assert_eq!(state.phase, SealedPhase::RequestGenerated);
         assert_eq!(state.request_scroll, 0);
     }
@@ -1247,7 +1263,7 @@ mod tests {
     #[test]
     fn finalize_request_populates_request_json_and_advances() {
         let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, Some("test".into()));
-        state.finalize_request().expect("finalize succeeds");
+        finalize_in_temp_cwd(&mut state).expect("finalize succeeds");
         assert_eq!(state.phase, SealedPhase::RequestGenerated);
         assert!(state.request_json.contains("\"version\""));
         assert!(state.request_json.contains("\"client_did\""));
@@ -1316,7 +1332,7 @@ mod tests {
         // the operator pastes it.
         let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
         state.context_id = r#"x"; rm -rf ~; echo ""#.into();
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         let cmd = state.primary_command();
         // The full hostile string lives inside a single-quoted block;
         // the surrounding `'…'` stops `;` and `"` from being shell-
@@ -1332,7 +1348,7 @@ mod tests {
         let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
         state.context_id = "prod-mediator".into();
         state.admin_label = "staff".into();
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         let cmd = state.primary_command();
         assert!(cmd.starts_with("pnm contexts bootstrap"));
         // Plain alphanumeric values pass through `sh_quote` unchanged.
@@ -1352,7 +1368,7 @@ mod tests {
     #[test]
     fn admin_only_primary_omits_admin_label_when_blank() {
         let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         let cmd = state.primary_command();
         assert!(!cmd.contains("--admin-label"));
     }
@@ -1360,7 +1376,7 @@ mod tests {
     #[test]
     fn admin_only_fallback_leaves_payload_placeholder_for_operator() {
         let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         let cmd = state
             .fallback_command()
             .expect("AdminOnly exposes a fallback");
@@ -1379,7 +1395,7 @@ mod tests {
         let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
             .with_mediator_url("https://mediator.example.com");
         state.context_id = "prod-mediator".into();
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         let cmd = state.primary_command();
         assert!(cmd.starts_with("vta bootstrap provision-integration"));
         assert!(cmd.contains("--request bootstrap-request-vp.json"));
@@ -1421,7 +1437,7 @@ mod tests {
         let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
         state.context_id = "prod-mediator".into();
         state.admin_label = "staff".into();
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         assert_eq!(state.pnm_command(), state.primary_command());
     }
 
@@ -1434,7 +1450,7 @@ mod tests {
         let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
             .with_mediator_url("https://mediator.example.com");
         state.context_id = "prod-mediator".into();
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         let cmd = state.pnm_command();
         assert!(cmd.starts_with("pnm bootstrap provision-integration"));
         assert!(cmd.contains("--request bootstrap-request-vp.json"));
@@ -1456,7 +1472,7 @@ mod tests {
         // command redirects with `>`.
         let mut state = SealedHandoffState::new(VtaIntent::OfflineExport, None);
         state.context_id = "prod-mediator".into();
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         let cmd = state.pnm_command();
         assert!(cmd.starts_with("pnm contexts reprovision"));
         assert!(cmd.contains("--id prod-mediator"));
@@ -1471,7 +1487,7 @@ mod tests {
         let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None);
         // No URL set → finalise should fail early. No runtime needed
         // — we never reach the VP sign call.
-        let err = state.finalize_request().unwrap_err();
+        let err = finalize_in_temp_cwd(&mut state).unwrap_err();
         assert!(matches!(err, SealedHandoffError::Internal(_)));
         assert_eq!(state.phase, SealedPhase::CollectContext);
     }
@@ -1480,7 +1496,7 @@ mod tests {
     async fn full_setup_writes_vp_framed_request_file() {
         let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
             .with_mediator_url("https://mediator.example.com");
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         // VP-framed requests go to a distinct filename so a mid-run
         // mode switch doesn't alias a stale plain request.
         let path = state.request_path.as_ref().expect("persisted file path");
@@ -1503,7 +1519,7 @@ mod tests {
         let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
             .with_mediator_url("https://mediator.example.com");
         state.webvh_server = "prod-1".into();
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         // The VP JSON is signed, so field ordering is canonical.
         // Assert on substrings that are present regardless of
         // ordering — var name and value both appear verbatim.
@@ -1523,7 +1539,7 @@ mod tests {
     async fn full_setup_omits_webvh_server_var_when_blank() {
         let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
             .with_mediator_url("https://mediator.example.com");
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         assert!(
             !state.request_json.contains("WEBVH_SERVER"),
             "blank webvh_server should omit the template var entirely"
@@ -1544,7 +1560,7 @@ mod tests {
             .with_mediator_url("https://mediator.example.com");
         state.webvh_server = "prod-1".into();
         state.webvh_path = "acme-mediator".into();
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         assert!(
             state.request_json.contains("\"WEBVH_PATH\""),
             "WEBVH_PATH template var missing from VP: {}",
@@ -1565,7 +1581,7 @@ mod tests {
             .with_mediator_url("https://mediator.example.com");
         state.webvh_server = String::new();
         state.webvh_path = "stray-mnemonic".into();
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         assert!(
             !state.request_json.contains("WEBVH_PATH"),
             "WEBVH_PATH must be dropped when no server is set: {}",
@@ -1580,7 +1596,7 @@ mod tests {
         let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
             .with_mediator_url("https://mediator.example.com");
         state.webvh_server = "prod-1".into();
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         assert!(state.request_json.contains("\"WEBVH_SERVER\""));
         assert!(
             !state.request_json.contains("WEBVH_PATH"),
@@ -1594,7 +1610,7 @@ mod tests {
         // addressed to the consumer's pubkey, then drive the wizard
         // helpers to open it.
         let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
-        state.finalize_request().expect("finalize_request");
+        finalize_in_temp_cwd(&mut state).expect("finalize_request");
 
         // Recover the consumer's HPKE X25519 pubkey from the did:key in
         // the request so the producer seals to the right recipient.
@@ -1638,7 +1654,7 @@ mod tests {
     #[test]
     fn ingest_rejects_garbage() {
         let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         let err = ingest_armored(&mut state, "not an armored bundle").unwrap_err();
         assert!(matches!(err, SealedHandoffError::ArmorDecode(_)));
         assert_eq!(state.phase, SealedPhase::RequestGenerated);
@@ -1647,7 +1663,7 @@ mod tests {
     #[tokio::test]
     async fn open_rejects_digest_mismatch() {
         let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
-        state.finalize_request().unwrap();
+        finalize_in_temp_cwd(&mut state).unwrap();
         let parsed_request: BootstrapRequest = serde_json::from_str(&state.request_json).unwrap();
         let recipient_pk = parsed_request.decode_client_x25519_pub().unwrap();
         let (_prod_seed, prod_ed_pub) = generate_ed25519_keypair();
