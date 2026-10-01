@@ -1,5 +1,11 @@
 # did:scid
 
+## Unreleased (0.3.0) — didwebvh-rs 0.8
+
+**Breaking.** Moves to `didwebvh-rs` 0.8 (on `affinidi-data-integrity` 0.8).
+`DIDSCIDError` wraps didwebvh-rs's error type, so this is a public dependency
+and moving it is breaking. No behaviour change.
+
 ## Unreleased (0.2.8) — a deactivated `did:scid:vh` no longer resolves
 
 - **Behaviour (security):** `resolve` for a `did:scid:vh` DID whose webvh log

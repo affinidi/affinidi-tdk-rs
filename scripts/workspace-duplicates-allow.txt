@@ -197,3 +197,16 @@
 # "registry+https://github.com/rust-lang/crates.io-index#affinidi-data-integrity@0.7.14"`
 # is empty.
 affinidi-data-integrity
+
+
+# ---------------------------------------------------------------------------
+#
+# Not an entry: a note on did-scid during the data-integrity 0.8 wave, step 3a.
+#
+# The workspace's did-scid is 0.3 (didwebvh-rs 0.8). affinidi-tdk 0.21.1 keeps
+# its *optional* did-scid dependency on the registry 0.2.8 until step 3b,
+# because `pub use did_scid` makes the move breaking. That registry copy
+# (with didwebvh-rs 0.7 and data-integrity 0.7 under it) is only in the graph
+# with tdk's `did-scid` feature on, e.g. under --all-features. This guard reads
+# `cargo metadata` with default features, so it does not see it, and no entry
+# is needed. It clears in 3b, when tdk takes did-scid 0.3 by path again.

@@ -257,7 +257,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.40"
+version = "0.8.41"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -276,8 +276,8 @@ dependencies = [
  "clap",
  "did-ebsi",
  "did-example",
- "did-scid",
- "didwebvh-rs",
+ "did-scid 0.3.0",
+ "didwebvh-rs 0.8.0",
  "futures-util",
  "highway",
  "moka",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-server"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
@@ -316,7 +316,7 @@ dependencies = [
  "axum-server",
  "chrono",
  "clap",
- "didwebvh-rs",
+ "didwebvh-rs 0.8.0",
  "http 1.5.0",
  "moka",
  "rand 0.10.3",
@@ -671,7 +671,7 @@ dependencies = [
  "chrono",
  "clap",
  "dashmap",
- "didwebvh-rs",
+ "didwebvh-rs 0.7.0",
  "fjall",
  "futures-util",
  "governor",
@@ -838,7 +838,7 @@ dependencies = [
  "chrono",
  "clap",
  "crossterm",
- "didwebvh-rs",
+ "didwebvh-rs 0.7.0",
  "humantime",
  "rand 0.10.3",
  "ratatui",
@@ -1176,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity 0.7.14",
@@ -1202,7 +1202,7 @@ dependencies = [
  "affinidi-vc",
  "clap",
  "did-ebsi",
- "did-scid",
+ "did-scid 0.2.8",
  "rustls",
  "serde",
  "serde_json",
@@ -3802,10 +3802,24 @@ dependencies = [
 [[package]]
 name = "did-scid"
 version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3cb51b0528373d016d6bea1cc14cbadd3ddbc87855e6f1b8cdcfd95ab41a86c"
+dependencies = [
+ "affinidi-did-common",
+ "didwebvh-rs 0.7.0",
+ "regex",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "did-scid"
+version = "0.3.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-webs",
- "didwebvh-rs",
+ "didwebvh-rs 0.8.0",
  "regex",
  "serde_json",
  "thiserror 2.0.21",
@@ -3820,6 +3834,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa08dc5af02f6bc159c10271195f467a894b3b4fe67da9796009ee2da785043"
 dependencies = [
  "affinidi-data-integrity 0.7.14",
+ "affinidi-did-common",
+ "affinidi-secrets-resolver",
+ "ahash",
+ "async-trait",
+ "base58",
+ "chrono",
+ "getrandom 0.4.3",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_json_canonicalizer",
+ "serde_with",
+ "sha2 0.11.0",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "didwebvh-rs"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f02bdbaaffc5b0bec1e3f8049e5e415476cfd56d23bc6bf692419e674ded93f9"
+dependencies = [
+ "affinidi-data-integrity 0.8.0",
  "affinidi-did-common",
  "affinidi-secrets-resolver",
  "ahash",
