@@ -628,3 +628,72 @@ async fn invite_and_accept(
         .accept_relationship(&bob.profile, &alice.did, invite_digest)
         .await
 }
+
+/// A relationship started **from cold** with a peer on another mediator: the
+/// inviter has never heard from the peer, so no mediator was learned, and only
+/// the peer's DID document says where it lives (a `TSPTransport` service naming
+/// its mediator by DID).
+///
+/// The invite used to go Direct to the inviter's own mediator, which refuses
+/// Direct delivery for an account it does not host
+/// (`e.p.direct_delivery.denied`), on every attempt. It now routes through the
+/// mediator the document names. The fallback reads the document and records
+/// nothing: the stored capability is still only what was learned or set.
+#[tokio::test]
+async fn a_cold_invite_crosses_to_the_mediator_the_did_document_names() {
+    let topology = TestTopology::builder()
+        .mediators(2)
+        .spawn()
+        .await
+        .expect("spawn two-mediator topology");
+    let mediator_b = topology.mediator_did(1).expect("mediator B").to_string();
+    let alice = topology.add_user(0, "alice").await.expect("add alice on A");
+    let bob = topology
+        .add_tsp_mediated_user(1, "bob")
+        .await
+        .expect("add bob on B, advertising mediator B by DID");
+    let node_a = topology.node(0).expect("node A");
+    let node_b = topology.node(1).expect("node B");
+
+    assert_eq!(
+        node_a
+            .atm
+            .tsp()
+            .peer_mediator(&alice.profile, &bob.did)
+            .await
+            .expect("peer_mediator"),
+        Some(mediator_b),
+        "with nothing learned, the DID document names bob's mediator"
+    );
+
+    node_a
+        .atm
+        .tsp()
+        .form_relationship_routed(&alice.profile, &bob.did)
+        .await
+        .expect("a cold invite to a peer on another mediator is accepted for delivery");
+
+    let stored = poll_inbox(node_b, &bob.profile).await;
+    let qb2 = node_b.atm.tsp().decode(&stored).expect("decode invite");
+    let (_invite, sender, _digest) = node_b
+        .atm
+        .tsp()
+        .unpack_control(&bob.profile, &qb2)
+        .await
+        .expect("bob receives alice's invite");
+    assert_eq!(sender, alice.did);
+
+    assert_eq!(
+        node_a
+            .atm
+            .tsp()
+            .peer_capability(&alice.profile, &bob.did)
+            .await
+            .expect("read capability")
+            .and_then(|c| c.mediator),
+        None,
+        "the document fallback is read, never stored"
+    );
+
+    topology.shutdown().await.expect("shutdown");
+}
