@@ -23,7 +23,7 @@
 //! never be checked. An accept's `Reply_Digest` and a cancel's `Digest` echo an
 //! earlier message's digest verbatim; they are not recomputed.
 
-use rand_core::RngCore;
+use rand_10::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::error::TspError;
@@ -41,7 +41,7 @@ pub const NONCE_LEN: usize = 16;
 /// Generate a cryptographically random 128-bit nonce.
 pub fn generate_nonce() -> [u8; NONCE_LEN] {
     let mut nonce = [0u8; NONCE_LEN];
-    rand_core::OsRng.fill_bytes(&mut nonce);
+    rand_10::rng().fill_bytes(&mut nonce);
     nonce
 }
 

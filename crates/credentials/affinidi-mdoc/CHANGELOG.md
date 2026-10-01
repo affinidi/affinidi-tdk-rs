@@ -1,5 +1,12 @@
 # Affinidi mdoc Changelog
 
+## Unreleased (0.3.2) — `rand` 0.10
+
+No behaviour change and no public API change. `EdDsaCoseKey::generate` now
+calls `SigningKey::generate` directly: ed25519-dalek 3 and `rand` 0.10 share
+`rand_core` 0.10, so the detour through an intermediate byte array (which left
+an unzeroized copy of the key on the stack) is gone.
+
 ## Unreleased (0.3.1) — `sha2` 0.11, `hmac` 0.13, `hkdf` 0.13, `aes-gcm` 0.11
 
 No behaviour change and no public API change: these are private dependencies

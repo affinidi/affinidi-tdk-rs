@@ -24,7 +24,7 @@ use blake2::Blake2b;
 use blake2::Digest;
 use crypto_secretbox::XSalsa20Poly1305;
 use crypto_secretbox::aead::generic_array::GenericArray;
-use crypto_secretbox::aead::generic_array::typenum::{U10, U16, U24};
+use crypto_secretbox::aead::generic_array::typenum::U24;
 use crypto_secretbox::aead::{AeadInPlace, KeyInit};
 use rand_10::Rng;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -63,9 +63,9 @@ fn shared_key(
             "X25519 produced an all-zero shared secret (peer supplied a small-order point)".into(),
         ));
     }
-    let derived = salsa20::hsalsa::<U10>(
-        GenericArray::from_slice(shared.as_bytes()),
-        &GenericArray::<u8, U16>::default(),
+    let derived = salsa20::hsalsa::<salsa20::cipher::consts::U10>(
+        &salsa20::Key::from(*shared.as_bytes()),
+        &Default::default(),
     );
     Ok(Zeroizing::new(derived.into()))
 }

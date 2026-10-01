@@ -1,5 +1,10 @@
 # Affinidi Status List Changelog
 
+## Unreleased (0.1.6) — `rand` 0.10
+
+No behaviour change and no public API change: this is a private dependencies here.
+Verified by the crate's test suite.
+
 ## Unreleased (0.1.5) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

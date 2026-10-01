@@ -1,5 +1,13 @@
 # affinidi-messaging-didcomm-v1 changelog
 
+## Unreleased (0.2.2) — `chacha20poly1305`, `salsa20`, `blake2` 0.11
+
+No behaviour change and no public API change: these are private dependencies
+here. Content encryption moves to aead 0.6's `AeadInOut` detached API, and the
+HSalsa20 key derivation takes salsa20 0.11's own key type. `crypto_secretbox`
+stays on 0.1 (no stable 0.2 yet). The libsodium known-answer vectors pass
+unchanged.
+
 ## Unreleased (0.2.1) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

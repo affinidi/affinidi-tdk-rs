@@ -17,7 +17,7 @@ use bls12_381_plus::group::Group;
 use bls12_381_plus::{
     G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective, Scalar, multi_miller_loop,
 };
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 use crate::ciphersuite::Ciphersuite;
 use crate::error::{BbsError, Result};
@@ -159,7 +159,7 @@ impl ProofRandomScalars {
         // cryptographically secure RNG — predictable randomness here would leak
         // the undisclosed messages. Seed a CSPRNG directly from the OS rather
         // than relying on the thread-local RNG.
-        let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::OsRng)
+        let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)
             .expect("OS entropy unavailable while seeding proof RNG");
         ProofRandomScalars {
             r1: random_nonzero_scalar(&mut rng),
@@ -696,7 +696,7 @@ fn compute_challenge(
 }
 
 /// Generate a random nonzero scalar.
-fn random_nonzero_scalar(rng: &mut impl Rng) -> Scalar {
+fn random_nonzero_scalar(rng: &mut impl RngExt) -> Scalar {
     loop {
         let bytes: [u8; 48] = rng.random();
         let s = Scalar::from_okm(&bytes);

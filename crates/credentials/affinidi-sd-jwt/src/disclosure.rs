@@ -10,7 +10,7 @@
  */
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::Rng;
+use rand::RngExt;
 use serde_json::Value;
 
 use crate::error::{Result, SdJwtError};
@@ -163,7 +163,7 @@ impl Disclosure {
 
 /// Generate a cryptographically random 128-bit salt, base64url-encoded.
 ///
-/// Uses `rand::rng()` which defaults to the OS CSPRNG via `OsRng`.
+/// Uses `rand::rng()` which defaults to the OS CSPRNG via `SysRng`.
 fn generate_salt() -> String {
     let mut rng = rand::rng();
     let bytes: [u8; 16] = rng.random();

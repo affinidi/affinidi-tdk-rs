@@ -26,8 +26,9 @@
 //! value and algorithm agree.
 
 use chacha20poly1305::ChaCha20Poly1305;
-use chacha20poly1305::aead::generic_array::GenericArray;
-use chacha20poly1305::aead::{AeadInPlace, KeyInit};
+use chacha20poly1305::aead::array::Array;
+use chacha20poly1305::aead::inout::InOutBuf;
+use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use rand_10::Rng;
 use zeroize::Zeroizing;
 
@@ -72,10 +73,14 @@ pub fn encrypt(
     aad: &[u8],
     plaintext: &[u8],
 ) -> Result<(Vec<u8>, [u8; TAG_LEN]), DIDCommV1Error> {
-    let cipher = ChaCha20Poly1305::new(GenericArray::from_slice(cek));
+    let cipher = ChaCha20Poly1305::new(&Array::from(*cek));
     let mut buffer = plaintext.to_vec();
     let tag = cipher
-        .encrypt_in_place_detached(GenericArray::from_slice(nonce), aad, &mut buffer)
+        .encrypt_inout_detached(
+            &Array::from(*nonce),
+            aad,
+            InOutBuf::from(buffer.as_mut_slice()),
+        )
         .map_err(|_| {
             DIDCommV1Error::ContentEncryption("ChaCha20-Poly1305 encryption failed".into())
         })?;
@@ -90,14 +95,14 @@ pub fn decrypt(
     ciphertext: &[u8],
     tag: &[u8; TAG_LEN],
 ) -> Result<Vec<u8>, DIDCommV1Error> {
-    let cipher = ChaCha20Poly1305::new(GenericArray::from_slice(cek));
+    let cipher = ChaCha20Poly1305::new(&Array::from(*cek));
     let mut buffer = ciphertext.to_vec();
     cipher
-        .decrypt_in_place_detached(
-            GenericArray::from_slice(nonce),
+        .decrypt_inout_detached(
+            &Array::from(*nonce),
             aad,
-            &mut buffer,
-            GenericArray::from_slice(tag),
+            InOutBuf::from(buffer.as_mut_slice()),
+            &Array::from(*tag),
         )
         .map_err(|_| {
             DIDCommV1Error::ContentEncryption("ChaCha20-Poly1305 authentication failed".into())

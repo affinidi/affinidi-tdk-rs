@@ -1,5 +1,12 @@
 # Affinidi TSP Changelog
 
+## Unreleased (0.2.2) — `salsa20` 0.11, drop `rand_core` 0.6
+
+No behaviour change and no public API change. Sealed-box and control-nonce
+randomness now come from `rand` 0.10 instead of `rand_core` 0.6's `OsRng`
+(both are the OS CSPRNG), and HSalsa20 takes salsa20 0.11's key type. The
+TSP Rev 3 spec vectors pass unchanged.
+
 ## Unreleased (0.2.1) — relationship re-establishment (recovery)
 
 - **Relationship re-establishment (recovery).** `RelationshipState::transition`

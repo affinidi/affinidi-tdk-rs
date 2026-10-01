@@ -1,5 +1,10 @@
 # Affinidi Data Integrity Changelog
 
+## Unreleased (0.7.14) — `affinidi-bbs` 0.4
+
+No behaviour change and no public API change. Follows `affinidi-bbs` 0.4
+(`bls12_381_plus` 0.9); no BBS type appears in this crate's public API.
+
 ## Unreleased (0.7.13) — the post-quantum tests never ran
 
 `cargo test -p affinidi-data-integrity` did not compile the ML-DSA tests, and

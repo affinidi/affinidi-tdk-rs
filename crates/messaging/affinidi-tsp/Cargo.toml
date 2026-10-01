@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-tsp"
 description = "Trust Spanning Protocol (TSP) implementation for the Affinidi TDK"
-version = "0.2.1"
+version = "0.2.2"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -49,7 +49,6 @@ hkdf = "0.13"
 sha2 = "0.11"
 ## TSP mandates ChaCha20Poly1305 as the HPKE AEAD (spec Rev 3 §8); see docs/tsp/interop.md.
 chacha20poly1305 = "0.11"
-rand_core = { version = "0.6", features = ["getrandom"] }
 rand_10 = { package = "rand", version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 zeroize = { version = "1", features = ["derive"] }
 blake2 = "0.11"
@@ -65,7 +64,7 @@ ml-dsa = { version = "0.1", optional = true }
 ## curve25519-dalek 4 and would reintroduce a second dalek generation into a
 ## workspace that is on 5 — the same trap `affinidi-messaging-didcomm-v1`
 ## documents against the same primitive.
-salsa20 = "0.10"
+salsa20 = "0.11"
 crypto_secretbox = { version = "0.1", default-features = false, features = ["salsa20"] }
 
 # Encoding / serialization

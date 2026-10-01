@@ -1,5 +1,10 @@
 # Affinidi SD-JWT Changelog
 
+## Unreleased (0.1.6) — `rand` 0.10, `sha2` 0.11
+
+No behaviour change and no public API change: these are private dependencies here.
+Verified by the crate's test suite.
+
 ## Unreleased (0.1.5) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.

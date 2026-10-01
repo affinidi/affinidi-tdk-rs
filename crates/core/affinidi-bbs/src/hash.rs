@@ -6,12 +6,12 @@
  * - `messages_to_scalars`: Convert message byte arrays to scalars
  * - `expand_message`: SHA-256 (XMD) message expansion per RFC 9380
  *
- * Uses `elliptic_curve::hash2curve::ExpandMsgXmd<Sha256>` for exact
+ * Uses `elliptic_curve_013::hash2curve::ExpandMsgXmd<Sha256>` for exact
  * compatibility with the `bls12_381_plus` hash-to-curve implementation.
  */
 
 use bls12_381_plus::Scalar;
-use bls12_381_plus::elliptic_curve::hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
+use bls12_381_plus::elliptic_curve_013::hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
 use sha2::Sha256;
 
 use crate::ciphersuite::Ciphersuite;

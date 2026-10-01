@@ -16,7 +16,7 @@
  * The digest in the MSO is `SHA-256(CBOR(Tag24<IssuerSignedItem>))`.
  */
 
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha384, Sha512};
 

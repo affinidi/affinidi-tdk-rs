@@ -45,9 +45,9 @@
 
 use blake2::Blake2b;
 use blake2::digest::Digest;
-use blake2::digest::consts::{U10, U16, U24};
+use blake2::digest::consts::U24;
 use crypto_secretbox::{AeadInPlace, KeyInit, XSalsa20Poly1305, aead::generic_array::GenericArray};
-use rand_core::RngCore;
+use rand_10::Rng;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
@@ -74,9 +74,9 @@ fn shared_key(secret: &StaticSecret, public: &PublicKey) -> Result<Zeroizing<[u8
             "X25519 produced an all-zero shared secret (peer supplied a small-order point)".into(),
         ));
     }
-    let derived = salsa20::hsalsa::<U10>(
-        GenericArray::from_slice(shared.as_bytes()),
-        &GenericArray::<u8, U16>::default(),
+    let derived = salsa20::hsalsa::<salsa20::cipher::consts::U10>(
+        &salsa20::Key::from(*shared.as_bytes()),
+        &Default::default(),
     );
     Ok(Zeroizing::new(derived.into()))
 }
@@ -96,7 +96,7 @@ fn seal_nonce(ephemeral_public: &[u8; 32], recipient_public: &[u8; 32]) -> [u8; 
 /// scheme exists to remove.
 pub fn seal(plaintext: &[u8], recipient_public: &[u8; 32]) -> Result<Vec<u8>, TspError> {
     let mut ephemeral_secret = Zeroizing::new([0u8; 32]);
-    rand_core::OsRng.fill_bytes(ephemeral_secret.as_mut());
+    rand_10::rng().fill_bytes(ephemeral_secret.as_mut());
     seal_with_ephemeral(plaintext, recipient_public, &ephemeral_secret)
 }
 
@@ -172,7 +172,7 @@ mod tests {
 
     fn keypair() -> ([u8; 32], [u8; 32]) {
         let mut sk = [0u8; 32];
-        rand_core::OsRng.fill_bytes(&mut sk);
+        rand_10::rng().fill_bytes(&mut sk);
         let secret = StaticSecret::from(sk);
         (sk, PublicKey::from(&secret).to_bytes())
     }
