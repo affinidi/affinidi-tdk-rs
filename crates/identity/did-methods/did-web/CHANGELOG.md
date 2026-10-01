@@ -1,5 +1,12 @@
 # Affinidi DID Web
 
+## 0.1.6 — the fetched document must name the requested DID
+
+- Resolution now refuses a fetched DID document whose `id` is not the DID
+  that was requested (new `DocumentIdMismatch` error). Previously a server
+  answering for one DID could return a document for another and have its
+  verification methods trusted.
+
 ## Changelog history
 
 ## 11th September 2026

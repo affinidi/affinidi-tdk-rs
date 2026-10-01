@@ -1,5 +1,12 @@
 # did:ebsi
 
+## 0.1.6 — the fetched document must name the requested DID
+
+- Resolution now refuses a fetched DID document whose `id` is not the DID
+  that was requested (new `DocumentIdMismatch` error). Previously a server
+  answering for one DID could return a document for another and have its
+  verification methods trusted.
+
 ## Unreleased (0.1.5) — `rand` 0.10
 
 No behaviour change: the identifier is still 16 bytes from the thread RNG.
