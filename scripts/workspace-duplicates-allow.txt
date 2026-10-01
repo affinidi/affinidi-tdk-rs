@@ -165,22 +165,3 @@
 #     Removing trust-tasks-proof v0.23.0
 #     Removing trust-tasks-rs v0.23.0
 
-# ---------------------------------------------------------------------------
-#
-# trust-tasks-rs 0.25 release wave (affinidi-tdk-rs #908).
-#
-# The mediator's optional `vta` feature depends on `vta-sdk` from crates.io,
-# and vta-sdk 0.56 depends on affinidi-tdk 0.20 / affinidi-messaging-sdk 0.30,
-# which are on trust-tasks-rs 0.24. This PR moves both to 0.21 / 0.31 on
-# trust-tasks-rs 0.25, so the published 0.56 no longer matches the workspace
-# copies. vta-sdk 0.57 (OpenVTC/verifiable-trust-infrastructure#1859) is built
-# on these 0.31 / 0.21 releases, so the cycle has to release in this order.
-# The mediator only uses vta-sdk's provisioning and sealed-transfer APIs, which
-# are unchanged between 0.56 and 0.57, and the workspace compiles with
-# --all-features.
-#
-# Clears when vta-sdk 0.57 is on crates.io: `cargo update -p vta-sdk`, tighten
-# the mediator's and mediator-setup's `vta-sdk` requirement to "0.57", and
-# delete these two lines.
-affinidi-messaging-sdk
-affinidi-tdk

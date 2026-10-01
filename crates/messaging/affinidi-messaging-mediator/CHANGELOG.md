@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.34.1) — vta-sdk 0.58
+
+The optional `vta` feature now requires `vta-sdk` 0.58, the release built on `affinidi-tdk` 0.21 and `affinidi-messaging-sdk` 0.31. The `>=0.56, <0.58` stopgap from 0.34.0 kept the registry copies of 0.20 / 0.30 in the mediator subtree until it published. No source change.
+
 ## Unreleased (0.34.0) — trust-tasks-rs 0.25
 
 Moves to `trust-tasks-rs` 0.25, with the rest of the `trust-tasks-*` family at 0.25. That release conforms the Trust Task vetting, member and endorsement specs to the DTG Credentials v1 statement and authority credentials (trustoverip/dtgwg-trust-tasks-tf#691). A public dependency moving a minor is breaking, so this crate moves a minor. No source change.
