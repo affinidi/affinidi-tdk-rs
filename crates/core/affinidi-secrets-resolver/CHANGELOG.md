@@ -1,5 +1,13 @@
 # Affinidi Secrets Manager
 
+## Unreleased (0.5.14) — wasm32 builds again
+
+`cargo check --target wasm32-unknown-unknown` failed in `getrandom`. 0.5.13
+replaced the wasm32 `getrandom` 0.3 pin with 0.4, but `ahash` 0.8 (its
+`runtime-rng` default) still pulls 0.3, which then had no `wasm_js` backend.
+Both pins are now declared. Earlier releases were also broken on wasm32: from
+`rand` 0.10, `getrandom` 0.4 had no backend there. Native builds are unaffected.
+
 ## Unreleased (0.5.13) — `getrandom` 0.4 on wasm
 
 No behaviour change. The wasm32 `getrandom` pin moves from 0.3 to 0.4
