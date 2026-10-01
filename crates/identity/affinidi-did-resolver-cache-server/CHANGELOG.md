@@ -1,5 +1,10 @@
 # Affinidi DID Resolver Cache Server
 
+## Unreleased (0.9.15) — didwebvh-rs 0.8
+
+Moves to `didwebvh-rs` 0.8 (on `affinidi-data-integrity` 0.8), and picks up
+`affinidi-did-resolver-cache-sdk` 0.8.41. No behaviour change.
+
 ## Unreleased (0.9.14) — raw did:webvh log cache
 
 - Adds an optional TTL cache for the raw `did:webvh` logs (`did.jsonl` and

@@ -1,5 +1,13 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.41) — didwebvh-rs 0.8, did-scid 0.3
+
+Moves to `didwebvh-rs` 0.8 and `did-scid` 0.3, both on `affinidi-data-integrity`
+0.8. Neither appears in this crate's public API, so this is a patch: a fresh
+resolve of `affinidi-did-resolver-cache-sdk = "0.8"` (trust-tasks-proof's
+requirement, for example) now brings no `affinidi-data-integrity` 0.7 copy with
+it. No behaviour change.
+
 ## Unreleased (0.8.40) — clippy `collapsible_if`
 
 No behaviour change. The shortcut check in `resolve` is written as a let-chain

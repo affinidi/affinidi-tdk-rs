@@ -1,5 +1,14 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.21.1) — `did-scid` from crates.io, pending 0.22
+
+No API or behaviour change. The workspace's `did-scid` moved to 0.3
+(`didwebvh-rs` 0.8), and because this crate re-exports `did_scid`, following it
+would be breaking. This release keeps the optional `did-scid` dependency on
+0.2.8, now taken from crates.io instead of the workspace path. 0.22.0 moves to
+did-scid 0.3 together with `affinidi-data-integrity` 0.8 and SDK 0.32, so
+there is one breaking tdk release, not two.
+
 ## Unreleased (0.21.0) — SDK 0.31
 
 The facade re-exports the messaging SDK, which moves a minor for trust-tasks-rs 0.25, so this crate moves a minor with it. No source change.

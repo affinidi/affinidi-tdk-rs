@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.21.0"
+version = "0.21.1"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -100,7 +100,12 @@ affinidi-openid4vp = { version = "0.1", path = "../../protocols/affinidi-openid4
 affinidi-did-web = { version = "0.1", path = "../../identity/did-methods/did-web", optional = true }
 did-ebsi = { version = "0.1", path = "../../identity/did-methods/did-ebsi", optional = true }
 affinidi-did-webs = { version = "0.7", path = "../../identity/did-methods/did-webs", optional = true }
-did-scid = { version = "0.2.3", path = "../../identity/did-methods/did-scid", optional = true }
+# Registry-only until the data-integrity 0.8 wave's step 3b. The workspace's
+# did-scid is 0.3 (didwebvh-rs 0.8), and `pub use did_scid` makes moving to it
+# breaking. 3b takes it together with tdk 0.22's other breaking moves, so
+# consumers see one breaking tdk release, not two. In 3b, restore
+# `version = "0.3", path = "../../identity/did-methods/did-scid"`.
+did-scid = { version = "0.2.8", optional = true }
 
 # Trust + TSP
 affinidi-trust-lists = { version = "0.1", path = "../../trust/affinidi-trust-lists", optional = true }
