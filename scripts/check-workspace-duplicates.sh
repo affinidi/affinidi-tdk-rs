@@ -72,7 +72,12 @@ for pkg in sorted(meta["packages"], key=lambda p: (p["name"], p["version"])):
         print(pkg["name"], pkg["version"], sep="\t")
 PY
 
-duplicates="$(cargo metadata --format-version 1 | python3 -c "$EXTRACT")"
+# --all-features: a duplicate reached only through an optional dependency is
+# still a duplicate. Without it the guard resolved default features only and
+# missed one: during the data-integrity 0.8 wave (#917), affinidi-tdk's
+# optional `did-scid` pulled a registry did-scid 0.2.8 beside the workspace's
+# 0.3.0, under every --all-features build, and the guard reported clean.
+duplicates="$(cargo metadata --format-version 1 --all-features | python3 -c "$EXTRACT")"
 
 status=0
 unexpected=""
@@ -107,7 +112,7 @@ Fix: add each to '[patch.crates-io]' in the root Cargo.toml, e.g.
 
 Then confirm with:
 
-  cargo tree --workspace -i "registry+https://github.com/rust-lang/crates.io-index#<crate>@<version>"
+  cargo tree --workspace --all-features -i "registry+https://github.com/rust-lang/crates.io-index#<crate>@<version>"
 
 If a duplicate genuinely cannot be resolved from this repository — an external
 consumer pinning an incompatible version range, say — add it to
