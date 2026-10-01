@@ -1,0 +1,68 @@
+name: checks-wasm
+# `cargo check --target wasm32-unknown-unknown` for every crate that declares
+# wasm32 support. Nothing else builds for wasm32: the shared pipeline-rust
+# workflows are native-only. Without this job, affinidi-secrets-resolver went
+# from the rand 0.10 move to 0.5.14 (#914) with no published version that
+# compiled for wasm32, and nobody noticed.
+#
+# Runs with `-D warnings` because code that is only used on native (client,
+# redirect, resolver in net-guard) shows up as dead code on wasm32; gate it
+# with `#[cfg(not(target_arch = "wasm32"))]` rather than allowing the lint.
+#
+# Paths: the three crates, every workspace crate in their wasm32 graph
+# (currently only affinidi-encoding — re-derive with
+# `cargo tree --target wasm32-unknown-unknown -p <crate>`), and the lockfile,
+# since a dependency bump is exactly what broke it last time.
+#
+# Actions are pinned to commit SHAs (tag in the trailing comment): a tag or
+# branch can be repointed upstream.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+    paths:
+      - "crates/core/affinidi-crypto/**"
+      - "crates/core/affinidi-secrets-resolver/**"
+      - "crates/core/affinidi-net-guard/**"
+      - "crates/core/affinidi-encoding/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/checks-wasm.yaml"
+  workflow_dispatch:
+
+# Read-only: the job checks out and compiles; it writes nothing back.
+permissions:
+  contents: read
+
+jobs:
+  wasm32:
+    name: wasm32 / ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - affinidi-crypto
+          - affinidi-secrets-resolver
+          - affinidi-net-guard
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
+        with:
+          toolchain: "1.95.0"
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: wasm32-${{ matrix.package }}
+
+      - name: cargo check --target wasm32-unknown-unknown -p ${{ matrix.package }}
+        run: cargo check --locked --target wasm32-unknown-unknown -p ${{ matrix.package }}

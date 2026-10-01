@@ -4,6 +4,15 @@ All notable changes to `affinidi-net-guard` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - Unreleased
+
+### Fixed
+
+- wasm32 builds no longer warn. `EgressPolicy::check_resolved` (crate-private,
+  called only from the native-only DNS resolver) is now compiled only on
+  native targets, and so is its `SocketAddr` import. No API or behaviour
+  change on any target.
+
 ## [0.1.0] - 2026-09-11
 
 Initial release: one egress guard for URLs an attacker can influence, extracted
