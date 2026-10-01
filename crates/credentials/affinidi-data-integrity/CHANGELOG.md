@@ -1,9 +1,26 @@
 # Affinidi Data Integrity Changelog
 
-## Unreleased (0.7.14) — `affinidi-bbs` 0.4
+## Unreleased (0.8.0) — `affinidi-bbs` 0.4, versioned correctly
 
-No behaviour change and no public API change. Follows `affinidi-bbs` 0.4
-(`bls12_381_plus` 0.9); no BBS type appears in this crate's public API.
+**Breaking.** The same code as 0.7.14, released under the version it needed.
+`affinidi-bbs` is a public dependency here. `bbs_2023_transform::{
+create_base_proof_value, sign_base_document, create_pseudonym_base_proof_value,
+create_derived_proof, create_pseudonym_derived_proof, verify_derived_proof,
+verify_pseudonym_derived_proof}` and `bbs_2023::{sign_base, derive_proof,
+verify_proof, sign_vc_base, derive_vc, verify_vc_derived}` take or return
+`affinidi_bbs::{PublicKey, SecretKey, Signature, Proof}`, so moving
+`affinidi-bbs` from 0.3 to 0.4 changes their types. Callers move to
+`affinidi-bbs` 0.4 alongside this release. No behaviour change.
+
+## 0.7.14 — `affinidi-bbs` 0.4 (**mis-versioned: breaking, use 0.8.0**)
+
+Moved to `affinidi-bbs` 0.4 (`bls12_381_plus` 0.9). Released as a patch on
+the claim that no BBS type is in this crate's public API, and that claim was
+wrong: see 0.8.0. Code using `affinidi-data-integrity ^0.7` with
+`affinidi-bbs` 0.3 fails to compile against 0.7.14 (`expected
+affinidi_bbs::types::PublicKey, found affinidi_bbs::PublicKey`). Pin
+`=0.7.13` to stay on `affinidi-bbs` 0.3, or move to 0.8.0 and
+`affinidi-bbs` 0.4.
 
 ## Unreleased (0.7.13) — the post-quantum tests never ran
 
