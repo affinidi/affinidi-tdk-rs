@@ -851,8 +851,14 @@ impl MessagePickup {
                     .unpack_with(&decoded, atm.inner.config.unpack_policy())
                     .await
                 {
-                    Ok((mut m, u)) => {
-                        m.id = id.clone();
+                    // The message keeps the id its sender gave it. The
+                    // mediator's id for it (the one to ack or delete) is `id`,
+                    // returned beside it. Overwriting `m.id` with that made a
+                    // reply to a request collected this way thread to the
+                    // mediator's id rather than the sender's, so the sender's
+                    // waiter never matched it. The same request collected
+                    // live kept its id and was answered (VTI-49).
+                    Ok((m, u)) => {
                         out.push((Some(InboundFrame::DidComm(Box::new(m), Box::new(u))), id));
                     }
                     Err(e) => {
@@ -2012,6 +2018,18 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!(out.iter().any(|(f, id)| id == "good-1" && f.is_some()));
         assert!(out.iter().any(|(f, id)| id == "rejected-1" && f.is_none()));
+
+        // VTI-49: the delivered message keeps its sender's id — what a reply
+        // threads to — while the mediator's id ("good-1") is the one returned
+        // to ack it.
+        let delivered = out
+            .iter()
+            .find_map(|(f, id)| match f {
+                Some(InboundFrame::DidComm(m, _)) if id == "good-1" => Some(m.id.clone()),
+                _ => None,
+            })
+            .expect("the good attachment is a DIDComm frame");
+        assert_eq!(delivered, "m1");
 
         // The unprocessable frame is also reported on the channel.
         let p = rx

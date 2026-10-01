@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased (0.31.1) — a TSP relationship can be started with a peer on another mediator; a reply to a request collected by pickup threads to the sender's id
+
+**A cold invite to a peer on another mediator.** `send_control` (invite,
+accept, cancel) routes across mediators only when it knows the peer's
+mediator, and it knew one only if it was learned from a routed invite *from*
+the peer or set with `set_peer_mediator`. A node starting a relationship has
+neither, so its invite went Direct to its own mediator, which refuses Direct
+delivery for an account it does not host:
+
+```
+e.p.direct_delivery.denied: Mediator is not accepting direct delivery of TSP messages. They must be relayed through a routing envelope
+```
+
+It failed this way on every attempt (VTI-56: a community's TSP push to a
+member on another mediator never left, and fell back to DIDComm an hour
+later). The new `TspOps::peer_mediator` falls back to the peer's DID
+document when nothing was learned: the DID its `TSPTransport` service names.
+If the document lists ours among several, ours is used. `send_control` and
+`ATM::send_to` both use it. The fallback is read, never stored, so a
+persisted `PeerCapability` is still only what was learned or set.
+
+**A reply to a request collected by Delivery-Request.**
+`send_delivery_request_frames` overwrote each delivered DIDComm message's
+`id` with the mediator's id for it. That id was already returned beside the
+frame for acking. A handler replying with `thid = message.id` threaded to
+the mediator's hash instead of the sender's id, so the sender's waiter never
+matched it. The same request collected live kept its id and was answered
+(VTI-49: two of seven DID mints from a VTA to a DID-hosting server timed out
+whenever the server's 30-second backup poll collected the request). The
+message now keeps its own id. `send_delivery_request`, which returns no id
+beside the message, still sets `id` to the mediator's id, because its callers
+delete by it.
+
 ## Unreleased (0.31.0) — trust-tasks-rs 0.25
 
 Moves to `trust-tasks-rs` 0.25, with the rest of the `trust-tasks-*` family at 0.25. That release conforms the Trust Task vetting, member and endorsement specs to the DTG Credentials v1 statement and authority credentials (trustoverip/dtgwg-trust-tasks-tf#691). A public dependency moving a minor is breaking, so this crate moves a minor. No source change.

@@ -746,11 +746,7 @@ impl ATM {
                 })?;
                 // Route cross-mediator (metadata-private) when the peer's mediator
                 // is known and differs from ours; otherwise Direct via our mediator.
-                let peer_mediator = self
-                    .tsp()
-                    .peer_capability(profile, to)
-                    .await?
-                    .and_then(|c| c.mediator);
+                let peer_mediator = self.tsp().peer_mediator(profile, to).await?;
                 let (_, own_mediator) = profile.dids()?;
                 match peer_mediator {
                     Some(peer_mediator) if peer_mediator != own_mediator => {
@@ -978,6 +974,16 @@ fn disclosure_advertises_tsp(disclosure: &DiscoverFeaturesDisclosure) -> bool {
     disclosure.disclosures.iter().any(|d| {
         matches!(d.feature_type, FeatureType::Protocol) && d.id == TSP_DISCOVER_FEATURE_URI
     })
+}
+
+/// Which of the mediators a peer's DID document advertises to route through:
+/// ours when it is among them (no cross-mediator hop needed), otherwise the
+/// first, in document order.
+fn advertised_mediator(advertised: &[String], own_mediator: &str) -> Option<String> {
+    if advertised.iter().any(|m| m == own_mediator) {
+        return Some(own_mediator.to_string());
+    }
+    advertised.first().cloned()
 }
 
 /// Under `Required`, no-TSP is a denial; otherwise fall back to DIDComm.
@@ -1782,8 +1788,9 @@ impl TspOps<'_> {
     /// message (it never inspects the control payload), and the recipient applies the
     /// relationship transition on receipt.
     ///
-    /// When `to_did`'s mediator is known (learned from a routed invite, or set
-    /// with [`set_peer_mediator`](Self::set_peer_mediator)) and is not ours, a
+    /// When `to_did`'s mediator is known (learned from a routed invite, set
+    /// with [`set_peer_mediator`](Self::set_peer_mediator), or advertised by
+    /// its DID document — see [`peer_mediator`](Self::peer_mediator)) and is not ours, a
     /// Direct message cannot reach it — our mediator delivers Direct only to its
     /// own accounts — so the control message is routed
     /// `[own_mediator, peer_mediator, to_did]` instead, as
@@ -1881,16 +1888,49 @@ impl TspOps<'_> {
         their_did: &str,
     ) -> Result<Option<Vec<String>>, ATMError> {
         let (_, own_mediator) = profile.dids()?;
-        let peer_mediator = self
-            .peer_capability(profile, their_did)
-            .await?
-            .and_then(|c| c.mediator);
+        let peer_mediator = self.peer_mediator(profile, their_did).await?;
         Ok(match peer_mediator {
             Some(peer_mediator) if peer_mediator != own_mediator => {
                 Some(vec![peer_mediator, their_did.to_string()])
             }
             _ => None,
         })
+    }
+
+    /// The mediator `their_did`'s TSP agent lives behind, if it can be told.
+    ///
+    /// A mediator learned for the peer (from its routed invite, or
+    /// [`set_peer_mediator`](Self::set_peer_mediator)) comes first. Without
+    /// one, the peer's DID document says: the DID a `TSPTransport` service
+    /// names is its mediator, and our own mediator if the document lists it
+    /// among several. Nothing is recorded, so the stored capability is only
+    /// ever what was learned or set.
+    ///
+    /// The document fallback is what lets a node *start* a relationship with
+    /// a peer on another mediator. Before it, that node knew no mediator for
+    /// the peer, sent its invite Direct, and the mediator refused it
+    /// (`e.p.direct_delivery.denied`) on every attempt.
+    ///
+    /// `None` when neither says (a service-less `did:key` peer nobody has
+    /// introduced), or the document cannot be resolved; a Direct send is then
+    /// all that can be tried.
+    pub async fn peer_mediator(
+        &self,
+        profile: &Arc<ATMProfile>,
+        their_did: &str,
+    ) -> Result<Option<String>, ATMError> {
+        if let Some(learned) = self
+            .peer_capability(profile, their_did)
+            .await?
+            .and_then(|c| c.mediator)
+        {
+            return Ok(Some(learned));
+        }
+        let (_, own_mediator) = profile.dids()?;
+        let Ok(vid) = self.resolve_vid(their_did).await else {
+            return Ok(None);
+        };
+        Ok(advertised_mediator(&vid.mediators, own_mediator))
     }
 
     /// Begin forming a relationship with `their_did`: advance the FSM with
@@ -3752,6 +3792,27 @@ mod tests {
     use affinidi_tsp::message::direct;
     use affinidi_tsp::{MessageType, PrivateVid};
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+
+    /// Our own mediator wins when the document lists it (no hop to add);
+    /// otherwise the first one listed; nothing listed is nothing to route by.
+    #[test]
+    fn the_advertised_mediator_prefers_ours_then_document_order() {
+        let ours = "did:example:mediator-a";
+        let list = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            super::advertised_mediator(&list(&["did:example:mediator-b", ours]), ours).as_deref(),
+            Some(ours)
+        );
+        assert_eq!(
+            super::advertised_mediator(
+                &list(&["did:example:mediator-b", "did:example:mediator-c"]),
+                ours
+            )
+            .as_deref(),
+            Some("did:example:mediator-b")
+        );
+        assert_eq!(super::advertised_mediator(&[], ours), None);
+    }
 
     fn is_tsp(stored: &str) -> bool {
         BASE64_URL_SAFE_NO_PAD
