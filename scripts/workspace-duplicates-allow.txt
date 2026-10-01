@@ -165,3 +165,35 @@
 #     Removing trust-tasks-proof v0.23.0
 #     Removing trust-tasks-rs v0.23.0
 
+
+
+# ---------------------------------------------------------------------------
+#
+# affinidi-data-integrity 0.8 release wave, step 1 of 4.
+#
+# 0.7.14 (#912) moved to affinidi-bbs 0.4 as a patch, but bbs types are in its
+# public API, so it was breaking. 0.8.0 re-releases the same code under the
+# right version. Every other workspace crate still requires "0.7", and so do
+# three published crates that re-export data-integrity types: didwebvh-rs 0.7
+# (`Signer`, `DataIntegrityProof`), trust-tasks-proof 0.25 (`Signer`,
+# `SignOptions`, `VerifyOptions`), and vta-sdk 0.58. A local 0.8.0 does not
+# satisfy "^0.7", so `[patch.crates-io]` declines to apply, and the registry
+# 0.7.14 is what the rest of the workspace builds against for now.
+#
+# Nothing in this workspace hands a 0.8 value to a 0.7 API yet: only
+# data-integrity itself is on 0.8. That changes in step 3, which is why the
+# order is forced:
+#
+#   1. this workspace publishes affinidi-data-integrity 0.8.0 (this entry)
+#   2. didwebvh-rs and trust-tasks-rs release breaking versions on 0.8;
+#      trust-tasks-proof's `Verifier::with_options` takes `VerifyOptions`, so
+#      the mediator cannot move before it does
+#   3. this workspace moves tdk-common, tdk, messaging-sdk and their dependents
+#      to 0.8 and to the new didwebvh-rs / trust-tasks-rs
+#   4. verifiable-trust-infrastructure publishes a vta-sdk on those
+#
+# Clears at step 4, when nothing in the graph requires "0.7": delete this line
+# and confirm `cargo tree --workspace -i
+# "registry+https://github.com/rust-lang/crates.io-index#affinidi-data-integrity@0.7.14"`
+# is empty.
+affinidi-data-integrity
