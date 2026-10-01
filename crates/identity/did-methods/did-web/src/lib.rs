@@ -97,6 +97,21 @@ pub enum DidWebError {
     #[error("did:web response was not a valid DID Document: {0}")]
     InvalidDocument(String),
 
+    /// The response document's `id` did not match the DID being resolved.
+    ///
+    /// A `did:web` value identifies its document only by the network location
+    /// it is fetched from — nothing else ties the response to the right
+    /// subject. Without this check, a host asked to resolve `did:web:a` (or
+    /// one it was redirected to, or one on-path) could answer with a document
+    /// whose `id` is `did:web:b`, and the caller would accept it as `a`'s.
+    #[error("did:web response document id {got:?} does not match the requested DID {expected:?}")]
+    DocumentIdMismatch {
+        /// The DID that was requested.
+        expected: String,
+        /// The `id` the response document actually carried.
+        got: String,
+    },
+
     /// The DID named a non-routable host (loopback / private / link-local /
     /// cloud-metadata), either as a literal address in the DID or as the
     /// address a hostname in the DID resolved to. Refused before any bytes are
@@ -281,8 +296,25 @@ impl DIDWeb {
             body.extend_from_slice(&chunk);
         }
 
-        serde_json::from_slice::<Document>(&body)
-            .map_err(|e| DidWebError::InvalidDocument(format!("parsing {url}: {e}")))
+        let document = serde_json::from_slice::<Document>(&body)
+            .map_err(|e| DidWebError::InvalidDocument(format!("parsing {url}: {e}")))?;
+        verify_document_id(did, &document)?;
+        Ok(document)
+    }
+}
+
+/// The DID Resolution spec requires a resolved document's `id` to equal the
+/// DID that was resolved. Check this ourselves rather than trust the remote:
+/// see [`DidWebError::DocumentIdMismatch`] for why that trust would be
+/// misplaced for `did:web`.
+fn verify_document_id(did: &str, document: &Document) -> Result<(), DidWebError> {
+    if document.id.as_str() == did {
+        Ok(())
+    } else {
+        Err(DidWebError::DocumentIdMismatch {
+            expected: did.to_string(),
+            got: document.id.as_str().to_string(),
+        })
     }
 }
 
@@ -537,6 +569,37 @@ mod tests {
         assert!(response.status().is_success());
         let parsed: serde_json::Value = response.json().await.unwrap();
         assert_eq!(parsed["id"], "did:web:example.com");
+    }
+
+    #[test]
+    fn verify_document_id_accepts_a_match() {
+        let document = Document::new("did:web:example.com").unwrap();
+        assert!(verify_document_id("did:web:example.com", &document).is_ok());
+    }
+
+    #[test]
+    fn verify_document_id_refuses_a_mismatch() {
+        // A server answering for `did:web:example.com` must not be able to
+        // hand back a document that names a different subject.
+        let document = Document::new("did:web:evil.example.com").unwrap();
+        let err = verify_document_id("did:web:example.com", &document).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DidWebError::DocumentIdMismatch { ref expected, ref got }
+                    if expected == "did:web:example.com" && got == "did:web:evil.example.com"
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// `Document::id` has no `#[serde(default)]`, so a document missing `id`
+    /// entirely is already refused by deserialization, before
+    /// `verify_document_id` is ever reached.
+    #[test]
+    fn document_without_id_fails_to_parse() {
+        let err = serde_json::from_str::<Document>(r#"{"service":[]}"#).unwrap_err();
+        assert!(err.to_string().contains("id"), "{err}");
     }
 
     #[tokio::test]

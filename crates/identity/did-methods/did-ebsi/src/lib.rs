@@ -53,6 +53,20 @@ pub enum EbsiError {
     /// HTTP request failed.
     #[error("HTTP error: {0}")]
     Http(String),
+
+    /// The response document's `id` did not match the DID being resolved.
+    ///
+    /// Nothing but this check ties the registry's response to the DID that
+    /// was asked for — without it, the registry (or anyone able to tamper
+    /// with the response) could answer a lookup for one `did:ebsi` with a
+    /// document naming a different one, and it would be accepted.
+    #[error("EBSI response document id {got:?} does not match the requested DID {expected:?}")]
+    DocumentIdMismatch {
+        /// The DID that was requested.
+        expected: String,
+        /// The `id` the response document actually carried.
+        got: String,
+    },
 }
 
 /// Default EBSI DID Registry API base URL (pilot environment).
@@ -175,8 +189,26 @@ pub async fn resolve_ebsi_did(
 
     let document: affinidi_did_common::Document = serde_json::from_str(&body)
         .map_err(|e| EbsiError::ParseError(format!("parsing DID document: {e}")))?;
+    verify_document_id(did, &document)?;
 
     Ok(document)
+}
+
+/// The DID Resolution spec requires a resolved document's `id` to equal the
+/// DID that was resolved. Check this ourselves rather than trust the
+/// registry: see [`EbsiError::DocumentIdMismatch`] for why.
+fn verify_document_id(
+    did: &str,
+    document: &affinidi_did_common::Document,
+) -> Result<(), EbsiError> {
+    if document.id.as_str() == did {
+        Ok(())
+    } else {
+        Err(EbsiError::DocumentIdMismatch {
+            expected: did.to_string(),
+            got: document.id.as_str().to_string(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -222,6 +254,41 @@ mod tests {
         let did1 = generate_ebsi_did();
         let did2 = generate_ebsi_did();
         assert_ne!(did1, did2);
+    }
+
+    #[test]
+    fn verify_document_id_accepts_a_match() {
+        let document = affinidi_did_common::Document::new("did:ebsi:zfEmvX5twhXjQJiCWsukvQA")
+            .expect("valid did:ebsi document id");
+        assert!(verify_document_id("did:ebsi:zfEmvX5twhXjQJiCWsukvQA", &document).is_ok());
+    }
+
+    #[test]
+    fn verify_document_id_refuses_a_mismatch() {
+        // The registry answering for one did:ebsi must not be able to hand
+        // back a document that names a different one.
+        let document = affinidi_did_common::Document::new("did:ebsi:znHeZWvhAK2FK2Dk1jXNe7m")
+            .expect("valid did:ebsi document id");
+        let err = verify_document_id("did:ebsi:zfEmvX5twhXjQJiCWsukvQA", &document).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                EbsiError::DocumentIdMismatch { ref expected, ref got }
+                    if expected == "did:ebsi:zfEmvX5twhXjQJiCWsukvQA"
+                        && got == "did:ebsi:znHeZWvhAK2FK2Dk1jXNe7m"
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// `Document::id` has no `#[serde(default)]`, so a document missing `id`
+    /// entirely is already refused by deserialization, before
+    /// `verify_document_id` is ever reached.
+    #[test]
+    fn document_without_id_fails_to_parse() {
+        let err =
+            serde_json::from_str::<affinidi_did_common::Document>(r#"{"service":[]}"#).unwrap_err();
+        assert!(err.to_string().contains("id"), "{err}");
     }
 
     #[test]
