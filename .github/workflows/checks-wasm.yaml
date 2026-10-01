@@ -13,6 +13,9 @@ name: checks-wasm
 # (currently only affinidi-encoding — re-derive with
 # `cargo tree --target wasm32-unknown-unknown -p <crate>`), and the lockfile,
 # since a dependency bump is exactly what broke it last time.
+#
+# Actions are pinned to commit SHAs (tag in the trailing comment): a tag or
+# branch can be repointed upstream.
 
 on:
   pull_request:
@@ -30,6 +33,10 @@ on:
       - ".github/workflows/checks-wasm.yaml"
   workflow_dispatch:
 
+# Read-only: the job checks out and compiles; it writes nothing back.
+permissions:
+  contents: read
+
 jobs:
   wasm32:
     name: wasm32 / ${{ matrix.package }}
@@ -44,16 +51,16 @@ jobs:
     env:
       RUSTFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-12
         with:
           toolchain: "1.95.0"
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry + build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: wasm32-${{ matrix.package }}
 
