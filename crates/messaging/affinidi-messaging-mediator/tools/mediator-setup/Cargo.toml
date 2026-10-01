@@ -84,7 +84,7 @@ affinidi-messaging-mediator-common = { path = "../../affinidi-messaging-mediator
 ] }
 
 # ── DID:webvh ────────────────────────────────────────────────────────────
-didwebvh-rs = "0.7"
+didwebvh-rs = "0.8"
 
 # ── VTA Integration ──────────────────────────────────────────────────────
 ## provision-client: orchestration layer that drives setup-key minting,

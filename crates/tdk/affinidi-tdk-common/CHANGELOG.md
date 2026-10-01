@@ -1,5 +1,9 @@
 # Changelog — `affinidi-tdk-common`
 
+## Unreleased (0.7.0) — `affinidi-data-integrity` 0.8
+
+Moves to `affinidi-data-integrity` 0.8 (the correctly versioned re-release of 0.7.14, on `affinidi-bbs` 0.4). It is a public dependency here (`TDKError::DataIntegrity` wraps its `DataIntegrityError`), so this crate moves a minor. No source change.
+
 ## Unreleased (0.6.11) — guarded HTTP client
 
 - Adds `create_guarded_http_client(extra_roots, &EgressPolicy)` next to

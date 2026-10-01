@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.32.0) — tdk-common 0.7, trust-tasks 0.26
+
+Moves to `affinidi-tdk-common` 0.7 and `trust-tasks-*` 0.26 (on data-integrity 0.8). Both are public dependencies here (`TDKSharedState`, `TDKProfile`, and the trust-tasks proof types), so this crate moves a minor. No source change.
+
 ## Unreleased (0.31.1) — a TSP relationship can be started with a peer on another mediator; a reply to a request collected by pickup threads to the sender's id
 
 **A cold invite to a peer on another mediator.** `send_control` (invite,

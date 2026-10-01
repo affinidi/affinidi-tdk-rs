@@ -201,12 +201,31 @@ affinidi-data-integrity
 
 # ---------------------------------------------------------------------------
 #
-# Not an entry: a note on did-scid during the data-integrity 0.8 wave, step 3a.
+# affinidi-data-integrity 0.8 release wave, step 3b. (The step-3a did-scid
+# note that stood here is cleared: tdk 0.22 takes did-scid 0.3 by path again.)
 #
-# The workspace's did-scid is 0.3 (didwebvh-rs 0.8). affinidi-tdk 0.21.1 keeps
-# its *optional* did-scid dependency on the registry 0.2.8 until step 3b,
-# because `pub use did_scid` makes the move breaking. That registry copy
-# (with didwebvh-rs 0.7 and data-integrity 0.7 under it) is only in the graph
-# with tdk's `did-scid` feature on, e.g. under --all-features. This guard reads
-# `cargo metadata` with default features, so it does not see it, and no entry
-# is needed. It clears in 3b, when tdk takes did-scid 0.3 by path again.
+# The mediator's optional `vta` feature, and mediator-setup unconditionally,
+# depend on vta-sdk from crates.io. vta-sdk 0.58 is built on affinidi-tdk 0.21 /
+# affinidi-messaging-sdk 0.31 / trust-tasks 0.25 / affinidi-data-integrity 0.7.
+# This PR moves the workspace to tdk 0.22 / SDK 0.32 / tdk-common 0.7 /
+# meeting-place 0.5 on trust-tasks 0.26 and data-integrity 0.8, so the
+# published 0.58 no longer matches the workspace copies, and
+# `[patch.crates-io]` declines to apply. The registry copies all hang off
+# vta-sdk:
+#
+#     vta-sdk 0.58.1 -> affinidi-tdk 0.21.1 -> affinidi-messaging-sdk 0.31.1,
+#                       affinidi-meeting-place 0.4.5, affinidi-tdk-common 0.6.11
+#                    -> trust-tasks-proof 0.25.2 -> affinidi-data-integrity 0.7.14
+#
+# The workspace compiles with --all-features: the mediator uses only vta-sdk's
+# provisioning and sealed-transfer APIs and passes none of these types across.
+#
+# Step 4 of the wave clears these four and the data-integrity entry above:
+# verifiable-trust-infrastructure publishes a vta-sdk on tdk 0.22 / SDK 0.32 /
+# trust-tasks 0.26 / data-integrity 0.8. Then `cargo update -p vta-sdk`,
+# tighten the mediator's and mediator-setup's `vta-sdk` requirement to that
+# version, and delete these lines.
+affinidi-meeting-place
+affinidi-messaging-sdk
+affinidi-tdk
+affinidi-tdk-common
