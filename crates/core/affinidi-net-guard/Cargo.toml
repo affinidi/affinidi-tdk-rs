@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-net-guard"
-version = "0.1.0"
+version = "0.1.1"
 description = "Egress guard for attacker-influenceable URLs: IP classification, URL vetting, a DNS-pinning resolver and a hardened reqwest client"
 repository.workspace = true
 edition.workspace = true

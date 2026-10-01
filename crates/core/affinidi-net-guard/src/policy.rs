@@ -2,7 +2,7 @@
 //! the guard.
 
 use std::fmt;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::{Arc, Once};
 
 use url::{Host, Url};
@@ -380,10 +380,11 @@ impl EgressPolicy {
 
     /// The connect-time check: every address `host` resolved to must be
     /// admitted, and there must be at least one.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn check_resolved(
         &self,
         host: &str,
-        addrs: &[SocketAddr],
+        addrs: &[std::net::SocketAddr],
     ) -> Result<(), EgressError> {
         let host = host.trim_end_matches('.').to_ascii_lowercase();
         if addrs.is_empty() {

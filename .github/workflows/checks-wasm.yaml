@@ -1,0 +1,61 @@
+name: checks-wasm
+# `cargo check --target wasm32-unknown-unknown` for every crate that declares
+# wasm32 support. Nothing else builds for wasm32: the shared pipeline-rust
+# workflows are native-only. Without this job, affinidi-secrets-resolver went
+# from the rand 0.10 move to 0.5.14 (#914) with no published version that
+# compiled for wasm32, and nobody noticed.
+#
+# Runs with `-D warnings` because code that is only used on native (client,
+# redirect, resolver in net-guard) shows up as dead code on wasm32; gate it
+# with `#[cfg(not(target_arch = "wasm32"))]` rather than allowing the lint.
+#
+# Paths: the three crates, every workspace crate in their wasm32 graph
+# (currently only affinidi-encoding — re-derive with
+# `cargo tree --target wasm32-unknown-unknown -p <crate>`), and the lockfile,
+# since a dependency bump is exactly what broke it last time.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+    paths:
+      - "crates/core/affinidi-crypto/**"
+      - "crates/core/affinidi-secrets-resolver/**"
+      - "crates/core/affinidi-net-guard/**"
+      - "crates/core/affinidi-encoding/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/checks-wasm.yaml"
+  workflow_dispatch:
+
+jobs:
+  wasm32:
+    name: wasm32 / ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - affinidi-crypto
+          - affinidi-secrets-resolver
+          - affinidi-net-guard
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-${{ matrix.package }}
+
+      - name: cargo check --target wasm32-unknown-unknown -p ${{ matrix.package }}
+        run: cargo check --locked --target wasm32-unknown-unknown -p ${{ matrix.package }}
