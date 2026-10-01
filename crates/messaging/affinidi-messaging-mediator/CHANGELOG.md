@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.35.0) — `affinidi-data-integrity` 0.8, SDK 0.32, trust-tasks 0.26
+
+Moves to `affinidi-data-integrity` 0.8 (the correctly versioned re-release of 0.7.14, on `affinidi-bbs` 0.4), `affinidi-messaging-sdk` 0.32, `trust-tasks-*` 0.26 (on data-integrity 0.8) and `didwebvh-rs` 0.8. The SDK's types are in this crate's library API, so it moves a minor. The optional `vta` feature still pulls vta-sdk 0.58 on the previous releases until verifiable-trust-infrastructure publishes one on these (see `scripts/workspace-duplicates-allow.txt`). No source change.
+
 ## Unreleased (0.34.1) — vta-sdk 0.58
 
 The optional `vta` feature now requires `vta-sdk` 0.58, the release built on `affinidi-tdk` 0.21 and `affinidi-messaging-sdk` 0.31. The `>=0.56, <0.58` stopgap from 0.34.0 kept the registry copies of 0.20 / 0.30 in the mediator subtree until it published. No source change.

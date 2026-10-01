@@ -1,5 +1,9 @@
 # Meeting Place Changelog
 
+## Unreleased (0.5.0) — tdk-common 0.7
+
+Moves to `affinidi-tdk-common` 0.7 (`affinidi-data-integrity` 0.8). `TDKSharedState` and `TDKProfile` are in this crate's public API, so it moves a minor. No source change.
+
 ## Unreleased (0.4.5) — dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
