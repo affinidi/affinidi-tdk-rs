@@ -78,10 +78,10 @@ affinidi-did-authentication = "0.3"
 # June-2026 semver wave), so an exact pin would break the facade build on every
 # patch. Caret already prevents incompatible within-minor skew; consumers should
 # use the facade OR direct sub-crate deps, not both.
-affinidi-tdk-common = "0.7"
+affinidi-tdk-common = { version = "0.7", path = "../affinidi-tdk-common" }
 affinidi-secrets-resolver = "0.5"
 affinidi-crypto = "0.2"
-affinidi-meeting-place = { version = "0.5", optional = true }
+affinidi-meeting-place = { version = "0.5", path = "../../applications/affinidi-meeting-place", optional = true }
 affinidi-data-integrity = { version = "0.8", optional = true }
 
 # Credentials

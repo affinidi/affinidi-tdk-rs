@@ -26,7 +26,7 @@ tsp = [
 
 [dependencies]
 # Affinidi Crates
-affinidi-tdk-common = "0.7"
+affinidi-tdk-common = { version = "0.7", path = "../../tdk/affinidi-tdk-common" }
 affinidi-crypto = { version = "0.2", features = ["jose"] }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15.9" }
 # Protocol-agnostic messaging vocabulary (ConnState, the future MessageTransport

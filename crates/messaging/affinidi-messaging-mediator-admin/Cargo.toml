@@ -14,7 +14,7 @@ repository.workspace = true
 [dependencies]
 affinidi-messaging-sdk = { version = "0.32", path = "../affinidi-messaging-sdk" }
 affinidi-messaging-didcomm = { version = "0.15", path = "../affinidi-messaging-didcomm" }
-affinidi-tdk-common = "0.7"
+affinidi-tdk-common = { version = "0.7", path = "../../tdk/affinidi-tdk-common" }
 affinidi-secrets-resolver = "0.5"
 trust-tasks-rs = "0.26"
 async-trait = "0.1"

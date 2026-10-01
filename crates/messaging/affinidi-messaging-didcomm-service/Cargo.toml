@@ -20,7 +20,7 @@ rust-version.workspace = true
 tsp = ["affinidi-messaging-sdk/tsp", "dep:affinidi-tsp"]
 
 [dependencies]
-affinidi-tdk-common = "0.7"
+affinidi-tdk-common = { version = "0.7", path = "../../tdk/affinidi-tdk-common" }
 # Path + version, like every other crate in this family. It was a bare
 # registry requirement, so this crate compiled against the *published* SDK
 # rather than the workspace one — which is how a third `trust-tasks-rs` node

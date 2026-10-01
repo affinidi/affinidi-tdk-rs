@@ -14,7 +14,7 @@ rust-version.workspace = true
 
 [dependencies]
 affinidi-did-authentication = "0.3"
-affinidi-tdk-common = "0.7"
+affinidi-tdk-common = { version = "0.7", path = "../../tdk/affinidi-tdk-common" }
 affinidi-messaging-didcomm = { path = "../../messaging/affinidi-messaging-didcomm", version = "0.15" }
 affinidi-did-resolver-cache-sdk = "0.8"
 affinidi-did-common = "0.4"
