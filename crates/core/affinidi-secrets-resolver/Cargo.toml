@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-secrets-resolver"
 description = "Common utilities for Affinidi Trust Development Kit."
-version = "0.5.13"
+version = "0.5.14"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -43,7 +43,11 @@ x25519-dalek = { version = "3", features = ["static_secrets"] }
 zeroize = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# Never imported: these only switch on the browser entropy backend. 0.4 is for
+# rand 0.10; 0.3 is for ahash 0.8's `runtime-rng`. Drop the 0.3 line only when
+# `cargo tree --target wasm32-unknown-unknown -i getrandom@0.3` is empty.
 getrandom = { version = "0.4", features = ["wasm_js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive"] }
