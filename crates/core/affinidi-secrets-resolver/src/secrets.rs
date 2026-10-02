@@ -179,29 +179,68 @@ impl Secret {
         }
     }
 
-    /// Helper functions for converting between different types.
-    /// Create a new Secret from a JWK JSON string
-    /// Example:
-    /// ```ignore
-    /// use affinidi_secrets_resolver::secrets::{Secret, SecretMaterial, SecretType};
+    /// Create a new Secret from a JWK held as a JSON [`Value`].
     ///
+    /// `key_id` overrides any `kid` in the JWK.
     ///
-    /// let key_id = "did:example:123#key-1";
-    /// let key_str = r#"{
-    ///    "crv": "Ed25519",
-    ///    "d": "LLWCf...dGpIqSFw",
-    ///    "kty": "OKP",
-    ///    "x": "Hn8T...ZExwQo"
-    ///  }"#;
-    ///
-    /// let secret = Secret::from_str(key_id, key_str)?;
     /// ```
-    pub fn from_str(key_id: &str, jwk: &Value) -> Result<Self> {
+    /// use affinidi_secrets_resolver::secrets::Secret;
+    /// use serde_json::json;
+    ///
+    /// let jwk = json!({
+    ///     "crv": "Ed25519",
+    ///     "d": "ymjvUTVuUPzGF5ui12LfreO8bjZ_LbnOrh0sk0xCxMM",
+    ///     "kty": "OKP",
+    ///     "x": "d17TbZmkoYHZUQpzJTcuOtq0tjWYm8CKvKGYHDW6ZaE"
+    /// });
+    ///
+    /// let secret = Secret::from_jwk_value("did:example:123#key-1", &jwk)?;
+    /// assert_eq!(secret.id, "did:example:123#key-1");
+    /// # Ok::<(), affinidi_secrets_resolver::errors::SecretsResolverError>(())
+    /// ```
+    pub fn from_jwk_value(key_id: &str, jwk: &Value) -> Result<Self> {
         let mut jwk: JWK = serde_json::from_value(jwk.to_owned())
             .map_err(|e| SecretsResolverError::KeyError(format!("Failed to parse JWK: {e}")))?;
 
         jwk.key_id = Some(key_id.to_string());
         Self::from_jwk(&jwk)
+    }
+
+    /// Create a new Secret from a JWK JSON string.
+    ///
+    /// `key_id` overrides any `kid` in the JWK.
+    ///
+    /// ```
+    /// use affinidi_secrets_resolver::secrets::Secret;
+    ///
+    /// let jwk = r#"{
+    ///     "crv": "Ed25519",
+    ///     "d": "ymjvUTVuUPzGF5ui12LfreO8bjZ_LbnOrh0sk0xCxMM",
+    ///     "kty": "OKP",
+    ///     "x": "d17TbZmkoYHZUQpzJTcuOtq0tjWYm8CKvKGYHDW6ZaE"
+    /// }"#;
+    ///
+    /// let secret = Secret::from_jwk_str("did:example:123#key-1", jwk)?;
+    /// assert_eq!(secret.id, "did:example:123#key-1");
+    /// # Ok::<(), affinidi_secrets_resolver::errors::SecretsResolverError>(())
+    /// ```
+    pub fn from_jwk_str(key_id: &str, jwk: &str) -> Result<Self> {
+        let mut jwk: JWK = serde_json::from_str(jwk)
+            .map_err(|e| SecretsResolverError::KeyError(format!("Failed to parse JWK: {e}")))?;
+
+        jwk.key_id = Some(key_id.to_string());
+        Self::from_jwk(&jwk)
+    }
+
+    /// Create a new Secret from a JWK held as a JSON [`Value`].
+    ///
+    /// Despite the name this takes a [`Value`], not a string.
+    #[deprecated(
+        since = "0.5.15",
+        note = "takes a `serde_json::Value`, not a string: use `from_jwk_value`, or `from_jwk_str` for a JSON string"
+    )]
+    pub fn from_str(key_id: &str, jwk: &Value) -> Result<Self> {
+        Self::from_jwk_value(key_id, jwk)
     }
 
     /// Creates a secret from a multibase encoded key
@@ -455,7 +494,7 @@ impl Secret {
                 "x": public
             });
 
-            Secret::from_str(&self.id, &jwk)
+            Secret::from_jwk_value(&self.id, &jwk)
         }
     }
 }
@@ -550,7 +589,7 @@ mod tests {
         "x": "d17TbZmkoYHZUQpzJTcuOtq0tjWYm8CKvKGYHDW6ZaE"
         });
 
-        let ed25519 = Secret::from_str("test", &jwk).unwrap();
+        let ed25519 = Secret::from_jwk_value("test", &jwk).unwrap();
 
         let x25519 = ed25519
             .to_x25519()

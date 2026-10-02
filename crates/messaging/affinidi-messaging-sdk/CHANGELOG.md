@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.32.2) — no behaviour change
+
+No behaviour change and no public API change. The `dart_interop_unpack_all`
+test imports its JWK with `Secret::from_jwk_value`, as
+`affinidi-secrets-resolver` 0.5.15 deprecates `Secret::from_str` (#893).
+
 ## Unreleased (0.32.1) — live-stream messages no longer lost to a timed-out waiter
 
 ### Fixed

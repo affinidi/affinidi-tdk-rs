@@ -40,13 +40,13 @@ async fn setup() -> (DIDCacheClient, SimpleSecretsResolver, SimpleSecretsResolve
 
     // ALICE = relaying mediator, BOB = receiving mediator.
     let relay_secrets = SimpleSecretsResolver::new(&[
-        Secret::from_str(&format!("{ALICE_DID}#key-1"), &ALICE_V1).expect("relay V1 key"),
-        Secret::from_str(&format!("{ALICE_DID}#key-2"), &ALICE_E1).expect("relay E1 key"),
+        Secret::from_jwk_value(&format!("{ALICE_DID}#key-1"), &ALICE_V1).expect("relay V1 key"),
+        Secret::from_jwk_value(&format!("{ALICE_DID}#key-2"), &ALICE_E1).expect("relay E1 key"),
     ])
     .await;
     let receiver_secrets = SimpleSecretsResolver::new(&[
-        Secret::from_str(&format!("{BOB_DID}#key-1"), &BOB_V1).expect("receiver V1 key"),
-        Secret::from_str(&format!("{BOB_DID}#key-2"), &BOB_E1).expect("receiver E1 key"),
+        Secret::from_jwk_value(&format!("{BOB_DID}#key-1"), &BOB_V1).expect("receiver V1 key"),
+        Secret::from_jwk_value(&format!("{BOB_DID}#key-2"), &BOB_E1).expect("receiver E1 key"),
     ])
     .await;
 
