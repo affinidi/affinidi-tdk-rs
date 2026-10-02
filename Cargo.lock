@@ -130,34 +130,11 @@ dependencies = [
 
 [[package]]
 name = "affinidi-data-integrity"
-version = "0.7.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b10420c88a645329cb8df2272b7420af3894a18c233769f4fec4f32220e78efb"
-dependencies = [
- "affinidi-crypto",
- "affinidi-did-common",
- "affinidi-rdf-encoding",
- "affinidi-secrets-resolver",
- "async-trait",
- "chrono",
- "ed25519-dalek",
- "multibase",
- "serde",
- "serde_json",
- "serde_json_canonicalizer",
- "sha2 0.11.0",
- "thiserror 2.0.21",
- "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "affinidi-data-integrity"
 version = "0.8.0"
 dependencies = [
  "affinidi-bbs",
  "affinidi-crypto",
- "affinidi-data-integrity 0.8.0",
+ "affinidi-data-integrity",
  "affinidi-did-common",
  "affinidi-rdf-encoding",
  "affinidi-secrets-resolver",
@@ -485,27 +462,6 @@ dependencies = [
 
 [[package]]
 name = "affinidi-meeting-place"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891fc1a20c99c50e5b2296d9bfa2b540d32587690073ae588d3345e02d7a6063"
-dependencies = [
- "affinidi-did-authentication",
- "affinidi-did-common",
- "affinidi-did-resolver-cache-sdk",
- "affinidi-messaging-didcomm",
- "affinidi-tdk-common 0.6.11",
- "base64 0.23.1",
- "chrono",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "affinidi-meeting-place"
 version = "0.5.0"
 dependencies = [
  "affinidi-did-authentication",
@@ -513,7 +469,7 @@ dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
  "affinidi-secrets-resolver",
- "affinidi-tdk-common 0.7.0",
+ "affinidi-tdk-common",
  "base64 0.23.1",
  "chrono",
  "clap",
@@ -580,16 +536,16 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-service"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-core",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.32.0",
+ "affinidi-messaging-sdk",
  "affinidi-messaging-test-mediator",
  "affinidi-secrets-resolver",
- "affinidi-tdk 0.22.0",
- "affinidi-tdk-common 0.7.0",
+ "affinidi-tdk",
+ "affinidi-tdk-common",
  "affinidi-tsp",
  "async-trait",
  "futures-util",
@@ -602,7 +558,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "trust-tasks-rs 0.26.0",
+ "trust-tasks-rs",
  "uuid",
 ]
 
@@ -640,8 +596,8 @@ dependencies = [
  "affinidi-crypto",
  "affinidi-messaging-core",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.32.0",
- "affinidi-tdk 0.22.0",
+ "affinidi-messaging-sdk",
+ "affinidi-tdk",
  "affinidi-tsp",
  "ahash",
  "base64 0.23.1",
@@ -656,16 +612,16 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "trust-tasks-rs 0.26.0",
+ "trust-tasks-rs",
  "uuid",
 ]
 
 [[package]]
 name = "affinidi-messaging-mediator"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "affinidi-crypto",
- "affinidi-data-integrity 0.8.0",
+ "affinidi-data-integrity",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-encoding",
@@ -673,7 +629,7 @@ dependencies = [
  "affinidi-messaging-didcomm-v1",
  "affinidi-messaging-mediator-common",
  "affinidi-messaging-mediator-config",
- "affinidi-messaging-sdk 0.32.0",
+ "affinidi-messaging-sdk",
  "affinidi-rate-limit",
  "affinidi-secrets-resolver",
  "affinidi-task-utils",
@@ -728,8 +684,8 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
- "trust-tasks-proof 0.26.0",
- "trust-tasks-rs 0.26.0",
+ "trust-tasks-proof",
+ "trust-tasks-rs",
  "url",
  "uuid",
  "vta-sdk",
@@ -741,10 +697,10 @@ version = "0.7.0"
 dependencies = [
  "affinidi-messaging-didcomm",
  "affinidi-messaging-mediator-common",
- "affinidi-messaging-sdk 0.32.0",
+ "affinidi-messaging-sdk",
  "affinidi-messaging-test-mediator",
  "affinidi-secrets-resolver",
- "affinidi-tdk-common 0.7.0",
+ "affinidi-tdk-common",
  "async-trait",
  "chrono",
  "serde",
@@ -753,7 +709,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
- "trust-tasks-rs 0.26.0",
+ "trust-tasks-rs",
  "uuid",
 ]
 
@@ -848,7 +804,7 @@ dependencies = [
  "affinidi-messaging-mediator-common",
  "affinidi-messaging-mediator-config",
  "affinidi-secrets-resolver",
- "affinidi-tdk 0.22.0",
+ "affinidi-tdk",
  "anyhow",
  "arboard",
  "aws-config",
@@ -908,42 +864,6 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.31.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f313c6181ca97db6a370d92fa0449eaa85e0326b06fc1e59e0e921aaa80e4d8"
-dependencies = [
- "affinidi-crypto",
- "affinidi-did-authentication",
- "affinidi-did-common",
- "affinidi-encoding",
- "affinidi-messaging-core",
- "affinidi-messaging-didcomm",
- "affinidi-messaging-mediator-common",
- "affinidi-secrets-resolver",
- "affinidi-task-utils",
- "affinidi-tdk-common 0.6.11",
- "ahash",
- "async-trait",
- "base64 0.23.1",
- "chrono",
- "futures-util",
- "rand 0.10.3",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "sha256",
- "thiserror 2.0.21",
- "tokio",
- "tokio-tungstenite 0.30.0",
- "tracing",
- "trust-tasks-proof 0.25.2",
- "trust-tasks-rs 0.25.2",
- "uuid",
-]
-
-[[package]]
-name = "affinidi-messaging-sdk"
 version = "0.32.0"
 dependencies = [
  "affinidi-crypto",
@@ -956,7 +876,7 @@ dependencies = [
  "affinidi-messaging-mediator-common",
  "affinidi-secrets-resolver",
  "affinidi-task-utils",
- "affinidi-tdk-common 0.7.0",
+ "affinidi-tdk-common",
  "affinidi-tsp",
  "ahash",
  "async-trait",
@@ -980,17 +900,17 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tracing",
- "trust-tasks-proof 0.26.0",
- "trust-tasks-rs 0.26.0",
+ "trust-tasks-proof",
+ "trust-tasks-rs",
  "uuid",
 ]
 
 [[package]]
 name = "affinidi-messaging-test-mediator"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "affinidi-crypto",
- "affinidi-data-integrity 0.8.0",
+ "affinidi-data-integrity",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-core",
@@ -998,9 +918,9 @@ dependencies = [
  "affinidi-messaging-didcomm-v1",
  "affinidi-messaging-mediator",
  "affinidi-messaging-mediator-common",
- "affinidi-messaging-sdk 0.32.0",
+ "affinidi-messaging-sdk",
  "affinidi-secrets-resolver",
- "affinidi-tdk 0.22.0",
+ "affinidi-tdk",
  "affinidi-tsp",
  "async-trait",
  "base64 0.23.1",
@@ -1017,8 +937,8 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "trust-tasks-proof 0.26.0",
- "trust-tasks-rs 0.26.0",
+ "trust-tasks-proof",
+ "trust-tasks-rs",
  "url",
  "uuid",
 ]
@@ -1029,8 +949,8 @@ version = "0.12.7"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.32.0",
- "affinidi-tdk 0.22.0",
+ "affinidi-messaging-sdk",
+ "affinidi-tdk",
  "ahash",
  "anyhow",
  "base64 0.23.1",
@@ -1052,7 +972,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
- "trust-tasks-rs 0.26.0",
+ "trust-tasks-rs",
  "tui-input",
  "tui-logger",
  "uuid",
@@ -1233,44 +1153,19 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.21.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3005cc71a6e4d412b8b450cdcd6c1e3318b098f49d59729f1bce0a5ae936661a"
-dependencies = [
- "affinidi-crypto",
- "affinidi-data-integrity 0.7.14",
- "affinidi-did-authentication",
- "affinidi-did-common",
- "affinidi-did-resolver-cache-sdk",
- "affinidi-meeting-place 0.4.5",
- "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.31.1",
- "affinidi-secrets-resolver",
- "affinidi-tdk-common 0.6.11",
- "clap",
- "rustls",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "affinidi-tdk"
 version = "0.22.0"
 dependencies = [
  "affinidi-crypto",
- "affinidi-data-integrity 0.8.0",
+ "affinidi-data-integrity",
  "affinidi-did-authentication",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-did-web",
  "affinidi-did-webs",
  "affinidi-mdoc",
- "affinidi-meeting-place 0.5.0",
+ "affinidi-meeting-place",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk 0.32.0",
+ "affinidi-messaging-sdk",
  "affinidi-oid4vc-core",
  "affinidi-openid4vci",
  "affinidi-openid4vp",
@@ -1278,7 +1173,7 @@ dependencies = [
  "affinidi-secrets-resolver",
  "affinidi-siopv2",
  "affinidi-status-list",
- "affinidi-tdk-common 0.7.0",
+ "affinidi-tdk-common",
  "affinidi-trust-lists",
  "affinidi-tsp",
  "affinidi-vc",
@@ -1295,38 +1190,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk-common"
-version = "0.6.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6235d6d0506aed283966e11bbe4bf1e6cda94e0188aa09db15d9be95d3aa61f"
-dependencies = [
- "affinidi-data-integrity 0.7.14",
- "affinidi-did-authentication",
- "affinidi-did-common",
- "affinidi-did-resolver-cache-sdk",
- "affinidi-net-guard",
- "affinidi-secrets-resolver",
- "ahash",
- "apple-native-keyring-store",
- "base64 0.23.1",
- "dbus-secret-service-keyring-store",
- "keyring-core",
- "moka",
- "reqwest",
- "rustls",
- "rustls-platform-verifier",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "windows-native-keyring-store",
-]
-
-[[package]]
-name = "affinidi-tdk-common"
 version = "0.7.0"
 dependencies = [
- "affinidi-data-integrity 0.8.0",
+ "affinidi-data-integrity",
  "affinidi-did-authentication",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
@@ -3930,7 +3796,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f02bdbaaffc5b0bec1e3f8049e5e415476cfd56d23bc6bf692419e674ded93f9"
 dependencies = [
- "affinidi-data-integrity 0.8.0",
+ "affinidi-data-integrity",
  "affinidi-did-common",
  "affinidi-secrets-resolver",
  "ahash",
@@ -9841,30 +9707,12 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-proof"
-version = "0.25.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a7010061315485ac8cbe6d3efcf167311bb22db49555f5ce06dc09a4cd938e5"
-dependencies = [
- "affinidi-crypto",
- "affinidi-data-integrity 0.7.14",
- "affinidi-did-common",
- "affinidi-did-resolver-cache-sdk",
- "affinidi-encoding",
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "trust-tasks-rs 0.25.2",
-]
-
-[[package]]
-name = "trust-tasks-proof"
 version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c90e3443a643c028202d32b73c1136c253bd9610689055b2665d7e45dd1f544"
 dependencies = [
  "affinidi-crypto",
- "affinidi-data-integrity 0.8.0",
+ "affinidi-data-integrity",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-encoding",
@@ -9872,23 +9720,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "trust-tasks-rs 0.26.0",
-]
-
-[[package]]
-name = "trust-tasks-rs"
-version = "0.25.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c190ff8dc9e01ed6954f539ca5e32d2c6d6423896ecec601c6409220e3239b0"
-dependencies = [
- "async-trait",
- "chrono",
- "jsonschema",
- "regress",
- "serde",
- "serde_json",
- "serde_with",
- "thiserror 2.0.21",
+ "trust-tasks-rs",
 ]
 
 [[package]]
@@ -9899,6 +9731,7 @@ checksum = "ff5e5cf6e5bd8fab9b2d8214d0ba7e934bce5c4b7921174614ac0e9a6997af1c"
 dependencies = [
  "async-trait",
  "chrono",
+ "jsonschema",
  "regress",
  "serde",
  "serde_json",
@@ -10254,12 +10087,12 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "vta-sdk"
-version = "0.58.1"
+version = "0.61.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88fdea23b2f27a9716660e7103d76c4952fb9192c29191a227e0d2d46296434d"
+checksum = "2ac457205be0e0e52beb0e59851cfdc0a50a2aca751ebfe98e1d64b13667244e"
 dependencies = [
  "affinidi-crypto",
- "affinidi-data-integrity 0.7.14",
+ "affinidi-data-integrity",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-did-resolver-traits",
@@ -10269,7 +10102,7 @@ dependencies = [
  "affinidi-openid4vci",
  "affinidi-openid4vp",
  "affinidi-secrets-resolver",
- "affinidi-tdk 0.21.1",
+ "affinidi-tdk",
  "affinidi-vc",
  "async-trait",
  "base64 0.23.1",
@@ -10289,7 +10122,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
- "trust-tasks-rs 0.25.2",
+ "trust-tasks-rs",
  "url",
  "uuid",
  "x25519-dalek",

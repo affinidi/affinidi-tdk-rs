@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (0.17.0) — embeds mediator 0.36
+
+Embeds mediator 0.36 (vta-sdk 0.61). This crate re-exports mediator config
+types, so it moves a minor with it. It takes the mediator with
+`default-features = false`, so vta-sdk itself isn't in its graph. No source
+change.
+
 ## Unreleased (0.16.0) — mediator 0.35
 
 Embeds mediator 0.35 and moves to `affinidi-messaging-sdk` 0.32, `affinidi-tdk` 0.22, `affinidi-data-integrity` 0.8 (the correctly versioned re-release of 0.7.14, on `affinidi-bbs` 0.4) and `trust-tasks-*` 0.26 (on data-integrity 0.8). It re-exports mediator config types and exposes `ATM` / `TDKSharedState`, so it moves a minor. No source change.

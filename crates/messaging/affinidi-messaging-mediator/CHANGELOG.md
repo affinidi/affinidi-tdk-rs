@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased (0.36.0) — vta-sdk 0.61
+
+**Breaking (with the `vta` feature).** The optional `vta` feature moves to
+`vta-sdk` 0.61, the release built on `affinidi-tdk` 0.22 /
+`affinidi-messaging-sdk` 0.32 / `affinidi-data-integrity` 0.8 / `trust-tasks-*`
+0.26. vta-sdk types are in this crate's public API under that feature
+(`tasks::vta_refresh::VtaRefresher::service_config` is a
+`vta_sdk::integration::VtaServiceConfig`, and
+`common::config::vta_cache::MediatorSecretCache` implements
+`vta_sdk::integration::SecretCache`), so the move is breaking. (The move to
+vta-sdk 0.58 in 0.34.1 should have been breaking for the same reason.) No
+behaviour change.
+
+This also removes the last registry copies of the previous releases from the
+graph, so the workspace builds one copy of each crate again.
+
 ## Unreleased (0.35.0) — `affinidi-data-integrity` 0.8, SDK 0.32, trust-tasks 0.26
 
 Moves to `affinidi-data-integrity` 0.8 (the correctly versioned re-release of 0.7.14, on `affinidi-bbs` 0.4), `affinidi-messaging-sdk` 0.32, `trust-tasks-*` 0.26 (on data-integrity 0.8) and `didwebvh-rs` 0.8. The SDK's types are in this crate's library API, so it moves a minor. The optional `vta` feature still pulls vta-sdk 0.58 on the previous releases until verifiable-trust-infrastructure publishes one on these (see `scripts/workspace-duplicates-allow.txt`). No source change.

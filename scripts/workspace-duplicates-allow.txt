@@ -166,66 +166,26 @@
 #     Removing trust-tasks-rs v0.23.0
 
 
-
 # ---------------------------------------------------------------------------
 #
-# affinidi-data-integrity 0.8 release wave, step 1 of 4.
+# The affinidi-data-integrity 0.8 release wave's entries (data-integrity,
+# then affinidi-meeting-place, affinidi-messaging-sdk, affinidi-tdk and
+# affinidi-tdk-common) were cleared on 2026-10-02, by step 4.
 #
-# 0.7.14 (#912) moved to affinidi-bbs 0.4 as a patch, but bbs types are in its
-# public API, so it was breaking. 0.8.0 re-releases the same code under the
-# right version. Every other workspace crate still requires "0.7", and so do
-# three published crates that re-export data-integrity types: didwebvh-rs 0.7
-# (`Signer`, `DataIntegrityProof`), trust-tasks-proof 0.25 (`Signer`,
-# `SignOptions`, `VerifyOptions`), and vta-sdk 0.58. A local 0.8.0 does not
-# satisfy "^0.7", so `[patch.crates-io]` declines to apply, and the registry
-# 0.7.14 is what the rest of the workspace builds against for now.
+# 0.7.14 (#912) had moved data-integrity to affinidi-bbs 0.4 as a patch,
+# though bbs types are in its public API. The wave re-released it as 0.8.0
+# (#916). didwebvh-rs 0.8 and did-scid 0.3 followed (#917), then
+# trust-tasks-* 0.26 and the tdk / messaging-sdk minors (#918). Each step's
+# registry copies hung off a published consumer still on the previous
+# releases, ending with vta-sdk 0.58. verifiable-trust-infrastructure #1893
+# published vta-sdk 0.61 on tdk 0.22 / SDK 0.32 / data-integrity 0.8 /
+# trust-tasks 0.26, and the mediator's and mediator-setup's requirement moved
+# from "0.58" to "0.61":
 #
-# Nothing in this workspace hands a 0.8 value to a 0.7 API yet: only
-# data-integrity itself is on 0.8. That changes in step 3, which is why the
-# order is forced:
-#
-#   1. this workspace publishes affinidi-data-integrity 0.8.0 (this entry)
-#   2. didwebvh-rs and trust-tasks-rs release breaking versions on 0.8;
-#      trust-tasks-proof's `Verifier::with_options` takes `VerifyOptions`, so
-#      the mediator cannot move before it does
-#   3. this workspace moves tdk-common, tdk, messaging-sdk and their dependents
-#      to 0.8 and to the new didwebvh-rs / trust-tasks-rs
-#   4. verifiable-trust-infrastructure publishes a vta-sdk on those
-#
-# Clears at step 4, when nothing in the graph requires "0.7": delete this line
-# and confirm `cargo tree --workspace -i
-# "registry+https://github.com/rust-lang/crates.io-index#affinidi-data-integrity@0.7.14"`
-# is empty.
-affinidi-data-integrity
-
-
-# ---------------------------------------------------------------------------
-#
-# affinidi-data-integrity 0.8 release wave, step 3b. (The step-3a did-scid
-# note that stood here is cleared: tdk 0.22 takes did-scid 0.3 by path again.)
-#
-# The mediator's optional `vta` feature, and mediator-setup unconditionally,
-# depend on vta-sdk from crates.io. vta-sdk 0.58 is built on affinidi-tdk 0.21 /
-# affinidi-messaging-sdk 0.31 / trust-tasks 0.25 / affinidi-data-integrity 0.7.
-# This PR moves the workspace to tdk 0.22 / SDK 0.32 / tdk-common 0.7 /
-# meeting-place 0.5 on trust-tasks 0.26 and data-integrity 0.8, so the
-# published 0.58 no longer matches the workspace copies, and
-# `[patch.crates-io]` declines to apply. The registry copies all hang off
-# vta-sdk:
-#
-#     vta-sdk 0.58.1 -> affinidi-tdk 0.21.1 -> affinidi-messaging-sdk 0.31.1,
-#                       affinidi-meeting-place 0.4.5, affinidi-tdk-common 0.6.11
-#                    -> trust-tasks-proof 0.25.2 -> affinidi-data-integrity 0.7.14
-#
-# The workspace compiles with --all-features: the mediator uses only vta-sdk's
-# provisioning and sealed-transfer APIs and passes none of these types across.
-#
-# Step 4 of the wave clears these four and the data-integrity entry above:
-# verifiable-trust-infrastructure publishes a vta-sdk on tdk 0.22 / SDK 0.32 /
-# trust-tasks 0.26 / data-integrity 0.8. Then `cargo update -p vta-sdk`,
-# tighten the mediator's and mediator-setup's `vta-sdk` requirement to that
-# version, and delete these lines.
-affinidi-meeting-place
-affinidi-messaging-sdk
-affinidi-tdk
-affinidi-tdk-common
+#     Removing affinidi-data-integrity v0.7.14
+#     Removing affinidi-meeting-place v0.4.5
+#     Removing affinidi-messaging-sdk v0.31.1
+#     Removing affinidi-tdk v0.21.1
+#     Removing affinidi-tdk-common v0.6.11
+#     Removing trust-tasks-proof v0.25.2
+#     Removing trust-tasks-rs v0.25.2
