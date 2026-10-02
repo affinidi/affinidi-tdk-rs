@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.32.3) — a repeated TSP accept is ignored, not refused
+
+`TspOps::record_incoming_control` now treats a second accept for a relationship
+already `Bidirectional` as a no-op: it returns the state unchanged, keeps the
+first accept's digest, and logs at `debug`. It used to return
+`invalid relationship transition: ReceiveAccept in state Bidirectional`, which
+consumers logged as an error although nothing was wrong. This happens when a
+community re-sends its accept or a relay delivers it twice (seen in VTI-61
+retesting). It applies only to an accept that belongs to the relationship
+held: one that echoes the invite we recorded, or is the accept we recorded.
+Any other accept is still refused.
+
 ## Unreleased (0.32.2) — no behaviour change
 
 No behaviour change and no public API change. The `dart_interop_unpack_all`
