@@ -189,6 +189,25 @@ impl ThreadDigests {
     }
 }
 
+/// Is an inbound accept a repeat for a relationship we already hold?
+///
+/// Only from `Bidirectional`, and only when the accept belongs to this
+/// relationship: it echoes the invite we recorded (`reply`, the accept's
+/// `Digest`) or is the accept we recorded (`digest`, its own SAID). A store
+/// with no digests recognises any, as [`ThreadDigests::recognizes`] does.
+fn is_duplicate_accept(
+    prior: RelationshipState,
+    digests: &ThreadDigests,
+    reply: Option<[u8; 32]>,
+    digest: Option<[u8; 32]>,
+) -> bool {
+    prior == RelationshipState::Bidirectional
+        && [reply, digest]
+            .into_iter()
+            .flatten()
+            .any(|d| digests.recognizes(&d))
+}
+
 /// The default implementation is [`InMemoryRelationshipStore`]; supply a
 /// durable one via
 /// [`crate::config::ATMConfigBuilder::with_relationship_store`].
@@ -2679,6 +2698,25 @@ impl TspOps<'_> {
             }
         }
 
+        // A second accept for a relationship already complete: the peer re-sent
+        // it, or a relay delivered it twice. Idempotent, as a re-sent invite is
+        // in `InviteReceived`. It changes nothing, so report the state as it
+        // stands and keep the first accept's digest. An accept that answers
+        // some other invite still falls through and is refused.
+        if control.control_type == ControlType::RelationshipFormingAccept
+            && is_duplicate_accept(prior, &digests, control.reply, control.digest)
+        {
+            tracing::debug!(
+                peer = %peer_did,
+                "duplicate TSP accept for a relationship already held; ignored",
+            );
+            return Ok(IncomingControl {
+                state: prior,
+                reply_expected: false,
+                reply_path: Vec::new(),
+            });
+        }
+
         // What the relationship was known by, for the §7.3 answer below — the
         // record is cleared before it is sent.
         let cancelled_digest = digests.invite.or(digests.accept);
@@ -3874,8 +3912,8 @@ mod tests {
         RecoveryAction, RecoveryCoordinator, RecoveryState, RelationshipEvent, RelationshipKv,
         RelationshipState, RelationshipStore, SendReadiness, TSP_DISCOVER_FEATURE_URI, TspPolicy,
         TspSupport, advance_state, classify_protocol, disclosure_advertises_tsp, full_jitter,
-        invite_refusal_is_benign, next_state, readiness_for, readiness_for_pair,
-        route_via_own_mediator,
+        invite_refusal_is_benign, is_duplicate_accept, next_state, readiness_for,
+        readiness_for_pair, route_via_own_mediator,
     };
     use crate::errors::ATMError;
     use crate::protocols::discover_features::{
@@ -4327,6 +4365,42 @@ mod tests {
 
         // Nothing recorded: anything is recognised.
         assert!(ThreadDigests::default().recognizes(&other));
+    }
+
+    /// A second accept for a complete relationship is a repeat only when it is
+    /// this relationship's: it echoes our invite or is the accept we recorded.
+    /// Before `Bidirectional`, the first accept is not a repeat.
+    #[test]
+    fn a_repeated_accept_is_recognised_only_for_the_relationship_held() {
+        let invite = [0x11u8; 32];
+        let accept = [0x22u8; 32];
+        let other = [0x33u8; 32];
+        let held = ThreadDigests {
+            invite: Some(invite),
+            accept: Some(accept),
+        };
+        let bi = RelationshipState::Bidirectional;
+
+        // Echoes our invite, or is the accept already recorded.
+        assert!(is_duplicate_accept(bi, &held, Some(invite), Some(other)));
+        assert!(is_duplicate_accept(bi, &held, Some(other), Some(accept)));
+        // Answers some other invite: still refused downstream.
+        assert!(!is_duplicate_accept(bi, &held, Some(other), Some(other)));
+        assert!(!is_duplicate_accept(bi, &held, None, None));
+        // The first accept, from Pending, is recorded normally.
+        assert!(!is_duplicate_accept(
+            RelationshipState::Pending,
+            &held,
+            Some(invite),
+            Some(accept)
+        ));
+        // A store that kept no digests cannot contradict one.
+        assert!(is_duplicate_accept(
+            bi,
+            &ThreadDigests::default(),
+            Some(other),
+            None
+        ));
     }
 
     #[tokio::test]
