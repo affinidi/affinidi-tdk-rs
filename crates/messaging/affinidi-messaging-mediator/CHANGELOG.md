@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.36.1) — live streaming survives a Redis restart
+
+Takes `affinidi-messaging-mediator-common` 0.17.3. After a Redis restart the
+mediator kept storing messages but stopped pushing them live to streaming
+clients, with no error logged, until the mediator itself was restarted. It now
+resubscribes once Redis is reachable again and logs a warning when the
+connection drops. Messages stored during the outage reach clients on their next
+fetch or reconnect rather than as a live push.
+
 ## Unreleased (0.36.0) — vta-sdk 0.61
 
 **Breaking (with the `vta` feature).** The optional `vta` feature moves to

@@ -114,6 +114,24 @@ fn activity_field(kind: ActivityKind) -> &'static str {
     }
 }
 
+/// Removes `mediator_uuid`'s broadcast channel from `channels` if it is still
+/// the one `sender` belongs to. Once the bridge's own clone is dropped too,
+/// subscribers see `Closed` and resubscribe onto a fresh bridge. A channel a
+/// newer bridge already installed is left alone.
+async fn retire_bridge<T>(
+    channels: &Mutex<HashMap<String, broadcast::Sender<T>>>,
+    mediator_uuid: &str,
+    sender: &broadcast::Sender<T>,
+) {
+    let mut channels = channels.lock().await;
+    if channels
+        .get(mediator_uuid)
+        .is_some_and(|current| current.same_channel(sender))
+    {
+        channels.remove(mediator_uuid);
+    }
+}
+
 /// Fallback ring size when no tuning is supplied. Production derives this from
 /// `limits.pubsub_buffer / limits.message_size` via `with_pubsub_capacity`.
 const PUBSUB_BROADCAST_CAPACITY: usize = 32;
@@ -1544,6 +1562,7 @@ impl MediatorStore for RedisStore {
 
         let inner_sender = sender.clone();
         let task_uuid = mediator_uuid.to_string();
+        let bridge_channels = self.broadcast_channels.clone();
         tokio::spawn(async move {
             let mut stream = pubsub.on_message();
             while let Some(msg) = stream.next().await {
@@ -1565,7 +1584,17 @@ impl MediatorStore for RedisStore {
                     ),
                 }
             }
-            debug!("RedisStore pubsub bridge ({}) exited", task_uuid);
+            // The pubsub connection dropped (e.g. Redis restarted). The
+            // map's Sender would otherwise keep the channel open forever,
+            // so subscribers would never see Closed and never resubscribe,
+            // and the next streaming_subscribe would hand back this dead
+            // channel. Retire it so both paths open a fresh bridge.
+            retire_bridge(&bridge_channels, &task_uuid, &inner_sender).await;
+            drop(inner_sender);
+            warn!(
+                "RedisStore pubsub bridge ({}) lost its connection; subscribers will resubscribe",
+                task_uuid
+            );
         });
 
         channels.insert(mediator_uuid.to_string(), sender);
@@ -1820,3 +1849,34 @@ impl MediatorStore for RedisStore {
 
 // `oob_expires_at` / `encode_oob_invite` moved up to `crate::store`
 // so non-Redis builds can call them too.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn retiring_a_dead_bridge_closes_its_subscribers() {
+        let channels = Mutex::new(HashMap::new());
+        let (sender, mut rx) = broadcast::channel::<u32>(4);
+        let bridge = sender.clone();
+        channels.lock().await.insert("m".to_string(), sender);
+
+        retire_bridge(&channels, "m", &bridge).await;
+        drop(bridge);
+
+        assert!(channels.lock().await.get("m").is_none());
+        assert_eq!(rx.recv().await, Err(broadcast::error::RecvError::Closed));
+    }
+
+    #[tokio::test]
+    async fn retiring_leaves_a_newer_bridge_in_place() {
+        let channels = Mutex::new(HashMap::new());
+        let (old, _) = broadcast::channel::<u32>(4);
+        let (newer, _) = broadcast::channel::<u32>(4);
+        channels.lock().await.insert("m".to_string(), newer.clone());
+
+        retire_bridge(&channels, "m", &old).await;
+
+        assert!(channels.lock().await.get("m").unwrap().same_channel(&newer));
+    }
+}

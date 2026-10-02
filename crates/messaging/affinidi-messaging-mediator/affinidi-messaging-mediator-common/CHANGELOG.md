@@ -1,5 +1,20 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.17.3) — Redis streaming resubscribes after Redis restarts
+
+`RedisStore::streaming_subscribe`'s pubsub bridge kept its broadcast `Sender`
+in `broadcast_channels` after the Redis pubsub connection dropped (a Redis
+restart, failover or network cut). Subscribers never saw `Closed`, so the
+mediator's streaming task never resubscribed, and a fresh subscribe was handed
+the same dead channel: messages were still stored but nothing was pushed live,
+with nothing logged above `debug`, until the mediator restarted. The bridge now
+retires its own channel when its connection ends (leaving a newer bridge in
+place) and logs a `warn!`; subscribers see `Closed` and the streaming task's
+existing resubscribe loop opens a fresh bridge once Redis is back.
+
+Notifications published while the bridge was down are not replayed live; the
+messages are stored and clients get them on their next fetch or reconnect.
+
 ## Unreleased (0.17.2) — Vault's read-only probe stops logging 404 errors
 
 `VaultStore` overrides `probe_readonly` to call `auth/token/lookup-self`. The
