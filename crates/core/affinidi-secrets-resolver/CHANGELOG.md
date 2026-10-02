@@ -1,5 +1,21 @@
 # Affinidi Secrets Manager
 
+## Unreleased (0.5.15) — `Secret::from_str` renamed to say what it takes
+
+`Secret::from_str(key_id, &Value)` was named and documented as if it parsed a
+JWK string, but it takes a `serde_json::Value` (#893). It is now deprecated in
+favour of two correctly named constructors:
+
+- `Secret::from_jwk_value(key_id, &Value)` — the same behaviour under an honest
+  name.
+- `Secret::from_jwk_str(key_id, &str)` — what the old name suggested: parses a
+  JWK JSON string.
+
+`from_str` still works and delegates to `from_jwk_value`, so this is not a
+breaking change; it only emits a deprecation warning. Both new constructors have
+compiled doctests in place of the old `ignore`d example, which passed a `&str`
+and could never have built.
+
 ## Unreleased (0.5.14) — wasm32 builds again
 
 `cargo check --target wasm32-unknown-unknown` failed in `getrandom`. 0.5.13

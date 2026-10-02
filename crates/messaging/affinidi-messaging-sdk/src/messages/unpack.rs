@@ -3749,7 +3749,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(format!("{dir}/keys.json")).unwrap()).unwrap();
         let kid = keys["recipient_ka_kid"].as_str().unwrap();
         let jwk = &keys["recipient_private_jwk"];
-        let secret = Secret::from_str(kid, jwk).expect("import recipient JWK");
+        let secret = Secret::from_jwk_value(kid, jwk).expect("import recipient JWK");
         println!("imported recipient secret id={}", secret.id);
 
         // Cross-impl *crypto* interop: accept every wrapping so this exercises

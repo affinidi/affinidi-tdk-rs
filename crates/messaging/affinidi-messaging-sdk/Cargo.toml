@@ -63,7 +63,7 @@ affinidi-messaging-mediator-common = { path = "../affinidi-messaging-mediator/af
 affinidi-did-authentication = "0.3.13"
 affinidi-did-common = { version = "0.4", features = ["key-agreement"] }
 affinidi-encoding = "0.1"
-affinidi-secrets-resolver = "0.5"
+affinidi-secrets-resolver = "0.5.15"
 ## Shared background-task supervision (delete-handler restart + health)
 affinidi-task-utils = "0.1"
 
