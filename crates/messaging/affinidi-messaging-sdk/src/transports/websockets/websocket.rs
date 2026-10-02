@@ -708,39 +708,86 @@ impl WebSocketTransport {
 
         match atm.unpack(&message).await {
             Ok((message, metadata)) => {
+                // An unpacked message has the same rule as a packed frame above:
+                // every home that turns it away hands it to the next, and it ends
+                // in the cache rather than falling off the end. Each `send` below
+                // used to be `let _ =`. A waiter whose poll had just timed out
+                // (its receiver dropped before its cancel reached this task) took
+                // the message with it, so a `live_stream_next` loop polling in
+                // windows silently lost about one message in twenty, and a
+                // `live_stream_get` that gave up a moment early lost its reply for
+                // good.
+                let (mut message, mut metadata) = (message, metadata);
+
+                // 1. A `live_stream_get` waiting on this thread.
                 if let Some(sender) = self.inbound_cache.message_wanted(&message) {
-                    debug!("Message is wanted, sending to requestor");
-                    let _ = sender.send(WebSocketResponses::MessageReceived(
+                    match sender.send(WebSocketResponses::MessageReceived(
                         Box::new(message),
                         Box::new(metadata),
-                    ));
-                    return;
-                }
-                if let Some(next_request) = self.next_requests_list.pop_front() {
-                    debug!("Next message found, sending to requestor");
-                    if let Some(sender) = self.next_requests.remove(&next_request) {
-                        let _ = sender.send(WebSocketResponses::MessageReceived(
-                            Box::new(message.clone()),
-                            Box::new(metadata),
-                        ));
-                        return;
-                    } else {
-                        error!(
-                            "Next message requestor not found - bug in the SDK - inbound message may be lost"
-                        );
+                    )) {
+                        Ok(()) => {
+                            debug!("Message is wanted, sent to requestor");
+                            return;
+                        }
+                        Err(WebSocketResponses::MessageReceived(m, md)) => {
+                            debug!("Wanted-message requestor is gone; re-homing the message");
+                            (message, metadata) = (*m, *md);
+                        }
+                        Err(_) => unreachable!("oneshot returns the value it was given"),
                     }
                 }
 
-                if let Some(direct_channel) = self.direct_channel.as_mut() {
-                    debug!("Sending message to direct channel");
-                    let _ = direct_channel.send(WebSocketResponses::MessageReceived(
+                // 2. Outstanding `Next` requests, oldest first. A gone waiter
+                //    hands the message back and the next one is tried.
+                while let Some(next_request) = self.next_requests_list.pop_front() {
+                    let Some(sender) = self.next_requests.remove(&next_request) else {
+                        error!(
+                            "Next message requestor ({next_request}) not found - bug in the SDK - trying the next waiter"
+                        );
+                        continue;
+                    };
+                    match sender.send(WebSocketResponses::MessageReceived(
                         Box::new(message),
                         Box::new(metadata),
-                    ));
-                } else {
-                    debug!("Caching message");
-                    self.inbound_cache.insert(message, metadata);
+                    )) {
+                        Ok(()) => {
+                            debug!("Next message found, sent to requestor");
+                            return;
+                        }
+                        Err(WebSocketResponses::MessageReceived(m, md)) => {
+                            debug!(
+                                "Next requestor ({next_request}) is gone; re-homing the message"
+                            );
+                            (message, metadata) = (*m, *md);
+                        }
+                        Err(_) => unreachable!("oneshot returns the value it was given"),
+                    }
                 }
+
+                // 3. The direct channel, when one is attached and has receivers.
+                if let Some(direct_channel) = self.direct_channel.as_mut() {
+                    match direct_channel.send(WebSocketResponses::MessageReceived(
+                        Box::new(message),
+                        Box::new(metadata),
+                    )) {
+                        Ok(_) => {
+                            debug!("Sent message to direct channel");
+                            return;
+                        }
+                        Err(broadcast::error::SendError(WebSocketResponses::MessageReceived(
+                            m,
+                            md,
+                        ))) => {
+                            debug!("Direct channel has no receivers; caching the message");
+                            (message, metadata) = (*m, *md);
+                        }
+                        Err(_) => unreachable!("broadcast returns the value it was given"),
+                    }
+                }
+
+                // 4. Cache it for the next `Next` / `Get`.
+                debug!("Caching message");
+                self.inbound_cache.insert(message, metadata);
             }
             Err(e) => {
                 error!("Error unpacking message: {:?}", e);
@@ -1297,5 +1344,117 @@ mod tests {
         );
         assert!(!p.reason.is_empty(), "a rejection reason is included");
         assert!(rx.try_recv().is_err(), "exactly one unprocessable event");
+    }
+
+    /// An ATM that accepts plaintext, so a test frame unpacks without keys.
+    async fn plaintext_atm() -> ATM {
+        use crate::config::{ATMConfig, MessageWrappingType, UnpackPolicy};
+        use affinidi_tdk_common::{TDKSharedState, config::TDKConfig};
+
+        let config = ATMConfig::builder()
+            .with_unpack_policy(UnpackPolicy {
+                expected: vec![MessageWrappingType::Plaintext],
+                ..UnpackPolicy::default()
+            })
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        ATM::new(config, tdk).await.unwrap()
+    }
+
+    fn plaintext_frame(id: &str, thid: Option<&str>) -> String {
+        use affinidi_messaging_didcomm::message::Message as DcMessage;
+        let mut msg = DcMessage::build(
+            id.to_string(),
+            "example/v1".to_string(),
+            serde_json::json!({ "n": id }),
+        )
+        .from("did:example:sender".to_string())
+        .to("did:example:recipient".to_string());
+        if let Some(thid) = thid {
+            msg = msg.thid(thid.to_string());
+        }
+        serde_json::to_string(&msg.finalize()).unwrap()
+    }
+
+    /// Park a `Next` waiter the way `live_stream_next` does, and return its
+    /// receiver so the test decides whether it is still listening.
+    fn park_next(ws: &mut WebSocketTransport, id: u32) -> oneshot::Receiver<WebSocketResponses> {
+        let (tx, rx) = oneshot::channel();
+        ws.next_requests.insert(id, tx);
+        ws.next_requests_list.push_back(id);
+        rx
+    }
+
+    /// A `live_stream_next` whose poll window has just elapsed has dropped its
+    /// receiver, but its `CancelNext` has not reached the task yet. A message
+    /// that arrives in that gap used to be handed to the dead waiter and lost
+    /// (`let _ = sender.send(..)`). About one message in twenty was lost to a
+    /// caller polling in 500 ms windows. It must be cached instead.
+    #[tokio::test]
+    async fn a_message_for_a_gone_next_waiter_is_cached_not_lost() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        drop(park_next(&mut ws, 1)); // the poll timed out
+
+        ws.process_inbound_didcomm_message(&atm, plaintext_frame("m1", None))
+            .await;
+
+        let (cached, _) = ws
+            .inbound_cache
+            .next()
+            .expect("the message must be cached, not lost with the gone waiter");
+        assert_eq!(cached.id, "m1");
+        assert!(ws.next_requests.is_empty() && ws.next_requests_list.is_empty());
+    }
+
+    /// A gone waiter hands the message on to the next live one, oldest first.
+    #[tokio::test]
+    async fn a_message_skips_a_gone_next_waiter_for_a_live_one() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        drop(park_next(&mut ws, 1)); // timed out
+        let live = park_next(&mut ws, 2); // still listening
+
+        ws.process_inbound_didcomm_message(&atm, plaintext_frame("m2", None))
+            .await;
+
+        // Bounded: before the fix the gone waiter swallowed the message and
+        // this waiter was never answered.
+        let answered = tokio::time::timeout(Duration::from_secs(2), live)
+            .await
+            .expect("the live waiter must be answered, not starved by the gone one");
+        match answered.expect("the live waiter must be answered") {
+            WebSocketResponses::MessageReceived(msg, _) => assert_eq!(msg.id, "m2"),
+            _ => panic!("expected the unpacked message"),
+        }
+        assert!(
+            ws.inbound_cache.next().is_none(),
+            "delivered once, not also cached"
+        );
+    }
+
+    /// A `live_stream_get` that gave up a moment early must not take the reply
+    /// with it: the reply is cached for a retry or a `Next`.
+    #[tokio::test]
+    async fn a_reply_for_a_gone_get_waiter_is_cached_not_lost() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        let (tx, rx) = oneshot::channel();
+        assert!(ws.inbound_cache.get_or_add_wanted("thread-1", tx).is_none());
+        drop(rx); // the get timed out
+
+        ws.process_inbound_didcomm_message(&atm, plaintext_frame("reply-1", Some("thread-1")))
+            .await;
+
+        let (cached, _) = ws
+            .inbound_cache
+            .next()
+            .expect("the reply must be cached, not lost with the gone waiter");
+        assert_eq!(cached.id, "reply-1");
     }
 }

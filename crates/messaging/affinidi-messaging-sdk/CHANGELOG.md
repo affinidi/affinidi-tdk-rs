@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased (0.32.1) — live-stream messages no longer lost to a timed-out waiter
+
+### Fixed
+
+- **An inbound DIDComm message could be silently lost on the websocket
+  transport.** `live_stream_next` parks a waiter with the websocket task,
+  waits up to its `wait`, then drops its receiver and sends `CancelNext`. A
+  message that arrived between the two was handed to the dead waiter with
+  `let _ = sender.send(..)`, and the failed send discarded it. It was never
+  cached, and the mediator had already delivered it. A caller polling in
+  windows hits this constantly. The mediator console's monitor reader polls in
+  500 ms windows, and in testing it lost **3–5% of single messages (6 of 200)**,
+  surfacing only as a console `lost` gap. After the fix it lost **0 of 200**.
+  Every consumer that polls `live_stream_next` / `live_stream_next_frame` with a
+  `wait` was exposed, and a `live_stream_get` that gave up a moment early lost
+  its reply the same way.
+
+  Unpacked messages now follow the rule the packed-frame path already had:
+  each home that turns a message away hands it to the next, in order: the
+  `live_stream_get` waiter for its thread, then live `Next` waiters oldest
+  first, then the direct channel (if it has receivers), then the cache. None
+  of them drops it. Regression tests cover a gone `Next` waiter, a gone waiter
+  ahead of a live one, and a gone `Get` waiter. All three fail on 0.32.0.
+
+**Behaviour note for consumers (R3.6):** no API change. The only observable
+difference is that messages which used to vanish now arrive: on the next
+`live_stream_next`, or in the cache for a later `live_stream_get`. Code that
+de-duplicates by message id is unaffected. Code that had compensated for the
+losses with blind resends may now see the original as well.
+
 ## Unreleased (0.32.0) — tdk-common 0.7, trust-tasks 0.26
 
 Moves to `affinidi-tdk-common` 0.7 and `trust-tasks-*` 0.26 (on data-integrity 0.8). Both are public dependencies here (`TDKSharedState`, `TDKProfile`, and the trust-tasks proof types), so this crate moves a minor. No source change.
