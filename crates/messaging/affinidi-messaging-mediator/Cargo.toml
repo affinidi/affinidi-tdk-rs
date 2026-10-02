@@ -339,7 +339,7 @@ tempfile = "3"
 ## the `network` build above only for test targets.
 affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["did_example"] }
 ## In-memory secrets + example DID docs for the `pack_encrypted` regression.
-affinidi-secrets-resolver = "0.5.15"
+affinidi-secrets-resolver = "0.5"
 ## `test-util` enables `tokio::time::pause/advance` so the task-supervisor
 ## backoff tests run deterministically without real sleeps.
 tokio = { workspace = true, features = ["test-util"] }
