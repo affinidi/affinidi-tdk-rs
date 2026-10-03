@@ -8,7 +8,7 @@
 use base64::Engine;
 
 use crate::errors::{ATMError, HttpStatusError};
-use std::env;
+use std::{env, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -190,10 +190,55 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
         .map(|pos| pos + 4)
 }
 
+/// Ceiling on one websocket connect: TCP connect, proxy tunnel, TLS handshake
+/// and HTTP upgrade together.
+///
+/// None of those steps has a deadline of its own, and the connect runs inline
+/// on the transport task — so a connect that stalls stalls the whole task, and
+/// with it every reconnect after it. A laptop waking from sleep does exactly
+/// this: the first attempt goes out while the network is half up and the SYN
+/// or the handshake is never answered. Bounded, it fails like any other connect
+/// error and the backoff ladder tries again on a network that has come back.
+const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Connects a WebSocket, tunneling through a proxy if `HTTPS_PROXY` / `ALL_PROXY` is set.
 ///
-/// When no proxy is configured, falls back to a direct `connect_async`.
+/// When no proxy is configured, falls back to a direct `connect_async`. Fails
+/// after [`WEBSOCKET_CONNECT_TIMEOUT`] rather than waiting on a peer that never
+/// answers.
 pub(crate) async fn connect_websocket<R>(
+    request: R,
+    target_host: &str,
+    target_port: u16,
+) -> Result<(WebSocket, Response<Option<Vec<u8>>>), ATMError>
+where
+    R: IntoClientRequest + Unpin,
+{
+    connect_websocket_within(request, target_host, target_port, WEBSOCKET_CONNECT_TIMEOUT).await
+}
+
+async fn connect_websocket_within<R>(
+    request: R,
+    target_host: &str,
+    target_port: u16,
+    timeout: Duration,
+) -> Result<(WebSocket, Response<Option<Vec<u8>>>), ATMError>
+where
+    R: IntoClientRequest + Unpin,
+{
+    tokio::time::timeout(
+        timeout,
+        connect_websocket_unbounded(request, target_host, target_port),
+    )
+    .await
+    .map_err(|_| {
+        ATMError::TransportError(format!(
+            "WebSocket connection to {target_host}:{target_port} timed out after {timeout:?}"
+        ))
+    })?
+}
+
+async fn connect_websocket_unbounded<R>(
     request: R,
     target_host: &str,
     target_port: u16,
@@ -257,6 +302,40 @@ fn upgrade_error(context: &str, err: WsError) -> ATMError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A peer that accepts the TCP connection and then says nothing — the
+    /// shape of a socket opened onto a network that is not really back yet —
+    /// must fail the connect within the deadline, not hang the caller.
+    #[tokio::test]
+    async fn a_silent_peer_times_out_the_connect() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let held = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            // Hold the socket open, never answering the upgrade.
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            drop(socket);
+        });
+
+        let started = std::time::Instant::now();
+        let result = connect_websocket_within(
+            format!("ws://127.0.0.1:{port}/ws"),
+            "127.0.0.1",
+            port,
+            Duration::from_millis(200),
+        )
+        .await;
+
+        assert!(started.elapsed() < Duration::from_secs(5));
+        match result {
+            Err(ATMError::TransportError(msg)) => {
+                assert!(msg.contains("timed out"), "unexpected error: {msg}")
+            }
+            Err(e) => panic!("expected a timeout, got {e:?}"),
+            Ok(_) => panic!("a silent peer cannot complete a websocket upgrade"),
+        }
+        held.abort();
+    }
 
     /// A refused upgrade keeps its status and attribution instead of becoming
     /// a string.
