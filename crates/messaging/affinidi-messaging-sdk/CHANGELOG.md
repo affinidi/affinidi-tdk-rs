@@ -1,10 +1,8 @@
 # Changelog
 
-## Unreleased (0.33.0) — trust-tasks 0.27
+## 0.33.1 — the websocket transport recovers from sleep and dead networks
 
-Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.27. The generated Trust Task types are in this crate's public API (the `TrustTasks` methods return `trust_tasks_rs::specs::messaging` responses, and `decode_monitor_event` returns a `TrustTask`), so it moves a minor. 0.27's one breaking change (git-ns `ActivityItem.source` becomes a typed enum) touches nothing here.
-
-### Fixed — the websocket transport recovers from sleep and dead networks
+### Fixed
 
 - **A websocket connect could hang forever and take the transport with it.**
   The TCP connect, proxy tunnel, TLS handshake and HTTP upgrade had no deadline,
@@ -23,6 +21,10 @@ Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.27. The generated Trust Task t
   now counts as a dead socket.
 - Closing a socket that is being abandoned, and writing a ping, are each bounded
   to 5 s, so the task does not park flushing frames to a peer that is gone.
+
+## Unreleased (0.33.0) — trust-tasks 0.27
+
+Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.27. The generated Trust Task types are in this crate's public API (the `TrustTasks` methods return `trust_tasks_rs::specs::messaging` responses, and `decode_monitor_event` returns a `TrustTask`), so it moves a minor. 0.27's one breaking change (git-ns `ActivityItem.source` becomes a typed enum) touches nothing here.
 
 ## Unreleased (0.32.3) — a repeated TSP accept is ignored, not refused
 
