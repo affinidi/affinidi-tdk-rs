@@ -1,5 +1,9 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.23.0) — SDK 0.33
+
+The facade re-exports `affinidi-messaging-sdk`, which moves to 0.33 (`trust-tasks-rs` 0.27), so this crate moves a minor with it. No source change.
+
 ## Unreleased (0.22.0) — `affinidi-data-integrity` 0.8, SDK 0.32, did-scid 0.3
 
 The facade re-exports `affinidi-data-integrity` 0.8 (the correctly versioned re-release of 0.7.14, on `affinidi-bbs` 0.4), `affinidi-tdk-common` 0.7, `affinidi-messaging-sdk` 0.32, `affinidi-meeting-place` 0.5 and `did-scid` 0.3 (`didwebvh-rs` 0.8). All of them move a minor, so this crate moves a minor with them. `did-scid` is taken by workspace path again: 0.21.1's registry pin is undone. No source change.

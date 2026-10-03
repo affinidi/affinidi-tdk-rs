@@ -189,3 +189,35 @@
 #     Removing affinidi-tdk-common v0.6.11
 #     Removing trust-tasks-proof v0.25.2
 #     Removing trust-tasks-rs v0.25.2
+
+
+# ---------------------------------------------------------------------------
+#
+# 2026-10-03, trust-tasks-rs 0.27 — the ninth crossing, the same one the notes
+# above describe.
+#
+# trust-tasks-rs 0.27 is a breaking minor (its one break: git-ns
+# `ActivityItem.source` becomes a typed enum, which nothing here uses), and its
+# generated types cross this SDK's API, so affinidi-messaging-sdk moves to 0.33
+# and affinidi-tdk to 0.23. The newest published vta-sdk (0.63) requires
+# affinidi-messaging-sdk "0.32.1", affinidi-tdk "0.22" and trust-tasks-rs
+# "0.26.2", which the local copies no longer satisfy, so `[patch.crates-io]`
+# declines to apply and the registry copies enter the graph beside them:
+#
+#     vta-sdk 0.61.0 -> affinidi-tdk 0.22.0 -> affinidi-messaging-sdk 0.32.3
+#                    -> trust-tasks-rs 0.26.3
+#
+# trust-tasks-rs is not a workspace member, so this guard does not list it, but
+# it is the same debt. It compiles because no trust-tasks-rs type crosses
+# between vta-sdk and the mediator (or mediator-setup).
+#
+# The order is forced, as before:
+#
+#   1. this workspace publishes the messaging crates on trust-tasks-rs 0.27
+#      (affinidi-messaging-sdk 0.33, affinidi-tdk 0.23)
+#   2. verifiable-trust-infrastructure takes trust-tasks-rs 0.27 and publishes
+#      a vta-sdk built against 0.33 / 0.23
+#   3. the mediator's and mediator-setup's vta-sdk requirement moves to that
+#      version, the patches apply again, and these entries are deleted
+affinidi-messaging-sdk
+affinidi-tdk

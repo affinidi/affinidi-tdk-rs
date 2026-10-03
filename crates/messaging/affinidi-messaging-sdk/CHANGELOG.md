@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.33.0) — trust-tasks 0.27
+
+Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.27. The generated Trust Task types are in this crate's public API (the `TrustTasks` methods return `trust_tasks_rs::specs::messaging` responses, and `decode_monitor_event` returns a `TrustTask`), so it moves a minor. 0.27's one breaking change (git-ns `ActivityItem.source` becomes a typed enum) touches nothing here. No source change.
+
 ## Unreleased (0.32.3) — a repeated TSP accept is ignored, not refused
 
 `TspOps::record_incoming_control` now treats a second accept for a relationship
