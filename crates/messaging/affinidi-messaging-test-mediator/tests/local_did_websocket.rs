@@ -131,3 +131,61 @@ async fn local_dids_setter_registers_each_did() {
 
     env.shutdown().await.expect("env shutdown");
 }
+
+/// A healthy socket survives the SDK's missed-pong watchdog.
+///
+/// The watchdog pings every 20s and closes a socket that has sent nothing back
+/// by the next tick. It used to be inert — the flag it checks was never set —
+/// so turning it on must not cost a live connection: the mediator's pong (or
+/// any frame) has to keep it up. Three ticks is the first moment a broken
+/// watchdog would have closed the socket twice over.
+#[tokio::test]
+#[ignore = "slow: holds a live socket across three 20s watchdog ticks"]
+async fn a_healthy_socket_survives_the_pong_watchdog() {
+    use affinidi_messaging_core::ConnState;
+    use std::time::Duration;
+
+    init_tracing();
+    let (user_did, user_secrets) = DID::generate_did_peer(
+        vec![
+            (PeerKeyRole::Verification, KeyType::Ed25519),
+            (PeerKeyRole::Encryption, KeyType::X25519),
+        ],
+        None,
+    )
+    .expect("generate user DID");
+    let mediator = TestMediator::builder()
+        .local_did(user_did.clone())
+        .spawn()
+        .await
+        .expect("spawn test mediator");
+    let env = TestEnvironment::new(mediator)
+        .await
+        .expect("wire test environment");
+    env.tdk.secrets_resolver().insert_vec(&user_secrets).await;
+    let profile = ATMProfile::new(
+        &env.atm,
+        Some("WatchdogUser".to_string()),
+        user_did.clone(),
+        Some(env.mediator.did().to_string()),
+    )
+    .await
+    .expect("create profile");
+    let added = env
+        .atm
+        .profile_add(&profile, true)
+        .await
+        .expect("profile connects");
+
+    let mut state = added.connection_state().await.expect("websocket running");
+    assert_eq!(*state.borrow_and_update(), ConnState::Connected);
+
+    let changed = tokio::time::timeout(Duration::from_secs(65), state.changed()).await;
+    assert!(
+        changed.is_err(),
+        "the connection changed state ({:?}) — the watchdog dropped a healthy socket",
+        *state.borrow()
+    );
+
+    env.shutdown().await.expect("env shutdown");
+}

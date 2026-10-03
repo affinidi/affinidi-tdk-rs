@@ -2,7 +2,27 @@
 
 ## Unreleased (0.33.0) — trust-tasks 0.27
 
-Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.27. The generated Trust Task types are in this crate's public API (the `TrustTasks` methods return `trust_tasks_rs::specs::messaging` responses, and `decode_monitor_event` returns a `TrustTask`), so it moves a minor. 0.27's one breaking change (git-ns `ActivityItem.source` becomes a typed enum) touches nothing here. No source change.
+Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.27. The generated Trust Task types are in this crate's public API (the `TrustTasks` methods return `trust_tasks_rs::specs::messaging` responses, and `decode_monitor_event` returns a `TrustTask`), so it moves a minor. 0.27's one breaking change (git-ns `ActivityItem.source` becomes a typed enum) touches nothing here.
+
+### Fixed — the websocket transport recovers from sleep and dead networks
+
+- **A websocket connect could hang forever and take the transport with it.**
+  The TCP connect, proxy tunnel, TLS handshake and HTTP upgrade had no deadline,
+  and the connect runs inline on the transport task. One stalled attempt (the
+  typical case is a laptop waking from sleep, with the first reconnect going out
+  before the network is back) stalled every reconnect after it. The listener
+  stayed `Disconnected` until the process restarted. A connect now fails after
+  30 s like any other connect error, and the backoff ladder retries.
+- **The missed-pong watchdog never fired.** It pinged every 20 s and closed
+  the socket if `awaiting_pong` was still set on the next tick, but nothing ever
+  set the flag. A half-open socket (peer gone, no FIN or RST) therefore sat
+  `Connected` indefinitely and received nothing. The flag is now set when a ping
+  is sent and cleared by any inbound frame. A silent socket is closed and
+  reconnected within about 40 s. The check is skipped while reads are paused on
+  full inbound caches, because no pong can be read then. A failed ping write
+  now counts as a dead socket.
+- Closing a socket that is being abandoned, and writing a ping, are each bounded
+  to 5 s, so the task does not park flushing frames to a peer that is gone.
 
 ## Unreleased (0.32.3) — a repeated TSP accept is ignored, not refused
 

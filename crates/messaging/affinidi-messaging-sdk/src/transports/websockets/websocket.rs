@@ -35,6 +35,52 @@ type WebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// [`WebSocketTransport::on_disconnected`] for why this gate exists.
 const STABLE_CONNECTION: Duration = Duration::from_secs(30);
 
+/// How long a control write — a ping, or the close frame of a socket we are
+/// giving up on — may take.
+///
+/// Both write and flush. On a socket whose peer is gone (the half-open socket a
+/// laptop wakes up holding) that flush may have nobody to drain it, and the
+/// transport task must not park on a frame nobody will read.
+const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// What the 20s watchdog does on a tick.
+#[derive(Debug, PartialEq, Eq)]
+enum WatchdogStep {
+    /// Nothing outstanding: send a ping.
+    Ping,
+    /// The last ping went a whole interval with no frame back: the socket is
+    /// dead even if the OS still thinks it is open.
+    Dead,
+    /// A ping is outstanding but reads are paused (inbound caches full), so a
+    /// pong could not have been read. Not evidence either way; keep waiting.
+    Wait,
+}
+
+/// The watchdog's decision, split out so the rule can be tested without a
+/// socket.
+///
+/// The missed-pong check is what detects a half-open socket — the peer gone
+/// with no FIN or RST ever arriving, as after sleep or a network change. The
+/// OS can keep such a socket "open" for a very long time, and without this the
+/// transport sits `Connected` on it, receiving nothing.
+fn watchdog_step(awaiting_pong: bool, reads_paused: bool) -> WatchdogStep {
+    match (awaiting_pong, reads_paused) {
+        (false, _) => WatchdogStep::Ping,
+        (true, false) => WatchdogStep::Dead,
+        (true, true) => WatchdogStep::Wait,
+    }
+}
+
+/// Close a socket within [`SOCKET_WRITE_TIMEOUT`]; the result is ignored either way.
+async fn close_bounded(web_socket: &mut WebSocket) {
+    if tokio::time::timeout(SOCKET_WRITE_TIMEOUT, web_socket.close(None))
+        .await
+        .is_err()
+    {
+        debug!("WebSocket close did not complete within {SOCKET_WRITE_TIMEOUT:?}; dropping it");
+    }
+}
+
 /// A standalone task that manages the WebSocket connection to a mediator for a DID Profile
 pub(crate) struct WebSocketTransport {
     /// The ATM Profile that this WebSocket connection is associated with
@@ -320,7 +366,7 @@ impl WebSocketTransport {
                         // Reconnect immediately (no backoff) so the new socket
                         // uses the fresh token before the old one expires.
                         if let Some(web_socket) = self.web_socket.as_mut() {
-                            let _ = web_socket.close(None).await;
+                            close_bounded(web_socket).await;
                         }
                         self.web_socket = None;
                         self.fail_pending_requests();
@@ -332,16 +378,51 @@ impl WebSocketTransport {
                         self.connect_delay_timer = None;
                     },
                     _ = watchdog.tick(), if self.web_socket.is_some() => {
-                        if self.awaiting_pong {
-                            warn!("Missed Pong, closing connection");
+                        let reads_paused =
+                            self.inbound_cache.is_full() || self.packed_cache_is_full();
+                        let dead = match watchdog_step(self.awaiting_pong, reads_paused) {
+                            WatchdogStep::Wait => false,
+                            WatchdogStep::Dead => {
+                                warn!("Missed Pong, closing connection");
+                                true
+                            }
+                            WatchdogStep::Ping => match self.web_socket.as_mut() {
+                                Some(web_socket) => {
+                                    // `awaiting_pong` used to be cleared here and
+                                    // never set, which left the missed-pong check
+                                    // above unreachable: a half-open socket was
+                                    // never detected. Any inbound frame clears it.
+                                    match tokio::time::timeout(
+                                        SOCKET_WRITE_TIMEOUT,
+                                        web_socket.send(Message::Ping(Bytes::new())),
+                                    )
+                                    .await
+                                    {
+                                        Ok(Ok(())) => {
+                                            self.awaiting_pong = true;
+                                            false
+                                        }
+                                        Ok(Err(e)) => {
+                                            warn!("WebSocket ping failed ({e}); closing connection");
+                                            true
+                                        }
+                                        Err(_) => {
+                                            warn!("WebSocket ping could not be written; closing connection");
+                                            true
+                                        }
+                                    }
+                                }
+                                None => false,
+                            },
+                        };
+                        if dead {
                             if let Some(web_socket) = self.web_socket.as_mut() {
-                                let _ = web_socket.close(None).await;
+                                close_bounded(web_socket).await;
                             }
                             self.web_socket = None;
+                            self.awaiting_pong = false;
                             self.fail_pending_requests();
                             self.on_disconnected();
-                        } else if let Some(web_socket) = self.web_socket.as_mut() {
-                            let _ = web_socket.send(Message::Ping(Bytes::new())).await;
                         }
                     },
                     cmd = task_rx.recv() => {
@@ -379,7 +460,7 @@ impl WebSocketTransport {
                             Some(WebSocketCommands::Stop) => {
                                 debug!("Stopping WebSocket connection");
                                 if let Some(web_socket) = self.web_socket.as_mut() {
-                                    let _ = web_socket.close(None).await;
+                                    close_bounded(web_socket).await;
                                 }
                                 break;
                             },
@@ -503,6 +584,11 @@ impl WebSocketTransport {
         atm: &ATM,
         inbound: Result<Message, tokio_tungstenite::tungstenite::Error>,
     ) {
+        // Any frame from the peer proves the socket is alive, not only a pong —
+        // a mediator busy streaming may answer the ping behind its messages.
+        if inbound.is_ok() {
+            self.awaiting_pong = false;
+        }
         match inbound {
             Ok(ws_msg) => match ws_msg {
                 Message::Text(text) => {
@@ -943,7 +1029,7 @@ impl WebSocketTransport {
                 }
                 Err(e) => {
                     error!("Error enabling live streaming: {:?}", e);
-                    let _ = web_socket.close(None).await;
+                    close_bounded(&mut web_socket).await;
                     self.backoff_delay();
                     None
                 }
@@ -1245,6 +1331,34 @@ mod tests {
                 assert!(d > 0.0);
             }
         }
+    }
+
+    /// The missed-pong rule. Before this, `awaiting_pong` was never set, so the
+    /// `Dead` arm was unreachable and a half-open socket (peer gone, no FIN) sat
+    /// `Connected` indefinitely.
+    #[test]
+    fn watchdog_pings_then_declares_a_silent_socket_dead() {
+        assert_eq!(watchdog_step(false, false), WatchdogStep::Ping);
+        assert_eq!(watchdog_step(true, false), WatchdogStep::Dead);
+    }
+
+    /// With reads paused on full caches a pong cannot have been read, so its
+    /// absence proves nothing — closing then would drop a healthy socket.
+    #[test]
+    fn watchdog_waits_while_reads_are_paused() {
+        assert_eq!(watchdog_step(true, true), WatchdogStep::Wait);
+        assert_eq!(watchdog_step(false, true), WatchdogStep::Ping);
+    }
+
+    /// Any frame from the peer counts as the answer to an outstanding ping.
+    #[tokio::test]
+    async fn any_inbound_frame_clears_an_outstanding_ping() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        ws.awaiting_pong = true;
+        ws.handle_inbound_message(&atm, Ok(Message::Ping(Bytes::new())))
+            .await;
+        assert!(!ws.awaiting_pong);
     }
 
     /// A minimal, disconnected [`WebSocketTransport`] for unit-testing inbound
