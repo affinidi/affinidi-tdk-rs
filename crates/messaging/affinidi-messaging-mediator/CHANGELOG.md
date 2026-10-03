@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.37.0) — SDK 0.33, trust-tasks 0.27
+
+Moves to `affinidi-messaging-sdk` 0.33 and `trust-tasks-rs` / `trust-tasks-proof` 0.27. The SDK is a public dependency, so this crate moves a minor. No source change.
+
 ## Unreleased (0.36.1) — live streaming survives a Redis restart
 
 Takes `affinidi-messaging-mediator-common` 0.17.3. After a Redis restart the
