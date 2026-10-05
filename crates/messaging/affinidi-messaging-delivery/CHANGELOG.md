@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.20 — a slow ack no longer stalls inbound dispatch
+
+**Behaviour change.** `ack_via_source` and the parked-ack retry pass now bound
+each `MessageTransport::ack` to 10 s (`ACK_TIMEOUT`); a timed-out ack is parked
+for the retry pass like any other failed ack. It used to be awaited without
+limit on the single inbound dispatcher. An ack is a delete at the mediator,
+queued behind whatever the transport's deletion path is doing — retrying a
+rate-limited batch, say — so one slow delete stopped all dispatch behind it.
+The socket stayed up and kept reading, but nothing more was handed off or
+deleted: from the mediator's side the DID had stopped collecting, its inbox
+filled, and every peer writing to it was refused `limits.queue.peer` once its
+per-recipient quota ran out. A parked ack loses nothing; the retry pass settles
+it.
+
 ## 0.1.19 — delivery is settled on the mediator's receipt, not on the outbox draining
 
 `poll_outbox_drain` inferred pickup from the sender's outbox: a hop-id seen

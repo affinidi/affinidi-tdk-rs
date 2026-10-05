@@ -137,6 +137,15 @@ pub struct ATMConfig {
     /// curve this build can't resolve).
     pub(crate) allow_invalid_signatures: bool,
 
+    /// Whether the websocket live stream deletes a frame it cannot unpack. See
+    /// [`ATMConfigBuilder::with_delete_unprocessable`].
+    pub(crate) delete_unprocessable: bool,
+
+    /// After how long without an inbound data frame the websocket transport
+    /// probes its receive leg. `None` disables the probe. See
+    /// [`ATMConfigBuilder::with_receive_probe`].
+    pub(crate) receive_probe_after: Option<Duration>,
+
     /// Should we auto unpack forwarded messages?
     pub(crate) unpack_forwards: bool,
 
@@ -241,6 +250,16 @@ impl ATMConfig {
     /// (recording them in
     /// [`crate::messages::compat::UnpackMetadata::unverified_signers`]).
     /// Default `false`.
+    /// Whether the websocket live stream deletes frames it cannot unpack.
+    pub fn delete_unprocessable(&self) -> bool {
+        self.delete_unprocessable
+    }
+
+    /// The receive-leg probe threshold, `None` when probing is off.
+    pub fn receive_probe_after(&self) -> Option<Duration> {
+        self.receive_probe_after
+    }
+
     pub fn allow_invalid_signatures(&self) -> bool {
         self.allow_invalid_signatures
     }
@@ -311,6 +330,9 @@ impl ATMConfig {
     }
 }
 
+/// Default for [`ATMConfigBuilder::with_receive_probe`].
+pub const DEFAULT_RECEIVE_PROBE_AFTER: Duration = Duration::from_secs(60);
+
 /// Builder for `ATMConfig`.
 /// Example:
 /// ```
@@ -328,6 +350,8 @@ pub struct ATMConfigBuilder {
         Option<Sender<crate::protocols::message_pickup::UnprocessableMessage>>,
     purge_policy_rejected_messages: bool,
     allow_invalid_signatures: bool,
+    delete_unprocessable: bool,
+    receive_probe_after: Option<Duration>,
     unpack_forwards: bool,
     unpack_policy: UnpackPolicy,
     discover_features: DiscoverFeatures,
@@ -358,6 +382,8 @@ impl Default for ATMConfigBuilder {
             unprocessable_message_channel: None,
             purge_policy_rejected_messages: true,
             allow_invalid_signatures: false,
+            delete_unprocessable: true,
+            receive_probe_after: Some(DEFAULT_RECEIVE_PROBE_AFTER),
             unpack_forwards: true,
             unpack_policy: UnpackPolicy::default(),
             discover_features: DiscoverFeatures::default(),
@@ -448,6 +474,44 @@ impl ATMConfigBuilder {
     /// this flag.
     pub fn with_purge_policy_rejected_messages(mut self, purge: bool) -> Self {
         self.purge_policy_rejected_messages = purge;
+        self
+    }
+
+    /// Whether the websocket **live stream** deletes an inbound DIDComm frame
+    /// it cannot unpack. Default `true`.
+    ///
+    /// A mediator keeps a message until its recipient deletes it, and counts
+    /// it against the **sender's** per-recipient queue (`limits.queue.peer`)
+    /// until then. A frame the recipient can never unpack used to be logged
+    /// and left there, so one poison frame per redelivery became a permanent
+    /// entry in the sender's quota, and enough of them stopped the sender
+    /// reaching this DID at all. With this on, the live stream follows the
+    /// pickup drain's rule (see [`Self::with_purge_policy_rejected_messages`]):
+    /// a frame whose failure is a property of its bytes is deleted at once, a
+    /// policy rejection per the purge flag, and one that failed transiently (a
+    /// resolver hiccup) is left for redelivery and deleted only once it has
+    /// failed three times. Every one is still reported on the
+    /// [unprocessable-message channel](Self::with_unprocessable_message_channel)
+    /// first. `false` restores the old behaviour (never delete).
+    pub fn with_delete_unprocessable(mut self, delete: bool) -> Self {
+        self.delete_unprocessable = delete;
+        self
+    }
+
+    /// Probe the websocket's receive leg after `idle` without an inbound data
+    /// frame; `None` turns the probe off. Default 60s.
+    ///
+    /// A ping/pong proves the socket, not that the mediator still delivers to
+    /// it — a mediator that lost its streaming registration for this socket
+    /// keeps answering pings while the inbox fills. The probe is a
+    /// live-delivery request written straight to the socket: the mediator
+    /// answers it, and redelivers anything waiting, through the very path that
+    /// may have failed. If nothing at all arrives within 30s, the transport
+    /// reconnects. Only sent while the transport's caches are empty, so a
+    /// slow application is never mistaken for a dead mediator. The probe's own
+    /// answer is consumed by the transport, not handed to the application.
+    pub fn with_receive_probe(mut self, idle: Option<Duration>) -> Self {
+        self.receive_probe_after = idle;
         self
     }
 
@@ -690,6 +754,8 @@ impl ATMConfigBuilder {
             unprocessable_message_channel: self.unprocessable_message_channel,
             purge_policy_rejected_messages: self.purge_policy_rejected_messages,
             allow_invalid_signatures: self.allow_invalid_signatures,
+            delete_unprocessable: self.delete_unprocessable,
+            receive_probe_after: self.receive_probe_after,
             unpack_forwards: self.unpack_forwards,
             unpack_policy: self.unpack_policy,
             discover_features: Arc::new(RwLock::new(discover_features)),

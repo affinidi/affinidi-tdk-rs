@@ -84,6 +84,33 @@ impl ATMError {
             .is_some_and(HttpStatusError::is_rate_limited)
     }
 
+    /// Is this unpack failure worth retrying, or is the inbound frame poison?
+    ///
+    /// The one classifier both inbound paths share — the TSP adapter
+    /// (`transport_adapter`) and the DIDComm live stream (the websocket
+    /// transport) — so the two halves of one socket agree on what "transient"
+    /// means:
+    ///
+    /// - [`ATMError::DIDError`] — resolving the sender's DID (or our own)
+    ///   failed. The overwhelmingly common transient case.
+    /// - [`ATMError::TransportError`] / [`ATMError::HttpStatus`] /
+    ///   [`ATMError::Disconnected`] / [`ATMError::TDKError`] — network or
+    ///   resolver-cache trouble underneath.
+    /// - Everything else — envelope parse, wrong recipient, decrypt/verify
+    ///   failure, a policy rejection — is a deterministic property of the
+    ///   bytes (or of local configuration). Retrying identical input cannot
+    ///   change it.
+    pub(crate) fn is_transient_unpack_failure(&self) -> bool {
+        matches!(
+            self,
+            ATMError::DIDError(_)
+                | ATMError::TransportError(_)
+                | ATMError::HttpStatus(_)
+                | ATMError::Disconnected(_)
+                | ATMError::TDKError(_)
+        )
+    }
+
     /// Creates an ATM Error from a DIDComm Problem Report Error Message
     pub fn from_problem_report(message: &Message) -> Self {
         if let Ok(MessageType::ProblemReport) = message.typ.parse::<MessageType>() {

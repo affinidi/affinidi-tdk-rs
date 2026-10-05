@@ -931,7 +931,7 @@ async fn ack_via_source(inner: &ServiceInner, src_id: &str, ack: InboundAck) {
     // depth limits until the mediator expires it. A sender refused over work
     // its recipient finished days ago is what that looks like from outside.
     match inner.transport_by_id(src_id) {
-        Some(transport) => match transport.ack(ack.clone()).await {
+        Some(transport) => match bounded_ack(transport.as_ref(), ack.clone()).await {
             Ok(()) => inner.acks.record_acked(),
             Err(e) => {
                 tracing::warn!(
@@ -954,6 +954,32 @@ async fn ack_via_source(inner: &ServiceInner, src_id: &str, ack: InboundAck) {
     }
 }
 
+/// How long one ack may take before it is parked for the retry pass.
+///
+/// This runs on the **single** inbound dispatcher. An ack is a delete at the
+/// mediator, queued behind whatever the transport's deletion path is doing —
+/// retrying a rate-limited batch, say — and an unbounded await here stopped all
+/// inbound dispatch behind one slow delete. The socket stayed healthy and kept
+/// receiving, but nothing more was handed off or deleted, so from the mediator's
+/// side this DID had stopped collecting: its inbox filled, and every peer
+/// writing to it was refused once its per-recipient quota ran out. A parked ack
+/// loses nothing — [`run_ack_retry`] settles it.
+pub(crate) const ACK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// [`MessageTransport::ack`], bounded by [`ACK_TIMEOUT`]. A timeout is an
+/// error, so the caller parks the ack.
+async fn bounded_ack(
+    transport: &dyn MessageTransport,
+    ack: InboundAck,
+) -> Result<(), MessagingError> {
+    match tokio::time::timeout(ACK_TIMEOUT, transport.ack(ack)).await {
+        Ok(result) => result,
+        Err(_) => Err(MessagingError::Transport(format!(
+            "ack did not complete within {ACK_TIMEOUT:?}"
+        ))),
+    }
+}
+
 /// Retry parked acks on a fixed interval until they settle or age out.
 async fn run_ack_retry(inner: Arc<ServiceInner>) {
     let mut ticker = tokio::time::interval(crate::ack::RETRY_INTERVAL);
@@ -966,7 +992,7 @@ async fn run_ack_retry(inner: Arc<ServiceInner>) {
         crate::ack::retry_pass(&inner.acks, now, |id, ack| {
             inner
                 .transport_by_id(id)
-                .map(|transport| async move { transport.ack(ack).await })
+                .map(|transport| async move { bounded_ack(transport.as_ref(), ack).await })
         })
         .await;
     }
@@ -1035,6 +1061,9 @@ mod tests {
         /// Makes `ack` fail, so a test can reach the parked-ack path without
         /// racing a transport removal.
         fail_ack: AtomicBool,
+        /// Makes `ack` never complete — a deletion path stuck behind a
+        /// rate-limited mediator.
+        hang_ack: AtomicBool,
     }
 
     struct MockHandles {
@@ -1053,6 +1082,7 @@ mod tests {
             conn_rx,
             fail_send: AtomicBool::new(false),
             fail_ack: AtomicBool::new(false),
+            hang_ack: AtomicBool::new(false),
         });
         MockHandles {
             transport,
@@ -1088,6 +1118,9 @@ mod tests {
             }
         }
         async fn ack(&self, ack: InboundAck) -> Result<(), MessagingError> {
+            if self.hang_ack.load(Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
             if self.fail_ack.load(Ordering::SeqCst) {
                 return Err(MessagingError::Transport("mock ack failed".into()));
             }
@@ -1154,6 +1187,40 @@ mod tests {
             &["q-park"],
             "the message must actually be released at the mediator"
         );
+    }
+
+    /// An ack that never completes must not stall the dispatcher.
+    ///
+    /// The dispatcher is the only thing that hands inbound messages on, and it
+    /// awaited each ack without a limit. With the deletion path stuck — a
+    /// mediator rate-limiting deletes, the deletion queue full — the socket
+    /// stayed up and kept reading, but nothing after the first message was
+    /// handed off or deleted. From the mediator's side the DID had stopped
+    /// collecting; its senders were refused `limits.queue.peer`.
+    #[tokio::test(start_paused = true)]
+    async fn a_hanging_ack_is_parked_and_does_not_stall_dispatch() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let mut sub = svc.subscribe();
+        h.transport.hang_ack.store(true, Ordering::SeqCst);
+
+        for n in 0..3 {
+            h.inbound_tx
+                .send(inbound(&format!("push-{n}"), None, &format!("q-{n}")))
+                .unwrap();
+        }
+        for n in 0..3 {
+            let got = tokio::time::timeout(ACK_TIMEOUT * 2, sub.next())
+                .await
+                .unwrap_or_else(|_| panic!("message {n} must be dispatched despite hung acks"))
+                .expect("stream item");
+            assert_eq!(got.message.id, format!("push-{n}"));
+        }
+        tokio::time::sleep(ACK_TIMEOUT * 2).await;
+
+        let stats = svc.ack_stats();
+        assert_eq!(stats.deferred, 3, "every hung ack is parked for retry");
+        assert_eq!(stats.acked, 0);
     }
 
     /// A successful ack is counted, so `acked` climbing is the healthy baseline

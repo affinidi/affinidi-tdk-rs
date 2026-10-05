@@ -54,6 +54,24 @@ const TSP_UNPACK_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
 #[cfg(feature = "tsp")]
 const TSP_UNPACK_MAX_BACKOFF: Duration = Duration::from_millis(800);
 
+/// Ceiling on one TSP unpack attempt. Unpacking resolves the sender's VID over
+/// the network, and the inbound stream is sequential: an unbounded await here
+/// stalls every frame behind it (R1.2). A timed-out attempt counts as
+/// transient, inside the same retry budget.
+#[cfg(feature = "tsp")]
+const TSP_UNPACK_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Ceiling on recording an inbound TSP control message (it persists to the
+/// relationship store, which may be remote).
+#[cfg(feature = "tsp")]
+const TSP_RECORD_CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Ceiling on handing a frame's deletion to the deletion handler. The enqueue
+/// is itself bounded (`delete_message_background`); this keeps the stream from
+/// depending on that.
+#[cfg(feature = "tsp")]
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// A [`MessageTransport`] over the DIDComm ATM wire for one profile.
 ///
 /// Construct with [`DidCommTransport::new`] (async — it captures the profile's
@@ -308,26 +326,12 @@ fn is_terminal_inbound_error(err: &ATMError) -> bool {
 
 /// Is this TSP unpack failure worth retrying, or is the frame poison?
 ///
-/// Mirrors the trust registry's classification of the same failure, so the two
-/// ends of a TSP hop agree on what "transient" means:
-///
-/// - [`ATMError::DIDError`] — resolving the sender's VID (or our own DID)
-///   failed. The overwhelmingly common transient case.
-/// - [`ATMError::TransportError`] / [`ATMError::Disconnected`] /
-///   [`ATMError::TDKError`] — network or resolver-cache trouble underneath.
-/// - Everything else — notably [`ATMError::MsgReceiveError`] (envelope parse,
-///   wrong recipient, decrypt/verify failure) and [`ATMError::SecretsError`]
-///   (our own key material missing) — is a deterministic property of the bytes
-///   or of local configuration. Retrying identical input cannot change it.
+/// Delegates to [`ATMError::is_transient_unpack_failure`], the classifier the
+/// DIDComm live stream uses too, so both halves of one socket agree. Mirrors
+/// the trust registry's classification of the same failure.
 #[cfg(feature = "tsp")]
 fn is_transient_unpack_error(err: &ATMError) -> bool {
-    matches!(
-        err,
-        ATMError::DIDError(_)
-            | ATMError::TransportError(_)
-            | ATMError::Disconnected(_)
-            | ATMError::TDKError(_)
-    )
+    err.is_transient_unpack_failure()
 }
 
 /// Map an [`InboundFrame`] (DIDComm or TSP, multiplexed on the one socket) to
@@ -405,7 +409,17 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
     let mut backoff = TSP_UNPACK_INITIAL_BACKOFF;
     let mut attempt = 1;
     let unpacked = loop {
-        match atm.tsp().unpack_message(profile, &qb2).await {
+        let attempt_result =
+            match tokio::time::timeout(TSP_UNPACK_TIMEOUT, atm.tsp().unpack_message(profile, &qb2))
+                .await
+            {
+                Ok(result) => result,
+                // A hung resolver is the transient case by definition.
+                Err(_) => Err(ATMError::TransportError(format!(
+                    "unpacking the inbound TSP frame did not complete within {TSP_UNPACK_TIMEOUT:?}"
+                ))),
+            };
+        match attempt_result {
             Ok(v) => break v,
             Err(e) if is_transient_unpack_error(&e) && attempt < TSP_UNPACK_MAX_ATTEMPTS => {
                 // A resolver hiccup must not cost us the frame. Retry in-process
@@ -445,13 +459,7 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
                     "cannot unpack an inbound TSP frame — deleting it from the mediator so it \
                      stops being redelivered",
                 );
-                if let Err(delete_err) = atm.delete_message_background(profile, &ack).await {
-                    tracing::warn!(
-                        error = %delete_err,
-                        frame = %ack,
-                        "could not delete the undeliverable TSP frame — it will be redelivered",
-                    );
-                }
+                release_frame(atm, profile, &ack).await;
                 return None;
             }
         }
@@ -487,11 +495,29 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
             // there is no relationship for a consumer to make a decision
             // about, and handing it one to answer would invite a reply to a
             // message TSP has already discarded.
-            let incoming = match atm
-                .tsp()
-                .record_incoming_control(profile, &sender, &control)
-                .await
+            let recorded = match tokio::time::timeout(
+                TSP_RECORD_CONTROL_TIMEOUT,
+                atm.tsp()
+                    .record_incoming_control(profile, &sender, &control),
+            )
+            .await
             {
+                Ok(recorded) => recorded,
+                Err(_) => {
+                    // Unknown whether it was recorded. NOT released: the frame
+                    // stays at the mediator and is offered again, where
+                    // recording a repeated invite/accept is idempotent.
+                    tracing::warn!(
+                        sender = %sender,
+                        frame = %ack,
+                        timeout_secs = TSP_RECORD_CONTROL_TIMEOUT.as_secs(),
+                        "recording an inbound TSP control message timed out — leaving the frame \
+                         at the mediator for redelivery",
+                    );
+                    return None;
+                }
+            };
+            let incoming = match recorded {
                 Ok(incoming) => {
                     tracing::debug!(
                         sender = %sender,
@@ -607,12 +633,17 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
 /// how one padding message becomes a permanent boot-time loop.
 #[cfg(feature = "tsp")]
 async fn release_frame(atm: &ATM, profile: &Arc<ATMProfile>, ack: &str) {
-    if let Err(e) = atm.delete_message_background(profile, ack).await {
-        tracing::warn!(
+    match tokio::time::timeout(RELEASE_TIMEOUT, atm.delete_message_background(profile, ack)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(
             error = %e,
             frame = %ack,
-            "could not release a handled TSP frame — it will be redelivered",
-        );
+            "could not release a TSP frame — it will be redelivered",
+        ),
+        Err(_) => tracing::warn!(
+            frame = %ack,
+            "releasing a TSP frame timed out — it will be redelivered",
+        ),
     }
 }
 

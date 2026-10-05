@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.33.2 — a recipient that stops collecting is noticed, and poison frames stop filling senders' queues
+
+A mediator keeps a message until its recipient deletes it, and counts it
+against the **sender's** per-recipient queue (`limits.queue.peer`, default 50)
+until then. So a recipient whose sends still work but whose receive side has
+quietly stopped does not fail itself — it fails everyone writing to it, who are
+refused `e.p.limits.queue.peer`. Seen 2026-10-05 on mediator 0.37.0: two OpenVTC
+admin sessions each held 49 VTA replies, the oldest an hour old, and every
+further reply was refused. This release closes the three ways this SDK let that
+happen, and makes the receive side observable.
+
+### Behaviour changes
+
+Ack/delete/reconnect semantics change without a signature change. Read these
+before upgrading a service.
+
+- **The live websocket stream deletes DIDComm frames it cannot unpack.** They
+  used to be logged (and reported on the unprocessable-message channel) and left
+  at the mediator, where they were redelivered on every reconnect and every
+  redelivery request and stayed in their sender's quota for their whole life.
+  The live stream now follows the pickup drain's rule: a failure that is a
+  property of the bytes (unparseable, not for us, undecryptable, a bad
+  signature) is deleted at once; a policy rejection per
+  `with_purge_policy_rejected_messages`; a transient failure (DID resolution,
+  network, an unpack that outlived its 20 s bound) and missing local key
+  material are left for redelivery and deleted on the third failed offer. Each
+  deletion is a WARN naming the frame id (`sha256` of the packed frame), the
+  envelope kind and the sender key or DID the envelope names (read without
+  decrypting, so a lead, not an identity), and the error. Every frame is still
+  reported on the unprocessable-message channel first.
+  `ATMConfigBuilder::with_delete_unprocessable(false)` keeps the old behaviour.
+  TSP frames were already deleted this way.
+- **Receive-leg probe, on by default.** Ping/pong proves the socket, not that the
+  mediator still delivers to it. After 60 s with no inbound data frame (and only
+  while the transport holds nothing for the application), the transport writes
+  a live-delivery request straight to the socket. The mediator answers it, and
+  redelivers anything waiting, through the path being tested. If nothing at all
+  arrives within 30 s, the transport logs a WARN and reconnects. The probe's
+  answer is consumed by the transport and never reaches the application. Cost:
+  one status message and one inbox redelivery pass per idle minute per socket;
+  messages an application read but never deleted are offered again (the
+  at-least-once contract already allowed this). Tune or disable with
+  `ATMConfigBuilder::with_receive_probe(Option<Duration>)`.
+- **`ATM::delete_message_background` gives up after 5 s** (`DELETE_ENQUEUE_TIMEOUT`)
+  when the deletion handler's queue is full, returning `ATMError::SDKError`,
+  instead of waiting without limit. The handler retries a failing batch with
+  backoff and `Retry-After`, so the queue could stay full long enough to park
+  every caller — including the delivery layer's single dispatcher.
+
+### Added
+
+- `ATMProfile::receive_health() -> Option<watch::Receiver<ReceiveHealth>>`: the
+  receive side's health, published on every change — when the last data frame
+  arrived, frames held for the application, since when the application has
+  stopped taking them, an outstanding probe, probe-forced reconnects, and
+  unprocessable frames deleted or retained. `ReceiveHealth` is
+  `#[non_exhaustive]` and re-exported at the crate root.
+  `ConnState` is unchanged: a degraded receive side must not stop sends.
+- `ATMProfile::reconnect_websocket()`: drop the socket and connect again at
+  once. The fresh connect re-enables live delivery, which redelivers the inbox.
+- `ATMConfigBuilder::with_delete_unprocessable(bool)`,
+  `ATMConfigBuilder::with_receive_probe(Option<Duration>)`,
+  `config::DEFAULT_RECEIVE_PROBE_AFTER`,
+  `messages::delete::DELETE_ENQUEUE_TIMEOUT`.
+
+### Fixed
+
+- **A stalled application is reported.** When frames have been held for the
+  application for 60 s with none taken (reads pause once the caches fill), the
+  transport logs one WARN per episode — nothing is being deleted at the
+  mediator and peers will start being refused — and sets
+  `ReceiveHealth::consumer_stalled_since`; an INFO when it drains. It does not
+  reconnect: a reconnect cannot make an application read, and the redelivery on
+  connect would only duplicate frames into the packed cache.
+- **The inline unpack on the transport task is bounded** (20 s). It resolves
+  DIDs over the network, and a hung resolver used to stall the whole socket —
+  reads, sends and the watchdog — behind one frame.
+- **Every await in the TSP inbound chain is bounded**
+  (`transport_adapter`): an unpack attempt (20 s, counted as transient inside
+  the existing retry budget), recording a control message (10 s; on timeout the
+  frame is left at the mediator for redelivery, not released), and releasing a
+  frame (10 s).
+- The transient-versus-poison classification is shared by the TSP adapter and
+  the DIDComm live stream, so both halves of one socket agree. An HTTP-status
+  failure underneath an unpack now counts as transient.
+
 ## 0.33.1 — the websocket transport recovers from sleep and dead networks
 
 ### Fixed

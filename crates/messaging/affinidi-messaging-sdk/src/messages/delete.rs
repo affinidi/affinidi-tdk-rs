@@ -1,4 +1,6 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
+
+use tokio::sync::mpsc::error::SendTimeoutError;
 
 use tracing::{Instrument, Level, debug, span};
 
@@ -14,10 +16,28 @@ use super::{DeleteMessageRequest, DeleteMessageResponse};
 
 const MAX_DELETED_MESSAGES: usize = 100;
 
+/// How long [`ATM::delete_message_background`] waits for room in the deletion
+/// handler's queue before giving up.
+pub const DELETE_ENQUEUE_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl ATM {
     /// Deletes a message from ATM in the background
     /// There is no guarantee as to when the message will be deleted
     /// You can choose to use `delete_message_direct` for a more immediate deletion
+    ///
+    /// # Bounded
+    ///
+    /// The deletion is queued for the background deletion handler. Its queue
+    /// is small (32), and the handler retries a failing batch with backoff —
+    /// honouring a mediator's `Retry-After` — so while the mediator is slow or
+    /// rate-limiting deletes the queue can stay full for a long time. This
+    /// used to await a slot without limit, which parked the caller: the
+    /// delivery layer's single dispatcher, acking a message it had already
+    /// handed off, stopped dispatching anything, and the socket looked healthy
+    /// while nothing was being deleted at the mediator. The enqueue now gives
+    /// up after [`DELETE_ENQUEUE_TIMEOUT`] with an [`ATMError::SDKError`]; the
+    /// message is still at the mediator and is redelivered, so a caller that
+    /// cares parks and retries the delete rather than blocking on it.
     pub async fn delete_message_background(
         &self,
         profile: &Arc<ATMProfile>,
@@ -26,16 +46,39 @@ impl ATM {
         debug!("Deleting message in the background: {}", message_id);
         self.inner
             .deletion_handler_send_stream
-            .send(DeletionHandlerCommands::DeleteMessage(
+            .send_timeout(
+                DeletionHandlerCommands::DeleteMessage(profile.clone(), message_id.to_string()),
+                DELETE_ENQUEUE_TIMEOUT,
+            )
+            .await
+            .map_err(|e| match e {
+                SendTimeoutError::Timeout(_) => ATMError::SDKError(format!(
+                    "Deletion handler queue still full after {DELETE_ENQUEUE_TIMEOUT:?}; \
+                     message ({message_id}) not queued for deletion"
+                )),
+                SendTimeoutError::Closed(_) => ATMError::SDKError(
+                    "Couldn't send deletion request to Deletion Handler: channel closed"
+                        .to_string(),
+                ),
+            })
+    }
+
+    /// Queue a deletion without waiting at all. `false` when the deletion
+    /// handler's queue is full or closed — the message stays at the mediator
+    /// and is redelivered. For callers that must never park, such as the
+    /// websocket transport task itself.
+    pub(crate) fn try_delete_message_background(
+        &self,
+        profile: &Arc<ATMProfile>,
+        message_id: &str,
+    ) -> bool {
+        self.inner
+            .deletion_handler_send_stream
+            .try_send(DeletionHandlerCommands::DeleteMessage(
                 profile.clone(),
                 message_id.to_string(),
             ))
-            .await
-            .map_err(|e| {
-                ATMError::SDKError(format!(
-                    "Couldn't send deletion request to Deletion Handler: {e}"
-                ))
-            })
+            .is_ok()
     }
 
     /// Delete messages from ATM directly

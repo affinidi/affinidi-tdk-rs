@@ -10,7 +10,7 @@ use crate::{
     ATM,
     errors::ATMError,
     transports::websockets::{
-        WebSocketResponses,
+        ReceiveHealth, WebSocketResponses,
         websocket::{WebSocketCommands, WebSocketTransport},
     },
 };
@@ -201,6 +201,7 @@ impl ATMProfile {
         // Drop the connection-state receiver with the sender; a fresh one is
         // installed by the next `WebSocketTransport::start`.
         let _ = mediator.ws_conn_state_rx.write().await.take();
+        let _ = mediator.ws_receive_health_rx.write().await.take();
 
         if let Some(channel) = channel {
             channel.send(WebSocketCommands::Stop).await.map_err(|err| {
@@ -225,6 +226,51 @@ impl ATMProfile {
         let mediator = self.inner.mediator.as_ref().as_ref()?;
         mediator.ws_conn_state_rx.read().await.clone()
     }
+
+    /// A live view of this profile's websocket **receive** side — whether
+    /// frames are arriving, whether the application is taking them, and what
+    /// the transport has done about frames it could not unpack. See
+    /// [`ReceiveHealth`].
+    ///
+    /// [`Self::connection_state`] answers "can I send?"; this answers "is
+    /// anything reaching me?". A socket can be `Connected` while the answer to
+    /// the second is no, and then every peer writing to this DID fills its
+    /// per-recipient quota at the mediator. `None` if no websocket transport is
+    /// running for this profile.
+    pub async fn receive_health(&self) -> Option<watch::Receiver<ReceiveHealth>> {
+        let mediator = self.inner.mediator.as_ref().as_ref()?;
+        mediator.ws_receive_health_rx.read().await.clone()
+    }
+
+    /// Drop the current websocket and connect again at once, without backoff.
+    ///
+    /// The fresh connect re-authenticates and re-enables live delivery, which
+    /// makes the mediator redeliver everything waiting in this DID's inbox —
+    /// the remedy for a socket that is up but no longer receiving. In-flight
+    /// requests on the old socket fail with a disconnect. `Err` if no websocket
+    /// transport is running for this profile.
+    pub async fn reconnect_websocket(&self) -> Result<(), ATMError> {
+        let Some(mediator) = &*self.inner.mediator else {
+            return Err(ATMError::ConfigError(
+                "No Mediator is configured for this Profile".to_string(),
+            ));
+        };
+        let guard = mediator.ws_channel_tx.read().await;
+        let Some(channel) = guard.as_ref() else {
+            return Err(ATMError::ProfileError(format!(
+                "Profile ({}) has no websocket transport to reconnect",
+                self.inner.alias
+            )));
+        };
+        channel
+            .send(WebSocketCommands::Reconnect)
+            .await
+            .map_err(|err| {
+                ATMError::TransportError(format!(
+                    "Could not send websocket Reconnect command: {err:?}"
+                ))
+            })
+    }
 }
 
 #[derive(Debug)]
@@ -241,6 +287,11 @@ pub struct Mediator {
     /// websocket transport is running for this mediator. Cloned out by
     /// [`ATMProfile::connection_state`].
     pub(crate) ws_conn_state_rx: RwLock<Option<watch::Receiver<ConnState>>>,
+
+    /// Receive-leg health published by the WebSocket transport. Installed by
+    /// `WebSocketTransport::start*`; `None` when no transport is running.
+    /// Cloned out by [`ATMProfile::receive_health`].
+    pub(crate) ws_receive_health_rx: RwLock<Option<watch::Receiver<ReceiveHealth>>>,
 
     /// Unique ID that is used for anything requiring a unique transaction identifier
     pub(crate) tx_uuid: AtomicU32,
@@ -263,6 +314,7 @@ impl Mediator {
             websocket_endpoint: Mediator::find_ws_endpoint(&mediator_doc),
             ws_channel_tx: RwLock::new(None),
             ws_conn_state_rx: RwLock::new(None),
+            ws_receive_health_rx: RwLock::new(None),
             tx_uuid: AtomicU32::new(0),
         };
 
@@ -361,6 +413,7 @@ impl Mediator {
         // Drop the stale connection-state receiver alongside the command sender;
         // a fresh one is installed on the next `WebSocketTransport::start`.
         let _ = self.ws_conn_state_rx.write().await.take();
+        let _ = self.ws_receive_health_rx.write().await.take();
         if let Some(sender) = sender {
             let _ = sender.send(WebSocketCommands::Stop).await;
         }
@@ -637,6 +690,7 @@ mod tests {
             websocket_endpoint: Some("ws://127.0.0.1:1/".to_string()),
             ws_channel_tx: RwLock::new(None),
             ws_conn_state_rx: RwLock::new(None),
+            ws_receive_health_rx: RwLock::new(None),
             tx_uuid: AtomicU32::new(0),
         };
         Arc::new(ATMProfile {
