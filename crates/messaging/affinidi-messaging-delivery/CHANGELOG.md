@@ -14,6 +14,11 @@ filled, and every peer writing to it was refused `limits.queue.peer` once its
 per-recipient quota ran out. A parked ack loses nothing; the retry pass settles
 it.
 
+Once an ack has run the full 10 s, the dispatcher parks acks without awaiting
+them for 30 s (`ACK_SLOW_COOLDOWN`), so acks that keep resolving just under the
+bound cannot throttle dispatch to one message per `ACK_TIMEOUT`; the retry pass
+settles them off the dispatcher.
+
 ## 0.1.19 — delivery is settled on the mediator's receipt, not on the outbox draining
 
 `poll_outbox_drain` inferred pickup from the sender's outbox: a hop-id seen

@@ -129,6 +129,9 @@ struct ServiceInner {
     /// mediator, so one that is dropped leaves a handled message queued against
     /// its sender — see [`crate::ack`].
     acks: AckQueue,
+    /// Until when the dispatcher parks acks without awaiting them, after one
+    /// ran the full [`ACK_TIMEOUT`]. See [`ack_via_source`].
+    ack_slow_until: Mutex<Option<tokio::time::Instant>>,
 }
 
 impl ServiceInner {
@@ -354,6 +357,7 @@ impl MessagingService {
             inbound_tx,
             fallback_conn,
             acks: AckQueue::default(),
+            ack_slow_until: Mutex::new(None),
         });
 
         let dispatcher = tokio::spawn(run_dispatcher(inner.clone(), inbound_rx));
@@ -930,10 +934,38 @@ async fn ack_via_source(inner: &ServiceInner, src_id: &str, ack: InboundAck) {
     // handled queued against its **sender**, counting toward that sender's
     // depth limits until the mediator expires it. A sender refused over work
     // its recipient finished days ago is what that looks like from outside.
+    //
+    // Bounding each ack (ACK_TIMEOUT) stops one hung delete from stalling
+    // dispatch, but acks that each take *nearly* the bound would still cap this
+    // single dispatcher at about one message per ACK_TIMEOUT. So once an ack has
+    // run the full bound, acks are parked without being awaited for
+    // ACK_SLOW_COOLDOWN: dispatch carries on at full speed, and the retry pass
+    // — off the dispatcher — settles them when the deletion path recovers.
+    let now = tokio::time::Instant::now();
+    let slow = inner
+        .ack_slow_until
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .is_some_and(|until| now < until);
+    if slow {
+        tracing::debug!(
+            transport = %src_id,
+            "acks are slow; parked for the retry pass without waiting"
+        );
+        inner.acks.park(src_id, ack);
+        return;
+    }
     match inner.transport_by_id(src_id) {
         Some(transport) => match bounded_ack(transport.as_ref(), ack.clone()).await {
             Ok(()) => inner.acks.record_acked(),
             Err(e) => {
+                if now.elapsed() >= ACK_TIMEOUT {
+                    *inner
+                        .ack_slow_until
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        Some(tokio::time::Instant::now() + ACK_SLOW_COOLDOWN);
+                }
                 tracing::warn!(
                     error = %e,
                     transport = %src_id,
@@ -965,6 +997,10 @@ async fn ack_via_source(inner: &ServiceInner, src_id: &str, ack: InboundAck) {
 /// writing to it was refused once its per-recipient quota ran out. A parked ack
 /// loses nothing — [`run_ack_retry`] settles it.
 pub(crate) const ACK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// After an ack runs the full [`ACK_TIMEOUT`], how long the dispatcher parks
+/// acks without awaiting them, leaving them to the retry pass.
+pub(crate) const ACK_SLOW_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// [`MessageTransport::ack`], bounded by [`ACK_TIMEOUT`]. A timeout is an
 /// error, so the caller parks the ack.
@@ -1221,6 +1257,38 @@ mod tests {
         let stats = svc.ack_stats();
         assert_eq!(stats.deferred, 3, "every hung ack is parked for retry");
         assert_eq!(stats.acked, 0);
+    }
+
+    /// Once one ack has run the full bound, the next acks are parked without
+    /// waiting, so acks that keep taking nearly the bound cannot throttle
+    /// dispatch to one message per `ACK_TIMEOUT`.
+    #[tokio::test(start_paused = true)]
+    async fn after_a_slow_ack_dispatch_does_not_wait_on_acks() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let mut sub = svc.subscribe();
+        h.transport.hang_ack.store(true, Ordering::SeqCst);
+        h.inbound_tx
+            .send(inbound("first", None, "q-first"))
+            .unwrap();
+        sub.next().await.expect("first dispatched");
+        // Let the first ack run out its bound.
+        tokio::time::sleep(ACK_TIMEOUT + Duration::from_millis(10)).await;
+
+        let started = tokio::time::Instant::now();
+        for n in 0..5 {
+            h.inbound_tx
+                .send(inbound(&format!("next-{n}"), None, &format!("q-next-{n}")))
+                .unwrap();
+        }
+        for n in 0..5 {
+            let got = sub.next().await.expect("stream item");
+            assert_eq!(got.message.id, format!("next-{n}"));
+        }
+        assert!(
+            started.elapsed() < ACK_TIMEOUT,
+            "five messages must not wait out an ack bound each"
+        );
     }
 
     /// A successful ack is counted, so `acked` climbing is the healthy baseline

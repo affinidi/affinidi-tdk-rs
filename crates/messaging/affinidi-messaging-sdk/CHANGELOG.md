@@ -20,12 +20,16 @@ before upgrading a service.
   used to be logged (and reported on the unprocessable-message channel) and left
   at the mediator, where they were redelivered on every reconnect and every
   redelivery request and stayed in their sender's quota for their whole life.
-  The live stream now follows the pickup drain's rule: a failure that is a
-  property of the bytes (unparseable, not for us, undecryptable, a bad
-  signature) is deleted at once; a policy rejection per
-  `with_purge_policy_rejected_messages`; a transient failure (DID resolution,
-  network, an unpack that outlived its 20 s bound) and missing local key
-  material are left for redelivery and deleted on the third failed offer. Each
+  The live stream now follows the pickup drain's rule: a failure known to be a
+  property of the bytes (`DidcommError`, `MsgReceiveError`,
+  `VerificationFailed` — undecryptable, a bad signature) is deleted at once; a
+  policy rejection per `with_purge_policy_rejected_messages`; a transient
+  failure (DID resolution, network, an unpack that outlived its 20 s bound, or
+  any error not on that allow-list) is left for redelivery and deleted only
+  once it has failed three times **and** for at least an hour, so a short
+  resolver outage with quick redeliveries discards nothing; a frame sent to a
+  key this profile has not loaded (`SecretsError`) is **never** deleted — it is
+  most likely a legitimate message, and the mediator's expiry bounds it. Each
   deletion is a WARN naming the frame id (`sha256` of the packed frame), the
   envelope kind and the sender key or DID the envelope names (read without
   decrypting, so a lead, not an identity), and the error. Every frame is still

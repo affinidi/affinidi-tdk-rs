@@ -41,12 +41,21 @@ pub(crate) const PROBE_DEADLINE: Duration = Duration::from_secs(30);
 pub(crate) const CONSUMER_STALL_AFTER: Duration = Duration::from_secs(60);
 
 /// How many times a frame that failed to unpack *transiently* is offered again
-/// before it is treated as undeliverable.
+/// before it may be treated as undeliverable.
 pub(crate) const TRANSIENT_UNPACK_SIGHTINGS: u32 = 3;
 
+/// How long a transiently failing frame is kept, from its first failed offer,
+/// before it may be deleted — whatever the count. Redeliveries can come
+/// seconds apart (a reconnect loop, a redelivery request), so a count alone let
+/// a short resolver outage discard frames that would have unpacked minutes
+/// later. A frame is deleted only once it has failed often *and* for long.
+pub(crate) const TRANSIENT_UNPACK_MIN_AGE: Duration = Duration::from_secs(3600);
+
 /// Bounds on the transient-failure memory: entries, and how long one is kept.
+/// Longer than [`TRANSIENT_UNPACK_MIN_AGE`], so an entry outlives the age it
+/// has to reach.
 const SIGHTINGS_CAPACITY: usize = 1024;
-const SIGHTINGS_TTL: Duration = Duration::from_secs(3600);
+const SIGHTINGS_TTL: Duration = Duration::from_secs(6 * 3600);
 
 /// What the receive-leg probe does on a watchdog tick.
 #[derive(Debug, PartialEq, Eq)]
@@ -136,27 +145,36 @@ pub(crate) enum UnpackFailure {
     /// exactly as on the pickup drain.
     PolicyRejected,
     /// Our own key material is missing. Local configuration, so not poison in
-    /// the bytes, but not going to fix itself on a retry either: bounded like
-    /// a transient failure.
+    /// the bytes — the frame is very likely a legitimate message to a key this
+    /// profile has not loaded yet (a rotation, a persona still being set up).
+    /// **Never deleted**: losing it would be silent data loss, and the
+    /// mediator's own expiry bounds how long it stays.
     LocalConfig,
-    /// A deterministic property of the bytes — unparseable, not for us,
-    /// undecryptable, a bad signature. No redelivery can change it.
+    /// A deterministic property of the bytes — undecryptable, a bad signature.
+    /// No redelivery can change it.
     Permanent,
 }
 
 /// Class an unpack failure. Shares the transient set with the TSP adapter
 /// ([`ATMError::is_transient_unpack_failure`]) so the two inbound paths agree.
+///
+/// Permanent is an allow-list of what is known to be a property of the bytes.
+/// Anything else — including an error variant added later — is treated as
+/// transient, so the default for an unrecognised failure is to keep the frame
+/// for a while, never to delete it at once.
 pub(crate) fn classify_unpack_failure(err: &ATMError) -> UnpackFailure {
     if err.is_transient_unpack_failure() {
-        UnpackFailure::Transient
-    } else {
-        match err {
-            ATMError::UnexpectedEnvelope(_) | ATMError::AddressingMismatch(_) => {
-                UnpackFailure::PolicyRejected
-            }
-            ATMError::SecretsError(_) => UnpackFailure::LocalConfig,
-            _ => UnpackFailure::Permanent,
+        return UnpackFailure::Transient;
+    }
+    match err {
+        ATMError::UnexpectedEnvelope(_) | ATMError::AddressingMismatch(_) => {
+            UnpackFailure::PolicyRejected
         }
+        ATMError::SecretsError(_) => UnpackFailure::LocalConfig,
+        ATMError::DidcommError(..)
+        | ATMError::MsgReceiveError(_)
+        | ATMError::VerificationFailed(_) => UnpackFailure::Permanent,
+        _ => UnpackFailure::Transient,
     }
 }
 
@@ -169,12 +187,15 @@ pub(crate) fn classify_unpack_failure(err: &ATMError) -> UnpackFailure {
 ///   this; the live stream did not, which left poison frames in the inbox
 ///   counting against their sender's queue for as long as they lived.
 /// - Policy rejections follow `purge_policy_rejected`, as on the drain.
-/// - Transient (and local-config) failures are kept for redelivery, but only
-///   for [`TRANSIENT_UNPACK_SIGHTINGS`] offers: a "transient" failure that
-///   repeats on every redelivery is not transient.
+/// - Transient failures are kept for redelivery until they have failed
+///   [`TRANSIENT_UNPACK_SIGHTINGS`] times **and** for at least
+///   [`TRANSIENT_UNPACK_MIN_AGE`] since the first failure (`age`): a
+///   "transient" failure that repeats for an hour is not transient.
+/// - Local-config failures (our own keys missing) are never deleted.
 pub(crate) fn unpack_failure_disposition(
     class: UnpackFailure,
     sightings: u32,
+    age: Duration,
     delete_unprocessable: bool,
     purge_policy_rejected: bool,
 ) -> bool {
@@ -184,9 +205,10 @@ pub(crate) fn unpack_failure_disposition(
     match class {
         UnpackFailure::Permanent => true,
         UnpackFailure::PolicyRejected => purge_policy_rejected,
-        UnpackFailure::Transient | UnpackFailure::LocalConfig => {
-            sightings >= TRANSIENT_UNPACK_SIGHTINGS
+        UnpackFailure::Transient => {
+            sightings >= TRANSIENT_UNPACK_SIGHTINGS && age >= TRANSIENT_UNPACK_MIN_AGE
         }
+        UnpackFailure::LocalConfig => false,
     }
 }
 
@@ -215,6 +237,11 @@ impl UnpackSightings {
             }
         }
         1
+    }
+
+    /// When `id` first failed, while it is remembered.
+    pub(crate) fn first_seen(&self, id: &str) -> Option<Instant> {
+        self.counts.get(id).map(|(_, first)| *first)
     }
 
     /// Forget `id` — it was deleted.
@@ -461,31 +488,59 @@ mod tests {
             classify_unpack_failure(&ATMError::VerificationFailed("sig".into())),
             UnpackFailure::Permanent
         );
+        // Anything not known to be a property of the bytes is kept, not
+        // deleted at once.
+        assert_eq!(
+            classify_unpack_failure(&ATMError::SDKError("unexpected".into())),
+            UnpackFailure::Transient
+        );
+        assert_eq!(
+            classify_unpack_failure(&ATMError::ConfigError("x".into())),
+            UnpackFailure::Transient
+        );
     }
 
     #[test]
-    fn permanent_failures_are_deleted_at_once_and_transient_ones_on_the_third_offer() {
+    fn permanent_failures_are_deleted_at_once_and_transient_ones_only_when_old_and_repeated() {
+        let young = Duration::from_secs(5);
+        let old = TRANSIENT_UNPACK_MIN_AGE;
         assert!(unpack_failure_disposition(
             UnpackFailure::Permanent,
             1,
+            young,
             true,
             true
         ));
-        for class in [UnpackFailure::Transient, UnpackFailure::LocalConfig] {
-            assert!(!unpack_failure_disposition(class, 1, true, true));
-            assert!(!unpack_failure_disposition(class, 2, true, true));
-            assert!(unpack_failure_disposition(class, 3, true, true));
-        }
+        let t = UnpackFailure::Transient;
+        assert!(
+            !unpack_failure_disposition(t, 2, old, true, true),
+            "too few"
+        );
+        assert!(
+            !unpack_failure_disposition(t, 9, young, true, true),
+            "many quick redeliveries during a short outage are not enough"
+        );
+        assert!(unpack_failure_disposition(t, 3, old, true, true));
+        // Our own keys missing: never deleted, however long.
+        assert!(!unpack_failure_disposition(
+            UnpackFailure::LocalConfig,
+            99,
+            old * 10,
+            true,
+            true
+        ));
         // Policy rejections follow the drain's retention flag.
         assert!(unpack_failure_disposition(
             UnpackFailure::PolicyRejected,
             1,
+            young,
             true,
             true
         ));
         assert!(!unpack_failure_disposition(
             UnpackFailure::PolicyRejected,
             9,
+            young,
             true,
             false
         ));
@@ -493,6 +548,7 @@ mod tests {
         assert!(!unpack_failure_disposition(
             UnpackFailure::Permanent,
             9,
+            old,
             false,
             true
         ));

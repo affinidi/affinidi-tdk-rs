@@ -1038,21 +1038,29 @@ impl WebSocketTransport {
     /// A transient failure (a resolver or network hiccup, or the unpack timing
     /// out) is **not** treated as poison: the frame stays at the mediator and
     /// is offered again, and is only deleted once it has failed
-    /// [`super::receive_leg::TRANSIENT_UNPACK_SIGHTINGS`] times — a
-    /// "transient" failure that repeats on every redelivery is not transient.
-    /// The cost is that a resolver outage spanning three redeliveries discards
-    /// a frame that would have unpacked; it is logged at WARN with what can be
-    /// read off the envelope, so the loss is auditable rather than silent.
+    /// [`super::receive_leg::TRANSIENT_UNPACK_SIGHTINGS`] times **and** for at
+    /// least [`super::receive_leg::TRANSIENT_UNPACK_MIN_AGE`] — a "transient"
+    /// failure that repeats for an hour is not transient. A failure for want of
+    /// this profile's own keys is never deleted. Only failures known to be a
+    /// property of the bytes (undecryptable, a bad signature) are deleted at
+    /// once, which is what the pickup drain already did; each deletion is
+    /// logged at WARN with what can be read off the envelope.
     /// `with_delete_unprocessable(false)` keeps every frame instead.
     fn handle_unprocessable(&mut self, atm: &ATM, id: &str, raw: &str, err: &ATMError) {
         let class = classify_unpack_failure(err);
-        let sightings = self
+        let now = tokio::time::Instant::now();
+        let sightings = self.unpack_sightings.record(id, now);
+        let age = self
             .unpack_sightings
-            .record(id, tokio::time::Instant::now());
+            .first_seen(id)
+            .map_or(std::time::Duration::ZERO, |first| {
+                now.saturating_duration_since(first)
+            });
         let config = &self.shared.config;
         let delete = unpack_failure_disposition(
             class,
             sightings,
+            age,
             config.delete_unprocessable(),
             config.purge_policy_rejected_messages(),
         );
@@ -1063,6 +1071,8 @@ impl WebSocketTransport {
         if !delete {
             let reason = if !config.delete_unprocessable() {
                 "deletion of unprocessable frames is disabled"
+            } else if class == UnpackFailure::LocalConfig {
+                "this profile lacks the key it was sent to; kept, never deleted"
             } else if class == UnpackFailure::PolicyRejected {
                 "policy rejects are retained (purge_policy_rejected_messages = false)"
             } else {
@@ -2003,9 +2013,11 @@ mod tests {
     }
 
     /// A transient failure (a resolver hiccup) is not poison: the frame is left
-    /// for redelivery, and deleted only on its third failed offer.
-    #[tokio::test]
-    async fn a_transiently_unprocessable_frame_is_deleted_only_on_its_third_offer() {
+    /// for redelivery, and deleted only once it has failed three times *and*
+    /// for at least `TRANSIENT_UNPACK_MIN_AGE` — quick redeliveries during a
+    /// short outage are not enough.
+    #[tokio::test(start_paused = true)]
+    async fn a_transiently_unprocessable_frame_is_deleted_only_when_old_and_repeated() {
         let atm = plaintext_atm().await;
         let mut ws = test_transport(&atm);
         let err = ATMError::DIDError("could not resolve did:web:flaky".into());
@@ -2018,8 +2030,34 @@ mod tests {
         assert_eq!(ws.health.unprocessable_retained, 1);
 
         ws.handle_unprocessable(&atm, &id, &raw, &err);
-        assert_eq!(ws.health.unprocessable_deleted, 1, "third offer deletes");
+        assert_eq!(
+            ws.health.unprocessable_deleted, 0,
+            "three quick offers are not enough"
+        );
+
+        tokio::time::advance(super::super::receive_leg::TRANSIENT_UNPACK_MIN_AGE).await;
+        ws.handle_unprocessable(&atm, &id, &raw, &err);
+        assert_eq!(
+            ws.health.unprocessable_deleted, 1,
+            "old and repeated: deleted"
+        );
         assert_eq!(ws.health.unprocessable_retained, 0);
+    }
+
+    /// A frame sent to a key this profile has not loaded is a legitimate
+    /// message, not poison: it is never deleted, however often or long.
+    #[tokio::test(start_paused = true)]
+    async fn a_frame_for_a_missing_local_key_is_never_deleted() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        let err = ATMError::SecretsError("no secret for did:example:me#key-2".into());
+        let raw = plaintext_frame("rotated", None);
+        let id = sha256::digest(&raw);
+        for _ in 0..5 {
+            ws.handle_unprocessable(&atm, &id, &raw, &err);
+            tokio::time::advance(super::super::receive_leg::TRANSIENT_UNPACK_MIN_AGE).await;
+        }
+        assert_eq!(ws.health.unprocessable_deleted, 0);
     }
 
     /// The mediator's answer to our own receive-leg probe is ours: it must not
