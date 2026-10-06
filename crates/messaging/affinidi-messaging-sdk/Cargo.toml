@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.33.1"
+version = "0.33.2"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -91,7 +91,7 @@ tracing = { version = "0.1", features = ["valuable"] }
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["net", "io-util"] }
+tokio = { workspace = true, features = ["net", "io-util", "test-util"] }
 clap = { version = "4", features = ["derive"] }
 console = "0.16"
 dialoguer = "0.12"

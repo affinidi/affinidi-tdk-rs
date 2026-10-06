@@ -2,7 +2,14 @@
  * WebSocket transport implementation for Affinidi Messaging SDK.
  */
 
-use super::{WebSocketResponses, ws_cache::MessageCache};
+use super::{
+    ReceiveHealth, WebSocketResponses,
+    receive_leg::{
+        CONSUMER_STALL_AFTER, ProbeStep, UnpackFailure, UnpackSightings, classify_unpack_failure,
+        consumer_stalled, frame_hint, probe_step, unpack_failure_disposition,
+    },
+    ws_cache::MessageCache,
+};
 use crate::{ATM, SharedState, errors::ATMError, profiles::ATMProfile};
 use affinidi_messaging_core::ConnState;
 use ahash::{HashMap, HashMapExt};
@@ -24,7 +31,7 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
     tungstenite::{Bytes, ClientRequestBuilder, Message, error::ProtocolError, http::Uri},
 };
-use tracing::{Instrument, Level, debug, error, span, warn};
+use tracing::{Instrument, Level, debug, error, info, span, warn};
 
 type WebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -42,6 +49,21 @@ const STABLE_CONNECTION: Duration = Duration::from_secs(30);
 /// laptop wakes up holding) that flush may have nobody to drain it, and the
 /// transport task must not park on a frame nobody will read.
 const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long the transport task waits for one inbound frame to unpack.
+///
+/// The unpack runs inline on the transport task and resolves DIDs over the
+/// network. Unbounded, a hung resolver stalled the whole socket — reads, sends,
+/// the watchdog — behind one frame (R1.2). A timed-out unpack is a transient
+/// failure: the frame is left at the mediator for redelivery.
+const UNPACK_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How long the transport task waits to pack a receive-leg probe (packing can
+/// resolve the mediator's DID).
+const PROBE_PACK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The Message Pickup 3.0 status type — the mediator's answer to a probe.
+const STATUS_TYPE: &str = "https://didcomm.org/messagepickup/3.0/status";
 
 /// What the 20s watchdog does on a tick.
 #[derive(Debug, PartialEq, Eq)]
@@ -160,6 +182,32 @@ pub(crate) struct WebSocketTransport {
     /// Skip unpacking messages - return them as packed strings instead
     skip_unpack_messages: bool,
 
+    /// When the last Text/Binary frame arrived, or the socket connected —
+    /// whichever is later. Drives the receive-leg probe; see
+    /// [`super::receive_leg::probe_step`].
+    last_data_frame_at: tokio::time::Instant,
+
+    /// The outstanding receive-leg probe: its message id and when it was
+    /// written. Cleared by any inbound data frame.
+    probe: Option<(String, tokio::time::Instant)>,
+
+    /// Ids of recent probes, so their answers can be recognised and consumed
+    /// here rather than handed to the application. Bounded (a handful).
+    probe_ids: VecDeque<String>,
+
+    /// When the caches last went from empty to holding frames.
+    held_since: Option<tokio::time::Instant>,
+
+    /// When a consumer last took a frame.
+    last_take_at: Option<tokio::time::Instant>,
+
+    /// Frames that failed to unpack transiently, counted per mediator id.
+    unpack_sightings: UnpackSightings,
+
+    /// The current receive-leg health, and where it is published.
+    health: ReceiveHealth,
+    health_tx: watch::Sender<ReceiveHealth>,
+
     /// Re-falsifiable connection-state signal. A transition is published on
     /// every successful (re)connect (`Connected`) and every drop
     /// (`Disconnected`), so observers see live connectivity rather than a
@@ -200,6 +248,10 @@ pub(crate) enum WebSocketCommands {
 
     /// If SDK timesout, then cancel the GetMessage request
     CancelGetMessage(String),
+
+    /// Drop the current socket and connect again at once (no backoff). See
+    /// [`crate::profiles::ATMProfile::reconnect_websocket`].
+    Reconnect,
 }
 
 impl WebSocketTransport {
@@ -214,36 +266,7 @@ impl WebSocketTransport {
         Sender<WebSocketCommands>,
         watch::Receiver<ConnState>,
     ) {
-        let (task_tx, mut task_rx) = mpsc::channel::<WebSocketCommands>(32);
-        let (conn_state_tx, conn_state_rx) = watch::channel(ConnState::Connecting);
-        let handle = tokio::spawn(async move {
-            let mut websocket = WebSocketTransport {
-                profile: profile.clone(),
-                shared: shared.clone(),
-                web_socket: None,
-                connect_delay_timer: None,
-                connect_delay: 0,
-                awaiting_pong: false,
-                connected_at: None,
-                access_expires_at: None,
-                inbound_cache: MessageCache {
-                    fetch_cache_limit_count: shared.config.fetch_cache_limit_count,
-                    fetch_cache_limit_bytes: shared.config.fetch_cache_limit_bytes,
-                    ..Default::default()
-                },
-                direct_channel,
-                next_requests: HashMap::new(),
-                next_requests_list: VecDeque::new(),
-                packed_cache: VecDeque::new(),
-                packed_cache_bytes: 0,
-                packed_cache_full: false,
-                skip_toggle_live_delivery: false,
-                skip_unpack_messages: false,
-                conn_state_tx,
-            };
-            websocket.run(&mut task_rx).await;
-        });
-        (handle, task_tx, conn_state_rx)
+        Self::start_with_options(profile, shared, direct_channel, false, false).await
     }
 
     pub(crate) async fn start_with_options(
@@ -259,34 +282,72 @@ impl WebSocketTransport {
     ) {
         let (task_tx, mut task_rx) = mpsc::channel::<WebSocketCommands>(32);
         let (conn_state_tx, conn_state_rx) = watch::channel(ConnState::Connecting);
+        let (health_tx, health_rx) = watch::channel(ReceiveHealth::default());
+        // Install the receive-health view before the task can publish to it, so
+        // a caller that reads it right after `start` never sees `None`.
+        if let Some(mediator) = profile.inner.mediator.as_ref().as_ref() {
+            mediator
+                .ws_receive_health_rx
+                .write()
+                .await
+                .replace(health_rx);
+        }
         let handle = tokio::spawn(async move {
-            let mut websocket = WebSocketTransport {
-                profile: profile.clone(),
-                shared: shared.clone(),
-                web_socket: None,
-                connect_delay_timer: None,
-                connect_delay: 0,
-                awaiting_pong: false,
-                connected_at: None,
-                access_expires_at: None,
-                inbound_cache: MessageCache {
-                    fetch_cache_limit_count: shared.config.fetch_cache_limit_count,
-                    fetch_cache_limit_bytes: shared.config.fetch_cache_limit_bytes,
-                    ..Default::default()
-                },
+            let mut websocket = WebSocketTransport::new(
+                profile,
+                shared,
                 direct_channel,
-                next_requests: HashMap::new(),
-                next_requests_list: VecDeque::new(),
-                packed_cache: VecDeque::new(),
-                packed_cache_bytes: 0,
-                packed_cache_full: false,
                 skip_toggle_live_delivery,
                 skip_unpack_messages,
                 conn_state_tx,
-            };
+                health_tx,
+            );
             websocket.run(&mut task_rx).await;
         });
         (handle, task_tx, conn_state_rx)
+    }
+
+    fn new(
+        profile: Arc<ATMProfile>,
+        shared: Arc<SharedState>,
+        direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
+        skip_toggle_live_delivery: bool,
+        skip_unpack_messages: bool,
+        conn_state_tx: watch::Sender<ConnState>,
+        health_tx: watch::Sender<ReceiveHealth>,
+    ) -> Self {
+        WebSocketTransport {
+            inbound_cache: MessageCache {
+                fetch_cache_limit_count: shared.config.fetch_cache_limit_count,
+                fetch_cache_limit_bytes: shared.config.fetch_cache_limit_bytes,
+                ..Default::default()
+            },
+            profile,
+            shared,
+            web_socket: None,
+            connect_delay_timer: None,
+            connect_delay: 0,
+            awaiting_pong: false,
+            connected_at: None,
+            access_expires_at: None,
+            direct_channel,
+            next_requests: HashMap::new(),
+            next_requests_list: VecDeque::new(),
+            packed_cache: VecDeque::new(),
+            packed_cache_bytes: 0,
+            packed_cache_full: false,
+            skip_toggle_live_delivery,
+            skip_unpack_messages,
+            last_data_frame_at: tokio::time::Instant::now(),
+            probe: None,
+            probe_ids: VecDeque::new(),
+            held_since: None,
+            last_take_at: None,
+            unpack_sightings: UnpackSightings::default(),
+            health: ReceiveHealth::default(),
+            health_tx,
+            conn_state_tx,
+        }
     }
 
     /// Starts the WebSocket Connection and management to the mediator
@@ -337,6 +398,11 @@ impl WebSocketTransport {
                             // Single success site for the first connect AND every
                             // reconnect — publish the live connection signal here.
                             let _ = self.conn_state_tx.send(ConnState::Connected);
+                            // A fresh socket starts its silence clock now, with
+                            // no probe out: the connect itself re-enabled live
+                            // delivery, which is what a probe would have asked.
+                            self.last_data_frame_at = tokio::time::Instant::now();
+                            self.probe = None;
                             // Arm the proactive-refresh timer for this socket.
                             refresh_deadline = self.refresh_deadline();
                             if notify_connection.is_some() {
@@ -423,6 +489,8 @@ impl WebSocketTransport {
                             self.awaiting_pong = false;
                             self.fail_pending_requests();
                             self.on_disconnected();
+                        } else {
+                            self.check_receive_leg(&atm).await;
                         }
                     },
                     cmd = task_rx.recv() => {
@@ -478,6 +546,9 @@ impl WebSocketTransport {
                                 // anything a later poll could produce, and they have no
                                 // other way out — the DIDComm cache is keyed by unpacked
                                 // message id and cannot hold them.
+                                // A `Next` is the consumer showing up, whether or
+                                // not there is anything to take.
+                                self.last_take_at = Some(tokio::time::Instant::now());
                                 if let Some(packed) = self.pop_packed() {
                                     debug!("Serving packed message from cache");
                                     let _ = sender.send(WebSocketResponses::PackedMessageReceived(Box::new(packed)));
@@ -495,12 +566,27 @@ impl WebSocketTransport {
 
                             },
                             Some(WebSocketCommands::GetMessage(id, sender)) => {
+                                self.last_take_at = Some(tokio::time::Instant::now());
                                 if let Some((sender, message, metadata)) = self.inbound_cache.get_or_add_wanted(&id, sender) {
                                     debug!("Message found in cache");
                                     let _ = sender.send(WebSocketResponses::MessageReceived(Box::new(message), Box::new(metadata)));
                                 } else {
                                     debug!("Message ({}) not found in cache, added to wanted list", id);
                                 }
+                            }
+                            Some(WebSocketCommands::Reconnect) => {
+                                debug!("Reconnect requested");
+                                if let Some(web_socket) = self.web_socket.as_mut() {
+                                    close_bounded(web_socket).await;
+                                }
+                                self.web_socket = None;
+                                self.awaiting_pong = false;
+                                self.fail_pending_requests();
+                                // Asked for, not a failure: immediate retry, and
+                                // the fresh socket earns its own stability.
+                                self.connected_at = None;
+                                self.connect_delay = 0;
+                                self.connect_delay_timer = None;
                             }
                             Some(WebSocketCommands::CancelGetMessage(id)) => {
                                 // Drop the registration so a reply that arrives
@@ -521,6 +607,7 @@ impl WebSocketTransport {
                         self.handle_inbound_message(&atm, msg).await;
                     }
                 }
+                self.track_held_frames();
             }
             debug!("WebSocket connection stopped");
         }
@@ -588,6 +675,18 @@ impl WebSocketTransport {
         // a mediator busy streaming may answer the ping behind its messages.
         if inbound.is_ok() {
             self.awaiting_pong = false;
+        }
+        // A data frame is evidence the mediator is delivering to this socket —
+        // stronger than a pong, which only proves the socket. It answers any
+        // outstanding receive-leg probe.
+        if matches!(inbound, Ok(Message::Text(_) | Message::Binary(_))) {
+            self.last_data_frame_at = tokio::time::Instant::now();
+            if self.probe.take().is_some() {
+                debug!("Receive-leg probe answered");
+            }
+            self.health.last_data_frame_at = Some(self.shared.config.clock().unix_secs());
+            self.health.probe_outstanding_since = None;
+            self.publish_health();
         }
         match inbound {
             Ok(ws_msg) => match ws_msg {
@@ -744,6 +843,7 @@ impl WebSocketTransport {
                 match sender.send(WebSocketResponses::PackedMessageReceived(Box::new(message))) {
                     Ok(()) => {
                         debug!("Next message found, sending to requestor packed");
+                        self.last_take_at = Some(tokio::time::Instant::now());
                         return;
                     }
                     Err(WebSocketResponses::PackedMessageReceived(returned)) => {
@@ -765,6 +865,7 @@ impl WebSocketTransport {
                 {
                     Ok(_) => {
                         debug!("Sending message to direct channel packed");
+                        self.last_take_at = Some(tokio::time::Instant::now());
                         return;
                     }
                     Err(returned) => {
@@ -792,8 +893,28 @@ impl WebSocketTransport {
             return;
         }
 
-        match atm.unpack(&message).await {
+        let unpacked = match tokio::time::timeout(UNPACK_TIMEOUT, atm.unpack(&message)).await {
+            Ok(result) => result,
+            Err(_) => Err(ATMError::TransportError(format!(
+                "unpacking the inbound frame did not complete within {UNPACK_TIMEOUT:?}"
+            ))),
+        };
+        match unpacked {
             Ok((message, metadata)) => {
+                // The answer to our own receive-leg probe. Already counted as
+                // evidence of delivery when its frame arrived; it is ours, not
+                // the application's, and the mediator does not store it, so
+                // there is nothing to hand on or delete.
+                if message.typ == STATUS_TYPE
+                    && message
+                        .thid
+                        .as_deref()
+                        .is_some_and(|thid| self.probe_ids.iter().any(|id| id == thid))
+                {
+                    debug!("Consumed the mediator's answer to a receive-leg probe");
+                    return;
+                }
+
                 // An unpacked message has the same rule as a packed frame above:
                 // every home that turns it away hands it to the next, and it ends
                 // in the cache rather than falling off the end. Each `send` below
@@ -813,6 +934,7 @@ impl WebSocketTransport {
                     )) {
                         Ok(()) => {
                             debug!("Message is wanted, sent to requestor");
+                            self.last_take_at = Some(tokio::time::Instant::now());
                             return;
                         }
                         Err(WebSocketResponses::MessageReceived(m, md)) => {
@@ -838,6 +960,7 @@ impl WebSocketTransport {
                     )) {
                         Ok(()) => {
                             debug!("Next message found, sent to requestor");
+                            self.last_take_at = Some(tokio::time::Instant::now());
                             return;
                         }
                         Err(WebSocketResponses::MessageReceived(m, md)) => {
@@ -858,6 +981,7 @@ impl WebSocketTransport {
                     )) {
                         Ok(_) => {
                             debug!("Sent message to direct channel");
+                            self.last_take_at = Some(tokio::time::Instant::now());
                             return;
                         }
                         Err(broadcast::error::SendError(WebSocketResponses::MessageReceived(
@@ -876,21 +1000,292 @@ impl WebSocketTransport {
                 self.inbound_cache.insert(message, metadata);
             }
             Err(e) => {
-                error!("Error unpacking message: {:?}", e);
-                // A live frame that fails to unpack (e.g. an unauthenticated
-                // wrapping the secure policy rejects) is dropped here; surface it
-                // on the optional unprocessable-message channel so a consumer can
-                // observe or quarantine it instead of losing it to a log line. The
-                // mediator ids a message by `sha256(packed message)` and
+                // The mediator ids a message by `sha256(packed message)` and
                 // live-delivers those exact bytes, so `sha256(&message)` is the
-                // mediator message id — the same identifier the pickup drain reports.
+                // mediator message id — the id the pickup drain reports, and
+                // the one a delete names.
+                let id = sha256::digest(&message);
+                // Reported first, whatever happens next, so a consumer can
+                // observe or quarantine the frame.
                 crate::protocols::message_pickup::emit_unprocessable(
                     atm,
-                    Some(sha256::digest(&message)),
+                    Some(id.clone()),
                     message.clone(),
                     e.to_string(),
                 );
+                self.handle_unprocessable(atm, &id, &message, &e);
             }
+        }
+    }
+
+    /// Decide what happens to an inbound DIDComm frame that could not be
+    /// unpacked: delete it from the mediator, or leave it for redelivery.
+    ///
+    /// # Why it is deleted at all (R1.6)
+    ///
+    /// R1.6 says ack (delete) only after durable handoff, and this frame was
+    /// never handed off. It is deleted anyway, deliberately: it never *can* be
+    /// handed off. A mediator keeps a message until its recipient deletes it
+    /// and counts it against the **sender's** per-recipient queue
+    /// (`limits.queue.peer`, default 50) until then. Left alone, every poison
+    /// frame was redelivered on every reconnect and every redelivery request,
+    /// and stayed in the sender's quota for its whole lifetime — enough of them
+    /// and the sender could no longer reach this DID at all, while this side
+    /// logged one error per delivery and looked healthy. The TSP adapter
+    /// already deletes undeliverable frames for the same reason, and the pickup
+    /// drain already deleted DIDComm ones; only the live stream kept them.
+    ///
+    /// A transient failure (a resolver or network hiccup, or the unpack timing
+    /// out) is **not** treated as poison: the frame stays at the mediator and
+    /// is offered again, and is only deleted once it has failed
+    /// [`super::receive_leg::TRANSIENT_UNPACK_SIGHTINGS`] times **and** for at
+    /// least [`super::receive_leg::TRANSIENT_UNPACK_MIN_AGE`] — a "transient"
+    /// failure that repeats for an hour is not transient. A failure for want of
+    /// this profile's own keys is never deleted. Only failures known to be a
+    /// property of the bytes (undecryptable, a bad signature) are deleted at
+    /// once, which is what the pickup drain already did; each deletion is
+    /// logged at WARN with what can be read off the envelope.
+    /// `with_delete_unprocessable(false)` keeps every frame instead.
+    fn handle_unprocessable(&mut self, atm: &ATM, id: &str, raw: &str, err: &ATMError) {
+        let class = classify_unpack_failure(err);
+        let now = tokio::time::Instant::now();
+        let sightings = self.unpack_sightings.record(id, now);
+        let age = self
+            .unpack_sightings
+            .first_seen(id)
+            .map_or(std::time::Duration::ZERO, |first| {
+                now.saturating_duration_since(first)
+            });
+        let config = &self.shared.config;
+        let delete = unpack_failure_disposition(
+            class,
+            sightings,
+            age,
+            config.delete_unprocessable(),
+            config.purge_policy_rejected_messages(),
+        );
+        let hint = frame_hint(raw);
+        let sender = hint.sender.as_deref().unwrap_or("<not named>");
+        let kind = hint.kind.as_deref().unwrap_or("<unknown>");
+
+        if !delete {
+            let reason = if !config.delete_unprocessable() {
+                "deletion of unprocessable frames is disabled"
+            } else if class == UnpackFailure::LocalConfig {
+                "this profile lacks the key it was sent to; kept, never deleted"
+            } else if class == UnpackFailure::PolicyRejected {
+                "policy rejects are retained (purge_policy_rejected_messages = false)"
+            } else {
+                "failure may be transient; left at the mediator for redelivery"
+            };
+            warn!(
+                profile = %self.profile.inner.alias,
+                frame = %id,
+                envelope = hint.envelope,
+                sender,
+                kind,
+                class = ?class,
+                sightings,
+                error = %err,
+                "could not unpack an inbound message — {reason}"
+            );
+            self.health.unprocessable_retained = self.unpack_sightings.len() as u32;
+            self.publish_health();
+            return;
+        }
+
+        // Never park the transport task on the deletion handler: a full queue
+        // leaves the frame for redelivery, where this runs again.
+        if atm.try_delete_message_background(&self.profile, id) {
+            warn!(
+                profile = %self.profile.inner.alias,
+                frame = %id,
+                envelope = hint.envelope,
+                sender,
+                kind,
+                class = ?class,
+                sightings,
+                error = %err,
+                "deleting an inbound message this profile cannot unpack, so it stops being \
+                 redelivered and stops counting against its sender's mediator queue"
+            );
+            self.unpack_sightings.forget(id);
+            self.health.unprocessable_deleted += 1;
+        } else {
+            warn!(
+                profile = %self.profile.inner.alias,
+                frame = %id,
+                sender,
+                "could not queue the deletion of an unprocessable inbound message (deletion \
+                 handler busy) — it will be redelivered and tried again"
+            );
+        }
+        self.health.unprocessable_retained = self.unpack_sightings.len() as u32;
+        self.publish_health();
+    }
+
+    /// Frames held in the caches, waiting for the application.
+    fn held_frames(&self) -> usize {
+        self.inbound_cache.total_count as usize + self.packed_cache.len()
+    }
+
+    /// Keep `held_since` in step with the caches. Run once per loop turn.
+    fn track_held_frames(&mut self) {
+        let held = self.held_frames();
+        match (held, self.held_since) {
+            (0, Some(_)) => self.held_since = None,
+            (n, None) if n > 0 => self.held_since = Some(tokio::time::Instant::now()),
+            _ => {}
+        }
+        if self.health.held_frames != held as u32 {
+            self.health.held_frames = held as u32;
+            self.publish_health();
+        }
+    }
+
+    fn publish_health(&self) {
+        self.health_tx.send_if_modified(|current| {
+            if *current == self.health {
+                false
+            } else {
+                *current = self.health.clone();
+                true
+            }
+        });
+    }
+
+    /// The receive-leg checks, run on each watchdog tick while connected: is
+    /// the application still taking frames, and is the mediator still
+    /// delivering?
+    async fn check_receive_leg(&mut self, atm: &ATM) {
+        let now = tokio::time::Instant::now();
+
+        // 1. Consumer stall. Reported, not "fixed" by reconnecting: a reconnect
+        //    cannot make an application read, and the mediator's redelivery on
+        //    connect would only duplicate frames into the packed cache. The
+        //    remedy is in the consumer; the signal is what this layer owes it.
+        let held = self.held_frames();
+        let stalled = consumer_stalled(
+            held,
+            self.held_since,
+            self.last_take_at,
+            now,
+            CONSUMER_STALL_AFTER,
+        );
+        match (stalled, self.health.consumer_stalled_since.is_some()) {
+            (true, false) => {
+                warn!(
+                    profile = %self.profile.inner.alias,
+                    held,
+                    reads_paused = self.inbound_cache.is_full() || self.packed_cache_is_full(),
+                    "inbound messages are not being collected: {held} held for more than {}s \
+                     with none taken. Nothing is being deleted at the mediator, so this DID's \
+                     inbox is filling and peers writing to it will start being refused \
+                     (limits.queue.peer)",
+                    CONSUMER_STALL_AFTER.as_secs()
+                );
+                self.health.consumer_stalled_since = Some(self.shared.config.clock().unix_secs());
+                self.publish_health();
+            }
+            (false, true) => {
+                info!(
+                    profile = %self.profile.inner.alias,
+                    "inbound messages are being collected again"
+                );
+                self.health.consumer_stalled_since = None;
+                self.publish_health();
+            }
+            _ => {}
+        }
+
+        // 2. Receive-leg probe.
+        let quiet = held == 0 && !self.inbound_cache.is_full() && !self.packed_cache_is_full();
+        let step = probe_step(
+            self.shared.config.receive_probe_after(),
+            now,
+            self.last_data_frame_at,
+            self.probe.as_ref().map(|(_, sent)| *sent),
+            quiet,
+        );
+        match step {
+            ProbeStep::Idle | ProbeStep::Wait => {}
+            ProbeStep::Send => self.send_probe(atm, now).await,
+            ProbeStep::Dead => {
+                let mediator = self
+                    .profile
+                    .dids()
+                    .map(|(_, m)| m.to_string())
+                    .unwrap_or_default();
+                let waited = self
+                    .probe
+                    .as_ref()
+                    .map(|(_, sent)| now.saturating_duration_since(*sent).as_secs())
+                    .unwrap_or_default();
+                warn!(
+                    profile = %self.profile.inner.alias,
+                    mediator = %mediator,
+                    "mediator socket is up but nothing is being delivered to it (live-delivery \
+                     probe unanswered for {waited}s); reconnecting"
+                );
+                self.probe = None;
+                self.health.probe_outstanding_since = None;
+                self.health.probe_reconnects += 1;
+                self.publish_health();
+                if let Some(web_socket) = self.web_socket.as_mut() {
+                    close_bounded(web_socket).await;
+                }
+                self.web_socket = None;
+                self.awaiting_pong = false;
+                self.fail_pending_requests();
+                self.on_disconnected();
+            }
+        }
+    }
+
+    /// Write a receive-leg probe — a live-delivery-change(true) — straight to
+    /// the socket. Never via `ATM::send_message`: that queues a command for this
+    /// very task and waits for a reply only this task could produce (#611).
+    async fn send_probe(&mut self, atm: &ATM, now: tokio::time::Instant) {
+        let packed = tokio::time::timeout(
+            PROBE_PACK_TIMEOUT,
+            crate::protocols::message_pickup::MessagePickup::packed_live_delivery_change(
+                atm,
+                &self.profile,
+                true,
+            ),
+        )
+        .await;
+        let (frame, msg_id) = match packed {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
+                debug!("Could not pack a receive-leg probe ({e}); trying next tick");
+                return;
+            }
+            Err(_) => {
+                debug!("Packing a receive-leg probe timed out; trying next tick");
+                return;
+            }
+        };
+        let Some(web_socket) = self.web_socket.as_mut() else {
+            return;
+        };
+        match tokio::time::timeout(SOCKET_WRITE_TIMEOUT, web_socket.send(Message::text(frame)))
+            .await
+        {
+            Ok(Ok(())) => {
+                debug!("Receive-leg probe sent (inbound silent)");
+                self.probe = Some((msg_id.clone(), now));
+                self.probe_ids.push_back(msg_id);
+                while self.probe_ids.len() > 4 {
+                    self.probe_ids.pop_front();
+                }
+                self.health.probe_outstanding_since = Some(self.shared.config.clock().unix_secs());
+                self.publish_health();
+            }
+            // A socket that cannot take a write is for the ping watchdog to
+            // judge; it will on its next tick.
+            Ok(Err(e)) => debug!("Receive-leg probe write failed ({e})"),
+            Err(_) => debug!("Receive-leg probe write timed out"),
         }
     }
 
@@ -1374,30 +1769,16 @@ mod tests {
             }),
         });
         let (conn_state_tx, _rx) = watch::channel(ConnState::Connecting);
-        WebSocketTransport {
+        let (health_tx, _rx) = watch::channel(ReceiveHealth::default());
+        WebSocketTransport::new(
             profile,
-            shared: atm.inner.clone(),
-            web_socket: None,
-            connect_delay_timer: None,
-            connect_delay: 0,
-            awaiting_pong: false,
-            connected_at: None,
-            access_expires_at: None,
-            inbound_cache: MessageCache {
-                fetch_cache_limit_count: atm.inner.config.fetch_cache_limit_count,
-                fetch_cache_limit_bytes: atm.inner.config.fetch_cache_limit_bytes,
-                ..Default::default()
-            },
-            direct_channel: None,
-            next_requests: HashMap::new(),
-            next_requests_list: VecDeque::new(),
-            packed_cache: VecDeque::new(),
-            packed_cache_bytes: 0,
-            packed_cache_full: false,
-            skip_toggle_live_delivery: false,
-            skip_unpack_messages: false,
+            atm.inner.clone(),
+            None,
+            false,
+            false,
             conn_state_tx,
-        }
+            health_tx,
+        )
     }
 
     /// A live-delivery frame that fails to unpack (here a plaintext the secure
@@ -1570,5 +1951,192 @@ mod tests {
             .next()
             .expect("the reply must be cached, not lost with the gone waiter");
         assert_eq!(cached.id, "reply-1");
+    }
+
+    /// A frame that can never unpack — here a plaintext the secure default
+    /// policy rejects — is deleted from the mediator, keyed by the sha256 of
+    /// the frame, and the deletion is queued without blocking the task.
+    /// Before, it was only logged (and, with a channel configured, reported),
+    /// so it stayed in the inbox counting against its sender's per-peer quota.
+    #[tokio::test]
+    async fn a_permanently_unprocessable_frame_is_deleted() {
+        use crate::config::ATMConfig;
+        use affinidi_tdk_common::{TDKSharedState, config::TDKConfig};
+
+        let config = ATMConfig::builder()
+            .with_unprocessable_message_channel(16)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        let atm = ATM::new(config, tdk).await.unwrap();
+        let mut rx = atm.get_unprocessable_message_channel().unwrap();
+        let mut ws = test_transport(&atm);
+
+        let raw = plaintext_frame("poison", None);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            ws.process_inbound_didcomm_message(&atm, raw.clone()),
+        )
+        .await
+        .expect("handling an unprocessable frame must not block the transport task");
+
+        assert_eq!(ws.health.unprocessable_deleted, 1, "queued for deletion");
+        assert_eq!(ws.unpack_sightings.len(), 0, "nothing left to retry");
+        let reported = rx.try_recv().expect("still reported on the channel");
+        assert_eq!(reported.attachment_id, Some(sha256::digest(&raw)));
+    }
+
+    /// Opting out keeps the old behaviour.
+    #[tokio::test]
+    async fn deletion_can_be_turned_off() {
+        use crate::config::ATMConfig;
+        use affinidi_tdk_common::{TDKSharedState, config::TDKConfig};
+
+        let config = ATMConfig::builder()
+            .with_delete_unprocessable(false)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        let atm = ATM::new(config, tdk).await.unwrap();
+        let mut ws = test_transport(&atm);
+        ws.process_inbound_didcomm_message(&atm, plaintext_frame("kept", None))
+            .await;
+        assert_eq!(ws.health.unprocessable_deleted, 0);
+    }
+
+    /// A transient failure (a resolver hiccup) is not poison: the frame is left
+    /// for redelivery, and deleted only once it has failed three times *and*
+    /// for at least `TRANSIENT_UNPACK_MIN_AGE` — quick redeliveries during a
+    /// short outage are not enough.
+    #[tokio::test(start_paused = true)]
+    async fn a_transiently_unprocessable_frame_is_deleted_only_when_old_and_repeated() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        let err = ATMError::DIDError("could not resolve did:web:flaky".into());
+        let raw = plaintext_frame("flaky", None);
+        let id = sha256::digest(&raw);
+
+        ws.handle_unprocessable(&atm, &id, &raw, &err);
+        ws.handle_unprocessable(&atm, &id, &raw, &err);
+        assert_eq!(ws.health.unprocessable_deleted, 0, "kept for redelivery");
+        assert_eq!(ws.health.unprocessable_retained, 1);
+
+        ws.handle_unprocessable(&atm, &id, &raw, &err);
+        assert_eq!(
+            ws.health.unprocessable_deleted, 0,
+            "three quick offers are not enough"
+        );
+
+        tokio::time::advance(super::super::receive_leg::TRANSIENT_UNPACK_MIN_AGE).await;
+        ws.handle_unprocessable(&atm, &id, &raw, &err);
+        assert_eq!(
+            ws.health.unprocessable_deleted, 1,
+            "old and repeated: deleted"
+        );
+        assert_eq!(ws.health.unprocessable_retained, 0);
+    }
+
+    /// A frame sent to a key this profile has not loaded is a legitimate
+    /// message, not poison: it is never deleted, however often or long.
+    #[tokio::test(start_paused = true)]
+    async fn a_frame_for_a_missing_local_key_is_never_deleted() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        let err = ATMError::SecretsError("no secret for did:example:me#key-2".into());
+        let raw = plaintext_frame("rotated", None);
+        let id = sha256::digest(&raw);
+        for _ in 0..5 {
+            ws.handle_unprocessable(&atm, &id, &raw, &err);
+            tokio::time::advance(super::super::receive_leg::TRANSIENT_UNPACK_MIN_AGE).await;
+        }
+        assert_eq!(ws.health.unprocessable_deleted, 0);
+    }
+
+    /// The mediator's answer to our own receive-leg probe is ours: it must not
+    /// reach the application, which never asked for it.
+    #[tokio::test]
+    async fn a_probe_answer_is_consumed_not_delivered() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        ws.probe_ids.push_back("probe-1".to_string());
+        let waiter = park_next(&mut ws, 1);
+
+        let status = {
+            use affinidi_messaging_didcomm::message::Message as DcMessage;
+            serde_json::to_string(
+                &DcMessage::build(
+                    "status-1".to_string(),
+                    STATUS_TYPE.to_string(),
+                    serde_json::json!({"message_count": 0}),
+                )
+                .thid("probe-1".to_string())
+                .from("did:example:mediator".to_string())
+                .to("did:example:recipient".to_string())
+                .finalize(),
+            )
+            .unwrap()
+        };
+        ws.process_inbound_didcomm_message(&atm, status).await;
+
+        assert!(ws.inbound_cache.next().is_none(), "not cached");
+        assert_eq!(
+            ws.next_requests_list.len(),
+            1,
+            "the waiter is still waiting"
+        );
+        drop(waiter);
+
+        // A status answering somebody else's request still goes through.
+        ws.process_inbound_didcomm_message(&atm, plaintext_frame("other", Some("not-a-probe")))
+            .await;
+        assert!(ws.inbound_cache.next().is_some() || ws.next_requests_list.is_empty());
+    }
+
+    /// Any inbound data frame answers an outstanding probe; a pong does not —
+    /// it proves the socket, not that the mediator is delivering to it.
+    #[tokio::test]
+    async fn a_data_frame_answers_the_probe_and_a_pong_does_not() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        ws.probe = Some(("p".into(), tokio::time::Instant::now()));
+
+        ws.handle_inbound_message(&atm, Ok(Message::Pong(Bytes::new())))
+            .await;
+        assert!(ws.probe.is_some(), "a pong is not evidence of delivery");
+
+        ws.handle_inbound_message(&atm, Ok(Message::text(plaintext_frame("d", None))))
+            .await;
+        assert!(ws.probe.is_none(), "a data frame answers the probe");
+        assert!(ws.health.last_data_frame_at.is_some());
+    }
+
+    /// Frames held with no consumer taking them are reported as a stall, and
+    /// the report clears once they are taken.
+    #[tokio::test]
+    async fn held_frames_nobody_takes_are_reported_as_a_stall() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        ws.process_inbound_didcomm_message(&atm, plaintext_frame("held", None))
+            .await;
+        ws.track_held_frames();
+        assert_eq!(ws.health.held_frames, 1);
+
+        // Pretend it has been held past the threshold.
+        ws.held_since = Some(tokio::time::Instant::now() - CONSUMER_STALL_AFTER);
+        ws.check_receive_leg(&atm).await;
+        assert!(ws.health.consumer_stalled(), "a stall is reported");
+
+        let _ = ws.inbound_cache.next();
+        ws.track_held_frames();
+        ws.check_receive_leg(&atm).await;
+        assert!(!ws.health.consumer_stalled(), "and clears once drained");
     }
 }
