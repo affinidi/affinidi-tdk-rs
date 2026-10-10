@@ -1302,6 +1302,29 @@ async fn check_purge_and_removal_receipts(store: Arc<dyn MediatorStore>) {
         "an admin filtered purge is not a collection"
     );
 
+    // The trait's default `purge_folder_by`, which a backend gets if it does
+    // not override it, honours the authority too (every backend here
+    // overrides it, so call the default's body directly).
+    let (to, from) = ("did_hash_rcpt_default_by", "did_hash_sndr_default_by");
+    let ids = receipt_fixture(&store, to, from, "default-by").await;
+    let (purged, _) = affinidi_messaging_mediator_common::store::purge_folder_by_listing(
+        store.as_ref(),
+        "s",
+        to,
+        Folder::Inbox,
+        DeletionAuthority::Admin {
+            admin_did_hash: "did_hash_admin_purge".into(),
+        },
+    )
+    .await
+    .expect("default purge");
+    assert_eq!(purged, 4, "the default purge empties the folder");
+    assert_eq!(
+        first_reason(&store, from, &ids).await,
+        Some(RemovalReason::Discarded),
+        "the default purge_folder_by honours the authority"
+    );
+
     let (to, from) = ("did_hash_rcpt_removed", "did_hash_sndr_removed");
     let ids = receipt_fixture(&store, to, from, "removed").await;
     store

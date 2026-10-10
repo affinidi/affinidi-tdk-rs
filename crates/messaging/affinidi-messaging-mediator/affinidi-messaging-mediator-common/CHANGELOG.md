@@ -13,9 +13,12 @@ senders were told their messages were collected when nobody had read them:
 - **Queue purges** had no way to say who was purging. New `MediatorStore`
   methods `purge_folder_by` and `purge_folder_filtered_by` take the deleting
   `DeletionAuthority`; `purge_folder` / `purge_folder_filtered` keep their
-  signatures and purge as the owner. Both new methods have defaults (the
-  unfiltered default purges as the owner); the Redis, Fjall and in-memory
-  stores honour the authority.
+  signatures and purge as the owner. Both new methods have defaults that
+  honour the authority, so a backend that doesn't override them can't hand
+  senders the wrong receipt. The unfiltered default is the new public
+  `store::purge_folder_by_listing`, which the conformance suite runs against
+  every backend. The Redis, Fjall and in-memory stores override both with
+  their own bulk paths.
 
 An owner purging its own inbox still reads as `collected` (its outbox,
 `withdrawn`), as #896 specifies. Additive only. Addresses #896.

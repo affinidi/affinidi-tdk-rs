@@ -208,6 +208,45 @@ impl PurgeFilter {
 }
 
 /// What a filtered purge did, or would have done.
+
+/// The default [`MediatorStore::purge_folder_by`], over the store's own
+/// primitives: the unfiltered [`purge_folder_filtered_by`] (whose default
+/// deletes each message with `by`) until nothing is left, then the stream key.
+/// Public so the store-conformance suite can run this exact path against
+/// every backend, which all override the trait method.
+///
+/// [`purge_folder_filtered_by`]: MediatorStore::purge_folder_filtered_by
+pub async fn purge_folder_by_listing<S: MediatorStore + ?Sized>(
+    store: &S,
+    session_id: &str,
+    did_hash: &str,
+    folder: Folder,
+    by: DeletionAuthority,
+) -> Result<(usize, usize), MediatorError> {
+    let (mut count, mut bytes) = (0, 0);
+    loop {
+        let report = store
+            .purge_folder_filtered_by(
+                did_hash,
+                folder.clone(),
+                &PurgeFilter::default(),
+                by.clone(),
+            )
+            .await?;
+        count += report.count;
+        bytes += report.bytes;
+        // A pass caps its work and says so; stop once one finishes, or
+        // removes nothing (only undeletable messages left).
+        if !report.truncated || report.count == 0 {
+            break;
+        }
+    }
+    store
+        .delete_folder_stream(session_id, did_hash, folder)
+        .await?;
+    Ok((count, bytes))
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PurgeReport {
     /// Messages matched **and actually removed** — or, for a dry run, matched
@@ -759,9 +798,12 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// account removal — must pass [`DeletionAuthority::Admin`] so senders see
     /// `discarded`, not a collection that never happened.
     ///
-    /// The default ignores `by` and purges as the owner; every in-tree
-    /// backend overrides it. `purge_folder` is this with the owner's
-    /// authority.
+    /// The default honours `by`, so a backend that doesn't override this
+    /// can't hand senders the wrong receipt: it runs the unfiltered
+    /// [`purge_folder_filtered_by`](Self::purge_folder_filtered_by) (whose
+    /// default deletes with `by`) until nothing is left, then drops the
+    /// stream key as `purge_folder` does. Backends override it with their
+    /// faster bulk path; `purge_folder` is this with the owner's authority.
     async fn purge_folder_by(
         &self,
         session_id: &str,
@@ -769,8 +811,7 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         folder: Folder,
         by: DeletionAuthority,
     ) -> Result<(usize, usize), MediatorError> {
-        let _ = by;
-        self.purge_folder(session_id, did_hash, folder).await
+        purge_folder_by_listing(self, session_id, did_hash, folder, by).await
     }
 
     /// Purge only the messages in a folder that match `filter`, and report
