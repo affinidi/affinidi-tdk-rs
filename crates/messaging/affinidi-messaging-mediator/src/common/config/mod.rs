@@ -510,6 +510,19 @@ impl TryFrom<ConfigRaw> for Config {
                 format!("Secret backend '{}' failed probe: {e}", raw.secrets.backend),
             )
         })?;
+        // Move a per-key deployment into the single-secret layout before
+        // anything reads from it. A failure stops the mediator here, with
+        // the cause and the fix, and leaves the store as it was.
+        mediator_secrets.ensure_migrated().await.map_err(|e| {
+            MediatorError::ConfigError(
+                12,
+                "NA".into(),
+                format!(
+                    "Secret backend '{}' could not be moved to the single-secret layout: {e}",
+                    raw.secrets.backend
+                ),
+            )
+        })?;
         if raw.secrets.backend.starts_with("file://") {
             warn!(
                 "Secret backend is file:// — secrets are plaintext on disk. \

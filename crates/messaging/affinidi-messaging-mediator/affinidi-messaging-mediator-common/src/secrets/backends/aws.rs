@@ -324,6 +324,17 @@ impl SecretStore for AwsStore {
         }
         Ok(names)
     }
+
+    /// The region-wide listing narrowed to this store's namespace, with
+    /// the namespace stripped back off.
+    async fn list_keys(&self) -> Result<Vec<String>> {
+        Ok(self
+            .list_namespace()
+            .await?
+            .into_iter()
+            .filter_map(|name| name.strip_prefix(&self.namespace).map(str::to_string))
+            .collect())
+    }
 }
 
 #[cfg(test)]

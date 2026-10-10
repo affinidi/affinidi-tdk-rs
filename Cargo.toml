@@ -107,10 +107,9 @@ tokio = "1"
 # newest release — still wants `^0.63.0`, and `aws-config` is what every AWS
 # feature here pulls.
 #
-# **This workspace ships no `Cargo.lock`** (it is in `.gitignore`), so there is
-# no lockfile to hold the working set and `--locked` has nothing to honour:
-# every clone resolves from scratch and every fresh resolve takes the break.
-# The manifest is the only place the constraint can live. A
+# The committed `Cargo.lock` holds a working set for this workspace, but nobody
+# who depends on these crates from crates.io uses it: their own resolve takes
+# the break. The manifest is the only place the constraint reaches them. A
 # `[workspace.dependencies]` entry alone constrains nothing, though — Cargo
 # honours a requirement only from a crate that *declares* the dependency, so
 # each crate whose subtree pulls `aws-config` names it below, under the same

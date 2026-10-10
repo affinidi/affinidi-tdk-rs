@@ -1,75 +1,68 @@
 # affinidi-messaging-mediator
 
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-messaging/affinidi-messaging-mediator)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-mediator)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 A mediator and relay service supporting
 [DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) and
 [Trust Spanning Protocol (TSP)](https://trustoverip.github.io/tswg-tsp-specification/).
-Handles connections, permissions, and message routing between messaging
+It handles connections, permissions, and message routing between messaging
 participants.
 
-## Quick Start
+## Quick start
 
-### 1. Start the storage backend (Redis-only — Fjall is embedded)
+### 1. Start Redis (skip for Fjall)
 
-If you picked Fjall in the wizard, skip this step — Fjall stores
-its data in a local directory and needs no sidecar. For Redis:
+Fjall is embedded and keeps its data in a local directory, so it needs no
+sidecar. For Redis:
 
 ```bash
 docker run --name=redis-local --publish=6379:6379 --hostname=redis \
   --restart=on-failure --detach redis:latest
 ```
 
-### 2. Run the Setup Wizard
+### 2. Run the setup wizard
 
-The setup wizard generates all configuration, keys, and secrets in one step:
+The wizard generates the configuration, keys, and secrets in one step:
 
 ```bash
 cargo run --locked --bin mediator-setup
 ```
 
-The interactive TUI guides you through:
+It asks for:
 
-1. **Deployment type** — local dev, headless server, or container
-2. **Protocol** — DIDComm v2, TSP, or both (dual-protocol)
-3. **DID configuration** — did:peer, did:webvh, or VTA-managed
-4. **Key storage** — file (`?encrypt=1` opt-in), OS keyring, AWS
-   Secrets Manager, GCP Secret Manager, Azure Key Vault, HashiCorp
-   Vault (token / Kubernetes / AppRole auth), or Kubernetes Secrets
-5. **SSL/TLS** — none (use a proxy), existing certs, or self-signed
-6. **Database** — Redis URL (multi-node cluster) or Fjall data
-   directory (single-node embedded LSM, no sidecar)
-7. **Admin account** — generate did:key, paste existing, or skip
+1. **Deployment type**: local dev, headless server, or container.
+2. **Protocol**: DIDComm v2 only, or DIDComm v2 + TSP.
+3. **DID**: did:peer, did:webvh, or VTA-managed.
+4. **Key storage**: one of the [secret backends](#secret-storage).
+5. **SSL/TLS**: none (use a proxy), existing certificates, or self-signed.
+6. **Database**: a Redis URL, or a Fjall data directory (single node).
+7. **Admin account**: generate a did:key, paste an existing one, or skip.
 
-The wizard generates:
-- `conf/mediator.toml` — full configuration with real cryptographic material
-- `conf/keys/` — SSL certificates (if using self-signed)
-- Admin DID and private key (displayed on screen — save securely)
-- Per-key secret-backend entries pushed into your chosen backend
-  (no inline secrets in `mediator.toml`)
+It writes:
 
-### 3. Build and Run
+- `conf/mediator.toml`, the full configuration. It holds no secrets.
+- `conf/keys/`, SSL certificates (self-signed mode only).
+- The admin DID and private key, shown on screen. Save them securely.
+- The mediator's secrets, written to the backend you chose.
 
-After the wizard completes, it prints the exact build and run commands:
+### 3. Build and run
+
+The wizard prints the exact build and run commands when it finishes. For the
+default build:
 
 ```bash
-# Default DIDComm build
 cargo build --release --locked -p affinidi-messaging-mediator
-
-# Run with generated config
 cargo run --release --locked -p affinidi-messaging-mediator -- -c conf/mediator.toml
 ```
 
-## Non-Interactive Setup (CI/CD)
-
-For automated environments, use the `--non-interactive` flag:
+## Non-interactive setup (CI/CD)
 
 ```bash
-# Quick local development setup (all defaults)
-cargo run --locked --bin mediator-setup -- --non-interactive
+# Local development
+cargo run --locked --bin mediator-setup -- --non-interactive --did-method peer
 
-# Production server with specific options
+# Production server
 cargo run --locked --bin mediator-setup -- --non-interactive \
   --deployment server \
   --did-method webvh \
@@ -77,112 +70,116 @@ cargo run --locked --bin mediator-setup -- --non-interactive \
   --secret-storage aws \
   --database-url "redis://redis.internal:6379/"
 
-# Container deployment
+# Container
 cargo run --locked --bin mediator-setup -- --non-interactive \
   --deployment container \
   --did-method peer \
   --secret-storage file
 ```
 
-Available CLI options:
-
 | Flag | Values | Default |
 |---|---|---|
 | `--deployment` | `local`, `server`, `container` | `local` |
-| `--protocol` | `didcomm` (DIDComm only), `tsp` (DIDComm + TSP) | `tsp` (both) |
-| `--did-method` | `peer`, `webvh`, `vta` | per deployment |
-| `--public-url` | URL string | (required for webvh) |
-| `--secret-storage` | `file`, `keyring`, `aws`, `gcp`, `azure`, `vault` | per deployment |
+| `--protocol` | `didcomm` (DIDComm only), `tsp` (DIDComm + TSP) | `tsp` |
+| `--did-method` | `peer`, `webvh`, `vta` | `vta` (see note) |
+| `--public-url` | URL | required for `webvh` |
+| `--key-suite` | `p256`, `secp256k1` (repeatable) | none (Ed25519 + X25519 only) |
+| `--save-did-web` | flag | off |
+| `--secret-storage` | `file`, `keyring`, `aws`, `gcp`, `azure`, `vault` | `keyring` |
 | `--ssl` | `none`, `self-signed` | `none` |
 | `--database-url` | Redis URL | `redis://127.0.0.1/` |
 | `--admin` | `generate`, `skip` | `generate` |
 | `--listen-address` | `ip:port` | `0.0.0.0:7037` |
 | `-c, --config` | file path | `conf/mediator.toml` |
+| `--force-reprovision` | flag | refuse to overwrite an existing setup |
+| `--uninstall` | flag | delete the stored keys and local config |
 
-`--secret-storage` picks the backend kind and uses the per-backend
-defaults baked into the wizard (region, project, vault name, etc.).
-For non-default per-key configuration — a custom AWS region, a
-sovereign-cloud Azure URL, a self-hosted Vault endpoint — use a
-recipe TOML and `mediator-setup --from <recipe>`. See
-[`docs/setup-guide.md`](docs/setup-guide.md) for the recipe schema.
+`--non-interactive` cannot provision a VTA-managed DID. With the default
+`--did-method vta` it writes a placeholder DID that you must replace by hand,
+so pass `peer` or `webvh`, or use the TUI or a recipe for VTA setups.
 
-## Feature Flags
+`--secret-storage` picks only the backend kind and uses the wizard's defaults
+(region, project, vault name). `k8s://` and any non-default backend URL (a
+custom AWS region, a sovereign-cloud Azure URL, a remote Vault) need a recipe:
+`mediator-setup --from <recipe.toml>`. See
+[docs/setup-guide.md](docs/setup-guide.md#recipe-fields-by-mode) and
+`tools/mediator-setup/examples/mediator-build.toml`.
 
-The mediator's behaviour is composed from Cargo features in three
-groups: **protocol**, **storage backend**, and **secret backend**.
-At least one storage backend and (for any non-trivial deployment) at
-least one secret backend must be enabled. Defaults are
-`didcomm + redis-backend`.
+## Feature flags
+
+The default build is `didcomm`, `tsp`, `redis-backend`, `jemalloc` and
+`vta`. With `--no-default-features`, list at least one protocol and one
+storage backend, and add back `vta` and `jemalloc` if you want them.
 
 ### Protocol
 
 | Feature | Default | Description |
 |---|---|---|
-| `didcomm` | Yes | DIDComm v2 — production protocol |
-| `tsp` | Yes | Trust Spanning Protocol — the preferred transport; run with `didcomm` (dual-protocol) |
+| `didcomm` | Yes | DIDComm v2. |
+| `tsp` | Yes | Trust Spanning Protocol. Run it with `didcomm`: TSP authenticates over the DIDComm session, so a TSP-only build has no auth path. |
+| `didcomm-v1` | No | Accepts DIDComm v1 (Aries) forwards alongside v2. Implies `didcomm`. |
 
-> **TSP endpoint advertisement.** For other mediators to route/forward TSP messages
-> to this one, this mediator's DID document must advertise a `TSPTransport` service
-> pointing at its inbound endpoint. With the `tsp` feature enabled:
-> - **did:web** — added automatically at startup, mirroring the `DIDCommMessaging`
->   service endpoint (TSP and DIDComm share `/inbound`). No action needed.
-> - **did:peer / did:webvh** — the document is bound to the DID, so add the
->   `TSPTransport` service **when generating the DID**. The mediator logs a startup
->   warning if TSP is enabled but no `TSPTransport` service is advertised.
+**TSP endpoint advertisement.** Other mediators can route TSP to this one
+only if its DID document advertises a `TSPTransport` service:
 
-For end-to-end TSP usage (sending, receiving, relationships, WebSocket, auth), see
-the **[TSP cookbook](../../../docs/tsp/cookbook.md)**.
+- **did:web**: added automatically at startup, mirroring the
+  `DIDCommMessaging` endpoint (both use `/inbound`).
+- **did:peer / did:webvh**: the document is bound to the DID, so add the
+  `TSPTransport` service when you generate the DID. The mediator logs a
+  warning at startup if TSP is enabled and the service is missing.
+
+For TSP usage (sending, receiving, relationships, WebSocket, auth), see the
+[TSP cookbook](../../../docs/tsp/cookbook.md).
 
 ### Storage backend (pick one)
 
 | Feature | Default | Use case |
 |---|---|---|
-| `redis-backend` | Yes | Multi-mediator clusters; cross-process pub/sub |
-| `fjall-backend` | No | Single-node persistence; embedded LSM, no sidecar |
-| `memory-backend` | No | Tests and in-process integration only |
+| `redis-backend` | Yes | Multi-mediator clusters; cross-process pub/sub. |
+| `fjall-backend` | No | Single-node persistence; embedded LSM, no sidecar. |
+| `memory-backend` | No | Tests and in-process integration only. |
 
-### Secret backend (pick one for production)
+Select the backend at runtime with `[storage].backend` in `mediator.toml`
+(env `STORAGE_BACKEND`, `redis` or `fjall`).
 
-| Feature | Default | Backend |
+### Secret backend
+
+`file://` is always compiled in. Every other backend is one opt-in feature.
+See [docs/secrets-backend.md](docs/secrets-backend.md#which-backends-are-compiled-in).
+
+| Feature | Backend URL |
+|---|---|
+| (built in) | `file://`, optionally `?encrypt=1` (AES-256-GCM, Argon2id) |
+| `secrets-keyring` | `keyring://` (macOS Keychain, Windows Credential Manager, Linux Secret Service) |
+| `secrets-aws` | `aws_secrets://` |
+| `secrets-gcp` | `gcp_secrets://` |
+| `secrets-azure` | `azure_keyvault://` |
+| `secrets-vault` | `vault://` (token, Kubernetes, or AppRole auth) |
+| `secrets-k8s` | `k8s://` (one Kubernetes `Secret`) |
+
+### Other
+
+| Feature | Default | Description |
 |---|---|---|
-| (built-in) | always | `file://` (optionally `?encrypt=1` for AES-256-GCM + Argon2id) |
-| `secrets-keyring` | No | OS keychain (`keyring://`) — macOS Keychain, Windows Credential Manager, Linux Secret Service |
-| `secrets-aws` | No | AWS Secrets Manager (`aws_secrets://`) |
-| `secrets-gcp` | No | GCP Secret Manager (`gcp_secrets://`) |
-| `secrets-azure` | No | Azure Key Vault (`azure_keyvault://`) |
-| `secrets-vault` | No | HashiCorp Vault KV v2 (`vault://`) — token / Kubernetes / AppRole auth |
-| `secrets-k8s` | No | Kubernetes Secrets (`k8s://`) — native `Secret` via the K8s API |
-
-The wizard automatically picks the right feature set and writes the
-exact `cargo build` / `cargo install` / Dockerfile commands when it
-finishes — most operators don't need to memorise these.
+| `vta` | Yes | VTA-backed key management and `mediator rotate-admin`. Self-hosted mediators don't need it. |
+| `jemalloc` | Yes | jemalloc as the global allocator, so RSS falls back after load. |
+| `aws` | No | `aws_parameter_store://` and `s3://` sources for `did_web_self_hosted`. Enabled by `secrets-aws`. |
 
 ### Example builds
 
 ```bash
-# Default — DIDComm + Redis, file:// or built-in keyring
+# Default: DIDComm + TSP + Redis, file:// secrets
 cargo build --locked -p affinidi-messaging-mediator
 
-# Embedded single-node deployment (Fjall + keyring)
+# Single node: Fjall + OS keyring
 cargo build --locked -p affinidi-messaging-mediator \
   --no-default-features \
-  --features didcomm,fjall-backend,secrets-keyring
+  --features didcomm,tsp,fjall-backend,secrets-keyring,jemalloc,vta
 
-# Multi-cluster with AWS Secrets Manager
+# Cluster with AWS Secrets Manager
 cargo build --locked -p affinidi-messaging-mediator \
-  --no-default-features \
-  --features didcomm,redis-backend,secrets-aws
-
-# TSP-only build (still needs a storage backend)
-cargo build --locked -p affinidi-messaging-mediator \
-  --no-default-features \
-  --features tsp,redis-backend
+  --features secrets-aws
 ```
-
-Picking `--no-default-features` always means you must list at least
-one protocol feature and one storage backend feature explicitly —
-otherwise the binary won't compile or won't have anywhere to keep
-state.
 
 ## Architecture
 
@@ -190,247 +187,156 @@ state.
 graph TD
     A["Alice"] -->|DIDComm / TSP| MED["Mediator Service"]
     B["Bob"] -->|DIDComm / TSP| MED
-    MED ---|Message Storage| REDIS[(Redis)]
+    MED ---|Message Storage| STORE[(Redis or Fjall)]
     MED --- ACL["Access Control<br/>Lists (ACLs)"]
     MED --- PROC["Processors<br/>(Forwarding, Expiry)"]
 ```
 
 ## Prerequisites
 
-- Rust 1.90.0+ (2024 Edition)
-- Docker (for Redis)
-- Redis 8.0+
+- Rust 1.95.0+ (2024 edition)
+- For the Redis backend: Redis 7.1 or later, below 9.0 (checked at startup).
+  Docker is the easiest way to run it locally.
 
-## Redis Security
+## Redis security
 
-The mediator uses Redis for all message storage, session management, and queue
-processing. Securing Redis is critical for production deployments.
+With the Redis backend, Redis holds all messages, sessions and queues.
 
-### Authentication
-
-Always configure Redis authentication in production:
-
-```bash
-# With password (requirepass)
-redis://:yourpassword@host:6379/
-
-# With ACL user and password (Redis 6+)
-redis://mediator:secretpass@host:6379/
-```
-
-Set the password in `mediator.toml`:
+Set the connection URL in `mediator.toml` or with the `DATABASE_URL`
+environment variable:
 
 ```toml
 [database]
-database_url = "redis://:yourpassword@redis.internal:6379/"
+database_url = "redis://:yourpassword@redis.internal:6379/"   # requirepass
+# database_url = "redis://mediator:secretpass@host:6379/"     # ACL user (Redis 6+)
+# database_url = "rediss://:yourpassword@redis.internal:6379/" # TLS
+# database_url = "redis://127.0.0.1/1"                         # database 1 of 0-15
 ```
 
-Or via environment variable:
-
-```bash
-export DATABASE_URL="redis://:yourpassword@redis.internal:6379/"
-```
-
-### TLS Encryption
-
-For encrypted connections, use the `rediss://` scheme (note the double `s`):
-
-```toml
-[database]
-database_url = "rediss://:yourpassword@redis.internal:6379/"
-```
-
-### Security Recommendations
-
-| Environment | Minimum Requirements |
+| Environment | Minimum |
 |---|---|
-| **Local dev** | No auth required (mediator logs a warning) |
-| **Shared/staging** | Password authentication (`requirepass`) |
-| **Production** | ACL users + TLS (`rediss://`) + network isolation |
+| Local dev | No auth. |
+| Shared/staging | Password authentication (`requirepass`). |
+| Production | ACL users, TLS (`rediss://`) and network isolation. |
 
-The mediator automatically logs warnings at startup:
-- **No authentication**: Warning for remote Redis, info-level for localhost
-- **No TLS**: Warning when connecting to remote Redis without `rediss://`
+At startup the mediator warns when a remote Redis has no authentication
+(info level for localhost) and when a remote Redis is used without
+`rediss://`.
 
-### Database Partitions
+## Secret storage
 
-When sharing a Redis instance across applications, use database partitions:
-
-```toml
-database_url = "redis://127.0.0.1/1"  # Uses database 1 (0-15 available)
-```
-
-## Secret Storage
-
-The mediator stores its admin credential, JWT signing key, operating
-keys, and the VTA cache in a single **unified backend** identified by a
-URL in `mediator.toml`:
+The mediator keeps its admin credential, JWT signing key, operating keys,
+and VTA cache in one secret backend, named by a URL:
 
 ```toml
 [secrets]
-backend = "keyring://affinidi-mediator"   # or aws_secrets://, file://, …
+backend = "keyring://affinidi-mediator"   # or aws_secrets://, file://, ...
 cache_ttl = "30d"                          # optional, humantime
 ```
 
-Pre-`0.14.0` deployments used `[vta].credential`,
-`[security].mediator_secrets`, and `[security].jwt_authorization_secret`
-fields directly in `mediator.toml`. Those are gone — see the migration
-section in [docs/secrets-backend.md](docs/secrets-backend.md) for the
-upgrade path.
+On keyring, AWS, GCP, Azure and Vault, everything lives in one backend
+secret, `mediator_secrets_bundle` (with the URL's prefix). `file://` and
+`k8s://` already use one object. A deployment that still has one secret per
+key is migrated on first start; if that fails, the mediator stops and says
+why.
 
-### Picking a backend in the wizard
+`vta://` is not a backend. The VTA is a key source; the wizard writes what it
+provisions into the backend you pick.
 
-```sh
-cargo run --locked --bin mediator-setup
-```
+[docs/secrets-backend.md](docs/secrets-backend.md) is the reference: backend
+URLs, the bundle and its migration, IAM permissions, entry schemas, `/readyz`,
+and HA.
 
-At the **Key Storage** step the wizard offers all seven backends:
-`keyring://`, `aws_secrets://`, `gcp_secrets://`,
-`azure_keyvault://`, `vault://` (with a token / Kubernetes / AppRole
-auth picker), `k8s://`, and `file://` (with an opt-in `?encrypt=1`
-envelope-encryption flag for AES-256-GCM + Argon2id).
-`vta://` is not a backend — the VTA is a key *source*, not a
-store; its provisioned bundle is written into whichever real
-backend you pick here.
+### VTA integration
 
-### VTA Integration (Centralized Key Management)
+With a [Verifiable Trust Agent](https://github.com/OpenVTC/verifiable-trust-infrastructure),
+the VTA manages the mediator's DID and operating keys. The wizard's
+**Online** flow, or the **sealed handoff** for air-gapped hosts, writes the
+admin credential into your secret backend. See
+[docs/setup-guide.md](docs/setup-guide.md).
 
-When VTA integration is enabled, the mediator uses a
-[Verifiable Trust Agent](https://github.com/OpenVTC/verifiable-trust-infrastructure)
-for DID and operating-key management. The wizard's **VTA Online** flow
-(or **VTA Sealed handoff** for air-gapped bootstraps) provisions the
-admin credential into whichever real backend you chose at the Key
-Storage step.
-
-See:
-
-- [docs/setup-guide.md](docs/setup-guide.md) — operator walkthrough
-  for the three setup modes (Online / Sealed-mint / Sealed-export).
-- [docs/secrets-backend.md](docs/secrets-backend.md) — well-known key
-  schemas, HA topology, and the migration path from the legacy schema.
-- [docs/memory-tuning.md](docs/memory-tuning.md) — what the mediator holds
-  in memory, which knob to raise for throughput, and how the Fjall and Redis
-  backends differ (they put their memory in different places).
-- [docs/mediation-and-routing.md](docs/mediation-and-routing.md) — the
-  addressing contract: DIDComm v2 is DID-addressed and needs no keylist, v1
-  is keylist-addressed and does, and what actually gates reachability.
-- [docs/multi-mediator.md](docs/multi-mediator.md) — federating two or more
-  independent mediators: how a relay hop is built and admitted, blind vs
-  rewrap, the config and ACLs both sides need, and how to reproduce a mesh
-  locally.
-
-### Re-running the wizard / tearing down
+### Re-running the wizard, rotation, teardown
 
 ```sh
-mediator-setup --force-reprovision   # rotate every well-known key
-mediator-setup --uninstall           # delete keys + local config files
-mediator rotate-admin --dry-run      # preview an admin rotation
-mediator rotate-admin                # actually rotate
+mediator-setup --force-reprovision   # overwrite an existing setup (rotates every key)
+mediator-setup --uninstall           # delete stored keys and local config files
+mediator rotate-admin --dry-run      # preview an admin credential rotation
+mediator rotate-admin                # rotate it (VTA-linked deployments)
 ```
 
-## Access Control Lists (ACLs)
+## Access control
 
-**See [`docs/acls.md`](./docs/acls.md) for the full guide.** Summary below.
-
-Access control is four independent layers:
+Access control has four independent layers. [docs/acls.md](docs/acls.md) is
+the full guide, including permission flags and deployment recipes.
 
 | Layer | Scope | What it decides |
 |---|---|---|
-| `mediator_acl_mode` | mediator-wide | Whether unknown DIDs may authenticate; who may pre-register other DIDs via `account_add` |
-| `global_acl_default` | mediator-wide | The ACL set given to every new/unknown DID |
-| `MediatorACLSet` | per DID | What that DID may do |
-| Access list | per DID | Which senders that DID accepts messages from |
+| `mediator_acl_mode` | mediator-wide | Whether unknown DIDs may authenticate, and who may add accounts. |
+| `global_acl_default` | mediator-wide | The ACL set given to every new DID. |
+| `MediatorACLSet` | per DID | What that DID may do. |
+| Access list | per DID | Which senders that DID accepts messages from. |
 
-### `mediator_acl_mode`
-
-| Value | Meaning |
+| `mediator_acl_mode` | Meaning |
 |---|---|
-| `explicit_allow` | **Closed.** Only pre-registered DIDs may authenticate — unknown DIDs are rejected at the challenge step. Only admins may add accounts via `account_add`. |
-| `explicit_deny` | **Open.** Any DID may authenticate; unknown DIDs are auto-registered with `global_acl_default`. Any authenticated DID may add accounts (always with `global_acl_default`). |
+| `explicit_deny` | **Open.** Any DID may authenticate; unknown DIDs are registered with `global_acl_default`. |
+| `explicit_allow` | **Closed.** Only pre-registered DIDs may authenticate. Only admins may add accounts. |
 
-> On an open (`explicit_deny`) mediator, `global_acl_default` is what
-> controls what an arbitrary DID may do. Before mediator 0.18.0,
-> `explicit_allow` did not gate authentication — see the historical note in
-> `docs/acls.md` §2.
+The shipped configuration is open (`explicit_deny`) with
+`global_acl_default = "DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES"`:
+direct messaging only, no relay or invites.
 
-### DID-level ACLs
+## More documentation
 
-| Flag | Description |
+| Doc | Covers |
 |---|---|
-| `ALLOW_ALL` | Every capability, every self-change bit, open inbox (denylist) |
-| `DENY_ALL` | No capability, no self-management, closed inbox (allowlist) |
-| `LOCAL` | DID has an inbox — required for fetch/list/delete and WebSocket |
-| `SEND_MESSAGES` | DID can send messages |
-| `RECEIVE_MESSAGES` | DID can receive directly-delivered messages |
-| `SEND_FORWARDED` | DID can send forwarded messages |
-| `RECEIVE_FORWARDED` | DID can receive forwarded messages |
-| `ANON_RECEIVE` | DID can receive anonymous messages |
-| `CREATE_INVITES` | DID can create OOB invites |
-| `BLOCKED` | DID cannot authenticate at all |
-
-Self-change flags (e.g. `SEND_MESSAGES_CHANGE`) let a DID flip that one
-capability itself. `LOCAL`, `BLOCKED` and the `SELF_MANAGE_*` flags are
-admin-only and have no self-change variant.
-
-## Operating Modes
-
-| Mode | `mediator_acl_mode` | `global_acl_default` | Use Case |
-|---|---|---|---|
-| **Open** | `explicit_deny` | `ALLOW_ALL` | Unrestricted public mediator |
-| **Consent-based** | `explicit_deny` | `ALLOW_ALL + MODE_EXPLICIT_ALLOW` | Anyone may register; each inbox is an allowlist |
-| **Direct messaging** | `explicit_deny` | `DENY_ALL + LOCAL + SEND + RECEIVE` | Shipped default — no relay, no invites |
-| **Relay only** | `explicit_deny` | `DENY_ALL + SEND_FORWARDED + RECEIVE_FORWARDED` | Pure inter-mediator relay, no inboxes |
-| **Closed** | `explicit_allow` | `DENY_ALL` | Unknown DIDs authenticate but can do nothing until an admin grants capabilities |
-
-See [`docs/acls.md`](./docs/acls.md) for the reasoning behind each, and
-`mediator.toml` for the settings.
-
-## Sub-crates
-
-| Crate | Description |
-|---|---|
-| [`affinidi-messaging-mediator-setup`](./affinidi-messaging-mediator-setup/) | Interactive TUI setup wizard |
-| [`affinidi-messaging-mediator-processors`](./affinidi-messaging-mediator-processors/) | Scalable parallel processors (message expiry, forwarding) |
-| `affinidi-messaging-mediator-common` | Shared types for the mediator |
+| [setup-guide.md](docs/setup-guide.md) | VTA setup modes (Online, sealed-mint, sealed-export) and recipes. |
+| [secrets-backend.md](docs/secrets-backend.md) | Secret backends, entry schemas, migration, HA. |
+| [acls.md](docs/acls.md) | Access control. |
+| [cors-and-origin.md](docs/cors-and-origin.md) | CORS and WebSocket origin checks. |
+| [didcomm-protocols.md](docs/didcomm-protocols.md) | Supported DIDComm protocols. |
+| [mediation-and-routing.md](docs/mediation-and-routing.md) | Addressing: v2 is DID-addressed, v1 is keylist-addressed, and what gates reachability. |
+| [multi-mediator.md](docs/multi-mediator.md) | Federating mediators: relay hops, blind vs rewrap, config and ACLs. |
+| [memory-tuning.md](docs/memory-tuning.md) | Memory use and throughput knobs for Fjall and Redis. |
+| [ERRORS.md](ERRORS.md) | Error codes. |
 
 ## Managing the mediator
 
-Run **`mediator-console`** against the mediator to operate it from a terminal:
-statistics, every account's queues with gradient quota bars, any account's
-messages (inspect, delete, preview-then-confirm purges), ACLs and queue limits,
-the audit log, and a live traffic monitor showing what arrives and leaves —
-DIDComm or TSP, and what was refused and why. Connect with the administrator
-profile the setup wizard wrote (`conf/admin-monitor.json`) to manage the whole
-mediator, or with any account's profile to manage just that account.
+`mediator-console` operates a running mediator from a terminal: statistics,
+account queues, messages (inspect, delete, purge), ACLs and queue limits, the
+audit log, and a live traffic monitor. Connect with the administrator profile
+the wizard wrote (`conf/admin-monitor.json`) to manage the whole mediator, or
+with an account's profile to manage that account.
 
 ```bash
 cargo run --release -p affinidi-messaging-mediator-tui -- --profile conf/admin-monitor.json
 ```
 
-Setup and usage: [`affinidi-messaging-mediator-tui`](../affinidi-messaging-mediator-tui/).
-The console needs this mediator at 0.28.20 or later (the `messaging/*`
-operations Trust Tasks). It replaces the former `tools/mediator-monitor`,
-which has been removed.
+See [affinidi-messaging-mediator-tui](../affinidi-messaging-mediator-tui/).
 
-## Examples
-
-Ensure the mediator is running, then:
+For a scripted example, run the mediator, then:
 
 ```bash
-# Mediator administration
 cargo run --locked --bin mediator_administration
 ```
 
-See [affinidi-messaging-helpers](../affinidi-messaging-helpers/) for additional
-examples.
+More examples are in [affinidi-messaging-helpers](../affinidi-messaging-helpers/).
 
-## Related Crates
+## Sub-crates
 
-- [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) — Client SDK
-- [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/) — DIDComm protocol
-- [`affinidi-tsp`](../affinidi-tsp/) — Trust Spanning Protocol
-- [`affinidi-messaging-core`](../affinidi-messaging-core/) — Protocol-agnostic messaging traits
-- [`affinidi-did-resolver`](../../affinidi-did-resolver/) — DID resolution
+| Crate | Description |
+|---|---|
+| [`mediator-setup`](./tools/mediator-setup/) | Setup wizard (TUI and headless). |
+| [`affinidi-messaging-mediator-common`](./affinidi-messaging-mediator-common/) | Shared types, storage traits, secret backends. |
+| [`affinidi-messaging-mediator-config`](./affinidi-messaging-mediator-config/) | The `mediator.toml` schema. |
+| [`affinidi-messaging-mediator-processors`](./affinidi-messaging-mediator-processors/) | Standalone forwarding and expiry processors (Redis). |
+
+## Related crates
+
+- [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/): client SDK
+- [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/): DIDComm protocol
+- [`affinidi-tsp`](../affinidi-tsp/): Trust Spanning Protocol
+- [`affinidi-messaging-core`](../affinidi-messaging-core/): protocol-agnostic messaging traits
+- [`affinidi-did-resolver-cache-sdk`](../../identity/affinidi-did-resolver-cache-sdk/): DID resolution
 
 ## License
 

@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased (0.38.0) — one secret in the secret store
+
+Takes `affinidi-messaging-mediator-common` 0.17.4. On AWS, GCP, Azure, Vault and
+keyring backends the mediator now keeps all its secrets in one backend secret,
+`mediator_secrets_bundle`, instead of one per key plus leftover
+`mediator_probe_*` and bootstrap-seed secrets. `file://` and `k8s://` are
+unchanged.
+
+**Migration is verified before it counts.** On first boot the per-key secrets
+are checked, copied and read back byte for byte; they stay in place and are
+written alongside the bundle. Only after this mediator has loaded its
+configuration from the bundle and bound its listener does it confirm the cutover
+and delete them. Until then an older mediator still runs against the same store.
+**Breaking (operational): the mediator refuses to start when the migration
+can't complete.** There is no fallback to the per-key layout, so that layout can
+be removed later without stranding a deployment. The failure stops the
+mediator at config load, before it serves anything, or right after binding if
+the final cutover fails. The error says why, whether anything changed (normally
+nothing: a partial copy is removed again, and the per-key secrets are never
+touched before the cutover), and what to do: typically grant access to
+`mediator_secrets_bundle`, repair a named per-key secret, or stop another
+mediator still writing the per-key secrets. Until the problem is fixed, the
+previous mediator version still runs against the unchanged store. A fresh
+deployment whose role can't create `mediator_secrets_bundle` (for example
+IaC-owned AWS secrets) also fails, rather than writing per-key: have the IaC
+create `mediator_secrets_bundle` instead of the per-key secrets.
+
+**Operational change.** Grant the mediator's role read/create/write on
+`<prefix>mediator_secrets_bundle`, and delete on the per-key names so the
+cutover can clean up. **Rolling back** to an older mediator *after* the cutover
+needs the per-key secrets written back first. See "One secret per deployment" in
+`docs/secrets-backend.md`.
+
+**Fewer secret-store calls.** An unchanged VTA bundle is no longer rewritten on
+every refresh, only when its content changes or the cache passes half its TTL.
+As a result, `/readyz`'s `vta_cache_age_secs` is the age of the last *write*
+and can reach half the TTL while the VTA is healthy. Use the
+`VTA_LAST_SUCCESS_TIMESTAMP_SECONDS` metric for VTA freshness. The
+`/readyz` backend check reuses a success for 30 s. Bundle reads are reused for
+30 s.
+
+**`vta-sdk` 0.61 → 0.64** (with the `vta` feature, where its types are in
+this crate's public API). 0.64 is built on `affinidi-messaging-sdk` 0.33 /
+`affinidi-tdk` 0.23 / `trust-tasks-rs` 0.27, the versions this workspace holds,
+so the workspace now builds one copy of each again. No source change.
+
+**`rotate-admin` checks its write.** After writing the new admin credential it
+waits 2 s, reads it back from the backend, and writes again if another process
+overwrote it (up to 3 attempts). The old ACL entry is revoked only once the new
+credential is confirmed. Otherwise it fails with the existing recovery message.
+
 ## Unreleased (0.37.0) — SDK 0.33, trust-tasks 0.27
 
 Moves to `affinidi-messaging-sdk` 0.33 and `trust-tasks-rs` / `trust-tasks-proof` 0.27. The SDK is a public dependency, so this crate moves a minor. No source change.

@@ -136,6 +136,11 @@ impl SecretStore for K8sStore {
         BACKEND_LABEL
     }
 
+    // Every key already lives in the one store object.
+    fn is_single_object(&self) -> bool {
+        true
+    }
+
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         let api = self.api().await?;
         // `get_opt` maps a 404 (missing Secret) to `Ok(None)` — the

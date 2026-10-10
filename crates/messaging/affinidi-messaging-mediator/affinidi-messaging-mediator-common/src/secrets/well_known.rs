@@ -6,7 +6,7 @@
 //! freshness.
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
@@ -15,8 +15,9 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
+use crate::secrets::bundle::BundledStore;
 use crate::secrets::envelope::Envelope;
 use crate::secrets::error::{Result, SecretStoreError};
 use crate::secrets::store::{DynSecretStore, open_store};
@@ -254,6 +255,12 @@ impl VtaCachedBundle {
     fn is_expired(&self, now_secs: u64) -> bool {
         self.ttl_secs > 0 && now_secs.saturating_sub(self.fetched_at) > self.ttl_secs
     }
+
+    /// Past half its TTL: rewrite even unchanged content, so a restart
+    /// during a VTA outage still finds a cache well inside its TTL.
+    fn due_for_rewrite(&self, now_secs: u64) -> bool {
+        self.ttl_secs > 0 && now_secs.saturating_sub(self.fetched_at) >= self.ttl_secs / 2
+    }
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -279,14 +286,40 @@ fn now_unix() -> u64 {
 /// Thin typed wrapper over a [`DynSecretStore`]. All mediator components
 /// take one of these rather than reaching into a raw store, so shape
 /// validation and envelope handling live in one place.
+///
+/// A per-key backend is wrapped in a [`BundledStore`], so every entry
+/// lands in the one [`SECRETS_BUNDLE`](crate::secrets::SECRETS_BUNDLE)
+/// secret and a deployment still on the per-key layout is migrated on
+/// first use. [`MediatorSecrets::store`] returns that wrapper.
 #[derive(Clone)]
 pub struct MediatorSecrets {
     store: DynSecretStore,
+    /// The wrapper behind `store`, when the backend is per-key.
+    bundle: Option<Arc<BundledStore>>,
+    /// When `probe_readonly` last succeeded. See [`PROBE_READONLY_REUSE`].
+    last_probe_ok: Arc<std::sync::Mutex<Option<Instant>>>,
 }
+
+/// How long a successful [`MediatorSecrets::probe_readonly`] is reused.
+/// `/readyz` is polled every few seconds and cloud secret stores bill per
+/// call; a failure is never reused, so recovery is seen on the next poll.
+const PROBE_READONLY_REUSE: Duration = Duration::from_secs(30);
 
 impl MediatorSecrets {
     pub fn new(store: DynSecretStore) -> Self {
-        Self { store }
+        if store.is_single_object() {
+            return Self {
+                store,
+                bundle: None,
+                last_probe_ok: Arc::default(),
+            };
+        }
+        let bundle = Arc::new(BundledStore::new(store));
+        Self {
+            store: bundle.clone(),
+            bundle: Some(bundle),
+            last_probe_ok: Arc::default(),
+        }
     }
 
     /// Convenience: open a store from a URL and wrap it in one call.
@@ -306,10 +339,71 @@ impl MediatorSecrets {
         self.store.probe().await
     }
 
+    /// Decide the storage layout now, moving a per-key deployment into the
+    /// single [`SECRETS_BUNDLE`](crate::secrets::SECRETS_BUNDLE) secret if
+    /// needed (copied and verified; the per-key secrets are kept until
+    /// [`MediatorSecrets::confirm_cutover`]). Fails with
+    /// [`SecretStoreError::MigrationFailed`], naming the cause and the fix,
+    /// when the store can't be moved; there is no running on the per-key
+    /// layout. A no-op for single-object backends.
+    pub async fn ensure_migrated(&self) -> Result<()> {
+        match &self.bundle {
+            Some(bundle) => bundle.ensure_migrated().await,
+            None => Ok(()),
+        }
+    }
+
+    /// Finish moving a per-key deployment into the single
+    /// [`SECRETS_BUNDLE`](crate::secrets::SECRETS_BUNDLE) secret. Call only
+    /// once the mediator has started on it (configuration loaded, listener
+    /// bound): this is the step after which an older mediator can no longer
+    /// run, because it deletes the per-key secrets. Returns `true` when
+    /// this call made the cutover. See [`BundledStore::confirm_cutover`].
+    pub async fn confirm_cutover(&self) -> Result<bool> {
+        match &self.bundle {
+            Some(bundle) => bundle.confirm_cutover().await,
+            None => Ok(false),
+        }
+    }
+
+    /// Delete every entry, and on a per-key backend the
+    /// [`SECRETS_BUNDLE`](crate::secrets::SECRETS_BUNDLE) secret itself —
+    /// which deleting each key leaves behind, empty. For uninstall.
+    pub async fn purge(&self) -> Result<()> {
+        if let Some(bundle) = &self.bundle {
+            return bundle.purge().await;
+        }
+        for key in [
+            ADMIN_CREDENTIAL,
+            JWT_SECRET,
+            OPERATING_SECRETS,
+            OPERATING_SIGNING,
+            OPERATING_KEY_AGREEMENT,
+            OPERATING_DID_DOCUMENT,
+            VTA_LAST_KNOWN_BUNDLE,
+        ] {
+            self.store.delete(key).await?;
+        }
+        for entry in self.load_seed_index().await?.entries {
+            self.delete_bootstrap_seed(&entry.bundle_id_hex).await?;
+        }
+        self.store.delete(BOOTSTRAP_SEED_INDEX).await
+    }
+
     /// Read-only reachability probe (no mutation). See
-    /// [`SecretStore::probe_readonly`].
+    /// [`SecretStore::probe_readonly`]. A success is reused for
+    /// [`PROBE_READONLY_REUSE`]; the first call always reaches the backend.
     pub async fn probe_readonly(&self) -> Result<()> {
-        self.store.probe_readonly().await
+        if let Ok(last) = self.last_probe_ok.lock()
+            && last.is_some_and(|at| at.elapsed() < PROBE_READONLY_REUSE)
+        {
+            return Ok(());
+        }
+        let result = self.store.probe_readonly().await;
+        if let Ok(mut last) = self.last_probe_ok.lock() {
+            *last = result.is_ok().then(Instant::now);
+        }
+        result
     }
 
     // ── Generic envelope accessors ───────────────────────────────────
@@ -359,6 +453,22 @@ impl MediatorSecrets {
         cred.validate(ADMIN_CREDENTIAL)?;
         let bytes = Envelope::new(KIND_ADMIN_CREDENTIAL, cred.clone()).seal()?;
         self.store.put(ADMIN_CREDENTIAL, &bytes).await
+    }
+
+    /// Like [`MediatorSecrets::load_admin_credential`], but always from the
+    /// backend, never a cached read — for checking that a write survived.
+    pub async fn reload_admin_credential(&self) -> Result<Option<AdminCredential>> {
+        let bytes = match &self.bundle {
+            Some(bundle) => bundle.get_fresh(ADMIN_CREDENTIAL).await?,
+            None => self.store.get(ADMIN_CREDENTIAL).await?,
+        };
+        let Some(bytes) = bytes else {
+            return Ok(None);
+        };
+        let cred: AdminCredential =
+            Envelope::open(&bytes, ADMIN_CREDENTIAL, KIND_ADMIN_CREDENTIAL)?;
+        cred.validate(ADMIN_CREDENTIAL)?;
+        Ok(Some(cred))
     }
 
     pub async fn delete_admin_credential(&self) -> Result<()> {
@@ -439,11 +549,27 @@ impl MediatorSecrets {
     /// Write a fresh VTA bundle snapshot. The HMAC is computed against
     /// the current admin credential; if no admin credential is present,
     /// returns a clear error rather than storing an unverifiable cache.
+    ///
+    /// Skipped when the cache already holds this bundle under the same TTL
+    /// and is younger than half the TTL (never rewritten for TTL `0`): the
+    /// refresh task re-fetches every `ttl / 4`, and rewriting unchanged
+    /// content on each tick would be a billed write per tick.
     pub async fn store_vta_cached_bundle(
         &self,
         bundle: serde_json::Value,
         ttl_secs: u64,
     ) -> Result<()> {
+        if let Ok(Some(existing)) = self.load_vta_cached_bundle().await
+            && existing.ttl_secs == ttl_secs
+            && existing.bundle == bundle
+            && !existing.due_for_rewrite(now_unix())
+        {
+            debug!(
+                fetched_at = existing.fetched_at,
+                "VTA bundle unchanged; keeping the cached copy"
+            );
+            return Ok(());
+        }
         let admin = self.load_admin_credential().await?.ok_or_else(|| {
             SecretStoreError::Other(
                 "cannot write VTA cache: no admin credential present (cache HMAC \
@@ -635,7 +761,7 @@ impl MediatorSecrets {
 // ── Bootstrap seed envelope + index types ───────────────────────────
 
 const KIND_EPHEMERAL_SEED: &str = "ephemeral-seed";
-const KIND_SEED_INDEX: &str = "bootstrap-seed-index";
+pub(crate) const KIND_SEED_INDEX: &str = "bootstrap-seed-index";
 
 /// Envelope-inner payload for a bootstrap seed. `seed_b64` carries the
 /// raw 32-byte Ed25519 seed encoded as URL-safe base64 (no padding).
@@ -850,6 +976,66 @@ mod tests {
         assert_eq!(got.bundle, bundle);
         assert_eq!(got.ttl_secs, 3600);
         assert!(!got.hmac.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_vta_bundle_is_not_rewritten_until_half_its_ttl() {
+        let secrets = helper();
+        secrets
+            .store_admin_credential(&sample_admin())
+            .await
+            .unwrap();
+        let bundle = serde_json::json!({"x": 1});
+        let admin = secrets.load_admin_credential().await.unwrap().unwrap();
+        let key = admin.derive_cache_hmac_key();
+        let write_at = |fetched_at: u64, bundle: serde_json::Value| {
+            let mut cached = VtaCachedBundle {
+                fetched_at,
+                ttl_secs: 3600,
+                hmac: String::new(),
+                bundle,
+            };
+            cached.hmac = cached.compute_hmac(&key);
+            Envelope::new(KIND_VTA_BUNDLE, cached).seal().unwrap()
+        };
+
+        // Ten minutes old, same content: kept as is.
+        let young = now_unix() - 600;
+        secrets
+            .store
+            .put(VTA_LAST_KNOWN_BUNDLE, &write_at(young, bundle.clone()))
+            .await
+            .unwrap();
+        secrets
+            .store_vta_cached_bundle(bundle.clone(), 3600)
+            .await
+            .unwrap();
+        let got = secrets.load_vta_cached_bundle().await.unwrap().unwrap();
+        assert_eq!(got.fetched_at, young);
+
+        // Different content: rewritten.
+        let changed = serde_json::json!({"x": 2});
+        secrets
+            .store_vta_cached_bundle(changed.clone(), 3600)
+            .await
+            .unwrap();
+        let got = secrets.load_vta_cached_bundle().await.unwrap().unwrap();
+        assert_eq!(got.bundle, changed);
+        assert!(got.fetched_at > young);
+
+        // Same content but past half the TTL: rewritten to stay fresh.
+        let old = now_unix() - 2000;
+        secrets
+            .store
+            .put(VTA_LAST_KNOWN_BUNDLE, &write_at(old, bundle.clone()))
+            .await
+            .unwrap();
+        secrets
+            .store_vta_cached_bundle(bundle.clone(), 3600)
+            .await
+            .unwrap();
+        let got = secrets.load_vta_cached_bundle().await.unwrap().unwrap();
+        assert!(got.fetched_at > old);
     }
 
     #[tokio::test]
@@ -1073,6 +1259,10 @@ mod tests {
                 }
                 self.inner.delete(key).await
             }
+            // Store entries directly, so the seed delete reaches this backend.
+            fn is_single_object(&self) -> bool {
+                true
+            }
         }
 
         let mem: DynSecretStore = Arc::new(MemoryStore::new("memory"));
@@ -1080,7 +1270,10 @@ mod tests {
         let aged_key = bootstrap_seed_key(aged_id);
         // Seed through the plain memory store so state exists before
         // the failing wrapper takes over — easier to reason about.
-        let plain = MediatorSecrets::new(mem.clone());
+        let plain = MediatorSecrets::new(Arc::new(FailingDelete {
+            inner: mem.clone(),
+            failing_key: String::new(),
+        }));
         plain
             .store_bootstrap_seed(aged_id, &[3u8; 32])
             .await

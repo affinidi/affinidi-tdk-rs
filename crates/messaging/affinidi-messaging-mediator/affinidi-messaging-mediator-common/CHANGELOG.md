@@ -1,5 +1,80 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.17.4) — one secret per mediator on per-key backends
+
+`MediatorSecrets` now keeps every entry in one backend secret,
+`mediator_secrets_bundle`, on the per-key backends (AWS, GCP, Azure, Vault,
+keyring). Before, each well-known key was its own backend secret, and so was
+every probe sentinel and bootstrap seed. On Vault those piled up, because a
+delete only soft-deleted them. `file://` and `k8s://` already hold everything in
+one object and are unchanged.
+
+- New `secrets::bundle::BundledStore` wraps a per-key backend, and
+  `MediatorSecrets::new` applies it unless the backend reports
+  `SecretStore::is_single_object()`. `MediatorSecrets::store()` returns the
+  wrapper, so raw `get`/`put`/`delete` calls see logical keys as before.
+- **Migration, with a cutover only after a successful start.** The per-key
+  secrets stay the source of truth until the mediator has started on the bundle.
+  The bundle records its `state`:
+  - Every per-key value is first checked to be a readable entry; if not, nothing
+    is written.
+  - The copy is written as `staged`, read back byte for byte, then marked
+    `mirrored` and read back again. A staged bundle is never used.
+  - While `mirrored`, reads come from the bundle and every write goes to the
+    per-key secret first, then the bundle, so an older mediator keeps working.
+    Each start re-compares, and copies again if an older mediator wrote to the
+    per-key secrets.
+  - The new `MediatorSecrets::confirm_cutover` (called by the mediator once its
+    listener is bound) compares a last time, marks the bundle `active` and reads
+    that back. Only then does it delete the per-key secrets and, where the
+    backend can list its own keys (Vault, AWS), stray `mediator_probe_<uuid>`
+    sentinels. A failed read-back puts `mirrored` back and deletes nothing.
+    Deletes that fail are retried on later starts.
+- **Failures are errors, and change nothing.** There is no running on the
+  per-key layout. Every failure returns the new
+  `SecretStoreError::MigrationFailed { reason, action }`: `reason` says what
+  happened and whether anything was left behind, and `action` says what the
+  operator must do. A failed copy deletes its partial bundle first. Failures
+  include: the bundle can't be read (while per-key secrets can) or can't be
+  written; a per-key value isn't a readable entry; the read-back differs; a
+  bundle exists but can't be parsed (never overwritten); or the per-key secrets
+  changed under a cutover. New `MediatorSecrets::ensure_migrated` runs the
+  migration at a chosen point. A fresh store whose bundle can't be created also
+  fails the write, rather than falling back to per-key secrets. An empty stored
+  bundle counts as absent, so IaC can pre-create the secret with no value.
+- **Rollback.** Until the cutover an older mediator runs unchanged. After it,
+  the per-key secrets are gone, so they must be written back by hand before
+  downgrading.
+- Multiple writers in one process are serialised. Two processes writing at the
+  same moment can lose one update, since the trait has no compare-and-swap.
+  That matches the documented single-writer model.
+- New trait methods with defaults: `SecretStore::list_keys` (implemented for
+  Vault, AWS and memory) and `SecretStore::is_single_object` (true for `file`,
+  `file_encrypted` and `k8s`). New `MediatorSecrets::purge` deletes everything,
+  including the bundle.
+- **Fewer billed calls.** Cloud secret stores bill per API call, and GCP also
+  bills each secret version that hasn't been destroyed:
+  - A bundle read is reused for 30 s by `get` / `list_keys`. Writes always read
+    fresh and refresh it, so a process sees its own writes at once; another
+    process's writes show up within 30 s. `BundledStore::get_fresh` and
+    `MediatorSecrets::reload_admin_credential` bypass the cache.
+  - A `put` that changes nothing, or a `delete` of an absent key, doesn't write.
+  - `probe()` on the bundle writes it back unchanged once (and reads it back),
+    instead of writing a sentinel in and out.
+  - `store_vta_cached_bundle` skips the write when the cache already holds the
+    same bundle under the same TTL and is younger than half the TTL. With the
+    default 30-day TTL that's one write about every 15 days instead of one per
+    hourly refresh.
+  - `MediatorSecrets::probe_readonly` reuses a success for 30 s, so `/readyz`
+    polling reaches the backend at most twice a minute. Failures are never
+    reused.
+  - GCP: after each write, the superseded version is destroyed (best-effort;
+    needs `secretmanager.versions.destroy`, otherwise a warning is logged).
+    Before, every write left one more billed version behind.
+- Vault `delete` now removes the key's metadata, so a deleted key disappears
+  from `vault kv list`. Without `delete` on the metadata path, the 403 falls
+  back to the old soft delete.
+
 ## Unreleased (0.17.3) — Redis streaming resubscribes after Redis restarts
 
 `RedisStore::streaming_subscribe`'s pubsub bridge kept its broadcast `Sender`
