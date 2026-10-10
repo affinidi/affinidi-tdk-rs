@@ -67,6 +67,31 @@ pub trait SecretStore: Send + Sync {
         })
     }
 
+    /// Enumerate the keys stored under *this* store's per-deployment
+    /// namespace, as the logical names `get` / `put` take (namespace
+    /// prefix stripped). Unlike [`SecretStore::list_namespace`] this never
+    /// returns another deployment's entries.
+    ///
+    /// Used by the one-time migration into the single-secret bundle to
+    /// find per-key leftovers no index records (stray probe sentinels,
+    /// untracked bootstrap seeds). Default impl returns
+    /// `BackendUnavailable`; the migration then skips that sweep.
+    async fn list_keys(&self) -> Result<Vec<String>> {
+        Err(SecretStoreError::BackendUnavailable {
+            backend: self.backend(),
+            reason: "this backend does not support enumerating its own keys".into(),
+        })
+    }
+
+    /// `true` when the backend already keeps every entry inside one
+    /// physical object (the `file://` blob, the `k8s://` `Secret`), so
+    /// [`MediatorSecrets`](crate::secrets::MediatorSecrets) stores entries
+    /// as-is instead of packing them into the
+    /// [`SECRETS_BUNDLE`](crate::secrets::SECRETS_BUNDLE) entry.
+    fn is_single_object(&self) -> bool {
+        false
+    }
+
     /// End-to-end health check: write a sentinel under a namespaced UUID
     /// key, read it back, delete it. Returns `Err` if any step fails
     /// (unreachable backend, permission issue, read/write mismatch).

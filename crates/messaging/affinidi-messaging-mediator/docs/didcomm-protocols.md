@@ -1,8 +1,19 @@
 # Affinidi Messaging Mediator - DIDComm Protocol Messages
 
-This document describes all DIDComm protocol messages supported by the mediator, including request/response formats and options.
+The DIDComm v2 messages the mediator handles, with their request and response
+formats. The advertised set is `ADVERTISED_PROTOCOLS` in
+`src/messages/protocols/discover_features.rs`. DIDComm v1 mediation (built with
+`--features didcomm-v1`) is covered in
+[`mediation-and-routing.md`](./mediation-and-routing.md).
 
-All DIDComm messages follow the standard envelope structure and are packed/encrypted before transmission. Common headers include `id`, `type`, `from`, `to`, `created_time`, and `expires_time`.
+Messages are packed (encrypted) before transmission. Common headers are `id`,
+`type`, `from`, `to`, `created_time` and `expires_time`. A message whose
+`expires_time` has passed is refused with `message.expired`. Error codes are
+listed in [`ERRORS.md`](../ERRORS.md).
+
+Authentication (`https://affinidi.com/atm/1.0/authenticate`) and out-of-band
+invitations run over the REST endpoints, not as DIDComm messages to the
+mediator.
 
 ---
 
@@ -27,7 +38,7 @@ Simple protocol to verify connectivity and that the mediator is responsive.
 
 | Field                | Type   | Required | Description                                                                                                |
 | -------------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------- |
-| `response_requested` | `bool` | No       | If `true` (default), the mediator sends a ping response back. If `false`, the mediator processes silently. |
+| `response_requested` | `bool` | No       | If `true` (default), the mediator sends a ping response back. If `false`, the mediator processes silently. A ping asking for a response must carry a `from` header, else `message.anonymous`. |
 
 ### Ping Response
 
@@ -72,22 +83,26 @@ Routes an encrypted DIDComm message to a recipient through the mediator.
 
 | Field  | Type     | Required | Description                            |
 | ------ | -------- | -------- | -------------------------------------- |
-| `next` | `string` | No       | DID of the next hop / final recipient. |
+| `next` | `string` | Yes      | DID of the next hop / final recipient. Missing → `protocol.forwarding.next.missing`. |
 
 **Extra Headers (optional):**
 
-| Header        | Type   | Description                                                                         |
-| ------------- | ------ | ----------------------------------------------------------------------------------- |
-| `ephemeral`   | `bool` | If `true`, the message is not stored -- only live-streamed to connected recipients. |
-| `delay_milli` | `i64`  | Delay in milliseconds before delivering. A negative value selects a random delay.   |
+| Header        | Type   | Description |
+| ------------- | ------ | ----------- |
+| `ephemeral`   | `bool` | If `true`, the message is never stored or relayed. It is pushed only to a recipient that is live-connected right now, and dropped otherwise. |
+| `delay_milli` | `i64`  | Delay in milliseconds before the forwarding processor relays the message to a **remote** next hop. Values ≤ 0 mean no delay; local delivery is immediate. A magnitude above `processors.forwarding.future_time_limit` seconds is refused (`protocol.forwarding.delay_milli`). |
 
 **Attachments:**
 
-The forwarded packed DIDComm message is carried as an attachment (Base64-encoded or JSON).
+The packed message to forward is the first attachment, as `base64` or inline
+`json`. JWS-signed JSON and linked attachments are refused.
 
 ### Response
 
-No DIDComm response message is generated. The mediator silently stores or forwards the message.
+No DIDComm response message is generated. The mediator stores the message
+locally or queues it for a remote mediator. The ACL checks it applies are in
+[`acls.md` §6](./acls.md#forwarding); relay between mediators is in
+[`multi-mediator.md`](./multi-mediator.md).
 
 ---
 
@@ -95,9 +110,18 @@ No DIDComm response message is generated. The mediator silently stores or forwar
 
 Protocol for clients to retrieve queued messages from the mediator.
 
-> **Required Header:** All Message Pickup 3.0 messages **must** include `"return_route": "all"` as an extra header.
+Every Message Pickup 3.0 request must:
 
-> **Note:** All Message IDs referenced in this protocol are SHA256 hashes of the message content. Do not pass raw message IDs to the mediator.
+- be addressed (`to`) to the mediator's DID;
+- carry a `from` header (anonymous requests get `message.anonymous`);
+- include the extra header `"return_route": "all"` (else `protocol.pickup.return_route`).
+
+A request acts only on the authenticated session's own inbox. A
+`recipient_did` that differs from the session DID is refused.
+
+Message IDs in this protocol are the mediator's stored message IDs (SHA-256
+hashes), as returned in the delivery attachment IDs — not the `id` header of
+the original message.
 
 ### 3.1 Status Request
 
@@ -118,7 +142,7 @@ Request the current mailbox status for a DID.
 
 | Field           | Type     | Required | Description                                                            |
 | --------------- | -------- | -------- | ---------------------------------------------------------------------- |
-| `recipient_did` | `string` | No       | DID to query status for. Defaults to the authenticated DID if omitted. |
+| `recipient_did` | `string` | No       | Must equal the session DID if present. Defaults to the session DID. |
 
 ### 3.2 Status Response
 
@@ -194,7 +218,7 @@ Request retrieval of queued messages.
 
 | Field           | Type     | Required | Description                                                          |
 | --------------- | -------- | -------- | -------------------------------------------------------------------- |
-| `recipient_did` | `string` | Yes      | DID to retrieve messages for.                                        |
+| `recipient_did` | `string` | Yes      | Must equal the session DID.                                          |
 | `limit`         | `usize`  | Yes      | Number of messages to retrieve. Must be between 1 and 100 inclusive. |
 
 ### 3.5 Delivery Response
@@ -204,17 +228,19 @@ Request retrieval of queued messages.
 | **Type URI**  | `https://didcomm.org/messagepickup/3.0/delivery` |
 | **Direction** | Mediator -> Client                               |
 
-If messages exist, the response contains Base64-encoded packed DIDComm messages as **attachments**. Each attachment ID is the SHA256 hash of the message.
+If messages exist, each one is an attachment: the stored packed message,
+base64url-encoded without padding, with the attachment `id` set to its message
+ID.
 
-If no messages are available, a **Status Response** message is returned instead.
+If no messages are available, a **Status Response** is returned instead.
 
 **Body:**
 
 ```json
-{}
+{
+  "recipient_did": "did:example:alice"
+}
 ```
-
-**Attachments:** Array of Base64-encoded packed DIDComm messages.
 
 ### 3.6 Messages Received (Acknowledgement/Delete)
 
@@ -235,7 +261,7 @@ Acknowledge receipt and delete messages from the mediator.
 
 | Field             | Type       | Required | Description                                             |
 | ----------------- | ---------- | -------- | ------------------------------------------------------- |
-| `message_id_list` | `string[]` | Yes      | List of SHA256 message hashes to delete from the queue. |
+| `message_id_list` | `string[]` | Yes      | Message IDs to delete. IDs not found in the caller's inbox are skipped. |
 
 **Response:** Returns a **Status Response** message reflecting the updated queue state.
 
@@ -264,13 +290,25 @@ The SDK sends every one of them through `atm.trust_tasks()`.
 | Operations   | `messaging/ping`, `messaging/stats/show`, `messaging/monitor/{subscribe,unsubscribe}`                              |
 | Mediator     | `audit/list`, `config/{show,patch,reload}`                                                                          |
 
-The DIDComm protocols `https://didcomm.org/mediator/1.0/admin-management`,
-`…/account-management` and `…/acl-management` are no longer served or
-advertised; a message of those types is not recognised.
+The former `https://didcomm.org/mediator/1.0/*` admin, account and ACL
+protocols are not served; a message of those types is refused as unknown.
 
 ---
 
-## 5. Problem Report 2.0
+## 5. Discover Features 2.0
+
+| Field         | Value                                               |
+| ------------- | --------------------------------------------------- |
+| **Type URI**  | `https://didcomm.org/discover-features/2.0/queries` |
+| **Direction** | Client -> Mediator                                  |
+
+The mediator answers with a `https://didcomm.org/discover-features/2.0/disclose`
+message drawn from `ADVERTISED_PROTOCOLS`. The query must carry a `from`
+header. The mediator does not accept incoming `disclose` messages.
+
+---
+
+## 6. Problem Report 2.0
 
 Error reporting protocol. The mediator generates problem reports for errors but does **not** accept incoming problem reports.
 
@@ -316,53 +354,11 @@ Error reporting protocol. The mediator generates problem reports for errors but 
 
 ---
 
-## Appendix A: ACL Bitmask Reference
+## Appendix A: ACL reference
 
-The ACL is stored as a Little Endian `u64` integer. Each bit controls a specific permission:
-
-| Bit | Field                             | Values                                              |
-| --- | --------------------------------- | --------------------------------------------------- |
-| 0   | `access_list_mode`                | `0` = ExplicitAllow, `1` = ExplicitDeny             |
-| 1   | `access_list_mode_self_change`    | `0` = admin only, `1` = self-changeable             |
-| 2   | `did_blocked`                     | `0` = allowed, `1` = blocked                        |
-| 3   | `did_local`                       | `0` = not local, `1` = local (can store messages)   |
-| 4   | `send_messages`                   | `0` = cannot send, `1` = can send                   |
-| 5   | `send_messages_self_change`       | `0` = admin only, `1` = self-changeable             |
-| 6   | `receive_messages`                | `0` = cannot receive, `1` = can receive             |
-| 7   | `receive_messages_self_change`    | `0` = admin only, `1` = self-changeable             |
-| 8   | `send_forwarded`                  | `0` = cannot forward, `1` = can forward             |
-| 9   | `send_forwarded_self_change`      | `0` = admin only, `1` = self-changeable             |
-| 10  | `receive_forwarded`               | `0` = cannot receive forwarded, `1` = can receive   |
-| 11  | `receive_forwarded_self_change`   | `0` = admin only, `1` = self-changeable             |
-| 12  | `create_invites`                  | `0` = cannot create OOB invites, `1` = can create   |
-| 13  | `create_invites_self_change`      | `0` = admin only, `1` = self-changeable             |
-| 14  | `anon_receive`                    | `0` = cannot receive anonymous, `1` = can receive   |
-| 15  | `anon_receive_self_change`        | `0` = admin only, `1` = self-changeable             |
-| 16  | `self_manage_list`                | `0` = admin only, `1` = can self-manage access list |
-| 17  | `self_manage_send_queue_limit`    | `0` = admin only, `1` = can self-manage             |
-| 18  | `self_manage_receive_queue_limit` | `0` = admin only, `1` = can self-manage             |
-
-### Convenience Rule Strings
-
-ACLs can also be configured using comma-separated rule strings:
-
-| Rule                    | Description                                     |
-| ----------------------- | ----------------------------------------------- |
-| `allow_all`             | Enable all permissions with ExplicitDeny mode   |
-| `deny_all`              | Disable all permissions with ExplicitAllow mode |
-| `allow_all_self_change` | Allow self-change on all permissions            |
-| `deny_all_self_change`  | Deny self-change on all permissions             |
-| `mode_explicit_allow`   | Set access list mode to ExplicitAllow           |
-| `mode_explicit_deny`    | Set access list mode to ExplicitDeny            |
-| `local`                 | Set DID as local                                |
-| `blocked`               | Block the DID                                   |
-| `send_messages`         | Allow sending messages                          |
-| `receive_messages`      | Allow receiving messages                        |
-| `send_forwarded`        | Allow sending forwarded messages                |
-| `receive_forwarded`     | Allow receiving forwarded messages              |
-| `create_invites`        | Allow creating OOB invitations                  |
-| `anon_receive`          | Allow receiving anonymous messages              |
-| `self_manage_list`      | Allow self-management of access list            |
+The ACL bit layout and the ruleset strings used in `global_acl_default` are
+documented once, in [`acls.md` §5](./acls.md#5-the-permission-bits) and
+[`acls.md` §3](./acls.md#ruleset-syntax).
 
 ---
 
@@ -378,5 +374,7 @@ ACLs can also be configured using comma-separated rule strings:
 | Message Pickup 3.0    | `https://didcomm.org/messagepickup/3.0/delivery-request`     | Request            |
 | Message Pickup 3.0    | `https://didcomm.org/messagepickup/3.0/delivery`             | Response           |
 | Message Pickup 3.0    | `https://didcomm.org/messagepickup/3.0/messages-received`    | Request            |
+| Discover Features 2.0 | `https://didcomm.org/discover-features/2.0/queries`          | Request            |
+| Discover Features 2.0 | `https://didcomm.org/discover-features/2.0/disclose`         | Response           |
 | Trust Tasks 0.1       | `https://trusttasks.org/binding/didcomm/0.1/envelope`        | Request & Response |
 | Problem Report 2.0    | `https://didcomm.org/report-problem/2.0/problem-report`      | Outbound only      |

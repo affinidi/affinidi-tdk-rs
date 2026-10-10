@@ -15,11 +15,17 @@
 //!   it asks [`MediatorSecrets`] for, say, "the admin credential" and the
 //!   helper handles lookup, envelope parsing, and shape validation.
 //!
+//! On per-key backends (AWS, GCP, Azure, Vault, keyring) every entry is
+//! packed into the one [`SECRETS_BUNDLE`] secret by [`bundle::BundledStore`];
+//! the `file://` and `k8s://` backends already keep everything in one
+//! object and store entries directly.
+//!
 //! All stored bytes are wrapped in a schema-versioned [`envelope::Envelope`]
 //! (`{version: 1, kind: "...", data: ...}`) so entries can evolve without
 //! breaking existing backends.
 
 pub mod backends;
+pub mod bundle;
 pub mod envelope;
 pub mod error;
 pub mod retry;
@@ -27,6 +33,7 @@ pub mod store;
 pub mod url;
 pub mod well_known;
 
+pub use bundle::{BundledStore, SECRETS_BUNDLE};
 pub use envelope::{ENVELOPE_VERSION, Envelope};
 pub use error::{Result, SecretStoreError};
 pub use store::{DynSecretStore, SecretStore, open_store};

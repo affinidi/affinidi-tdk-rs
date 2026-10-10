@@ -470,6 +470,11 @@ impl SecretStore for EncryptedFileStore {
         BACKEND_LABEL
     }
 
+    // Every key already lives in the one store object.
+    fn is_single_object(&self) -> bool {
+        true
+    }
+
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         let guard = self
             .state

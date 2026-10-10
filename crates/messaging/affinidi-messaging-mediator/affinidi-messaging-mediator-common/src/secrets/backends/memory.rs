@@ -57,6 +57,14 @@ impl SecretStore for MemoryStore {
         guard.remove(key);
         Ok(())
     }
+
+    async fn list_keys(&self) -> Result<Vec<String>> {
+        let guard = self
+            .data
+            .lock()
+            .map_err(|e| SecretStoreError::Other(format!("in-memory store poisoned: {e}")))?;
+        Ok(guard.keys().cloned().collect())
+    }
 }
 
 #[cfg(test)]

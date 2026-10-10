@@ -61,6 +61,13 @@ pub enum SecretStoreError {
     #[error("serialisation error: {0}")]
     Serde(#[from] serde_json::Error),
 
+    /// Moving a per-key deployment into the single
+    /// [`SECRETS_BUNDLE`](crate::secrets::SECRETS_BUNDLE) secret failed.
+    /// `reason` says what happened and whether anything was left behind;
+    /// `action` what the operator must do before starting again.
+    #[error("{reason}. To fix: {action}, then start again")]
+    MigrationFailed { reason: String, action: String },
+
     #[error("{0}")]
     Other(String),
 }

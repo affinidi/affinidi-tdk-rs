@@ -33,8 +33,8 @@ https://didcomm.org/report-problem/2.0
 ```
 
 The mediator maintains the account itself. `resolve_next_account` creates one on
-first forward to an unknown DID, using `global_acl_default`; authenticating also
-registers the DID. A client never has to ask.
+first forward to an unknown DID, using `global_acl_default`. In `explicit_deny`
+mode, authenticating also registers the DID. A client never has to ask.
 
 `did:key` clients are the common case and are not special: a `did:key` has no
 service endpoint, so it cannot be routed to from outside and instead collects
@@ -45,9 +45,9 @@ WebSocket. That works on the authenticated session DID alone.
 
 Assert on discover-features. If `https://didcomm.org/coordinate-mediation/*`
 ever appears in the advertised set, the assumption has changed and your check
-should fail loudly. On our side the same assertion runs as
-`coordinate_mediation_is_not_advertised`, so adding v2 mediation cannot happen
-by accident — it means amending this document too.
+should fail loudly. The mediator runs the same assertion as the unit test
+`coordinate_mediation_is_not_advertised`, so v2 mediation cannot be added by
+accident — adding it means amending this document too.
 
 ---
 
@@ -75,12 +75,12 @@ and all of them can make a v2 recipient unreachable:
 
 | Gate | Effect |
 |------|--------|
-| `mediator_acl_mode = "explicit_allow"` | Unknown DIDs are refused at the authentication challenge, and v1 mediation is denied. Such a deployment registers DIDs out of band, via admin `account_add`. |
-| Account existence, on **direct delivery** | A directly-delivered message to a DID with no account is refused: `direct_delivery.recipient.unknown` (error 72). Forwarding differs — it auto-creates the account. |
+| `mediator_acl_mode = "explicit_allow"` | Unknown DIDs are refused at the authentication challenge, and v1 mediation is denied for DIDs with no account. Such a deployment registers DIDs ahead of time with the `messaging/account/add` Trust Task. |
+| Account existence, on **direct delivery** | A directly-delivered message to a DID with no account is refused with `delivery.refused` (error 73). Forwarding differs — it auto-creates the account. |
 | `LOCAL` | Required to complete the WebSocket upgrade and to use inbox fetch/list/delete. |
 | `RECEIVE_MESSAGES` | Required to accept direct delivery. |
 | `RECEIVE_FORWARDED` | Required to accept a forwarded message. |
-| Recipient's access list | Evaluated against the sender; see [`acls.md`](acls.md). |
+| Recipient's access list | Evaluated against the sender; see [`acls.md` §6](acls.md#access-list-evaluation). |
 | `local_direct_delivery_allowed` | When false, direct delivery is refused and senders must use a routing envelope. |
 
 The asymmetry in row two is the one most likely to surprise: a recipient that

@@ -1,5 +1,22 @@
 # Affinidi Messaging Mediator Setup
 
+## Unreleased (0.1.38) — one secret in the secret store
+
+Built on `affinidi-messaging-mediator-common` 0.17.4: on per-key backends the
+wizard writes every entry into the single `mediator_secrets_bundle` secret. On
+an existing per-key deployment it copies and verifies the per-key secrets the
+first time it opens the backend, but keeps them (and writes them first); only
+the mediator, once started, cuts over and deletes them. If that copy can't be
+made, setup stops before provisioning anything, with the cause and the fix.
+Headless AWS setups under the IaC-owns-lifecycle contract now need the IaC to
+create `<prefix>mediator_secrets_bundle` (with no value) instead of the
+per-key secrets. `--uninstall` also removes the bundle (and any bootstrap
+seeds), not only the well-known keys.
+
+`vta-sdk` 0.61 → 0.64, alongside the mediator, so the workspace resolves one
+`affinidi-messaging-sdk`, `affinidi-tdk` and `trust-tasks-rs` again. No source
+change.
+
 ## Unreleased (0.1.37) — vta-sdk 0.56
 
 `vta-sdk` 0.53 -> 0.56, alongside the mediator, so the workspace resolves one

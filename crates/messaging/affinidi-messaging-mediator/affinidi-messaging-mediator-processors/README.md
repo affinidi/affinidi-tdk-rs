@@ -1,6 +1,6 @@
 # affinidi-messaging-mediator-processors
 
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 Standalone background processors for the Affinidi Messaging Mediator.
@@ -39,8 +39,9 @@ run alongside the mediator's own sweep without duplicating deletes.
 ### forwarding_processor
 
 Reads queued messages from `FORWARD_Q` and delivers them to remote
-mediators (HTTP POST or WebSocket). Multiple instances coordinate via
-the consumer group so each message is processed exactly once.
+mediators (HTTP POST or WebSocket). Instances share one consumer group, so
+each message is claimed by one instance at a time; delivery is
+at-least-once.
 
 ## Crate layout
 

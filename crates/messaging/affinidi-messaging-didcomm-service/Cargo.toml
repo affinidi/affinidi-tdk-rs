@@ -52,7 +52,7 @@ affinidi-did-common = "0.4"
 # Embedded mediator fixture + DID generation for the soft-restart websocket
 # regression test. Sister-crate path deps carry an explicit `version =` so the
 # package stays publishable while using the in-tree path for dev-builds.
-affinidi-messaging-test-mediator = { version = "0.18", path = "../affinidi-messaging-test-mediator", features = ["tsp"] }
+affinidi-messaging-test-mediator = { version = "0.19", path = "../affinidi-messaging-test-mediator", features = ["tsp"] }
 # `messaging` as well as `did-peer`: the TSP test targets use
 # `affinidi_tdk::messaging::ATM`. A workspace build supplied it through feature
 # unification, so this was only wrong when the crate is built on its own —

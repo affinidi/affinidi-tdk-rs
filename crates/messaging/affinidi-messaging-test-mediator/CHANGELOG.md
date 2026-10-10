@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (0.19.0) — embeds mediator 0.38
+
+Embeds mediator 0.38, whose secret store keeps everything in one backend secret
+and refuses to start when it can't migrate to it. The embedded mediator uses an
+in-memory secret store, so tests see no difference. This crate re-exports
+mediator config types, so it moves a minor with it. No source change.
+
 ## Unreleased (0.18.0) — embeds mediator 0.37
 
 Embeds mediator 0.37 on `affinidi-messaging-sdk` 0.33, `affinidi-tdk` 0.23 and `trust-tasks-rs` 0.27. This crate re-exports mediator config types, so it moves a minor with it. No source change.

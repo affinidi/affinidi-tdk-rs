@@ -89,7 +89,7 @@ and session state under pressure. You want writes to fail loudly instead.
 
 ## Tuning for throughput
 
-All four knobs trade memory for speed. Raise the one that matches your
+Each knob trades memory for speed. Raise the one that matches your
 bottleneck.
 
 **Write-heavy** (high message ingest) — raise `storage.fjall.write_buffer` and
@@ -101,10 +101,12 @@ take effect; `max_journal` does not.
 `storage.fjall.block_cache`. This is a straight cache-hit-rate trade: more memory,
 fewer disk reads. Costs exactly what you give it, once warm.
 
-**Many live-streaming clients** — raise `limits.ws_send_buffer`. Watch
-`ws_live_delivery_dropped_total` (below) to decide.
+**Many live-streaming clients** — raise `limits.ws_send_buffer`. It is one
+pool shared by all connections; each connection's queue is also capped at 8
+messages. Watch `ws_live_delivery_dropped_total` (below) to decide.
 
-**Bursty throughput with lag warnings** — raise `limits.pubsub_buffer`.
+**Bursty throughput with lag warnings** — raise `limits.pubsub_buffer`. The
+ring holds `pubsub_buffer / message_size` messages (16 at the defaults).
 
 **Many distinct DIDs** — raise `did_resolver.cache_capacity` (a count, not bytes;
 each cached DID document is roughly 1–10 KB).
@@ -137,17 +139,12 @@ ws_size      = "10485760"   # 10 MiB — transport cap
 ```
 
 `message_size` is the ceiling on a single message the mediator will accept, copy,
-queue, and fan out. **Every in-memory budget above is sized against it**, so it is
-the multiplier on all of them: doubling `message_size` halves how many messages
-fit in the same `pubsub_buffer`.
+queue, and fan out. A larger message is refused with `message.size.exceeded`.
+**Every in-memory budget above is sized against it**: doubling `message_size`
+halves how many messages fit in the same `pubsub_buffer`.
 
 `http_size` and `ws_size` are *transport* caps — they bound one request or one
 frame. Keep them at or above `message_size`.
-
-> **Upgrade note.** `message_size` was documented but never enforced before
-> mediator 0.16.46; the effective ceiling was `http_size`/`ws_size` (10 MiB).
-> If your clients send messages larger than 1 MiB, they will now be rejected with
-> `message.size.exceeded`. Raise `message_size` to restore the old behaviour.
 
 ## The allocator
 
@@ -160,9 +157,11 @@ looks exactly like a leak on a memory graph even though the live heap is flat.
 jemalloc's decay-based purging returns those pages, so **RSS tracks live memory**
 and the numbers in this document are meaningful.
 
-Build with `--no-default-features` to fall back to the system allocator (for
-profiling, or on a target jemalloc does not support) — and expect resident memory
-to read high and flat if you do.
+To use the system allocator (for profiling, or on a target jemalloc does not
+support), build without the `jemalloc` feature while keeping the others, e.g.
+`--no-default-features --features didcomm,tsp,redis-backend,vta`. Plain
+`--no-default-features` also drops the protocol and storage features. Expect
+resident memory to read high and flat if you do.
 
 ## Cross-references
 

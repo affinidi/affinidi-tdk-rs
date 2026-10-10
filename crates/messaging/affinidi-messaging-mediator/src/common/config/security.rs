@@ -819,9 +819,11 @@ impl SecurityConfigRawExt for SecurityConfigRaw {
                 return Err(MediatorError::ConfigError(
                     12,
                     "NA".into(),
-                    "JWT signing secret is missing from the backend (well-known key \
-                     'mediator/jwt/secret'). Re-run `mediator-setup` to provision."
-                        .into(),
+                    format!(
+                        "JWT signing secret is missing from the backend (well-known key \
+                         '{}'). Re-run `mediator-setup` to provision.",
+                        affinidi_messaging_mediator_common::JWT_SECRET
+                    ),
                 ));
             }
             Err(err) => {

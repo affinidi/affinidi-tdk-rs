@@ -1,20 +1,19 @@
 # Mediator Setup Guide
 
-Operator walkthrough for bringing up a new Affinidi Messaging Mediator
-against a Verifiable Trust Agent (VTA). Covers all three setup modes,
-what each expects from you, and what the mediator walks away with.
+How to bring up a mediator whose DID and keys come from a Verifiable Trust
+Agent (VTA): the three setup modes, what each needs, and what the mediator
+ends up with.
 
-This guide ends when `mediator-setup` exits cleanly and your mediator
-binary is authenticated against the VTA. Steady-state operations
-(routing, accounts, policies) are out of scope — see the main mediator
-README once you're past first boot.
+The guide ends when `mediator-setup` exits cleanly and the mediator can
+authenticate to the VTA. For everything after first start, see the
+[mediator README](../README.md). For where the secrets are stored, see
+[secrets-backend.md](secrets-backend.md).
 
 ## Modes at a glance
 
-Pick the mode that matches your VTA-side situation. Every mode walks
-the mediator through the same phases (generate a request, hand it to
-the VTA, apply the sealed bundle that comes back) — only the transport
-and the command you run on the VTA side differ.
+Every mode has the same phases: generate a request, hand it to the VTA,
+apply the sealed bundle that comes back. Only the transport and the VTA-side
+command differ.
 
 | Mode | VTA reachable over network? | VTA has existing state for this mediator? | VTA-side command | Interactive? |
 |---|---|---|---|---|
@@ -22,23 +21,22 @@ and the command you run on the VTA side differ.
 | [Sealed-mint](#2-sealed-mint) | Optional (file transfer works air-gapped too) | No (greenfield) | `vta bootstrap provision-integration --request req.json` on VTA host | TUI *or* `--from` |
 | [Sealed-export](#3-sealed-export) | Optional | **Yes** (ran mode 1 or 2 previously) | `vta contexts reprovision --id <ctx> --recipient req.json` on VTA host | TUI *or* `--from` |
 
-If you're unsure whether the context already has a mediator DID on the
-VTA side, ask your VTA admin to run `pnm contexts show --id <ctx>`. A
-populated `did` column means sealed-export; no DID means sealed-mint.
+Not sure whether the VTA context already has a mediator DID? Ask your VTA
+admin to run `pnm contexts show --id <ctx>`. A DID means sealed-export; no
+DID means sealed-mint.
 
 ## 1. Online
 
 ### When to pick this mode
 
-Your VTA is up, reachable from the mediator host over HTTPS, and you
-(or an admin who can authenticate to the VTA) can drive the setup
-interactively. This is the happy path for most production deployments.
+The VTA is reachable from the mediator host over HTTPS, and you (or a VTA
+admin) can drive the setup interactively. This suits most production
+deployments.
 
-The mediator wizard walks you through a TUI. There's a brief
-out-of-band step where you run `pnm acl create` on your admin
-workstation to authorise the wizard's ephemeral setup DID; this is
-intentional — the VTA's authorization story requires a human signing
-off on the admin grant, not automation.
+The wizard runs as a TUI. One step happens out of band: you run
+`pnm acl create` on your admin workstation to authorize the wizard's
+temporary setup DID. That is deliberate: a person, not automation, signs off
+on the admin grant.
 
 ### Prerequisites
 
@@ -94,7 +92,7 @@ provisioned keys into your chosen secret backend, and offering to run
 |---|---|---|
 | Authentication never succeeds | `pnm acl create` wasn't run, or it targeted the wrong VTA | Re-check the VTA URL in PNM's config; re-run the command shown on the wizard's AwaitingAcl screen |
 | `CIRCULAR DEPENDENCY` warning on the final screen | The VTA has this mediator configured as *its* mediator | Proceed — the wizard uses REST bootstrapping to break the cycle. Consider using a separate mediator for the VTA itself before production |
-| "validation error: context 'X' has no DID assigned" on first mediator boot | VTA-side — context exists but DID wasn't bound to it | Pull the latest `vta-service` (the `bind minted DID as context primary` fix), or manually run `pnm contexts update --id <ctx> --did <mediator-did>` |
+| `context 'X' has no DID assigned` on first mediator start | VTA side: the context exists but the DID wasn't bound to it (older `vta-service`) | Upgrade `vta-service`, or run `pnm contexts update --id <ctx> --did <mediator-did>` |
 
 ## 2. Sealed-mint
 
@@ -127,13 +125,14 @@ lives and bring back a `bundle.armor`.
 mediator-setup --from recipe.toml
 ```
 
-The wizard validates the recipe, generates an ephemeral keypair,
-writes a VP-framed request to `./bootstrap-request-vp.json`, persists
-the HPKE recipient seed into the configured secret backend (under
-`mediator_bootstrap_ephemeral_seed_<bundle-id>`, indexed by
-`mediator_bootstrap_seed_index` for auto-sweep), and prints the
-exact VTA-side command to run plus the follow-up phase-2 command.
-Exit code is 0 — this is a normal pause point, not an error.
+The wizard validates the recipe, generates a temporary keypair, and writes
+the request to `./bootstrap-request-vp.json`. It stores the HPKE recipient
+seed in the secret backend as the entry
+`mediator_bootstrap_ephemeral_seed_<bundle-id>`, listed in
+`mediator_bootstrap_seed_index` for the 24 h sweep (see
+[entry schemas](secrets-backend.md#entry-schemas)). It then prints the
+VTA-side command and the phase-2 command, and exits 0: this is a normal
+pause, not an error.
 
 Carry `bootstrap-request-vp.json` to the VTA host by whatever transfer
 mechanism you use.
@@ -276,7 +275,7 @@ auto-detects and routes to the right projector.
 | Symptom | Cause | Remedy |
 |---|---|---|
 | "OfflineExport bundle has no DID slot" on phase 2 | VTA reprovisioned an admin-only context (no DID attached) | The context doesn't carry a mediator DID. Either pick sealed-mint instead (new mint) or pick a different context |
-| "context 'X' has no DID assigned" when the mediator later tries to auth | VTA-side gap — `provision_integration` minted a DID but didn't bind it as the context primary. Fixed upstream; older VTA versions may need the manual binding | Run `pnm contexts update --id <ctx> --did <mediator-did>` on the VTA to bind the DID, then restart the mediator |
+| `context 'X' has no DID assigned` when the mediator authenticates | Same VTA-side gap as in [Online](#common-gotchas) | Run `pnm contexts update --id <ctx> --did <mediator-did>` on the VTA, then restart the mediator |
 | "paste appears to be armored but contains no line breaks" | Tried to paste the armor inline; terminal stripped newlines | Use the file path (`--bundle bundle.armor`) — that's the reliable route |
 
 ## Recipe fields by mode
@@ -332,11 +331,8 @@ own URL.
 
 ### Legacy
 
-Recipes written before the mint/export split used a single
-`vta_mode = "sealed"` value. The loader silently normalises that to
-`"sealed-mint"` because that's the only interpretation it could have
-had. No migration needed, but new recipes should use the explicit
-values.
+`vta_mode = "sealed"` from older recipes is read as `"sealed-mint"`. Use the
+explicit values in new recipes.
 
 ## What the wizard collects from you
 
@@ -395,53 +391,32 @@ as the mediator's own admin-API identity overloads one key across
 two distinct trust scopes (VTA admin vs. clients calling INTO the
 mediator). See `[security].admin` in the recipe to override.
 
-## Transport preference for routine VTA calls
+## How the mediator reaches the VTA after setup
 
-After setup is done, the mediator makes ongoing calls to its VTA
-(fetching refreshed secrets at boot, ACL queries, etc.). The SDK
-controls the transport via `TransportPreference`:
+At startup the mediator calls the VTA to fetch its keys, using DIDComm when
+the VTA's DID document advertises a `DIDCommMessaging` endpoint and REST
+otherwise. There is no configuration knob.
 
-| Value | Behaviour |
-|---|---|
-| `Auto` (default) | Try DIDComm first when the VTA's DID doc advertises a `DIDCommMessaging` service endpoint. Fall through to REST otherwise. |
-| `PreferRest` | Skip DIDComm entirely; always REST. For integrations whose VTA workload is boot-time / occasional. |
-| `DidCommOnly` | DIDComm only; error on network failure. For environments that intentionally don't expose REST publicly. |
-
-**Mediator-as-own-VTA-mediator caveat.** If your VTA is configured
-with *this* mediator as its `DIDCommMessaging` endpoint (i.e. the
-VTA routes its own DIDComm traffic through this mediator), then
-`Auto` creates a circular dependency: the mediator tries to route
-VTA traffic through itself, which requires the VTA to be reachable,
-which requires the mediator to already be running. The `config/mod.rs`
-boot path detects this via the `CIRCULAR DEPENDENCY` warning but
-cannot break it at runtime.
-
-**Recommendation for mediator deployments**: set
-`TransportPreference::PreferRest` unless a *separate* mediator (not
-this one) handles the VTA's DIDComm routing. This is wired
-automatically today — the mediator's boot path passes `Auto` but the
-SDK degrades gracefully via REST on DIDComm failure, so the circular
-case still boots. If you want stricter behaviour, set
-`TransportPreference::PreferRest` via a code change in
-`common/config/mod.rs` (no recipe knob yet — tracked).
+If the VTA uses *this* mediator as its own DIDComm mediator, the two depend
+on each other. The mediator logs a `CIRCULAR DEPENDENCY` warning at startup
+and still starts, because the startup fetch falls back to REST. The
+background refresh detects this case and always uses REST. Before
+production, consider giving the VTA a separate mediator.
 
 ## Troubleshooting
 
-One row per failure mode. When in doubt, re-run with `--force-reprovision`
-to bypass the "refuse to overwrite" safety check (destructive — rotates
-any existing keys).
+Mode-specific problems are in each mode's *Common gotchas* table above.
+`--force-reprovision` overrides the wizard's refusal to overwrite an existing
+setup. It is destructive: it replaces existing keys.
 
 | Observed | Diagnosis | Remedy |
 |---|---|---|
-| Phase 1 fails: `A bootstrap is already in progress` | Previous phase-1 run is unfinished; seed is still in the backend's sweep index | Either `--bundle bundle.armor` to finalise, wait 24h for the auto-sweep (`MEDIATOR_BOOTSTRAP_SEED_TTL=<dur>` overrides), or `--force-reprovision` |
-| Phase 2 fails: `could not locate the ephemeral seed for bundle id XYZ` | Phase 2 points at a different `[secrets].backend` than phase 1, or the seed was swept / manually deleted | Re-run phase 2 with the same recipe (and therefore the same `[secrets].backend`) phase 1 used |
-| Phase 2 fails: `provided digest did not match the bundle` | Mis-typed digest, or bundle tampered in transit | Re-copy digest from VTA host; if still mismatched, re-request the bundle |
 | Phase 2 fails: `sealed payload was the wrong variant` | Recipe says `sealed-mint` but VTA ran `vta contexts reprovision` (or vice versa) | Match `vta_mode` to the VTA-side command. `sealed-mint` expects `provision-integration`; `sealed-export` expects `contexts reprovision` |
-| Mediator boots but logs `VTA integration DEGRADED` | VTA returned a validation error or was unreachable at boot; cached bundle loaded | Check the preceding SDK warning for root cause. Mediator continues to serve on cached keys; it will refresh on next successful VTA call |
-| Mediator boot fails: `VTA is unreachable and no cached secrets exist` | First boot, cache never populated, VTA not reachable | Re-run `mediator-setup` so it can seed the cache. The wizard writes `mediator/vta/last_known_bundle` on every successful setup |
-| Mediator boot fails: `context 'X' has no DID assigned` | VTA-side: `provision_integration` didn't bind the minted DID as context primary | Update `vta-service` to pick up the `bind minted DID as context primary` fix, or manually `pnm contexts update --id <ctx> --did <mediator-did>` |
-| Keyring prompts repeatedly during setup | macOS sees a rebuilt binary with a new code signature each time; each keychain item asks once | Click "Always Allow" on every prompt. After three prompts (admin credential, JWT secret, cached VTA bundle) the run completes |
-| Wizard reports `backend unreachable` on phase 2 | Secret backend's credentials aren't in the environment | For AWS: set `AWS_ACCESS_KEY_ID`. For Vault: `VAULT_TOKEN`. For file-encrypted: `MEDIATOR_FILE_SECRETS_KEY`. Keyring needs an unlocked OS keychain |
+| Mediator starts but logs `VTA integration DEGRADED` | The VTA was unreachable or returned an error; the mediator loaded its cached keys | Check the preceding SDK warning. The mediator serves on the cached keys and refreshes on the next successful VTA call |
+| Mediator fails: `VTA is unreachable (or rejected the request) and no cached secrets exist` | The VTA can't be reached and the cache (`mediator_vta_last_known_bundle`) is empty | Make the VTA reachable, or re-run `mediator-setup`, which writes the cache |
+| Mediator or wizard stops with a secret-store migration error | An older per-key secret layout couldn't be moved into `mediator_secrets_bundle` | Follow the message; see [When migration fails](secrets-backend.md#when-migration-fails) |
+| macOS asks for keychain access repeatedly | Each rebuilt binary has a new code signature | Click "Always Allow" on each prompt |
+| Wizard reports `backend unreachable` | The backend's credentials aren't in the environment | AWS: the standard credential chain (e.g. `AWS_ACCESS_KEY_ID`). Vault: `VAULT_TOKEN` (or the `?auth=` method's variables). Encrypted file: `MEDIATOR_FILE_BACKEND_PASSPHRASE`. Keyring: an unlocked OS keychain |
 
 ## Cross-references
 

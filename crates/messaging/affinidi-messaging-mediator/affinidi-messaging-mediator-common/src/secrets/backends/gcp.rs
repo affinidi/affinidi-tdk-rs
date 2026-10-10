@@ -46,6 +46,15 @@ use tokio::sync::OnceCell;
 
 const BACKEND_LABEL: &str = "gcp_secrets";
 
+/// `…/versions/N` → `…/versions/N-1`; `None` for version 1 or an
+/// unexpected shape.
+#[cfg_attr(not(feature = "secrets-gcp"), allow(dead_code))]
+fn previous_version_name(version: &str) -> Option<String> {
+    let (secret, number) = version.rsplit_once("/versions/")?;
+    let number: u64 = number.parse().ok()?;
+    (number > 1).then(|| format!("{secret}/versions/{}", number - 1))
+}
+
 #[cfg(feature = "secrets-gcp")]
 pub(crate) fn open(url: BackendUrl) -> Result<DynSecretStore> {
     let BackendUrl::Gcp { project, namespace } = url else {
@@ -100,6 +109,48 @@ impl GcpStore {
     /// Access path for the `latest` version of a secret.
     fn latest_version(&self, key: &str) -> String {
         format!("{}/versions/latest", self.secret_name(key))
+    }
+
+    /// Destroy the version `new_version` superseded. GCP bills every
+    /// version not yet destroyed (enabled *or* disabled), and every write
+    /// adds one, so without this a secret's bill grows with each write.
+    /// Readers only ever read `latest`. Best-effort: the write already
+    /// succeeded, so a failure (e.g. a role without
+    /// `secretmanager.versions.destroy`) is logged, not returned.
+    async fn destroy_previous_version(&self, client: SecretManagerService, new_version: &str) {
+        let Some(previous) = previous_version_name(new_version) else {
+            return;
+        };
+        let label = format!("DestroySecretVersion({previous})");
+        let result = with_retry(&label, &GcpRetryPolicy, || {
+            let client = client.clone();
+            let previous = previous.clone();
+            async move {
+                client
+                    .destroy_secret_version()
+                    .set_name(&previous)
+                    .send()
+                    .await
+            }
+        })
+        .await;
+        if let Err(err) = result {
+            // NotFound / FailedPrecondition: already gone or destroyed.
+            if !matches!(
+                err.status().map(|s| s.code),
+                Some(
+                    google_cloud_gax::error::rpc::Code::NotFound
+                        | google_cloud_gax::error::rpc::Code::FailedPrecondition
+                )
+            ) {
+                tracing::warn!(
+                    version = %previous,
+                    error = %err,
+                    "could not destroy the superseded secret version; it stays \
+                     billable until destroyed"
+                );
+            }
+        }
     }
 
     /// Defence-in-depth: our flat well-known keys never contain `/`,
@@ -243,7 +294,10 @@ impl SecretStore for GcpStore {
         .await;
 
         match add_result {
-            Ok(_) => Ok(()),
+            Ok(version) => {
+                self.destroy_previous_version(client, &version.name).await;
+                Ok(())
+            }
             Err(err)
                 if matches!(
                     err.status().map(|s| s.code),
@@ -414,6 +468,19 @@ mod tests {
             store.secret_name("mediator_admin_credential"),
             "projects/my-proj/secrets/test_mediator_admin_credential"
         );
+    }
+
+    #[test]
+    fn previous_version_name_steps_back_one() {
+        assert_eq!(
+            previous_version_name("projects/p/secrets/s/versions/7").as_deref(),
+            Some("projects/p/secrets/s/versions/6")
+        );
+        assert_eq!(
+            previous_version_name("projects/p/secrets/s/versions/1"),
+            None
+        );
+        assert_eq!(previous_version_name("projects/p/secrets/s"), None);
     }
 
     #[test]
