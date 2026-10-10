@@ -12,7 +12,8 @@ jobs:
     with:
       toolchain: "1.95.0"
       rustflags: "-D warnings --cfg tracing_unstable"
-      # Only quinn-proto (RUSTSEC-2024-0373) is still suppressed.
+      # quinn-proto (RUSTSEC-2024-0373) and paste (RUSTSEC-2024-0436, below) are
+      # suppressed.
       #
       # RUSTSEC-2026-0258 (h2, unbounded empty DATA frames) was the reason this
       # list existed. It is now genuinely fixed rather than suppressed: h2 0.3.27
@@ -24,7 +25,14 @@ jobs:
       # The same removal took owning_ref (2022-0040), rsa (2023-0071) and im
       # (2023-0126) out of the graph, so their entries went with it. Anything
       # re-entering the graph should fail the build rather than be inherited.
-      auditIgnore: "RUSTSEC-2024-0373"
+      #
+      # RUSTSEC-2024-0436 (paste, unmaintained; no vulnerability) is accepted:
+      # it is in Cargo.lock only through optional `image` features (AVIF:
+      # ravif -> rav1e; OpenEXR: exr -> pulp). text-client and mediator-setup
+      # (via arboard) use `image` with both off, so it is never compiled. The
+      # latest releases (image 0.25.10, rav1e 0.8.1, pulp 0.22.3) still use it.
+      # Clears when rav1e and pulp move off `paste`: delete it then (#779).
+      auditIgnore: "RUSTSEC-2024-0373,RUSTSEC-2024-0436"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       release_debug: true
       # `workspace_publish: true` uses `cargo publish --workspace`, which errors on
