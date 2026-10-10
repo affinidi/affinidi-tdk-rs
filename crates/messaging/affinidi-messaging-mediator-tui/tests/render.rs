@@ -47,6 +47,34 @@ async fn settle(app: &mut App, window: Duration) {
     }
 }
 
+/// How long a step may take to show its result. Generous on purpose: a step
+/// returns as soon as its screen is right, so this only matters on a loaded
+/// runner, where a fixed 2-3 s window was what made these tests flaky.
+const STEP_WAIT: Duration = Duration::from_secs(30);
+
+/// Apply background results until the drawn screen satisfies `ready`, or
+/// `within` passes. Returns the last screen either way, so the caller's
+/// assertion fails on what was actually there.
+async fn settle_until(
+    app: &mut App,
+    terminal: &mut Terminal<TestBackend>,
+    within: Duration,
+    ready: impl Fn(&str) -> bool,
+) -> String {
+    let until = tokio::time::Instant::now() + within;
+    loop {
+        terminal.draw(|f| app.render(f, f.area())).unwrap();
+        let s = screen(terminal);
+        if ready(&s) {
+            return s;
+        }
+        match tokio::time::timeout_at(until, app.next_update()).await {
+            Ok(Some(update)) => app.apply(update),
+            _ => return s,
+        }
+    }
+}
+
 fn screen(terminal: &Terminal<TestBackend>) -> String {
     let buf = terminal.backend().buffer();
     (0..buf.area.height)
@@ -89,9 +117,13 @@ async fn an_admin_console_renders_real_data() {
     let mut app = App::new(console).with_color_depth(ColorDepth::TrueColor);
     let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
 
-    settle(&mut app, Duration::from_secs(2)).await;
-    terminal.draw(|f| app.render(f, f.area())).unwrap();
-    let dashboard = screen(&terminal);
+    let dashboard = settle_until(&mut app, &mut terminal, STEP_WAIT, |s| {
+        s.contains("ADMIN")
+            && s.contains("Mediator")
+            && s.contains("version")
+            && s.contains("Queue pressure")
+    })
+    .await;
     println!("{dashboard}");
     assert!(dashboard.contains("ADMIN"), "mode badge");
     assert!(
@@ -103,24 +135,29 @@ async fn an_admin_console_renders_real_data() {
     // Open the monitor pane and the Account tab for the busiest queue.
     assert_eq!(app.handle_key(key(KeyCode::Char('m'))), Control::Continue);
     app.handle_key(key(KeyCode::Char('2')));
-    settle(&mut app, Duration::from_secs(2)).await;
-    terminal.draw(|f| app.render(f, f.area())).unwrap();
-    let queues = screen(&terminal);
+    let queues = settle_until(&mut app, &mut terminal, STEP_WAIT, |s| {
+        s.contains("Traffic")
+    })
+    .await;
     println!("{queues}");
     assert!(queues.contains("Traffic"), "monitor pane beside the queues");
 
     // Alice's account: the three messages she sent bob wait in her send
     // queue, and bob is the recipient who has not collected them.
     app.open_account(Some(alice.did_hash()));
-    settle(&mut app, Duration::from_secs(2)).await;
-    terminal.draw(|f| app.render(f, f.area())).unwrap();
-    let account = screen(&terminal);
+    let bob_short = format!("{}…", &bob.did_hash()[..8]);
+    let account = settle_until(&mut app, &mut terminal, STEP_WAIT, |s| {
+        s.contains("who hasn't collected")
+            && s.contains("Receive queue")
+            && s.lines()
+                .any(|l| l.contains(&bob_short) && l.contains(" 3 "))
+    })
+    .await;
     println!("{account}");
     assert!(
         account.contains("who hasn't collected"),
         "send queue by recipient"
     );
-    let bob_short = format!("{}…", &bob.did_hash()[..8]);
     let peer_row = account
         .lines()
         .find(|l| l.contains(&bob_short) && l.contains(" 3 "))
@@ -166,9 +203,7 @@ async fn a_named_account_gets_room_beside_the_monitor() {
     app.handle_key(key(KeyCode::Char('m')));
     app.open_account(Some(alice.did_hash()));
     app.handle_key(key(KeyCode::Char('x'))); // her send queue
-    settle(&mut app, Duration::from_secs(3)).await;
-    terminal.draw(|f| app.render(f, f.area())).unwrap();
-    let account = screen(&terminal);
+    let account = settle_until(&mut app, &mut terminal, STEP_WAIT, |s| s.contains(name)).await;
     println!("{account}");
     assert!(
         account.contains(name),
@@ -177,9 +212,10 @@ async fn a_named_account_gets_room_beside_the_monitor() {
 
     // Every account on the mediator, the named one by its name.
     app.handle_key(key(KeyCode::Char('5')));
-    settle(&mut app, Duration::from_secs(2)).await;
-    terminal.draw(|f| app.render(f, f.area())).unwrap();
-    let accounts = screen(&terminal);
+    let accounts = settle_until(&mut app, &mut terminal, STEP_WAIT, |s| {
+        s.contains("Accounts —") && s.contains(name) && s.contains("admin")
+    })
+    .await;
     println!("{accounts}");
     assert!(
         accounts.contains("Accounts —"),
@@ -212,8 +248,10 @@ async fn a_named_account_gets_room_beside_the_monitor() {
         );
     }
     app.handle_key(key(KeyCode::Char('t')));
-    terminal.draw(|f| app.render(f, f.area())).unwrap();
-    let totals = screen(&terminal);
+    let totals = settle_until(&mut app, &mut terminal, STEP_WAIT, |s| {
+        s.contains("delivered") && s.contains("to it") && s.contains(name)
+    })
+    .await;
     println!("{totals}");
     assert!(seen(&totals) >= 1, "the arrival is counted:\n{totals}");
     assert!(
@@ -224,9 +262,10 @@ async fn a_named_account_gets_room_beside_the_monitor() {
 
     // The configuration, limits first; an admin (not root) may read it only.
     app.handle_key(key(KeyCode::Char('6')));
-    settle(&mut app, Duration::from_secs(2)).await;
-    terminal.draw(|f| app.render(f, f.area())).unwrap();
-    let config = screen(&terminal);
+    let config = settle_until(&mut app, &mut terminal, STEP_WAIT, |s| {
+        s.contains("Configuration —") && s.contains("limits.") && s.contains("needs a rootAdmin")
+    })
+    .await;
     println!("{config}");
     assert!(
         config.contains("Configuration —"),
@@ -240,9 +279,10 @@ async fn a_named_account_gets_room_beside_the_monitor() {
 
     // Alice's settings, and an edit: the first ACL flag toggled and saved.
     app.open_account(Some(alice.did_hash()));
-    settle(&mut app, Duration::from_secs(2)).await;
-    terminal.draw(|f| app.render(f, f.area())).unwrap();
-    let before = screen(&terminal);
+    let before = settle_until(&mut app, &mut terminal, STEP_WAIT, |s| {
+        s.contains("Settings") && s.contains("role standard") && s.contains("anonReceive")
+    })
+    .await;
     assert!(before.contains("Settings"), "settings panel:\n{before}");
     assert!(before.contains("role standard"), "the role:\n{before}");
     let anon_before = before.contains("✓anonReceive");
@@ -251,9 +291,11 @@ async fn a_named_account_gets_room_beside_the_monitor() {
     app.handle_key(key(KeyCode::Down)); // past the role row, to anonReceive
     app.handle_key(key(KeyCode::Char(' ')));
     app.handle_key(key(KeyCode::Char('s')));
-    settle(&mut app, Duration::from_secs(3)).await;
-    terminal.draw(|f| app.render(f, f.area())).unwrap();
-    let after = screen(&terminal);
+    // Saved, and the reloaded account shows the flag flipped.
+    let after = settle_until(&mut app, &mut terminal, STEP_WAIT, |s| {
+        s.contains("account updated") && s.contains("✓anonReceive") != anon_before
+    })
+    .await;
     println!("{after}");
     assert!(after.contains("account updated"), "saved:\n{after}");
     assert_eq!(
@@ -301,9 +343,10 @@ async fn logs_stay_off_the_screen_and_the_monitor_scrolls_back() {
             .write_all(b"\x1b[31mERROR\x1b[0m could not reach the mediator\n")
             .unwrap();
     }
-    settle(&mut app, Duration::from_secs(1)).await;
-    terminal.draw(|f| app.render(f, f.area())).unwrap();
-    let flagged = screen(&terminal);
+    let flagged = settle_until(&mut app, &mut terminal, STEP_WAIT, |s| {
+        s.contains("3 log warning(s)")
+    })
+    .await;
     println!("{flagged}");
     assert!(
         flagged.contains("3 log warning(s)"),
