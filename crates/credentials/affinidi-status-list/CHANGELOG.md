@@ -1,5 +1,34 @@
 # Affinidi Status List Changelog
 
+## Unreleased (0.1.7) — IETF Token Status List
+
+Additive: a new `token` module and three new `StatusListError` variants
+(the enum is `#[non_exhaustive]`). Nothing existing changes.
+
+- **`TokenStatusList`** — `draft-ietf-oauth-status-list-21` §4: entries 1, 2,
+  4 or 8 bits wide, packed least-significant-bit first, ZLIB-compressed and
+  base64url-encoded as `{ bits, lst }`. Decoding is capped
+  (`DEFAULT_MAX_LIST_BYTES`, 16 MiB; `decode_with_limit` to choose), so a
+  small `lst` cannot inflate without bound. An index past the end is an
+  error, never a default. Decodes both of the draft's worked examples.
+- **`TokenStatus`** — the §7 registry: `Valid`, `Invalid`, `Suspended`,
+  `ApplicationSpecific(0x03 | 0x0C..=0x0F)`, and `Reserved(_)` for values
+  this implementation cannot interpret.
+- **`StatusListReference`** — a Referenced Token's `status.status_list`
+  (`idx`, `uri`), read strictly: a negative, fractional or string `idx` is
+  refused.
+- **`VerifiedStatusListToken::verify`** — checks a `statuslist+jwt` in the
+  §8.3 order. The signature is verified **first**, by a caller-supplied
+  closure that returns the payload only after verifying it (key resolution is
+  the caller's). Then `typ` (compared per RFC 7515 §4.1.9), `sub` equals the
+  referenced `uri`, `iat` not in the future, `exp` not passed (with
+  leeway), and the list decodes under the cap. Only the verified type answers
+  `status_of`; the verified header and `iss` are exposed so the caller can
+  bind the list's signer to the Referenced Token's issuer.
+- **`status_list_token_payload`** — the payload a Status Issuer signs.
+
+The CWT form (`statuslist+cwt`) is not implemented.
+
 ## Unreleased (0.1.6) — `rand` 0.10
 
 No behaviour change and no public API change: this is a private dependencies here.

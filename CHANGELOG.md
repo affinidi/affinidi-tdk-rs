@@ -9,6 +9,17 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
+### Added
+
+- **IETF Token Status List.** **`affinidi-status-list` 0.1.7**. A `token`
+  module implementing `draft-ietf-oauth-status-list-21`, the status mechanism
+  SD-JWT VCs and the EUDI / swiyu profiles reference: 1/2/4/8-bit ZLIB lists
+  with a decompression cap, the status-type registry, strict
+  `status.status_list` references, and `VerifiedStatusListToken::verify`,
+  which checks a `statuslist+jwt` signature (caller-supplied) before reading
+  `typ`, `sub` = the referenced `uri`, `iat` and `exp`, and only then
+  decompresses. Additive; the CWT form is not implemented.
+
 ### Fixed
 
 - **Senders are no longer told a message was collected when it was purged or
