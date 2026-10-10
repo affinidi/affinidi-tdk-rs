@@ -24,6 +24,18 @@ pub enum StatusListError {
     #[error("Invalid status list: {0}")]
     Invalid(String),
 
+    /// A Status List Token's signature did not verify.
+    #[error("Status list token signature: {0}")]
+    Signature(String),
+
+    /// A Status List Token is malformed or its claims are not acceptable.
+    #[error("Invalid status list token: {0}")]
+    Token(String),
+
+    /// A Status List Token's `exp` has passed.
+    #[error("Status list token expired at {exp} (now {now})")]
+    Expired { exp: i64, now: i64 },
+
     /// JSON serialization/deserialization failed.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
