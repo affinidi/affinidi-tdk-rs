@@ -207,8 +207,6 @@ impl PurgeFilter {
     }
 }
 
-/// What a filtered purge did, or would have done.
-
 /// The default [`MediatorStore::purge_folder_by`], over the store's own
 /// primitives: the unfiltered [`purge_folder_filtered_by`] (whose default
 /// deletes each message with `by`) until nothing is left, then the stream key.
@@ -247,6 +245,7 @@ pub async fn purge_folder_by_listing<S: MediatorStore + ?Sized>(
     Ok((count, bytes))
 }
 
+/// What a filtered purge did, or would have done.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PurgeReport {
     /// Messages matched **and actually removed** — or, for a dry run, matched
