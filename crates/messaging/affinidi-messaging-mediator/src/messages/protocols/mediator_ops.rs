@@ -1091,6 +1091,19 @@ pub(crate) async fn consume_queue_purge(
     let peer = payload.peer.as_ref().map(|p| p.to_string());
     let older_than = payload.older_than_seconds;
 
+    // Purging your own queue is your own removal (collected / withdrawn);
+    // purging someone else's is the mediator's (discarded), so its senders
+    // aren't told their messages were collected.
+    let by = if session.did_hash == target {
+        DeletionAuthority::Owner {
+            did_hash: target.clone(),
+        }
+    } else {
+        DeletionAuthority::Admin {
+            admin_did_hash: session.did_hash.clone(),
+        }
+    };
+
     let report = if peer.is_some() || older_than.is_some() || dry_run {
         let filter = PurgeFilter {
             peer: peer.clone(),
@@ -1104,12 +1117,12 @@ pub(crate) async fn consume_queue_purge(
         };
         state
             .database
-            .purge_folder_filtered(&target, folder.clone(), &filter)
+            .purge_folder_filtered_by(&target, folder.clone(), &filter, by)
             .await?
     } else {
         let (count, bytes) = state
             .database
-            .purge_folder(&session.session_id, &target, folder.clone())
+            .purge_folder_by(&session.session_id, &target, folder.clone(), by)
             .await?;
         PurgeReport {
             count,

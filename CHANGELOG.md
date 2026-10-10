@@ -9,6 +9,14 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
+### Fixed
+
+- **Senders are no longer told a message was collected when it was purged or
+  its recipient's account was removed.** **`affinidi-messaging-mediator`
+  0.38.1**, **`affinidi-messaging-mediator-common` 0.17.5**. The outbox receipt
+  (#897) for an admin purge of another account's queue, or for account removal,
+  now reads `discarded`. A DID purging its own queue is unchanged.
+
 ### Changed
 
 - **The mediator keeps all its secrets in one backend secret.**

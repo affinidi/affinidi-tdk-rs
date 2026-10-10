@@ -782,7 +782,29 @@ impl MediatorStore for RedisStore {
             session_id: session_id.to_string(),
             ..Default::default()
         };
-        self.purge_messages(&session, did_hash, folder).await
+        self.purge_messages(
+            &session,
+            did_hash,
+            folder,
+            &DeletionAuthority::Owner {
+                did_hash: did_hash.to_string(),
+            },
+        )
+        .await
+    }
+
+    async fn purge_folder_by(
+        &self,
+        session_id: &str,
+        did_hash: &str,
+        folder: Folder,
+        by: DeletionAuthority,
+    ) -> Result<(usize, usize), MediatorError> {
+        let session = Session {
+            session_id: session_id.to_string(),
+            ..Default::default()
+        };
+        self.purge_messages(&session, did_hash, folder, &by).await
     }
 
     async fn delete_folder_stream(
