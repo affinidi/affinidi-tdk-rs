@@ -903,9 +903,27 @@ impl MediatorStore for MemoryStore {
 
     async fn purge_folder(
         &self,
+        session_id: &str,
+        did_hash: &str,
+        folder: Folder,
+    ) -> Result<(usize, usize), MediatorError> {
+        self.purge_folder_by(
+            session_id,
+            did_hash,
+            folder,
+            DeletionAuthority::Owner {
+                did_hash: did_hash.to_string(),
+            },
+        )
+        .await
+    }
+
+    async fn purge_folder_by(
+        &self,
         _session_id: &str,
         did_hash: &str,
         folder: Folder,
+        by: DeletionAuthority,
     ) -> Result<(usize, usize), MediatorError> {
         // Snapshot the message IDs in the folder under the lock, then
         // call delete_message on each (which re-acquires the lock).
@@ -923,21 +941,11 @@ impl MediatorStore for MemoryStore {
         let mut count = 0;
         let mut bytes = 0;
         for msg_id in msg_ids {
-            // Owner-authority delete; respects ownership semantics.
             let bytes_before = {
                 let state = self.state.lock().await;
                 state.messages.get(&msg_id).map(|r| r.bytes).unwrap_or(0)
             };
-            if self
-                .delete_message(
-                    &msg_id,
-                    DeletionAuthority::Owner {
-                        did_hash: did_hash.to_string(),
-                    },
-                )
-                .await
-                .is_ok()
-            {
+            if self.delete_message(&msg_id, by.clone()).await.is_ok() {
                 count += 1;
                 bytes += bytes_before;
             }
@@ -1117,7 +1125,17 @@ impl MediatorStore for MemoryStore {
         // already delivered) and purge the inbox.
         self.delete_folder_stream("", did_hash, Folder::Outbox)
             .await?;
-        self.purge_folder("", did_hash, Folder::Inbox).await?;
+        // As the mediator, not the owner: senders see these as `discarded`,
+        // not collected by a recipient who never read them.
+        self.purge_folder_by(
+            "",
+            did_hash,
+            Folder::Inbox,
+            DeletionAuthority::Admin {
+                admin_did_hash: did_hash.to_string(),
+            },
+        )
+        .await?;
 
         // Drop the account, admin set membership, and known-DIDs entry.
         let mut state = self.state.lock().await;

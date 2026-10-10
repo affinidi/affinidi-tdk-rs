@@ -5,7 +5,7 @@
 
 use super::Database;
 use crate::errors::MediatorError;
-use crate::store::types::Session;
+use crate::store::types::{DeletionAuthority, Session};
 use crate::types::messages::Folder;
 use ahash::AHashMap as HashMap;
 use tracing::{Instrument, Level, debug, span, warn};
@@ -13,18 +13,21 @@ use tracing::{Instrument, Level, debug, span, warn};
 // Redis-backend implementation behind `RedisStore`.
 impl Database {
     /// Will purge/delete all messages from the database for the given DID and folder
-    /// Returns the number of messages purged and the total bytes purged
+    /// Returns the number of messages purged and the total bytes purged.
+    /// `by` decides the senders' outbox receipts (see
+    /// `MediatorStore::purge_folder_by`).
     pub(crate) async fn purge_messages(
         &self,
         session: &Session,
         did_hash: &str,
         folder: Folder,
+        by: &DeletionAuthority,
     ) -> Result<(usize, usize), MediatorError> {
         let mut purge_count: usize = 0;
         let mut purge_bytes: usize = 0;
 
         loop {
-            let (count, bytes) = self._purge_messages(session, did_hash, &folder).await?;
+            let (count, bytes) = self._purge_messages(session, did_hash, &folder, by).await?;
             purge_count += count;
             purge_bytes += bytes;
 
@@ -46,6 +49,7 @@ impl Database {
         session: &Session,
         did_hash: &str,
         folder: &Folder,
+        by: &DeletionAuthority,
     ) -> Result<(usize, usize), MediatorError> {
         let _span = span!(Level::DEBUG, "purge_messages", did_hash = did_hash, folder = ?folder);
 
@@ -103,14 +107,22 @@ impl Database {
                 0_usize
             };
 
-            // Delete the message
+            // Delete the message. An admin delete passes the admin DID as both
+            // requester and admin, as `RedisStore::delete_message` does, so the
+            // Lua check accepts it and the receipt reads `discarded`.
+            let (requester, admin) = match by {
+                DeletionAuthority::Owner { did_hash } => (did_hash.as_str(), None),
+                DeletionAuthority::Admin { admin_did_hash } => {
+                    (admin_did_hash.as_str(), Some(admin_did_hash.as_str()))
+                }
+            };
             self.handler
                 .delete_message(
                     Some(&session.session_id),
-                    did_hash,
+                    requester,
                     message_hash,
                     None,
-                    None,
+                    admin,
                 )
                 .await?;
 

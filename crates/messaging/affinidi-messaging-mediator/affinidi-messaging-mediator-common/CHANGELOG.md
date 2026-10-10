@@ -1,5 +1,25 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.17.5) — purges and account removal no longer read as "collected"
+
+The outbox receipts from 0.17.0 (#897) record why a sent message left its
+sender's outbox, and the reason is decided by who deleted it. Two paths deleted
+as the folder's owner when the mediator was acting on its own behalf, so
+senders were told their messages were collected when nobody had read them:
+
+- **Account removal** purged the removed account's inbox as its owner. Every
+  backend now purges it with `DeletionAuthority::Admin`, so senders see
+  `discarded`, as the receipts' documentation always said.
+- **Queue purges** had no way to say who was purging. New `MediatorStore`
+  methods `purge_folder_by` and `purge_folder_filtered_by` take the deleting
+  `DeletionAuthority`; `purge_folder` / `purge_folder_filtered` keep their
+  signatures and purge as the owner. Both new methods have defaults (the
+  unfiltered default purges as the owner); the Redis, Fjall and in-memory
+  stores honour the authority.
+
+An owner purging its own inbox still reads as `collected` (its outbox,
+`withdrawn`), as #896 specifies. Additive only. Addresses #896.
+
 ## Unreleased (0.17.4) — one secret per mediator on per-key backends
 
 `MediatorSecrets` now keeps every entry in one backend secret,

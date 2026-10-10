@@ -750,6 +750,29 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         folder: Folder,
     ) -> Result<(usize, usize), MediatorError>;
 
+    /// [`purge_folder`](Self::purge_folder), deleting with `by`'s authority.
+    ///
+    /// The authority decides the outbox receipt each sender gets (see
+    /// [`ops::removal_reason`]): a purge by the folder's owner reads as
+    /// `collected` (inbox) or `withdrawn` (outbox), while one the mediator
+    /// does on someone else's behalf — an admin purging another account, or
+    /// account removal — must pass [`DeletionAuthority::Admin`] so senders see
+    /// `discarded`, not a collection that never happened.
+    ///
+    /// The default ignores `by` and purges as the owner; every in-tree
+    /// backend overrides it. `purge_folder` is this with the owner's
+    /// authority.
+    async fn purge_folder_by(
+        &self,
+        session_id: &str,
+        did_hash: &str,
+        folder: Folder,
+        by: DeletionAuthority,
+    ) -> Result<(usize, usize), MediatorError> {
+        let _ = by;
+        self.purge_folder(session_id, did_hash, folder).await
+    }
+
     /// Purge only the messages in a folder that match `filter`, and report
     /// what was (or would be) removed.
     ///
@@ -782,6 +805,27 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         did_hash: &str,
         folder: Folder,
         filter: &PurgeFilter,
+    ) -> Result<PurgeReport, MediatorError> {
+        self.purge_folder_filtered_by(
+            did_hash,
+            folder,
+            filter,
+            DeletionAuthority::Owner {
+                did_hash: did_hash.to_string(),
+            },
+        )
+        .await
+    }
+
+    /// [`purge_folder_filtered`](Self::purge_folder_filtered), deleting with
+    /// `by`'s authority — which decides the senders' outbox receipts, as
+    /// [`purge_folder_by`](Self::purge_folder_by) explains.
+    async fn purge_folder_filtered_by(
+        &self,
+        did_hash: &str,
+        folder: Folder,
+        filter: &PurgeFilter,
+        by: DeletionAuthority,
     ) -> Result<PurgeReport, MediatorError> {
         const PAGE: u32 = 100;
         let mut report = PurgeReport::default();
@@ -829,15 +873,7 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
                     continue;
                 }
 
-                match self
-                    .delete_message(
-                        &element.msg_id,
-                        DeletionAuthority::Owner {
-                            did_hash: did_hash.to_string(),
-                        },
-                    )
-                    .await
-                {
+                match self.delete_message(&element.msg_id, by.clone()).await {
                     Ok(()) => {
                         report.count += 1;
                         report.bytes += element.size as usize;
