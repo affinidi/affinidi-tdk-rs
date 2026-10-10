@@ -25,17 +25,18 @@ pub fn open_secret_backend(backend_url: &str) -> anyhow::Result<MediatorSecrets>
 /// Which liveness probe to run when opening the backend for provisioning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProvisionProbe {
-    /// Write → read → delete a random `mediator_probe_<uuid>` sentinel. Fails
-    /// fast on missing **write** permissions before any crypto material is
-    /// minted. Used by the interactive wizard, which may be pointed at a fresh
+    /// Write round-trip: rewrites `mediator_secrets_bundle` unchanged and
+    /// reads it back (on `file://` / `k8s://`, writes, reads and deletes a
+    /// `mediator_probe_<uuid>` sentinel). Fails fast on missing **write**
+    /// permissions before any crypto material is minted. Used by the interactive wizard, which may be pointed at a fresh
     /// backend the operator must be able to create secrets in.
     ReadWrite,
     /// Read-only reachability check (fixed `mediator_probe_readonly` sentinel,
     /// never written — `Ok` even when absent). Requested by the **headless /
     /// recipe** flow, but honoured **only for `aws_secrets://`** backends,
-    /// where the Secrets Manager entries are provisioned out-of-band (e.g. CDK
-    /// pre-creates them) so setup only overwrites them and never needs
-    /// create/delete rights — the IaC-owns-lifecycle contract, matching the
+    /// where the Secrets Manager entry is provisioned out-of-band (e.g. CDK
+    /// pre-creates `<prefix>mediator_secrets_bundle`) so setup only
+    /// overwrites it and never needs create/delete rights — the IaC-owns-lifecycle contract, matching the
     /// mediator runtime, which also probes read-only at boot and on `/readyz`.
     ///
     /// For every other backend (`file://`, `keyring://`, `vault://`, …) the
@@ -87,6 +88,13 @@ pub async fn open_and_probe_secret_backend(
         ProvisionProbe::ReadOnly => store.probe_readonly().await,
     };
     result.map_err(|e| anyhow::anyhow!("secret backend '{backend_url}' failed probe: {e}"))?;
+    // An existing per-key deployment is moved to the single-secret layout
+    // (kept until the mediator confirms it); fail now, not mid-provisioning.
+    store.ensure_migrated().await.map_err(|e| {
+        anyhow::anyhow!(
+            "secret backend '{backend_url}' could not be moved to the single-secret layout: {e}"
+        )
+    })?;
     Ok(store)
 }
 

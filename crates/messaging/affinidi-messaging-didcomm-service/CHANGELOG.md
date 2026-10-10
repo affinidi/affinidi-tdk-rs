@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (0.18.1) — test-mediator 0.19 (dev-dependency)
+
+The `affinidi-messaging-test-mediator` dev-dependency moves to 0.19. Tests
+only; nothing a consumer builds changes.
+
 ## Unreleased (0.18.0) — SDK 0.33, trust-tasks 0.27
 
 Moves to `affinidi-messaging-sdk` 0.33, `affinidi-tdk` 0.23 and `trust-tasks-rs` 0.27. The SDK is a public dependency here, so this crate moves a minor. No source change.

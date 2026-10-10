@@ -7,7 +7,7 @@
 //!    which secret backend to talk to.
 //! 2. Open the unified secret backend and read the current
 //!    [`affinidi_messaging_mediator_common::AdminCredential`] under the
-//!    well-known key `mediator/admin/credential`.
+//!    well-known key `mediator_admin_credential`.
 //! 3. Authenticate to the VTA using the existing credential.
 //! 4. Read the existing ACL entry (`role`, `allowed_contexts`, optional
 //!    `expires_at`) so the new entry is a faithful mirror — losing
@@ -43,6 +43,7 @@
 //!   the operator instructed to remove it via `pnm acl delete`.
 
 use affinidi_messaging_mediator_common::{AdminCredential, MediatorSecrets};
+use std::time::Duration;
 use tracing::{error, info, warn};
 use vta_sdk::client::CreateAclRequest;
 use vta_sdk::credentials::CredentialBundle;
@@ -238,14 +239,15 @@ pub async fn run(config_path: &str, dry_run: bool) -> Result<(), Box<dyn std::er
         context: context.clone(),
     };
 
-    if let Err(e) = secrets.store_admin_credential(&new_credential).await {
+    if let Err(e) = write_admin_credential_checked(&secrets, &new_credential).await {
         error!(
             new_admin_did = %new_did,
             error = %e,
             "ACL was created on the VTA but writing the new credential to the backend failed. \
-             The mediator still holds the OLD credential; the new ACL entry is live but \
-             unused. Recovery: re-run with `mediator-setup --force-reprovision` to write \
-             the new credential, or remove the new ACL entry on the VTA before retrying."
+             The backend still holds the OLD credential, which keeps working; the new \
+             ACL entry is live but unused, and its key was not kept. Recovery: remove \
+             the new ACL entry on the VTA (e.g. `pnm acl delete <new DID>`), fix the \
+             cause above, then run `mediator rotate-admin` again."
         );
         return Err(format!("backend write failed after ACL create: {e}").into());
     }
@@ -273,6 +275,52 @@ pub async fn run(config_path: &str, dry_run: bool) -> Result<(), Box<dyn std::er
          If a mediator process is currently running, restart it to pick up the rotation."
     );
     Ok(())
+}
+
+/// How many times to write the new credential before giving up.
+const WRITE_ATTEMPTS: u32 = 3;
+/// Pause between writing the credential and reading it back.
+const WRITE_SETTLE: Duration = Duration::from_secs(2);
+
+/// Write `credential`, then read it back from the backend after a pause and
+/// write again if it is gone. The secret store has no compare-and-swap, and
+/// on per-key backends every entry shares one secret: a running mediator
+/// rewriting its VTA cache can read the bundle just before this write and
+/// put it back just after, losing the new credential. The old ACL entry is
+/// revoked only once this returns `Ok`, so a lost write must not go unseen.
+async fn write_admin_credential_checked(
+    secrets: &MediatorSecrets,
+    credential: &AdminCredential,
+) -> Result<(), String> {
+    for attempt in 1..=WRITE_ATTEMPTS {
+        secrets
+            .store_admin_credential(credential)
+            .await
+            .map_err(|e| e.to_string())?;
+        // Let a read-modify-write that began before ours land first.
+        tokio::time::sleep(WRITE_SETTLE).await;
+        match secrets.reload_admin_credential().await {
+            Ok(Some(stored))
+                if stored.did == credential.did
+                    && stored.private_key_multibase == credential.private_key_multibase =>
+            {
+                return Ok(());
+            }
+            Ok(_) => warn!(
+                attempt,
+                "the new admin credential was overwritten by another writer; writing it again"
+            ),
+            Err(e) => warn!(
+                attempt,
+                error = %e,
+                "could not read the new admin credential back; writing it again"
+            ),
+        }
+    }
+    Err(format!(
+        "the new admin credential did not persist after {WRITE_ATTEMPTS} attempts — \
+         another process kept overwriting the secret store; stop it and retry"
+    ))
 }
 
 /// Mint a fresh Ed25519 did:key locally. Returns `(did, private_key_multibase)`
@@ -307,6 +355,83 @@ fn mint_did_key() -> Result<(String, String), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use affinidi_messaging_mediator_common::ADMIN_CREDENTIAL;
+    use affinidi_messaging_mediator_common::secrets::{
+        Result as SecretsResult, SecretStore, backends::MemoryStore,
+    };
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Silently drops the first `lost` admin-credential writes, as a
+    /// concurrent read-modify-write would.
+    struct LosesWrites {
+        inner: MemoryStore,
+        lost: AtomicU32,
+    }
+
+    #[async_trait::async_trait]
+    impl SecretStore for LosesWrites {
+        fn backend(&self) -> &'static str {
+            "loses-writes"
+        }
+        async fn get(&self, key: &str) -> SecretsResult<Option<Vec<u8>>> {
+            self.inner.get(key).await
+        }
+        async fn put(&self, key: &str, value: &[u8]) -> SecretsResult<()> {
+            if key == ADMIN_CREDENTIAL
+                && self
+                    .lost
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok()
+            {
+                return Ok(());
+            }
+            self.inner.put(key, value).await
+        }
+        async fn delete(&self, key: &str) -> SecretsResult<()> {
+            self.inner.delete(key).await
+        }
+        fn is_single_object(&self) -> bool {
+            true
+        }
+    }
+
+    fn secrets_losing(lost: u32) -> MediatorSecrets {
+        MediatorSecrets::new(Arc::new(LosesWrites {
+            inner: MemoryStore::new("memory"),
+            lost: AtomicU32::new(lost),
+        }))
+    }
+
+    fn credential() -> AdminCredential {
+        AdminCredential {
+            did: "did:key:z6MkNEW".into(),
+            private_key_multibase: "z3u2NEW".into(),
+            vta_did: Some("did:webvh:vta.example.com".into()),
+            vta_url: None,
+            context: "mediator".into(),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lost_credential_write_is_written_again() {
+        let secrets = secrets_losing(1);
+        write_admin_credential_checked(&secrets, &credential())
+            .await
+            .unwrap();
+        let stored = secrets.reload_admin_credential().await.unwrap().unwrap();
+        assert_eq!(stored.did, "did:key:z6MkNEW");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_credential_that_never_persists_is_an_error() {
+        let secrets = secrets_losing(WRITE_ATTEMPTS);
+        assert!(
+            write_admin_credential_checked(&secrets, &credential())
+                .await
+                .is_err()
+        );
+    }
 
     #[test]
     fn a_credential_with_a_rest_url_prefers_rest() {

@@ -202,6 +202,19 @@ pub async fn run_uninstall(config_path: &str) -> anyhow::Result<()> {
                 }
             }
         }
+        // Deleting each key leaves the (now empty) single-secret bundle and
+        // any bootstrap seeds behind; purge removes the rest.
+        match secrets.purge().await {
+            Ok(()) => info!(backend = %setup.backend_url, "Removed remaining mediator secrets"),
+            Err(e) => {
+                warn!(
+                    backend = %setup.backend_url,
+                    error = %e,
+                    "Failed to remove remaining mediator secrets"
+                );
+                eprintln!("  \x1b[33m\u{26A0}\x1b[0m remaining secrets: {e}");
+            }
+        }
     }
 
     if path.exists() {

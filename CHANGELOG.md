@@ -11,6 +11,24 @@ Per-crate version history is summarised here; for the full code history see
 
 ### Changed
 
+- **The mediator keeps all its secrets in one backend secret.**
+  **`affinidi-messaging-mediator` 0.38.0**, **`affinidi-messaging-mediator-common`
+  0.17.4**, **`affinidi-messaging-test-mediator` 0.19.0**.
+
+  On AWS, GCP, Azure, Vault and keyring backends every entry now lives in
+  `mediator_secrets_bundle` instead of one secret per key (plus stray probe and
+  bootstrap-seed secrets). Existing deployments migrate on first start: the
+  per-key secrets are copied and verified, kept in step until the mediator has
+  started on the bundle, and only then deleted. **Breaking (operational):** a
+  migration that can't complete stops the mediator with the cause and the fix,
+  leaving the store unchanged; grant the mediator access to
+  `<prefix>mediator_secrets_bundle`. Secret-store calls are also cut (cached
+  reads, no unchanged writes, the VTA cache rewritten only on change), and
+  `mediator rotate-admin` verifies its write before revoking the old ACL. The
+  mediator moves to `vta-sdk` 0.64, so the workspace builds one copy of the
+  messaging SDK, `affinidi-tdk` and `trust-tasks-rs` again. See
+  `crates/messaging/affinidi-messaging-mediator/docs/secrets-backend.md`.
+
 - **`/readyz` no longer logs three `ERROR` lines per hit on the Vault backend.**
   **`affinidi-messaging-mediator-common` 0.17.2**.
 

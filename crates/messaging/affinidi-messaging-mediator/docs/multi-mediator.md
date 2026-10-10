@@ -13,9 +13,8 @@ this document:
   user homed on mediator A can reach a user homed on mediator B. **That is
   this document.**
 
-Everything below is sourced from the code paths named in each section and
-from the end-to-end tests listed in §9; those tests are the executable form of
-this document.
+Each section names the code path it describes. The end-to-end tests in §9
+are the executable form of this document.
 
 ---
 
@@ -144,7 +143,7 @@ of peer mediator DIDs. Empty accepts any peer (still ACL-gated); non-empty
 admits only its members and rejects anonymous peers outright. An unlisted peer
 is refused with error 60, `authorization.relay.untrusted_peer`. Where it does
 and does not apply is tabulated in [`acls.md` §6, "Inter-mediator relay
-admission"](./acls.md) — read that table before populating the list, because
+admission"](./acls.md#inter-mediator-relay-admission) — read that table before populating the list, because
 it does **not** apply to blind relay or to TSP opaque pass-through, and must
 not apply to an ordinary client's routed message.
 
@@ -196,7 +195,7 @@ federation both roles apply to both mediators.
 | `processors.forwarding.max_hops` | applies | applies | default 10; `PROCESSOR_FORWARDING_MAX_HOPS` |
 | `processors.forwarding.blocked_forwarding_dids` | JSON array string | — | own DID + every service URI in its document are added automatically |
 | `security.enable_inter_mediator_relay` | — | `true` | admits the anonymous `/inbound` hop |
-| `security.global_acl_default` | must grant `RECEIVE_FORWARDED` (§6) | must grant `SEND_FORWARDED` (§6) | a relay deployment typically runs `ALLOW_ALL`; see [`acls.md` §7](./acls.md) |
+| `security.global_acl_default` | must grant `RECEIVE_FORWARDED` (§6) | must grant `SEND_FORWARDED` (§6) | a relay deployment typically runs `ALLOW_ALL`; see [`acls.md` §7](./acls.md#7-recipes) |
 | `security.local_direct_delivery_allowed` | — | `true` for single-forward relays (§1b) | not needed for the double forward |
 | `server.local_endpoints` | required behind a hostname/LB | required behind a hostname/LB | otherwise the mediator relays to itself; `LOCAL_ENDPOINTS`, comma-separated |
 | `processors.forwarding.ws_threshold_msgs_per_10s` | rate at which the relay socket engages | — | default 1; see §7 for what the rate actually measures |
@@ -206,15 +205,20 @@ federation both roles apply to both mediators.
 
 ## 6. The ACLs that have to line up
 
-Four different accounts are consulted for one cross-mediator delivery. Getting
-any of them wrong produces a `403` in a place that looks unrelated.
+Several accounts are consulted for one cross-mediator delivery. Getting any of
+them wrong produces a `403` in a place that looks unrelated.
+
+Every refusal that is a fact about the recipient returns the same
+`73 delivery.refused`, so the sender cannot tell them apart. The mediator
+that refused logs the specific reason against the session (see
+[`acls.md` §6](./acls.md#direct-delivery-didcomm-and-tsp)).
 
 **On A (sender's mediator):**
 
 | Account | Capability | Enforced by | Error |
 |---|---|---|---|
 | Alice | `SEND_FORWARDED` | `resolve_forward_sender` | 60 `authorization.send_forwarded` |
-| the next hop — **B's DID** for a double forward, **Bob's DID** for a single forward | `RECEIVE_FORWARDED` | forward gate | 58 `authorization.receive_forwarded` |
+| the next hop — **B's DID** for a double forward, **Bob's DID** for a single forward | `RECEIVE_FORWARDED` | forward gate | 73 `delivery.refused` |
 
 The next-hop account is auto-created on first contact with A's
 `global_acl_default` (`resolve_next_account`). **This is why a relay mediator
@@ -225,13 +229,15 @@ to hold an account on A, and nothing else creates it.
 
 | Account | Capability | Enforced by | Error |
 |---|---|---|---|
-| Alice (no account on B) | `SEND_FORWARDED` | `resolve_forward_sender` | 60 `authorization.send_forwarded` |
-| Bob | `RECEIVE_FORWARDED` (double forward) or `RECEIVE_MESSAGES` (single forward) | forward gate / direct delivery | 58 `authorization.receive_forwarded` / 74 `authorization.receive` |
-| Bob's access list | must admit Alice | `check_access_list` | 73 `authorization.access_list.denied` |
+| Alice, double forward | `SEND_FORWARDED` | `resolve_forward_sender` | 60 `authorization.send_forwarded` |
+| Alice, single forward | `SEND_MESSAGES` (B's `global_acl_default` if she has no account) | direct-delivery sender check | 44 `authorization.send` |
+| Bob | `RECEIVE_FORWARDED` (double forward) or `RECEIVE_MESSAGES` (single forward) | forward gate / direct delivery | 73 `delivery.refused` |
+| Bob's access list | must admit Alice | access-list verdict | 73 `delivery.refused` |
 | — (mediator policy, single forward only) | `local_direct_delivery_allowed` | direct-delivery gate | 71 `direct_delivery.denied` |
-| Bob, if the inner envelope is anon-packed | `ANON_RECEIVE` | `deliver_forward` | 69 `authorization.receive_anon` |
+| Bob, if the inner envelope is anon-packed | `ANON_RECEIVE` | `deliver_forward` | 73 `delivery.refused` |
 
-Alice is an account-less forward sender on B, so B auto-registers her via
+On a double forward Alice is an account-less forward sender on B, so B
+auto-registers her via
 `relay_sender_acls` — which seeds `SEND_FORWARDED` **only if B's
 `global_acl_default` grants it**, and nothing else (no `LOCAL`, no
 `RECEIVE_*`, no invites, no self-management). A DID that has only ever relayed
@@ -241,7 +247,7 @@ Consequence worth stating plainly: **the shipped default
 `global_acl_default = "DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES"` is not
 a federation configuration.** It grants neither forwarded bit. A mediator that
 should relay needs at minimum the "Relay only" or an allow-all recipe from
-[`acls.md` §7](./acls.md).
+[`acls.md` §7](./acls.md#7-recipes).
 
 ---
 
@@ -373,6 +379,7 @@ The tests below are the verified reference for every claim in this document:
 | TSP routed/nested + peer discovery | `test-mediator/tests/tsp_cross_mediator.rs` |
 | TSP peer allowlist scoping | `test-mediator/tests/tsp_relay_peer_trust.rs` |
 | Abandonment problem report | `test-mediator/tests/forwarding_abandonment_report.rs` |
+| Relay socket admission and `relay-ack` | `test-mediator/tests/ws_relay_admission.rs` |
 
 A runnable two-mediator demo against real deployments lives in
 `affinidi-messaging-helpers/examples/cross_mediator_forwarding.rs` (pass
@@ -388,7 +395,8 @@ mediator **DIDs**, not URLs).
 | Message loops back to A | A's public hostname doesn't match its bind address | set `server.local_endpoints` to every public URL in A's DID document |
 | B returns `401` on `/inbound` | B isn't configured as a relay | `security.enable_inter_mediator_relay = "true"` on B |
 | Error 60 `authorization.send_forwarded` at B | B's `global_acl_default` doesn't grant `SEND_FORWARDED`, so the auto-registered sender got nothing | widen B's default (§6) |
-| Error 58 `authorization.receive_forwarded` at A | the peer mediator's auto-created account on A lacks the bit | A's `global_acl_default` must grant `RECEIVE_FORWARDED` |
+| Error 73 `delivery.refused` at A, logged as "recipient is not accepting forwarded messages" | the peer mediator's auto-created account on A lacks `RECEIVE_FORWARDED` | A's `global_acl_default` must grant `RECEIVE_FORWARDED` |
+| Error 73 `delivery.refused` at B | a recipient-side check on Bob failed (§6) | B's log names the reason |
 | Error 60 `authorization.relay.untrusted_peer` | B's `relay_trusted_mediators` doesn't name A | add A's DID, or empty the list; confirm both sides run `rewrap` |
 | Error 71 `direct_delivery.denied` at B | a single-forward relay landed as a direct delivery | `local_direct_delivery_allowed = "true"` on B, or send the double forward |
 | Error 94 `loop_detected` | genuine loop, or `max_hops` too low for the topology | inspect the route before raising `max_hops` |
@@ -399,18 +407,10 @@ mediator **DIDs**, not URLs).
 
 ---
 
-## 11. Known gaps
-
-None outstanding for the relay path. The one that stood here — that
-inter-mediator WebSocket delivery could not authenticate, so it degraded to
-REST — was closed by the `relay-ack` admission path described in §7.
-
----
-
 ## Cross-references
 
-- [`acls.md`](./acls.md) — the permission model; §6 has the relay-admission
-  table
+- [`acls.md`](./acls.md) — the permission model;
+  [§6](./acls.md#inter-mediator-relay-admission) has the relay-admission table
 - [`mediation-and-routing.md`](./mediation-and-routing.md) — the addressing
   contract a recipient is reachable under
 - [`../README.md`](../README.md) — features, deployment, TSP endpoint

@@ -71,13 +71,9 @@ specify custom ACLs. So in `explicit_deny` the worst a non-admin can do is
 create account records that would have been created anyway on first
 authentication.
 
-> **Historical note.** Before mediator 0.18.0, `explicit_allow` did **not**
-> gate authentication — any DID completing the challenge was auto-registered
-> in either mode, and the only closed-ish posture was a denying
-> `global_acl_default` (unknown DIDs authenticated but could do nothing).
-> 0.18.0 made the mode enforce what its name always promised. If you run
-> `explicit_allow` and *relied* on unknown DIDs being able to
-> self-register, switch to `explicit_deny` with a restrictive
+> **Historical note.** Before mediator 0.18.0, `explicit_allow` did not gate
+> authentication (see the CHANGELOG). If you relied on unknown DIDs
+> self-registering, switch to `explicit_deny` with a restrictive
 > `global_acl_default` (§3).
 
 ---
@@ -111,14 +107,15 @@ It is consumed in four places:
 
 ### Ruleset syntax
 
-A comma-separated string. `ALLOW_ALL` or `DENY_ALL` must come **first** if
-present; later flags layer on top.
+A comma-separated, case-insensitive string. Entries apply left to right.
+`ALLOW_ALL` and `DENY_ALL` reset every flag, so put them first and layer the
+other flags after them.
 
 | Keyword | Effect |
 |---------|--------|
 | `ALLOW_ALL` | Every capability, every self-change bit, every `self_manage_*`, and `access_list_mode = ExplicitDeny` (open inbox). |
 | `DENY_ALL` | No capability, no self-change, no self-management, and `access_list_mode = ExplicitAllow` (closed inbox). |
-| `ALLOW_ALL_SELF_CHANGE` / `DENY_ALL_SELF_CHANGE` | Set/clear every self-change bit, leaving the capability values alone. |
+| `ALLOW_ALL_SELF_CHANGE` / `DENY_ALL_SELF_CHANGE` | Set/clear every self-change bit and every `self_manage_*` bit, leaving the capability values alone. |
 | `MODE_EXPLICIT_ALLOW` / `MODE_EXPLICIT_DENY` | This DID's own access-list mode (layer 4). |
 | `MODE_SELF_CHANGE` | Let the DID change its own access-list mode. |
 | `LOCAL` | Grant an inbox (message storage). No `_CHANGE` variant — admin-only. |
@@ -137,19 +134,22 @@ from everyone.
 
 ## 4. How a DID gets an account
 
-Five paths, and they do **not** all grant the same ACLs:
+Six paths, and they do **not** all grant the same ACLs:
 
 | Path | Trigger | ACLs granted |
 |------|---------|--------------|
 | Authentication challenge | Any DID requesting `/authenticate/challenge` — `explicit_deny` mode only (`explicit_allow` rejects unknown DIDs instead) | `global_acl_default` |
 | Authentication response | Backstop if the record vanished mid-flow — `explicit_deny` mode only (`explicit_allow` rejects instead) | `global_acl_default` |
-| `account_add` by an admin | Admin protocol or Trust Task | Admin's choice, else `global_acl_default` |
-| `account_add` by a non-admin | Only in `explicit_deny` mode | Always `global_acl_default` |
-| Forward routing | An unseen DID relays a forward through the mediator | **Least privilege**: `DENY_ALL` + `SEND_FORWARDED`, and only if `global_acl_default` grants `SEND_FORWARDED`. A DID that has only ever relayed a forward does not get `LOCAL`, `RECEIVE_*`, invites, or self-management. |
+| `messaging/account/add` by an admin | Trust Task | The admin's ACL applied onto `global_acl_default`, else `global_acl_default` |
+| `messaging/account/add` by a non-admin | Trust Task, `explicit_deny` mode only | Always `global_acl_default` |
+| Forward next hop | An unseen DID is named as a forward's `next` (`resolve_next_account`) | `global_acl_default` — in either mode |
+| Forward sender | An unseen DID relays a forward through the mediator (`relay_sender_acls`) | **Least privilege**: `DENY_ALL` + `SEND_FORWARDED`, and only if `global_acl_default` grants `SEND_FORWARDED`. No `LOCAL`, `RECEIVE_*`, invites, or self-management. |
 
 The first path is the one that surprises people: in `explicit_deny` mode,
 **registration is automatic and unconditional** — there is no approval
-step. `explicit_allow` is the mode that turns it off.
+step. `explicit_allow` turns off registration at authentication. It does not
+turn off the forward paths: a forward naming an unseen `next` DID still
+creates an account for it with `global_acl_default`.
 
 ---
 
@@ -162,15 +162,15 @@ DID may flip it without an admin.
 | Bit | Flag | Enforced at |
 |-----|------|-------------|
 | 0 | `access_list_mode` | Access-list evaluation on every delivery (§6) |
-| 1 | `access_list_mode_change` | Self-service gate for bit 0 |
+| 1 | `access_list_mode_self_change` | Self-service gate for bit 0 |
 | 2 | `did_blocked` | Authentication (both steps), session load, token refresh |
 | 3 | `did_local` | Inbox fetch, message list, message delete, outbound, WebSocket upgrade |
-| 4 / 5 | `send_messages` (+change) | Inbound handler (session), direct-delivery sender check |
-| 6 / 7 | `receive_messages` (+change) | Direct-delivery recipient check (DIDComm and TSP) |
-| 8 / 9 | `send_forwarded` (+change) | Forward gate (sender); anonymous inter-mediator relay |
-| 10 / 11 | `receive_forwarded` (+change) | Forward gate (next hop) |
-| 12 / 13 | `create_invites` (+change) | OOB invite handler |
-| 14 / 15 | `anon_receive` (+change) | Anonymous senders in access-list evaluation; anonymous forward next hop |
+| 4 / 5 | `send_messages` (+`_self_change`) | Inbound handler (session), direct-delivery sender check |
+| 6 / 7 | `receive_messages` (+`_self_change`) | Direct-delivery recipient check (DIDComm and TSP) |
+| 8 / 9 | `send_forwarded` (+`_self_change`) | Forward gate (sender); anonymous inter-mediator relay |
+| 10 / 11 | `receive_forwarded` (+`_self_change`) | Forward gate (next hop) |
+| 12 / 13 | `create_invites` (+`_self_change`) | OOB invite handler |
+| 14 / 15 | `anon_receive` (+`_self_change`) | Anonymous senders in access-list evaluation; anonymous forward next hop |
 | 16 | `self_manage_list` | Access-list add / remove / clear |
 | 17 | `self_manage_send_queue_limit` | Setting one's own send queue limit |
 | 18 | `self_manage_receive_queue_limit` | Setting one's own receive queue limit |
@@ -187,8 +187,8 @@ fine" tells you nothing about its permissions.
 ### Two classes of bit
 
 - **Self-changeable** (bits 0, 4, 6, 8, 10, 12, 14): the DID may flip the
-  value when the paired `_change` bit is set. It may **never** flip the
-  `_change` bit itself.
+  value when the paired `_self_change` bit is set. It may **never** flip the
+  `_self_change` bit itself.
 - **Admin-only** (bits 2, 3, 16, 17, 18): no self-change bit exists.
   `blocked` and `local` are the mediator's own gates; the `self_manage_*`
   bits are what delegate self-service in the first place, so a DID that
@@ -221,13 +221,20 @@ deliberately identical (§2).
 
 ```
 ├─ local_direct_delivery_allowed?               else 403 direct_delivery.denied
-├─ recipient has an account?                    else 403 direct_delivery.recipient.unknown
+├─ recipient has an account?                    else 403 delivery.refused
 ├─ force_session_did_match: envelope sender == session DID?
+│                                               else 400 authorization.did.session_mismatch
 ├─ sender has SEND_MESSAGES?                    else 403 authorization.send
-│    (anonymous sender: local_direct_delivery_allow_anon?)
-├─ recipient has RECEIVE_MESSAGES?              else 403 authorization.receive
-└─ recipient's access list admits the sender?   else 403 authorization.access_list.denied
+│    (anonymous sender: local_direct_delivery_allow_anon?  else 403 message.anonymous)
+├─ recipient has RECEIVE_MESSAGES?              else 403 delivery.refused
+└─ recipient's access list admits the sender?   else 403 delivery.refused
 ```
+
+Every refusal that is a fact about the **recipient** (no account, no
+`RECEIVE_*`, no `ANON_RECEIVE`, access list) returns the same
+`delivery.refused` (error 73). A distinguishable answer would let a sender
+enumerate which DIDs the mediator serves and probe their access lists. The
+specific reason is logged against the session on the mediator.
 
 The claimed sender is unverified in both protocols — the mediator holds no key
 for an envelope it is only carrying, so it reads the JWE `skid` (DIDComm) or the
@@ -246,10 +253,10 @@ to admit or refuse.
 ### Forwarding
 
 ```
-├─ sender has SEND_FORWARDED?                   else 403
-├─ next hop has RECEIVE_FORWARDED?              else 403
-├─ anonymous envelope → next hop has ANON_RECEIVE? else 403
-└─ access list check
+├─ sender has SEND_FORWARDED?                   else 403 authorization.send_forwarded
+├─ next hop has RECEIVE_FORWARDED?              else 403 delivery.refused
+├─ anonymous envelope → next hop has ANON_RECEIVE? else 403 delivery.refused
+└─ next hop's access list admits the sender?    else 403 delivery.refused
 ```
 
 ### Inter-mediator relay admission
@@ -323,13 +330,17 @@ operate on any DID; a Standard account may only target its own DID hash.
 Creating an Admin requires admin rights; creating a RootAdmin requires
 RootAdmin.
 
+Administration is done only through Trust Tasks; the list is in
+[`didcomm-protocols.md` §4](./didcomm-protocols.md#4-administration-trust-tasks).
+
 ### Admin message hardening
 
 - `block_remote_admin_msgs = "true"` (default) requires an admin's Trust
-  Task to be sent by a key belonging to the session DID, so admin
+  Task to be signed or authcrypted by a key of the session DID, so admin
   operations cannot be relayed in from elsewhere.
-- Replay of a captured Trust Task is bounded by its `issuedAt`, checked
-  under `trust_task_verification`.
+- `trust_task_verification` checks each Trust Task's `proof`, `issuedAt`
+  (bounding replay) and issuer. The default `"warn"` logs failures and still
+  runs the task; `"enforce"` refuses them.
 
 ### Changing ACLs
 
@@ -337,7 +348,8 @@ Through the `messaging/account/update` Trust Task, with an `acl` member.
 
 An admin may set anything. A non-admin may only target its own DID, may
 only change capabilities whose self-change bit is set, may never change a
-self-change bit, and may never change an admin-only flag (§5).
+self-change bit, and may never change an admin-only flag (§5). A refused
+change returns `authorization.acl.not_self_manageable`, naming the flag.
 
 ### Limits
 
@@ -354,27 +366,29 @@ is set.
 |---------|--------------|
 | DID authenticates fine but every operation is 403 | `global_acl_default` is `DENY_ALL`, or too narrow. Authentication only checks `blocked` and (in `explicit_allow`) that the DID is registered. |
 | `authorization.local` on fetch/list/WebSocket | The DID lacks `LOCAL`. |
-| `authorization.receive` on delivery | The **recipient** lacks `RECEIVE_MESSAGES`. |
 | `authorization.send` on delivery | The **sender** lacks `SEND_MESSAGES`. |
-| `authorization.access_list.denied` | Recipient's access list rejects the sender. Check the recipient's `access_list_mode`: in `ExplicitAllow` an *empty* list denies everyone. |
-| Messages silently not received, no error | Recipient's inbox mode is `ExplicitAllow` with an empty list, or `anon_receive` is unset for an anonymous sender. |
-| Setting `explicit_allow` did not stop unknown DIDs connecting | You are running mediator < 0.18.0 — the mode only gates authentication from 0.18.0 on (§2). |
+| `authorization.send_forwarded` on a forward | The **sender** lacks `SEND_FORWARDED`. |
+| `delivery.refused` (73) | A recipient-side check failed: no account, no `RECEIVE_MESSAGES` / `RECEIVE_FORWARDED`, no `ANON_RECEIVE` for an anonymous sender, or the access list rejects the sender. The mediator log names the reason. In `ExplicitAllow` mode an *empty* access list denies everyone. |
+| Setting `explicit_allow` did not stop unknown DIDs connecting | Mediator older than 0.18.0 (§2). |
 | DID gets `403 authentication.blocked` but was never blocked | `mediator_acl_mode = explicit_allow` and the DID has no account. The rejection deliberately reuses the blocked problem report (§2); pre-register the DID via `account_add`. |
-| `acl/set` rejected with "admin-only" | You tried to change `blocked`, `local`, or a `self_manage_*` flag as a non-admin. |
+| `authorization.acl.not_self_manageable` on `account/update` | A non-admin tried to change `blocked`, `local`, a `self_manage_*` flag, or a capability whose self-change bit is unset. |
 | Every new DID is blocked | `BLOCKED` was included in `global_acl_default`. |
 
 ---
 
 ## 10. Implementation notes
 
-Every permission decision resolves through `src/common/authz.rs`:
+Permission decisions resolve through `src/common/authz.rs`:
 
 - `require_capability` / `grants` — the capability gate
 - `check_access_list` — the sender↔recipient verdict
 - `effective_acls` — stored ACLs, else `global_acl_default`
 - `authentication_check` — the pre-auth blocked gate (the `explicit_allow`
   known-DID gate consumes its `known` result in the challenge handler)
-- `acl_change_ok` — non-admin self-service rules
+- `check_permissions` — admin, or own DID only, plus the admin-signature check
+
+The non-admin self-service rules for `account/update` are
+`ensure_self_manageable` in `src/messages/protocols/trust_tasks.rs`.
 
 The `Capability` enum deliberately carries no `#[allow(dead_code)]`: an
 unused variant means a permission bit the mediator advertises but never

@@ -223,6 +223,7 @@ pub async fn start(config_path: &str) -> Result<(), MediatorError> {
             }
         };
 
+    let secrets_backend = config.secrets_backend.clone();
     let shutdown_token = CancellationToken::new();
     let handle = serve_internal(
         config,
@@ -233,6 +234,20 @@ pub async fn start(config_path: &str) -> Result<(), MediatorError> {
     )
     .await?;
     info!("Mediator listening on {}", handle.bound_addr);
+    // The configuration loaded and the listener bound from the secrets
+    // as they are now. Only that proves a migration into the single
+    // secret works, so only now are the per-key secrets it replaced
+    // deleted. Failing leaves them (and an older mediator) working.
+    if let Err(e) = secrets_backend.confirm_cutover().await {
+        error!("Secret store migration could not be completed; stopping: {e}");
+        handle.shutdown();
+        let _ = handle.join().await;
+        return Err(MediatorError::ConfigError(
+            error_codes::CONFIG_ERROR,
+            "NA".into(),
+            format!("secret store migration could not be completed: {e}"),
+        ));
+    }
     handle.join().await
 }
 

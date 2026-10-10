@@ -409,8 +409,39 @@ impl SecretStore for VaultStore {
         })
     }
 
+    /// Deletes the key's metadata, which removes every version and the
+    /// key itself — `delete_latest` alone only soft-deletes the newest
+    /// version, so the key stays in `vault kv list` forever (stray
+    /// `mediator_probe_*` sentinels piled up that way). A policy without
+    /// `delete` on `<mount>/metadata/…` gets a 403; we then fall back to
+    /// the soft delete, which `data/` rights allow.
     async fn delete(&self, key: &str) -> Result<()> {
         let path = self.secret_path(key);
+        let label = format!("kv2::delete_metadata({}/{path})", self.mount);
+        let result = self
+            .run(&label, |client| {
+                let mount = self.mount.clone();
+                let path = path.clone();
+                Box::pin(async move { kv2::delete_metadata(client, &mount, &path).await })
+            })
+            .await?;
+        match result {
+            Ok(()) => return Ok(()),
+            Err(err) if matches!(api_status(&err), Some(404)) => return Ok(()),
+            Err(err) if matches!(api_status(&err), Some(403)) => {
+                warn!(
+                    path = %format!("{}/{path}", self.mount),
+                    "no delete right on the metadata path; soft-deleting the latest \
+                     version instead, so the key stays listed"
+                );
+            }
+            Err(err) => {
+                return Err(SecretStoreError::Unreachable {
+                    backend: BACKEND_LABEL,
+                    reason: format!("kv2::delete_metadata({}/{path}) failed: {err}", self.mount),
+                });
+            }
+        }
         let label = format!("kv2::delete_latest({}/{path})", self.mount);
         let result = self
             .run(&label, |client| {
@@ -472,6 +503,28 @@ impl SecretStore for VaultStore {
             Err(err) => Err(SecretStoreError::Unreachable {
                 backend: BACKEND_LABEL,
                 reason: format!("kv2::list({}/) failed: {err}", self.mount),
+            }),
+        }
+    }
+
+    /// One LIST of the namespace folder. Sub-folders (trailing `/`) are
+    /// not mediator keys and are dropped; a 404 is an empty folder.
+    async fn list_keys(&self) -> Result<Vec<String>> {
+        let folder = self.namespace.trim_end_matches('/').to_string();
+        let label = format!("kv2::list({}/{folder})", self.mount);
+        let result = self
+            .run(&label, |client| {
+                let mount = self.mount.clone();
+                let folder = folder.clone();
+                Box::pin(async move { kv2::list(client, &mount, &folder).await })
+            })
+            .await?;
+        match result {
+            Ok(keys) => Ok(keys.into_iter().filter(|k| !k.ends_with('/')).collect()),
+            Err(err) if matches!(api_status(&err), Some(404)) => Ok(Vec::new()),
+            Err(err) => Err(SecretStoreError::Unreachable {
+                backend: BACKEND_LABEL,
+                reason: format!("{label} failed: {err}"),
             }),
         }
     }

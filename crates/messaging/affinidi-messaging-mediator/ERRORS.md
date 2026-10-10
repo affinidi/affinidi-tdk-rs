@@ -1,23 +1,26 @@
-# Affinidi Messaging - Error Handling Documentation
+# Mediator error codes
 
-Where ever possible, the Mediator reports errors using the [DIDComm Problem Report](https://identity.foundation/didcomm-messaging/spec/#problem-reports) format.
+The mediator reports errors as
+[DIDComm problem reports](https://identity.foundation/didcomm-messaging/spec/#problem-reports)
+where it can. The problem code has the form `<sorter>.<scope>.<descriptor>`:
+`e` (error) or `w` (warning), then `p` (protocol) or `m` (message).
 
-There are scenarios where the Mediator will fail to handle a message, and will not generate a error. These are silent drops of the message flow, and occurs to protect
-the privacy of the overall system. It is up to the higher-level protocols to determine how to handle a message that has not been delivered.
+Some failures produce no error at all: the message is dropped to protect
+the privacy of the system, and higher-level protocols must handle the
+non-delivery. Refusals that would reveal whether a recipient exists or what
+its ACLs allow all return the same code, 73 `e.p.delivery.refused`; the
+reason is logged on the mediator only.
 
-## REST API
+- **REST API**: each request returns a status. A 2xx status does not always
+  mean the action completed.
+- **WebSocket**: failures may come back as a problem report message. How to
+  handle them is up to the client.
 
-When using the REST based API methods, each request will return with the status of the transaction.
+The HTTP status shown is the usual one; a few codes are raised from several
+places with different statuses. Queue-limit refusals (61, 62, 95) include a
+`Retry-After` header.
 
-**NOTE:** _It is possible for the Mediator to return a 2xx status response, but the action did not complete_
-
-## WebSocket Interface
-
-WebSocket usage is a little more complicated due to it's fire and forget nature. When an Error does occur for a transaction over WebSocket, you may get a DIDComm Problem Report message back.
-
-How you choose to handle these is left to the client side on how to handle these errors.
-
-## Error Codes
+## Codes
 
 | Error Code | HTTP Status Code | DIDComm Problem Code                               | Retryable? | Cause                                                                                                                       |
 | ---------: | :--------------: | :------------------------------------------------- | :--------: | :-------------------------------------------------------------------------------------------------------------------------- |
@@ -25,8 +28,8 @@ How you choose to handle these is left to the client side on how to handle these
 |          1 |       500        | e.p.me.res.storage.url                             |     No     | Incorrect Mediator database URL in mediator configuration                                                                   |
 |          2 |       500        | e.p.me.res.storage.config                          |     No     | Mediator database configuration is invalid                                                                                  |
 |          3 |       503        | e.p.me.res.storage.connection                      |    Yes     | A connection to the mediator database couldn't be made                                                                      |
-|          4 |       503        | e.p.me.res.storage.pubsub.connection               |    Yes     | Couldn't open database connection for pubsub                                                                                |
-|          5 |       503        | e.p.me.res.storage.pubsub.connection.receiver      |    Yes     | Couldn't get receiver for pubsub connection                                                                                 |
+|          4 |       503        | e.p.me.res.storage.connection.pubsub               |    Yes     | Couldn't open database connection for pubsub |
+|          5 |       503        | e.p.me.res.storage.connection.pubsub.receiver      |    Yes     | Couldn't get receiver for pubsub connection |
 |          6 |       503        | e.p.me.res.storage.info                            |    Yes     | Querying database information failed                                                                                        |
 |          7 |       500        | e.p.me.res.storage.version                         |     No     | Cannot parse the database server version                                                                                    |
 |          8 |       500        | e.p.me.res.storage.version.incompatible            |     No     | The database server version is incorrect                                                                                    |
@@ -49,23 +52,23 @@ How you choose to handle these is left to the client side on how to handle these
 |         25 |       403        | e.p.authentication.blocked                         |     No     | DID has been blocked from connecting to the mediator                                                                        |
 |         26 |       500        | w.m.database.acl.get.parse                         |     No     | Could not parse DID ACL FLags correctly                                                                                     |
 |         27 |       400        | w.m.database.acl.get_dids.limit                    |     No     | Max 100 DIDs at a time can be fetched                                                                                       |
-|         28 |       400        | e.p.authentication.response.parse                  |     No     | Couldn't parse authentication response from client to challenge (restart auth process)                                      |
-|         29 |       400        | e.p.authentication.response.from                   |     No     | Authentication response message is missing the from header. From must be included                                           |
+|         28 |       400        | e.p.authentication.response.parse                  |     No     | Couldn't parse the authentication response (restart auth). TSP authentication uses `e.p.authentication.tsp.*` with this code |
+|         29 |       400        | e.p.authentication.response.from                   |     No     | Authentication message is missing a valid `from` DID (also `authentication.challenge.invalid_did`, `authentication.tsp.invalid_vid`) |
 |         30 |       400        | e.p.message.type.incorrect                         |     No     | DIDComm Message type is missing or incorrect                                                                                |
 |         31 |       400        | e.p.message.expired                                |     No     | DIDComm Message has expired (or is missing expires_time header where it is required)                                        |
-|         32 |       400        | e.p.message.unpack                                 |     No     | DIDComm Message unpack from envelope failed                                                                                 |
+|         32 |       403        | e.p.message.unpack                                 |     No     | DIDComm message unpack failed (TSP: `e.p.authentication.tsp.signature.invalid`, 401) |
 |         33 |       400        | e.p.authentication.session.mismatch                |     No     | DIDs do not match throughout the authentication process                                                                     |
 |         34 |       400        | e.p.authentication.session.invalid                 |     No     | Authentication session is invalid due to a client misconfiguration                                                          |
 |         35 |       500        | e.p.authentication.session.access_token            |     No     | Couldn't create JWT Access Token                                                                                            |
 |         36 |       500        | e.p.authentication.session.refresh_token           |     No     | Couldn't create JWT Refresh Token                                                                                           |
-|         37 |       400        | e.p.message.envelope.read                          |     No     | Couldn't read message envelope                                                                                              |
-|         38 |       400        | e.p.authentication.session.refresh_token.parse     |     No     | Couldn't parse JWT refresh_token                                                                                            |
-|         39 |       400        | e.p.message.from.missing                           |     No     | DIDComm message is missing a `from` header, required for this transaction                                                   |
+|         37 |       400        | e.p.message.envelope.read                          |     No     | Couldn't read the message envelope. Also used for unsupported or malformed DIDComm v1/TSP messages, and `e.m.message.size.exceeded` (413) |
+|         38 |       400        | e.p.authentication.session.refresh_token.parse     |     No     | Couldn't parse the JWT refresh token (also `.expired`, and `.reuse` with 401) |
+|         39 |       400        | e.p.authentication.message.from.missing            |     No     | Refresh request is missing a `from` header |
 |         40 |       403        | e.p.authorization.local                            |     No     | DID is not local to the mediator, delivery rejected                                                                         |
 |         41 |       400        | e.p.api.inbox_fetch.limit                          |     No     | Invalid number of messages requested to retrieve (1 - 100)                                                                  |
 |         42 |       400        | e.p.api.inbox_fetch.start_id                       |     No     | Invalid start_id. Must be a UNIX EPOCH timestamp in milliseconds + `-(0-999)`                                               |
 |         43 |       400        | e.p.api.message_delete.limit                       |     No     | Invalid number of messages to delete. Max 100                                                                               |
-|         44 |       403        | e.p.authorization.send                             |     No     | DID does not have authorization to send messages                                                                            |
+|         44 |       403        | e.p.authorization.send                             |     No     | DID may not send messages. `e.p.authorization.authentication_required` (401) when an anonymous session sends anything but a DIDComm v1 forward |
 |         45 |       403        | e.p.authorization.permission                       |     No     | DID does not have permission to access the requested resource                                                               |
 |         46 |       500        | e.p.oob.store                                      |     No     | Could not store Out-Of-Band (OOB) invitation                                                                                |
 |         47 |       500        | e.p.message.pack                                   |     No     | Couldn't pack DIDComm message                                                                                               |
@@ -73,14 +76,13 @@ How you choose to handle these is left to the client side on how to handle these
 |         49 |       400        | w.m.protocol.pickup.return_route                   |     No     | Message Pickup Protocol message missing or incorrect `return_route` field                                                   |
 |         50 |       400        | w.m.message.anonymous                              |     No     | DIDComm message appears to be anonymous, yet this transaction will not allow for an anonymous message                       |
 |         51 |       400        | w.m.message.to                                     |     No     | There was a problem with the message to: header.                                                                            |
-|         52 |       403        | e.p.authorization.did.session_mismatch             |     No     | Message DID and Session DID do not match for a transaction where they should be matching                                    |
+|         52 |       400        | e.p.authorization.did.session_mismatch             |     No     | Message DID and session DID differ where they must match |
 |         53 |       400        | w.m.protocol.pickup.delivery_request.limit         |     No     | Limit must be between 1 and 100                                                                                             |
 |         54 |       400        | w.m.protocol.pickup.parse                          |     No     | Couldn't parse message body correctly                                                                                       |
 |         55 |       500        | e.p.protocol.pickup.live_streaming                 |     No     | An error occurred with enabling/disabling live streaming                                                                    |
 |         56 |       400        | w.m.protocol.forwarding.next.missing               |     No     | Forwarding message is missing next field                                                                                    |
 |         57 |       400        | w.m.protocol.forwarding.parse                      |     No     | Couldn't parse forwarding message body                                                                                      |
-|         58 |       403        | e.p.authorization.receive_forwarded                |     No     | Recipient isn't accepting forwarded messages                                                                                |
-|         58 |       404        | e.p.message.tsp.no_endpoint                        |     No     | TSP next hop publishes no TSP transport endpoint, or it couldn't be resolved                                                |
+|         58 |    404 / 502     | e.p.message.tsp.no_endpoint                        |     No     | TSP next hop publishes no TSP endpoint (404), or it or its mediator couldn't be resolved (`message.tsp.resolve`, `message.tsp.mediator.unresolvable`, 502). The former `e.p.authorization.receive_forwarded` is now reported as 73 |
 |         59 |       400        | w.m.protocol.forwarding.attachments.missing        |     No     | There were no attachments for this forward message                                                                          |
 |         60 |       403        | e.p.authorization.send_forwarded                   |     No     | Sender isn't allowed to send forwarded messages                                                                             |
 |         60 |       403        | e.p.authorization.relay.untrusted_peer             |     No     | Relaying peer mediator is not in `relay_trusted_mediators`                                                                  |
@@ -89,17 +91,17 @@ How you choose to handle these is left to the client side on how to handle these
 |         63 |       400        | w.m.protocol.forwarding.attachments.too_many       |     No     | Forwarded message has too many attachments                                                                                  |
 |         64 |       503        | e.p.me.res.forwarding.queue.limit                  |    Yes     | Mediator forwarding queue is at max limit, try again later                                                                  |
 |         65 |       400        | w.m.protocol.forwarding.delay_milli                |     No     | Forward delay_milli field isn't valid                                                                                       |
-|         66 |       500        | e.p.me.not_implemented                             |     No     | Feature is not implemented by the mediator                                                                                  |
-|         67 |       400        | w.m.protocol.forwarding.attachments.json.invalid   |     No     | JSON schema for attachment is incorrect                                                                                     |
+|         66 |       501        | e.p.me.not_implemented                             |     No     | Feature is not implemented by the mediator |
+|         67 |       400        | w.m.protocol.forwarding.attachments.json.invalid   |     No     | Attachment JSON is invalid, or the attachment type is unknown (`attachments.unknown`) |
 |         68 |       400        | w.m.protocol.forwarding.attachments.base64         |     No     | Couldn't decode base64 attachment                                                                                           |
-|         69 |       403        | e.p.authorization.receive_anon                     |     No     | Recipient isn't accepting anonymous messages                                                                                |
-|         70 |       403        | w.m.protocol.forwarding.next.mediator.self         |     No     | Forwarded next hop is the same mediator. Not allowed due to creating loops                                                  |
+|         69 |        —         | e.p.authorization.receive_anon                     |     —      | No longer returned; reported as 73 |
+|         70 |        —         | w.m.protocol.forwarding.next.mediator.self         |     —      | No longer returned; a next hop that is this mediator is delivered locally, and loops are 94 |
 |         71 |       403        | w.m.direct_delivery.denied                         |     No     | Mediator is not accepting direct delivery of DIDComm messages. They must be wrapped in a forwarding envelope                |
-|         72 |       403        | w.m.direct_delivery.recipient.unknown              |     No     | Direct Delivery Recipient is not known on this Mediator                                                                     |
-|         73 |       403        | e.p.authorization.access_list.denied               |     No     | Delivery blocked due to ACLs (access_list denied)                                                                           |
+|         72 |        —         | w.m.direct_delivery.recipient.unknown              |     —      | No longer returned; reported as 73 |
+|         73 |       403        | e.p.delivery.refused                               |     No     | Message not accepted for delivery: unknown or non-local recipient, missing receive permission, or blocked by the access list. The reason is logged, not returned |
 |         74 |       500        | e.p.did.resolve                                    |   Maybe    | DID could not be resolved                                                                                                   |
-|         75 |       400        | e.p.message.recipients.missing                     |     No     | There are no recipients for this message                                                                                    |
-|         76 |       400        | e.p.message.recipients.too_many                    |     No     | There are too many recipients for this message                                                                              |
+|         75 |       500        | e.p.message.recipients.missing                     |     No     | There are no recipients for this message |
+|         76 |       500        | e.p.message.recipients.too_many                    |     No     | There are too many recipients for this message |
 |         77 |       500        | e.p.me.storage.message.error                       |     No     | There was in internal error when storing the message                                                                        |
 |         78 |       500        | e.p.me.res.storage.pubsub.subscribe                |    Yes     | Couldn't subscribe to pubsub channel                                                                                        |
 |         79 |       400        | w.m.message.header.ephemeral.invalid               |     No     | Ephemeral header isn't a JSON bool value. Defaults to false and still sends message                                         |
@@ -110,11 +112,13 @@ How you choose to handle these is left to the client side on how to handle these
 |         84 |       400        | w.m.protocol.mediator.administration.strip.missing |     No     | Missing admin DID to strip admin type from                                                                                  |
 |         85 |       400        | e.p.message.from.incorrect                         |     No     | Inner DIDComm plaintext from field does NOT match signing or encryption DID                                                 |
 |         86 |       400        | e.p.authentication.message.not_signed_or_encrypted |     No     | DIDComm message MUST be signed and encrypted for this transaction                                                           |
-|         87 |       500        | e.p.oob.error                                      |   Maybe    | Trying to retrieve an OOB invite created an internal error                                                                  |
-|         88 |       400        | e.p.me.not_implemented                             |     No     | A Feature Discovery Disclose message was sent to the mediator. The mediator doesn't read message disclosures sent to itself |
+|         87 |       500        | e.p.oob.retrieve                                   |   Maybe    | Retrieving an OOB invite failed internally |
+|         88 |       501        | e.p.me.not_implemented                             |     No     | A Discover Features disclose was sent to the mediator, which does not read disclosures sent to itself |
 |         89 |       400        | w.m.protocol.discover_features.queries.parse       |     No     | Couldn't parse message body correctly                                                                                       |
 |         90 |       503        | e.p.me.res.forwarding.enqueue                      |    Yes     | Couldn't enqueue a message for remote forwarding (DIDComm `me.res.` / TSP `message.tsp.forward.`)                           |
 |         91 |       400        | e.p.message.created_time.missing                   |     No     | Admin messages must include a created_time header                                                                           |
 |         92 |       400        | e.p.message.expires_time.missing                   |     No     | Authentication messages must include an expires_time header                                                                 |
 |         93 |       400        | e.p.protocol.mediator.access_list.limit            |     No     | Access list batch must contain 1-100 entries                                                                                |
 |         94 |       508        | e.p.protocol.forwarding.loop_detected              |     No     | Forward exceeded max_hops, or its next hop resolves back to this mediator                                                   |
+|         95 |       503        | e.p.limits.queue.peer                              |    Yes     | Too many messages already waiting from this sender for this recipient |
+|         96 |       403        | e.p.authorization.sender.mismatch                  |     No     | Message `from` is not the DID that authenticated the session |
