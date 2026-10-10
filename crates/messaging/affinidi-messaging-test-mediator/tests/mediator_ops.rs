@@ -651,7 +651,7 @@ async fn an_admin_watches_a_message_arrive_live() {
         &env,
         &admin,
         |e| e["stage"] == "stored" && e["to"] == bob_hash.as_str(),
-        Duration::from_secs(10),
+        common::EVENT_WAIT,
     )
     .await
     .expect("the store of alice's message to bob is seen live");
@@ -714,7 +714,7 @@ async fn the_monitor_follows_a_message_from_arrival_to_deletion() {
         &env,
         &admin,
         |e| e["stage"] == "received" && e["to"] == bob_hash.as_str(),
-        Duration::from_secs(10),
+        common::EVENT_WAIT,
     )
     .await
     .expect("the arrival names its recipient");
@@ -733,7 +733,7 @@ async fn the_monitor_follows_a_message_from_arrival_to_deletion() {
         &env,
         &admin,
         |e| e["stage"] == "delivered" && e["to"] == bob_hash.as_str(),
-        Duration::from_secs(10),
+        common::EVENT_WAIT,
     )
     .await
     .expect("a REST fetch is a delivery");
@@ -749,7 +749,7 @@ async fn the_monitor_follows_a_message_from_arrival_to_deletion() {
         &env,
         &admin,
         |e| e["stage"] == "deleted" && e["to"] == bob_hash.as_str(),
-        Duration::from_secs(10),
+        common::EVENT_WAIT,
     )
     .await
     .expect("the delete is seen");
@@ -805,7 +805,7 @@ async fn the_monitor_sees_a_message_expire() {
         &env,
         &admin,
         |e| e["stage"] == "expired" && e["to"] == bob_hash.as_str(),
-        Duration::from_secs(10),
+        common::EVENT_WAIT,
     )
     .await
     .expect("the sweep's removal is seen");

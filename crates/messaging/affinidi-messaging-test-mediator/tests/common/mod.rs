@@ -32,6 +32,12 @@ pub fn init_tracing() {
     });
 }
 
+/// How long to wait for a monitor event that should arrive. Generous on
+/// purpose: [`await_monitor_event`] returns on the first match, so this only
+/// matters on a loaded runner, where 10 s was not always enough.
+#[allow(dead_code)]
+pub const EVENT_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Read the admin's live stream until a monitor batch shows an event matching
 /// `wanted`, or `deadline` passes.
 #[allow(dead_code)]
