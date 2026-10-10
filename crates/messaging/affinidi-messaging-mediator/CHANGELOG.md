@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.38.1) — an admin purge or account removal reads as "discarded"
+
+Takes `affinidi-messaging-mediator-common` 0.17.5. An admin purging another
+account's queue, and the removal of an account, used to give the senders of the
+removed messages a `collected` receipt (`messaging/message/status`) for messages
+nobody read. Senders now see `discarded`. A DID purging its own queue is
+unchanged (`collected` for its inbox, `withdrawn` for its outbox). The queue
+purge Trust Task decides this from whether the requester is the target account.
+
 ## Unreleased (0.38.0) — one secret in the secret store
 
 Takes `affinidi-messaging-mediator-common` 0.17.4. On AWS, GCP, Azure, Vault and

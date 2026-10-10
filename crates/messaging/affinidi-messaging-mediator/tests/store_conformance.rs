@@ -1236,6 +1236,108 @@ async fn check_outbox_receipts(store: Arc<dyn MediatorStore>) {
     );
 }
 
+/// Purges and account removal give senders the receipt matching who removed
+/// the messages: an owner purging its own inbox collected them; an admin
+/// purging someone else's, or the mediator removing the account, discarded
+/// them. (Both of the latter used to read as `collected`.)
+async fn check_purge_and_removal_receipts(store: Arc<dyn MediatorStore>) {
+    use affinidi_messaging_mediator_common::store::{
+        DeletionAuthority, PurgeFilter, RemovalReason, SentMessageState,
+    };
+    use affinidi_messaging_mediator_common::types::messages::Folder;
+    let admin = DeletionAuthority::Admin {
+        admin_did_hash: "did_hash_admin_purge".into(),
+    };
+    async fn first_reason(
+        store: &Arc<dyn MediatorStore>,
+        from: &str,
+        ids: &[String; 4],
+    ) -> Option<RemovalReason> {
+        let states = store
+            .sent_message_states(from, &ids[..1])
+            .await
+            .expect("states");
+        match states[0] {
+            SentMessageState::Removed(receipt) => Some(receipt.reason),
+            _ => None,
+        }
+    }
+
+    let (to, from) = ("did_hash_rcpt_own_purge", "did_hash_sndr_own_purge");
+    let ids = receipt_fixture(&store, to, from, "own-purge").await;
+    store
+        .purge_folder("s", to, Folder::Inbox)
+        .await
+        .expect("purge");
+    assert_eq!(
+        first_reason(&store, from, &ids).await,
+        Some(RemovalReason::Collected),
+        "the owner purging its own inbox collected them"
+    );
+
+    let (to, from) = ("did_hash_rcpt_admin_purge", "did_hash_sndr_admin_purge");
+    let ids = receipt_fixture(&store, to, from, "admin-purge").await;
+    store
+        .purge_folder_by("s", to, Folder::Inbox, admin.clone())
+        .await
+        .expect("purge");
+    assert_eq!(
+        first_reason(&store, from, &ids).await,
+        Some(RemovalReason::Discarded),
+        "an admin purge is not a collection"
+    );
+
+    let (to, from) = (
+        "did_hash_rcpt_admin_filtered",
+        "did_hash_sndr_admin_filtered",
+    );
+    let ids = receipt_fixture(&store, to, from, "admin-filtered").await;
+    store
+        .purge_folder_filtered_by(to, Folder::Inbox, &PurgeFilter::default(), admin)
+        .await
+        .expect("filtered purge");
+    assert_eq!(
+        first_reason(&store, from, &ids).await,
+        Some(RemovalReason::Discarded),
+        "an admin filtered purge is not a collection"
+    );
+
+    // The trait's default `purge_folder_by`, which a backend gets if it does
+    // not override it, honours the authority too (every backend here
+    // overrides it, so call the default's body directly).
+    let (to, from) = ("did_hash_rcpt_default_by", "did_hash_sndr_default_by");
+    let ids = receipt_fixture(&store, to, from, "default-by").await;
+    let (purged, _) = affinidi_messaging_mediator_common::store::purge_folder_by_listing(
+        store.as_ref(),
+        "s",
+        to,
+        Folder::Inbox,
+        DeletionAuthority::Admin {
+            admin_did_hash: "did_hash_admin_purge".into(),
+        },
+    )
+    .await
+    .expect("default purge");
+    assert_eq!(purged, 4, "the default purge empties the folder");
+    assert_eq!(
+        first_reason(&store, from, &ids).await,
+        Some(RemovalReason::Discarded),
+        "the default purge_folder_by honours the authority"
+    );
+
+    let (to, from) = ("did_hash_rcpt_removed", "did_hash_sndr_removed");
+    let ids = receipt_fixture(&store, to, from, "removed").await;
+    store
+        .account_remove(&admin_session("did_hash_admin_purge"), to)
+        .await
+        .expect("account_remove");
+    assert_eq!(
+        first_reason(&store, from, &ids).await,
+        Some(RemovalReason::Discarded),
+        "removing the recipient's account is not a collection"
+    );
+}
+
 /// Receipts are dropped once their retention has passed. In-process backends
 /// only: Redis expires them on the key's own TTL, which a sweep with a
 /// far-future clock cannot advance.
@@ -1304,7 +1406,8 @@ async fn check_config_overrides(store: Arc<dyn MediatorStore>) {
 async fn check_db0_in_sequence(store: Arc<dyn MediatorStore>) {
     check_expiry_sweep_reports_each_message(store.clone()).await;
     check_config_overrides(store.clone()).await;
-    check_outbox_receipts(store).await;
+    check_outbox_receipts(store.clone()).await;
+    check_purge_and_removal_receipts(store).await;
 }
 
 /// Generate one `#[tokio::test]` per check for a backend `$ctor`.
@@ -1388,6 +1491,10 @@ macro_rules! conformance_for {
             #[tokio::test]
             async fn outbox_receipts() {
                 check_outbox_receipts(ready($ctor).await).await;
+            }
+            #[tokio::test]
+            async fn purge_and_removal_receipts() {
+                check_purge_and_removal_receipts(ready($ctor).await).await;
             }
             #[tokio::test]
             async fn outbox_receipt_retention() {

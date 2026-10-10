@@ -1,7 +1,7 @@
 //! Handles scanning, adding and removing DID accounts from the mediator
 use super::Database;
 use crate::errors::MediatorError;
-use crate::store::types::Session;
+use crate::store::types::{DeletionAuthority, Session};
 use crate::types::{
     accounts::{Account, AccountType, MediatorAccountList},
     acls::MediatorACLSet,
@@ -203,8 +203,17 @@ impl Database {
                 .await?;
 
             // Step 3 - Purge the inbox so future fetches return nothing.
-            self.purge_messages(session, did_hash, Folder::Inbox)
-                .await?;
+            // As the mediator, not the owner: senders see these as
+            // `discarded`, not collected by a recipient who never read them.
+            self.purge_messages(
+                session,
+                did_hash,
+                Folder::Inbox,
+                &DeletionAuthority::Admin {
+                    admin_did_hash: did_hash.to_string(),
+                },
+            )
+            .await?;
 
             // If DID is an admin account then remove from the admin list
             if let Some(current) = current

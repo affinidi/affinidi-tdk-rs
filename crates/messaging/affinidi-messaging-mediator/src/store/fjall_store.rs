@@ -1657,6 +1657,24 @@ impl MediatorStore for FjallStore {
         did_hash: &str,
         folder: Folder,
     ) -> Result<(usize, usize), MediatorError> {
+        self.purge_folder_by(
+            session_id,
+            did_hash,
+            folder,
+            DeletionAuthority::Owner {
+                did_hash: did_hash.to_string(),
+            },
+        )
+        .await
+    }
+
+    async fn purge_folder_by(
+        &self,
+        session_id: &str,
+        did_hash: &str,
+        folder: Folder,
+        by: DeletionAuthority,
+    ) -> Result<(usize, usize), MediatorError> {
         // Snapshot all msg_ids in this folder, then delete each via
         // the trait method (which handles cross-partition cleanup).
         let partition = match folder {
@@ -1693,16 +1711,7 @@ impl MediatorStore for FjallStore {
                 .and_then(|v| Self::decode::<StoredMessage>(&v).ok())
                 .map(|s| s.bytes)
                 .unwrap_or(0);
-            if self
-                .delete_message(
-                    &msg_id,
-                    DeletionAuthority::Owner {
-                        did_hash: did_hash.to_string(),
-                    },
-                )
-                .await
-                .is_ok()
-            {
+            if self.delete_message(&msg_id, by.clone()).await.is_ok() {
                 count += 1;
                 bytes += bytes_before;
             }
@@ -2101,7 +2110,17 @@ impl MediatorStore for FjallStore {
         // already delivered) and purge the inbox.
         self.delete_folder_stream("", did_hash, Folder::Outbox)
             .await?;
-        self.purge_folder("", did_hash, Folder::Inbox).await?;
+        // As the mediator, not the owner: senders see these as `discarded`,
+        // not collected by a recipient who never read them.
+        self.purge_folder_by(
+            "",
+            did_hash,
+            Folder::Inbox,
+            DeletionAuthority::Admin {
+                admin_did_hash: did_hash.to_string(),
+            },
+        )
+        .await?;
 
         // Drop account, admin entry, and access list.
         let _guard = self.write_lock.lock().await;
