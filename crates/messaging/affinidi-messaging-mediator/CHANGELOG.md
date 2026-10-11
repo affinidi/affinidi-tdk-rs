@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.39.0) — SDK 0.34, trust-tasks 0.28
+
+Moves to `affinidi-messaging-sdk` 0.34 and `trust-tasks-rs` / `trust-tasks-proof` 0.28. The SDK is a public dependency, so this crate moves a minor. No source change.
+
 ## Unreleased (0.38.1) — an admin purge or account removal reads as "discarded"
 
 Takes `affinidi-messaging-mediator-common` 0.17.5. An admin purging another

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.34.0) — trust-tasks 0.28
+
+Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.28. The generated Trust Task types are in this crate's public API (the `TrustTasks` methods return `trust_tasks_rs::specs::messaging` responses, and `decode_monitor_event` returns a `TrustTask`), so it moves a minor. 0.28's one breaking change (the rooms 0.1 specs' `NOT_AUTHORIZED` error-code constants are withdrawn for the standard `permissionDenied`) touches nothing here. No source change.
+
 ## 0.33.2 — a recipient that stops collecting is noticed, and poison frames stop filling senders' queues
 
 A mediator keeps a message until its recipient deletes it, and counts it
