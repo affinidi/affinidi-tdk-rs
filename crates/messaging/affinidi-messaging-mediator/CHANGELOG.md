@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.40.0) — SDK 0.35, trust-tasks 0.30
+
+Moves to `affinidi-messaging-sdk` 0.35 and `trust-tasks-rs` / `trust-tasks-proof` 0.30. The SDK is a public dependency, so this crate moves a minor. No source change.
+
 ## Unreleased (0.39.2) — vta-sdk 0.65
 
 The optional `vta` feature now requires `vta-sdk` 0.65, the release built on `affinidi-messaging-sdk` 0.34, `affinidi-tdk` 0.24 and `trust-tasks-rs` 0.28. Until it published, `vta-sdk` 0.64 kept the registry copies of the 0.33 / 0.23 / 0.27 line in the mediator subtree beside the workspace's own. No source change.

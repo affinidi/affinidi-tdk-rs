@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.10.0) — SDK 0.35, trust-tasks 0.30
+
+Moves to `affinidi-messaging-sdk` 0.35 and `trust-tasks-rs` 0.30. It re-exports `trust_tasks_rs::specs::messaging` as `specs`, and `ATM` is in its public API, so it moves a minor. No source change.
+
 ## Unreleased (0.9.0) — SDK 0.34, trust-tasks 0.28
 
 Moves to `affinidi-messaging-sdk` 0.34 and `trust-tasks-rs` 0.28. It re-exports `trust_tasks_rs::specs::messaging` as `specs`, and `ATM` is in its public API, so it moves a minor. No source change.

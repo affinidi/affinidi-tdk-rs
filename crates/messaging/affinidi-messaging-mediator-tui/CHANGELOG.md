@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.10.0) — mediator-admin 0.10
+
+Moves to `affinidi-messaging-mediator-admin` 0.10. Its `ConsoleError` is in this crate's public API, so it moves a minor. No source change.
+
 ## Unreleased (0.9.0) — mediator-admin 0.9
 
 Moves to `affinidi-messaging-mediator-admin` 0.9. Its `ConsoleError` is in this crate's public API, so it moves a minor. No source change.
