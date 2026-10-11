@@ -1031,8 +1031,10 @@ name = "affinidi-openid4vp"
 version = "0.1.3"
 dependencies = [
  "affinidi-oid4vc-core",
+ "base64 0.23.1",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
