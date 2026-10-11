@@ -27,7 +27,11 @@ jobs:
     secrets: inherit
     with:
       toolchain: "1.95.0"
-      rustflags: "-D warnings --cfg tracing_unstable"
+      # line-tables-only: file and line numbers in backtraces, without full
+      # debug info. A test build of the workspace was near the hosted runner's
+      # disk, and the vta-sdk crossing's second trust-tasks-rs (~3 GB) killed
+      # the runner mid-build (#940). Local builds keep the default.
+      rustflags: "-D warnings --cfg tracing_unstable -C debuginfo=line-tables-only"
       # quinn-proto (RUSTSEC-2024-0373) and paste (RUSTSEC-2024-0436, below) are
       # suppressed.
       #
@@ -65,7 +69,11 @@ jobs:
     secrets: inherit
     with:
       toolchain: "1.95.0"
-      rustflags: "-D warnings --cfg tracing_unstable"
+      # line-tables-only: file and line numbers in backtraces, without full
+      # debug info. A test build of the workspace was near the hosted runner's
+      # disk, and the vta-sdk crossing's second trust-tasks-rs (~3 GB) killed
+      # the runner mid-build (#940). Local builds keep the default.
+      rustflags: "-D warnings --cfg tracing_unstable -C debuginfo=line-tables-only"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       useRedis: true
 
