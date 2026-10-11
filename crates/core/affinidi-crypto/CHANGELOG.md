@@ -1,5 +1,19 @@
 # Affinidi Crypto Changelog
 
+## Unreleased (0.2.11) — A128GCM / A256GCM content encryption
+
+`jose` gains AES-GCM content encryption: `jose::gcm` (free functions) and the
+`A128Gcm` / `A256Gcm` implementations of `ContentEncryption`. These are the JWE
+`enc` values OpenID4VP 1.0 and HAIP use for an encrypted authorization response
+(`direct_post.jwt`), where `ECDH-ES` direct key agreement derives the CEK —
+`jose::ecdh::derive_key_es_recipient` with the `enc` value as the AlgorithmID,
+which RFC 7518 Appendix C's vector now pins. 96-bit IV, 128-bit detached tag.
+
+Additive: no existing API changes. `aes-gcm` 0.11 joins the `jose` feature, on
+the same `aes` 0.9 as the CBC and key-wrap code. Tests: RFC 7516 Appendix A.1
+(A256GCM), the GCM specification's test case 4 (A128GCM), RFC 7518 Appendix C
+(the ECDH-ES direct CEK), tamper and length refusals.
+
 ## Unreleased (0.2.10) — drop `rand_core` 0.6, `getrandom` 0.4 on wasm
 
 No behaviour change and no public API change. `rand_core` 0.6 was declared but

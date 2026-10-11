@@ -14,7 +14,7 @@
 
 use crate::error::CryptoError;
 
-use super::{aes_kw, concat_kdf, content_encryption, signing};
+use super::{aes_kw, concat_kdf, content_encryption, gcm, signing};
 
 /// Key-wrapping algorithms (JWE `alg` of the `…+AxxxKW` form).
 pub trait KeyWrap {
@@ -166,6 +166,86 @@ impl ContentEncryption for A256CbcHs512 {
             .try_into()
             .map_err(|_| CryptoError::ContentEncryption("tag must be 32 bytes".into()))?;
         content_encryption::decrypt(ciphertext, cek, iv, aad, tag)
+    }
+}
+
+/// A128GCM (AES-128 in Galois/Counter Mode, RFC 7518 §5.3).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct A128Gcm;
+
+impl ContentEncryption for A128Gcm {
+    fn enc(&self) -> &'static str {
+        "A128GCM"
+    }
+    fn cek_len(&self) -> usize {
+        gcm::A128_CEK_SIZE
+    }
+    fn iv_len(&self) -> usize {
+        gcm::IV_SIZE
+    }
+    fn tag_len(&self) -> usize {
+        gcm::TAG_SIZE
+    }
+
+    fn encrypt(
+        &self,
+        plaintext: &[u8],
+        cek: &[u8],
+        iv: &[u8],
+        aad: &[u8],
+    ) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
+        gcm::encrypt_a128(plaintext, cek, iv, aad)
+    }
+
+    fn decrypt(
+        &self,
+        ciphertext: &[u8],
+        cek: &[u8],
+        iv: &[u8],
+        aad: &[u8],
+        tag: &[u8],
+    ) -> Result<Vec<u8>, CryptoError> {
+        gcm::decrypt_a128(ciphertext, cek, iv, aad, tag)
+    }
+}
+
+/// A256GCM (AES-256 in Galois/Counter Mode, RFC 7518 §5.3).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct A256Gcm;
+
+impl ContentEncryption for A256Gcm {
+    fn enc(&self) -> &'static str {
+        "A256GCM"
+    }
+    fn cek_len(&self) -> usize {
+        gcm::A256_CEK_SIZE
+    }
+    fn iv_len(&self) -> usize {
+        gcm::IV_SIZE
+    }
+    fn tag_len(&self) -> usize {
+        gcm::TAG_SIZE
+    }
+
+    fn encrypt(
+        &self,
+        plaintext: &[u8],
+        cek: &[u8],
+        iv: &[u8],
+        aad: &[u8],
+    ) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
+        gcm::encrypt_a256(plaintext, cek, iv, aad)
+    }
+
+    fn decrypt(
+        &self,
+        ciphertext: &[u8],
+        cek: &[u8],
+        iv: &[u8],
+        aad: &[u8],
+        tag: &[u8],
+    ) -> Result<Vec<u8>, CryptoError> {
+        gcm::decrypt_a256(ciphertext, cek, iv, aad, tag)
     }
 }
 
