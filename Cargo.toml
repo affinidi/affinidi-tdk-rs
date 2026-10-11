@@ -166,6 +166,7 @@ affinidi-messaging-core = { path = "crates/messaging/affinidi-messaging-core" }
 agent-names = { path = "crates/identity/shortcuts/agent-names" }
 affinidi-vc = { path = "crates/credentials/affinidi-vc" }
 affinidi-sd-jwt = { path = "crates/credentials/affinidi-sd-jwt" }
+affinidi-status-list = { path = "crates/credentials/affinidi-status-list" }
 affinidi-oid4vc-core = { path = "crates/protocols/affinidi-oid4vc-core" }
 affinidi-openid4vci = { path = "crates/protocols/affinidi-openid4vci" }
 affinidi-openid4vp = { path = "crates/protocols/affinidi-openid4vp" }
