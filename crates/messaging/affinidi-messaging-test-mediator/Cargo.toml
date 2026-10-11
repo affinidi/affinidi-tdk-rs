@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.20.0"
+version = "0.20.1"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -114,6 +114,8 @@ futures-util = "0.3"
 ## browser scenario can't go through tokio-tungstenite's client, which
 ## errors when it offers a subprotocol the server doesn't echo back).
 tokio = { workspace = true, features = ["io-util"] }
+## The stub remote mediator in `tests/forwarding_processor.rs`.
+axum = "0.8"
 
 [lints]
 workspace = true
