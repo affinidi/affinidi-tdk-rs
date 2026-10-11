@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.39.1) — Vault: no lost secret changes, no lingering versions
+
+Takes `affinidi-messaging-mediator-common` 0.17.6. On the Vault backend, writes
+to `mediator_secrets_bundle` are conditional (KV v2 `cas`). A change based on a
+stale read, as a lagging Vault Enterprise performance standby can serve, is
+redone instead of silently dropping the change before it. Each write also
+destroys the version it supersedes, so removed or rotated secrets no longer stay
+readable in the bundle's history. Add
+`path "<mount>/destroy/<prefix>/*" { capabilities = ["update"] }` to the
+mediator's Vault policy. Without it a warning is logged once and old versions
+remain until `max_versions` drops them. See `docs/secrets-backend.md`.
+
 ## Unreleased (0.39.0) — SDK 0.34, trust-tasks 0.28
 
 Moves to `affinidi-messaging-sdk` 0.34 and `trust-tasks-rs` / `trust-tasks-proof` 0.28. The SDK is a public dependency, so this crate moves a minor. No source change.

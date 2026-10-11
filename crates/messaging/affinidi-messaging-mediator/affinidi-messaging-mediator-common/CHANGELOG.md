@@ -1,5 +1,30 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.17.6) — Vault: conditional bundle writes, no lingering versions
+
+Two Vault problems with the single `mediator_secrets_bundle` from 0.17.4:
+
+- **A rewrite could drop the change before it.** Every `put`/`delete` reads,
+  edits and rewrites the whole bundle. On Vault Enterprise with performance
+  standbys, the read can come from a replica that is behind, and the rewrite
+  then replaces the newer version without the latest change. `VaultStore` now
+  remembers the version of each path it last read or wrote and writes with
+  KV v2 `cas`. A version it never saw makes the write fail with the new
+  `SecretStoreError::Conflict` (the enum is `#[non_exhaustive]`, so this is
+  additive). `BundledStore` then reads again and redoes the change, up to 5 times
+  over about 1.5 s. A path that read as absent or soft-deleted is written
+  unconditionally, because a `cas` of 0 would refuse a soft-deleted key forever.
+- **Removed and rotated secrets stayed readable.** Every bundle version is a full
+  copy of the secrets, and Vault keeps `max_versions` of them (10 by default).
+  Each write now destroys the version it supersedes. The first write to a path
+  after a start destroys up to 100 earlier versions, which clears history left
+  by 0.17.4/0.17.5. This needs `update` on `<mount>/destroy/<prefix>/*`. Without
+  it, a warning is logged once and the write still succeeds.
+
+Reads now go through the KV v2 read endpoint directly, because `kv2::read`
+drops the version. A live test, `vault_live_cas_and_history`, covers both
+fixes against a real Vault.
+
 ## Unreleased (0.17.5) — purges and account removal no longer read as "collected"
 
 The outbox receipts from 0.17.0 (#897) record why a sent message left its

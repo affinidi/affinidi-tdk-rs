@@ -51,9 +51,14 @@
 //!
 //! Every `put` / `delete` reads, modifies and rewrites the whole bundle
 //! under a per-store lock, so writers in one process never lose each
-//! other's updates. Two *processes* writing at the same instant can (the
-//! trait has no compare-and-swap); the mediator is single-writer per the
-//! HA design, and setup tooling runs while it is stopped.
+//! other's updates. A backend that writes conditionally (Vault's KV v2
+//! `cas`) refuses a rewrite of a bundle that changed since it was read
+//! with [`SecretStoreError::Conflict`]; the read-modify-write is then
+//! redone from a fresh read, a few times. That also covers a read served
+//! by a replica that was behind. On the other backends two *processes*
+//! writing at the same instant can lose an update; the mediator is
+//! single-writer per the HA design, and setup tooling runs while it is
+//! stopped.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -87,6 +92,13 @@ const KIND_BUNDLE: &str = "secrets-bundle";
 /// process sees its own writes at once; another process's writes show up
 /// within this window.
 const READ_CACHE_TTL: Duration = Duration::from_secs(30);
+
+/// How many times [`BundledStore::update`] redoes a read-modify-write the
+/// backend refused as a [`SecretStoreError::Conflict`], and the first
+/// pause between attempts (doubled each time; about 1.5 s in all) — long
+/// enough for a lagging replica to catch up.
+const CONFLICT_ATTEMPTS: u32 = 5;
+const CONFLICT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// Well-known keys that had their own backend secret before the bundle.
 /// Bootstrap seeds are found through the index (and `list_keys`).
@@ -691,21 +703,36 @@ impl BundledStore {
     /// Read-modify-write the bundle under the write lock, always from a
     /// fresh read so another process's writes aren't overwritten with a
     /// cached copy. `edit` returns whether it changed anything; an
-    /// unchanged bundle isn't rewritten.
-    async fn update(&self, edit: impl FnOnce(&mut Bundle) -> bool + Send) -> Result<()> {
+    /// unchanged bundle isn't rewritten. A write the backend refuses as a
+    /// [`SecretStoreError::Conflict`] is redone from a fresh read.
+    async fn update(&self, edit: impl Fn(&mut Bundle) -> bool + Send + Sync) -> Result<()> {
         let _guard = self.write_lock.lock().await;
-        let mut bundle = self.read_bundle().await?.unwrap_or_default();
-        if !edit(&mut bundle) {
-            return Ok(());
-        }
-        match self.inner.put(SECRETS_BUNDLE, &bundle.seal()?).await {
-            Ok(()) => {
-                self.remember(Some(bundle));
-                Ok(())
+        let mut backoff = CONFLICT_BACKOFF;
+        let mut attempt = 1;
+        loop {
+            let mut bundle = self.read_bundle().await?.unwrap_or_default();
+            if !edit(&mut bundle) {
+                return Ok(());
             }
-            Err(e) => {
-                self.forget();
-                Err(e)
+            match self.inner.put(SECRETS_BUNDLE, &bundle.seal()?).await {
+                Ok(()) => {
+                    self.remember(Some(bundle));
+                    return Ok(());
+                }
+                Err(SecretStoreError::Conflict { .. }) if attempt < CONFLICT_ATTEMPTS => {
+                    self.forget();
+                    warn!(
+                        attempt,
+                        "{SECRETS_BUNDLE} changed since it was read; reading it again"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    backoff *= 2;
+                    attempt += 1;
+                }
+                Err(e) => {
+                    self.forget();
+                    return Err(e);
+                }
             }
         }
     }
@@ -1381,6 +1408,104 @@ mod tests {
         store.probe().await.unwrap();
         assert_eq!(backend.calls().1, puts + 1);
         assert_eq!(backend.inner.get(SECRETS_BUNDLE).await.unwrap(), before);
+    }
+
+    /// Backend that refuses the next `conflicts` bundle writes as a
+    /// [`SecretStoreError::Conflict`], like Vault's `cas`. With `rival`
+    /// set, each refusal first lets "another writer" add that entry.
+    struct Contended {
+        inner: Arc<MemoryStore>,
+        conflicts: AtomicUsize,
+        rival: Option<&'static str>,
+    }
+
+    #[async_trait]
+    impl SecretStore for Contended {
+        fn backend(&self) -> &'static str {
+            "contended"
+        }
+        async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+            self.inner.get(key).await
+        }
+        async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
+            if key == SECRETS_BUNDLE
+                && self
+                    .conflicts
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok()
+            {
+                if let Some(rival) = self.rival {
+                    let mut bundle = stored_bundle(&self.inner).await;
+                    bundle.insert(rival, b"rival");
+                    self.inner
+                        .put(SECRETS_BUNDLE, &bundle.seal().unwrap())
+                        .await
+                        .unwrap();
+                }
+                return Err(SecretStoreError::Conflict {
+                    backend: "contended",
+                    key: key.to_string(),
+                });
+            }
+            self.inner.put(key, value).await
+        }
+        async fn delete(&self, key: &str) -> Result<()> {
+            self.inner.delete(key).await
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_write_refused_as_a_conflict_is_redone_and_keeps_the_rival_write() {
+        let inner = memory();
+        BundledStore::new(inner.clone())
+            .put(ADMIN_CREDENTIAL, b"admin")
+            .await
+            .unwrap();
+        let store = BundledStore::new(Arc::new(Contended {
+            inner: inner.clone(),
+            conflicts: AtomicUsize::new(2),
+            rival: Some(OPERATING_SIGNING),
+        }));
+
+        store.put(JWT_SECRET, b"jwt").await.unwrap();
+
+        let stored = stored_bundle(&inner).await;
+        assert_eq!(
+            stored.entry(JWT_SECRET).unwrap().as_deref(),
+            Some(&b"jwt"[..])
+        );
+        assert_eq!(
+            stored.entry(OPERATING_SIGNING).unwrap().as_deref(),
+            Some(&b"rival"[..]),
+            "the other writer's entry survives"
+        );
+        assert!(stored.entry(ADMIN_CREDENTIAL).unwrap().is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_write_that_keeps_conflicting_fails_with_the_conflict() {
+        let inner = memory();
+        BundledStore::new(inner.clone())
+            .put(ADMIN_CREDENTIAL, b"admin")
+            .await
+            .unwrap();
+        let store = BundledStore::new(Arc::new(Contended {
+            inner: inner.clone(),
+            conflicts: AtomicUsize::new(usize::MAX),
+            rival: None,
+        }));
+
+        assert!(matches!(
+            store.put(JWT_SECRET, b"jwt").await,
+            Err(SecretStoreError::Conflict { .. })
+        ));
+        assert!(
+            stored_bundle(&inner)
+                .await
+                .entry(JWT_SECRET)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

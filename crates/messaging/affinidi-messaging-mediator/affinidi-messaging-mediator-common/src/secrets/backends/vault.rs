@@ -55,15 +55,20 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 #[cfg(feature = "secrets-vault")]
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "secrets-vault")]
+use std::collections::{HashMap, HashSet};
+#[cfg(feature = "secrets-vault")]
 use std::future::Future;
 #[cfg(feature = "secrets-vault")]
 use std::pin::Pin;
+#[cfg(feature = "secrets-vault")]
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "secrets-vault")]
 use tokio::sync::{OnceCell, RwLock};
 #[cfg(feature = "secrets-vault")]
 use tracing::warn;
 #[cfg(feature = "secrets-vault")]
 use vaultrs::{
+    api::kv2::requests::{ReadSecretRequest, SetSecretRequestOptions},
     auth::{approle, kubernetes},
     client::{Client, VaultClient, VaultClientSettings, VaultClientSettingsBuilder},
     error::ClientError,
@@ -81,6 +86,13 @@ const VAULT_ROLE_ID_ENV: &str = "VAULT_ROLE_ID";
 #[cfg(feature = "secrets-vault")]
 const VAULT_SECRET_ID_ENV: &str = "VAULT_SECRET_ID";
 
+/// How many versions before the new one the first write to a path in a
+/// process destroys. Later writes destroy only the version they
+/// supersede. Covers mounts whose `max_versions` was raised well past
+/// Vault's default of 10.
+#[cfg(feature = "secrets-vault")]
+const SWEEP_WINDOW: u64 = 100;
+
 /// Boxed future returned by a KV operation closure; borrows the client.
 #[cfg(feature = "secrets-vault")]
 type VaultFut<'a, T> =
@@ -88,45 +100,55 @@ type VaultFut<'a, T> =
 
 #[cfg(feature = "secrets-vault")]
 pub(crate) fn open(url: BackendUrl) -> Result<DynSecretStore> {
-    let BackendUrl::Vault {
-        endpoint,
-        path,
-        auth,
-        enterprise_namespace,
-        insecure,
-    } = url
-    else {
-        return Err(SecretStoreError::Other(
-            "internal error: vault backend received non-vault URL".into(),
-        ));
-    };
-    // Split the URL path into KV v2 mount + per-key namespace. First
-    // segment is the mount; everything else is the namespace glued to
-    // each stored key name.
-    let (mount, namespace) = match path.split_once('/') {
-        Some((m, rest)) => (m.to_string(), format!("{rest}/")),
-        None => (path, String::new()),
-    };
-    if mount.is_empty() {
-        return Err(SecretStoreError::InvalidUrl {
-            url: format!("vault://{endpoint}/{mount}"),
-            reason: "vault:// requires a KV v2 mount point as the first path segment".into(),
-        });
+    Ok(std::sync::Arc::new(VaultStore::new(url)?))
+}
+
+#[cfg(feature = "secrets-vault")]
+impl VaultStore {
+    fn new(url: BackendUrl) -> Result<Self> {
+        let BackendUrl::Vault {
+            endpoint,
+            path,
+            auth,
+            enterprise_namespace,
+            insecure,
+        } = url
+        else {
+            return Err(SecretStoreError::Other(
+                "internal error: vault backend received non-vault URL".into(),
+            ));
+        };
+        // Split the URL path into KV v2 mount + per-key namespace. First
+        // segment is the mount; everything else is the namespace glued to
+        // each stored key name.
+        let (mount, namespace) = match path.split_once('/') {
+            Some((m, rest)) => (m.to_string(), format!("{rest}/")),
+            None => (path, String::new()),
+        };
+        if mount.is_empty() {
+            return Err(SecretStoreError::InvalidUrl {
+                url: format!("vault://{endpoint}/{mount}"),
+                reason: "vault:// requires a KV v2 mount point as the first path segment".into(),
+            });
+        }
+        let address = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+            endpoint.clone()
+        } else {
+            format!("https://{endpoint}")
+        };
+        Ok(VaultStore {
+            address,
+            mount,
+            namespace,
+            enterprise_namespace,
+            auth,
+            verify_tls: !insecure,
+            client: OnceCell::new(),
+            versions: Default::default(),
+            swept: Default::default(),
+            destroy_denied_warned: AtomicBool::new(false),
+        })
     }
-    let address = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
-        endpoint.clone()
-    } else {
-        format!("https://{endpoint}")
-    };
-    Ok(std::sync::Arc::new(VaultStore {
-        address,
-        mount,
-        namespace,
-        enterprise_namespace,
-        auth,
-        verify_tls: !insecure,
-        client: OnceCell::new(),
-    }))
 }
 
 #[cfg(not(feature = "secrets-vault"))]
@@ -158,6 +180,15 @@ pub struct VaultStore {
     /// current one expires. Authentication happens on first use so a
     /// wizard run that never touches the backend doesn't require creds.
     client: OnceCell<RwLock<VaultClient>>,
+    /// The version of each secret path this process last read or wrote.
+    /// A write passes it as KV v2 `cas`, so it fails instead of replacing
+    /// a version this process never saw (another writer, or a read served
+    /// by a performance standby that was behind).
+    versions: std::sync::Mutex<HashMap<String, u64>>,
+    /// Paths whose older versions were destroyed since start.
+    swept: std::sync::Mutex<HashSet<String>>,
+    /// The missing-`destroy`-right warning is logged once per process.
+    destroy_denied_warned: AtomicBool,
 }
 
 /// Read a required env var, erroring if it is unset or empty.
@@ -180,6 +211,82 @@ fn require_env(var: &str) -> Result<String> {
 impl VaultStore {
     fn secret_path(&self, key: &str) -> String {
         format!("{}{key}", self.namespace)
+    }
+
+    fn known_version(&self, path: &str) -> Option<u64> {
+        self.versions.lock().ok()?.get(path).copied()
+    }
+
+    fn remember_version(&self, path: &str, version: Option<u64>) {
+        if let Ok(mut versions) = self.versions.lock() {
+            match version {
+                Some(version) => versions.insert(path.to_string(), version),
+                None => versions.remove(path),
+            };
+        }
+    }
+
+    /// Destroy the versions `new_version` superseded: each holds a full
+    /// copy of what was stored, including entries since removed or
+    /// rotated, and stays readable (`vault kv get -version=N`) until
+    /// `max_versions` drops it. The first write to a path in a process
+    /// sweeps [`SWEEP_WINDOW`] versions back, so history left by an
+    /// earlier release goes too; later writes destroy just the one
+    /// before. Best-effort: the write already succeeded, so failures are
+    /// logged, not returned.
+    async fn destroy_superseded(&self, path: &str, new_version: u64) {
+        let first = self.swept.lock().is_ok_and(|swept| !swept.contains(path));
+        let oldest = if first {
+            new_version.saturating_sub(SWEEP_WINDOW).max(1)
+        } else {
+            new_version.saturating_sub(1).max(1)
+        };
+        let superseded: Vec<u64> = (oldest..new_version).collect();
+        if superseded.is_empty() {
+            return;
+        }
+        let label = format!("kv2::destroy_versions({}/{path})", self.mount);
+        let result = self
+            .run(&label, |client| {
+                let mount = self.mount.clone();
+                let path = path.to_string();
+                let superseded = superseded.clone();
+                Box::pin(
+                    async move { kv2::destroy_versions(client, &mount, &path, superseded).await },
+                )
+            })
+            .await;
+        let failure = match result {
+            Ok(Ok(())) => None,
+            Ok(Err(err)) if matches!(api_status(&err), Some(404)) => None,
+            Ok(Err(err)) if matches!(api_status(&err), Some(403)) => {
+                if !self.destroy_denied_warned.swap(true, Ordering::Relaxed) {
+                    warn!(
+                        path = %format!("{}/destroy/{path}", self.mount),
+                        "no update right on the destroy path, so superseded versions \
+                         (each a full copy of the stored secrets) stay readable until \
+                         the mount's max_versions drops them; grant `update` on \
+                         <mount>/destroy/<prefix>/*"
+                    );
+                }
+                None
+            }
+            Ok(Err(err)) => Some(err.to_string()),
+            Err(err) => Some(err.to_string()),
+        };
+        match failure {
+            None => {
+                if let Ok(mut swept) = self.swept.lock() {
+                    swept.insert(path.to_string());
+                }
+            }
+            Some(error) => warn!(
+                path = %format!("{}/{path}", self.mount),
+                error = %error,
+                "could not destroy superseded versions; they stay readable until \
+                 the next write destroys them or max_versions drops them"
+            ),
+        }
     }
 
     /// Build client settings shared by every auth method — address, TLS
@@ -343,6 +450,13 @@ fn api_status(err: &ClientError) -> Option<u16> {
     }
 }
 
+/// Vault's answer when a write's `cas` is not the current version.
+#[cfg(feature = "secrets-vault")]
+fn is_cas_mismatch(err: &ClientError) -> bool {
+    matches!(err, ClientError::APIError { code: 400, errors }
+        if errors.iter().any(|e| e.contains("check-and-set")))
+}
+
 /// KV v2 stores arbitrary JSON under the secret path. We wrap every
 /// envelope's raw bytes in a single `{"value": "<base64url>"}` object
 /// so the stored shape is consistent across every backend the wizard
@@ -367,12 +481,26 @@ impl SecretStore for VaultStore {
             .run(&label, |client| {
                 let mount = self.mount.clone();
                 let path = path.clone();
-                Box::pin(async move { kv2::read::<VaultPayload>(client, &mount, &path).await })
+                // `kv2::read` drops the version, which a later `cas`
+                // write needs, so read through the endpoint directly.
+                Box::pin(async move {
+                    let endpoint = ReadSecretRequest::builder()
+                        .mount(mount)
+                        .path(path)
+                        .build()
+                        .expect("mount and path are set");
+                    vaultrs::api::exec_with_result(client, endpoint).await
+                })
             })
             .await?;
-        let payload = match result {
-            Ok(p) => p,
-            Err(err) if matches!(api_status(&err), Some(404)) => return Ok(None),
+        let response = match result {
+            Ok(response) => response,
+            Err(err) if matches!(api_status(&err), Some(404)) => {
+                // Absent, or its latest version soft-deleted (which a
+                // `cas` of 0 would refuse): the next write is unconditional.
+                self.remember_version(&path, None);
+                return Ok(None);
+            }
             Err(err) => {
                 return Err(SecretStoreError::Unreachable {
                     backend: BACKEND_LABEL,
@@ -380,6 +508,12 @@ impl SecretStore for VaultStore {
                 });
             }
         };
+        self.remember_version(&path, Some(response.metadata.version));
+        let payload: VaultPayload =
+            serde_json::from_value(response.data).map_err(|e| SecretStoreError::InvalidShape {
+                key: key.to_string(),
+                reason: format!("Vault payload is not a {{\"value\": …}} object: {e}"),
+            })?;
         let bytes = B64URL.decode(payload.value.as_bytes()).map_err(|e| {
             SecretStoreError::InvalidShape {
                 key: key.to_string(),
@@ -389,24 +523,53 @@ impl SecretStore for VaultStore {
         Ok(Some(bytes))
     }
 
+    /// Writes conditionally (`cas`) when this process has read or written
+    /// the path before: a version it never saw fails the write with
+    /// [`SecretStoreError::Conflict`] rather than being replaced. Then
+    /// destroys the version the write superseded.
     async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
         let path = self.secret_path(key);
         let encoded = B64URL.encode(value);
+        let cas = self
+            .known_version(&path)
+            .and_then(|version| u32::try_from(version).ok());
         let label = format!("kv2::set({}/{path})", self.mount);
-        self.run(&label, |client| {
-            let mount = self.mount.clone();
-            let path = path.clone();
-            let payload = VaultPayload {
-                value: encoded.clone(),
-            };
-            Box::pin(async move { kv2::set(client, &mount, &path, &payload).await })
-        })
-        .await?
-        .map(|_| ())
-        .map_err(|err| SecretStoreError::Unreachable {
-            backend: BACKEND_LABEL,
-            reason: format!("kv2::set({}/{path}) failed: {err}", self.mount),
-        })
+        let result = self
+            .run(&label, |client| {
+                let mount = self.mount.clone();
+                let path = path.clone();
+                let payload = VaultPayload {
+                    value: encoded.clone(),
+                };
+                Box::pin(async move {
+                    match cas {
+                        Some(cas) => {
+                            let options = SetSecretRequestOptions { cas };
+                            kv2::set_with_options(client, &mount, &path, &payload, options).await
+                        }
+                        None => kv2::set(client, &mount, &path, &payload).await,
+                    }
+                })
+            })
+            .await?;
+        match result {
+            Ok(written) => {
+                self.remember_version(&path, Some(written.version));
+                self.destroy_superseded(&path, written.version).await;
+                Ok(())
+            }
+            Err(err) if is_cas_mismatch(&err) => {
+                self.remember_version(&path, None);
+                Err(SecretStoreError::Conflict {
+                    backend: BACKEND_LABEL,
+                    key: key.to_string(),
+                })
+            }
+            Err(err) => Err(SecretStoreError::Unreachable {
+                backend: BACKEND_LABEL,
+                reason: format!("kv2::set({}/{path}) failed: {err}", self.mount),
+            }),
+        }
     }
 
     /// Deletes the key's metadata, which removes every version and the
@@ -417,6 +580,10 @@ impl SecretStore for VaultStore {
     /// the soft delete, which `data/` rights allow.
     async fn delete(&self, key: &str) -> Result<()> {
         let path = self.secret_path(key);
+        self.remember_version(&path, None);
+        if let Ok(mut swept) = self.swept.lock() {
+            swept.remove(&path);
+        }
         let label = format!("kv2::delete_metadata({}/{path})", self.mount);
         let result = self
             .run(&label, |client| {
@@ -548,6 +715,9 @@ mod tests {
             auth: VaultAuth::Token,
             verify_tls: true,
             client: OnceCell::new(),
+            versions: Default::default(),
+            swept: Default::default(),
+            destroy_denied_warned: AtomicBool::new(false),
         }
     }
 
@@ -615,5 +785,66 @@ mod tests {
         assert_eq!(got, payload);
         store.delete(&key).await.unwrap();
         assert!(store.get(&key).await.unwrap().is_none());
+    }
+
+    /// Opt-in live test of conditional writes and version destruction;
+    /// same setup as [`vault_live_roundtrip`]. Run with `--ignored
+    /// vault_live_cas_and_history`.
+    #[tokio::test]
+    #[ignore]
+    async fn vault_live_cas_and_history() {
+        use crate::secrets::bundle::BundledStore;
+        let url = std::env::var("MEDIATOR_TEST_VAULT_URL")
+            .expect("set MEDIATOR_TEST_VAULT_URL to run the live Vault test");
+        let open_vault = || VaultStore::new(parse_url(&url).unwrap()).unwrap();
+        let ours = open_vault();
+        let theirs = open_vault();
+        let key = format!("mediator_probe_{}", uuid::Uuid::new_v4().simple());
+
+        // Each write leaves only the newest version readable.
+        for n in 1..=3u8 {
+            ours.put(&key, &[n]).await.unwrap();
+        }
+        let path = ours.secret_path(&key);
+        let cell = ours.cell().await.unwrap();
+        let metadata = kv2::read_metadata(&*cell.read().await, &ours.mount, &path)
+            .await
+            .unwrap();
+        assert_eq!(metadata.current_version, 3);
+        for (version, meta) in &metadata.versions {
+            assert_eq!(
+                meta.destroyed,
+                version != "3",
+                "version {version}: {meta:?}"
+            );
+        }
+
+        // A version this process never read is not overwritten.
+        assert_eq!(theirs.get(&key).await.unwrap(), Some(vec![3]));
+        theirs.put(&key, &[4]).await.unwrap();
+        assert!(matches!(
+            ours.put(&key, &[5]).await,
+            Err(SecretStoreError::Conflict { .. })
+        ));
+        assert_eq!(ours.get(&key).await.unwrap(), Some(vec![4]));
+        ours.put(&key, &[5]).await.unwrap();
+        ours.delete(&key).await.unwrap();
+
+        // The bundle on top: every write is conditional, and none of a
+        // second writer's entries is lost.
+        let namespace = format!("mediator_bundle_{}", uuid::Uuid::new_v4().simple());
+        let bundle_url = match url.split_once('?') {
+            Some((base, query)) => format!("{base}/{namespace}?{query}"),
+            None => format!("{url}/{namespace}"),
+        };
+        let ours = BundledStore::new(open(parse_url(&bundle_url).unwrap()).unwrap());
+        let theirs = BundledStore::new(open(parse_url(&bundle_url).unwrap()).unwrap());
+        ours.put("a", b"a").await.unwrap();
+        theirs.put("b", b"b").await.unwrap();
+        ours.put("c", b"c").await.unwrap();
+        assert_eq!(theirs.get_fresh("a").await.unwrap(), Some(b"a".to_vec()));
+        assert_eq!(theirs.get_fresh("b").await.unwrap(), Some(b"b".to_vec()));
+        assert_eq!(theirs.get_fresh("c").await.unwrap(), Some(b"c".to_vec()));
+        ours.purge().await.unwrap();
     }
 }

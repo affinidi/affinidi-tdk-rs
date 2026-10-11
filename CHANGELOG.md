@@ -22,6 +22,22 @@ Per-crate version history is summarised here; for the full code history see
 
 ### Fixed
 
+- **On Vault, two quick changes to the mediator's secrets can no longer lose
+  one, and a removed secret no longer lingers in old versions.**
+  **`affinidi-messaging-mediator` 0.39.1**,
+  **`affinidi-messaging-mediator-common` 0.17.6**.
+
+  Since 0.38.0 every change rewrites the whole `mediator_secrets_bundle`. On
+  Vault Enterprise with performance standbys a read can be served by a replica
+  that is behind, so a rewrite could drop the change just before it. Vault
+  writes are now conditional (KV v2 `cas`) on the version last read, and a
+  refused rewrite is redone from a fresh read. Each write also destroys the
+  version it supersedes, because every version holds a full copy of the secrets,
+  including ones since removed or rotated. That needs `update` on
+  `<mount>/destroy/<prefix>/*`; without it a warning is logged once and old
+  versions stay until `max_versions` drops them. New
+  `SecretStoreError::Conflict` (the enum is `#[non_exhaustive]`).
+
 - **Senders are no longer told a message was collected when it was purged or
   its recipient's account was removed.** **`affinidi-messaging-mediator`
   0.38.1**, **`affinidi-messaging-mediator-common` 0.17.5**. The outbox receipt
