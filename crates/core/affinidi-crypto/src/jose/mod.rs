@@ -2,9 +2,10 @@
 //!
 //! Centralizes the JOSE crypto previously hand-rolled in
 //! `affinidi-messaging-didcomm` (#327): the Concat KDF, AES-256 Key Wrap,
-//! A256CBC-HS512 content encryption, EdDSA, ECDH key agreement (X25519 /
-//! P-256 / K-256), and the ECDH-ES / ECDH-1PU derivations that combine
-//! them — plus the algorithm traits that make them extensible.
+//! A256CBC-HS512 and A128GCM / A256GCM content encryption, EdDSA, ECDH key
+//! agreement (X25519 / P-256 / K-256), and the ECDH-ES / ECDH-1PU
+//! derivations that combine them — plus the algorithm traits that make them
+//! extensible.
 //!
 //! Two ways to call:
 //!
@@ -23,14 +24,15 @@ pub mod aes_kw;
 pub mod concat_kdf;
 pub mod content_encryption;
 pub mod ecdh;
+pub mod gcm;
 pub mod key_agreement;
 pub mod signing;
 pub mod traits;
 
 pub use key_agreement::{Curve, EphemeralKeyPair, PrivateKeyAgreement, PublicKeyAgreement};
 pub use traits::{
-    A256CbcHs512, A256Kw, ConcatKdf, ContentEncryption, Ed25519, JwsSigner, JwsVerifier,
-    KeyDerivation, KeyWrap,
+    A128Gcm, A256CbcHs512, A256Gcm, A256Kw, ConcatKdf, ContentEncryption, Ed25519, JwsSigner,
+    JwsVerifier, KeyDerivation, KeyWrap,
 };
 
 /// Known-answer / golden-master tests. These assert the **same** expected
