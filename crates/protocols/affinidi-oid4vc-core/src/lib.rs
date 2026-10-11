@@ -24,6 +24,11 @@ pub mod es256;
 #[cfg(feature = "eddsa")]
 pub mod eddsa;
 
+/// Compact JWE with `ECDH-ES` direct key agreement — the OpenID4VP 1.0
+/// encrypted authorization response (`direct_post.jwt`).
+#[cfg(feature = "jwe")]
+pub mod jwe;
+
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
