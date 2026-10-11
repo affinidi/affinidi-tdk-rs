@@ -63,6 +63,70 @@ pub fn verify(
     options: &VerificationOptions,
     holder_verifier: Option<&dyn JwtVerifier>,
 ) -> Result<VerificationResult> {
+    verify_inner(
+        sd_jwt,
+        issuer_verifier,
+        hasher,
+        options,
+        holder_verifier,
+        None,
+    )
+}
+
+/// How recent a Key Binding JWT's `iat` must be (RFC 9901 §7.3 step 5: the
+/// verifier checks the creation time is within an acceptable window).
+#[derive(Debug, Clone, Copy)]
+pub struct KbFreshness {
+    /// The verifier's current time, seconds since the epoch.
+    pub now: i64,
+    /// The oldest `iat` accepted, as seconds before `now`.
+    pub max_age_secs: i64,
+    /// How far ahead of `now` an `iat` may be, for clock skew.
+    pub max_future_skew_secs: i64,
+}
+
+impl KbFreshness {
+    /// A window of `max_age_secs` before `now`, allowing 60 seconds of skew
+    /// ahead of it.
+    pub fn new(now: i64, max_age_secs: i64) -> Self {
+        Self {
+            now,
+            max_age_secs,
+            max_future_skew_secs: 60,
+        }
+    }
+}
+
+/// [`verify`], and when the KB-JWT is verified, also require its `iat` within
+/// `freshness`. A verifier that issues single-use nonces still wants this: a
+/// nonce stops a replay, the window bounds how long a presentation built for
+/// that nonce stays usable.
+pub fn verify_with_kb_freshness(
+    sd_jwt: &SdJwt,
+    issuer_verifier: &dyn JwtVerifier,
+    hasher: &dyn SdHasher,
+    options: &VerificationOptions,
+    holder_verifier: Option<&dyn JwtVerifier>,
+    freshness: &KbFreshness,
+) -> Result<VerificationResult> {
+    verify_inner(
+        sd_jwt,
+        issuer_verifier,
+        hasher,
+        options,
+        holder_verifier,
+        Some(freshness),
+    )
+}
+
+fn verify_inner(
+    sd_jwt: &SdJwt,
+    issuer_verifier: &dyn JwtVerifier,
+    hasher: &dyn SdHasher,
+    options: &VerificationOptions,
+    holder_verifier: Option<&dyn JwtVerifier>,
+    freshness: Option<&KbFreshness>,
+) -> Result<VerificationResult> {
     // 1. Verify the issuer JWS
     let payload = issuer_verifier.verify_jwt(&sd_jwt.jws)?;
 
@@ -110,6 +174,32 @@ pub fn verify(
                 ));
             };
             let kb_payload = hv.verify_jwt(kb_jwt_str)?;
+
+            // RFC 9901 §4.3 / §7.3: a KB-JWT's `typ` is `kb+jwt`. The header
+            // was covered by the signature just verified; this keeps another
+            // JWT the holder signed with the same key from passing as one.
+            let typ = kb_jwt_typ(kb_jwt_str)?;
+            if typ.as_deref() != Some(KB_JWT_TYP) {
+                return Err(SdJwtError::KeyBinding(format!(
+                    "KB-JWT typ must be {KB_JWT_TYP}, got {typ:?}"
+                )));
+            }
+
+            if let Some(window) = freshness {
+                let iat = kb_payload
+                    .get("iat")
+                    .and_then(|v| v.as_i64())
+                    .ok_or_else(|| SdJwtError::KeyBinding("iat missing in KB-JWT".into()))?;
+                if iat > window.now + window.max_future_skew_secs {
+                    return Err(SdJwtError::KeyBinding("KB-JWT iat is in the future".into()));
+                }
+                if window.now - iat > window.max_age_secs {
+                    return Err(SdJwtError::KeyBinding(format!(
+                        "KB-JWT is older than {}s",
+                        window.max_age_secs
+                    )));
+                }
+            }
 
             // Verify sd_hash
             let expected_sd_hash = hasher.hash_b64(sd_jwt.serialize_without_kb().as_bytes());
@@ -164,6 +254,28 @@ pub fn verify(
         claims,
         kb_verified,
     })
+}
+
+/// The `typ` of a Key Binding JWT (RFC 9901 §4.3).
+pub const KB_JWT_TYP: &str = "kb+jwt";
+
+/// The `typ` header member of a compact JWS, if any.
+fn kb_jwt_typ(jws: &str) -> Result<Option<String>> {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let header_b64 = jws
+        .split('.')
+        .next()
+        .ok_or_else(|| SdJwtError::KeyBinding("KB-JWT is not a JWS".into()))?;
+    let header: Value = URL_SAFE_NO_PAD
+        .decode(header_b64)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .ok_or_else(|| SdJwtError::KeyBinding("KB-JWT header is not JSON".into()))?;
+    Ok(header
+        .get("typ")
+        .and_then(Value::as_str)
+        .map(str::to_string))
 }
 
 /// Check for duplicate disclosure digests (RFC 9901 §8.1).
@@ -573,5 +685,110 @@ mod tests {
         assert!(result.claims.get("family_name").is_none());
         assert_eq!(result.claims["address"]["city"], "Anytown");
         assert!(result.claims["address"].get("street").is_none());
+    }
+}
+
+#[cfg(test)]
+mod kb_hardening_tests {
+    use super::*;
+    use crate::disclosure::Disclosure;
+    use crate::hasher::Sha256Hasher;
+    use crate::holder::{self, KbJwtInput};
+    use crate::issuer;
+    use crate::signer::JwtSigner;
+    use crate::signer::test_utils::{HmacSha256Signer, HmacSha256Verifier};
+
+    const ISSUER_KEY: &[u8] = b"test-secret-key-for-hmac-signing!";
+    const HOLDER_KEY: &[u8] = b"holder-key-for-hmac-signing!!!";
+    const AUD: &str = "decentralized_identifier:did:webvh:Qm1:verifier.example";
+
+    fn opts() -> VerificationOptions<'static> {
+        VerificationOptions {
+            verify_kb: true,
+            expected_audience: Some(AUD),
+            expected_nonce: Some("n-1"),
+        }
+    }
+
+    /// A presentation whose KB-JWT was made at `iat`.
+    fn presented_at(iat: i64) -> SdJwt {
+        let hasher = Sha256Hasher;
+        let signer = HmacSha256Signer::new(ISSUER_KEY);
+        let holder_signer = HmacSha256Signer::new(HOLDER_KEY);
+        let holder_jwk = serde_json::json!({ "kty": "oct", "k": "holder-key" });
+        let sd_jwt = issuer::issue(
+            &serde_json::json!({ "sub": "u1", "name": "N" }),
+            &serde_json::json!({ "_sd": ["name"] }),
+            &signer,
+            &hasher,
+            Some(&holder_jwk),
+        )
+        .unwrap();
+        let all: Vec<&Disclosure> = sd_jwt.disclosures.iter().collect();
+        holder::present(
+            &sd_jwt,
+            &all,
+            Some(&KbJwtInput {
+                audience: AUD,
+                nonce: "n-1",
+                signer: &holder_signer,
+                iat: iat as u64,
+            }),
+            &hasher,
+        )
+        .unwrap()
+    }
+
+    fn check(presentation: &SdJwt, now: i64) -> Result<VerificationResult> {
+        verify_with_kb_freshness(
+            presentation,
+            &HmacSha256Verifier::new(ISSUER_KEY),
+            &Sha256Hasher,
+            &opts(),
+            Some(&HmacSha256Verifier::new(HOLDER_KEY)),
+            &KbFreshness::new(now, 300),
+        )
+    }
+
+    #[test]
+    fn a_fresh_kb_jwt_passes_and_a_stale_or_future_one_fails() {
+        let now = 1_800_000_000;
+        assert_eq!(
+            check(&presented_at(now - 10), now).unwrap().kb_verified,
+            Some(true)
+        );
+        let stale = check(&presented_at(now - 301), now).unwrap_err();
+        assert!(stale.to_string().contains("older than"), "{stale}");
+        let future = check(&presented_at(now + 120), now).unwrap_err();
+        assert!(future.to_string().contains("future"), "{future}");
+        // Plain `verify` keeps its behaviour: no window.
+        verify(
+            &presented_at(now - 10_000),
+            &HmacSha256Verifier::new(ISSUER_KEY),
+            &Sha256Hasher,
+            &opts(),
+            Some(&HmacSha256Verifier::new(HOLDER_KEY)),
+        )
+        .unwrap();
+    }
+
+    /// A JWT the holder signed with the same key, but not as a KB-JWT, does not
+    /// pass as one even with every claim right.
+    #[test]
+    fn a_kb_jwt_without_the_kb_typ_is_refused() {
+        let now = 1_800_000_000;
+        let mut presentation = presented_at(now);
+        let sd_hash = Sha256Hasher.hash_b64(presentation.serialize_without_kb().as_bytes());
+        let holder_signer = HmacSha256Signer::new(HOLDER_KEY);
+        presentation.kb_jwt = Some(
+            holder_signer
+                .sign_jwt(
+                    &serde_json::json!({ "alg": holder_signer.algorithm(), "typ": "JWT" }),
+                    &serde_json::json!({ "iat": now, "aud": AUD, "nonce": "n-1", "sd_hash": sd_hash }),
+                )
+                .unwrap(),
+        );
+        let err = check(&presentation, now).unwrap_err();
+        assert!(err.to_string().contains("kb+jwt"), "{err}");
     }
 }

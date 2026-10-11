@@ -1,5 +1,25 @@
 # Affinidi OID4VC Core Changelog
 
+## Unreleased (0.1.10) — compact JWE with `ECDH-ES` direct (`jwe` feature)
+
+New opt-in `jwe` feature and module: the OpenID4VP 1.0 encrypted authorization
+response (`response_mode=direct_post.jwt`).
+
+- `EcdhEsDecryptionKey` — a per-exchange P-256 key. `public_jwk()` is what a
+  verifier publishes in `client_metadata.jwks` (`use: enc`, `alg: ECDH-ES`).
+  The scalar is exposed (`scalar_bytes` / `from_scalar`) so a verifier can keep
+  the key between request and response; it is zeroized on drop and never
+  printed.
+- `decrypt_compact(jwe, key, allowed_enc)` — `alg` must be `ECDH-ES` (direct, so
+  an empty encrypted-key segment), `enc` must be one the caller allows
+  (`A128GCM`, `A256GCM`), the `epk` must be on P-256, a `kid` must name this key,
+  and `zip` or `crit` are refused, all before any key agreement. A tag failure
+  is one `Decryption` error whatever caused it.
+- `encrypt_compact` — the wallet's side, used by the tests.
+
+Builds on `affinidi-crypto` 0.2.11's `jose::gcm` and `jose::ecdh`. Additive;
+the feature is off by default.
+
 ## Unreleased (0.1.9) — `sha2` 0.11
 
 No behaviour change and no public API change: this is a private dependencies here.

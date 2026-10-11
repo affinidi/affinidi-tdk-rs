@@ -7,6 +7,22 @@
  * Also includes [Presentation Exchange v2](https://identity.foundation/presentation-exchange/spec/v2.0.0/)
  * types for credential matching.
  *
+ * # Verifying with OpenID4VP 1.0
+ *
+ * - [`ClientId`] — the verifier's prefixed client identifier
+ *   (`decentralized_identifier:`, `x509_hash:`, …), which is also the
+ *   audience a key-binding proof must name.
+ * - [`RequestObject`] — the 1.0 request object, signed as a JAR
+ *   (`oauth-authz-req+jwt`) by [`RequestObject::sign`], and the wallet
+ *   invocation URI that points at its `request_uri`.
+ * - `response::receive_direct_post_jwt` (feature `direct-post-jwt`) — reads
+ *   and decrypts what the wallet posts to `response_uri`.
+ * - [`DcqlQuery::evaluate_presentation`] — whether the verified presentations
+ *   satisfy the query.
+ *
+ * The types below for Presentation Exchange and the pre-1.0 request and
+ * response predate these and are kept for existing callers.
+ *
  * # Flow
  *
  * 1. Verifier creates an authorization request with a presentation definition
@@ -25,11 +41,19 @@
  * - `ldp_vc` — Linked Data Proof VC
  */
 
+pub mod client_id;
 pub mod dcql;
 pub mod error;
+pub mod request_object;
+/// Receiving an encrypted `direct_post.jwt` authorization response.
+#[cfg(feature = "direct-post-jwt")]
+pub mod response;
 pub mod types;
 pub mod verifier;
 pub mod wallet;
+
+pub use client_id::{ClientId, ClientIdPrefix};
+pub use request_object::{JarHeader, RequestObject, VerifierClientMetadata};
 
 pub use dcql::{
     CandidateCredential, ClaimPathSegment, ClaimsQuery, CredentialMatch, CredentialQuery,

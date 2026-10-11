@@ -1,5 +1,21 @@
 # Affinidi SD-JWT Changelog
 
+## Unreleased (0.1.7) — Key Binding JWT `typ` and freshness
+
+- **Behaviour (stricter):** with `verify_kb`, a Key Binding JWT whose header
+  `typ` is not `kb+jwt` is refused (RFC 9901 §4.3, §7.3). Without the check, a
+  JWT the holder signed with the same key for another purpose could pass as a
+  KB-JWT. Every RFC 9901 producer sets it, including this crate's
+  `holder::present`; the RFC 9901 and spec vectors still pass.
+- **Added:** `verifier::verify_with_kb_freshness` and `KbFreshness` — `verify`,
+  plus a window on the KB-JWT's `iat` (RFC 9901 §7.3 step 5): not older than
+  `max_age_secs`, not more than `max_future_skew_secs` (default 60) ahead. A
+  separate function rather than a new `VerificationOptions` member, so callers
+  that build the options as a struct literal are unaffected. `KB_JWT_TYP`
+  constant.
+
+For the OpenID4VP verifier in OpenVTC/verifiable-trust-infrastructure#1988.
+
 ## Unreleased (0.1.6) — `rand` 0.10, `sha2` 0.11
 
 No behaviour change and no public API change: these are private dependencies here.

@@ -36,7 +36,7 @@
  * [pe]: https://identity.foundation/presentation-exchange/spec/v2.0.0/
  */
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::de::{self, Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
@@ -672,6 +672,203 @@ impl DcqlQuery {
             }
         }
         Ok(DcqlMatch { matches })
+    }
+
+    /// The verifier's side: decide whether what a wallet presented satisfies
+    /// this query.
+    ///
+    /// `presented` maps each credential query id the wallet answered (the
+    /// 1.0 `vp_token`'s keys) to the presentations that answered it, each
+    /// projected — **after** the caller verified it — into a
+    /// [`CandidateCredential`]: its format, `vct` / `doctype`, the claims it
+    /// disclosed, and `supports_holder_binding` set only when its key-binding
+    /// proof verified.
+    ///
+    /// Refused when:
+    /// - an id is not a credential query of this one (the wallet answered
+    ///   something it was not asked);
+    /// - a query without `multiple` is answered more than once;
+    /// - any presentation fails its query's `format`, `meta`, holder-binding,
+    ///   `claims` or `claim_sets` constraints — every presentation must stand
+    ///   on its own, not only enough of them;
+    /// - the request is not satisfied: with `credential_sets`, a required set
+    ///   has no option whose ids were all answered; without, a query was not
+    ///   answered.
+    ///
+    /// `self` is assumed [valid](DcqlQuery::validate).
+    pub fn evaluate_presentation(
+        &self,
+        presented: &BTreeMap<String, Vec<CandidateCredential>>,
+    ) -> Result<(), Oid4vpError> {
+        for (id, candidates) in presented {
+            let cq = self
+                .credentials
+                .iter()
+                .find(|cq| &cq.id == id)
+                .ok_or_else(|| {
+                    Oid4vpError::InvalidVpToken(format!(
+                        "`{id}` is not a credential query of this request"
+                    ))
+                })?;
+            if candidates.is_empty() {
+                return Err(Oid4vpError::InvalidVpToken(format!(
+                    "credential query `{id}` is answered by nothing"
+                )));
+            }
+            if candidates.len() > 1 && !cq.multiple() {
+                return Err(Oid4vpError::InvalidVpToken(format!(
+                    "credential query `{id}` allows one presentation, got {}",
+                    candidates.len()
+                )));
+            }
+            if let Some(candidate) = candidates.iter().find(|c| cq.evaluate(c).is_none()) {
+                return Err(Oid4vpError::NoMatchingCredentials(format!(
+                    "a presentation for `{id}` ({}) does not satisfy its credential query",
+                    candidate.format
+                )));
+            }
+        }
+
+        let answered = |id: &str| presented.contains_key(id);
+        match &self.credential_sets {
+            Some(sets) => {
+                for set in sets.iter().filter(|s| s.is_required()) {
+                    if !set
+                        .options
+                        .iter()
+                        .any(|option| option.iter().all(|id| answered(id)))
+                    {
+                        return Err(Oid4vpError::NoMatchingCredentials(
+                            "no option of a required credential set was answered".into(),
+                        ));
+                    }
+                }
+            }
+            None => {
+                if let Some(cq) = self.credentials.iter().find(|cq| !answered(&cq.id)) {
+                    return Err(Oid4vpError::NoMatchingCredentials(format!(
+                        "credential query `{}` was not answered",
+                        cq.id
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod evaluate_presentation_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn query(value: Json) -> DcqlQuery {
+        let q = DcqlQuery::from_json(&value).unwrap();
+        q.validate().unwrap();
+        q
+    }
+
+    fn residence_query() -> DcqlQuery {
+        query(json!({
+            "credentials": [{
+                "id": "residence",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": ["https://example.org/residence"] },
+                "claims": [{ "path": ["address", "country"], "values": ["CH"] }]
+            }]
+        }))
+    }
+
+    fn sd_jwt(vct: &str, claims: Json, bound: bool) -> CandidateCredential {
+        CandidateCredential {
+            id: "p1".into(),
+            format: "dc+sd-jwt".into(),
+            claims,
+            vct: Some(vct.into()),
+            doctype: None,
+            supports_holder_binding: bound,
+        }
+    }
+
+    fn one(id: &str, c: CandidateCredential) -> BTreeMap<String, Vec<CandidateCredential>> {
+        BTreeMap::from([(id.to_string(), vec![c])])
+    }
+
+    #[test]
+    fn a_presentation_meeting_the_query_satisfies_it() {
+        let p = sd_jwt(
+            "https://example.org/residence",
+            json!({ "address": { "country": "CH" } }),
+            true,
+        );
+        residence_query()
+            .evaluate_presentation(&one("residence", p))
+            .unwrap();
+    }
+
+    #[test]
+    fn a_wrong_value_vct_or_missing_binding_fails() {
+        let q = residence_query();
+        for p in [
+            sd_jwt(
+                "https://example.org/residence",
+                json!({ "address": { "country": "DE" } }),
+                true,
+            ),
+            sd_jwt(
+                "https://example.org/other",
+                json!({ "address": { "country": "CH" } }),
+                true,
+            ),
+            // Holder binding is required by default; a presentation whose
+            // key-binding proof did not verify does not count.
+            sd_jwt(
+                "https://example.org/residence",
+                json!({ "address": { "country": "CH" } }),
+                false,
+            ),
+        ] {
+            assert!(q.evaluate_presentation(&one("residence", p)).is_err());
+        }
+    }
+
+    #[test]
+    fn an_unasked_id_a_repeat_or_a_missing_answer_fails() {
+        let q = residence_query();
+        let good = sd_jwt(
+            "https://example.org/residence",
+            json!({ "address": { "country": "CH" } }),
+            true,
+        );
+        assert!(
+            q.evaluate_presentation(&one("something-else", good.clone()))
+                .is_err()
+        );
+        let twice = BTreeMap::from([("residence".to_string(), vec![good.clone(), good])]);
+        assert!(q.evaluate_presentation(&twice).is_err());
+        assert!(q.evaluate_presentation(&BTreeMap::new()).is_err());
+    }
+
+    /// With `credential_sets`, a required set needs one option fully answered;
+    /// an optional set may go unanswered.
+    #[test]
+    fn credential_sets_follow_required_options() {
+        let q = query(json!({
+            "credentials": [
+                { "id": "pid", "format": "dc+sd-jwt" },
+                { "id": "residence", "format": "dc+sd-jwt" },
+                { "id": "loyalty", "format": "dc+sd-jwt" }
+            ],
+            "credential_sets": [
+                { "options": [["pid"], ["residence"]] },
+                { "options": [["loyalty"]], "required": false }
+            ]
+        }));
+        let any = |vct: &str| sd_jwt(vct, json!({}), true);
+        q.evaluate_presentation(&one("residence", any("r")))
+            .unwrap();
+        q.evaluate_presentation(&one("pid", any("p"))).unwrap();
+        assert!(q.evaluate_presentation(&one("loyalty", any("l"))).is_err());
     }
 }
 
