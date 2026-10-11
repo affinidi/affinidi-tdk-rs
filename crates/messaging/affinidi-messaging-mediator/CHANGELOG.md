@@ -1,8 +1,17 @@
 # Changelog
 
-## Unreleased (0.39.1) — Vault: no lost secret changes, no lingering versions
+## Unreleased (0.39.1) — Vault: starts after a used bootstrap seed; no lost secret changes, no lingering versions
 
-Takes `affinidi-messaging-mediator-common` 0.17.6. On the Vault backend, writes
+Takes `affinidi-messaging-mediator-common` 0.17.6.
+
+**Fixes a start failure on Vault after upgrading to 0.38.** A deployment whose
+older mediator had used its bootstrap seed has the seed and its index
+soft-deleted in Vault. The 0.38 migration read those tombstones as "Vault
+unreachable" and the mediator refused to start. They now read as absent. No
+operator action is needed. If you deleted the tombstones by hand
+(`vault kv metadata delete`) as a workaround, that is harmless.
+
+On the Vault backend, writes
 to `mediator_secrets_bundle` are conditional (KV v2 `cas`). A change based on a
 stale read, as a lagging Vault Enterprise performance standby can serve, is
 redone instead of silently dropping the change before it. Each write also

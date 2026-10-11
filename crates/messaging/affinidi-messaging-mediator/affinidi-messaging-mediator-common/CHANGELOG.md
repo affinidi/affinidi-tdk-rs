@@ -1,8 +1,24 @@
 # Affinidi Messaging Mediator Common
 
-## Unreleased (0.17.6) — Vault: conditional bundle writes, no lingering versions
+## Unreleased (0.17.6) — Vault: soft-deleted keys read as absent; conditional bundle writes, no lingering versions
 
-Two Vault problems with the single `mediator_secrets_bundle` from 0.17.4:
+**Soft-deleted keys broke the 0.17.4 migration.** Reading a KV v2 key whose
+latest version is soft-deleted returns 404 with
+`{"data": {"data": null, "metadata": …}}` and no `errors` array. `vaultrs` 0.8
+builds an `APIError` only from a body with `errors`, so it left this one as a
+`RestClientError`. `api_status` didn't look inside that, so `get` reported
+the key as `Unreachable` ("An error occurred with the request") instead of
+`None`, after retrying it as a transport failure. Older mediators soft-deleted
+the consumed bootstrap seed and its index, and the migration reads both, so
+every deployment that had bootstrapped failed to start on 0.17.4/0.17.5.
+`api_status` now also reads the status from a wrapped
+`rustify::errors::ClientError::ServerResponseError`, which fixes `get`,
+`delete`, `list` and `destroy` together. `VaultRetryPolicy` classifies by that
+status, so an unparsed 4xx is no longer retried. `rustify` 0.7, already in the
+tree through `vaultrs`, is now a direct optional dependency of
+`secrets-vault`. Live test: `vault_live_soft_deleted_keys_read_as_absent_and_migrate`.
+
+Two more Vault problems with the single `mediator_secrets_bundle` from 0.17.4:
 
 - **A rewrite could drop the change before it.** Every `put`/`delete` reads,
   edits and rewrites the whole bundle. On Vault Enterprise with performance

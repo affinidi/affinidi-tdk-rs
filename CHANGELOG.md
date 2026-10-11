@@ -22,6 +22,19 @@ Per-crate version history is summarised here; for the full code history see
 
 ### Fixed
 
+- **A mediator on Vault that had used its bootstrap seed no longer refuses to
+  start after upgrading to 0.38.** **`affinidi-messaging-mediator` 0.39.1**,
+  **`affinidi-messaging-mediator-common` 0.17.6**.
+
+  Older mediators removed the consumed seed and its index with a KV v2 soft
+  delete. Reading a soft-deleted key returns 404 with a body `vaultrs` 0.8
+  can't parse as an error, so the backend took it for an unreachable Vault
+  (`An error occurred with the request`) instead of a missing key. The 0.38
+  migration reads every per-key secret, including the seed index, so it
+  failed and the mediator stopped. The Vault backend now reads the status code
+  either way, so a soft-deleted key reads as absent. It also no longer retries
+  a 4xx it couldn't parse as if it were a transport failure.
+
 - **On Vault, two quick changes to the mediator's secrets can no longer lose
   one, and a removed secret no longer lingers in old versions.**
   **`affinidi-messaging-mediator` 0.39.1**,

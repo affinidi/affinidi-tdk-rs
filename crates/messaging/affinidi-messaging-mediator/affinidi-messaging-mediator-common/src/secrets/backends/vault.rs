@@ -422,14 +422,16 @@ pub(crate) struct VaultRetryPolicy;
 #[cfg(feature = "secrets-vault")]
 impl RetryPolicy<ClientError> for VaultRetryPolicy {
     fn classify(&self, err: &ClientError) -> Retryable {
+        // A status code — parsed or not — decides on its own; a 404 for a
+        // soft-deleted key is not a transport failure to retry.
+        if let Some(code) = api_status(err) {
+            return if code == 429 || (500..600).contains(&code) {
+                Retryable::Yes { retry_after: None }
+            } else {
+                Retryable::No
+            };
+        }
         match err {
-            ClientError::APIError { code, .. } => {
-                if *code == 429 || (*code >= 500 && *code < 600) {
-                    Retryable::Yes { retry_after: None }
-                } else {
-                    Retryable::No
-                }
-            }
             // rustify wraps connection / timeout / IO under a single
             // variant. Safest to retry once — if it's a real
             // configuration error it will surface deterministically
@@ -442,10 +444,19 @@ impl RetryPolicy<ClientError> for VaultRetryPolicy {
     }
 }
 
+/// The HTTP status Vault answered with, whether or not vaultrs could
+/// parse the body. vaultrs only builds an `APIError` from a body with an
+/// `errors` array; anything else stays a `RestClientError` wrapping the
+/// status. That includes the 404 for a KV v2 key whose latest version is
+/// soft-deleted, whose body is `{"data": {"data": null, "metadata": …}}`.
+/// Mistaking that for a transport failure made such a key unreadable.
 #[cfg(feature = "secrets-vault")]
 fn api_status(err: &ClientError) -> Option<u16> {
     match err {
         ClientError::APIError { code, .. } => Some(*code),
+        ClientError::RestClientError {
+            source: rustify::errors::ClientError::ServerResponseError { code, .. },
+        } => Some(*code),
         _ => None,
     }
 }
@@ -721,6 +732,40 @@ mod tests {
         }
     }
 
+    /// The 404 for a soft-deleted key: a body without `errors`, which
+    /// vaultrs leaves wrapped instead of an `APIError`.
+    fn unparsed(code: u16) -> ClientError {
+        ClientError::RestClientError {
+            source: rustify::errors::ClientError::ServerResponseError {
+                code,
+                content: Some(r#"{"data":{"data":null,"metadata":{"version":1}}}"#.into()),
+            },
+        }
+    }
+
+    #[test]
+    fn a_status_is_read_whether_or_not_vaultrs_parsed_the_body() {
+        assert_eq!(api_status(&unparsed(404)), Some(404));
+        let parsed = ClientError::APIError {
+            code: 403,
+            errors: vec!["permission denied".into()],
+        };
+        assert_eq!(api_status(&parsed), Some(403));
+        assert_eq!(api_status(&ClientError::ResponseEmptyError), None);
+    }
+
+    #[test]
+    fn an_unparsed_4xx_is_not_retried_but_an_unparsed_5xx_is() {
+        assert!(matches!(
+            VaultRetryPolicy.classify(&unparsed(404)),
+            Retryable::No
+        ));
+        assert!(matches!(
+            VaultRetryPolicy.classify(&unparsed(503)),
+            Retryable::Yes { .. }
+        ));
+    }
+
     #[test]
     fn secret_path_glues_namespace_and_key() {
         let with_namespace = store_from("vault.internal", "secret/mediator");
@@ -846,5 +891,69 @@ mod tests {
         assert_eq!(theirs.get_fresh("b").await.unwrap(), Some(b"b".to_vec()));
         assert_eq!(theirs.get_fresh("c").await.unwrap(), Some(b"c".to_vec()));
         ours.purge().await.unwrap();
+    }
+
+    /// Opt-in live test: a key whose latest version was soft-deleted (as
+    /// an older mediator's `delete_latest` left consumed bootstrap seeds
+    /// and their index) reads as absent, and a per-key deployment holding
+    /// such tombstones migrates. Run with `--ignored
+    /// vault_live_soft_deleted`.
+    #[tokio::test]
+    #[ignore]
+    async fn vault_live_soft_deleted_keys_read_as_absent_and_migrate() {
+        use crate::secrets::bundle::{BundledStore, SECRETS_BUNDLE};
+        use crate::secrets::envelope::Envelope;
+        use crate::secrets::well_known::{
+            BOOTSTRAP_EPHEMERAL_SEED_PREFIX, BOOTSTRAP_SEED_INDEX, JWT_SECRET,
+        };
+        let url = std::env::var("MEDIATOR_TEST_VAULT_URL")
+            .expect("set MEDIATOR_TEST_VAULT_URL to run the live Vault test");
+        let namespace = format!("mediator_tombstones_{}", uuid::Uuid::new_v4().simple());
+        let url = match url.split_once('?') {
+            Some((base, query)) => format!("{base}/{namespace}?{query}"),
+            None => format!("{url}/{namespace}"),
+        };
+        let vault = VaultStore::new(parse_url(&url).unwrap()).unwrap();
+        let soft_delete = |key: String| {
+            let path = vault.secret_path(&key);
+            let mount = vault.mount.clone();
+            let vault = &vault;
+            async move {
+                let cell = vault.cell().await.unwrap();
+                kv2::delete_latest(&*cell.read().await, &mount, &path)
+                    .await
+                    .unwrap();
+            }
+        };
+
+        // An older mediator's layout after its bootstrap seed was used.
+        let jwt = Envelope::new("test", "jwt".to_string()).seal().unwrap();
+        let seed = format!("{BOOTSTRAP_EPHEMERAL_SEED_PREFIX}{}", "a".repeat(32));
+        vault.put(JWT_SECRET, &jwt).await.unwrap();
+        vault.put(BOOTSTRAP_SEED_INDEX, b"index").await.unwrap();
+        vault.put(&seed, b"seed").await.unwrap();
+        soft_delete(BOOTSTRAP_SEED_INDEX.to_string()).await;
+        soft_delete(seed.clone()).await;
+
+        assert_eq!(vault.get(BOOTSTRAP_SEED_INDEX).await.unwrap(), None);
+        assert_eq!(vault.get(&seed).await.unwrap(), None);
+        assert!(
+            vault.list_keys().await.unwrap().contains(&seed),
+            "still listed"
+        );
+        // A soft-deleted key is rewritable (no `cas` against the tombstone).
+        vault.put(&seed, b"again").await.unwrap();
+        assert_eq!(vault.get(&seed).await.unwrap(), Some(b"again".to_vec()));
+        soft_delete(seed.clone()).await;
+
+        let store = BundledStore::new(std::sync::Arc::new(vault));
+        store
+            .ensure_migrated()
+            .await
+            .expect("migrates past the tombstones");
+        assert_eq!(store.get(JWT_SECRET).await.unwrap(), Some(jwt));
+        assert!(store.confirm_cutover().await.unwrap());
+        assert!(store.get_fresh(SECRETS_BUNDLE).await.unwrap().is_none());
+        store.purge().await.unwrap();
     }
 }

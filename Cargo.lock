@@ -749,6 +749,7 @@ dependencies = [
  "redis",
  "regex",
  "reqwest",
+ "rustify",
  "rustls",
  "semver",
  "serde",
