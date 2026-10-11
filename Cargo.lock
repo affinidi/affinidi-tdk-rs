@@ -537,15 +537,15 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-service"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-core",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk",
+ "affinidi-messaging-sdk 0.35.0",
  "affinidi-messaging-test-mediator",
  "affinidi-secrets-resolver",
- "affinidi-tdk",
+ "affinidi-tdk 0.25.0",
  "affinidi-tdk-common",
  "affinidi-tsp",
  "async-trait",
@@ -559,7 +559,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "trust-tasks-rs",
+ "trust-tasks-rs 0.30.0",
  "uuid",
 ]
 
@@ -597,8 +597,8 @@ dependencies = [
  "affinidi-crypto",
  "affinidi-messaging-core",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk",
- "affinidi-tdk",
+ "affinidi-messaging-sdk 0.35.0",
+ "affinidi-tdk 0.25.0",
  "affinidi-tsp",
  "ahash",
  "base64 0.23.1",
@@ -613,13 +613,13 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "trust-tasks-rs",
+ "trust-tasks-rs 0.30.0",
  "uuid",
 ]
 
 [[package]]
 name = "affinidi-messaging-mediator"
-version = "0.39.2"
+version = "0.40.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -630,7 +630,7 @@ dependencies = [
  "affinidi-messaging-didcomm-v1",
  "affinidi-messaging-mediator-common",
  "affinidi-messaging-mediator-config",
- "affinidi-messaging-sdk",
+ "affinidi-messaging-sdk 0.35.0",
  "affinidi-rate-limit",
  "affinidi-secrets-resolver",
  "affinidi-task-utils",
@@ -685,8 +685,8 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
- "trust-tasks-proof",
- "trust-tasks-rs",
+ "trust-tasks-proof 0.30.0",
+ "trust-tasks-rs 0.30.0",
  "url",
  "uuid",
  "vta-sdk",
@@ -694,11 +694,11 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-admin"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "affinidi-messaging-didcomm",
  "affinidi-messaging-mediator-common",
- "affinidi-messaging-sdk",
+ "affinidi-messaging-sdk 0.35.0",
  "affinidi-messaging-test-mediator",
  "affinidi-secrets-resolver",
  "affinidi-tdk-common",
@@ -710,7 +710,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
- "trust-tasks-rs",
+ "trust-tasks-rs 0.30.0",
  "uuid",
 ]
 
@@ -806,7 +806,7 @@ dependencies = [
  "affinidi-messaging-mediator-common",
  "affinidi-messaging-mediator-config",
  "affinidi-secrets-resolver",
- "affinidi-tdk",
+ "affinidi-tdk 0.25.0",
  "anyhow",
  "arboard",
  "aws-config",
@@ -844,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-tui"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "affinidi-messaging-didcomm",
  "affinidi-messaging-mediator-admin",
@@ -867,6 +867,42 @@ dependencies = [
 [[package]]
 name = "affinidi-messaging-sdk"
 version = "0.34.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89264bb29d76647cf8e8bbb79cc05e5543f2181dc07127d45b0f16654ff8d70b"
+dependencies = [
+ "affinidi-crypto",
+ "affinidi-did-authentication",
+ "affinidi-did-common",
+ "affinidi-encoding",
+ "affinidi-messaging-core",
+ "affinidi-messaging-didcomm",
+ "affinidi-messaging-mediator-common",
+ "affinidi-secrets-resolver",
+ "affinidi-task-utils",
+ "affinidi-tdk-common",
+ "ahash",
+ "async-trait",
+ "base64 0.23.1",
+ "chrono",
+ "futures-util",
+ "rand 0.10.3",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha256",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tracing",
+ "trust-tasks-proof 0.28.1",
+ "trust-tasks-rs 0.28.1",
+ "uuid",
+]
+
+[[package]]
+name = "affinidi-messaging-sdk"
+version = "0.35.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",
@@ -902,14 +938,14 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tracing",
- "trust-tasks-proof",
- "trust-tasks-rs",
+ "trust-tasks-proof 0.30.0",
+ "trust-tasks-rs 0.30.0",
  "uuid",
 ]
 
 [[package]]
 name = "affinidi-messaging-test-mediator"
-version = "0.20.1"
+version = "0.21.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -920,9 +956,9 @@ dependencies = [
  "affinidi-messaging-didcomm-v1",
  "affinidi-messaging-mediator",
  "affinidi-messaging-mediator-common",
- "affinidi-messaging-sdk",
+ "affinidi-messaging-sdk 0.35.0",
  "affinidi-secrets-resolver",
- "affinidi-tdk",
+ "affinidi-tdk 0.25.0",
  "affinidi-tsp",
  "async-trait",
  "axum",
@@ -940,8 +976,8 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "trust-tasks-proof",
- "trust-tasks-rs",
+ "trust-tasks-proof 0.30.0",
+ "trust-tasks-rs 0.30.0",
  "url",
  "uuid",
 ]
@@ -952,8 +988,8 @@ version = "0.12.7"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk",
- "affinidi-tdk",
+ "affinidi-messaging-sdk 0.35.0",
+ "affinidi-tdk 0.25.0",
  "ahash",
  "anyhow",
  "base64 0.23.1",
@@ -975,7 +1011,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
- "trust-tasks-rs",
+ "trust-tasks-rs 0.30.0",
  "tui-input",
  "tui-logger",
  "uuid",
@@ -1161,6 +1197,31 @@ dependencies = [
 [[package]]
 name = "affinidi-tdk"
 version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a341a83a52a33ecbbe984a0244d90a29996da3328cd8f96d7ef45202458fbb38"
+dependencies = [
+ "affinidi-crypto",
+ "affinidi-data-integrity",
+ "affinidi-did-authentication",
+ "affinidi-did-common",
+ "affinidi-did-resolver-cache-sdk",
+ "affinidi-meeting-place",
+ "affinidi-messaging-didcomm",
+ "affinidi-messaging-sdk 0.34.1",
+ "affinidi-secrets-resolver",
+ "affinidi-tdk-common",
+ "clap",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "affinidi-tdk"
+version = "0.25.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -1172,7 +1233,7 @@ dependencies = [
  "affinidi-mdoc",
  "affinidi-meeting-place",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-sdk",
+ "affinidi-messaging-sdk 0.35.0",
  "affinidi-oid4vc-core",
  "affinidi-openid4vci",
  "affinidi-openid4vp",
@@ -1444,7 +1505,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1455,7 +1516,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3552,7 +3613,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.7",
 ]
 
 [[package]]
@@ -3867,7 +3928,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4130,7 +4191,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6460,7 +6521,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7501,7 +7562,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8178,7 +8239,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8236,7 +8297,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8922,7 +8983,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8994,7 +9055,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9161,10 +9222,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9177,7 +9238,7 @@ dependencies = [
  "parking_lot",
  "rustix 1.1.5",
  "signal-hook",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9738,9 +9799,9 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-proof"
-version = "0.28.0"
+version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f1d3fcd3af7d8f262d2c26c66a79f51b7dcf91f296dbdc173069044db7e4894"
+checksum = "8b94aea662bfbf59e098893b2573fe85bdc383c705d8aee71d722ebf6c73939e"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -9751,18 +9812,51 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "trust-tasks-rs",
+ "trust-tasks-rs 0.28.1",
+]
+
+[[package]]
+name = "trust-tasks-proof"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf2ce1f46e3fae8bedf62fe616479992a573abf82fb5644cd6352fb794d4d0e7"
+dependencies = [
+ "affinidi-crypto",
+ "affinidi-data-integrity",
+ "affinidi-did-common",
+ "affinidi-did-resolver-cache-sdk",
+ "affinidi-encoding",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "trust-tasks-rs 0.30.0",
 ]
 
 [[package]]
 name = "trust-tasks-rs"
-version = "0.28.0"
+version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c98d3e0888d3b9be9b0f5d7ad35ea7a84f426514f68a11d2e6b4e3c207fa5b16"
+checksum = "c421b62f590b59427e49e1ad6f64cb0cc8ff7e508a89fe5f97ce55c1e0205403"
 dependencies = [
  "async-trait",
  "chrono",
  "jsonschema",
+ "regress",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "trust-tasks-rs"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "895639e385a78301616dab9e34bb3ff6efd5b945f668aba3d88cd45f1a63ad4e"
+dependencies = [
+ "async-trait",
+ "chrono",
  "regress",
  "serde",
  "serde_json",
@@ -10134,7 +10228,7 @@ dependencies = [
  "affinidi-openid4vp",
  "affinidi-secrets-resolver",
  "affinidi-status-list",
- "affinidi-tdk",
+ "affinidi-tdk 0.24.0",
  "affinidi-vc",
  "async-trait",
  "base64 0.23.1",
@@ -10154,7 +10248,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
- "trust-tasks-rs",
+ "trust-tasks-rs 0.28.1",
  "url",
  "uuid",
  "x25519-dalek",
@@ -10422,7 +10516,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

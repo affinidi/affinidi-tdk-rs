@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.35.0) — trust-tasks 0.30
+
+Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.30. The generated Trust Task types are in this crate's public API (the `TrustTasks` methods return `trust_tasks_rs::specs::messaging` responses, and `decode_monitor_event` returns a `TrustTask`), so it moves a minor. 0.29 adds `keys/sign-jws` and `keys/sign-csr`; 0.30's one break makes `rooms/info` and `rooms/usage` require a proof. Neither touches anything here. No source change.
+
 ## 0.34.1 — a reconnected socket is no longer closed by heartbeats it missed while disconnected
 
 ### Behaviour change
