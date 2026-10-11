@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-common"
-version = "0.17.5"
+version = "0.17.6"
 description = "Shared types for the Affinidi Messaging Mediator (errors, database handler, config)"
 edition.workspace = true
 authors.workspace = true
@@ -91,7 +91,7 @@ secrets-azure = [
   "dep:azure_identity",
   "dep:azure_core",
 ]
-secrets-vault = ["server", "dep:vaultrs"]
+secrets-vault = ["server", "dep:vaultrs", "dep:rustify"]
 secrets-k8s = ["server", "dep:kube", "dep:k8s-openapi"]
 
 # ── Test-only injectable clock ──────────────────────────────────────
@@ -183,6 +183,10 @@ azure_core = { version = "1", optional = true }
 vaultrs = { version = "0.8", default-features = false, features = [
   "rustls",
 ], optional = true }
+## vaultrs' HTTP layer. Named only to read the status code of a server
+## response vaultrs couldn't parse as an error body (a soft-deleted KV v2
+## key's 404); no features of its own.
+rustify = { version = "0.7", default-features = false, optional = true }
 ## Native Kubernetes Secrets backend. `kube` talks to the API server
 ## (in-cluster ServiceAccount or local kubeconfig); rustls-tls keeps it
 ## on the workspace TLS story. `k8s-openapi` "latest" pins the generated

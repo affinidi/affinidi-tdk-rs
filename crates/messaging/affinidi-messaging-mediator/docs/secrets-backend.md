@@ -104,6 +104,7 @@ backend = "vault://vault.internal:8200/secret/mediator?auth=kubernetes&role=medi
 # mediator-policy.hcl
 path "secret/data/mediator/*"     { capabilities = ["create", "read", "update", "delete"] }
 path "secret/metadata/mediator/*" { capabilities = ["list", "read", "delete"] }
+path "secret/destroy/mediator/*"  { capabilities = ["update"] }
 ```
 
 ```sh
@@ -119,6 +120,22 @@ vault write auth/kubernetes/role/mediator \
 `delete` on the metadata path lets a delete remove a key completely. Without
 it the mediator falls back to a soft delete and the key still shows in
 `vault kv list`.
+
+`update` on the destroy path lets the mediator destroy the versions each write
+supersedes. Every version of `mediator_secrets_bundle` is a full copy of the
+mediator's secrets, including entries since removed or rotated, so without
+this right they stay readable (`vault kv get -version=N`) until the mount's
+`max_versions` drops them. The mediator logs a warning once and carries on.
+The first write after a start also destroys up to 100 older versions, so
+history left by an earlier release goes too.
+
+Every write is conditional (KV v2 `cas`) on the version the mediator last read.
+A write to a version it never saw, from another writer or from a read that a
+lagging performance standby served, is refused. The mediator then reads the
+bundle again and redoes the change, up to 5 times over about 1.5 s. Without
+this, two changes close together could lose the first on Vault Enterprise
+with performance standbys. A mount with `cas_required=true` works, except for
+the very first write of each key.
 
 ---
 
@@ -300,8 +317,8 @@ Cloud secret stores bill per call, so the mediator keeps calls down:
   destroyed after each write. This needs `secretmanager.versions.destroy`
   (in `roles/secretmanager.admin`); without it a warning is logged and old
   versions pile up.
-- On Vault a delete removes the key's metadata (see
-  [Vault authentication](#vault-authentication)).
+- On Vault a delete removes the key's metadata, and each write destroys the
+  version it superseded (see [Vault authentication](#vault-authentication)).
 
 ---
 

@@ -68,6 +68,13 @@ pub enum SecretStoreError {
     #[error("{reason}. To fix: {action}, then start again")]
     MigrationFailed { reason: String, action: String },
 
+    /// A conditional write lost: `key` changed on the backend since this
+    /// process last read it (another writer, or a read served by a
+    /// replica that was behind). Nothing was written; read again and
+    /// retry.
+    #[error("backend '{backend}' refused the write to '{key}': it changed since it was read")]
+    Conflict { backend: &'static str, key: String },
+
     #[error("{0}")]
     Other(String),
 }
