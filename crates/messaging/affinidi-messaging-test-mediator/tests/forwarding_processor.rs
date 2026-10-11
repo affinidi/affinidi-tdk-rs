@@ -6,8 +6,15 @@
 //! against `MemoryStore` with a local stub standing in for the remote
 //! mediator's `/inbound` endpoint.
 //!
-//! Run with: `cargo test -p affinidi-messaging-mediator --features memory-backend`
-#![cfg(feature = "memory-backend")]
+//! The stub listens on 127.0.0.1, a next hop the forwarding client's egress
+//! guard refuses unless `affinidi-messaging-mediator-common`'s `test-clock`
+//! feature admits loopback. That feature must never reach the mediator's own
+//! graph (`scripts/check-test-clock-isolation.sh`), so these tests live here,
+//! in the fixture crate that enables it, rather than in the mediator. There
+//! they went unrun: the mediator never enabled the feature, so all five timed
+//! out on deliveries the guard refused, from #819 on.
+//!
+//! Run with: `cargo test -p affinidi-messaging-test-mediator --test forwarding_processor`
 
 use affinidi_messaging_mediator::store::MemoryStore;
 use affinidi_messaging_mediator_common::{

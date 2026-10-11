@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.20.1) — the forwarding-processor tests run here
+
+Test-only. `tests/forwarding_processor.rs` moves here from `affinidi-messaging-mediator`. Its stub remote mediator listens on 127.0.0.1, which the forwarding egress guard admits only under `affinidi-messaging-mediator-common`'s `test-clock`. This crate enables that feature, and the mediator must never (`scripts/check-test-clock-isolation.sh`), so in the mediator all five tests had timed out since mediator 0.26.3. CI's test-mediator jobs now run them. No change to the built crate.
+
 ## Unreleased (0.20.0) — embeds mediator 0.39
 
 Moves to `affinidi-messaging-mediator` 0.39, `affinidi-messaging-sdk` 0.34, `affinidi-tdk` 0.24 and `trust-tasks-rs` / `trust-tasks-proof` 0.28. It re-exports the mediator's configuration, so it moves a minor. No source change.
