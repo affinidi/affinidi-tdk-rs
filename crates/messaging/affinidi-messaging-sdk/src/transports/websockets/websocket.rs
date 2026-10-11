@@ -25,7 +25,7 @@ use tokio::{
         oneshot, watch,
     },
     task::JoinHandle,
-    time::{Interval, interval_at},
+    time::{Interval, MissedTickBehavior, interval_at},
 };
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
@@ -65,7 +65,40 @@ const PROBE_PACK_TIMEOUT: Duration = Duration::from_secs(10);
 /// The Message Pickup 3.0 status type — the mediator's answer to a probe.
 const STATUS_TYPE: &str = "https://didcomm.org/messagepickup/3.0/status";
 
-/// What the 20s watchdog does on a tick.
+/// How often the watchdog pings an idle socket, and how long a ping may go
+/// unanswered before the socket is declared dead.
+const WATCHDOG_INTERVAL: Duration = Duration::from_secs(20);
+
+/// The heartbeat timer, built once per transport task.
+///
+/// `Delay`, not tokio's default `Burst`. The watchdog's `select!` arm only runs
+/// while a socket exists, so every tick that falls due while disconnected goes
+/// unconsumed — and `Burst` replays them back to back the moment a socket is
+/// back. The first replayed tick sends a ping, the second finds it unanswered a
+/// few milliseconds later and closes the new socket as `Missed Pong`. Each
+/// failed reconnect then waits out its backoff (more missed ticks) and consumes
+/// two, so the backlog only grows: after a disconnection longer than two
+/// intervals the transport never kept a socket again until the process was
+/// restarted. Seen 2026-10-11 on two VTAs and a VTC after a DNS outage (each new
+/// socket closed 23–420 ms after opening, for over an hour), and after a
+/// mediator restart.
+fn new_watchdog() -> Interval {
+    let mut watchdog = interval_at(
+        tokio::time::Instant::now() + WATCHDOG_INTERVAL,
+        WATCHDOG_INTERVAL,
+    );
+    watchdog.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    watchdog
+}
+
+/// Give a freshly connected socket a whole interval before its first ping, and
+/// so two before any missed-pong verdict. Called at the one success site for the
+/// first connect and every reconnect, beside the other per-socket resets.
+fn rearm_watchdog(watchdog: &mut Interval) {
+    watchdog.reset();
+}
+
+/// What the watchdog does on a tick.
 #[derive(Debug, PartialEq, Eq)]
 enum WatchdogStep {
     /// Nothing outstanding: send a ping.
@@ -360,11 +393,9 @@ impl WebSocketTransport {
                 inner: self.shared.clone(),
             };
 
-            // Set up a watchdog to ping the mediator every 20 seconds
-            let mut watchdog = interval_at(
-                tokio::time::Instant::now() + Duration::from_secs(20),
-                Duration::from_secs(20),
-            );
+            // Ping the mediator every `WATCHDOG_INTERVAL` — see `new_watchdog`
+            // for why ticks missed while disconnected are never replayed.
+            let mut watchdog = new_watchdog();
 
             let mut notify_connection: Option<oneshot::Sender<bool>> = None;
 
@@ -403,6 +434,9 @@ impl WebSocketTransport {
                             // delivery, which is what a probe would have asked.
                             self.last_data_frame_at = tokio::time::Instant::now();
                             self.probe = None;
+                            // And its heartbeat: nothing the last socket left
+                            // on the timer may judge this one.
+                            rearm_watchdog(&mut watchdog);
                             // Arm the proactive-refresh timer for this socket.
                             refresh_deadline = self.refresh_deadline();
                             if notify_connection.is_some() {
@@ -1683,8 +1717,8 @@ mod tests {
         // "Stable" must mean at least one completed ping/pong round-trip,
         // otherwise a connection we never proved could reset the backoff.
         assert!(
-            STABLE_CONNECTION > Duration::from_secs(20),
-            "STABLE_CONNECTION must exceed the 20s watchdog interval"
+            STABLE_CONNECTION > WATCHDOG_INTERVAL,
+            "STABLE_CONNECTION must exceed the watchdog interval"
         );
         // Just under the threshold still escalates — no off-by-one grace.
         assert_eq!(
@@ -1743,6 +1777,60 @@ mod tests {
     fn watchdog_waits_while_reads_are_paused() {
         assert_eq!(watchdog_step(true, true), WatchdogStep::Wait);
         assert_eq!(watchdog_step(false, true), WatchdogStep::Ping);
+    }
+
+    /// The 2026-10-11 failure, reproduced on tokio's own timer: a watchdog built
+    /// the old way (default `Burst`, never re-armed) that goes unpolled for a
+    /// disconnection fires its missed ticks back to back on reconnect, so the
+    /// ping and the missed-pong verdict land at the same instant. This is the
+    /// control for the test below — without it, that one could pass because
+    /// paused time never produces a burst at all.
+    #[tokio::test(start_paused = true)]
+    async fn an_unarmed_burst_watchdog_judges_a_new_socket_at_once() {
+        let mut watchdog = interval_at(
+            tokio::time::Instant::now() + WATCHDOG_INTERVAL,
+            WATCHDOG_INTERVAL,
+        );
+        // Disconnected for five intervals: the `select!` arm is not polled.
+        tokio::time::sleep(WATCHDOG_INTERVAL * 5).await;
+        let reconnected = tokio::time::Instant::now();
+        watchdog.tick().await; // ping
+        watchdog.tick().await; // "Missed Pong"
+        assert_eq!(
+            tokio::time::Instant::now(),
+            reconnected,
+            "the old timer pings and gives up on a new socket in the same instant"
+        );
+    }
+
+    /// The fix: after the same disconnection, a re-armed watchdog waits a whole
+    /// interval before the first ping and another before it can find that ping
+    /// unanswered.
+    #[tokio::test(start_paused = true)]
+    async fn a_reconnected_socket_gets_a_full_interval_before_any_verdict() {
+        let mut watchdog = new_watchdog();
+        tokio::time::sleep(WATCHDOG_INTERVAL * 5).await;
+        let reconnected = tokio::time::Instant::now();
+        rearm_watchdog(&mut watchdog);
+        watchdog.tick().await; // ping
+        assert_eq!(tokio::time::Instant::now() - reconnected, WATCHDOG_INTERVAL);
+        watchdog.tick().await; // the earliest a missed pong can be declared
+        assert_eq!(
+            tokio::time::Instant::now() - reconnected,
+            WATCHDOG_INTERVAL * 2
+        );
+    }
+
+    /// Belt and braces for a path that reconnects without reaching the success
+    /// site: ticks missed while unpolled are not replayed even un-armed.
+    #[tokio::test(start_paused = true)]
+    async fn missed_ticks_are_not_replayed() {
+        let mut watchdog = new_watchdog();
+        tokio::time::sleep(WATCHDOG_INTERVAL * 5).await;
+        let resumed = tokio::time::Instant::now();
+        watchdog.tick().await; // one overdue tick, at once
+        watchdog.tick().await; // the next is a full interval later, not another at once
+        assert_eq!(tokio::time::Instant::now() - resumed, WATCHDOG_INTERVAL);
     }
 
     /// Any frame from the peer counts as the answer to an outstanding ping.

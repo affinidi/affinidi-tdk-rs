@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.34.1 — a reconnected socket is no longer closed by heartbeats it missed while disconnected
+
+### Behaviour change
+
+Reconnect semantics change without a signature change.
+
+- **The websocket watchdog no longer replays ticks it missed while
+  disconnected, and every new socket gets a full interval before its first
+  ping.** The 20 s heartbeat timer was built once per transport task with
+  tokio's default `MissedTickBehavior::Burst`, and its `select!` arm only runs
+  while a socket exists, so ticks that fell due while disconnected piled up.
+  On reconnect they fired back to back: the first sent a ping, the second found
+  it unanswered milliseconds later and closed the new socket as `Missed Pong`.
+  Each failed reconnect waited out its backoff (more missed ticks) and consumed
+  two, so the backlog only grew. After any disconnection longer than about two
+  intervals the transport never held a socket again, and received nothing,
+  until the process was restarted, while HTTP kept answering. Seen 2026-10-11 on
+  two VTAs and a VTC after a DNS outage (each new socket closed 23–420 ms after
+  opening, roughly once a minute, for over an hour) and after a mediator
+  restart. The timer now uses `MissedTickBehavior::Delay` and is re-armed at the
+  one success site for the first connect and every reconnect, beside the
+  existing per-socket resets.
+
 ## Unreleased (0.34.0) — trust-tasks 0.28
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.28. The generated Trust Task types are in this crate's public API (the `TrustTasks` methods return `trust_tasks_rs::specs::messaging` responses, and `decode_monitor_event` returns a `TrustTask`), so it moves a minor. 0.28's one breaking change (the rooms 0.1 specs' `NOT_AUTHORIZED` error-code constants are withdrawn for the standard `permissionDenied`) touches nothing here. No source change.
