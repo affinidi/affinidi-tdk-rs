@@ -35,6 +35,10 @@ name: checks-storage
 # secrets backend together — where a `cfg(feature = "...")` gate that
 # assumes the default of the other axis would slip through. A curated
 # handful of pairs catches that without the full 3x5 cross-product.
+#
+# Jobs that build and run test binaries use `vars.CI_RUNNER_LARGE` (a paid
+# larger runner) when the repo variable is set, else `ubuntu-latest`. The
+# `cargo check`-only matrices stay on the free runner. See docs/ci-cost.md.
 
 on:
   pull_request:
@@ -163,7 +167,7 @@ jobs:
     # catches drift). Gated on `REDIS_URL`; each check runs on its own
     # logical DB for isolation.
     name: redis conformance
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-latest' }}
     services:
       redis:
         image: redis:7
@@ -208,7 +212,7 @@ jobs:
     # the regression where someone accidentally re-introduces a
     # Redis dependency in the SDK fixture or environment plumbing.
     name: test-mediator (memory)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -238,7 +242,7 @@ jobs:
     # Fjall backend. The fixture wraps each store in a tempfile::TempDir
     # so partition files don't leak between tests.
     name: test-mediator (fjall)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -276,7 +280,7 @@ jobs:
     # so the protocol axis deserves the same standing coverage the storage
     # backends get.
     name: test-mediator (tsp)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -317,7 +321,7 @@ jobs:
     # no specification example shows). Conformance to another implementation is
     # exactly the kind of check that rots silently when nothing runs it.
     name: test-mediator (didcomm-v1)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -361,7 +365,7 @@ jobs:
     # one. A service that mishandles those is not lossy but inert — no
     # relationship can form, so every application message is then refused.
     name: didcomm-service (tsp)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 

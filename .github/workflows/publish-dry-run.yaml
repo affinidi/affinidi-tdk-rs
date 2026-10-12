@@ -10,6 +10,9 @@ name: publish-dry-run
 # source/test/doc split as the version-bump guard) so it stays cheap. The
 # `toolchain:` pin below is policed by scripts/check-toolchain-sync.sh, so it
 # stays equal to rust-toolchain.toml's channel.
+#
+# Runs on `vars.CI_RUNNER_LARGE` when that repo variable is set, else
+# `ubuntu-latest`. See docs/ci-cost.md.
 
 on:
   pull_request:
@@ -20,7 +23,7 @@ on:
 jobs:
   publish-dry-run:
     name: publish dry-run
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-latest' }}
     env:
       # Match release.yaml so dead-code (and friends) are hard errors here too —
       # without this the dry-run's verify build would only warn and pass.
