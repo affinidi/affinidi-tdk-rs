@@ -62,16 +62,13 @@ jobs:
       # whole scan would be ignored within a week.
       verifyPublish: ${{ github.event_name == 'pull_request' }}
       deprecationCheck: true
-      # TEMP: no `runs-on` until affinidi/pipeline-rust#feat/rust-ci-runner
-      # merges. checks-no-test.yaml calls its sub-workflows at @main, which
-      # don't accept the input yet, so even pointing this at the branch fails.
-      # Restore then: runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-24.04' }}
+      # Paid larger runner for check/clippy/verify-publish/deprecation-check
+      # when the repo variable is set. See docs/ci-cost.md.
+      runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-24.04' }}
 
   # Tests run on every event, including PRs — this is the gate that matters.
   test:
-    # TEMP: branch ref to try the larger runner before
-    # affinidi/pipeline-rust#feat/rust-ci-runner merges. Revert to @main then.
-    uses: affinidi/pipeline-rust/.github/workflows/test.yaml@feat/rust-ci-runner
+    uses: affinidi/pipeline-rust/.github/workflows/test.yaml@main
     secrets: inherit
     with:
       toolchain: "1.95.0"
