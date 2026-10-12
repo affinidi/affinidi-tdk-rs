@@ -62,6 +62,9 @@ jobs:
       # whole scan would be ignored within a week.
       verifyPublish: ${{ github.event_name == 'pull_request' }}
       deprecationCheck: true
+      # Paid larger runner for check/clippy/verify-publish/deprecation-check
+      # when the repo variable is set. See docs/ci-cost.md.
+      runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-24.04' }}
 
   # Tests run on every event, including PRs — this is the gate that matters.
   test:
@@ -76,6 +79,7 @@ jobs:
       rustflags: "-D warnings --cfg tracing_unstable -C debuginfo=line-tables-only"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       useRedis: true
+      runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-24.04' }}
 
   # Coverage is NOT run on pull requests, and that is the point of this split.
   #

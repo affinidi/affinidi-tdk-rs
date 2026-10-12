@@ -5,6 +5,9 @@ name: compose-smoke
 #
 # NOT run per-PR — the mediator image is a full release build, too heavy for
 # every push. Runs on demand (workflow_dispatch) and nightly.
+#
+# Runs on `vars.CI_RUNNER_LARGE` when that repo variable is set, else
+# `ubuntu-latest`. See docs/ci-cost.md.
 
 on:
   workflow_dispatch:
@@ -15,7 +18,7 @@ on:
 jobs:
   smoke:
     name: composed-stack smoke
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
