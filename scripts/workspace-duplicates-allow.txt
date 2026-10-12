@@ -305,5 +305,13 @@
 #      a vta-sdk built against 0.35 / 0.25
 #   3. the mediator's and mediator-setup's vta-sdk requirement moves to that
 #      version, the patches apply again, and these entries are deleted
-affinidi-messaging-sdk
-affinidi-tdk
+#
+# Cleared on 2026-10-12, by step 3: verifiable-trust-infrastructure published
+# vta-sdk 0.67 on affinidi-messaging-sdk 0.35 / affinidi-tdk 0.25 /
+# trust-tasks-rs 0.30, and the mediator's and mediator-setup's requirement
+# moved from "0.65" to "0.67" with no source change:
+#
+#     Removing affinidi-messaging-sdk v0.34.1
+#     Removing affinidi-tdk v0.24.0
+#     Removing trust-tasks-proof v0.28.1
+#     Removing trust-tasks-rs v0.28.1
