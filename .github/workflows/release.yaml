@@ -45,3 +45,9 @@ jobs:
       # option (or when a release genuinely bumps every workspace member).
       workspace_publish: false
       release_dry_run: false
+      # Publish verification of the mediator was killed twice (exit 143) on the
+      # default runner at full parallelism, leaving 0.40.0 and its dependents
+      # unpublished. Run on the same larger runner as checks, and cap rustc
+      # parallelism to keep peak memory down.
+      runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-24.04' }}
+      build-jobs: 4
