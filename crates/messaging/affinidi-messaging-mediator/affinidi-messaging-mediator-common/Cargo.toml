@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-common"
-version = "0.17.6"
+version = "0.17.7"
 description = "Shared types for the Affinidi Messaging Mediator (errors, database handler, config)"
 edition.workspace = true
 authors.workspace = true
@@ -25,6 +25,8 @@ default = ["server"]
 ## `errors`, `secrets`, `store`, `tasks`, `time`. Pulls every
 ## non-types crate this package needs.
 server = [
+  # SystemClock logs a pre-epoch system clock, as the `time` helpers do
+  "affinidi-messaging-mediator-types/tracing",
   # secrets module + envelope encryption + cache HMAC + freshness
   "dep:async-trait",
   "dep:base64",
@@ -106,16 +108,21 @@ secrets-k8s = ["server", "dep:kube", "dep:k8s-openapi"]
 ## test-only feature — rather than a new one — keeps `test-mediator` (a published
 ## crate) resolving against the released mediator-common with no new feature
 ## request. Never on in a production build, so the guard stays fail-closed there.
-test-clock = ["affinidi-net-guard/dev-loopback"]
+test-clock = [
+  "affinidi-messaging-mediator-types/test-clock",
+  "affinidi-net-guard/dev-loopback",
+]
 
 [dependencies]
-# ── Always-on: lean types module deps ───────────────────────────────
-## Used by `types/*` (acls, problem_report, messages, accounts,
-## administration, acls_handler). SDK consumers see only these.
+# ── Always-on ───────────────────────────────────────────────────────
+## The protocol types, re-exported as `types`. They live in their own crate
+## so the client SDK can depend on them without depending on this one.
+affinidi-messaging-mediator-types = { version = "0.1", path = "../../affinidi-messaging-mediator-types" }
+## Used by the always-built helpers (`did_web`, `parameter_store`, …) and
+## the `server` modules.
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 thiserror = "2"
-regex = "1"
 
 # ── Secrets module: core (gated on `server`) ────────────────────────
 async-trait = { version = "0.1", optional = true }

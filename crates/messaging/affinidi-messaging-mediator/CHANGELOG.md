@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased (0.41.2) — mediator-common 0.17.7
+
+Requires `affinidi-messaging-mediator-common` 0.17.7, whose `types` module is now
+a re-export of the new `affinidi-messaging-mediator-types` crate. SDK 0.36.1 takes
+its protocol types from that crate too, so with 0.17.7 the mediator and the SDK
+share one copy of them; with 0.17.6 they would be two distinct sets of types. No
+source change.
+
 ## Unreleased (0.41.1) — vta-sdk 0.68
 
 The optional `vta` feature now requires `vta-sdk` 0.68, the release built on `affinidi-messaging-sdk` 0.36, `affinidi-tdk` 0.26 and `trust-tasks-rs` 0.31. Until it published, `vta-sdk` 0.67 kept the registry copies of the 0.35 / 0.25 / 0.30 line in the mediator subtree beside the workspace's own. No source change.

@@ -7,7 +7,7 @@
 //! canonical types. ACLs and access lists are managed over the
 //! `messaging/account/*` Trust Tasks: see [`crate::protocols::trust_tasks`].
 
-pub use affinidi_messaging_mediator_common::types::acls_handler::{
+pub use affinidi_messaging_mediator_types::acls_handler::{
     MediatorACLExpanded, MediatorACLGetResponse, MediatorAccessListAddResponse,
     MediatorAccessListGetResponse, MediatorAccessListListResponse,
 };

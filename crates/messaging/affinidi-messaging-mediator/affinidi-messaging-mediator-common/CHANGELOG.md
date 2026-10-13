@@ -1,5 +1,22 @@
 # Affinidi Messaging Mediator Common
 
+## Unreleased (0.17.7) — `types` moves to `affinidi-messaging-mediator-types`
+
+The `types` module is now its own crate, `affinidi-messaging-mediator-types`
+0.1, and this crate re-exports it as `types`, so every
+`affinidi_messaging_mediator_common::types::*` path still resolves to the same
+items. The client SDK depends on the new crate instead of this one, which
+leaves this crate server-side only, ready to move with the mediator to its own
+repository.
+
+Client crates that took this crate with `default-features = false` for the
+types alone should depend on `affinidi-messaging-mediator-types` instead.
+
+The `server` feature turns on the types crate's `tracing` feature, so
+`SystemClock` still logs a system clock set before the UNIX epoch. `test-clock`
+forwards to the types crate's `test-clock`. `regex` is no longer a dependency:
+only the types used it.
+
 ## Unreleased (0.17.6) — Vault: soft-deleted keys read as absent; conditional bundle writes, no lingering versions
 
 **Soft-deleted keys broke the 0.17.4 migration.** Reading a KV v2 key whose

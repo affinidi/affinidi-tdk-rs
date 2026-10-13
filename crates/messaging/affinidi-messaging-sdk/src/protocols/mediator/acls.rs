@@ -9,6 +9,4 @@
  * keep resolving to the canonical type.
  */
 
-pub use affinidi_messaging_mediator_common::types::acls::{
-    ACLError, AccessListModeType, MediatorACLSet,
-};
+pub use affinidi_messaging_mediator_types::acls::{ACLError, AccessListModeType, MediatorACLSet};
