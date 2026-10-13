@@ -865,6 +865,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "affinidi-messaging-mediator-types"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
 name = "affinidi-messaging-sdk"
 version = "0.36.0"
 dependencies = [
