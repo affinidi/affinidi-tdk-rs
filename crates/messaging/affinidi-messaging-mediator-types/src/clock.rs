@@ -34,13 +34,14 @@ pub struct SystemClock;
 
 impl SystemClock {
     fn since_epoch() -> Duration {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_else(|_e| {
+        match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(since) => since,
+            Err(_e) => {
                 #[cfg(feature = "tracing")]
                 tracing::error!("System clock before UNIX epoch: {_e}. Returning 0.");
                 Duration::ZERO
-            })
+            }
+        }
     }
 }
 
