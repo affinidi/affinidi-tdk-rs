@@ -337,6 +337,8 @@ pub struct MemoryStore {
     forward_notify: Arc<Notify>,
     /// Slots in the live-delivery broadcast ring. See `with_pubsub_capacity`.
     pubsub_capacity: usize,
+    /// Test hook: delay range applied before each `store_message`. See `with_store_delay`.
+    store_delay: std::ops::RangeInclusive<std::time::Duration>,
 }
 
 impl MemoryStore {
@@ -380,6 +382,16 @@ impl MemoryStore {
         self.pubsub_capacity = capacity.max(1);
         self
     }
+
+    /// Delay every `store_message` by a random duration in `delay`, to mimic a
+    /// networked store's latency and expose store-ordering races in tests.
+    pub fn with_store_delay(
+        mut self,
+        delay: std::ops::RangeInclusive<std::time::Duration>,
+    ) -> Self {
+        self.store_delay = delay;
+        self
+    }
 }
 
 impl Default for MemoryStore {
@@ -389,6 +401,7 @@ impl Default for MemoryStore {
             broadcast_channels: Arc::new(Mutex::new(HashMap::new())),
             forward_notify: Arc::new(Notify::new()),
             pubsub_capacity: PUBSUB_BROADCAST_CAPACITY,
+            store_delay: std::time::Duration::ZERO..=std::time::Duration::ZERO,
         }
     }
 }
@@ -400,6 +413,7 @@ impl Clone for MemoryStore {
             broadcast_channels: Arc::clone(&self.broadcast_channels),
             forward_notify: Arc::clone(&self.forward_notify),
             pubsub_capacity: self.pubsub_capacity,
+            store_delay: self.store_delay.clone(),
         }
     }
 }
@@ -455,6 +469,12 @@ impl MediatorStore for MemoryStore {
         expires_at: u64,
         _queue_maxlen: usize,
     ) -> Result<String, MediatorError> {
+        let (min, max) = (self.store_delay.start(), self.store_delay.end());
+        if !max.is_zero() {
+            use rand::RngExt;
+            let micros = rand::rng().random_range(min.as_micros()..=max.as_micros());
+            tokio::time::sleep(std::time::Duration::from_micros(micros as u64)).await;
+        }
         let msg_id = digest(message.as_bytes());
         let bytes = message.len();
         let ts_ms = now_ms() as u128;

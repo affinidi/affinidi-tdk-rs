@@ -20,12 +20,13 @@
 
 mod common;
 
+use affinidi_messaging_mediator::store::MemoryStore;
 use affinidi_messaging_sdk::messages::fetch::FetchOptions;
-use affinidi_messaging_test_mediator::{TestEnvironment, TestUser};
+use affinidi_messaging_test_mediator::{TestEnvironment, TestMediator, TestUser};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use common::init_tracing;
 use futures_util::StreamExt;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::time::timeout;
 use tokio_tungstenite::{
     connect_async,
@@ -314,6 +315,66 @@ async fn tsp_websocket_delivers_messages_that_arrive_after_connect() {
         "pushed TSP messages must be deleted on send, got {} left in the inbox",
         fetched.success.len()
     );
+
+    ws.close().await.ok();
+    env.shutdown().await.expect("shutdown");
+}
+
+/// **Notify after store**: a message to an open raw-TSP socket must be
+/// delivered even when the store is slow.
+///
+/// The live notification only wakes the socket to drain its inbox. Published
+/// before the store, the drain ran first, found nothing, and stranded the
+/// message until an unrelated wake-up. A realistic random store delay makes
+/// that ordering bug show up reliably instead of almost never.
+#[tokio::test]
+async fn tsp_websocket_delivers_when_the_store_is_slow() {
+    init_tracing();
+
+    let mediator = TestMediator::builder()
+        .store(Arc::new(
+            // Redis-like store latency; the e2e stack lost the race by ~125 µs.
+            MemoryStore::new()
+                .with_store_delay(Duration::from_micros(200)..=Duration::from_millis(2)),
+        ))
+        .local_direct_delivery(true, false)
+        .spawn()
+        .await
+        .expect("spawn mediator");
+    let env = TestEnvironment::new(mediator).await.expect("environment");
+
+    let alice = env.add_user("alice").await.expect("add alice");
+    let bob = env.add_user("bob").await.expect("add bob");
+    env.relate_directly(&alice, &bob)
+        .await
+        .expect("seed the TSP relationship");
+
+    let mut ws = env
+        .atm
+        .tsp()
+        .connect_websocket(&bob.profile)
+        .await
+        .expect("bob opens the TSP websocket");
+
+    let payload = b"stored before notified".to_vec();
+    env.atm
+        .tsp()
+        .send(&alice.profile, &bob.did, &payload)
+        .await
+        .expect("alice sends TSP message");
+
+    let frame = timeout(Duration::from_secs(5), ws.recv())
+        .await
+        .expect("message stored but never pushed to the open socket")
+        .expect("recv succeeds")
+        .expect("a pushed frame");
+    let (recovered, _) = env
+        .atm
+        .tsp()
+        .unpack_bytes(&bob.profile, &frame)
+        .await
+        .expect("bob unpacks the pushed TSP message");
+    assert_eq!(recovered, payload);
 
     ws.close().await.ok();
     env.shutdown().await.expect("shutdown");
