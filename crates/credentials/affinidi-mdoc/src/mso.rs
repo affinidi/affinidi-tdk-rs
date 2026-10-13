@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::error::{MdocError, Result};
 use crate::issuer_signed_item::{IssuerSignedItem, generate_decoy_digest};
@@ -66,15 +66,23 @@ pub struct DeviceKeyInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidityInfo {
     /// When the MSO was signed (CBOR Tag 0, RFC 3339 tstr).
+    #[serde(serialize_with = "serialize_with_cbor_0_tag")]
     pub signed: String,
 
     /// Valid from date (CBOR Tag 0, RFC 3339 tstr).
-    #[serde(rename = "validFrom")]
+    #[serde(rename = "validFrom", serialize_with = "serialize_with_cbor_0_tag")]
     pub valid_from: String,
 
     /// Valid until date (CBOR Tag 0, RFC 3339 tstr).
-    #[serde(rename = "validUntil")]
+    #[serde(rename = "validUntil", serialize_with = "serialize_with_cbor_0_tag")]
     pub valid_until: String,
+}
+
+fn serialize_with_cbor_0_tag<S>(value: &str, serializer: S) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    ciborium::tag::Required::<&str, 0>(value).serialize(serializer)
 }
 
 impl ValidityInfo {
