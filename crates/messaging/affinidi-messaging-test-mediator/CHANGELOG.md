@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.22.0) — embeds mediator 0.41
+
+Moves to `affinidi-messaging-mediator` 0.41, `affinidi-messaging-sdk` 0.36, `affinidi-tdk` 0.26 and `trust-tasks-rs` / `trust-tasks-proof` 0.31. It re-exports the mediator's configuration, so it moves a minor. No source change.
+
 ## Unreleased (0.21.0) — embeds mediator 0.40
 
 Moves to `affinidi-messaging-mediator` 0.40, `affinidi-messaging-sdk` 0.35, `affinidi-tdk` 0.25 and `trust-tasks-rs` / `trust-tasks-proof` 0.30. It re-exports the mediator's configuration, so it moves a minor. No source change.
