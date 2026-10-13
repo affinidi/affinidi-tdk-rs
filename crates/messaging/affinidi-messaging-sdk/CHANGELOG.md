@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.36.0) — trust-tasks 0.31
+
+Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.31. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.31 makes a `vta-account` storage config name its account's context (trustoverip/dtgwg-trust-tasks-tf#758), which touches nothing here. No source change.
+
 ## Unreleased (0.35.0) — trust-tasks 0.30
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.30. The generated Trust Task types are in this crate's public API (the `TrustTasks` methods return `trust_tasks_rs::specs::messaging` responses, and `decode_monitor_event` returns a `TrustTask`), so it moves a minor. 0.29 adds `keys/sign-jws` and `keys/sign-csr`; 0.30's one break makes `rooms/info` and `rooms/usage` require a proof. Neither touches anything here. No source change.
