@@ -4,6 +4,6 @@
 //! existing call-sites keep the original `affinidi_messaging_sdk::messages::problem_report::*`
 //! paths.
 
-pub use affinidi_messaging_mediator_common::types::problem_report::{
+pub use affinidi_messaging_mediator_types::problem_report::{
     ProblemReport, ProblemReportScope, ProblemReportSorter,
 };

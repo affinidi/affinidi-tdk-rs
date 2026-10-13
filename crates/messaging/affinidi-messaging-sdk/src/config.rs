@@ -3,7 +3,7 @@ use crate::{
     transports::websockets::WebSocketResponses,
 };
 use affinidi_crypto::jose::key_agreement::Curve;
-use affinidi_messaging_mediator_common::types::clock::{Clock, SystemClock};
+use affinidi_messaging_mediator_types::clock::{Clock, SystemClock};
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::{fs::File, io::BufReader, sync::Arc, time::Duration};
 use tokio::sync::{RwLock, broadcast::Sender};

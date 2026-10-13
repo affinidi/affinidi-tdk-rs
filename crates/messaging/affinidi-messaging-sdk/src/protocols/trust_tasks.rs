@@ -1005,7 +1005,7 @@ impl TrustTasksOps<'_> {
     where
         R: DeserializeOwned,
     {
-        use affinidi_messaging_mediator_common::types::messages::MessageProtocol;
+        use affinidi_messaging_mediator_types::messages::MessageProtocol;
 
         use crate::messages::{DeleteMessageRequest, fetch::FetchOptions};
 

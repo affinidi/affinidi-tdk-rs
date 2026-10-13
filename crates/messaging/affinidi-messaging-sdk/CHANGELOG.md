@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.36.1) — protocol types from `affinidi-messaging-mediator-types`
+
+The mediator protocol types (ACLs, accounts, message pickup, problem reports,
+`Clock`) now come from the new `affinidi-messaging-mediator-types` crate rather
+than `affinidi-messaging-mediator-common`. They are the same items, re-exported
+from the same SDK paths, so nothing changes for callers. The SDK no longer
+depends on anything from the mediator, which is moving to its own repository.
+
+If you also use `affinidi-messaging-mediator-common` and pass these types
+between it and the SDK, use mediator-common 0.17.7 or later: it re-exports the
+same crate. With 0.17.6 the two would be distinct types.
+
 ## Unreleased (0.36.0) — trust-tasks 0.31
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.31. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.31 makes a `vta-account` storage config name its account's context (trustoverip/dtgwg-trust-tasks-tf#758), which touches nothing here. No source change.

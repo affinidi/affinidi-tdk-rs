@@ -14,7 +14,7 @@ use super::{FetchDeletePolicy, GetMessagesResponse};
 // `FetchOptions` lives in `affinidi-messaging-mediator-common` so the
 // storage trait can describe its fetch API without depending on the
 // SDK. Re-exported here for backwards compatibility.
-pub use affinidi_messaging_mediator_common::types::messages::FetchOptions;
+pub use affinidi_messaging_mediator_types::messages::FetchOptions;
 
 impl ATM {
     /// Fetches any available messages from your ATM inbox

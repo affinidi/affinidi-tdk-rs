@@ -19,7 +19,7 @@ pub mod wrapping;
 // its API without depending on the client SDK. They're re-exported here
 // so existing call sites keep their `affinidi_messaging_sdk::messages::*`
 // paths working unchanged.
-pub use affinidi_messaging_mediator_common::types::messages::{
+pub use affinidi_messaging_mediator_types::messages::{
     FetchDeletePolicy, Folder, GenericDataStruct, GetMessagesResponse, MessageList,
     MessageListElement, MessageProtocol,
 };

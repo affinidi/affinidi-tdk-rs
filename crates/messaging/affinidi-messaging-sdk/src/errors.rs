@@ -1,6 +1,6 @@
 use affinidi_did_authentication::errors::DIDAuthError;
 use affinidi_messaging_didcomm::message::Message;
-use affinidi_messaging_mediator_common::types::acls::ACLError;
+use affinidi_messaging_mediator_types::acls::ACLError;
 use affinidi_tdk_common::errors::TDKError;
 use thiserror::Error;
 

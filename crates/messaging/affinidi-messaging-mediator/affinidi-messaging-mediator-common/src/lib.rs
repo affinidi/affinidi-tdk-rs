@@ -3,9 +3,9 @@
 //! ## Feature layout
 //!
 //! - **types** (always built) — protocol-vocabulary types (ACL bits,
-//!   problem-report shape, message envelopes, account records). Lean
-//!   deps: `serde`, `thiserror`, `regex`. Suitable for the SDK and
-//!   any client-side consumer.
+//!   problem-report shape, message envelopes, account records),
+//!   re-exported from `affinidi-messaging-mediator-types`. Client-side
+//!   consumers should depend on that crate directly.
 //! - **`server`** (default) — full server-side stack: error wrappers
 //!   tied to axum, the `MediatorStore` trait, secrets backends,
 //!   circuit breaker, forwarding processor, time helpers. Pulls
@@ -16,11 +16,12 @@
 //! - **`secrets-{keyring,aws,gcp,azure,vault}`** — each implies `server`
 //!   and pulls in the matching cloud SDK.
 //!
-//! Downstream client crates (the SDK, third-party tooling) should
-//! depend on this crate with `default-features = false` to avoid
-//! pulling the server stack into their build graph.
+//! Client crates (the SDK, third-party tooling) should depend on
+//! `affinidi-messaging-mediator-types` rather than this crate.
 
-pub mod types;
+/// The protocol types, from `affinidi-messaging-mediator-types`. Re-exported
+/// here so `affinidi_messaging_mediator_common::types::*` paths keep working.
+pub use affinidi_messaging_mediator_types as types;
 
 /// `did:webvh` → `did:web` document rewriting. Pure (`serde_json` only),
 /// always built: shared by the mediator runtime (serving `did.json`) and

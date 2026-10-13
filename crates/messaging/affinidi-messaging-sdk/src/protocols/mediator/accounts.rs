@@ -7,6 +7,4 @@
 //! are managed over the `messaging/account/*` Trust Tasks: see
 //! [`crate::protocols::trust_tasks`].
 
-pub use affinidi_messaging_mediator_common::types::accounts::{
-    Account, AccountType, MediatorAccountList,
-};
+pub use affinidi_messaging_mediator_types::accounts::{Account, AccountType, MediatorAccountList};
