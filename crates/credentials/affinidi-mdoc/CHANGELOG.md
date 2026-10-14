@@ -1,5 +1,21 @@
 # Affinidi mdoc Changelog
 
+## Unreleased (0.3.3) — `ValidityInfo` dates are CBOR Tag 0
+
+Fixes [#950](https://github.com/affinidi/affinidi-tdk-rs/issues/950); the fix is
+by [@razvp](https://github.com/razvp) ([#951](https://github.com/affinidi/affinidi-tdk-rs/pull/951)).
+
+ISO 18013-5 types `signed`, `validFrom` and `validUntil` as `tdate`, which
+RFC 8610 defines as `#6.0(tstr)`. They were encoded as bare text strings, so a
+strict verifier could reject MSOs issued by this crate. They now carry Tag 0.
+
+- **Wire change for new MSOs:** the encoded MSO, and so the signed payload,
+  differs from 0.3.2 for the same input. Nothing re-encodes a received MSO
+  (digests and signatures are checked over the bytes as received), so MSOs
+  already issued keep verifying.
+- **Decoding is unchanged:** tagged and untagged dates both parse.
+- `ValidityInfo` now derives `PartialEq`.
+
 ## Unreleased (0.3.2) — `rand` 0.10
 
 No behaviour change and no public API change. `EdDsaCoseKey::generate` now

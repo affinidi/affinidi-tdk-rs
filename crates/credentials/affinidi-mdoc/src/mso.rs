@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::error::{MdocError, Result};
 use crate::issuer_signed_item::{IssuerSignedItem, generate_decoy_digest};
@@ -63,18 +63,29 @@ pub struct DeviceKeyInfo {
 }
 
 /// Temporal validity of an MSO per ISO 18013-5.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ValidityInfo {
     /// When the MSO was signed (CBOR Tag 0, RFC 3339 tstr).
+    #[serde(serialize_with = "serialize_with_cbor_0_tag")]
     pub signed: String,
 
     /// Valid from date (CBOR Tag 0, RFC 3339 tstr).
-    #[serde(rename = "validFrom")]
+    #[serde(rename = "validFrom", serialize_with = "serialize_with_cbor_0_tag")]
     pub valid_from: String,
 
     /// Valid until date (CBOR Tag 0, RFC 3339 tstr).
-    #[serde(rename = "validUntil")]
+    #[serde(rename = "validUntil", serialize_with = "serialize_with_cbor_0_tag")]
     pub valid_until: String,
+}
+
+/// Encode a `tdate` as ISO 18013-5 requires: CBOR Tag 0 around the RFC 3339
+/// tstr. Decoding stays lenient (ciborium skips tags), so MSOs issued before
+/// 0.3.3 with bare tstr dates still parse.
+fn serialize_with_cbor_0_tag<S>(value: &str, serializer: S) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    ciborium::tag::Required::<&str, 0>(value).serialize(serializer)
 }
 
 impl ValidityInfo {
@@ -314,12 +325,14 @@ mod tests {
             )],
         );
 
+        let validity = test_validity();
+
         let mso = MobileSecurityObject::create(
             "test",
             "SHA-256",
             &namespaces,
             test_device_key(),
-            test_validity(),
+            validity.clone(),
             0,
         )
         .unwrap();
@@ -334,6 +347,7 @@ mod tests {
         assert_eq!(decoded.version, "1.0");
         assert_eq!(decoded.digest_algorithm, "SHA-256");
         assert_eq!(decoded.value_digests["test"].len(), 1);
+        assert_eq!(decoded.validity_info, validity);
     }
 
     #[test]
@@ -436,5 +450,48 @@ mod tests {
             v.check(time::OffsetDateTime::now_utc()),
             Err(MdocError::InvalidMso(_))
         ));
+    }
+
+    fn validity_map(v: &ValidityInfo) -> Vec<(ciborium::Value, ciborium::Value)> {
+        let mut buf = Vec::new();
+        ciborium::into_writer(v, &mut buf).unwrap();
+        match ciborium::from_reader(&buf[..]).unwrap() {
+            ciborium::Value::Map(m) => m,
+            other => panic!("ValidityInfo must encode as a map, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validity_info_dates_encode_as_tdate() {
+        // tdate = #6.0(tstr) (RFC 8610 Appendix D). A round-trip can't see
+        // this — ciborium drops tags on decode — so inspect the encoded form.
+        let v = test_validity();
+        let map = validity_map(&v);
+        assert_eq!(map.len(), 3);
+        for (key, value) in map {
+            match value {
+                ciborium::Value::Tag(0, inner) => {
+                    assert!(
+                        matches!(*inner, ciborium::Value::Text(_)),
+                        "{key:?}: {inner:?}"
+                    )
+                }
+                other => panic!("{key:?} must be CBOR Tag 0, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn validity_info_decodes_untagged_dates() {
+        // MSOs issued before 0.3.3 carry bare tstr dates; they must still parse.
+        let legacy = ciborium::Value::Map(vec![
+            ("signed".into(), "2024-01-01T00:00:00Z".into()),
+            ("validFrom".into(), "2024-01-01T00:00:00Z".into()),
+            ("validUntil".into(), "2025-01-01T00:00:00Z".into()),
+        ]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&legacy, &mut buf).unwrap();
+        let decoded: ValidityInfo = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded, test_validity());
     }
 }
