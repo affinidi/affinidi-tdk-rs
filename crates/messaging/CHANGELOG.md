@@ -7,12 +7,12 @@
 > `CHANGELOG.md` — a directory-level file cannot say which crate a change
 > shipped in, and every crate here versions independently. Start with:
 >
-> - [`affinidi-messaging-mediator`](affinidi-messaging-mediator/CHANGELOG.md)
+> - [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator/blob/main/crates/affinidi-messaging-mediator/CHANGELOG.md) (now in its own repository)
 > - [`affinidi-messaging-sdk`](affinidi-messaging-sdk/CHANGELOG.md)
 > - [`affinidi-messaging-didcomm`](affinidi-messaging-didcomm/CHANGELOG.md)
 > - [`affinidi-messaging-didcomm-service`](affinidi-messaging-didcomm-service/CHANGELOG.md)
 > - [`affinidi-messaging-delivery`](affinidi-messaging-delivery/CHANGELOG.md)
-> - [`affinidi-messaging-test-mediator`](affinidi-messaging-test-mediator/CHANGELOG.md)
+> - [`affinidi-messaging-test-mediator`](https://github.com/affinidi/affinidi-messaging-mediator/blob/main/crates/affinidi-messaging-test-mediator/CHANGELOG.md) (now in its own repository)
 > - [`affinidi-tsp`](affinidi-tsp/CHANGELOG.md)
 >
 > The history below is kept for the record and stops at Mediator 0.15.5

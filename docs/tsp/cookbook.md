@@ -12,7 +12,8 @@ unchanged.
 
 > The SDK snippets are marked `ignore` because they need an async runtime and a
 > running mediator; they follow the patterns covered by the
-> `affinidi-messaging-test-mediator` integration tests
+> `affinidi-messaging-test-mediator` integration tests in
+> [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator)
 > (`tests/tsp_delivery.rs`, `tests/tsp_websocket.rs`, `tests/tsp_auth.rs`),
 > which are the runnable, CI-checked source of truth for these APIs.
 
@@ -40,7 +41,7 @@ unchanged.
 ```toml
 affinidi-messaging-sdk = { version = "0.19", features = ["tsp"] }
 # Mediator deployments: run TSP alongside DIDComm (dual-protocol).
-affinidi-messaging-mediator = { version = "0.16", features = ["didcomm", "tsp"] }
+affinidi-messaging-mediator = { version = "0.42", features = ["didcomm", "tsp"] }
 ```
 
 A TSP client today reuses the profile's **DIDComm-authenticated session**, so a

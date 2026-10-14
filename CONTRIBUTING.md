@@ -5,8 +5,10 @@ make by creating a new [GitHub issue](https://github.com/affinidi/affinidi-tdk-r
 
 ## Developement Requirements
 
-- Rust (1.85.0) 2024 Edition
-- Redis 8.0
+- Rust (1.95.0) 2024 Edition
+
+The mediator, which needs Redis, lives in its own repository:
+[affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
 
 ### Code quality expectations
 

@@ -1,13 +1,15 @@
 name: checks-features
-# Matrix check: `cargo check --no-default-features --features secrets-<X>`
-# for each secret backend against the mediator runtime and the setup
-# wizard. Catches the case where a new cfg-gate misses a backend and
-# the lean per-backend install breaks.
+# Feature-surface checks that the main `checks.yaml` (which builds the
+# workspace with default features through the shared pipeline-rust workflow)
+# does not reach:
 #
-# Runs alongside the main `checks.yaml` (which drives fmt/clippy/test
-# through the shared pipeline-rust workflow). Kept standalone because
-# the matrix shape is wizard-specific and doesn't belong in the shared
-# workflow.
+#   - `facade-features`  — the `affinidi-tdk` facade across its feature
+#     combinations.
+#   - `didcomm-service (tsp)` — `affinidi-messaging-didcomm-service`'s
+#     non-default `tsp` feature.
+#
+# The mediator's secrets-backend feature matrix moved with the mediator to
+# affinidi/affinidi-messaging-mediator.
 
 on:
   pull_request:
@@ -15,74 +17,13 @@ on:
       - opened
       - synchronize
     paths:
-      - "crates/messaging/affinidi-messaging-mediator/**"
       - "crates/tdk/affinidi-tdk/**"
+      - "crates/messaging/affinidi-messaging-didcomm-service/**"
+      - "crates/messaging/affinidi-messaging-sdk/**"
+      - "crates/messaging/affinidi-tsp/**"
       - ".github/workflows/checks-features.yaml"
 
 jobs:
-  feature-matrix:
-    name: ${{ matrix.crate.short }} / ${{ matrix.backend }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [keyring, aws, gcp, azure, vault]
-        crate:
-          - short: mediator
-            package: affinidi-messaging-mediator
-            # Mediator default = ["didcomm"]. Keep didcomm enabled
-            # explicitly alongside the backend-under-test so the
-            # check matches a real deployment build rather than a
-            # protocol-less binary that never compiles in practice.
-            extra_features: "didcomm"
-          - short: setup
-            package: affinidi-messaging-mediator-setup
-            # Wizard has no protocol feature; the backend is the
-            # only moving piece.
-            extra_features: ""
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install native deps for keyring + aws_lc_rs
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libdbus-1-dev libssl-dev
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.95.0"
-
-      - name: Cache cargo registry + build
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: features-${{ matrix.crate.short }}-${{ matrix.backend }}
-
-      - name: Assemble feature list
-        id: features
-        run: |
-          if [ -n "${{ matrix.crate.extra_features }}" ]; then
-            echo "list=${{ matrix.crate.extra_features }},secrets-${{ matrix.backend }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "list=secrets-${{ matrix.backend }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: cargo check --no-default-features --features ${{ steps.features.outputs.list }}
-        env:
-          # Keep `--cfg tracing_unstable` to match the main pipeline so
-          # the `valuable` feature on `tracing` resolves consistently,
-          # but don't promote warnings to errors: the wizard has
-          # pre-existing `dead_code` lints that the main rust-pipeline
-          # workflow tolerates, and the matrix's job is to catch
-          # missing `cfg(feature = "secrets-*")` gates, not lint
-          # cleanliness.
-          RUSTFLAGS: "--cfg tracing_unstable"
-        run: |
-          cargo check \
-            -p ${{ matrix.crate.package }} \
-            --no-default-features \
-            --features "${{ steps.features.outputs.list }}"
-
   # Build the affinidi-tdk facade across its feature surface so a new feature
   # (or a broken re-export) can't silently fail to compile in some combination.
   facade-features:
@@ -131,3 +72,45 @@ jobs:
       - name: cargo build -p affinidi-tdk --examples
         if: matrix.combo.short == 'default'
         run: cargo build -p affinidi-tdk --examples
+
+  didcomm-service-tsp:
+    # `affinidi-messaging-didcomm-service` multiplexes TSP alongside DIDComm on
+    # one websocket, behind its own `tsp` feature — off by default, so the
+    # default workspace build never compiles it. What it gates is the inbound
+    # TSP dispatch: the relationship-lifecycle handling that admits application
+    # traffic under Rev 3 §7.2.2 gating, and the arms that discard a padding
+    # message and route an upper-layer control one.
+    #
+    # Its end-to-end tests run against the embedded test mediator, so they
+    # moved with the mediator to affinidi/affinidi-messaging-mediator. This job
+    # keeps the feature compiling (and lint-clean) here, where the code lives.
+    name: didcomm-service (tsp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          components: clippy
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: didcomm-service-tsp
+
+      - name: cargo clippy -p affinidi-messaging-didcomm-service --features tsp
+        env:
+          RUSTFLAGS: "--cfg tracing_unstable"
+        run: |
+          cargo clippy \
+            -p affinidi-messaging-didcomm-service \
+            --features tsp \
+            --all-targets \
+            -- -D warnings

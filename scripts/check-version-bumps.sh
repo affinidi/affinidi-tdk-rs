@@ -62,9 +62,8 @@ fi
 # affinidi-tdk/common). `pub` is 1 for publishable, 0 otherwise.
 #
 # We include non-publishable crates here (not just publishable ones) so a file
-# under a nested `publish = false` package (e.g. the mediator-setup tool nested
-# in the publishable affinidi-messaging-mediator dir) is attributed to that
-# nested package and skipped — rather than bubbling up to the publishable parent
+# under a nested `publish = false` package (e.g. a tool crate nested inside a
+# publishable crate's dir) is attributed to that nested package and skipped — rather than bubbling up to the publishable parent
 # and demanding a spurious bump for source that never reaches crates.io.
 crates=$(cargo metadata --format-version 1 --no-deps 2>/dev/null \
   | jq -r '.packages[]

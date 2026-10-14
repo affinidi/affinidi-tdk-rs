@@ -3,9 +3,10 @@
 //! naming different key ids, either one missing, duplicate members, and so on.
 //! The KEK is derived over whatever PartyUInfo the test chooses.
 //!
-//! Shared by the forgery tests in this crate, `affinidi-messaging-sdk` and
-//! `affinidi-messaging-test-mediator` (included there by `#[path]`), so it
-//! depends only on `affinidi-crypto` and `serde_json`.
+//! Shared by the forgery tests in this crate and `affinidi-messaging-sdk`
+//! (included there by `#[path]`), so it depends only on `affinidi-crypto` and
+//! `serde_json`. `affinidi-messaging-test-mediator`, which moved to
+//! affinidi/affinidi-messaging-mediator, carries its own copy.
 #![allow(dead_code)]
 
 use affinidi_crypto::jose::{

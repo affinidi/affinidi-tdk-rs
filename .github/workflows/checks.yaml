@@ -48,9 +48,8 @@ jobs:
       #
       # RUSTSEC-2024-0436 (paste, unmaintained; no vulnerability) is accepted:
       # it is in Cargo.lock only through optional `image` features (AVIF:
-      # ravif -> rav1e; OpenEXR: exr -> pulp). text-client and mediator-setup
-      # (via arboard) use `image` with both off, so it is never compiled. The
-      # latest releases (image 0.25.10, rav1e 0.8.1, pulp 0.22.3) still use it.
+      # ravif -> rav1e; OpenEXR: exr -> pulp). text-client uses `image` with
+      # both off, so it is never compiled. The latest releases (image 0.25.10, rav1e 0.8.1, pulp 0.22.3) still use it.
       # Clears when rav1e and pulp move off `paste`: delete it then (#779).
       auditIgnore: "RUSTSEC-2024-0373,RUSTSEC-2024-0436"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
@@ -78,7 +77,6 @@ jobs:
       # the runner mid-build (#940). Local builds keep the default.
       rustflags: "-D warnings --cfg tracing_unstable -C debuginfo=line-tables-only"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
-      useRedis: true
       runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-24.04' }}
 
   # Coverage is NOT run on pull requests, and that is the point of this split.
@@ -103,4 +101,3 @@ jobs:
       rustflags: "-D warnings --cfg tracing_unstable"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       coverage: 0
-      useRedis: true

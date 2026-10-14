@@ -11,14 +11,13 @@ There are two paths:
   issue/present/verify round trip.
 - **Language-agnostic** — `docker compose up` a known-good mediator + Redis +
   did:web host and point any client (any language) at it. See
-  [Composed test stack](#composed-test-stack-any-language) below and
-  [`docker-compose.md`](docker-compose.md).
+  [Composed test stack](#composed-test-stack-any-language) below.
 
 The two fixture crates:
 
 | Crate | Owns | Pull in as |
 |-------|------|------------|
-| [`affinidi-messaging-test-mediator`] | embedded mediator(s): `TestMediator`, `TestEnvironment`, `TestTopology` | `affinidi-messaging-test-mediator = "0.2"` |
+| [`affinidi-messaging-test-mediator`] | embedded mediator(s): `TestMediator`, `TestEnvironment`, `TestTopology` | `affinidi-messaging-test-mediator = "0.42"` |
 | [`affinidi-tdk-test-support`] | did:web mock, deterministic resolver, seeded DIDs, credential scenarios, vector loader | `affinidi-tdk-test-support = "0.7"` |
 
 > Every `affinidi-tdk-test-support` snippet below mirrors a **runnable,
@@ -26,6 +25,9 @@ The two fixture crates:
 > the API shown here is the API that compiles. The mediator/SDK snippets are
 > marked `ignore` because they need an async runtime and the full SDK; they
 > follow the patterns covered by that crate's own integration tests.
+>
+> `affinidi-messaging-test-mediator` ships with the mediator, in
+> [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
 
 ---
 
@@ -270,13 +272,9 @@ For non-Rust clients — or a realistic Redis-backed target this repo's
 `MemoryStore` can't model — bring up a known-good mediator + Redis + static
 did:web host with fixed, committed **TEST-ONLY** identities:
 
-```bash
-docker compose -f docker-compose.test.yml up --build
-# mediator → http://localhost:7037/mediator/v1/   did:web → http://localhost:8080
-```
-
-Fixed identities, the regeneration recipe, and the smoke test are documented in
-[`docker-compose.md`](docker-compose.md).
+The stack (`docker-compose.test.yml`), its fixed identities, the regeneration
+recipe and the smoke test live with the mediator in
+[affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
 
 ---
 
@@ -289,5 +287,5 @@ variants land additively — match arms need a `_` wildcard.
 `affinidi-messaging-test-mediator` follows the same convention; see each crate's
 README and `CHANGELOG`.
 
-[`affinidi-messaging-test-mediator`]: ../../crates/messaging/affinidi-messaging-test-mediator
+[`affinidi-messaging-test-mediator`]: https://github.com/affinidi/affinidi-messaging-mediator
 [`affinidi-tdk-test-support`]: ../../crates/tdk/affinidi-tdk-test-support

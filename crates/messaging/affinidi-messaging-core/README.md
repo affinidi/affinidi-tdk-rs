@@ -206,7 +206,7 @@ async fn secure_exchange(
 | [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/) | DIDComm v2.1 adapter (`DIDCommAdapter`) |
 | [`affinidi-tsp`](../affinidi-tsp/) | TSP adapter (`TspAdapter`) |
 | [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) | High-level messaging client SDK |
-| [`affinidi-messaging-mediator`](../affinidi-messaging-mediator/) | Mediator service supporting both protocols |
+| [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator) | Mediator service supporting both protocols |
 
 ## License
 

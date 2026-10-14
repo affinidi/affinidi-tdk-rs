@@ -13,7 +13,7 @@ crates.io. Build it from source.
 ## Running
 
 Ensure a mediator is configured and running (see
-[mediator setup](../affinidi-messaging-mediator/)), then:
+[mediator setup](https://github.com/affinidi/affinidi-messaging-mediator)), then:
 
 ```bash
 cargo run -p affinidi-messaging-text-client
@@ -33,7 +33,7 @@ Don't copy the state file off the host or commit it to source control.
 ## Related Crates
 
 - [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) — Messaging SDK (dependency)
-- [`affinidi-messaging-mediator`](../affinidi-messaging-mediator/) — Mediator service
+- [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator) — Mediator service
 
 ## License
 

@@ -75,15 +75,6 @@ exceptions = [
   { allow = [
     "MPL-2.0",
   ], crate = "im" },
-  # Reached only via `vta-sdk`'s `session` feature (new in 0.32.0):
-  # vta-sdk -> dirs 6 -> dirs-sys 0.5 -> option-ext. MPL-2.0 is file-level
-  # copyleft — the obligation attaches to the MPL'd files themselves, not to
-  # the combined work — and we consume it unmodified, so a per-crate exception
-  # is the right scope. Deliberately not added to the global `allow` list:
-  # that would silently admit any future copyleft dependency.
-  { allow = [
-    "MPL-2.0",
-  ], crate = "option-ext" },
   # `textwrap` 0.16.3 (via `affinidi-messaging-text-client`) pulls the ICU
   # segmentation crates for line breaking, and ICU relicensed to Unicode-3.0.
   # Not copyleft — Unicode-3.0 is the OSI-approved Unicode License v3, a

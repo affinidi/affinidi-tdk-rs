@@ -30,7 +30,8 @@ you don't want to stand up external services.
 | `vectors`                  | Shared `tests/vectors/` layout + loader                         |
 
 The embedded-mediator fixtures (`TestMediator`, `TestEnvironment`,
-`TestTopology`) live in the sibling [`affinidi-messaging-test-mediator`] crate.
+`TestTopology`) live in [`affinidi-messaging-test-mediator`], which ships with
+the mediator in its own repository.
 
 ## Cookbook
 
@@ -50,4 +51,4 @@ get a minor bump and a `CHANGELOG` entry. The fixture config enums
 carry a `_` wildcard. Each module ships a runnable doc example
 (`cargo test --doc`) of its happy path.
 
-[`affinidi-messaging-test-mediator`]: ../../messaging/affinidi-messaging-test-mediator
+[`affinidi-messaging-test-mediator`]: https://github.com/affinidi/affinidi-messaging-mediator
