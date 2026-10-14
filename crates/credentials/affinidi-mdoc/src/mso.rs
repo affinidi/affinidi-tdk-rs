@@ -63,7 +63,7 @@ pub struct DeviceKeyInfo {
 }
 
 /// Temporal validity of an MSO per ISO 18013-5.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ValidityInfo {
     /// When the MSO was signed (CBOR Tag 0, RFC 3339 tstr).
     #[serde(serialize_with = "serialize_with_cbor_0_tag")]
@@ -322,12 +322,14 @@ mod tests {
             )],
         );
 
+        let validity = test_validity();
+
         let mso = MobileSecurityObject::create(
             "test",
             "SHA-256",
             &namespaces,
             test_device_key(),
-            test_validity(),
+            validity.clone(),
             0,
         )
         .unwrap();
@@ -342,6 +344,7 @@ mod tests {
         assert_eq!(decoded.version, "1.0");
         assert_eq!(decoded.digest_algorithm, "SHA-256");
         assert_eq!(decoded.value_digests["test"].len(), 1);
+        assert_eq!(decoded.validity_info, validity);
     }
 
     #[test]
