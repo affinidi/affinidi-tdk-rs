@@ -41,7 +41,8 @@ members = [
   "crates/protocols/affinidi-openid4vci",
   "crates/protocols/affinidi-openid4vp",
 
-  # Messaging: core, DIDComm, TSP, SDK, mediator
+  # Messaging: core, DIDComm, TSP, SDK (the mediator lives in
+  # affinidi/affinidi-messaging-mediator)
   "crates/messaging/affinidi-messaging-core",
   "crates/messaging/affinidi-messaging-delivery",
   "crates/messaging/affinidi-messaging-didcomm",
@@ -51,15 +52,7 @@ members = [
   "crates/messaging/affinidi-messaging-helpers",
   "crates/messaging/affinidi-messaging-didcomm-service",
   "crates/messaging/affinidi-messaging-mediator-types",
-  "crates/messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common",
-  "crates/messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-config",
-  "crates/messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors",
-  "crates/messaging/affinidi-messaging-mediator",
-  "crates/messaging/affinidi-messaging-mediator/tools/mediator-setup",
-  "crates/messaging/affinidi-messaging-test-mediator",
   "crates/messaging/affinidi-messaging-text-client",
-  "crates/messaging/affinidi-messaging-mediator-admin",
-  "crates/messaging/affinidi-messaging-mediator-tui",
 
   # Trust: trust infrastructure
   "crates/trust/affinidi-trust-lists",
@@ -89,38 +82,6 @@ rust-version = "1.95.0"
 [workspace.dependencies]
 tokio = "1"
 
-# Upper bound on `aws-smithy-types`, which nothing in this workspace calls.
-#
-# **This is here to constrain the resolver, not because anything uses it.**
-# `aws-smithy-types` 1.7.0 changed `Document::Object` from
-# `HashMap<String, Document>` to a new `DocumentObject`, and added a variant to
-# an enum that is `#[non_exhaustive]` — a breaking change shipped as a MINOR
-# bump. `aws-smithy-json` 0.63.0 declares `aws-smithy-types = "^1.6.1"`, which
-# admits 1.7.0 and then fails to compile against it, inside the registry source:
-#
-#   error[E0308]: expected `DocumentObject`, found `HashMap<String, Document>`
-#   error[E0004]: non-exhaustive patterns: `&_` not covered
-#
-# Cargo unifies `aws-smithy-types` to one version across the graph but keeps
-# both `aws-smithy-json` 0.63 and 0.64 (0.x minors are incompatible majors), so
-# the two coexist and only the 0.63 copy breaks. We have both because the newer
-# `aws-sdk-*` releases moved to json `^0.64.0` while `aws-config` 1.12.0 — its
-# newest release — still wants `^0.63.0`, and `aws-config` is what every AWS
-# feature here pulls.
-#
-# The committed `Cargo.lock` holds a working set for this workspace, but nobody
-# who depends on these crates from crates.io uses it: their own resolve takes
-# the break. The manifest is the only place the constraint reaches them. A
-# `[workspace.dependencies]` entry alone constrains nothing, though — Cargo
-# honours a requirement only from a crate that *declares* the dependency, so
-# each crate whose subtree pulls `aws-config` names it below, under the same
-# feature.
-#
-# **Remove this the moment `aws-config` ships a release on json 0.64.** The
-# bound is `< 1.7` rather than `= 1.6.3` so patch releases in the working line
-# are still picked up; it is an exclusion of the break, not a freeze.
-aws-smithy-types = ">=1.6.1, <1.7"
-
 [profile.release]
 # Tell `rustc` to optimize for small code size.
 opt-level = "s"
@@ -143,10 +104,7 @@ affinidi-rdf-encoding = { path = "crates/credentials/affinidi-rdf-encoding" }
 affinidi-messaging-didcomm = { path = "crates/messaging/affinidi-messaging-didcomm" }
 affinidi-messaging-didcomm-v1 = { path = "crates/messaging/affinidi-messaging-didcomm-v1" }
 affinidi-messaging-sdk = { path = "crates/messaging/affinidi-messaging-sdk" }
-affinidi-messaging-mediator = { path = "crates/messaging/affinidi-messaging-mediator" }
-affinidi-messaging-mediator-common = { path = "crates/messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
 affinidi-messaging-mediator-types = { path = "crates/messaging/affinidi-messaging-mediator-types" }
-affinidi-messaging-test-mediator = { path = "crates/messaging/affinidi-messaging-test-mediator" }
 affinidi-did-authentication = { path = "crates/identity/affinidi-did-authentication" }
 affinidi-tdk-common = { path = "crates/tdk/affinidi-tdk-common" }
 affinidi-tdk = { path = "crates/tdk/affinidi-tdk" }

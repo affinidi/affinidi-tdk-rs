@@ -9,6 +9,23 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
+### Removed
+
+- **The mediator moved to its own repository,
+  [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).**
+  `affinidi-messaging-mediator`, `affinidi-messaging-mediator-common`,
+  `affinidi-messaging-mediator-config`, `affinidi-messaging-mediator-processors`,
+  `affinidi-messaging-mediator-setup`, `affinidi-messaging-test-mediator`,
+  `affinidi-messaging-mediator-admin` and `affinidi-messaging-mediator-tui` are
+  no longer workspace members here; their history was extracted to the new
+  repository, which releases them in lockstep from 0.42.0. Consumers move from
+  mediator 0.41 / mediator-common 0.17 / test-mediator 0.22 / admin and tui
+  0.11 to 0.42. The mediator Docker image, composed test stack and their
+  workflows went with them. `affinidi-messaging-mediator-types` (the protocol
+  contract) stays here beside the SDK. **`affinidi-messaging-didcomm-service`
+  0.21.1** loses the four end-to-end tests that ran against the embedded test
+  mediator; they moved too.
+
 ### Added
 
 - **IETF Token Status List.** **`affinidi-status-list` 0.1.7**. A `token`

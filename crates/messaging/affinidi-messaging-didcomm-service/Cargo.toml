@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-didcomm-service"
-version = "0.21.0"
+version = "0.21.1"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
 authors.workspace = true
@@ -48,19 +48,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
+# DID generation for the `echo_server` example. The end-to-end tests that ran
+# against the embedded test mediator moved with it to
+# affinidi/affinidi-messaging-mediator.
 affinidi-did-common = "0.4"
-# Embedded mediator fixture + DID generation for the soft-restart websocket
-# regression test. Sister-crate path deps carry an explicit `version =` so the
-# package stays publishable while using the in-tree path for dev-builds.
-affinidi-messaging-test-mediator = { version = "0.22", path = "../affinidi-messaging-test-mediator", features = ["tsp"] }
-# `messaging` as well as `did-peer`: the TSP test targets use
-# `affinidi_tdk::messaging::ATM`. A workspace build supplied it through feature
-# unification, so this was only wrong when the crate is built on its own —
-# which is how CI builds it.
-affinidi-tdk = { version = "0.26", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer", "messaging"] }
-affinidi-messaging-core = { version = "0.1", path = "../affinidi-messaging-core" }
-futures-util = "0.3"
-
 
 [[example]]
 name = "echo_server"

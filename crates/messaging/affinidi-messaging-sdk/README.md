@@ -101,7 +101,7 @@ export RUST_LOG=none,affinidi_messaging_sdk=debug
 
 ## Examples
 
-Set up a mediator first (see [mediator README](../affinidi-messaging-mediator/)),
+Set up a mediator first (see [affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator)),
 then:
 
 ```bash
@@ -121,7 +121,7 @@ examples.
 - [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/) — DIDComm protocol implementation (dependency)
 - [`affinidi-tsp`](../affinidi-tsp/) — Trust Spanning Protocol (alternative protocol)
 - [`affinidi-messaging-core`](../affinidi-messaging-core/) — Protocol-agnostic messaging traits
-- [`affinidi-messaging-mediator`](../affinidi-messaging-mediator/) — Mediator service
+- [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator) — Mediator service
 - [`affinidi-did-resolver-cache-sdk`](../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk/) — DID resolution
 
 ## License

@@ -137,7 +137,7 @@ See [`examples/echo_server.rs`](examples/echo_server.rs) for a complete working 
 - [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) -- Client SDK for Affinidi Messaging (dependency)
 - [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/) -- DIDComm protocol layer (dependency)
 - [`affinidi-tdk-common`](../../affinidi-tdk/common/affinidi-tdk-common/) -- Shared types including `TDKProfile` (dependency)
-- [`affinidi-messaging-mediator`](../affinidi-messaging-mediator/) -- Mediator server implementation
+- [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator) -- Mediator server implementation
 
 ## License
 

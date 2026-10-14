@@ -10,6 +10,12 @@ original SDK paths; the mediator depends on it through
 `affinidi-messaging-mediator-common`, which re-exports it as `types`. Neither
 side has to depend on the other.
 
+The mediator itself (`affinidi-messaging-mediator`, `-common`, the test
+fixture, admin and TUI crates) lives in its own repository,
+[affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
+This crate stays here, beside the SDK, so a client never has to depend on the
+mediator's repository to speak its protocol.
+
 Dependencies are deliberately lean: `serde`, `serde_json`, `thiserror` and
 `regex`.
 

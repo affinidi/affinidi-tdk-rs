@@ -169,9 +169,13 @@ Secure, private messaging built on [DIDComm v2](https://identity.foundation/didc
 | [`affinidi-messaging-didcomm`](./crates/messaging/affinidi-messaging-didcomm/) | DIDComm v2.1 protocol implementation |
 | [`affinidi-messaging-didcomm-service`](./crates/messaging/affinidi-messaging-didcomm-service/) | Always-online DIDComm client framework (connection, lifecycle, handler dispatch) |
 | [`affinidi-messaging-core`](./crates/messaging/affinidi-messaging-core/) | Protocol-agnostic messaging traits |
-| [`affinidi-messaging-mediator`](./crates/messaging/affinidi-messaging-mediator/) | Mediator & relay service (DIDComm and TSP via feature flags) |
-| [`affinidi-messaging-test-mediator`](./crates/messaging/affinidi-messaging-test-mediator/) | Embedded mediator fixture for integration tests |
+| [`affinidi-messaging-mediator-types`](./crates/messaging/affinidi-messaging-mediator-types/) | Protocol types shared by the mediator and its clients |
 | [`affinidi-tsp`](./crates/messaging/affinidi-tsp/) | Trust Spanning Protocol (TSP) with HPKE-Auth encryption |
+
+The mediator (`affinidi-messaging-mediator`, `-mediator-common`, the
+`affinidi-messaging-test-mediator` fixture, and the `-mediator-admin` /
+`-mediator-tui` console) lives in its own repository:
+[affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
 
 ### [Trust](./crates/trust/)
 
@@ -188,8 +192,6 @@ Secure, private messaging built on [DIDComm v2](https://identity.foundation/didc
 ## Requirements
 
 - **Rust** 1.90.0+ (2024 Edition)
-- **Redis** 8.0+ (required for the messaging mediator)
-- **Docker** (recommended for running Redis)
 
 ## Quick Start
 
@@ -239,18 +241,17 @@ You can write messaging / DID / credential integration tests with **no external
 infrastructure** — no Redis, no network, no standing services. Two paths:
 
 - **Rust fixtures** — pull a fixture crate in as a `dev-dependency`:
-  [`affinidi-messaging-test-mediator`](./crates/messaging/affinidi-messaging-test-mediator/)
-  for embedded mediators (`TestMediator` / `TestEnvironment` / `TestTopology`),
-  and [`affinidi-tdk-test-support`](./crates/tdk/affinidi-tdk-test-support/) for
+  [`affinidi-messaging-test-mediator`](https://github.com/affinidi/affinidi-messaging-mediator)
+  (in the mediator's repository) for embedded mediators (`TestMediator` /
+  `TestEnvironment` / `TestTopology`), and
+  [`affinidi-tdk-test-support`](./crates/tdk/affinidi-tdk-test-support/) for
   did:web mocks, deterministic resolvers, seeded DIDs, and credential scenarios.
   A mediator is three lines; an issue/present/verify round trip is a handful.
-- **Language-agnostic** — `docker compose -f docker-compose.test.yml up` a
-  known-good mediator + Redis + did:web host with fixed TEST-ONLY identities and
-  point any client at it.
+- **Language-agnostic** — the mediator repository's composed test stack
+  (`docker-compose.test.yml`) brings up a known-good mediator + Redis + did:web
+  host with fixed TEST-ONLY identities for any client to point at.
 
-Copy-paste scenarios for both paths are in the
-[testing cookbook](./docs/testing/cookbook.md); the composed stack is documented
-in [`docs/testing/docker-compose.md`](./docs/testing/docker-compose.md).
+Copy-paste scenarios are in the [testing cookbook](./docs/testing/cookbook.md).
 
 ## Using affinidi-* crates from outside this workspace
 
@@ -278,7 +279,7 @@ affinidi-tdk = "0.7"
 affinidi-messaging-sdk = "0.17"
 
 [dev-dependencies]
-affinidi-messaging-test-mediator = "0.1"
+affinidi-messaging-test-mediator = "0.42"
 ```
 
 No patch table is needed — cargo resolves a single version of each
@@ -303,8 +304,7 @@ affinidi-encoding = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev =
 affinidi-data-integrity = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
 affinidi-messaging-didcomm = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
 affinidi-messaging-sdk = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
-affinidi-messaging-mediator = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
-affinidi-messaging-mediator-common = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-messaging-mediator-types = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
 affinidi-did-authentication = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
 affinidi-tdk-common = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
 affinidi-tdk = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }

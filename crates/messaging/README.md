@@ -34,14 +34,16 @@ mediator routes and stores messages but **cannot** read their content.
 | [`affinidi-messaging-sdk`](./affinidi-messaging-sdk/) | SDK for integrating messaging into your application |
 | [`affinidi-messaging-didcomm`](./affinidi-messaging-didcomm/) | DIDComm v2.1 protocol implementation |
 | [`affinidi-messaging-core`](./affinidi-messaging-core/) | Protocol-agnostic messaging traits |
-| [`affinidi-messaging-mediator`](./affinidi-messaging-mediator/) | Mediator & relay service (DIDComm and TSP support via feature flags) |
 | [`affinidi-messaging-didcomm-service`](./affinidi-messaging-didcomm-service/) | Framework for building always-online DIDComm services with mediator connectivity, message routing, middleware, and handler dispatch |
 | [`affinidi-messaging-helpers`](./affinidi-messaging-helpers/) | Setup tools, environment config, and example runners |
-| [`affinidi-messaging-test-mediator`](./affinidi-messaging-test-mediator/) | Embedded mediator fixture for integration tests against the mediator |
 | [`affinidi-tsp`](./affinidi-tsp/) | Trust Spanning Protocol implementation (HPKE-Base, CESR) |
 | [`affinidi-messaging-text-client`](./affinidi-messaging-text-client/) | Terminal-based DIDComm chat client |
-| [`affinidi-messaging-mediator-tui`](./affinidi-messaging-mediator-tui/) | `mediator-console`: terminal console to operate a mediator — as an administrator or as any account |
-| [`affinidi-messaging-mediator-admin`](./affinidi-messaging-mediator-admin/) | The console's headless engine, for embedding mediator management in your own application |
+| [`affinidi-messaging-mediator-types`](./affinidi-messaging-mediator-types/) | Protocol types shared by the mediator and its clients (ACLs, problem reports, pickup envelopes) |
+
+The mediator itself — `affinidi-messaging-mediator`, `-mediator-common`, the
+`affinidi-messaging-test-mediator` fixture, and the `mediator-console`
+(`-mediator-tui` / `-mediator-admin`) — lives in its own repository,
+[affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
 
 **Dependencies:**
 [affinidi-did-resolver](../affinidi-did-resolver/) for DID Document resolution.
@@ -51,49 +53,12 @@ mediator routes and stores messages but **cannot** read their content.
 ### Prerequisites
 
 - Rust 1.90.0+ (2024 Edition)
-- Docker (for Redis)
-- Redis 8.0+
+- A running mediator. To run your own, follow the setup guide in
+  [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator) — its
+  `mediator-setup` wizard generates the mediator DID, secrets, admin
+  credential and a ready-to-run `mediator.toml`.
 
-### 1. Start the storage backend
-
-For Redis-backed deployments (the default; required for
-multi-mediator clusters):
-
-```bash
-docker run --name=redis-local --publish=6379:6379 --hostname=redis \
-  --restart=on-failure --detach redis:latest
-```
-
-For single-node deployments you can skip this step and pick the
-embedded **Fjall** backend in the wizard's Database step — Fjall
-stores its data in a local directory and needs no sidecar.
-
-### 2. Configure the Mediator
-
-Run the interactive setup wizard:
-
-```bash
-cargo run --bin mediator-setup
-```
-
-The wizard generates the mediator DID and secrets, the admin
-credential, optional self-signed SSL certificates, and a
-ready-to-run `mediator.toml`. See the mediator's
-[setup guide](./affinidi-messaging-mediator/docs/setup-guide.md)
-for the full operator walkthrough including online VTA, sealed-mint,
-and sealed-export flows.
-
-### 3. Start the Mediator
-
-The wizard prints the exact build/run commands for your chosen
-features when it finishes. The default DIDComm + Redis build is:
-
-```bash
-cargo run --release --locked -p affinidi-messaging-mediator -- \
-  -c conf/mediator.toml
-```
-
-### 4. Run Examples
+### Run Examples
 
 Go to [affinidi-messaging-helpers](./affinidi-messaging-helpers/) to explore
 available examples including trust pings, sending/receiving messages, and message
@@ -102,21 +67,8 @@ crate's README documents the schema.
 
 ## Operating a mediator
 
-`mediator-console` is a terminal console for a running mediator. Connect as the
-mediator's administrator to see its health, every account's queues (with
-green-to-red quota bars), anyone's messages and settings, the audit log and live
-traffic — or as any other account to manage your own queues and messages and
-watch your own traffic. Everything it does is a signed Trust Task the mediator
-authorises on its own.
-
-```bash
-cargo run --release -p affinidi-messaging-mediator-tui -- --profile conf/admin-monitor.json
-```
-
-`admin-monitor.json` is the administrator profile `mediator-setup` writes next to
-`mediator.toml`. See [`affinidi-messaging-mediator-tui`](./affinidi-messaging-mediator-tui/)
-for setup, the screens and keys, and embedding the console in your own
-application.
+`mediator-console`, the terminal console for a running mediator, ships with the
+mediator in [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
 
 ## Related Crates
 

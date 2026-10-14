@@ -1,5 +1,8 @@
 # AWS Marketplace Setup Guide
 
+> The mediator's source now lives in
+> [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
+
 DIDComm Mediator, published on AWS Marketplace, allows you to host the mediator in your AWS account using the CloudFormation template.
 
 Creating a mediator instance from AWS Marketplace gives you full control over the configuration, scaling, and resource usage of your mediator, allowing you to achieve more scalability and performance based on your requirements.

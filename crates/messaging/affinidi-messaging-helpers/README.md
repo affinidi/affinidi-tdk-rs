@@ -7,9 +7,8 @@
 Administration tooling and example runners for
 [Affinidi Messaging](../). The mediator itself ships its own setup
 wizard — see
-[`affinidi-messaging-mediator`](../affinidi-messaging-mediator/) and
-its [setup guide](../affinidi-messaging-mediator/docs/setup-guide.md)
-to provision a mediator end to end.
+[affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator)
+and its setup guide to provision a mediator end to end.
 
 ## Tools
 
@@ -32,6 +31,7 @@ record the values you'll need to talk to it (mediator DID, public
 URL, optional admin DID + secret):
 
 ```bash
+# in a checkout of affinidi/affinidi-messaging-mediator
 cargo run --bin mediator-setup
 ```
 
@@ -92,7 +92,7 @@ Explore the [examples folder](./examples/) for available examples, including:
 
 - [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) — Messaging SDK (dependency)
 - [`affinidi-tsp`](../affinidi-tsp/) — Trust Spanning Protocol
-- [`affinidi-messaging-mediator`](../affinidi-messaging-mediator/) — Mediator service
+- [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator) — Mediator service
 - [`affinidi-tdk`](../../affinidi-tdk/affinidi-tdk/) — Unified TDK entry point (dependency)
 
 ## License

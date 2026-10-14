@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (0.21.1) — end-to-end tests moved to affinidi-messaging-mediator
+
+The tests that ran this crate against the embedded test mediator
+(`soft_restart_websocket`, `tsp_live_stream`, `tsp_transport_adapter`,
+`tsp_invite_then_payload`) moved with the mediator to
+[affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
+The `affinidi-messaging-test-mediator`, `affinidi-tdk`,
+`affinidi-messaging-core` and `futures-util` dev-dependencies went with them.
+Tests only; nothing a consumer builds changes.
+
 ## Unreleased (0.21.0) — SDK 0.36, trust-tasks 0.31
 
 Moves to `affinidi-messaging-sdk` 0.36, `affinidi-tdk` 0.26 and `trust-tasks-rs` 0.31. The SDK is a public dependency here, so this crate moves a minor. No source change.

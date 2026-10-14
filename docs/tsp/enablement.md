@@ -9,6 +9,10 @@ TSP is **additive alongside DIDComm** — a single mediator carries both on the
 same HTTPS/WSS endpoints, sniffing each inbound message at ingress. Turning TSP
 on never changes the DIDComm path.
 
+> The mediator, its setup wizard and its test fixture live in
+> [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator); paths and
+> tests named below are in that repository.
+
 ---
 
 ## TL;DR
@@ -35,14 +39,14 @@ include TSP. `didcomm` and `tsp` are additive (not mutually exclusive); the
 supported production shape is a **dual `didcomm,tsp` build**:
 
 ```bash
-# from crates/messaging/affinidi-messaging-mediator
+# from crates/affinidi-messaging-mediator in affinidi/affinidi-messaging-mediator
 cargo build --release --no-default-features \
   --features didcomm,tsp,redis-backend
 ```
 
 ```toml
 # or, as a dependency
-affinidi-messaging-mediator = { version = "0.16", features = ["didcomm", "tsp"] }
+affinidi-messaging-mediator = { version = "0.42", features = ["didcomm", "tsp"] }
 ```
 
 > The crate `compile_error!`s if neither `didcomm` nor `tsp` is enabled. A
