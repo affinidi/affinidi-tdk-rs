@@ -15,7 +15,7 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
-use tokio::select;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{Instrument, Level, debug, span, warn};
 use uuid::Uuid;
 
@@ -335,61 +335,56 @@ impl MessagePickup {
                 })?;
             debug!("sent next request to websocket");
 
-            // Setup the timer for the wait, doesn't do anything till `await` is called in the select! macro
-            let sleep: tokio::time::Sleep = tokio::time::sleep(wait.unwrap_or(Duration::MAX));
-
-            select! {
-                _ = sleep, if wait.is_some() => {
-                    debug!("Timeout reached, no message received");
-                    ws_channel.send(WebSocketCommands::CancelNext(tx_uuid)).await.map_err(|err| {
-                        ATMError::TransportError(format!(
-                            "Could not send CancelNext command to websocket: {err:?}"
-                        ))
-                    })?;
+            let Some(value) = await_next(
+                &ws_channel,
+                rx,
+                wait,
+                WebSocketCommands::CancelNext(tx_uuid),
+            )
+            .await?
+            else {
+                return Ok(None);
+            };
+            match value {
+                Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
+                    // If auto_delete is true, delete the message
+                    if auto_delete {
+                        atm.delete_message_background(profile, &meta.sha256_hash)
+                            .await?;
+                    }
+                    Ok(Some((*msg, meta)))
+                }
+                Ok(WebSocketResponses::Disconnected) => {
+                    // Connection dropped while waiting. Treat as "no
+                    // message right now" so streaming callers quietly
+                    // retry on the reconnected socket instead of logging
+                    // a spurious receive error.
+                    debug!("WebSocket disconnected while awaiting next message");
                     Ok(None)
                 }
-                value = rx => {
-                    match value {
-                        Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
-                             // If auto_delete is true, delete the message
-                             if auto_delete {
-                                atm.delete_message_background(profile, &meta.sha256_hash).await?;
-                            }
-                            Ok(Some((*msg, meta)))
-                        }
-                        Ok(WebSocketResponses::Disconnected) => {
-                            // Connection dropped while waiting. Treat as "no
-                            // message right now" so streaming callers quietly
-                            // retry on the reconnected socket instead of logging
-                            // a spurious receive error.
-                            debug!("WebSocket disconnected while awaiting next message");
-                            Ok(None)
-                        }
-                        Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
-                            // A DIDComm-only stream can't handle a packed (e.g.
-                            // TSP/CESR) frame. Erroring here without removing it
-                            // left the message in the mediator queue, so the
-                            // pickup redelivered it every cycle — a poison loop.
-                            // Delete it (when auto_delete) and skip; a consumer
-                            // that wants packed frames uses `live_stream_next_frame`
-                            // / `live_stream_next_packed`.
-                            warn!(
-                                "Dropping unexpected packed message on a DIDComm-only stream \
-                                 (use live_stream_next_frame for multiplexed TSP + DIDComm)"
-                            );
-                            if auto_delete {
-                                let sha256_hash = sha256::digest(packed_msg.as_str());
-                                atm.delete_message_background(profile, &sha256_hash).await?;
-                            }
-                            Ok(None)
-                        }
-                        Err(e) => {
-                            warn!("Error receiving message: {:?}", e);
-                            Err(ATMError::MsgReceiveError(format!(
-                                "Error receiving message: {e:?}"
-                            )))
-                        }
+                Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
+                    // A DIDComm-only stream can't handle a packed (e.g.
+                    // TSP/CESR) frame. Erroring here without removing it
+                    // left the message in the mediator queue, so the
+                    // pickup redelivered it every cycle — a poison loop.
+                    // Delete it (when auto_delete) and skip; a consumer
+                    // that wants packed frames uses `live_stream_next_frame`
+                    // / `live_stream_next_packed`.
+                    warn!(
+                        "Dropping unexpected packed message on a DIDComm-only stream \
+                         (use live_stream_next_frame for multiplexed TSP + DIDComm)"
+                    );
+                    if auto_delete {
+                        let sha256_hash = sha256::digest(packed_msg.as_str());
+                        atm.delete_message_background(profile, &sha256_hash).await?;
                     }
+                    Ok(None)
+                }
+                Err(e) => {
+                    warn!("Error receiving message: {:?}", e);
+                    Err(ATMError::MsgReceiveError(format!(
+                        "Error receiving message: {e:?}"
+                    )))
                 }
             }
         }
@@ -454,53 +449,49 @@ impl MessagePickup {
                 })?;
             debug!("sent next request to websocket for inbound frame");
 
-            let sleep: tokio::time::Sleep = tokio::time::sleep(wait.unwrap_or(Duration::MAX));
-
-            select! {
-                _ = sleep, if wait.is_some() => {
-                    debug!("Timeout reached, no message received");
-                    ws_channel.send(WebSocketCommands::CancelNext(tx_uuid)).await.map_err(|err| {
-                        ATMError::TransportError(format!(
-                            "Could not send CancelNext command to websocket: {err:?}"
-                        ))
-                    })?;
+            let Some(value) = await_next(
+                &ws_channel,
+                rx,
+                wait,
+                WebSocketCommands::CancelNext(tx_uuid),
+            )
+            .await?
+            else {
+                return Ok(None);
+            };
+            match value {
+                Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
+                    if auto_delete {
+                        atm.delete_message_background(profile, &meta.sha256_hash)
+                            .await?;
+                    }
+                    Ok(Some(InboundFrame::DidComm(msg, meta)))
+                }
+                Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
+                    if auto_delete {
+                        // The live path carries no attachment id, so the
+                        // message id is reconstructed as sha256 of the
+                        // received frame. This matches the mediator's id
+                        // derivation (`msg_id = digest(body)`), since it
+                        // streams the exact bytes it stored — locked by
+                        // the mediator's `message_id_is_sha256_of_body`.
+                        let sha256_hash = sha256::digest(packed_msg.as_str());
+                        atm.delete_message_background(profile, &sha256_hash).await?;
+                    }
+                    Ok(Some(InboundFrame::Tsp(packed_msg)))
+                }
+                Ok(WebSocketResponses::Disconnected) => {
+                    // Connection dropped while waiting — treat as "no
+                    // message right now" so the consumer's loop quietly
+                    // retries on the reconnected socket.
+                    debug!("WebSocket disconnected while awaiting next frame");
                     Ok(None)
                 }
-                value = rx => {
-                    match value {
-                        Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
-                            if auto_delete {
-                                atm.delete_message_background(profile, &meta.sha256_hash).await?;
-                            }
-                            Ok(Some(InboundFrame::DidComm(msg, meta)))
-                        }
-                        Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
-                            if auto_delete {
-                                // The live path carries no attachment id, so the
-                                // message id is reconstructed as sha256 of the
-                                // received frame. This matches the mediator's id
-                                // derivation (`msg_id = digest(body)`), since it
-                                // streams the exact bytes it stored — locked by
-                                // the mediator's `message_id_is_sha256_of_body`.
-                                let sha256_hash = sha256::digest(packed_msg.as_str());
-                                atm.delete_message_background(profile, &sha256_hash).await?;
-                            }
-                            Ok(Some(InboundFrame::Tsp(packed_msg)))
-                        }
-                        Ok(WebSocketResponses::Disconnected) => {
-                            // Connection dropped while waiting — treat as "no
-                            // message right now" so the consumer's loop quietly
-                            // retries on the reconnected socket.
-                            debug!("WebSocket disconnected while awaiting next frame");
-                            Ok(None)
-                        }
-                        Err(e) => {
-                            warn!("Error receiving frame: {:?}", e);
-                            Err(ATMError::MsgReceiveError(format!(
-                                "Error receiving frame: {e:?}"
-                            )))
-                        }
-                    }
+                Err(e) => {
+                    warn!("Error receiving frame: {:?}", e);
+                    Err(ATMError::MsgReceiveError(format!(
+                        "Error receiving frame: {e:?}"
+                    )))
                 }
             }
         }
@@ -602,68 +593,58 @@ impl MessagePickup {
         let _span = span!(Level::DEBUG, "live_stream_get");
 
         async move {
-            // Setup the timer for the wait, doesn't do anything till `await` is called in the select! macro
-            let sleep = tokio::time::sleep(wait);
-            tokio::pin!(sleep);
-
-            select! {
-                _ = &mut sleep, if wait.as_millis() > 0 => {
-                    debug!("Timeout reached, no message received");
-                    ws_channel.send(WebSocketCommands::CancelGetMessage(msg_id.to_string())).await.map_err(|err| {
-                        ATMError::TransportError(format!(
-                            "Could not send CancelGetMessage command to websocket: {err:?}"
-                        ))
-                    })?;
+            // A zero `wait` has always meant no timeout here.
+            let wait = (wait.as_millis() > 0).then_some(wait);
+            let cancel = WebSocketCommands::CancelGetMessage(msg_id.to_string());
+            let Some(value) = await_next(&ws_channel, rx, wait, cancel).await? else {
+                return Ok(None);
+            };
+            match value {
+                Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
+                    // If auto_delete is true, delete the message
+                    if auto_delete {
+                        atm.delete_message_background(profile, &meta.sha256_hash)
+                            .await?;
+                    }
+                    Ok(Some((*msg, meta)))
+                }
+                Ok(WebSocketResponses::Disconnected) => {
+                    // Connection dropped while waiting for this specific
+                    // response. The request was lost with the socket, so
+                    // fail fast with a typed error — this lets callers
+                    // tell a reconnect race apart from a genuine
+                    // no-response and avoid a misleading send-failure log.
+                    debug!("WebSocket disconnected while awaiting message {msg_id}");
+                    Err(ATMError::Disconnected(format!(
+                        "Connection reset while awaiting response for {msg_id}"
+                    )))
+                }
+                Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
+                    // A DIDComm-only stream can't handle a packed (e.g.
+                    // TSP/CESR) frame. Erroring here without removing it
+                    // left the message in the mediator queue, so the
+                    // pickup redelivered it every cycle — a poison loop.
+                    // Delete it (when auto_delete) and skip; a consumer
+                    // that wants packed frames uses `live_stream_next_frame`
+                    // / `live_stream_next_packed`.
+                    warn!(
+                        "Dropping unexpected packed message on a DIDComm-only stream \
+                         (use live_stream_next_frame for multiplexed TSP + DIDComm)"
+                    );
+                    if auto_delete {
+                        let sha256_hash = sha256::digest(packed_msg.as_str());
+                        atm.delete_message_background(profile, &sha256_hash).await?;
+                    }
                     Ok(None)
                 }
-                value = rx => {
-                    match value {
-                        Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
-                            // If auto_delete is true, delete the message
-                            if auto_delete {
-                                atm.delete_message_background(profile, &meta.sha256_hash).await?;
-                            }
-                            Ok(Some((*msg, meta)))
-                        }
-                        Ok(WebSocketResponses::Disconnected) => {
-                            // Connection dropped while waiting for this specific
-                            // response. The request was lost with the socket, so
-                            // fail fast with a typed error — this lets callers
-                            // tell a reconnect race apart from a genuine
-                            // no-response and avoid a misleading send-failure log.
-                            debug!("WebSocket disconnected while awaiting message {msg_id}");
-                            Err(ATMError::Disconnected(format!(
-                                "Connection reset while awaiting response for {msg_id}"
-                            )))
-                        }
-                        Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
-                            // A DIDComm-only stream can't handle a packed (e.g.
-                            // TSP/CESR) frame. Erroring here without removing it
-                            // left the message in the mediator queue, so the
-                            // pickup redelivered it every cycle — a poison loop.
-                            // Delete it (when auto_delete) and skip; a consumer
-                            // that wants packed frames uses `live_stream_next_frame`
-                            // / `live_stream_next_packed`.
-                            warn!(
-                                "Dropping unexpected packed message on a DIDComm-only stream \
-                                 (use live_stream_next_frame for multiplexed TSP + DIDComm)"
-                            );
-                            if auto_delete {
-                                let sha256_hash = sha256::digest(packed_msg.as_str());
-                                atm.delete_message_background(profile, &sha256_hash).await?;
-                            }
-                            Ok(None)
-                        }
-                        Err(e) => {
-                            warn!("Error receiving message: {:?}", e);
-                            Err(ATMError::MsgReceiveError(format!(
-                                "Error receiving message: {e:?}"
-                            )))
-                        }
-                    }
+                Err(e) => {
+                    warn!("Error receiving message: {:?}", e);
+                    Err(ATMError::MsgReceiveError(format!(
+                        "Error receiving message: {e:?}"
+                    )))
                 }
             }
-    }
+        }
         .instrument(_span)
         .await
     }
@@ -1258,50 +1239,39 @@ impl MessagePickup {
                 })?;
             debug!("sent next request to websocket for packed message");
 
-            // Setup the timer for the wait, doesn't do anything till `await` is called in the select! macro
-            let sleep: tokio::time::Sleep = tokio::time::sleep(wait.unwrap_or(Duration::MAX));
-
-            select! {
-                _ = sleep, if wait.is_some() => {
-                    debug!("Timeout reached, no message received");
-                    ws_channel.send(WebSocketCommands::CancelNext(tx_uuid)).await.map_err(|err| {
-                        ATMError::TransportError(format!(
-                            "Could not send CancelNext command to websocket: {err:?}"
-                        ))
-                    })?;
+            let Some(value) =
+                await_next(&ws_channel, rx, wait, WebSocketCommands::CancelNext(tx_uuid)).await?
+            else {
+                return Ok(None);
+            };
+            match value {
+                Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
+                    // If auto_delete is true, delete the message
+                    if auto_delete {
+                        let sha256_hash = sha256::digest(packed_msg.as_str());
+                        debug!("Trying to delete message in background with hash: {}", sha256_hash);
+                        atm.delete_message_background(profile, &sha256_hash).await?;
+                        debug!("Deleted message in background with hash: {}", sha256_hash);
+                    }
+                    Ok(Some(*packed_msg))
+                }
+                Ok(WebSocketResponses::Disconnected) => {
+                    // Connection dropped while waiting. Treat as "no
+                    // message right now" so streaming callers quietly
+                    // retry on the reconnected socket.
+                    debug!("WebSocket disconnected while awaiting next packed message");
                     Ok(None)
                 }
-                value = rx => {
-                    match value {
-                        Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
-                            // If auto_delete is true, delete the message
-                            if auto_delete {
-                                let sha256_hash = sha256::digest(packed_msg.as_str());
-                                debug!("Trying to delete message in background with hash: {}", sha256_hash);
-                                atm.delete_message_background(profile, &sha256_hash).await?;
-                                debug!("Deleted message in background with hash: {}", sha256_hash);
-                            }
-                            Ok(Some(*packed_msg))
-                        }
-                        Ok(WebSocketResponses::Disconnected) => {
-                            // Connection dropped while waiting. Treat as "no
-                            // message right now" so streaming callers quietly
-                            // retry on the reconnected socket.
-                            debug!("WebSocket disconnected while awaiting next packed message");
-                            Ok(None)
-                        }
-                        Ok(WebSocketResponses::MessageReceived(_, _)) => {
-                            Err(ATMError::MsgReceiveError(
-                                "Received unpacked message when expecting packed message. Make sure WebSocket is configured with skip_unpack_messages=true".into()
-                            ))
-                        }
-                        Err(e) => {
-                            warn!("Error receiving message: {:?}", e);
-                            Err(ATMError::MsgReceiveError(format!(
-                                "Error receiving message: {e:?}"
-                            )))
-                        }
-                    }
+                Ok(WebSocketResponses::MessageReceived(_, _)) => {
+                    Err(ATMError::MsgReceiveError(
+                        "Received unpacked message when expecting packed message. Make sure WebSocket is configured with skip_unpack_messages=true".into()
+                    ))
+                }
+                Err(e) => {
+                    warn!("Error receiving message: {:?}", e);
+                    Err(ATMError::MsgReceiveError(format!(
+                        "Error receiving message: {e:?}"
+                    )))
                 }
             }
         }
@@ -1449,6 +1419,43 @@ impl<'a> MessagePickupOps<'a> {
             .send_delivery_request_frames(self.atm, profile, limit, wait_for_response)
             .await
     }
+}
+
+/// Wait up to `wait` (forever when `None`) for the websocket task's answer on
+/// `rx`. When the wait runs out, `cancel` withdraws the request and the result
+/// is `None`.
+///
+/// A frame handed over at the instant the wait runs out must not be lost. The
+/// websocket task re-homes a frame only when the hand-over *fails*, which
+/// needs the receiver gone, and a receiver that has timed out but is not yet
+/// dropped accepts the frame and then discards it with itself. So on timeout
+/// the receiver is closed first — any later hand-over fails and is re-homed —
+/// and whatever was handed over before the close is kept. A frame that is
+/// never stored (a monitor batch) has no other copy to fall back on.
+async fn await_next(
+    ws_channel: &mpsc::Sender<WebSocketCommands>,
+    mut rx: oneshot::Receiver<WebSocketResponses>,
+    wait: Option<Duration>,
+    cancel: WebSocketCommands,
+) -> Result<Option<Result<WebSocketResponses, oneshot::error::RecvError>>, ATMError> {
+    let Some(wait) = wait else {
+        return Ok(Some(rx.await));
+    };
+    if let Ok(value) = tokio::time::timeout(wait, &mut rx).await {
+        return Ok(Some(value));
+    }
+    rx.close();
+    if let Ok(value) = rx.try_recv() {
+        debug!("Message arrived as the wait ran out; keeping it");
+        return Ok(Some(Ok(value)));
+    }
+    debug!("Timeout reached, no message received");
+    ws_channel.send(cancel).await.map_err(|err| {
+        ATMError::TransportError(format!(
+            "Could not send the cancel command to websocket: {err:?}"
+        ))
+    })?;
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -2041,5 +2048,74 @@ mod tests {
             rx.try_recv().is_err(),
             "only the unprocessable frame is reported, not the valid one"
         );
+    }
+
+    // ── `await_next`: a frame handed over as the wait runs out ──────────────
+
+    fn frame(n: usize) -> WebSocketResponses {
+        WebSocketResponses::PackedMessageReceived(Box::new(format!("frame-{n}")))
+    }
+
+    /// A frame already handed over when the wait runs out is returned, not
+    /// dropped with the receiver, and the request is not cancelled — the
+    /// websocket task has already retired it.
+    #[tokio::test]
+    async fn a_frame_ready_when_the_wait_runs_out_is_kept() {
+        for n in 0..200 {
+            let (ws_tx, mut ws_rx) = mpsc::channel(4);
+            let (tx, rx) = oneshot::channel();
+            assert!(tx.send(frame(n)).is_ok());
+
+            let got = await_next(
+                &ws_tx,
+                rx,
+                Some(Duration::ZERO),
+                WebSocketCommands::CancelNext(1),
+            )
+            .await
+            .expect("no transport error");
+
+            assert!(
+                matches!(got, Some(Ok(WebSocketResponses::PackedMessageReceived(ref m))) if **m == format!("frame-{n}")),
+                "iteration {n}: a frame handed over before the timeout was lost"
+            );
+            assert!(
+                ws_rx.try_recv().is_err(),
+                "a retired request is not cancelled"
+            );
+        }
+    }
+
+    /// Under a real race between the hand-over and the timeout, every frame
+    /// ends up somewhere: either the waiter returns it, or the hand-over fails
+    /// and the websocket task gets it back to re-home. A hand-over that
+    /// succeeds while the waiter returns `None` is a lost frame.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_hand_over_racing_the_timeout_is_never_lost() {
+        let wait = Duration::from_micros(500);
+        for n in 0..500 {
+            let (ws_tx, _ws_rx) = mpsc::channel(4);
+            let (tx, rx) = oneshot::channel();
+            let sender = tokio::spawn(async move {
+                tokio::time::sleep(wait).await;
+                tx.send(frame(n)).is_ok()
+            });
+
+            let got = await_next(&ws_tx, rx, Some(wait), WebSocketCommands::CancelNext(1))
+                .await
+                .expect("no transport error");
+            let accepted = sender.await.expect("sender task");
+
+            assert_eq!(
+                accepted,
+                got.is_some(),
+                "iteration {n}: hand-over accepted={accepted} but the waiter returned {}",
+                if got.is_some() {
+                    "the frame"
+                } else {
+                    "nothing"
+                }
+            );
+        }
     }
 }

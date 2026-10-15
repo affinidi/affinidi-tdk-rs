@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (0.36.2) — a frame arriving as a live-stream wait times out is no longer lost
+
+### Fixed
+
+- **A live-stream frame that arrived just as a wait timed out could be
+  silently lost.** 0.32.1 re-homes a frame whose waiter has *dropped* its
+  receiver. A narrower window remained: the waiter's `select!` had chosen its
+  timeout but not yet dropped the receiver, so the websocket task's hand-over
+  succeeded and the frame was then discarded with the receiver. On timeout the
+  waiter now closes its receiver and keeps anything already handed over;
+  after the close a hand-over fails and the frame is re-homed as before.
+  Applies to `live_stream_next`, `live_stream_next_frame`,
+  `live_stream_next_packed` and `live_stream_get`.
+- Stored messages lost this way came back on a later pickup. A frame that is
+  never stored did not: a mediator monitor batch lost here is gone, which
+  showed up as `the_monitor_follows_a_message_from_arrival_to_deletion` in
+  affinidi-messaging-mediator failing about 1 run in 10, a monitor event
+  missing for 30 s.
+- No API change. A caller polling with a `wait` may now receive, at the end
+  of a wait, a frame it would previously have lost (R3.6).
+
 ## Unreleased (0.36.1) — protocol types from `affinidi-messaging-mediator-types`
 
 The mediator protocol types (ACLs, accounts, message pickup, problem reports,
