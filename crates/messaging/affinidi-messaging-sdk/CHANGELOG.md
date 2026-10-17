@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (0.36.3) — a token-refresh reconnect no longer drops reply waiters
+
+### Fixed
+
+- **A reply in flight across the proactive token-refresh reconnect was lost
+  to its waiter.** At 80% of the access token's lifetime the websocket task
+  refreshes the token and reconnects, and that path failed every pending
+  `live_stream_get` / `live_stream_next` waiter as if the socket had been
+  lost. It had not: a request already written was taken by the mediator, and
+  its reply is delivered on the fresh socket moments later — to nobody, so it
+  reached the consumer's general handler as an unsolicited message. A VTC
+  answered a mediator `messaging/message/status` `#response` that way with a
+  422 every 12 minutes (OpenVTC/verifiable-trust-infrastructure#1949). The
+  refresh reconnect now keeps the waiters; each still has its own timeout,
+  and a reconnect that then fails fails them as before.
+- No API change.
+
 ## Unreleased (0.36.2) — a frame arriving as a live-stream wait times out is no longer lost
 
 ### Fixed

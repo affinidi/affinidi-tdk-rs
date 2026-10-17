@@ -468,14 +468,7 @@ impl WebSocketTransport {
                         if let Some(web_socket) = self.web_socket.as_mut() {
                             close_bounded(web_socket).await;
                         }
-                        self.web_socket = None;
-                        self.fail_pending_requests();
-                        // Self-initiated reconnect (not a failure): keep the
-                        // immediate retry, but clear the stability marker so the
-                        // fresh socket has to earn its own reset.
-                        self.connected_at = None;
-                        self.connect_delay = 0;
-                        self.connect_delay_timer = None;
+                        self.drop_socket_for_token_refresh();
                     },
                     _ = watchdog.tick(), if self.web_socket.is_some() => {
                         let reads_paused =
@@ -1323,6 +1316,31 @@ impl WebSocketTransport {
         }
     }
 
+    /// Let go of the socket for a proactive token refresh, keeping every
+    /// in-flight request waiter.
+    ///
+    /// Unlike every other disconnect, this one is ours and is not a loss: a
+    /// request already written was taken by the mediator, and its reply waits
+    /// in our inbox and is delivered on the fresh socket moments later.
+    /// Failing the waiter here (as this path once did, through
+    /// [`Self::fail_pending_requests`]) left that reply with nobody to take it,
+    /// so it was routed to the consumer's general handler as an unsolicited
+    /// message — a VTC answered a mediator `message/status` `#response` with a
+    /// 422 every token lifetime (OpenVTC/verifiable-trust-infrastructure#1949).
+    /// Every waiter keeps its own timeout and cancel, and if the reconnect then
+    /// fails, that failure's path fails them as before.
+    fn drop_socket_for_token_refresh(&mut self) {
+        self.web_socket = None;
+        self.awaiting_pong = false;
+        let _ = self.conn_state_tx.send(ConnState::Disconnected);
+        // Self-initiated reconnect (not a failure): keep the immediate retry,
+        // but clear the stability marker so the fresh socket has to earn its
+        // own reset.
+        self.connected_at = None;
+        self.connect_delay = 0;
+        self.connect_delay_timer = None;
+    }
+
     /// Notify every in-flight request waiter that the connection was lost.
     ///
     /// Called on each disconnect transition so callers (`live_stream_get` /
@@ -2039,6 +2057,30 @@ mod tests {
             .next()
             .expect("the reply must be cached, not lost with the gone waiter");
         assert_eq!(cached.id, "reply-1");
+    }
+
+    /// A proactive token-refresh reconnect is not a loss: the waiter for a
+    /// reply survives it and takes the reply the fresh socket delivers (#1949).
+    #[tokio::test]
+    async fn a_token_refresh_reconnect_keeps_a_reply_waiter() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        let (tx, mut rx) = oneshot::channel();
+        assert!(ws.inbound_cache.get_or_add_wanted("thread-1", tx).is_none());
+
+        ws.drop_socket_for_token_refresh();
+        assert!(
+            rx.try_recv().is_err(),
+            "the waiter must not be answered by the refresh"
+        );
+
+        ws.process_inbound_didcomm_message(&atm, plaintext_frame("reply-1", Some("thread-1")))
+            .await;
+        match rx.await {
+            Ok(WebSocketResponses::MessageReceived(msg, _)) => assert_eq!(msg.id, "reply-1"),
+            Ok(_) => panic!("expected the reply, got another response"),
+            Err(e) => panic!("the waiter was dropped: {e}"),
+        }
     }
 
     /// A frame that can never unpack — here a plaintext the secure default
