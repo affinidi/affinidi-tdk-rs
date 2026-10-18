@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.37.0) — trust-tasks 0.32
+
+Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.32. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.32 adds a `version` to `SealedRecord` (trustoverip/dtgwg-trust-tasks-tf#816) and `sign-document` to the device `Capability` (#819), and adds rooms `register` 0.2 and `group/remove` 0.3 (released in #818). None of it touches anything here. No source change.
+
 ## Unreleased (0.36.3) — a token-refresh reconnect no longer drops reply waiters
 
 ### Fixed

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.22.0) — SDK 0.37, trust-tasks 0.32
+
+Moves to `affinidi-messaging-sdk` 0.37 and `trust-tasks-rs` 0.32. The SDK is a public dependency here, so this crate moves a minor. No source change.
+
 ## Unreleased (0.21.1) — end-to-end tests moved to affinidi-messaging-mediator
 
 The tests that ran this crate against the embedded test mediator
