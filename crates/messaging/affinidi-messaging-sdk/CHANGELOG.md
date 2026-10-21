@@ -11,6 +11,9 @@
   ignoring a did:scid `src`, and finds the key a `skid` or signature `kid`
   names by DID and fragment. Before, `did:scid:vh:1:<scid>?src=…#key-1` matched
   neither its sender nor its key. Every other DID compares as before.
+- **Behaviour:** the transport adapter's authenticated sender (`from` against
+  the DID of `encrypted_from_kid`) is bound the same way, so a did:scid sender
+  that gives `src` in only one of the two is still its sender.
 - A did:scid identity's secrets are registered under its document's key ids
   (`did:scid:vh:1:<scid>#key-1`).
 
