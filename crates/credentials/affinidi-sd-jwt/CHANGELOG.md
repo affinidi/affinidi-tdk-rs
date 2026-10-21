@@ -1,5 +1,29 @@
 # Affinidi SD-JWT Changelog
 
+## Unreleased (0.1.8) — RFC 9901 §7.1 disclosure processing
+
+Fixes #962. `holder::resolve_claims`, and so `verifier::verify`, now perform
+RFC 9901 §7.1 steps 3–5 in one pass over the payload and every disclosed value.
+
+- **Fixed (now accepted):** recursive Disclosures — a digest inside another
+  Disclosure's value (RFC 9901 §4.2.6, Appendix A.2). The verifier collected
+  digests from the issuer-signed payload only, so it refused the RFC's own A.2
+  example and SD-JWTs this crate's `issuer::issue` makes from a nested frame.
+- **Behaviour (stricter):** refused, where they were silently accepted:
+  - a digest appearing more than once, at any level or through a Disclosure,
+    disclosed or not (step 4);
+  - an object `_sd` digest whose Disclosure has no claim name, names `_sd` or
+    `...`, or names a claim already present at that level (step 3.c.ii) —
+    previously the Disclosure overwrote the issuer's plain value;
+  - an array `{"...": digest}` whose Disclosure has a claim name (step 3.c.iii);
+  - a non-array `_sd`, or a non-string entry in it.
+  - `resolve_claims` also refuses an unreferenced or repeated Disclosure
+    (step 5), which only `verify` checked before.
+
+  Each needs the issuer-signed payload itself to carry the structure: a holder
+  cannot produce one from a well-formed SD-JWT. Only `{"...": digest}` objects
+  with no other key are array-element digests (RFC 9901 §4.2.4.2).
+
 ## Unreleased (0.1.7) — Key Binding JWT `typ` and freshness
 
 - **Behaviour (stricter):** with `verify_kb`, a Key Binding JWT whose header

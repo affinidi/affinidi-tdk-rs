@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-sd-jwt"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "affinidi-sd-jwt",
  "base64 0.23.1",

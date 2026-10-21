@@ -54,7 +54,10 @@ impl VerificationResult {
 /// - The issuer JWS signature is invalid
 /// - `_sd_alg` in the payload doesn't match the provided hasher
 /// - Duplicate disclosures are detected (RFC 9901 §8.1)
-/// - A disclosure digest is not found in the payload
+/// - A disclosure is not referenced from the payload, directly or through
+///   another disclosure (RFC 9901 §7.1 step 5)
+/// - A digest appears more than once, or a disclosure does not fit where its
+///   digest sits (RFC 9901 §7.1 steps 3-4; see [`resolve_claims`])
 /// - KB-JWT verification is requested but fails (missing cnf, sd_hash mismatch, etc.)
 pub fn verify(
     sd_jwt: &SdJwt,
@@ -140,16 +143,14 @@ fn verify_inner(
         )));
     }
 
-    // 3. Check for duplicate disclosures (S3, RFC 9901 §8.1)
-    check_duplicate_disclosures(&sd_jwt.disclosures)?;
+    // 3. Each disclosure's digest is the one this hasher gives
+    check_disclosure_digests(&sd_jwt.disclosures, hasher)?;
 
-    // 4. Verify disclosure digests match the _sd array
-    verify_disclosure_digests(&payload, &sd_jwt.disclosures, hasher)?;
-
-    // 5. Resolve disclosed claims
+    // 4. Resolve disclosed claims (RFC 9901 §7.1 steps 3-5): every digest
+    //    once, every disclosure referenced, recursively through disclosures
     let claims = resolve_claims(&payload, &sd_jwt.disclosures)?;
 
-    // 6. Verify KB-JWT if requested
+    // 5. Verify KB-JWT if requested
     let kb_verified = if options.verify_kb {
         if let Some(kb_jwt_str) = &sd_jwt.kb_jwt {
             // Extract cnf.jwk from payload
@@ -278,70 +279,21 @@ fn kb_jwt_typ(jws: &str) -> Result<Option<String>> {
         .map(str::to_string))
 }
 
-/// Check for duplicate disclosure digests (RFC 9901 §8.1).
-fn check_duplicate_disclosures(disclosures: &[crate::disclosure::Disclosure]) -> Result<()> {
-    let mut seen = std::collections::HashSet::new();
-    for d in disclosures {
-        if !seen.insert(&d.digest) {
-            return Err(SdJwtError::Verification(format!(
-                "duplicate disclosure digest: {}",
-                d.digest
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Verify that all disclosure digests appear in the payload's _sd arrays.
-fn verify_disclosure_digests(
-    payload: &Value,
+/// Check each disclosure's digest against the verifying hasher, so a
+/// disclosure parsed with another hash function cannot match by its old digest.
+fn check_disclosure_digests(
     disclosures: &[crate::disclosure::Disclosure],
     hasher: &dyn SdHasher,
 ) -> Result<()> {
-    let mut all_digests = std::collections::HashSet::new();
-    collect_digests(payload, &mut all_digests);
-
-    for disclosure in disclosures {
-        let expected_digest = hasher.hash_b64(disclosure.serialized.as_bytes());
-        if !all_digests.contains(expected_digest.as_str()) {
+    for d in disclosures {
+        let expected = hasher.hash_b64(d.serialized.as_bytes());
+        if d.digest != expected {
             return Err(SdJwtError::Verification(format!(
-                "disclosure digest not found in payload: {expected_digest}",
+                "disclosure digest not found in payload: {expected}"
             )));
         }
     }
-
     Ok(())
-}
-
-/// Recursively collect all digest strings from _sd arrays and {"...": digest} entries.
-fn collect_digests(value: &Value, digests: &mut std::collections::HashSet<String>) {
-    match value {
-        Value::Object(obj) => {
-            if let Some(sd_array) = obj.get("_sd").and_then(|v| v.as_array()) {
-                for item in sd_array {
-                    if let Some(s) = item.as_str() {
-                        digests.insert(s.to_string());
-                    }
-                }
-            }
-
-            if let Some(digest) = obj.get("...").and_then(|v| v.as_str()) {
-                digests.insert(digest.to_string());
-            }
-
-            for (key, val) in obj {
-                if key != "_sd" {
-                    collect_digests(val, digests);
-                }
-            }
-        }
-        Value::Array(arr) => {
-            for item in arr {
-                collect_digests(item, digests);
-            }
-        }
-        _ => {}
-    }
 }
 
 #[cfg(test)]
