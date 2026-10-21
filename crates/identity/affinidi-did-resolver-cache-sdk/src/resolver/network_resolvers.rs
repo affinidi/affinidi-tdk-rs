@@ -404,6 +404,11 @@ impl AsyncResolver for CheqdResolver {
 // ---------------------------------------------------------------------------
 
 /// Resolver for `did:scid` — Self-Certifying Identifier DID method.
+///
+/// Refuses non-public hosts for the `vh` format; [`ScidResolverWithPolicy`]
+/// takes an explicit [`HostPolicy`], and is what [`DIDCacheClient`] registers.
+///
+/// [`DIDCacheClient`]: crate::DIDCacheClient
 #[cfg(feature = "did-scid")]
 pub struct ScidResolver;
 
@@ -417,15 +422,60 @@ impl AsyncResolver for ScidResolver {
         &'a self,
         did: &'a DID,
     ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
-        Box::pin(async move {
-            if !matches!(did.method(), DIDMethod::Scid { .. }) {
-                return None;
-            }
+        Box::pin(resolve_scid(did, HostPolicy::PublicOnly))
+    }
+}
 
-            let did_str = did.to_string();
+/// Resolver for `did:scid` under an explicit [`HostPolicy`].
+///
+/// A `did:scid:vh:1` value resolves through its did:webvh form, so the policy
+/// applies exactly as it does to [`WebvhResolver`]: a local stack serving
+/// `did:scid:vh:1:{SCID}?src=localhost:8000` opts out with
+/// [`HostPolicy::AllowPrivate`], or with
+/// [`DIDCacheConfigBuilder::with_host_policy`](crate::config::DIDCacheConfigBuilder::with_host_policy).
+#[cfg(feature = "did-scid")]
+#[derive(Debug, Clone, Copy)]
+pub struct ScidResolverWithPolicy {
+    policy: HostPolicy,
+}
 
-            Some(
-                did_scid::resolve(&did_str, None, None)
+#[cfg(feature = "did-scid")]
+impl ScidResolverWithPolicy {
+    /// Create a resolver under an explicit [`HostPolicy`].
+    pub fn new(policy: HostPolicy) -> Self {
+        Self { policy }
+    }
+}
+
+#[cfg(feature = "did-scid")]
+impl AsyncResolver for ScidResolverWithPolicy {
+    fn name(&self) -> &str {
+        "ScidResolver"
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        did: &'a DID,
+    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+        Box::pin(resolve_scid(did, self.policy))
+    }
+}
+
+#[cfg(feature = "did-scid")]
+async fn resolve_scid(did: &DID, policy: HostPolicy) -> Resolution {
+    if !matches!(did.method(), DIDMethod::Scid { .. }) {
+        return None;
+    }
+
+    let did_str = did.to_string();
+    let policy = match policy {
+        HostPolicy::AllowPrivate => didwebvh_rs::resolve::HostPolicy::AllowPrivate,
+        _ => didwebvh_rs::resolve::HostPolicy::PublicOnly,
+    };
+    let options = didwebvh_rs::resolve::ResolveOptions::default().with_host_policy(policy);
+
+    Some(
+                did_scid::resolve_with_options(&did_str, None, options)
                     .await
                     .map_err(|e| match e {
                         did_scid::errors::DIDSCIDError::WebVHError(
@@ -446,8 +496,6 @@ impl AsyncResolver for ScidResolver {
                         }
                     }),
             )
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -835,7 +835,9 @@ impl DIDCacheClient {
         resolvers
             .entry(MethodName::Scid)
             .or_default()
-            .push_back(Box::new(network_resolvers::ScidResolver));
+            .push_back(Box::new(network_resolvers::ScidResolverWithPolicy::new(
+                config.host_policy,
+            )));
         #[cfg(feature = "did-ebsi")]
         resolvers
             .entry(MethodName::Ebsi)

@@ -1,5 +1,13 @@
 # did:scid
 
+## Unreleased (0.3.1) — `resolve_with_options`
+
+- **Added:** `resolve_with_options`, which passes `didwebvh_rs::resolve::ResolveOptions`
+  to the did:webvh resolution of the `vh` format, so a caller can resolve
+  under its own host policy (for example `did:scid:vh:1:<scid>?src=localhost:8000`
+  in a local stack). `resolve` now delegates to it with the options it used
+  before. No behaviour change.
+
 ## Unreleased (0.3.0) — didwebvh-rs 0.8
 
 **Breaking.** Moves to `didwebvh-rs` 0.8 (on `affinidi-data-integrity` 0.8).

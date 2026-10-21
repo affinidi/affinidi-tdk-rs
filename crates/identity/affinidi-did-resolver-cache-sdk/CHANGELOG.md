@@ -1,5 +1,16 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.42) — did:scid follows the configured host policy
+
+- **Behaviour:** the built-in did:scid resolver now applies
+  `DIDCacheConfigBuilder::with_host_policy` the way did:webvh does. Before,
+  it always refused non-public hosts, so a local stack that allowed
+  `did:webvh:<scid>:localhost%3A8000` could not resolve its
+  `did:scid:vh:1:<scid>?src=localhost:8000` form. The default policy
+  (`PublicOnly`) is unchanged.
+- **Added:** `ScidResolverWithPolicy`, which `DIDCacheClient` now registers.
+  `ScidResolver` is unchanged and still refuses non-public hosts.
+
 ## Unreleased (0.8.41) — didwebvh-rs 0.8, did-scid 0.3
 
 Moves to `didwebvh-rs` 0.8 and `did-scid` 0.3, both on `affinidi-data-integrity`

@@ -78,6 +78,30 @@ pub async fn resolve(
     peer_src: Option<ScidMethod>,
     timeout: Option<Duration>,
 ) -> Result<Document, DIDSCIDError> {
+    resolve_with_options(
+        did,
+        peer_src,
+        didwebvh_rs::resolve::ResolveOptions {
+            timeout,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+/// Resolve a SCID DID Method, passing `options` to the did:webvh resolution of
+/// the `vh` format.
+///
+/// [`resolve`] uses `ResolveOptions::default()`, whose host policy refuses
+/// non-public hosts; use this to resolve under the caller's own policy, such
+/// as a local stack serving `did:scid:vh:1:<scid>?src=localhost:8000`, the same
+/// way its `did:webvh` form would be. The options do not apply to other
+/// formats.
+pub async fn resolve_with_options(
+    did: &str,
+    peer_src: Option<ScidMethod>,
+    options: didwebvh_rs::resolve::ResolveOptions,
+) -> Result<Document, DIDSCIDError> {
     // No prefix test here: `convert_scid_to_method` matches the whole
     // `did:scid:<format>:<version>:<scid>` shape and reports an unknown format
     // or version by name. A `starts_with("did:scid:vh:1")` gate used to sit in
@@ -87,16 +111,7 @@ pub async fn resolve(
         ScidMethod::WebVH(webvh_did) => {
             debug!("Resolving WebVH DID: {webvh_did}");
             let mut method = DIDWebVHState::default();
-            match method
-                .resolve(
-                    &webvh_did,
-                    didwebvh_rs::resolve::ResolveOptions {
-                        timeout,
-                        ..Default::default()
-                    },
-                )
-                .await
-            {
+            match method.resolve(&webvh_did, options).await {
                 // didwebvh-rs resolves a deactivated DID `Ok` and flags it in
                 // the metadata only; this returns a bare `Document`, so refuse
                 // it here or the retired keys stay usable.

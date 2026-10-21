@@ -1,5 +1,6 @@
 //! Host policy through the resolver cache: one `DIDCacheConfigBuilder` setting
-//! decides whether did:web and did:webvh resolution may contact a private host.
+//! decides whether did:web, did:webvh and did:scid resolution may contact a
+//! private host.
 //!
 //! Each test points a DID at a loopback TCP listener and counts the connections
 //! it accepts. Nothing serves a valid document: under the default policy the
@@ -24,7 +25,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-#[cfg(feature = "did-webvh")]
+#[cfg(any(feature = "did-webvh", feature = "did-scid"))]
 const SCID: &str = "Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai";
 
 const RESOLVE_DEADLINE: Duration = Duration::from_secs(20);
@@ -161,5 +162,34 @@ async fn web_localhost_is_contacted_under_allow_private() {
     assert!(
         listener.connections_after_grace().await > 0,
         "the same setting must let did:web reach the local host ({error:?})"
+    );
+}
+
+#[cfg(feature = "did-scid")]
+#[tokio::test]
+async fn scid_localhost_is_refused_by_default_without_connecting() {
+    let listener = CountingListener::start().await;
+    let did = format!("did:scid:vh:1:{SCID}?src=localhost:{}", listener.port);
+
+    resolve(&cache_client(None).await, &did)
+        .await
+        .expect_err("a localhost did:scid must not resolve under the default policy");
+
+    assert_eq!(listener.connections_after_grace().await, 0);
+}
+
+#[cfg(feature = "did-scid")]
+#[tokio::test]
+async fn scid_localhost_is_contacted_under_allow_private() {
+    let listener = CountingListener::start().await;
+    let did = format!("did:scid:vh:1:{SCID}?src=localhost:{}", listener.port);
+
+    let error = resolve(&cache_client(Some(HostPolicy::AllowPrivate)).await, &did)
+        .await
+        .expect_err("the listener serves no log");
+
+    assert!(
+        listener.connections_after_grace().await > 0,
+        "the same setting must let did:scid reach the local host ({error:?})"
     );
 }
