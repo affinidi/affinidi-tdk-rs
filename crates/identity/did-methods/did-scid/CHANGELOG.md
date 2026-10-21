@@ -1,6 +1,6 @@
 # did:scid
 
-## Unreleased — a did:scid resolves to its own document
+## Unreleased (0.4.0) — a did:scid resolves to its own document
 
 - **Behaviour (breaking for did:scid callers):** `resolve` and
   `resolve_with_options` now return the did:scid's own document for the `vh`

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — did:scid profiles
+## Unreleased (0.23.1) — did:scid profiles
 
 - **Behaviour:** a `message.from` that differs from the profile DID only by a
   did:scid `src` locator no longer logs a mismatch warning.

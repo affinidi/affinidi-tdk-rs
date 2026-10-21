@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — a did:scid identity sends and receives as itself
+## Unreleased (0.38.1) — a did:scid identity sends and receives as itself
 
 - **Behaviour:** packing authcrypt `from` a did:scid DID URL
   (`did:scid:vh:1:<scid>?src=…`) gives the JWE `skid` the same `src`. The

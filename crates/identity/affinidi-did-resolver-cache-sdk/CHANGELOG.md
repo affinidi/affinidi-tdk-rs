@@ -1,6 +1,6 @@
 # Affinidi DID Resolver Cache SDK
 
-## Unreleased — native did:scid resolution
+## Unreleased (0.8.42) — native did:scid resolution
 
 - **Behaviour (breaking for did:scid callers):** a `did:scid:vh:1` DID resolves
   to its own document, with the bare `did:scid:vh:1:<scid>` DID as `id` and its

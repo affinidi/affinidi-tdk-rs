@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — did:scid sender binding
+## Unreleased (0.15.11) — did:scid sender binding
 
 - **Behaviour (`messaging-core` adapter):** the plaintext `from` is checked
   against the authenticated sender by DID, ignoring a did:scid `src` locator,
