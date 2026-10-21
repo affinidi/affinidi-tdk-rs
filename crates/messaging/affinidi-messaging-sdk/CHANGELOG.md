@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.38.0) — trust-tasks 0.33
+
+Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.33. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.33 (trustoverip/dtgwg-trust-tasks-tf#858) adds a linking form to `persona/contact/put/1.1` and makes `subjectDid` optional in the `get`/`list` 1.1 responses. None of it touches anything here. No source change.
+
 ## Unreleased (0.37.0) — trust-tasks 0.32
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.32. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.32 adds a `version` to `SealedRecord` (trustoverip/dtgwg-trust-tasks-tf#816) and `sign-document` to the device `Capability` (#819), and adds rooms `register` 0.2 and `group/remove` 0.3 (released in #818). None of it touches anything here. No source change.
