@@ -5,11 +5,13 @@
  * creates a Key Binding JWT to prove possession of the holder key.
  */
 
-use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+
+use serde_json::{Map, Value};
 
 use crate::SdJwt;
 use crate::disclosure::Disclosure;
-use crate::error::Result;
+use crate::error::{Result, SdJwtError};
 use crate::hasher::SdHasher;
 use crate::signer::JwtSigner;
 
@@ -101,81 +103,163 @@ pub fn parse_presentation(serialized: &str, hasher: &dyn SdHasher) -> Result<SdJ
 ///
 /// Returns the claims object with disclosed values restored and SD-JWT
 /// internal claims (`_sd`, `_sd_alg`) removed.
+///
+/// This is the processing of RFC 9901 §7.1 steps 3–5, and refuses what those
+/// steps refuse:
+/// - a digest that appears more than once, in the payload or in a disclosed
+///   value (step 4);
+/// - an object `_sd` digest whose Disclosure is not `[salt, name, value]`, or
+///   names `_sd` or `...`, or a claim already present at that level
+///   (step 3.c.ii);
+/// - an array `{"...": digest}` whose Disclosure is not `[salt, value]`
+///   (step 3.c.iii);
+/// - a Disclosure no digest refers to, directly or through another Disclosure
+///   (step 5), and the same Disclosure given twice.
+///
+/// Disclosed values are processed recursively, so a Disclosure referenced from
+/// inside another one (RFC 9901 §4.2.6, Appendix A.2) resolves.
 pub fn resolve_claims(payload: &Value, disclosures: &[Disclosure]) -> Result<Value> {
-    let mut claims = payload.clone();
+    let mut by_digest = HashMap::with_capacity(disclosures.len());
+    for d in disclosures {
+        if by_digest.insert(d.digest.as_str(), d).is_some() {
+            return Err(SdJwtError::Verification(format!(
+                "duplicate disclosure digest: {}",
+                d.digest
+            )));
+        }
+    }
 
+    let mut resolver = Resolver {
+        disclosures: by_digest,
+        seen: HashSet::new(),
+    };
+    let mut claims = resolver.value(payload.clone(), 0)?;
     if let Some(obj) = claims.as_object_mut() {
-        resolve_object(obj, disclosures)?;
-        obj.remove("_sd");
         obj.remove("_sd_alg");
+    }
+
+    for d in disclosures {
+        if !resolver.seen.contains(&d.digest) {
+            return Err(SdJwtError::Verification(format!(
+                "disclosure digest not found in payload: {}",
+                d.digest
+            )));
+        }
     }
 
     Ok(claims)
 }
 
-/// Recursively resolve `_sd` digests in an object using the provided disclosures.
-fn resolve_object(
-    obj: &mut serde_json::Map<String, Value>,
-    disclosures: &[Disclosure],
-) -> Result<()> {
-    let digest_map: std::collections::HashMap<&str, &Disclosure> =
-        disclosures.iter().map(|d| (d.digest.as_str(), d)).collect();
+/// Deepest nesting of objects and arrays, counted through disclosed values,
+/// that [`resolve_claims`] processes. Recursive Disclosures can chain, so the
+/// per-document depth limit of the JSON parser does not bound it.
+const MAX_DEPTH: usize = 128;
 
-    if let Some(sd_array) = obj.remove("_sd")
-        && let Some(digests) = sd_array.as_array()
-    {
-        for digest_val in digests {
-            if let Some(digest_str) = digest_val.as_str()
-                && let Some(disclosure) = digest_map.get(digest_str)
-                && let Some(name) = &disclosure.claim_name
-            {
-                obj.insert(name.clone(), disclosure.claim_value.clone());
-            }
-        }
-    }
-
-    let keys: Vec<String> = obj.keys().cloned().collect();
-    for key in keys {
-        if let Some(value) = obj.get_mut(&key) {
-            match value {
-                Value::Object(nested) => resolve_object(nested, disclosures)?,
-                Value::Array(arr) => resolve_array(arr, disclosures)?,
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
+/// One pass of RFC 9901 §7.1 over a payload and the values it discloses.
+struct Resolver<'a> {
+    disclosures: HashMap<&'a str, &'a Disclosure>,
+    /// Every digest met so far, disclosed or not.
+    seen: HashSet<String>,
 }
 
-/// Resolve `{"...": digest}` entries in arrays.
-fn resolve_array(arr: &mut Vec<Value>, disclosures: &[Disclosure]) -> Result<()> {
-    let digest_map: std::collections::HashMap<&str, &Disclosure> =
-        disclosures.iter().map(|d| (d.digest.as_str(), d)).collect();
-
-    let mut i = 0;
-    while i < arr.len() {
-        if let Some(obj) = arr[i].as_object()
-            && let Some(digest_val) = obj.get("...")
-            && let Some(digest_str) = digest_val.as_str()
-        {
-            if let Some(disclosure) = digest_map.get(digest_str) {
-                arr[i] = disclosure.claim_value.clone();
-            } else {
-                arr.remove(i);
-                continue;
-            }
+impl<'a> Resolver<'a> {
+    /// Record a digest (refusing one already met) and return its Disclosure,
+    /// if one was presented.
+    fn digest(&mut self, digest: &str) -> Result<Option<&'a Disclosure>> {
+        if !self.seen.insert(digest.to_string()) {
+            return Err(SdJwtError::Verification(format!(
+                "digest appears more than once: {digest}"
+            )));
         }
-
-        match &mut arr[i] {
-            Value::Object(nested) => resolve_object(nested, disclosures)?,
-            Value::Array(nested_arr) => resolve_array(nested_arr, disclosures)?,
-            _ => {}
-        }
-        i += 1;
+        Ok(self.disclosures.get(digest).copied())
     }
 
-    Ok(())
+    fn value(&mut self, value: Value, depth: usize) -> Result<Value> {
+        if depth > MAX_DEPTH {
+            return Err(SdJwtError::Verification(format!(
+                "claims nested deeper than {MAX_DEPTH}"
+            )));
+        }
+        match value {
+            Value::Object(obj) => Ok(Value::Object(self.object(obj, depth)?)),
+            Value::Array(arr) => Ok(Value::Array(self.array(arr, depth)?)),
+            other => Ok(other),
+        }
+    }
+
+    fn object(&mut self, mut obj: Map<String, Value>, depth: usize) -> Result<Map<String, Value>> {
+        let sd = obj.remove("_sd");
+
+        let mut out = Map::new();
+        for (key, value) in obj {
+            out.insert(key, self.value(value, depth + 1)?);
+        }
+
+        let Some(sd) = sd else {
+            return Ok(out);
+        };
+        let Value::Array(digests) = sd else {
+            return Err(SdJwtError::Verification("_sd must be an array".into()));
+        };
+        for digest in digests {
+            let Value::String(digest) = digest else {
+                return Err(SdJwtError::Verification(
+                    "_sd must contain only strings".into(),
+                ));
+            };
+            let Some(disclosure) = self.digest(&digest)? else {
+                continue; // withheld or decoy
+            };
+            let Some(name) = &disclosure.claim_name else {
+                return Err(SdJwtError::Verification(format!(
+                    "digest {digest} in _sd refers to an array element disclosure"
+                )));
+            };
+            if name == "_sd" || name == "..." {
+                return Err(SdJwtError::Verification(format!(
+                    "disclosure {digest} uses the reserved claim name \"{name}\""
+                )));
+            }
+            if out.contains_key(name) {
+                return Err(SdJwtError::Verification(format!(
+                    "disclosed claim \"{name}\" already exists"
+                )));
+            }
+            let value = self.value(disclosure.claim_value.clone(), depth + 1)?;
+            out.insert(name.clone(), value);
+        }
+        Ok(out)
+    }
+
+    fn array(&mut self, arr: Vec<Value>, depth: usize) -> Result<Vec<Value>> {
+        let mut out = Vec::with_capacity(arr.len());
+        for element in arr {
+            let Some(digest) = array_element_digest(&element) else {
+                out.push(self.value(element, depth + 1)?);
+                continue;
+            };
+            let Some(disclosure) = self.digest(digest)? else {
+                continue; // withheld or decoy: the element is removed
+            };
+            if disclosure.claim_name.is_some() {
+                return Err(SdJwtError::Verification(format!(
+                    "array element digest {digest} refers to an object claim disclosure"
+                )));
+            }
+            out.push(self.value(disclosure.claim_value.clone(), depth + 1)?);
+        }
+        Ok(out)
+    }
+}
+
+/// The digest of an array element `{"...": digest}`: an object whose only key
+/// is `...`, holding a string (RFC 9901 §4.2.4.2).
+fn array_element_digest(element: &Value) -> Option<&str> {
+    let obj = element.as_object()?;
+    if obj.len() != 1 {
+        return None;
+    }
+    obj.get("...")?.as_str()
 }
 
 #[cfg(test)]
