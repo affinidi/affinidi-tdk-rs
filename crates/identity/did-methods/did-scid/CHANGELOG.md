@@ -1,12 +1,24 @@
 # did:scid
 
-## Unreleased (0.3.1) — `resolve_with_options`
+## Unreleased — a did:scid resolves to its own document
 
-- **Added:** `resolve_with_options`, which passes `didwebvh_rs::resolve::ResolveOptions`
-  to the did:webvh resolution of the `vh` format, so a caller can resolve
-  under its own host policy (for example `did:scid:vh:1:<scid>?src=localhost:8000`
-  in a local stack). `resolve` now delegates to it with the options it used
-  before. No behaviour change.
+- **Behaviour (breaking for did:scid callers):** `resolve` and
+  `resolve_with_options` now return the did:scid's own document for the `vh`
+  format, rather than the did:webvh document that verifies it. Its `id` is the
+  bare `did:scid:vh:1:<scid>` DID (`?src=` is a locator, not part of the
+  identity), every reference the log makes to itself is under that DID, and
+  `alsoKnownAs` lists the did:scid DID URL of the log's location and the
+  did:webvh DID. Before, `id` and every key id were the did:webvh DID, which
+  DID Core does not allow for a resolved did:scid and which left a verifier
+  that looked up a `did:scid:…#key` reference with no key to find. Requires
+  `didwebvh-rs` with `did_web::to_scid_did_document`.
+- **Added:** `resolve_scid`, returning a `ScidResolution` with the document and
+  the source, did:webvh DID and version the log was resolved at, so a caller
+  can resolve the bare DID later and refuse an older copy of the log.
+- **Added:** `resolve_with_options`, which passes
+  `didwebvh_rs::resolve::ResolveOptions` to the did:webvh resolution of the
+  `vh` format, so a caller can resolve under its own host policy (for example
+  `did:scid:vh:1:<scid>?src=localhost:8000` in a local stack).
 
 ## Unreleased (0.3.0) — didwebvh-rs 0.8
 

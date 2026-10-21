@@ -422,28 +422,155 @@ impl AsyncResolver for ScidResolver {
         &'a self,
         did: &'a DID,
     ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
-        Box::pin(resolve_scid(did, HostPolicy::PublicOnly))
+        Box::pin(resolve_scid(did, HostPolicy::PublicOnly, None))
+    }
+}
+
+/// What a resolver has verified about each `did:scid` SCID: where its log was
+/// last found, and the latest version it has seen.
+///
+/// A did:scid identity is the bare DID; `?src=` is only a locator (VTI-KEY-160).
+/// The book is what lets the bare DID resolve after its source has been seen
+/// once, and what refuses an older copy of the log served from another source
+/// (VTI-KEY-162): the SCID makes a copy unforgeable, not current.
+///
+/// It is in memory and bounded at [`ScidSourceBook::CAPACITY`] SCIDs; a caller
+/// that must resolve a bare did:scid across restarts records the source it
+/// learned and seeds it back with [`ScidSourceBook::add_source`].
+#[cfg(feature = "did-scid")]
+#[derive(Debug, Default)]
+pub struct ScidSourceBook {
+    seen: std::sync::Mutex<std::collections::HashMap<String, ScidSeen>>,
+}
+
+#[cfg(feature = "did-scid")]
+#[derive(Debug, Clone)]
+struct ScidSeen {
+    source: String,
+    /// `None` for a source seeded by a caller and not yet verified.
+    version: Option<(u32, String)>,
+}
+
+#[cfg(feature = "did-scid")]
+impl ScidSourceBook {
+    /// How many SCIDs the book holds before it forgets one to make room.
+    pub const CAPACITY: usize = 100_000;
+
+    fn key(did: &str) -> String {
+        let did = affinidi_did_common::scid::strip_scid_src(did);
+        did.split('#').next().unwrap_or(&did).to_string()
+    }
+
+    /// The source last recorded for the SCID of `did`, in `src` form.
+    pub fn source(&self, did: &str) -> Option<String> {
+        self.seen
+            .lock()
+            .ok()?
+            .get(&Self::key(did))
+            .map(|seen| seen.source.clone())
+    }
+
+    /// Records the `src` of a did:scid DID URL as where to look for that SCID,
+    /// without changing the latest version verified for it. Returns `false`
+    /// when `did_url` carries no `src`.
+    pub fn add_source(&self, did_url: &str) -> bool {
+        let Some(src) = affinidi_did_common::scid::scid_src(did_url) else {
+            return false;
+        };
+        let Ok(mut seen) = self.seen.lock() else {
+            return false;
+        };
+        let key = Self::key(did_url);
+        match seen.get_mut(&key) {
+            Some(entry) => entry.source = src.to_string(),
+            None => {
+                Self::make_room(&mut seen);
+                seen.insert(
+                    key,
+                    ScidSeen {
+                        source: src.to_string(),
+                        version: None,
+                    },
+                );
+            }
+        }
+        true
+    }
+
+    fn make_room(seen: &mut std::collections::HashMap<String, ScidSeen>) {
+        if seen.len() >= Self::CAPACITY
+            && let Some(key) = seen.keys().next().cloned()
+        {
+            seen.remove(&key);
+        }
+    }
+
+    /// Accepts a verified resolution, or refuses it as older than one already
+    /// verified for the same SCID.
+    fn accept(
+        &self,
+        did: &str,
+        source: &str,
+        version_number: u32,
+        version_id: &str,
+    ) -> Result<(), ResolverError> {
+        let mut seen = self
+            .seen
+            .lock()
+            .map_err(|_| ResolverError::ResolutionFailed("did:scid source book poisoned".into()))?;
+        let key = Self::key(did);
+        if let Some((latest, latest_id)) = seen.get(&key).and_then(|s| s.version.clone())
+            && (version_number < latest || (version_number == latest && version_id != latest_id))
+        {
+            return Err(ResolverError::ResolutionFailed(format!(
+                "{key}: the log at {source} is at version {version_id}, behind {latest_id} \
+                 already verified for this SCID"
+            )));
+        }
+        if !seen.contains_key(&key) {
+            Self::make_room(&mut seen);
+        }
+        seen.insert(
+            key,
+            ScidSeen {
+                source: source.to_string(),
+                version: Some((version_number, version_id.to_string())),
+            },
+        );
+        Ok(())
     }
 }
 
 /// Resolver for `did:scid` under an explicit [`HostPolicy`].
 ///
-/// A `did:scid:vh:1` value resolves through its did:webvh form, so the policy
+/// A `did:scid:vh:1` DID resolves through its did:webvh log, so the policy
 /// applies exactly as it does to [`WebvhResolver`]: a local stack serving
 /// `did:scid:vh:1:{SCID}?src=localhost:8000` opts out with
 /// [`HostPolicy::AllowPrivate`], or with
 /// [`DIDCacheConfigBuilder::with_host_policy`](crate::config::DIDCacheConfigBuilder::with_host_policy).
+///
+/// The document is the did:scid's own, under the bare DID. A DID URL with `src`
+/// resolves through that source; a bare DID through the source its
+/// [`ScidSourceBook`] holds for the SCID, and fails when it holds none.
 #[cfg(feature = "did-scid")]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ScidResolverWithPolicy {
     policy: HostPolicy,
+    sources: std::sync::Arc<ScidSourceBook>,
 }
 
 #[cfg(feature = "did-scid")]
 impl ScidResolverWithPolicy {
-    /// Create a resolver under an explicit [`HostPolicy`].
+    /// Create a resolver under an explicit [`HostPolicy`], with its own source
+    /// book.
     pub fn new(policy: HostPolicy) -> Self {
-        Self { policy }
+        Self::with_sources(policy, Default::default())
+    }
+
+    /// Create a resolver that records into, and resolves bare DIDs from, a
+    /// shared source book.
+    pub fn with_sources(policy: HostPolicy, sources: std::sync::Arc<ScidSourceBook>) -> Self {
+        Self { policy, sources }
     }
 }
 
@@ -457,12 +584,16 @@ impl AsyncResolver for ScidResolverWithPolicy {
         &'a self,
         did: &'a DID,
     ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
-        Box::pin(resolve_scid(did, self.policy))
+        Box::pin(resolve_scid(did, self.policy, Some(&self.sources)))
     }
 }
 
 #[cfg(feature = "did-scid")]
-async fn resolve_scid(did: &DID, policy: HostPolicy) -> Resolution {
+async fn resolve_scid(
+    did: &DID,
+    policy: HostPolicy,
+    sources: Option<&ScidSourceBook>,
+) -> Resolution {
     if !matches!(did.method(), DIDMethod::Scid { .. }) {
         return None;
     }
@@ -474,28 +605,61 @@ async fn resolve_scid(did: &DID, policy: HostPolicy) -> Resolution {
     };
     let options = didwebvh_rs::resolve::ResolveOptions::default().with_host_policy(policy);
 
-    Some(
+    let peer_src = if affinidi_did_common::scid::scid_src(&did_str).is_some() {
+        None
+    } else {
+        sources
+            .and_then(|book| book.source(&did_str))
+            .map(did_scid::ScidMethod::WebVH)
+    };
+
+    let resolution = match did_scid::resolve_scid(&did_str, peer_src, options.clone()).await {
+        Ok(resolution) => resolution,
+        // Formats other than `vh` keep their source method's document.
+        Err(did_scid::errors::DIDSCIDError::UnsupportedFormat) => {
+            return Some(
                 did_scid::resolve_with_options(&did_str, None, options)
                     .await
-                    .map_err(|e| match e {
-                        did_scid::errors::DIDSCIDError::WebVHError(
-                            didwebvh_rs::DIDWebVHError::NetworkError {
-                                url,
-                                status_code,
-                                message,
-                            },
-                        ) => {
-                            error!(
-                                "did:scid resolution fetch failed: url={url} status={status_code:?} {message}"
-                            );
-                            webvh_network_error(url, status_code, message)
-                        }
-                        other => {
-                            error!("did:scid resolution error: {other:?}");
-                            ResolverError::ResolutionFailed(other.to_string())
-                        }
-                    }),
-            )
+                    .map_err(scid_error),
+            );
+        }
+        Err(e) => return Some(Err(scid_error(e))),
+    };
+
+    if let Some(book) = sources
+        && let Err(e) = book.accept(
+            &did_str,
+            &resolution.source,
+            resolution.version_number,
+            &resolution.version_id,
+        )
+    {
+        error!("did:scid resolution refused: {e}");
+        return Some(Err(e));
+    }
+    Some(Ok(resolution.document))
+}
+
+#[cfg(feature = "did-scid")]
+fn scid_error(e: did_scid::errors::DIDSCIDError) -> ResolverError {
+    match e {
+        did_scid::errors::DIDSCIDError::WebVHError(didwebvh_rs::DIDWebVHError::NetworkError {
+            url,
+            status_code,
+            message,
+        }) => {
+            error!("did:scid resolution fetch failed: url={url} status={status_code:?} {message}");
+            webvh_network_error(url, status_code, message)
+        }
+        did_scid::errors::DIDSCIDError::MissingPeerSource => ResolverError::ResolutionFailed(
+            "no source is known for this did:scid; resolve it once with its ?src= DID URL"
+                .to_string(),
+        ),
+        other => {
+            error!("did:scid resolution error: {other:?}");
+            ResolverError::ResolutionFailed(other.to_string())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -73,6 +73,11 @@ pub enum ScidMethod {
 ///     optional scheme/trailing slash, etc.
 ///   - [`ScidMethod::Cheqd`]: the network name (`mainnet` or `testnet`).
 /// * `timeout` — optional resolution timeout.
+///
+/// For the `vh` format the result is the DID's own document: its `id` is the
+/// bare `did:scid:vh:1:<scid>` DID, with no `src`, and every reference the
+/// did:webvh log makes to itself is under that DID. `alsoKnownAs` lists the
+/// did:scid DID URL of the log's location and the did:webvh DID.
 pub async fn resolve(
     did: &str,
     peer_src: Option<ScidMethod>,
@@ -87,6 +92,89 @@ pub async fn resolve(
         },
     )
     .await
+}
+
+/// A resolved `did:scid:vh:1` DID, with what a caller needs to remember about
+/// where it came from.
+///
+/// The `src` of a did:scid DID URL is a locator, not part of the identity, so
+/// a caller that wants to resolve the bare DID later keeps [`source`](Self::source),
+/// and one that wants to refuse an older copy of the log served from another
+/// source keeps [`version_number`](Self::version_number).
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct ScidResolution {
+    /// The DID's own document: `id` is the bare did:scid DID and every
+    /// reference to the DID is under it (see
+    /// [`didwebvh_rs::did_web::to_scid_did_document`]).
+    pub document: Document,
+    /// The did:webvh DID of the log as resolved.
+    pub webvh_did: String,
+    /// The log's location, in `src` form (`example.com/alice`).
+    pub source: String,
+    /// The latest log entry's version number.
+    pub version_number: u32,
+    /// The latest log entry's version id.
+    pub version_id: String,
+}
+
+/// Resolve a `did:scid:vh:1` DID to its own document, reporting the source and
+/// version it was resolved at.
+///
+/// The source is the `src` of `did` when it has one, and `peer_src` otherwise.
+/// Other formats are refused with [`DIDSCIDError::UnsupportedFormat`]; use
+/// [`resolve_with_options`] for them.
+pub async fn resolve_scid(
+    did: &str,
+    peer_src: Option<ScidMethod>,
+    options: didwebvh_rs::resolve::ResolveOptions,
+) -> Result<ScidResolution, DIDSCIDError> {
+    match convert_scid_to_method(did, peer_src)? {
+        ScidMethod::WebVH(webvh_did) => resolve_webvh_native(&webvh_did, options).await,
+        _ => Err(DIDSCIDError::UnsupportedFormat),
+    }
+}
+
+async fn resolve_webvh_native(
+    webvh_did: &str,
+    options: didwebvh_rs::resolve::ResolveOptions,
+) -> Result<ScidResolution, DIDSCIDError> {
+    debug!("Resolving WebVH DID: {webvh_did}");
+    let mut method = DIDWebVHState::default();
+    match method.resolve(webvh_did, options).await {
+        // didwebvh-rs resolves a deactivated DID `Ok` and flags it in the
+        // metadata only; this returns a bare `Document`, so refuse it here or
+        // the retired keys stay usable.
+        Ok((_, metadata)) if metadata.deactivated => Err(DIDSCIDError::WebVHError(
+            didwebvh_rs::DIDWebVHError::DeactivatedError(format!(
+                "{webvh_did} has been deactivated"
+            )),
+        )),
+        Ok((log_entry, metadata)) => {
+            let webvh_document = log_entry.get_did_document()?;
+            let document = didwebvh_rs::did_web::to_scid_did_document(&webvh_document)?;
+            let log_did = webvh_document
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(webvh_did)
+                .to_string();
+            let source = DIDWebVHState::convert_webvh_id_to_scid_id(&log_did)
+                .split_once("?src=")
+                .map(|(_, src)| src.to_string())
+                .unwrap_or_default();
+            Ok(ScidResolution {
+                document: serde_json::from_value(document)?,
+                webvh_did: log_did,
+                source,
+                version_number: metadata.version_number,
+                version_id: metadata.version_id,
+            })
+        }
+        Err(e) => {
+            error!("Error: {e:?}");
+            Err(DIDSCIDError::WebVHError(e))
+        }
+    }
 }
 
 /// Resolve a SCID DID Method, passing `options` to the did:webvh resolution of
@@ -108,25 +196,9 @@ pub async fn resolve_with_options(
     // front of it, which made every format other than `vh` unreachable through
     // this function no matter what the conversion supported.
     match convert_scid_to_method(did, peer_src)? {
-        ScidMethod::WebVH(webvh_did) => {
-            debug!("Resolving WebVH DID: {webvh_did}");
-            let mut method = DIDWebVHState::default();
-            match method.resolve(&webvh_did, options).await {
-                // didwebvh-rs resolves a deactivated DID `Ok` and flags it in
-                // the metadata only; this returns a bare `Document`, so refuse
-                // it here or the retired keys stay usable.
-                Ok((_, metadata)) if metadata.deactivated => Err(DIDSCIDError::WebVHError(
-                    didwebvh_rs::DIDWebVHError::DeactivatedError(format!(
-                        "{webvh_did} has been deactivated"
-                    )),
-                )),
-                Ok((log_entry, _)) => Ok(serde_json::from_value(log_entry.get_did_document()?)?),
-                Err(e) => {
-                    error!("Error: {e:?}");
-                    Err(DIDSCIDError::WebVHError(e))
-                }
-            }
-        }
+        ScidMethod::WebVH(webvh_did) => resolve_webvh_native(&webvh_did, options)
+            .await
+            .map(|resolution| resolution.document),
         ScidMethod::Webs(webs_did) => resolve_webs(&webs_did).await,
         // Retired in 0.2.6. The `did:cheqd` shape still parses and this arm still
         // exists, so nothing a consumer named has gone away — only the

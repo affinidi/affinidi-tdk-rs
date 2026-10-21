@@ -1,15 +1,29 @@
 # Affinidi DID Resolver Cache SDK
 
-## Unreleased (0.8.42) — did:scid follows the configured host policy
+## Unreleased — native did:scid resolution
 
+- **Behaviour (breaking for did:scid callers):** a `did:scid:vh:1` DID resolves
+  to its own document, with the bare `did:scid:vh:1:<scid>` DID as `id` and its
+  keys under it (see did-scid). Before, the did:webvh document came back
+  unchanged.
+- **Behaviour:** a bare `did:scid:vh:1:<scid>` resolves through the source
+  last seen for its SCID. Each DID URL of one did:scid identity
+  (`?src=a.example`, `?src=b.example`, none) shares one cache entry. A bare DID
+  with no known source fails, uncached.
+- **Behaviour (security):** a did:scid log older than one already verified for
+  the same SCID is refused, whatever source serves it. The SCID stops a source
+  from forging the log, but not from replaying an older copy of it.
+- **Added:** `DIDCacheClient::scid_sources` and `ScidSourceBook`, to read and
+  seed did:scid sources (for example, ones a service keeps across restarts).
+  The book is in memory and bounded.
 - **Behaviour:** the built-in did:scid resolver now applies
-  `DIDCacheConfigBuilder::with_host_policy` the way did:webvh does. Before,
-  it always refused non-public hosts, so a local stack that allowed
-  `did:webvh:<scid>:localhost%3A8000` could not resolve its
-  `did:scid:vh:1:<scid>?src=localhost:8000` form. The default policy
-  (`PublicOnly`) is unchanged.
+  `DIDCacheConfigBuilder::with_host_policy` as did:webvh does. Before, it always
+  refused non-public hosts, so a local stack that allowed
+  `did:webvh:<scid>:localhost%3A8000` could not resolve
+  `did:scid:vh:1:<scid>?src=localhost:8000`. The default (`PublicOnly`) is
+  unchanged.
 - **Added:** `ScidResolverWithPolicy`, which `DIDCacheClient` now registers.
-  `ScidResolver` is unchanged and still refuses non-public hosts.
+  `ScidResolver` still refuses non-public hosts and keeps no sources.
 
 ## Unreleased (0.8.41) — didwebvh-rs 0.8, did-scid 0.3
 
