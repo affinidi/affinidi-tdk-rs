@@ -1,5 +1,30 @@
 # Affinidi mdoc Changelog
 
+## Unreleased (0.4.0) — OpenID4VP 1.0 Final handovers
+
+Fixes [#960](https://github.com/affinidi/affinidi-tdk-rs/issues/960); the fix is
+by [@razvp](https://github.com/razvp) ([#961](https://github.com/affinidi/affinidi-tdk-rs/pull/961)).
+
+The OID4VP `SessionTranscript` used the pre-final draft handover
+`[clientId, responseUri, nonce, mdocGeneratedNonce]`, which no OpenID4VP 1.0
+Final verifier or wallet produces, so device authentication over an OID4VP
+transcript could not interoperate. It now follows Appendix B.2.6.
+
+- **Breaking — `Handover::Oid4vp`** is the `OpenID4VPHandover` (invocation via
+  redirects): fields `client_id`, `nonce`, `jwk_thumbprint`, `response_uri`,
+  encoded as `["OpenID4VPHandover", sha256(cbor([clientId, nonce,
+  jwkThumbprint, responseUri]))]`. `mdoc_generated_nonce` is gone.
+- **Breaking — `SessionTranscript::new_oid4vp(client_id, nonce,
+  jwk_thumbprint, response_uri)`** — new argument order, and `jwk_thumbprint` is the RFC 7638 SHA-256 thumbprint of the Verifier's
+  response-encryption key, or `None` when the response is not encrypted.
+- **New — `Handover::Oid4vpDcapi` / `SessionTranscript::new_oid4vp_dcapi(origin,
+  nonce, jwk_thumbprint)`** for the `OpenID4VPDCAPIHandover` (invocation via the
+  Digital Credentials API). `origin` is the bare web origin, without an
+  `origin:` prefix.
+- **Wire change:** transcripts, and so `DeviceAuth` signatures/MACs over them,
+  differ from 0.3.x. Both handovers are pinned by known-answer tests against the
+  spec's example `SessionTranscript` bytes.
+
 ## Unreleased (0.3.3) — `ValidityInfo` dates are CBOR Tag 0
 
 Fixes [#950](https://github.com/affinidi/affinidi-tdk-rs/issues/950); the fix is
