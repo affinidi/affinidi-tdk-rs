@@ -19,6 +19,7 @@
  * - **QR**: `Handover = null` (no handover data)
  * - **NFC**: `Handover = [handoverSelect, ?handoverRequest]`
  * - **OID4VP (Invocation via Redirects)**: `Handover = [clientId, nonce, jkwThumbprint, responseUri]`
+ * - **OID4VP DCAPI (Invocation via DCAPI)**: `Handover = [origin, nonce, jkwThumbprint]`
  */
 
 use sha2::{Digest, Sha256};
@@ -60,6 +61,12 @@ pub enum Handover {
         nonce: String,
         jwk_thumbprint: Option<Vec<u8>>,
         response_uri: String,
+    },
+    /// OID4VP handover (Invocation via DCAPI) per OpenID4VP 1.0 Final.
+    Oid4vpDcapi {
+        origin: String,
+        nonce: String,
+        jwk_thumbprint: Option<Vec<u8>>,
     },
 }
 
@@ -121,6 +128,26 @@ impl SessionTranscript {
         }
     }
 
+    /// Create a session transcript for OID4VP (Invocation via DCAPI).
+    ///
+    /// If the response isn't encrypted `jwk_thumbprint` MUST be `None` so it's encoded as a
+    /// CBOR `null` object when creating the OpenID4VPDCAPIHandoverInfoHash.
+    pub fn new_oid4vp_dcapi(
+        origin: String,
+        nonce: String,
+        jwk_thumbprint: Option<Vec<u8>>,
+    ) -> Self {
+        Self {
+            device_engagement_bytes: None,
+            e_reader_key_bytes: None,
+            handover: Handover::Oid4vpDcapi {
+                origin,
+                nonce,
+                jwk_thumbprint,
+            },
+        }
+    }
+
     /// Encode the session transcript as a CBOR Value (array).
     pub fn to_cbor_value(&self) -> Result<ciborium::Value> {
         // DeviceEngagementBytes: Tag24 wrapping or null
@@ -158,7 +185,7 @@ impl SessionTranscript {
                 jwk_thumbprint,
                 response_uri,
             } => {
-                let handover_info = ciborium::Value::Array(vec![
+                let handover_info_hash = oid4vp_handover_info_hash(vec![
                     ciborium::Value::Text(client_id.clone()),
                     ciborium::Value::Text(nonce.clone()),
                     match jwk_thumbprint {
@@ -166,17 +193,30 @@ impl SessionTranscript {
                         None => ciborium::Value::Null,
                     },
                     ciborium::Value::Text(response_uri.clone()),
-                ]);
-
-                let mut handover_info_bytes = Vec::new();
-                ciborium::into_writer(&handover_info, &mut handover_info_bytes)
-                    .map_err(|e| MdocError::SessionTranscript(format!("encoding: {e}")))?;
-
-                let handover_info_hash = Sha256::digest(handover_info_bytes);
+                ])?;
 
                 ciborium::Value::Array(vec![
                     ciborium::Value::Text("OpenID4VPHandover".into()),
-                    ciborium::Value::Bytes(handover_info_hash.to_vec()),
+                    ciborium::Value::Bytes(handover_info_hash),
+                ])
+            }
+            Handover::Oid4vpDcapi {
+                origin,
+                nonce,
+                jwk_thumbprint,
+            } => {
+                let handover_info_hash = oid4vp_handover_info_hash(vec![
+                    ciborium::Value::Text(origin.clone()),
+                    ciborium::Value::Text(nonce.clone()),
+                    match jwk_thumbprint {
+                        Some(bytes) => ciborium::Value::Bytes(bytes.clone()),
+                        None => ciborium::Value::Null,
+                    },
+                ])?;
+
+                ciborium::Value::Array(vec![
+                    ciborium::Value::Text("OpenID4VPDCAPIHandover".into()),
+                    ciborium::Value::Bytes(handover_info_hash),
                 ])
             }
         };
@@ -204,6 +244,15 @@ impl SessionTranscript {
         let transcript_bytes = self.to_cbor_bytes()?;
         SessionKeys::derive(shared_secret, &transcript_bytes)
     }
+}
+
+fn oid4vp_handover_info_hash(handover_info: Vec<ciborium::Value>) -> Result<Vec<u8>> {
+    let handover_info = ciborium::Value::Array(handover_info);
+    let mut handover_info_bytes = Vec::new();
+    ciborium::into_writer(&handover_info, &mut handover_info_bytes)
+        .map_err(|e| MdocError::SessionTranscript(format!("encoding: {e}")))?;
+
+    Ok(Sha256::digest(handover_info_bytes).to_vec())
 }
 
 #[cfg(test)]
@@ -315,6 +364,59 @@ mod tests {
                             assert_eq!(
                                 handover[0],
                                 ciborium::Value::Text("OpenID4VPHandover".into())
+                            );
+                            assert_eq!(
+                                handover[1],
+                                ciborium::Value::Bytes(expected_handover_info_bytes)
+                            )
+                        }
+                        _ => panic!("expected handover array"),
+                    }
+                }
+                _ => panic!("expected array"),
+            }
+        }
+    }
+
+    #[test]
+    fn oid4vp_dcapi_transcript() {
+        for jwk_thumbprint in [Some(vec![1, 2, 3]), None] {
+            let transcript = SessionTranscript::new_oid4vp_dcapi(
+                "https://example.com/response".to_string(),
+                "nonce_abc".to_string(),
+                jwk_thumbprint.clone(),
+            );
+
+            let expected_handover_info_bytes = {
+                let handover_info = ciborium::Value::Array(vec![
+                    ciborium::Value::Text("https://example.com/response".into()),
+                    ciborium::Value::Text("nonce_abc".into()),
+                    match jwk_thumbprint {
+                        Some(bytes) => ciborium::Value::Bytes(bytes.clone()),
+                        None => ciborium::Value::Null,
+                    },
+                ]);
+                let mut handover_info_bytes = Vec::new();
+                ciborium::into_writer(&handover_info, &mut handover_info_bytes).unwrap();
+
+                Sha256::digest(handover_info_bytes).to_vec()
+            };
+
+            let value = transcript.to_cbor_value().unwrap();
+            match value {
+                ciborium::Value::Array(arr) => {
+                    assert_eq!(arr.len(), 3);
+                    // DeviceEngagement is null for OID4VP
+                    assert!(matches!(arr[0], ciborium::Value::Null));
+                    // EReaderKey is null for OID4VP
+                    assert!(matches!(arr[1], ciborium::Value::Null));
+                    // Handover is 2-element array
+                    match &arr[2] {
+                        ciborium::Value::Array(handover) => {
+                            assert_eq!(handover.len(), 2);
+                            assert_eq!(
+                                handover[0],
+                                ciborium::Value::Text("OpenID4VPDCAPIHandover".into())
                             );
                             assert_eq!(
                                 handover[1],
