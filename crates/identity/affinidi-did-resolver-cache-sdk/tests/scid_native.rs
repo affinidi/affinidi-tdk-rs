@@ -206,7 +206,10 @@ async fn bare_did_resolves_through_the_source_last_seen() {
 
     resolve(&client, &url).await.expect("resolves with src");
     // Out of the cache, so this resolves over the network again.
-    client.remove(&did).await.expect("cached under the bare DID");
+    client
+        .remove(&did)
+        .await
+        .expect("cached under the bare DID");
 
     let doc = resolve(&client, &did).await.expect("resolves without src");
     assert_eq!(doc.id.as_str(), did);
@@ -244,7 +247,9 @@ async fn an_older_copy_of_the_log_is_refused() {
     let client = client().await;
 
     listener.serve(&logs[1]);
-    resolve(&client, &url).await.expect("latest version resolves");
+    resolve(&client, &url)
+        .await
+        .expect("latest version resolves");
 
     // The source now serves the first version only, as a stale mirror would.
     listener.serve(&logs[0]);
