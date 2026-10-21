@@ -1,5 +1,11 @@
 # Affinidi TDK Test Support
 
+## Unreleased (0.9.0) — mdoc 0.4
+
+`mdoc_scenario` takes and returns `affinidi-mdoc` types (`SessionTranscript`,
+`DeviceResponse`), and `affinidi-mdoc` moves to 0.4, so this crate moves a minor
+with it. No source change.
+
 ## Unreleased (0.8.6) — authcrypt fixtures name their sender key id
 
 - `didcomm_fuzz::PackedEnvelope::sender_kid()` returns the envelope's bound

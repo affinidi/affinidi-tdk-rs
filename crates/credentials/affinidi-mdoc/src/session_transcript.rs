@@ -18,8 +18,8 @@
  *
  * - **QR**: `Handover = null` (no handover data)
  * - **NFC**: `Handover = [handoverSelect, ?handoverRequest]`
- * - **OID4VP (Invocation via Redirects)**: `Handover = [clientId, nonce, jkwThumbprint, responseUri]`
- * - **OID4VP DCAPI (Invocation via DCAPI)**: `Handover = [origin, nonce, jkwThumbprint]`
+ * - **OID4VP (Invocation via Redirects)**: `Handover = [clientId, nonce, jwkThumbprint, responseUri]`
+ * - **OID4VP DCAPI (Invocation via DCAPI)**: `Handover = [origin, nonce, jwkThumbprint]`
  */
 
 use sha2::{Digest, Sha256};
@@ -111,19 +111,19 @@ impl SessionTranscript {
     /// If the response isn't encrypted `jwk_thumbprint` MUST be `None` so it's encoded as a
     /// CBOR `null` object when creating the OpenID4VPHandoverInfoHash.
     pub fn new_oid4vp(
-        client_id: String,
-        nonce: String,
+        client_id: impl Into<String>,
+        nonce: impl Into<String>,
         jwk_thumbprint: Option<Vec<u8>>,
-        response_uri: String,
+        response_uri: impl Into<String>,
     ) -> Self {
         Self {
             device_engagement_bytes: None,
             e_reader_key_bytes: None,
             handover: Handover::Oid4vp {
-                client_id,
-                nonce,
+                client_id: client_id.into(),
+                nonce: nonce.into(),
                 jwk_thumbprint,
-                response_uri,
+                response_uri: response_uri.into(),
             },
         }
     }
@@ -133,16 +133,16 @@ impl SessionTranscript {
     /// If the response isn't encrypted `jwk_thumbprint` MUST be `None` so it's encoded as a
     /// CBOR `null` object when creating the OpenID4VPDCAPIHandoverInfoHash.
     pub fn new_oid4vp_dcapi(
-        origin: String,
-        nonce: String,
+        origin: impl Into<String>,
+        nonce: impl Into<String>,
         jwk_thumbprint: Option<Vec<u8>>,
     ) -> Self {
         Self {
             device_engagement_bytes: None,
             e_reader_key_bytes: None,
             handover: Handover::Oid4vpDcapi {
-                origin,
-                nonce,
+                origin: origin.into(),
+                nonce: nonce.into(),
                 jwk_thumbprint,
             },
         }
@@ -327,10 +327,10 @@ mod tests {
     fn oid4vp_transcript() {
         for jwk_thumbprint in [Some(vec![1, 2, 3]), None] {
             let transcript = SessionTranscript::new_oid4vp(
-                "client_id_123".to_string(),
-                "nonce_abc".to_string(),
+                "client_id_123",
+                "nonce_abc",
                 jwk_thumbprint.clone(),
-                "https://example.com/response".to_string(),
+                "https://example.com/response",
             );
 
             let expected_handover_info_bytes = {
@@ -382,8 +382,8 @@ mod tests {
     fn oid4vp_dcapi_transcript() {
         for jwk_thumbprint in [Some(vec![1, 2, 3]), None] {
             let transcript = SessionTranscript::new_oid4vp_dcapi(
-                "https://example.com/response".to_string(),
-                "nonce_abc".to_string(),
+                "https://example.com/response",
+                "nonce_abc",
                 jwk_thumbprint.clone(),
             );
 
@@ -438,6 +438,48 @@ mod tests {
         let t2 = SessionTranscript::new_qr(&de, test_cose_key()).unwrap();
 
         assert_eq!(t1.to_cbor_bytes().unwrap(), t2.to_cbor_bytes().unwrap());
+    }
+
+    /// JWK SHA-256 Thumbprint (RFC 7638) of the Verifier encryption key used by
+    /// the OpenID4VP 1.0 Final examples in Appendix B.2.6.
+    const SPEC_JWK_THUMBPRINT: &str =
+        "4283ec927ae0f208daaa2d026a814f2b22dca52cf85ffa8f3f8626c6bd669047";
+    const SPEC_NONCE: &str = "exc7gBkxjx1rdc9udRrveKvSsJIq80avlXeLHhGwqtA";
+
+    /// Known-answer test against the SessionTranscript example in
+    /// OpenID4VP 1.0 Final, Appendix B.2.6.1 (Invocation via Redirects).
+    #[test]
+    fn oid4vp_transcript_matches_spec_example() {
+        let transcript = SessionTranscript::new_oid4vp(
+            "x509_san_dns:example.com",
+            SPEC_NONCE,
+            Some(hex::decode(SPEC_JWK_THUMBPRINT).unwrap()),
+            "https://example.com/response",
+        );
+
+        assert_eq!(
+            hex::encode(transcript.to_cbor_bytes().unwrap()),
+            "83f6f682714f70656e494434565048616e646f7665725820048bc053c00442af9b8e\
+             ed494cefdd9d95240d254b046b11b68013722aad38ac"
+        );
+    }
+
+    /// Known-answer test against the SessionTranscript example in
+    /// OpenID4VP 1.0 Final, Appendix B.2.6.2 (Invocation via the Digital
+    /// Credentials API).
+    #[test]
+    fn oid4vp_dcapi_transcript_matches_spec_example() {
+        let transcript = SessionTranscript::new_oid4vp_dcapi(
+            "https://example.com",
+            SPEC_NONCE,
+            Some(hex::decode(SPEC_JWK_THUMBPRINT).unwrap()),
+        );
+
+        assert_eq!(
+            hex::encode(transcript.to_cbor_bytes().unwrap()),
+            "83f6f682764f70656e4944345650444341504948616e646f7665725820fbece366f4\
+             212f9762c74cfdbf83b8c69e371d5d68cea09cb4c48ca6daab761a"
+        );
     }
 
     #[test]

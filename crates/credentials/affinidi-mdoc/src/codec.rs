@@ -741,10 +741,10 @@ mod tests {
         let device_verifier =
             Es256CoseVerifier::from_bytes(&device_signer.public_key_bytes()).unwrap();
         let transcript = SessionTranscript::new_oid4vp(
-            "client-id".to_string(),
-            "https://verifier.example/response".to_string(),
+            "client-id",
+            "nonce-abc",
             None,
-            "mdoc-nonce-xyz".to_string(),
+            "https://verifier.example/response",
         );
 
         let response = DeviceResponse::create_with_device_auth(
@@ -838,12 +838,7 @@ mod tests {
     fn encoded_device_namespaces_are_tag24_wrapped_on_the_wire() {
         let (issued, _) = sample();
         let device_signer = Es256CoseSigner::generate();
-        let transcript = SessionTranscript::new_oid4vp(
-            "c".to_string(),
-            "n".to_string(),
-            None,
-            "https://v.example/r".to_string(),
-        );
+        let transcript = SessionTranscript::new_oid4vp("c", "n", None, "https://v.example/r");
         let response = DeviceResponse::create_with_device_auth(
             &issued,
             &requested_all(),

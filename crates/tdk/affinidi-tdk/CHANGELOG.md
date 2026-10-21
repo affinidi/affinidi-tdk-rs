@@ -1,5 +1,11 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.28.0) — mdoc 0.4
+
+The facade re-exports `affinidi-mdoc` (feature `mdoc`), which moves to 0.4
+(OpenID4VP 1.0 Final handovers, breaking), so this crate moves a minor with it.
+No source change.
+
 ## Unreleased (0.27.0) — SDK 0.37
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.37 (`trust-tasks-rs` 0.32), so this crate moves a minor with it. No source change.
