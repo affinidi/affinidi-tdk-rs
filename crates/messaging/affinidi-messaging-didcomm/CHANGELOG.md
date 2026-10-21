@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — did:scid sender binding
+
+- **Behaviour (`messaging-core` adapter):** the plaintext `from` is checked
+  against the authenticated sender by DID, ignoring a did:scid `src` locator,
+  and `ReceivedMessage::sender` is the sender's identity: the bare
+  `did:scid:vh:1:<scid>` for a did:scid sender that presented
+  `did:scid:vh:1:<scid>?src=…`. Other DIDs are unchanged.
+- The `messaging-core` feature now depends on `affinidi-did-common`.
+
 ## Unreleased (0.15.10) — `sha2` 0.11, drop `rand_core` 0.6
 
 No behaviour change and no public API change. `sha2` is a private dependency;

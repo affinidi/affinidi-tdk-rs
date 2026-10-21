@@ -20,6 +20,9 @@ rust-version.workspace = true
 tsp = ["affinidi-messaging-sdk/tsp", "dep:affinidi-tsp"]
 
 [dependencies]
+# did:scid sender comparison (`scid` module, 0.4.4), and DID generation for
+# the `echo_server` example.
+affinidi-did-common = "0.4"
 affinidi-tdk-common = { version = "0.7", path = "../../tdk/affinidi-tdk-common" }
 # Path + version, like every other crate in this family. It was a bare
 # registry requirement, so this crate compiled against the *published* SDK
@@ -48,10 +51,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
-# DID generation for the `echo_server` example. The end-to-end tests that ran
-# against the embedded test mediator moved with it to
-# affinidi/affinidi-messaging-mediator.
-affinidi-did-common = "0.4"
 
 [[example]]
 name = "echo_server"

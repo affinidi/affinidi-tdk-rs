@@ -123,12 +123,10 @@ impl MessagingProtocol for DIDCommAdapter {
                 // The cryptographically authenticated sender (from ECDH-1PU
                 // skid), not the plaintext `from` header which the sender can
                 // set to anything.
-                let auth_sender = sender_kid
-                    .as_ref()
-                    .map(|kid| kid.split('#').next().unwrap_or(kid).to_string());
+                let auth_sender = sender_kid.as_deref().map(sender_identity);
                 if authenticated
                     && let (Some(from), Some(auth)) = (&message.from, &auth_sender)
-                    && from != auth
+                    && sender_identity(from) != *auth
                 {
                     return Err(MessagingError::Unpack(format!(
                         "plaintext `from` ({from}) does not match authenticated sender ({auth})"
@@ -160,11 +158,9 @@ impl MessagingProtocol for DIDCommAdapter {
             } => {
                 let payload = extract_payload(&message.body);
 
-                let auth_sender = signer_kid
-                    .as_ref()
-                    .map(|kid| kid.split('#').next().unwrap_or(kid).to_string());
+                let auth_sender = signer_kid.as_deref().map(sender_identity);
                 if let (Some(from), Some(auth)) = (&message.from, &auth_sender)
-                    && from != auth
+                    && sender_identity(from) != *auth
                 {
                     return Err(MessagingError::Unpack(format!(
                         "plaintext `from` ({from}) does not match JWS signer ({auth})"
@@ -238,6 +234,15 @@ impl MessagingProtocol for DIDCommAdapter {
 
         Ok(packed.into_bytes())
     }
+}
+
+/// The identity a sender reference names: its DID, with no fragment and no
+/// did:scid `src` locator. A did:scid sender may present
+/// `did:scid:vh:1:<scid>?src=…` in `from` and in its `skid` so a recipient can
+/// resolve it; the identity is `did:scid:vh:1:<scid>` either way.
+fn sender_identity(reference: &str) -> String {
+    let did = reference.split('#').next().unwrap_or(reference);
+    affinidi_did_common::scid::strip_scid_src(did).into_owned()
 }
 
 impl DIDCommAdapter {

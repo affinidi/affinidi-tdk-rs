@@ -431,7 +431,8 @@ impl SharedState {
             .ok()?;
 
         use affinidi_did_common::{
-            document::DocumentExt, verification_method::VerificationRelationship,
+            document::DocumentExt, scid::same_reference,
+            verification_method::VerificationRelationship,
         };
 
         let relative = format!("#{fragment}");
@@ -441,12 +442,12 @@ impl SharedState {
             .iter()
             .find_map(|ka| match ka {
                 VerificationRelationship::VerificationMethod(vm)
-                    if vm.id.as_str() == skid || vm.id.as_str() == relative =>
+                    if same_reference(vm.id.as_str(), skid) || vm.id.as_str() == relative =>
                 {
                     Some(vm.as_ref())
                 }
                 VerificationRelationship::Reference(id)
-                    if id.as_str() == skid || id.as_str() == relative =>
+                    if same_reference(id.as_str(), skid) || id.as_str() == relative =>
                 {
                     sender_doc
                         .doc
@@ -744,7 +745,7 @@ impl SharedState {
             .iter()
             .filter_map(|a| match a {
                 VerificationRelationship::VerificationMethod(vm)
-                    if vm.id.as_str() == lookup_kid =>
+                    if affinidi_did_common::scid::same_reference(vm.id.as_str(), lookup_kid) =>
                 {
                     Some(vm.as_ref())
                 }
@@ -770,8 +771,13 @@ impl SharedState {
     }
 
     /// The base DID of a DID URL (everything before the `#fragment`).
-    fn base_did(did_url: &str) -> &str {
-        did_url.split_once('#').map(|(d, _)| d).unwrap_or(did_url)
+    /// The DID a reference names: no fragment, and no did:scid `src`
+    /// locator, so a sender presenting `did:scid:vh:1:<scid>?src=…` binds to
+    /// keys under `did:scid:vh:1:<scid>`.
+    fn base_did(did_url: &str) -> std::borrow::Cow<'_, str> {
+        affinidi_did_common::scid::strip_scid_src(
+            did_url.split_once('#').map(|(d, _)| d).unwrap_or(did_url),
+        )
     }
 
     /// Classify the unwrapped layer stack, enforce the policy's accepted
@@ -839,11 +845,11 @@ impl SharedState {
         // Attribute a signer to `sign_from` (best-effort): prefer the signature
         // whose DID matches `from`, else the first signer.
         if wrapping.is_signed() {
-            let matching = from.and_then(|f| {
+            let matching = from.as_ref().and_then(|f| {
                 metadata
                     .signers
                     .iter()
-                    .find(|kid| Self::base_did(kid) == f)
+                    .find(|kid| Self::base_did(kid) == *f)
                     .cloned()
             });
             metadata.sign_from = matching
@@ -853,7 +859,7 @@ impl SharedState {
             if policy.validate_addressing_consistency && matching.is_none() {
                 return Err(ATMError::AddressingMismatch(format!(
                     "no signature matches the message `from` ({}); signers: {:?}",
-                    from.unwrap_or("<none>"),
+                    from.as_deref().unwrap_or("<none>"),
                     metadata.signers
                 )));
             }
@@ -862,7 +868,7 @@ impl SharedState {
         if policy.validate_addressing_consistency {
             // Authcrypt layer → its skid DID must match `from`.
             if let Some(skid) = &authcrypt_skid {
-                let from_did = from.ok_or_else(|| {
+                let from_did = from.as_deref().ok_or_else(|| {
                     ATMError::AddressingMismatch(
                         "authcrypt message has no `from` to bind the sender to".into(),
                     )
@@ -878,7 +884,7 @@ impl SharedState {
             // sender, so a `from` claim cannot be backed. The spec makes such a
             // message anonymous; require `from` to be absent.
             if wrapping == MessageWrappingType::AnoncryptPlaintext
-                && let Some(from_did) = from
+                && let Some(from_did) = from.as_deref()
             {
                 return Err(ATMError::AddressingMismatch(format!(
                     "anoncrypt message declares a `from` ({from_did}) but anonymous \

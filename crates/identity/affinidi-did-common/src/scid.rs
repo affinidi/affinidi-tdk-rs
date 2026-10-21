@@ -52,6 +52,24 @@ pub fn scid_src(did_url: &str) -> Option<&str> {
     split_src(did_url).map(|(_, src, _)| src)
 }
 
+/// Gives a bare `did:scid` reference the `src` locator `src`, before any
+/// fragment: `did:scid:vh:1:Qm#key-1` becomes
+/// `did:scid:vh:1:Qm?src=example.com#key-1`.
+///
+/// Use this where a recipient resolves the reference before it knows the
+/// source, such as a DIDComm `skid`. A reference that is not a bare `did:scid`
+/// DID or DID URL with a fragment, or that already carries a query, is returned
+/// unchanged.
+pub fn with_scid_src(reference: &str, src: &str) -> String {
+    if !reference.starts_with(PREFIX) || reference.contains('?') || reference.contains('/') {
+        return reference.to_string();
+    }
+    match reference.split_once('#') {
+        Some((did, fragment)) => format!("{did}?src={src}#{fragment}"),
+        None => format!("{reference}?src={src}"),
+    }
+}
+
 /// Whether two references name the same thing, ignoring a `did:scid` `src`.
 ///
 /// Use this, not `==`, to match a key or sender reference against a DID
@@ -98,6 +116,24 @@ mod tests {
             Some("example.com/alice")
         );
         assert_eq!(scid_src("did:scid:vh:1:Qm"), None);
+    }
+
+    #[test]
+    fn src_is_added_to_a_bare_reference() {
+        assert_eq!(
+            with_scid_src("did:scid:vh:1:Qm#key-1", "example.com/alice"),
+            "did:scid:vh:1:Qm?src=example.com/alice#key-1"
+        );
+        assert_eq!(
+            with_scid_src("did:scid:vh:1:Qm", "example.com"),
+            "did:scid:vh:1:Qm?src=example.com"
+        );
+        for unchanged in [
+            "did:scid:vh:1:Qm?src=a.example#key-1",
+            "did:webvh:Qm:example.com#key-1",
+        ] {
+            assert_eq!(with_scid_src(unchanged, "b.example"), unchanged);
+        }
     }
 
     #[test]

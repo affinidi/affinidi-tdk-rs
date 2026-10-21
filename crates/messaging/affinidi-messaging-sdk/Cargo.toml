@@ -93,6 +93,9 @@ uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["net", "io-util", "test-util"] }
+# A did:scid sender, from a signed did:webvh log served on loopback.
+didwebvh-rs = "0.8"
+affinidi-did-resolver-cache-sdk = "0.8"
 clap = { version = "4", features = ["derive"] }
 console = "0.16"
 dialoguer = "0.12"

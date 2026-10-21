@@ -122,7 +122,7 @@ pub(crate) async fn send_message(
     let message_id = message.id.clone();
 
     if let Some(ref from) = message.from
-        && from != sender_did
+        && !affinidi_did_common::scid::same_reference(from, sender_did)
     {
         warn!(
             profile = %profile.inner.alias,

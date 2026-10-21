@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — a did:scid identity sends and receives as itself
+
+- **Behaviour:** packing authcrypt `from` a did:scid DID URL
+  (`did:scid:vh:1:<scid>?src=…`) gives the JWE `skid` the same `src`. The
+  document lists its keys under the bare DID, and a recipient resolves the
+  `skid` before it can read anything else, so without it a recipient that had
+  not seen the sender before has no source to resolve.
+- **Behaviour:** unpack binds a sender, and a signer, to `from` by DID,
+  ignoring a did:scid `src`, and finds the key a `skid` or signature `kid`
+  names by DID and fragment. Before, `did:scid:vh:1:<scid>?src=…#key-1` matched
+  neither its sender nor its key. Every other DID compares as before.
+- A did:scid identity's secrets are registered under its document's key ids
+  (`did:scid:vh:1:<scid>#key-1`).
+
 ## Unreleased (0.38.0) — trust-tasks 0.33
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.33. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.33 (trustoverip/dtgwg-trust-tasks-tf#858) adds a linking form to `persona/contact/put/1.1` and makes `subjectDid` optional in the `get`/`list` 1.1 responses. None of it touches anything here. No source change.

@@ -2,8 +2,8 @@
 
 ## Unreleased (0.4.4) — did:scid references match by DID
 
-- **Added:** the `scid` module: `strip_scid_src`, `scid_src` and
-  `same_reference`. A `did:scid` identity is the DID; its `src` query is a
+- **Added:** the `scid` module: `strip_scid_src`, `scid_src`, `with_scid_src`
+  and `same_reference`. A `did:scid` identity is the DID; its `src` query is a
   locator, so `did:scid:vh:1:Qm?src=example.com#key-1` and
   `did:scid:vh:1:Qm#key-1` name the same key. Only a `did:scid` DID URL whose
   sole query parameter is `src` is affected.

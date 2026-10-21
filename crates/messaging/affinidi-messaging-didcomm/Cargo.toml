@@ -14,7 +14,7 @@ rust-version.workspace = true
 
 [features]
 default = []
-messaging-core = ["dep:affinidi-messaging-core", "dep:async-trait"]
+messaging-core = ["dep:affinidi-messaging-core", "dep:async-trait", "dep:affinidi-did-common"]
 # Off-by-default. Adds `arbitrary::Arbitrary` impls for the wire types (Message,
 # Attachment, AttachmentData) for structure-aware coverage-guided fuzzing. No
 # runtime/behaviour change; pull it in only from a fuzz harness or dev build.
@@ -51,6 +51,9 @@ rand_10 = { package = "rand", version = "0.10", default-features = false, featur
 # Optional — messaging-core trait integration
 affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1", optional = true }
 async-trait = { version = "0.1", optional = true }
+# did:scid sender binding: a `from` may carry the `src` locator its `skid`'s
+# DID does not. Needs 0.4.4 (the `scid` module).
+affinidi-did-common = { version = "0.4", optional = true }
 
 # Optional — structure-aware fuzzing support (see the `arbitrary` feature).
 arbitrary = { version = "1", optional = true }

@@ -118,10 +118,18 @@ impl SharedState {
                     .iter()
                     .find(|(_, _, c)| *c == pairing.curve)
                     .expect("negotiated curve came from sender_curves");
+                // A did:scid sender's document lists its keys under the bare
+                // DID, but a recipient resolves the `skid` before it can read
+                // anything else, so it carries the `src` the sender was given
+                // with (VTI-KEY-163) or the recipient has no source to resolve.
+                let sender_kid = match affinidi_did_common::scid::scid_src(sender_did) {
+                    Some(src) => affinidi_did_common::scid::with_scid_src(sender_kid, src),
+                    None => sender_kid.to_string(),
+                };
 
                 let packed = pack::pack_encrypted_authcrypt(
                     message,
-                    sender_kid,
+                    &sender_kid,
                     sender_private,
                     &[(pairing.recipient_kid, &pairing.recipient_pub)],
                 )
@@ -133,7 +141,7 @@ impl SharedState {
                 })?;
 
                 let metadata = PackEncryptedMetadata {
-                    from_kid: Some(sender_kid.to_string()),
+                    from_kid: Some(sender_kid),
                     sign_by_kid: None,
                     to_kids: vec![pairing.recipient_kid.to_string()],
                 };
