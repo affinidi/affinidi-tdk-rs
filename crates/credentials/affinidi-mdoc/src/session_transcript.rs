@@ -18,8 +18,10 @@
  *
  * - **QR**: `Handover = null` (no handover data)
  * - **NFC**: `Handover = [handoverSelect, ?handoverRequest]`
- * - **OID4VP**: `Handover = [clientId, responseUri, nonce, mdocGeneratedNonce]`
+ * - **OID4VP (Invocation via Redirects)**: `Handover = [clientId, nonce, jkwThumbprint, responseUri]`
  */
+
+use sha2::{Digest, Sha256};
 
 use crate::device_engagement::DeviceEngagement;
 use crate::error::{MdocError, Result};
@@ -52,12 +54,12 @@ pub enum Handover {
         /// Optional Handover Request message bytes.
         handover_request: Option<Vec<u8>>,
     },
-    /// OID4VP handover per ISO 18013-7 / OpenID4VP.
+    /// OID4VP handover (Invocation via Redirects) per OpenID4VP 1.0 Final.
     Oid4vp {
         client_id: String,
-        response_uri: String,
         nonce: String,
-        mdoc_generated_nonce: String,
+        jwk_thumbprint: Option<Vec<u8>>,
+        response_uri: String,
     },
 }
 
@@ -97,21 +99,24 @@ impl SessionTranscript {
         })
     }
 
-    /// Create a session transcript for OID4VP.
+    /// Create a session transcript for OID4VP (Invocation via Redirects).
+    ///
+    /// If the response isn't encrypted `jwk_thumbprint` MUST be `None` so it's encoded as a
+    /// CBOR `null` object when creating the OpenID4VPHandoverInfoHash.
     pub fn new_oid4vp(
         client_id: impl Into<String>,
-        response_uri: impl Into<String>,
         nonce: impl Into<String>,
-        mdoc_generated_nonce: impl Into<String>,
+        jwk_thumbprint: Option<Vec<u8>>,
+        response_uri: impl Into<String>,
     ) -> Self {
         Self {
             device_engagement_bytes: None,
             e_reader_key_bytes: None,
             handover: Handover::Oid4vp {
                 client_id: client_id.into(),
-                response_uri: response_uri.into(),
                 nonce: nonce.into(),
-                mdoc_generated_nonce: mdoc_generated_nonce.into(),
+                jwk_thumbprint: jwk_thumbprint,
+                response_uri: response_uri.into(),
             },
         }
     }
@@ -149,15 +154,31 @@ impl SessionTranscript {
             }
             Handover::Oid4vp {
                 client_id,
-                response_uri,
                 nonce,
-                mdoc_generated_nonce,
-            } => ciborium::Value::Array(vec![
-                ciborium::Value::Text(client_id.clone()),
-                ciborium::Value::Text(response_uri.clone()),
-                ciborium::Value::Text(nonce.clone()),
-                ciborium::Value::Text(mdoc_generated_nonce.clone()),
-            ]),
+                jwk_thumbprint,
+                response_uri,
+            } => {
+                let handover_info = ciborium::Value::Array(vec![
+                    ciborium::Value::Text(client_id.clone()),
+                    ciborium::Value::Text(nonce.clone()),
+                    match jwk_thumbprint {
+                        Some(bytes) => ciborium::Value::Bytes(bytes.clone()),
+                        None => ciborium::Value::Null,
+                    },
+                    ciborium::Value::Text(response_uri.clone()),
+                ]);
+
+                let mut handover_info_bytes = Vec::new();
+                ciborium::into_writer(&handover_info, &mut handover_info_bytes)
+                    .map_err(|e| MdocError::SessionTranscript(format!("encoding: {e}")))?;
+
+                let handover_info_hash = Sha256::digest(handover_info_bytes);
+
+                ciborium::Value::Array(vec![
+                    ciborium::Value::Text("OpenID4VPHandover".into()),
+                    ciborium::Value::Bytes(handover_info_hash.to_vec()),
+                ])
+            }
         };
 
         Ok(ciborium::Value::Array(vec![de_val, ek_val, handover_val]))
@@ -255,30 +276,56 @@ mod tests {
 
     #[test]
     fn oid4vp_transcript() {
-        let transcript = SessionTranscript::new_oid4vp(
-            "client_id_123",
-            "https://example.com/response",
-            "nonce_abc",
-            "mdoc_nonce_xyz",
-        );
+        for jwk_thumbprint in [Some(vec![1, 2, 3]), None] {
+            let transcript = SessionTranscript::new_oid4vp(
+                "client_id_123",
+                "nonce_abc",
+                jwk_thumbprint.clone(),
+                "https://example.com/response",
+            );
 
-        let value = transcript.to_cbor_value().unwrap();
-        match value {
-            ciborium::Value::Array(arr) => {
-                assert_eq!(arr.len(), 3);
-                // DeviceEngagement is null for OID4VP
-                assert!(matches!(arr[0], ciborium::Value::Null));
-                // EReaderKey is null for OID4VP
-                assert!(matches!(arr[1], ciborium::Value::Null));
-                // Handover is 4-element array
-                match &arr[2] {
-                    ciborium::Value::Array(handover) => {
-                        assert_eq!(handover.len(), 4);
+            let expected_handover_info_bytes = {
+                let handover_info = ciborium::Value::Array(vec![
+                    ciborium::Value::Text("client_id_123".into()),
+                    ciborium::Value::Text("nonce_abc".into()),
+                    match jwk_thumbprint {
+                        Some(bytes) => ciborium::Value::Bytes(bytes.clone()),
+                        None => ciborium::Value::Null,
+                    },
+                    ciborium::Value::Text("https://example.com/response".into()),
+                ]);
+                let mut handover_info_bytes = Vec::new();
+                ciborium::into_writer(&handover_info, &mut handover_info_bytes).unwrap();
+
+                Sha256::digest(handover_info_bytes).to_vec()
+            };
+
+            let value = transcript.to_cbor_value().unwrap();
+            match value {
+                ciborium::Value::Array(arr) => {
+                    assert_eq!(arr.len(), 3);
+                    // DeviceEngagement is null for OID4VP
+                    assert!(matches!(arr[0], ciborium::Value::Null));
+                    // EReaderKey is null for OID4VP
+                    assert!(matches!(arr[1], ciborium::Value::Null));
+                    // Handover is 2-element array
+                    match &arr[2] {
+                        ciborium::Value::Array(handover) => {
+                            assert_eq!(handover.len(), 2);
+                            assert_eq!(
+                                handover[0],
+                                ciborium::Value::Text("OpenID4VPHandover".into())
+                            );
+                            assert_eq!(
+                                handover[1],
+                                ciborium::Value::Bytes(expected_handover_info_bytes)
+                            )
+                        }
+                        _ => panic!("expected handover array"),
                     }
-                    _ => panic!("expected handover array"),
                 }
+                _ => panic!("expected array"),
             }
-            _ => panic!("expected array"),
         }
     }
 
