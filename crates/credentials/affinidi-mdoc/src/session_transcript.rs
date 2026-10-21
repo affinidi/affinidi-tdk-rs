@@ -104,19 +104,19 @@ impl SessionTranscript {
     /// If the response isn't encrypted `jwk_thumbprint` MUST be `None` so it's encoded as a
     /// CBOR `null` object when creating the OpenID4VPHandoverInfoHash.
     pub fn new_oid4vp(
-        client_id: impl Into<String>,
-        nonce: impl Into<String>,
+        client_id: String,
+        nonce: String,
         jwk_thumbprint: Option<Vec<u8>>,
-        response_uri: impl Into<String>,
+        response_uri: String,
     ) -> Self {
         Self {
             device_engagement_bytes: None,
             e_reader_key_bytes: None,
             handover: Handover::Oid4vp {
-                client_id: client_id.into(),
-                nonce: nonce.into(),
-                jwk_thumbprint: jwk_thumbprint,
-                response_uri: response_uri.into(),
+                client_id,
+                nonce,
+                jwk_thumbprint,
+                response_uri,
             },
         }
     }
@@ -278,10 +278,10 @@ mod tests {
     fn oid4vp_transcript() {
         for jwk_thumbprint in [Some(vec![1, 2, 3]), None] {
             let transcript = SessionTranscript::new_oid4vp(
-                "client_id_123",
-                "nonce_abc",
+                "client_id_123".to_string(),
+                "nonce_abc".to_string(),
                 jwk_thumbprint.clone(),
-                "https://example.com/response",
+                "https://example.com/response".to_string(),
             );
 
             let expected_handover_info_bytes = {
