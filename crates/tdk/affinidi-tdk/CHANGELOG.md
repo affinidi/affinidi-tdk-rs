@@ -1,5 +1,12 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.31.0) — TSP 1.0, SDK 0.39
+
+The facade re-exports `affinidi-tsp` (feature `tsp`), which moves to 0.3 and
+TSP 1.0 (`YTSP-BAA`) — not wire-compatible with the 0.2.x (Rev 3) it
+re-exported before — and `affinidi-messaging-sdk`, which moves to 0.39 with it.
+So this crate moves a minor. No source change.
+
 ## Unreleased (0.30.0) — did-scid 0.4
 
 Moves the re-exported `did_scid` (feature `did-scid`) to 0.4, whose `resolve`

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased (0.24.0) — SDK 0.39, TSP 1.0
+
+Moves to `affinidi-messaging-sdk` 0.39 and `affinidi-tsp` 0.3. With the `tsp`
+feature this speaks TSP 1.0 (`YTSP-BAA`) and cannot exchange TSP messages with
+a service still on 0.23.x (Rev 3) in either direction — upgrade both ends
+together. See `affinidi-tsp`'s changelog. The SDK is a public dependency, so
+this crate moves a minor. No source change.
+
 ## Unreleased (0.23.1) — did:scid profiles
 
 - **Behaviour:** a `message.from` that differs from the profile DID only by a
