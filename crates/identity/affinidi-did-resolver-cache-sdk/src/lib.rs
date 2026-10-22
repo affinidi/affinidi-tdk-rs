@@ -369,6 +369,10 @@ pub struct DIDCacheClient {
     /// one underlying resolution — its document on success, its error on
     /// failure. See `single_flight`.
     inflight: Arc<single_flight::InflightMap>,
+    /// Where each did:scid SCID's log was last found and the latest version
+    /// verified for it, shared with the did:scid resolver.
+    #[cfg(feature = "did-scid")]
+    scid_sources: Arc<network_resolvers::ScidSourceBook>,
 }
 
 impl Clone for DIDCacheClient {
@@ -394,6 +398,8 @@ impl Clone for DIDCacheClient {
             #[cfg(feature = "agent-names")]
             agent_name_inflight: self.agent_name_inflight.clone(),
             inflight: self.inflight.clone(),
+            #[cfg(feature = "did-scid")]
+            scid_sources: self.scid_sources.clone(),
         }
     }
 }
@@ -571,7 +577,7 @@ impl DIDCacheClient {
             .try_into()
             .unwrap_or(DIDMethod::OTHER);
 
-        let hash = DIDCacheClient::hash_did(did);
+        let hash = DIDCacheClient::cache_key(did);
 
         #[cfg(feature = "did_example")]
         // Short-circuit for example DIDs
@@ -747,14 +753,32 @@ impl DIDCacheClient {
     /// Removes the specified DID from the cache
     /// Returns the removed DID Document if it was in the cache, or None if it was not
     pub async fn remove(&self, did: &str) -> Option<Document> {
-        self.cache.remove(&DIDCacheClient::hash_did(did)).await
+        self.cache.remove(&DIDCacheClient::cache_key(did)).await
     }
 
     /// Add a DID Document to the cache manually
     pub async fn add_did_document(&mut self, did: &str, doc: Document) {
-        let hash = DIDCacheClient::hash_did(did);
+        let hash = DIDCacheClient::cache_key(did);
         debug!("DID manually cached: {}", did);
         self.cache.insert(hash, doc).await;
+    }
+
+    /// The did:scid source book: where each SCID's log was last found, and
+    /// the latest version verified for it.
+    ///
+    /// A bare `did:scid:vh:1:<scid>` resolves only through a source recorded
+    /// here, by an earlier resolution of a DID URL with `?src=` or by
+    /// [`ScidSourceBook::add_source`](network_resolvers::ScidSourceBook::add_source),
+    /// which a caller uses to seed sources it keeps across restarts.
+    #[cfg(feature = "did-scid")]
+    pub fn scid_sources(&self) -> &network_resolvers::ScidSourceBook {
+        &self.scid_sources
+    }
+
+    /// The cache key of a DID: its hash, with a did:scid `src` locator removed
+    /// so that every DID URL of one did:scid identity shares an entry.
+    fn cache_key(did: &str) -> [u64; 2] {
+        DIDCacheClient::hash_did(&affinidi_did_common::scid::strip_scid_src(did))
     }
 
     /// Convenience function to hash a DID
@@ -832,10 +856,17 @@ impl DIDCacheClient {
             .or_default()
             .push_back(Box::new(network_resolvers::CheqdResolver));
         #[cfg(feature = "did-scid")]
+        let scid_sources = Arc::new(network_resolvers::ScidSourceBook::default());
+        #[cfg(feature = "did-scid")]
         resolvers
             .entry(MethodName::Scid)
             .or_default()
-            .push_back(Box::new(network_resolvers::ScidResolver));
+            .push_back(Box::new(
+                network_resolvers::ScidResolverWithPolicy::with_sources(
+                    config.host_policy,
+                    scid_sources.clone(),
+                ),
+            ));
         #[cfg(feature = "did-ebsi")]
         resolvers
             .entry(MethodName::Ebsi)
@@ -885,6 +916,8 @@ impl DIDCacheClient {
             #[cfg(feature = "agent-names")]
             agent_name_inflight: Arc::new(StdMutex::new(HashMap::new())),
             inflight: Arc::new(StdMutex::new(HashMap::new())),
+            #[cfg(feature = "did-scid")]
+            scid_sources,
         };
         #[cfg(not(feature = "network"))]
         let client = Self {
@@ -900,6 +933,8 @@ impl DIDCacheClient {
             #[cfg(feature = "agent-names")]
             agent_name_inflight: Arc::new(StdMutex::new(HashMap::new())),
             inflight: Arc::new(StdMutex::new(HashMap::new())),
+            #[cfg(feature = "did-scid")]
+            scid_sources,
         };
 
         #[cfg(feature = "network")]

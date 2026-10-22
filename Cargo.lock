@@ -149,7 +149,7 @@ dependencies = [
  "multibase",
  "serde",
  "serde_json",
- "serde_json_canonicalizer",
+ "serde_json_canonicalizer 0.3.2",
  "sha2 0.11.0",
  "thiserror 2.0.21",
  "tokio",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-common"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "affinidi-crypto",
  "affinidi-encoding",
@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.41"
+version = "0.8.42"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -515,9 +515,10 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm"
-version = "0.15.10"
+version = "0.15.11"
 dependencies = [
  "affinidi-crypto",
+ "affinidi-did-common",
  "affinidi-messaging-core",
  "arbitrary",
  "async-trait",
@@ -537,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-service"
-version = "0.23.0"
+version = "0.23.1"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-didcomm",
@@ -626,7 +627,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.38.0"
+version = "0.38.1"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",
@@ -647,6 +648,7 @@ dependencies = [
  "clap",
  "console",
  "dialoguer",
+ "didwebvh-rs",
  "futures-util",
  "hyper",
  "rand 0.10.3",
@@ -881,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -2448,7 +2450,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.7",
 ]
 
 [[package]]
@@ -2639,7 +2641,7 @@ dependencies = [
 
 [[package]]
 name = "did-scid"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-webs",
@@ -2653,9 +2655,9 @@ dependencies = [
 
 [[package]]
 name = "didwebvh-rs"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f02bdbaaffc5b0bec1e3f8049e5e415476cfd56d23bc6bf692419e674ded93f9"
+checksum = "346ad3a3c4f10c0c8dc8c710c2511375cd14ffb5e5bc5b6e6f03617ce2dabb87"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-did-common",
@@ -2669,7 +2671,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "serde_json_canonicalizer",
+ "serde_json_canonicalizer 0.4.1",
  "serde_with",
  "sha2 0.11.0",
  "thiserror 2.0.21",
@@ -6180,6 +6182,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_json_canonicalizer"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87f7bb64f8c7e9f783fdfe883b5fe93a90bee1597c63705baa91842c5f698620"
+dependencies = [
+ "ryu-js",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "serde_path_to_error"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6689,7 +6702,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",

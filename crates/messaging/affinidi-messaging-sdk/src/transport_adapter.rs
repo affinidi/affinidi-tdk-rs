@@ -728,8 +728,13 @@ fn authenticated_sender(message: &Message, meta: &UnpackMetadata) -> Option<Stri
     // The DID that owns the authcrypt key. A key id without a `#fragment`
     // names no key, so it authenticates no one.
     let (key_did, _) = kid.split_once('#')?;
+    // By DID, ignoring a did:scid `src` locator: a did:scid sender may name
+    // itself `did:scid:vh:1:<scid>?src=…` in `from` and in its `skid`, or in
+    // only one of them. The sender is returned as `from` presents it.
     match message.from.as_deref() {
-        Some(from) if from == key_did => Some(from.to_string()),
+        Some(from) if affinidi_did_common::scid::same_reference(from, key_did) => {
+            Some(from.to_string())
+        }
         _ => None,
     }
 }
@@ -921,6 +926,45 @@ mod tests {
         let inbound = to_inbound(message, &meta).unwrap();
         assert_eq!(inbound.message.sender, None, "spoofed from → no sender");
         assert!(!inbound.message.verified, "spoofed from → not verified");
+    }
+
+    #[test]
+    fn a_did_scid_sender_binds_by_did_whatever_its_src() {
+        let bare = "did:scid:vh:1:QmScid";
+        let located = "did:scid:vh:1:QmScid?src=alice.example";
+        for (from, kid) in [
+            (located, format!("{located}#key-1")),
+            (located, format!("{bare}#key-1")),
+            (bare, format!("{located}#key-1")),
+        ] {
+            let meta = UnpackMetadata {
+                authenticated: true,
+                encrypted: true,
+                encrypted_from_kid: Some(kid.clone()),
+                sha256_hash: "q".to_string(),
+                ..Default::default()
+            };
+            let inbound = to_inbound(msg_from(from), &meta).unwrap();
+            assert_eq!(
+                inbound.message.sender.as_deref(),
+                Some(from),
+                "{from} / {kid}"
+            );
+            assert!(inbound.message.verified);
+        }
+
+        // Another SCID is another party.
+        let meta = UnpackMetadata {
+            authenticated: true,
+            encrypted: true,
+            encrypted_from_kid: Some("did:scid:vh:1:QmOther?src=alice.example#key-1".into()),
+            sha256_hash: "q".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            to_inbound(msg_from(located), &meta).unwrap().message.sender,
+            None
+        );
     }
 
     #[test]

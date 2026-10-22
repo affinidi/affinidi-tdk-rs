@@ -223,9 +223,11 @@ impl DIDCacheConfigBuilder {
         self
     }
 
-    /// Set which hosts `did:web` and `did:webvh` resolution may contact.
+    /// Set which hosts `did:web`, `did:webvh` and `did:scid` resolution may
+    /// contact.
     ///
-    /// Both methods name the host their document is fetched from, so whoever
+    /// Each names the host its document is fetched from (`did:scid` in its
+    /// `src`), so whoever
     /// supplies the DID chooses where this client sends HTTP requests.
     /// [`HostPolicy::PublicOnly`] refuses loopback, private-network,
     /// link-local and other non-public hosts, whether the DID names them
@@ -233,7 +235,7 @@ impl DIDCacheConfigBuilder {
     /// lifts that, for local development (`did:webvh:{SCID}:localhost%3A8000`)
     /// and for deployments whose DID hosts are trusted and on a private network.
     ///
-    /// Applies to the built-in did:web and did:webvh resolvers. A resolver
+    /// Applies to the built-in did:web, did:webvh and did:scid resolvers. A resolver
     /// installed with [`set_resolver`](crate::DIDCacheClient::set_resolver)
     /// carries its own policy.
     /// Default: `PublicOnly`

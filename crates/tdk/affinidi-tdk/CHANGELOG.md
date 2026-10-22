@@ -1,5 +1,12 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.30.0) — did-scid 0.4
+
+Moves the re-exported `did_scid` (feature `did-scid`) to 0.4, whose `resolve`
+returns a did:scid's own document (bare `did:scid:vh:1:<scid>` as `id`, keys
+under it) rather than the did:webvh document that verifies it. The re-export
+makes that a breaking change here.
+
 ## Unreleased (0.29.0) — mdoc 0.4
 
 The facade re-exports `affinidi-mdoc` (feature `mdoc`), which moves to 0.4

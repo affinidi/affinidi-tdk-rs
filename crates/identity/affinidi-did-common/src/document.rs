@@ -1,8 +1,13 @@
 //! Extends the SSI Crate Document with new methods and functions
 
-use crate::{DID, Document, DocumentError, verification_method::VerificationMethod};
+use crate::{
+    DID, Document, DocumentError, scid::same_reference, verification_method::VerificationMethod,
+};
 use std::collections::HashMap;
 
+/// Lookups by id match a `did:scid` reference by DID and fragment, ignoring its
+/// `src` locator (see [`crate::scid`]): a document lists its keys under the
+/// bare DID, and a reference may carry `src` so its recipient can resolve it.
 pub trait DocumentExt {
     /// Does this DID contain authentication verification_method with the given id?
     fn contains_authentication(&self, id: &str) -> bool;
@@ -38,15 +43,21 @@ pub trait DocumentExt {
 
 impl DocumentExt for Document {
     fn contains_authentication(&self, id: &str) -> bool {
-        self.authentication.iter().any(|vm| vm.get_id() == id)
+        self.authentication
+            .iter()
+            .any(|vm| same_reference(vm.get_id(), id))
     }
 
     fn contains_key_agreement(&self, id: &str) -> bool {
-        self.key_agreement.iter().any(|vm| vm.get_id() == id)
+        self.key_agreement
+            .iter()
+            .any(|vm| same_reference(vm.get_id(), id))
     }
 
     fn contains_assertion_method(&self, id: &str) -> bool {
-        self.assertion_method.iter().any(|vm| vm.get_id() == id)
+        self.assertion_method
+            .iter()
+            .any(|vm| same_reference(vm.get_id(), id))
     }
 
     /// Finds a specific authentication_id or returns all authentication ID's
@@ -94,7 +105,7 @@ impl DocumentExt for Document {
     fn get_verification_method(&self, id: &str) -> Option<&VerificationMethod> {
         self.verification_method
             .iter()
-            .find(|vm| vm.id.as_str() == id)
+            .find(|vm| same_reference(vm.id.as_str(), id))
     }
 
     fn expand_peer_keys(&self) -> Result<Document, DocumentError> {

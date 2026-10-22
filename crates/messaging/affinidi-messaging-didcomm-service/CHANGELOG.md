@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.23.1) — did:scid profiles
+
+- **Behaviour:** a `message.from` that differs from the profile DID only by a
+  did:scid `src` locator no longer logs a mismatch warning.
+- `affinidi-did-common` moves from a dev-dependency to a dependency.
+
 ## Unreleased (0.23.0) — SDK 0.38, trust-tasks 0.33
 
 Moves to `affinidi-messaging-sdk` 0.38 and `trust-tasks-rs` 0.33. The SDK is a public dependency here, so this crate moves a minor. No source change.

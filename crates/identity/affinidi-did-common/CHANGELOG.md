@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.4.4) — did:scid references match by DID
+
+- **Added:** the `scid` module: `strip_scid_src`, `scid_src`, `with_scid_src`
+  and `same_reference`. A `did:scid` identity is the DID; its `src` query is a
+  locator, so `did:scid:vh:1:Qm?src=example.com#key-1` and
+  `did:scid:vh:1:Qm#key-1` name the same key. Only a `did:scid` DID URL whose
+  sole query parameter is `src` is affected.
+- **Behaviour:** `DocumentExt` lookups by id (`contains_*`, `find_*`,
+  `get_verification_method`) match a did:scid reference that carries `src`
+  against the bare ids its document lists. Every other id still matches
+  exactly.
+
 ## Unreleased (0.4.3) — a service endpoint's URI is a URI
 
 `Endpoint::get_uri` and `get_uris` return the `uri` member's **value** for the

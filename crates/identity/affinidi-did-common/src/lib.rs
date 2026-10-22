@@ -23,6 +23,7 @@ pub mod document;
 #[cfg(feature = "key-agreement")]
 pub mod key_negotiation;
 pub mod one_or_many;
+pub mod scid;
 pub mod service;
 pub mod verification_method;
 

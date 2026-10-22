@@ -259,11 +259,22 @@ mod tests {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();
 
-        let did_document = client.resolve(DID_SCID).await.unwrap();
-        assert_eq!(
-            did_document.did.as_str(),
-            "did:webvh:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai:identity.foundation:didwebvh-implementations:implementations:affinidi-didwebvh-rs"
+        let response = client.resolve(DID_SCID).await.unwrap();
+        // The did:scid's own document: the bare DID is its id, and its keys are
+        // under it, not under the did:webvh log that verifies it.
+        let did = "did:scid:vh:1:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai";
+        assert_eq!(response.doc.id.as_str(), did);
+        assert!(
+            response
+                .doc
+                .verification_method
+                .iter()
+                .all(|vm| vm.id.as_str().starts_with(&format!("{did}#"))),
+            "{:?}",
+            response.doc.verification_method
         );
+        assert!(response.doc.also_known_as.iter().any(|a| a
+            == "did:webvh:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai:identity.foundation:didwebvh-implementations:implementations:affinidi-didwebvh-rs"));
     }
 
     // -----------------------------------------------------------------------
