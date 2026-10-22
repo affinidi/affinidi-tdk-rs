@@ -7,7 +7,7 @@
 //! Wire format:
 //! ```text
 //! -E<count>                       one frame; count covers everything below
-//!   YTSP <version>                  `YTSP-AAC`
+//!   YTSP <version>                  `YTSP-BAA`
 //!   <var-data B> sender-VID
 //!   <var-data B> receiver-VID       `4BAA` when absent
 //!   <var-data F> enc ‖ ct         HPKE-Base ciphertext, AEAD tag inside ct
@@ -170,14 +170,13 @@ fn decode_digest(
 
 /// Encode the ESSR sender-VID payload field.
 ///
-/// Rev 3 §8 makes this field optional under HPKE-Base — the AAD already binds
-/// the sender — but permits carrying it, in which case a receiver MUST check it
-/// against the envelope. We carry it. The spec's own security considerations
-/// note that the two bindings are then independent, so an implementation "that
-/// does not wish to rely on the associated-data handling of a newer HPKE
-/// implementation obtains the same property from the payload check alone".
-/// Our HPKE is hand-rolled, which is exactly the situation that argues for not
-/// resting the sender binding on a single mechanism.
+/// 1.0 requires it in every confidential payload, under HPKE-Base as under the
+/// sealed box (§3.2, §3.7 step 7), and a receiver MUST check it against the
+/// envelope. Rev 3 let HPKE-Base write the NULL VID instead, since the AAD
+/// already binds the sender; we carried it anyway, so the rule changed the
+/// receive side here and not the send side. The two bindings are independent,
+/// which matters because our HPKE is hand-rolled: the sender binding does not
+/// rest on a single mechanism.
 fn encode_sender_field(sender_vid: &str, out: &mut Vec<u8>) {
     wire::encode_variable_data(wire::TSP_VID, sender_vid.as_bytes(), out);
 }
@@ -343,7 +342,7 @@ fn decode_referral(frame: &[u8], pos: &mut usize) -> Result<Option<Referral>, Ts
 /// Build the bytes `Signature_new` is made over (Rev 3 §9.3).
 ///
 /// "`Signature_new` within the `Referral_Field` is made by `VID_new`'s key over
-/// {`XRFI`, `VID_sndr | 4BAA`, `Digest`, `Nonce`, `Reply_Path`, `VID_new`}. The
+/// {`XRFI`, `VID_sndr`, `Digest`, `Nonce`, `Reply_Path`, `VID_new`}. The
 /// referral field's own code and count are not covered; the message signature
 /// covers them."
 ///
@@ -449,8 +448,9 @@ struct FixedInputs {
     ephemeral: Option<[u8; 32]>,
     /// An `XPAD` message's nonce.
     pad_nonce: Option<[u8; NONCE_LEN]>,
-    /// Write the NULL VID `4BAA` in the ESSR sender field, as §8 permits under
-    /// HPKE-Base and the vectors do, rather than the sender VID.
+    /// Write the NULL VID `4BAA` in the ESSR sender field rather than the
+    /// sender VID, as §3.7 permits for a non-confidential payload and the
+    /// signed-only vector does.
     null_payload_sender: bool,
 }
 
@@ -796,11 +796,15 @@ fn decode_app_stream(frame: &[u8], pos: &mut usize, frame_end: usize) -> Result<
 /// `envelope_fields` and `envelope_sender` come from the message's envelope and
 /// are needed to recompute a control message's `TSP_Digest` and to check the
 /// ESSR sender field against the envelope.
+///
+/// `confidential` says whether the frame was sealed: only a non-confidential
+/// payload may carry the NULL VID in its ESSR sender field.
 fn decode_payload_frame(
     scheme: PkaeScheme,
     frame: &[u8],
     envelope_fields: &[u8],
     envelope_sender: &str,
+    confidential: bool,
 ) -> Result<DecodedFrame, TspError> {
     let mut pos = 0usize;
     let quadlets = wire::decode_count(wire::TSP_PAYLOAD, frame, &mut pos)
@@ -820,13 +824,21 @@ fn decode_payload_frame(
         .expect("3-byte slice");
     pos += 3;
 
-    // Every Rev 3 layout carries the ESSR sender field next. Under HPKE-Base it
-    // MAY be the NULL VID; when it is not, it MUST equal the envelope sender.
+    // Every layout carries the ESSR sender field next. A confidential payload
+    // MUST name the sender (§3.7 step 7); a non-confidential one MAY carry the
+    // NULL VID. Whenever it names a VID, it MUST equal the envelope sender.
     let sender_field_begin = pos;
     let sender_bytes = wire::decode_variable_data(wire::TSP_VID, frame, &mut pos)
         .ok_or_else(|| TspError::InvalidMessage("missing ESSR sender VID field".into()))?;
     let sender_field = &frame[sender_field_begin..pos];
-    if !sender_bytes.is_empty() {
+    if sender_bytes.is_empty() {
+        if confidential {
+            return Err(TspError::Verification(
+                "ESSR sender VID is the NULL VID; a confidential payload must name its sender"
+                    .into(),
+            ));
+        }
+    } else {
         let payload_sender = std::str::from_utf8(&sender_bytes)
             .map_err(|_| TspError::InvalidMessage("ESSR sender VID is not UTF-8".into()))?;
         if payload_sender != envelope_sender {
@@ -1611,9 +1623,10 @@ pub mod insecure_deterministic {
         /// The sender VID — what every public packing function writes.
         #[default]
         Present,
-        /// The NULL VID `4BAA`. §8 permits it under HPKE-Base, where the AAD
-        /// binds the sender, and the Appendix A vectors use it. Refused under
-        /// the sealed box, which has no AAD and so needs the field.
+        /// The NULL VID `4BAA`. §3.7 permits it only in a non-confidential
+        /// payload, and the signed-only vector uses it. Refused for a sealed
+        /// payload under either scheme: Rev 3 allowed it under HPKE-Base, 1.0
+        /// does not.
         Null,
     }
 
@@ -1665,9 +1678,9 @@ pub mod insecure_deterministic {
                 "a nested or routed message must be confidential".into(),
             ));
         }
-        if scheme == PkaeScheme::SealedBox && options.payload_sender == PayloadSender::Null {
+        if confidential && options.payload_sender == PayloadSender::Null {
             return Err(TspError::InvalidMessage(
-                "the sealed box has no AAD, so its payload must name the sender".into(),
+                "a confidential payload must name its sender".into(),
             ));
         }
         match (message_type, options.hops.len()) {
@@ -2041,7 +2054,13 @@ fn unpack_inner(
         body: payload,
         control,
         thread_digest,
-    } = decode_payload_frame(scheme, &payload_frame, &envelope_fields, &envelope.sender)?;
+    } = decode_payload_frame(
+        scheme,
+        &payload_frame,
+        &envelope_fields,
+        &envelope.sender,
+        confidential,
+    )?;
 
     Ok(UnpackedMessage {
         payload,
@@ -2516,20 +2535,21 @@ mod tests {
         }
     }
 
-    // ---- The Rev 2 / Rev 3 boundary ----
+    // ---- The draft / 1.0 boundary ----
     //
-    // These pin what a Rev 2 message does when it meets this build.
+    // These pin what a draft-revision message does when it meets this build.
     //
     // Rev 3 as first proposed left the version unchanged across a wire-breaking
     // revision, which left a structural probe — the byte after the receiver VID,
     // Rev 2's `XAAA` against Rev 3's `F` — as the only way to tell them apart.
-    // A discriminator built out of a field the new revision deletes. Raised on
-    // the spec PR and fixed: Rev 3 is `YTSP-AAC` (0.2) against Rev 2's
-    // `YTSP-AAB` (0.1), so the envelope answers the question itself.
+    // Raised on the spec PR and fixed: Rev 3 became `YTSP-AAC` (0.2) against
+    // Rev 2's `YTSP-AAB` (0.1). 1.0 is `YTSP-BAA`, and moving MAJOR means a
+    // draft message is now refused at the envelope, before any parse of the
+    // payload can fail in a misleading place.
     //
-    // The structural difference is still asserted below. It is what makes the
-    // frames genuinely incompatible, and the version field is a label on that
-    // fact rather than a substitute for it.
+    // The Rev 2 structural difference is still asserted below. It is what makes
+    // those frames genuinely incompatible, and the version field is a label on
+    // that fact rather than a substitute for it.
 
     /// Rev 2's version marker, `YTSP-AAB` — 0.1, written out rather than
     /// derived, since this build's own constant has moved on.
@@ -2539,8 +2559,8 @@ mod tests {
     }
 
     /// Build the Rev 2 wire shape by hand. Everything from the sender VID to the
-    /// end of the receiver VID is byte-identical to Rev 3; Rev 2 then diverges
-    /// with the `XAAA` marker and a `G` ciphertext where Rev 3 has an `F` one.
+    /// end of the receiver VID is byte-identical to 1.0; Rev 2 then diverges
+    /// with the `XAAA` marker and a `G` ciphertext where 1.0 has an `F` one.
     fn rev2_shaped_message(sender: &str, receiver: &str) -> Vec<u8> {
         let mut header = Vec::new();
         rev2_version(&mut header);
@@ -2561,15 +2581,38 @@ mod tests {
         out
     }
 
-    /// Where the two revisions differ on the wire: the version marker, the `-E`
+    /// A Rev 3 message: a 1.0 message with its version marker rewritten to
+    /// `YTSP-AAC` (0.2). Rev 3 permitted every byte after the marker — it let
+    /// HPKE-Base carry the sender or not — so this is a message a Rev 3 peer
+    /// could have sent, signature aside.
+    fn rev3_message(keys: &TestKeys) -> Vec<u8> {
+        let mut packed = pack(
+            b"x",
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap()
+        .bytes;
+        // `-E##` is three bytes and `YTSP` three more; the version count code
+        // is the next three.
+        let mut aac = Vec::new();
+        wire::encode_count(0, 2, &mut aac);
+        packed[6..9].copy_from_slice(&aac);
+        packed
+    }
+
+    /// Where Rev 2 and 1.0 differ on the wire: the version marker, the `-E`
     /// count, and the byte after the two VIDs — Rev 2's `XAAA` marker against
-    /// Rev 3's `F` ciphertext field. The VIDs themselves are identical, which is
+    /// 1.0's `F` ciphertext field. The VIDs themselves are identical, which is
     /// what lets a relay read either revision's addressing.
     #[test]
-    fn rev2_and_rev3_differ_in_version_and_after_the_vids() {
+    fn rev2_and_v1_differ_in_version_and_after_the_vids() {
         let keys = gen_keys();
         let rev2 = rev2_shaped_message("did:web:alice", "did:web:bob");
-        let rev3 = pack(
+        let v1 = pack(
             b"x",
             MessageType::Direct,
             "did:web:alice",
@@ -2580,42 +2623,37 @@ mod tests {
         .unwrap()
         .bytes;
 
-        let d2 = Envelope::decode_full(&rev2).unwrap();
-        let d3 = Envelope::decode_full(&rev3).unwrap();
+        let d2 = Envelope::decode_full_any_version(&rev2).unwrap();
+        let d1 = Envelope::decode_full(&v1).unwrap();
 
-        // The version marker differs, in the byte that carries MINOR: Rev 2's
-        // `AAB` against Rev 3's `AAC`.
-        assert_eq!(rev2[3..8], rev3[3..8]);
-        assert_eq!(rev2[8], 0x01, "Rev 2 is 0.1");
-        assert_eq!(rev3[8], 0x02, "Rev 3 is 0.2");
+        // The version marker differs: Rev 2's `AAB` against 1.0's `BAA`.
+        assert_eq!(rev2[3..6], v1[3..6], "both are YTSP");
+        assert_eq!((d2.envelope.version, d2.minor), (0, 1), "Rev 2 is 0.1");
+        assert_eq!((d1.envelope.version, d1.minor), (1, 0), "1.0 is 1.0");
 
         // Both VIDs are byte-identical, which is the property a relay depends
         // on: it can read addressing off either revision without knowing which.
-        assert_eq!(d2.header_len, d3.header_len);
-        assert_eq!(rev2[9..d2.header_len], rev3[9..d3.header_len]);
+        assert_eq!(d2.header_len, d1.header_len);
+        assert_eq!(rev2[9..d2.header_len], v1[9..d1.header_len]);
 
-        // Two things do differ. The `-E` count, because Rev 3 covers the
+        // Two things do differ. The `-E` count, because 1.0 covers the
         // ciphertext with it and Rev 2 covered only the header...
-        assert_ne!(rev2[..3], rev3[..3]);
-        assert!(d3.content_end > d2.content_end);
+        assert_ne!(rev2[..3], v1[..3]);
+        assert!(d1.content_end > d2.content_end);
 
         // ...and, unambiguously, the byte after the VIDs.
         assert_eq!(rev2[d2.header_len], 0x5c, "Rev 2 continues with XAAA");
-        assert_ne!(
-            rev3[d3.header_len], 0x5c,
-            "Rev 3 continues with the F field"
-        );
+        assert_ne!(v1[d1.header_len], 0x5c, "1.0 continues with the F field");
     }
 
     /// A Rev 2 message is refused as a *revision* mismatch, naming both
     /// revisions.
     ///
-    /// It is the diagnostic that matters here, not the rejection. Without the
-    /// version check the parse dies at the ciphertext selector — "missing F
-    /// ciphertext field" — which sends whoever is reading it to the crypto
-    /// layer to debug a problem that is nothing of the sort. The underlying
-    /// error is still carried, since a corrupt Rev 3 frame produces the same
-    /// shape of failure and the real cause has to survive.
+    /// It is the diagnostic that matters here, not the rejection. Under Rev 3
+    /// the version check passed and the parse died at the ciphertext selector —
+    /// "missing F ciphertext field" — which sent whoever was reading it to the
+    /// crypto layer. Under 1.0 MAJOR differs, so the envelope refuses it, and
+    /// the wrapping names both full versions.
     #[test]
     fn a_rev2_message_is_rejected_as_a_revision_mismatch() {
         let keys = gen_keys();
@@ -2633,22 +2671,120 @@ mod tests {
         };
         assert_eq!((*found_major, *found_minor), (0, 1), "Rev 2 is 0.1");
         assert!(
-            matches!(**source, TspError::InvalidMessage(_)),
-            "the underlying parse failure is carried, got {source:?}"
+            matches!(
+                **source,
+                TspError::VersionMismatch {
+                    found: 0,
+                    supported: 1
+                }
+            ),
+            "refused on MAJOR at the envelope, got {source:?}"
         );
         assert!(
-            err.to_string().contains("0.1") && err.to_string().contains("0.2"),
+            err.to_string().contains("0.1") && err.to_string().contains("1.0"),
             "the message names both revisions: {err}"
         );
+    }
+
+    /// A Rev 3 message is refused on MAJOR too, though the rest of its frame
+    /// would parse: 1.0 changed what a confidential payload must carry, and
+    /// the version is how a receiver knows which rule the sender followed.
+    #[test]
+    fn a_rev3_message_is_rejected_as_a_revision_mismatch() {
+        let keys = gen_keys();
+        let rev3 = rev3_message(&keys);
+        let err = unpack(&rev3, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap_err();
+
+        let TspError::RevisionMismatch {
+            found_major,
+            found_minor,
+            source,
+            ..
+        } = &err
+        else {
+            panic!("expected a revision mismatch, got {err:?}");
+        };
+        assert_eq!((*found_major, *found_minor), (0, 2), "Rev 3 is 0.2");
+        assert!(matches!(
+            **source,
+            TspError::VersionMismatch { found: 0, .. }
+        ));
+        assert!(
+            err.to_string().contains("0.2") && err.to_string().contains("1.0"),
+            "the message names both revisions: {err}"
+        );
+    }
+
+    /// 1.0's payload rule: a confidential payload whose ESSR sender field is
+    /// the NULL VID is refused, though the AAD still binds the sender and the
+    /// message would otherwise open. Rev 3 accepted it under HPKE-Base.
+    #[test]
+    fn a_confidential_payload_with_a_null_sender_is_refused() {
+        let keys = gen_keys();
+        let packed = pack_inner_with(
+            b"x",
+            MessageType::Direct,
+            &[],
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            None,
+            &Padding::None,
+            true,
+            PkaeScheme::HpkeBase,
+            &FixedInputs {
+                null_payload_sender: true,
+                ..FixedInputs::FRESH
+            },
+        )
+        .unwrap();
+
+        let err = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk)
+            .expect_err("NULL sender in a confidential payload");
+        assert!(
+            matches!(&err, TspError::Verification(m) if m.contains("NULL VID")),
+            "got {err:?}"
+        );
+    }
+
+    /// A non-confidential payload may still carry the NULL VID (§3.7 step 7),
+    /// as the signed-only vector does.
+    #[test]
+    fn a_signed_only_payload_may_carry_a_null_sender() {
+        let keys = gen_keys();
+        let packed = pack_inner_with(
+            b"x",
+            MessageType::Direct,
+            &[],
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+            None,
+            &Padding::None,
+            false,
+            PkaeScheme::HpkeBase,
+            &FixedInputs {
+                null_payload_sender: true,
+                ..FixedInputs::FRESH
+            },
+        )
+        .unwrap();
+
+        let unpacked = unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk)
+            .expect("NULL sender in a signed-only payload");
+        assert_eq!(unpacked.payload, b"x");
+        assert!(!unpacked.confidential);
     }
 
     /// A corrupt message of *our own* revision is not blamed on the revision.
     ///
     /// The version check only fires on a mismatch, so an ordinary malformed
-    /// frame keeps its own error and nobody goes looking for a Rev 2 sender that
-    /// does not exist.
+    /// frame keeps its own error and nobody goes looking for a draft-revision
+    /// sender that does not exist.
     #[test]
-    fn a_corrupt_rev3_message_keeps_its_own_error() {
+    fn a_corrupt_v1_message_keeps_its_own_error() {
         let keys = gen_keys();
         let mut packed = pack(
             b"x",
@@ -2670,18 +2806,23 @@ mod tests {
         );
     }
 
-    /// Keys-free addressing reads both revisions. The envelope prefix a relay
-    /// needs — the `-E` frame, the version and both VIDs — did not change, so a
-    /// mediator can route, apply ACLs and store a message of either revision
-    /// without knowing which it is holding.
+    /// Keys-free addressing reads every revision. The envelope prefix a relay
+    /// needs — the `-E` frame, the version and both VIDs — has not changed, so
+    /// a mediator can route, apply ACLs and store a message of any revision
+    /// without knowing which it is holding, or speaking it.
     #[test]
-    fn keys_free_addressing_reads_both_revisions() {
-        let rev2 = rev2_shaped_message("did:web:alice", "did:web:bob");
-        assert!(crate::message::meta::is_tsp(&rev2));
+    fn keys_free_addressing_reads_every_revision() {
+        let keys = gen_keys();
+        for msg in [
+            rev2_shaped_message("did:web:alice", "did:web:bob"),
+            rev3_message(&keys),
+        ] {
+            assert!(crate::message::meta::is_tsp(&msg));
 
-        let meta = crate::message::meta::MetaEnvelope::parse(&rev2).unwrap();
-        assert_eq!(meta.sender, "did:web:alice");
-        assert_eq!(meta.receiver, "did:web:bob");
+            let meta = crate::message::meta::MetaEnvelope::parse(&msg).unwrap();
+            assert_eq!(meta.sender, "did:web:alice");
+            assert_eq!(meta.receiver, "did:web:bob");
+        }
     }
 
     /// Rev 3 widened the `-E` count to cover the ciphertext, which makes the

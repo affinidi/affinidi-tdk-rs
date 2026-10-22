@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (0.39.0) — TSP 1.0
+
+**Breaking on the wire (feature `tsp`).** Requires `affinidi-tsp` 0.3, which
+speaks TSP 1.0 (`YTSP-BAA`) — see that crate's changelog. No source change
+here, but every TSP message this SDK packs or unpacks follows it:
+
+- A peer still on `affinidi-tsp` 0.2.x / Rev 3 (`YTSP-AAC`), or on
+  `tsp_sdk` before 0.16.0, cannot exchange TSP messages with this release in
+  either direction: each side refuses the other's MAJOR. Upgrade both ends
+  together. DIDComm is unaffected.
+- A confidential TSP payload that leaves the sender VID NULL is now refused.
+  This SDK always wrote it, so only messages from other implementations that
+  relied on Rev 3's HPKE-Base allowance are affected.
+- A mediator's keys-free routing (`MetaEnvelope::parse`) reads any TSP
+  version, so a mediator on this release still routes between two Rev 3
+  endpoints.
+
+`affinidi-tsp` is a public dependency under `tsp`, so this moves a minor.
+
 ## Unreleased (0.38.1) — a did:scid identity sends and receives as itself
 
 - **Behaviour:** packing authcrypt `from` a did:scid DID URL

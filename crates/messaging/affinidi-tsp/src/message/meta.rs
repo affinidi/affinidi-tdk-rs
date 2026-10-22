@@ -78,8 +78,12 @@ impl MetaEnvelope {
     /// Does **not** decrypt or verify the payload — it only reads the envelope
     /// and hashes the wire bytes. Returns an error if the bytes are not a
     /// well-formed TSP envelope.
+    ///
+    /// Any MAJOR version is read: a relay processes nothing it addresses, so
+    /// it routes a message whose version it does not speak rather than
+    /// stranding two endpoints that do.
     pub fn parse(wire: &[u8]) -> Result<Self, TspError> {
-        let (envelope, _consumed) = Envelope::decode(wire)?;
+        let envelope = Envelope::decode_full_any_version(wire)?.envelope;
         let sha256: [u8; 32] = Sha256::digest(wire).into();
         Ok(Self {
             sender: envelope.sender,

@@ -1,5 +1,32 @@
 # Affinidi TSP Changelog
 
+## Unreleased (0.3.0) — TSP 1.0 (`YTSP-BAA`)
+
+**Breaking on the wire.** Follows the released specification,
+trustoverip/tswg-tsp-specification@`ccda6b3` (PR #86), and the reference
+implementation `tsp_sdk` 0.16.0.
+
+- **The version marker is `YTSP-BAA` (1.0)**, was `YTSP-AAC` (0.2, Rev 3).
+  MAJOR gates processability, so a Rev 3 or Rev 2 message is now refused at
+  the envelope (`RevisionMismatch` wrapping `VersionMismatch`), and a 0.2.x
+  build refuses ours the same way. Same behaviour as `tsp_sdk` 0.16.0.
+- **The ESSR sender field (`VID_sndr`) is mandatory in every confidential
+  payload**, HPKE-Base as well as the sealed box (§3.2, §3.7 step 7). Rev 3
+  let HPKE-Base write the NULL VID `4BAA`. This crate already carried the
+  sender on send, so only the receive side changed: a confidential payload
+  whose sender field is NULL is refused with `TspError::Verification`. A
+  signed-only (non-confidential) payload may still carry NULL.
+- **Keys-free addressing reads any version.** `MetaEnvelope::parse` no longer
+  gates on MAJOR, so a mediator still routes between two endpoints that speak
+  a revision it has moved past. Full unpack still gates. New
+  `wire::read_version` reads a marker without the gate.
+- `insecure_deterministic`: `PayloadSender::Null` is now refused for any
+  confidential payload, not only the sealed box.
+- Spec vectors replaced with the 1.0 Appendix A (all eleven change with the
+  version; eight gain the sender VID). Adds the `control-rfi-referral`
+  vector, which is unpacked, re-packed byte for byte, and has its
+  `Signature_new` checked with `verify_referral`.
+
 ## Unreleased (0.2.2) — `salsa20` 0.11, drop `rand_core` 0.6
 
 No behaviour change and no public API change. Sealed-box and control-nonce

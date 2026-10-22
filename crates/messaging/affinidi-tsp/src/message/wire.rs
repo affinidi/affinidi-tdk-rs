@@ -186,36 +186,37 @@ pub const YTSP: [u8; 3] = cesr_data("YTSP");
 pub const TSP_INFO: &[u8] = b"YTSP-";
 
 /// TSP version `(major, minor)` advertised on the wire, encoded as the
-/// `YTSP-###` marker of §9.1 — `YTSP-AAC` for `0.2`.
+/// `YTSP-###` marker of §9.1 — `YTSP-BAA` for `1.0`, the released
+/// specification.
+///
+/// # MAJOR gates, MINOR is carried
+///
+/// The drafts before 1.0 were `0.2` (Rev 3, `YTSP-AAC`) and `0.1` (Rev 2,
+/// `YTSP-AAB`), and none is interoperable with the next. 1.0 differs from Rev 3
+/// in one payload rule — the ESSR sender field must name the sender in every
+/// confidential payload, where Rev 3 let HPKE-Base write the NULL VID — but
+/// the MAJOR moved with it, so a draft message is refused at the envelope as
+/// [`TspError::VersionMismatch`] rather than read under rules it was not
+/// written to. A different MINOR is carried and never refused.
 ///
 /// # Two components, not three
 ///
-/// The marker is one character of MAJOR and two of MINOR (§9.1). An earlier
+/// The marker is one character of MAJOR and two of MINOR (§9.1). A pre-merge
 /// draft of Rev 3 read the three characters as MAJOR, MINOR, PATCH instead and
-/// gave the version as `YTSP-ABA`; the merged specification settled on
-/// MAJOR.MINOR and `YTSP-AAC`, which is what this crate had already moved to.
+/// gave the version as `YTSP-ABA`; the specification settled on MAJOR.MINOR.
 ///
 /// PATCH has no role in a wire version. Semver defines it as a
 /// backward-compatible bug fix — a change that by definition cannot alter what
 /// goes over the wire — so a receiver can never act on it, and six bits of
 /// every envelope would carry something no peer can use.
 ///
-/// The two readings disagree about the value, which is how the split showed
-/// itself. The trailing 12 bits are identical on the wire; only their
-/// interpretation differs:
-///
 /// ```text
-/// marker                   MAJOR   trailing 12 bits   MAJOR.MINOR   MAJOR.MINOR.PATCH
-/// AAB  (Rev 2)                 0                  1           0.1               0.0.1
-/// ABA  (pre-merge Rev 3)       0                 64          0.64               0.1.0
-/// AAC  (merged Rev 3)          0                  2           0.2               0.0.2
+/// marker                   MAJOR   trailing 12 bits   MAJOR.MINOR
+/// AAB  (Rev 2)                 0                  1           0.1
+/// AAC  (Rev 3)                 0                  2           0.2
+/// BAA  (1.0)                   1                  0           1.0
 /// ```
-///
-/// Only MAJOR gates processability, and neither the reference implementation
-/// nor this one refuses a message on MINOR, so a message a pre-merge peer
-/// packed under `ABA` still reads here: its digest and signature cover the
-/// version bytes *it* carries, not ours.
-pub const TSP_VERSION: (u16, u16) = (0, 2);
+pub const TSP_VERSION: (u16, u16) = (1, 0);
 
 /// MINOR occupies the whole 12-bit count of the version code.
 const fn encoded_version() -> u16 {
@@ -489,7 +490,9 @@ pub fn decode_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u16), TspE
     Ok((major, minor))
 }
 
-fn read_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u16), TspError> {
+/// Read the version marker at `*pos` without gating on MAJOR. Bytes that are
+/// not a version marker are still [`TspError::NotTsp`].
+pub fn read_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u16), TspError> {
     let hdr = stream
         .get(*pos..*pos + YTSP.len())
         .ok_or_else(|| TspError::NotTsp("truncated version marker".into()))?;
@@ -646,24 +649,27 @@ mod tests {
         let mut buf = Vec::new();
         encode_version(&mut buf);
         let mut pos = 0;
-        assert_eq!(decode_version(&buf, &mut pos).unwrap(), (0, 2));
+        assert_eq!(decode_version(&buf, &mut pos).unwrap(), (1, 0));
 
-        // A different MINOR is carried, not refused: `YTSP-ABA`, the
-        // pre-merge Rev 3 marker, reads as MAJOR 0, MINOR 64.
-        let mut aba = Vec::new();
-        aba.extend_from_slice(&YTSP);
-        encode_count(0, 64, &mut aba);
+        // A different MINOR is carried, not refused: `YTSP-BAB` reads as 1.1.
+        let mut bab = Vec::new();
+        bab.extend_from_slice(&YTSP);
+        encode_count(1, 1, &mut bab);
         let mut pos = 0;
-        assert_eq!(decode_version(&aba, &mut pos).unwrap(), (0, 64));
+        assert_eq!(decode_version(&bab, &mut pos).unwrap(), (1, 1));
 
-        // A YTSP marker with a different MAJOR is TSP, but unprocessable.
-        let mut other = Vec::new();
-        other.extend_from_slice(&YTSP);
-        encode_count(1, 0, &mut other);
+        // A YTSP marker with a different MAJOR is TSP, but unprocessable. The
+        // Rev 3 draft, `YTSP-AAC`, is exactly that.
+        let mut rev3 = Vec::new();
+        rev3.extend_from_slice(&YTSP);
+        encode_count(0, 2, &mut rev3);
         let mut pos = 0;
         assert!(matches!(
-            decode_version(&other, &mut pos),
-            Err(TspError::VersionMismatch { found: 1, .. })
+            decode_version(&rev3, &mut pos),
+            Err(TspError::VersionMismatch {
+                found: 0,
+                supported: 1
+            })
         ));
 
         // Bytes that are not a YTSP marker at all are not TSP.
@@ -721,9 +727,9 @@ mod tests {
     fn version_roundtrip() {
         let mut buf = Vec::new();
         encode_version(&mut buf);
-        // `YTSP-AAC`: the `-` selector, MAJOR 0 as `A`, then MINOR 2 filling
-        // the 12-bit count as `AC`.
-        assert_eq!(buf, [0x61, 0x34, 0x8f, 0xf8, 0x00, 0x02]);
+        // `YTSP-BAA`: the `-` selector, MAJOR 1 as `B`, then MINOR 0 filling
+        // the 12-bit count as `AA`.
+        assert_eq!(buf, [0x61, 0x34, 0x8f, 0xf8, 0x10, 0x00]);
         let mut pos = 0;
         decode_version(&buf, &mut pos).unwrap();
         assert_eq!(pos, 6);

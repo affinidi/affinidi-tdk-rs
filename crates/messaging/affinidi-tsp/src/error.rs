@@ -47,8 +47,9 @@ pub enum TspError {
     #[error("unsupported TSP major version {found} (this build speaks {supported})")]
     VersionMismatch { found: u16, supported: u16 },
 
-    /// A TSP message whose MAJOR version we accept but whose MINOR names a
-    /// different revision, and which then failed to parse.
+    /// A TSP message whose version names a different revision, and which then
+    /// failed to parse — including a draft (`0.x`) message refused on MAJOR,
+    /// which is carried as the `source` [`TspError::VersionMismatch`].
     ///
     /// §9.1 uses MINOR to track the CESR code table a revision pins, so a
     /// differing MINOR means the frame was built against a table this build does
