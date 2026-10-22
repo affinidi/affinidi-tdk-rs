@@ -25,7 +25,7 @@
 //! Wire layout:
 //! ```text
 //! -E<count>                     count = quadlets of everything below
-//!   YTSP <version>              `YTSP-AAC` for version 0.2
+//!   YTSP <version>              `YTSP-BAA` for version 1.0
 //!   <var-data B> sender-VID
 //!   <var-data B> receiver-VID   `4BAA` when absent
 //!   <ciphertext or payload>     supplied by the caller
@@ -38,7 +38,7 @@ use crate::message::MessageType;
 use crate::message::wire;
 
 /// TSP protocol version (major) advertised on the wire.
-pub const TSP_VERSION: u8 = 0;
+pub const TSP_VERSION: u8 = 1;
 
 /// A TSP message envelope (cleartext header).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,7 +120,28 @@ impl Envelope {
     }
 
     /// Decode an envelope and report the offsets needed to open and verify it.
+    ///
+    /// Refuses a MAJOR this build does not speak with
+    /// [`TspError::VersionMismatch`].
     pub fn decode_full(data: &[u8]) -> Result<DecodedEnvelope, TspError> {
+        Self::decode_framed(data, true)
+    }
+
+    /// [`Envelope::decode_full`] without the MAJOR gate, for keys-free
+    /// addressing.
+    ///
+    /// A relay reads only the frame and the two VIDs, whose encoding every
+    /// revision since Rev 2 shares, and processes nothing it reads. Gating it
+    /// on MAJOR would make a mediator refuse to route between two endpoints
+    /// that both speak a revision the mediator has moved past — the endpoint
+    /// that opens the message is the one that has to speak it. The returned
+    /// [`DecodedEnvelope::minor`] is the message's own, and its
+    /// [`Envelope::version`] is the MAJOR as read rather than this build's.
+    pub(crate) fn decode_full_any_version(data: &[u8]) -> Result<DecodedEnvelope, TspError> {
+        Self::decode_framed(data, false)
+    }
+
+    fn decode_framed(data: &[u8], gate_major: bool) -> Result<DecodedEnvelope, TspError> {
         let mut pos = 0usize;
 
         // The `-E` frame. Its count is validated against the message length:
@@ -139,7 +160,11 @@ impl Envelope {
             })?;
 
         // Version marker. MAJOR gates processability; MINOR is carried.
-        let (_, minor) = wire::decode_version(data, &mut pos)?;
+        let (major, minor) = if gate_major {
+            wire::decode_version(data, &mut pos)?
+        } else {
+            wire::read_version(data, &mut pos)?
+        };
 
         let aad_begin = content_begin;
 
@@ -168,7 +193,7 @@ impl Envelope {
 
         Ok(DecodedEnvelope {
             envelope: Envelope {
-                version: TSP_VERSION,
+                version: major as u8,
                 // Not on the wire; populated from the payload frame on unpack.
                 message_type: MessageType::Direct,
                 sender,

@@ -1,12 +1,12 @@
-//! Conformance against the specification's own test vectors (Rev 3 Appendix A).
+//! Conformance against the specification's own test vectors (1.0 Appendix A).
 //!
-//! These are the strongest evidence this crate has that it reads Rev 3
-//! correctly, and they check something the interop harness cannot. The harness
+//! These are the strongest evidence this crate has that it reads the
+//! specification correctly, and they check something the interop harness cannot. The harness
 //! packs with one implementation and unpacks with the other, so a shared
 //! misreading of the spec passes it: both sides agree, and nothing external says
 //! whether the agreement is right. These vectors were generated once, published
 //! in the specification, and are fixed — a message that unpacks here is one the
-//! specification says is a valid Rev 3 message, whatever any implementation
+//! specification says is a valid TSP 1.0 message, whatever any implementation
 //! thinks.
 //!
 //! What that buys, concretely, is the `TSP_Digest` derivation. `unpack`
@@ -20,14 +20,16 @@
 //! qb2 binary domain this crate works in, so decoding is plain base64url and no
 //! CESR-aware conversion is involved.
 //!
-//! Fixture: `tests/vectors/rev3.json`, lifted verbatim from the merged
-//! specification, commit `f5b8668`, where the version is `YTSP-AAC`. The private
-//! keys in it are published in the specification and must never be used for
-//! anything else.
+//! Fixture: `tests/vectors/rev3.json`, lifted verbatim from the released
+//! specification, commit `ccda6b3`, where the version is `YTSP-BAA` (1.0). The
+//! file keeps its Rev 3 name, as the reference implementation's does; 1.0 is
+//! Rev 3 with the ESSR sender field made mandatory in every confidential
+//! payload. The private keys in it are published in the specification and must
+//! never be used for anything else.
 
 use affinidi_tsp::MessageType;
 use affinidi_tsp::message::control::ControlType;
-use affinidi_tsp::message::direct::unpack;
+use affinidi_tsp::message::direct::{PkaeScheme, unpack, verify_referral};
 use serde_json::Value;
 
 /// Decode CESR's text domain. It is base64url without padding, and every TSP
@@ -281,6 +283,57 @@ fn control_rfd() {
     assert!(control.referral.is_none(), "a cancel introduces nothing");
 }
 
+/// The referral invite (§7.2.5): an invite over an existing relationship that
+/// introduces a new VID, with `Signature_new` made by that VID's own key.
+///
+/// The SAID check in `unpack` covers the referral's contribution to the digest
+/// — `VID_new` alone, without its `-J` code or the signature. `verify_referral`
+/// then checks `Signature_new` over the payload fields, which in 1.0 always
+/// begin with the sender's VID: under Rev 3 a reference sender wrote the NULL
+/// VID there, and a signature made over that would not have verified here.
+#[test]
+fn control_rfi_referral() {
+    let v = Vectors::load();
+    let name = "control-rfi-referral";
+    let unpacked = v.unpack(name);
+    v.assert_parties(name, &unpacked);
+    assert_eq!(unpacked.message_type, MessageType::Control);
+
+    let control = unpacked.control.as_ref().expect("an invite is a control");
+    assert_eq!(control.control_type, ControlType::RelationshipFormingInvite);
+    assert_eq!(control.digest, Some(unpacked.thread_digest));
+    assert!(control.route.is_empty(), "the reply path is empty (-JAA)");
+
+    let new_vid = v.field(name, "newVid");
+    let referral = control.referral.as_ref().expect("a populated referral");
+    assert_eq!(
+        referral.new_vid,
+        v.id(&new_vid, "longForm"),
+        "a VID introduced for the first time travels in its long form, which \
+         carries the document the receiver has no other way to resolve"
+    );
+    assert_eq!(
+        referral.signature.as_slice(),
+        qb64(&v.field(name, "signatureNew")),
+        "Signature_new as published"
+    );
+
+    verify_referral(
+        PkaeScheme::HpkeBase,
+        control,
+        &unpacked.sender,
+        &key(&v.id(&new_vid, "pkS")),
+    )
+    .expect("Signature_new verifies under the new VID's key");
+    verify_referral(
+        PkaeScheme::HpkeBase,
+        control,
+        &unpacked.sender,
+        &key(&v.id("alice", "pkS")),
+    )
+    .expect_err("and under no other");
+}
+
 /// The identity the truncation was caught by, now applied to every vector in
 /// the appendix: a TSP message is its `-E` count code, the content that count
 /// declares, and a signature group that declares its own length the same way.
@@ -303,6 +356,7 @@ fn every_vector_has_a_self_consistent_length() {
         "control-rfa-direct",
         "control-rfd",
         "control-rfi-sealed-box",
+        "control-rfi-referral",
         "nested-direct",
         "routed",
         "direct-hpke-base-pq",
@@ -332,22 +386,21 @@ fn every_vector_has_a_self_consistent_length() {
     }
 }
 
-/// Every vector is at the merged specification's version, `YTSP-AAC` — the
-/// marker this crate emits.
+/// Every vector is at the released specification's version, `YTSP-BAA` (1.0)
+/// — the marker this crate emits.
 ///
-/// The fixture was `YTSP-ABA` before the merge, and those vectors verified
-/// here too, because MINOR does not gate processing. That tolerance is exactly
-/// why this is worth asserting: a stale fixture would otherwise pass unnoticed.
+/// A stale `YTSP-AAC` fixture would fail every unpack on MAJOR, so this is not
+/// the only line of defence; it is the one whose failure says what is wrong.
 #[test]
-fn every_vector_is_at_the_merged_version() {
+fn every_vector_is_at_version_1_0() {
     let v = Vectors::load();
     let mut ours = Vec::new();
     affinidi_tsp::message::wire::encode_version(&mut ours);
     for (name, vector) in v.json["vectors"].as_object().expect("vectors") {
         let message = vector["message"].as_str().expect("message");
         assert!(
-            message[4..].starts_with("YTSP-AAC"),
-            "{name}: expected YTSP-AAC after the frame code"
+            message[4..].starts_with("YTSP-BAA"),
+            "{name}: expected YTSP-BAA after the frame code"
         );
         assert_eq!(qb64(message)[3..9], ours[..], "{name}: version bytes");
     }
@@ -443,10 +496,11 @@ fn direct_sealed_box() {
 /// the assertion that we hash with the right algorithm *and* read the right
 /// code.
 ///
-/// The sender VID also travels inside the encrypted payload rather than as the
-/// NULL VID. It has to: a sealed box is anonymous and has no AAD, so the payload
-/// is the only place the sender's identity can be bound (§8, and §3.7 step 7
-/// makes the receiver check it against the envelope).
+/// The sender VID also travels inside the encrypted payload, as it does in
+/// every 1.0 confidential payload. Under the sealed box it always had to: the
+/// box is anonymous and has no AAD, so the payload is the only place the
+/// sender's identity is bound (§8, and §3.7 step 7 makes the receiver check it
+/// against the envelope).
 #[test]
 fn control_rfi_sealed_box() {
     let v = Vectors::load();
@@ -545,7 +599,7 @@ fn a_sealed_box_round_trips_and_is_distinguishable() {
 #[cfg(feature = "test-vectors")]
 mod repack {
     use super::*;
-    use affinidi_tsp::message::control::{ControlMessage, DIGEST_LEN, NONCE_LEN};
+    use affinidi_tsp::message::control::{ControlMessage, DIGEST_LEN, NONCE_LEN, Referral};
     use affinidi_tsp::message::direct::Padding;
     use affinidi_tsp::message::direct::insecure_deterministic::{
         Options, PayloadSender, Protection, pack_insecure_deterministic,
@@ -559,6 +613,9 @@ mod repack {
         digest: Option<[u8; DIGEST_LEN]>,
         nonce: Option<[u8; NONCE_LEN]>,
         hops: Vec<String>,
+        /// An invite's `VID_new`. `Signature_new` is not taken: it covers the
+        /// digest, so the packer makes it and has to land on the published one.
+        referral: Option<String>,
         padding: Vec<u8>,
         /// The application bytes of an `XSCS`, or the raw inner message of an
         /// `XHOP`.
@@ -608,6 +665,7 @@ mod repack {
             digest: None,
             nonce: None,
             hops: Vec::new(),
+            referral: None,
             padding: Vec::new(),
             body: Vec::new(),
         };
@@ -625,10 +683,15 @@ mod repack {
                         .expect("nonce"),
                 );
                 p.hops = hop_list(&mut pos); // Reply_Path
-                assert!(
-                    hop_list(&mut pos).is_empty(),
-                    "no vector carries a referral"
-                );
+                let quadlets =
+                    wire::decode_count(wire::TSP_HOP_LIST, &frame, &mut pos).expect("-J referral");
+                if quadlets > 0 {
+                    let end = pos + quadlets as usize * 3;
+                    let new_vid = wire::decode_variable_data(wire::TSP_VID, &frame, &mut pos)
+                        .expect("VID_new");
+                    p.referral = Some(String::from_utf8(new_vid).unwrap());
+                    pos = end; // Signature_new: made by the packer
+                }
                 p.padding = padding(&mut pos);
             }
             k if *k == wire::XRFA => {
@@ -686,6 +749,10 @@ mod repack {
                 let mut control = if *k == wire::XRFI {
                     let mut c = ControlMessage::invite_routed(printed.hops.clone());
                     c.nonce = printed.nonce;
+                    c.referral = printed.referral.clone().map(|new_vid| Referral {
+                        new_vid,
+                        signature: [0; 64],
+                    });
                     c
                 } else if *k == wire::XRFA {
                     ControlMessage::accept(printed.digest.unwrap())
@@ -701,6 +768,16 @@ mod repack {
         } else {
             Vec::new()
         };
+        // The fixture names the identifier whose VID is introduced; the parse
+        // above has to have found that same VID on the wire.
+        let referral_key = vector.get("newVid").and_then(Value::as_str).map(|id| {
+            assert_eq!(
+                printed.referral,
+                Some(v.id(id, "longForm")),
+                "{name}: VID_new"
+            );
+            key(&v.id(id, "skS"))
+        });
 
         let packed = pack_insecure_deterministic(
             &body,
@@ -714,6 +791,7 @@ mod repack {
                 payload_sender: printed.sender,
                 padding: Padding::Exact(printed.padding.clone()),
                 hops: &hops,
+                referral_signing_key: referral_key.as_ref(),
                 ..Options::default()
             },
         )
@@ -791,6 +869,11 @@ mod repack {
     }
 
     #[test]
+    fn control_rfi_referral() {
+        repack("control-rfi-referral");
+    }
+
+    #[test]
     fn nested_direct() {
         repack("nested-direct");
     }
@@ -815,6 +898,7 @@ mod repack {
             "control-rfa-direct",
             "control-rfd",
             "control-rfi-sealed-box",
+            "control-rfi-referral",
             "nested-direct",
             "routed",
         ];
@@ -852,28 +936,34 @@ mod repack {
         assert_eq!(pack(), pack());
     }
 
-    /// The sealed box has no AAD, so §8 requires its payload to name the
-    /// sender; a NULL sender field is refused rather than packed.
+    /// 1.0 requires every confidential payload to name the sender (§3.2), so
+    /// a NULL sender field is refused rather than packed — under HPKE-Base as
+    /// well as the sealed box, where Rev 3 allowed it.
     #[test]
-    fn a_sealed_box_refuses_a_null_payload_sender() {
+    fn a_confidential_payload_refuses_a_null_payload_sender() {
         let v = Vectors::load();
-        let err = pack_insecure_deterministic(
-            b"x",
-            MessageType::Direct,
-            &v.id("alice", "id"),
-            &v.id("bob", "id"),
-            &key(&v.id("alice", "skS")),
-            &key(&v.id("bob", "pkE")),
+        for protection in [
             Protection::SealedBox {
                 ephemeral_secret: [7; 32],
             },
-            &Options {
-                payload_sender: PayloadSender::Null,
-                ..Options::default()
-            },
-        )
-        .expect_err("NULL sender under the sealed box");
-        assert!(format!("{err}").contains("sender"), "{err}");
+            Protection::HpkeBase { ikm_e: [7; 32] },
+        ] {
+            let err = pack_insecure_deterministic(
+                b"x",
+                MessageType::Direct,
+                &v.id("alice", "id"),
+                &v.id("bob", "id"),
+                &key(&v.id("alice", "skS")),
+                &key(&v.id("bob", "pkE")),
+                protection,
+                &Options {
+                    payload_sender: PayloadSender::Null,
+                    ..Options::default()
+                },
+            )
+            .expect_err("NULL sender in a confidential payload");
+            assert!(format!("{err}").contains("sender"), "{err}");
+        }
     }
 }
 
@@ -991,13 +1081,9 @@ mod post_quantum {
     /// the vector's bytes cannot be reproduced and only their structure can be
     /// compared.
     ///
-    /// The one structural difference is deliberate and is asserted rather than
-    /// tolerated. §8 makes the ESSR sender field optional under HPKE-Base,
-    /// because the AAD already binds the sender; the reference omits it and we
-    /// carry it, for the reason given at `encode_sender_field`. So our frame is
-    /// longer than the vector's by exactly that field and by nothing else —
-    /// which is a sharper check than equality would have been, since it pins
-    /// where the difference is allowed to be.
+    /// Under Rev 3 the two differed by the ESSR sender field, which the
+    /// reference left NULL and we carried. 1.0 makes the field mandatory, so
+    /// the frames are now the same length to the byte.
     #[test]
     fn a_packed_post_quantum_message_matches_the_vector_shape() {
         let v = Vectors::load();
@@ -1020,18 +1106,15 @@ mod post_quantum {
 
         let vector = qb64(&v.field("direct-hpke-base-pq", "message"));
 
-        // `4B##` code plus the VID, against the vector's `4BAA` NULL VID.
-        let sender_field = 3 + alice.len().next_multiple_of(3);
         assert_eq!(
             packed.bytes.len(),
-            vector.len() + sender_field - 3,
-            "our frame is the vector's plus the optional ESSR sender field"
+            vector.len(),
+            "both carry the ESSR sender field, so the frames are the same size"
         );
 
         // The framing itself. A CESR code word is 24 bits — six of selector,
-        // six of identifier, twelve of count — so comparing whole code bytes
-        // would compare the counts, which differ by the sender field. Compare
-        // the selector and identifier, which are what say *what* a field is.
+        // six of identifier, twelve of count. Compare the selector and
+        // identifier, which are what say *what* a field is.
         let code_at = |bytes: &[u8], at: usize| -> (u32, u32) {
             let w = u32::from_be_bytes([0, bytes[at], bytes[at + 1], bytes[at + 2]]);
             (w >> 18, (w >> 12) & 0x3f)
