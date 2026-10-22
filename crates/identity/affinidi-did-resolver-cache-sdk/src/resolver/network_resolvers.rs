@@ -426,75 +426,227 @@ impl AsyncResolver for ScidResolver {
     }
 }
 
-/// What a resolver has verified about each `did:scid` SCID: where its log was
-/// last found, and the latest version it has seen.
+/// What a resolver has verified about one `did:scid` identity: where its log
+/// has been found, and the latest version verified for it.
+///
+/// A service that authorises did:scid identities persists these (from
+/// [`ScidSourceBook::records`] or the [`ScidSourceBook::set_listener`] hook) and
+/// seeds them back at boot with [`ScidSourceBook::seed`], so the floor survives
+/// a restart (VTI-KEY-162).
+#[cfg(feature = "did-scid")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScidSourceRecord {
+    /// The bare `did:scid:vh:1:<scid>` DID.
+    pub did: String,
+    /// Sources the log has been found at, in `src` form, most recent first.
+    pub sources: Vec<String>,
+    /// The latest version verified, or `None` for sources seeded but never
+    /// verified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<ScidVersion>,
+}
+
+/// A did:webvh log version: its number and its `versionId`.
+#[cfg(feature = "did-scid")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScidVersion {
+    /// The version number (the `N` of `N-<hash>`).
+    pub number: u32,
+    /// The full `versionId`.
+    pub id: String,
+}
+
+/// Called with a record each time the book's record for an identity changes.
+#[cfg(feature = "did-scid")]
+pub type ScidSourceListener = std::sync::Arc<dyn Fn(&ScidSourceRecord) + Send + Sync>;
+
+/// What a resolver has verified about each `did:scid` SCID: where its log has
+/// been found, and the latest version it has verified.
 ///
 /// A did:scid identity is the bare DID; `?src=` is only a locator (VTI-KEY-160).
-/// The book is what lets the bare DID resolve after its source has been seen
-/// once, and what refuses an older copy of the log served from another source
-/// (VTI-KEY-162): the SCID makes a copy unforgeable, not current.
+/// The book lets the bare DID resolve after a source has been seen, and refuses
+/// an older copy of the log from any source (VTI-KEY-162): the SCID makes a
+/// copy unforgeable, not current. Because the `src` a peer presents is its own
+/// choice, a DID URL whose source the book does not know is also checked
+/// against the sources it does know, and refused when they hold a newer log.
 ///
-/// It is in memory and bounded at [`ScidSourceBook::CAPACITY`] SCIDs; a caller
-/// that must resolve a bare did:scid across restarts records the source it
-/// learned and seeds it back with [`ScidSourceBook::add_source`].
+/// It is in memory and bounded at [`ScidSourceBook::CAPACITY`] identities of
+/// [`ScidSourceBook::MAX_SOURCES`] sources each. A service that authorises
+/// did:scid identities persists the records and seeds them back at boot.
 #[cfg(feature = "did-scid")]
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct ScidSourceBook {
     seen: std::sync::Mutex<std::collections::HashMap<String, ScidSeen>>,
+    listener: std::sync::Mutex<Option<ScidSourceListener>>,
 }
 
 #[cfg(feature = "did-scid")]
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for ScidSourceBook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let len = self.seen.lock().map(|s| s.len()).unwrap_or_default();
+        f.debug_struct("ScidSourceBook")
+            .field("identities", &len)
+            .finish()
+    }
+}
+
+#[cfg(feature = "did-scid")]
+#[derive(Debug, Clone, Default)]
 struct ScidSeen {
-    source: String,
-    /// `None` for a source seeded by a caller and not yet verified.
+    /// Canonical `src` forms, most recent first.
+    sources: Vec<String>,
+    /// `None` until a resolution is verified.
     version: Option<(u32, String)>,
 }
 
 #[cfg(feature = "did-scid")]
 impl ScidSourceBook {
-    /// How many SCIDs the book holds before it forgets one to make room.
+    /// How many identities the book holds before it forgets one to make room.
     pub const CAPACITY: usize = 100_000;
+    /// How many sources it keeps per identity.
+    pub const MAX_SOURCES: usize = 4;
 
     fn key(did: &str) -> String {
         let did = affinidi_did_common::scid::strip_scid_src(did);
         did.split('#').next().unwrap_or(&did).to_string()
     }
 
-    /// The source last recorded for the SCID of `did`, in `src` form.
-    pub fn source(&self, did: &str) -> Option<String> {
-        self.seen
-            .lock()
-            .ok()?
-            .get(&Self::key(did))
-            .map(|seen| seen.source.clone())
+    /// The `src` of `src` for `bare`, in the form the log's own did:webvh DID
+    /// gives it, so `localhost:8000` and `localhost%3A8000` are one source.
+    fn canonical_src(bare: &str, src: &str) -> Option<String> {
+        let webvh =
+            didwebvh_rs::DIDWebVHState::convert_scid_id_to_webvh_id(&format!("{bare}?src={src}"))?;
+        didwebvh_rs::DIDWebVHState::convert_webvh_id_to_scid_id(&webvh)
+            .split_once("?src=")
+            .map(|(_, src)| src.to_string())
     }
 
-    /// Records the `src` of a did:scid DID URL as where to look for that SCID,
-    /// without changing the latest version verified for it. Returns `false`
-    /// when `did_url` carries no `src`.
-    pub fn add_source(&self, did_url: &str) -> bool {
-        let Some(src) = affinidi_did_common::scid::scid_src(did_url) else {
+    fn record_of(key: &str, seen: &ScidSeen) -> ScidSourceRecord {
+        ScidSourceRecord {
+            did: key.to_string(),
+            sources: seen.sources.clone(),
+            version: seen
+                .version
+                .clone()
+                .map(|(number, id)| ScidVersion { number, id }),
+        }
+    }
+
+    fn notify(&self, record: Option<ScidSourceRecord>) {
+        if let Some(record) = record
+            && let Some(listener) = self.listener.lock().ok().and_then(|l| l.clone())
+        {
+            listener(&record);
+        }
+    }
+
+    /// The most recent source recorded for the identity of `did`, in `src` form.
+    pub fn source(&self, did: &str) -> Option<String> {
+        self.sources(did).into_iter().next()
+    }
+
+    /// Every source recorded for the identity of `did`, most recent first.
+    pub fn sources(&self, did: &str) -> Vec<String> {
+        self.seen
+            .lock()
+            .ok()
+            .and_then(|seen| seen.get(&Self::key(did)).map(|s| s.sources.clone()))
+            .unwrap_or_default()
+    }
+
+    /// The record held for the identity of `did`.
+    pub fn record(&self, did: &str) -> Option<ScidSourceRecord> {
+        let key = Self::key(did);
+        let seen = self.seen.lock().ok()?;
+        seen.get(&key).map(|s| Self::record_of(&key, s))
+    }
+
+    /// Every record held, for a service to persist.
+    pub fn records(&self) -> Vec<ScidSourceRecord> {
+        self.seen
+            .lock()
+            .map(|seen| seen.iter().map(|(k, s)| Self::record_of(k, s)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Calls `listener` with the identity's record each time the book records
+    /// a new source or a newer verified version for it. Replaces any listener
+    /// already set. The listener runs on the resolving task, after the book's
+    /// lock is released; it must not block.
+    pub fn set_listener(&self, listener: ScidSourceListener) {
+        if let Ok(mut slot) = self.listener.lock() {
+            *slot = Some(listener);
+        }
+    }
+
+    /// Merges a persisted record into the book: its sources are added after
+    /// any the book already holds, and its version raises the floor but never
+    /// lowers it. Returns `false` for a record whose `did` is not a did:scid.
+    pub fn seed(&self, record: &ScidSourceRecord) -> bool {
+        if !record.did.starts_with("did:scid:") {
             return false;
-        };
+        }
+        let key = Self::key(&record.did);
         let Ok(mut seen) = self.seen.lock() else {
             return false;
         };
-        let key = Self::key(did_url);
-        match seen.get_mut(&key) {
-            Some(entry) => entry.source = src.to_string(),
-            None => {
-                Self::make_room(&mut seen);
-                seen.insert(
-                    key,
-                    ScidSeen {
-                        source: src.to_string(),
-                        version: None,
-                    },
-                );
+        if !seen.contains_key(&key) {
+            Self::make_room(&mut seen);
+        }
+        let entry = seen.entry(key.clone()).or_default();
+        for src in &record.sources {
+            if let Some(src) = Self::canonical_src(&key, src)
+                && !entry.sources.contains(&src)
+                && entry.sources.len() < Self::MAX_SOURCES
+            {
+                entry.sources.push(src);
             }
         }
+        if let Some(version) = &record.version
+            && entry
+                .version
+                .as_ref()
+                .is_none_or(|(n, _)| version.number > *n)
+        {
+            entry.version = Some((version.number, version.id.clone()));
+        }
         true
+    }
+
+    /// Records the `src` of a did:scid DID URL as the most recent place to look
+    /// for that identity, without changing the version verified for it.
+    /// Returns `false` when `did_url` carries no usable `src`.
+    pub fn add_source(&self, did_url: &str) -> bool {
+        let key = Self::key(did_url);
+        let Some(src) = affinidi_did_common::scid::scid_src(did_url)
+            .and_then(|src| Self::canonical_src(&key, src))
+        else {
+            return false;
+        };
+        let record = {
+            let Ok(mut seen) = self.seen.lock() else {
+                return false;
+            };
+            if !seen.contains_key(&key) {
+                Self::make_room(&mut seen);
+            }
+            let entry = seen.entry(key.clone()).or_default();
+            if entry.sources.first() == Some(&src) {
+                return true;
+            }
+            Self::push_front(&mut entry.sources, src);
+            Self::record_of(&key, entry)
+        };
+        self.notify(Some(record));
+        true
+    }
+
+    fn push_front(sources: &mut Vec<String>, src: String) {
+        sources.retain(|s| *s != src);
+        sources.insert(0, src);
+        sources.truncate(Self::MAX_SOURCES);
     }
 
     fn make_room(seen: &mut std::collections::HashMap<String, ScidSeen>) {
@@ -503,6 +655,26 @@ impl ScidSourceBook {
         {
             seen.remove(&key);
         }
+    }
+
+    /// Refuses a version older than the floor, or a different entry at the
+    /// floor's number (a fork).
+    fn below_floor(
+        floor: Option<&(u32, String)>,
+        key: &str,
+        source: &str,
+        version_number: u32,
+        version_id: &str,
+    ) -> Result<(), ResolverError> {
+        if let Some((latest, latest_id)) = floor
+            && (version_number < *latest || (version_number == *latest && version_id != latest_id))
+        {
+            return Err(ResolverError::ResolutionFailed(format!(
+                "{key}: the log at {source} is at version {version_id}, behind {latest_id} \
+                 already verified for this SCID"
+            )));
+        }
+        Ok(())
     }
 
     /// Accepts a verified resolution, or refuses it as older than one already
@@ -514,29 +686,29 @@ impl ScidSourceBook {
         version_number: u32,
         version_id: &str,
     ) -> Result<(), ResolverError> {
-        let mut seen = self
-            .seen
-            .lock()
-            .map_err(|_| ResolverError::ResolutionFailed("did:scid source book poisoned".into()))?;
         let key = Self::key(did);
-        if let Some((latest, latest_id)) = seen.get(&key).and_then(|s| s.version.clone())
-            && (version_number < latest || (version_number == latest && version_id != latest_id))
-        {
-            return Err(ResolverError::ResolutionFailed(format!(
-                "{key}: the log at {source} is at version {version_id}, behind {latest_id} \
-                 already verified for this SCID"
-            )));
-        }
-        if !seen.contains_key(&key) {
-            Self::make_room(&mut seen);
-        }
-        seen.insert(
-            key,
-            ScidSeen {
-                source: source.to_string(),
-                version: Some((version_number, version_id.to_string())),
-            },
-        );
+        let record = {
+            let mut seen = self.seen.lock().map_err(|_| {
+                ResolverError::ResolutionFailed("did:scid source book poisoned".into())
+            })?;
+            Self::below_floor(
+                seen.get(&key).and_then(|s| s.version.as_ref()),
+                &key,
+                source,
+                version_number,
+                version_id,
+            )?;
+            if !seen.contains_key(&key) {
+                Self::make_room(&mut seen);
+            }
+            let entry = seen.entry(key.clone()).or_default();
+            let changed = entry.sources.first().map(String::as_str) != Some(source)
+                || entry.version.as_ref().map(|(n, _)| *n) != Some(version_number);
+            Self::push_front(&mut entry.sources, source.to_string());
+            entry.version = Some((version_number, version_id.to_string()));
+            changed.then(|| Self::record_of(&key, entry))
+        };
+        self.notify(record);
         Ok(())
     }
 }
@@ -604,27 +776,76 @@ async fn resolve_scid(
         _ => didwebvh_rs::resolve::HostPolicy::PublicOnly,
     };
     let options = didwebvh_rs::resolve::ResolveOptions::default().with_host_policy(policy);
+    let key = ScidSourceBook::key(&did_str);
+    let known = sources
+        .map(|book| book.sources(&did_str))
+        .unwrap_or_default();
+    let presented = affinidi_did_common::scid::scid_src(&did_str)
+        .and_then(|src| ScidSourceBook::canonical_src(&key, src));
 
-    let peer_src = if affinidi_did_common::scid::scid_src(&did_str).is_some() {
-        None
-    } else {
-        sources
-            .and_then(|book| book.source(&did_str))
-            .map(did_scid::ScidMethod::WebVH)
-    };
-
-    let resolution = match did_scid::resolve_scid(&did_str, peer_src, options.clone()).await {
-        Ok(resolution) => resolution,
-        // Formats other than `vh` keep their source method's document.
-        Err(did_scid::errors::DIDSCIDError::UnsupportedFormat) => {
-            return Some(
-                did_scid::resolve_with_options(&did_str, None, options)
-                    .await
-                    .map_err(scid_error),
-            );
+    let resolution = if affinidi_did_common::scid::scid_src(&did_str).is_some() {
+        match did_scid::resolve_scid(&did_str, None, options.clone()).await {
+            Ok(resolution) => resolution,
+            // Formats other than `vh` keep their source method's document.
+            Err(did_scid::errors::DIDSCIDError::UnsupportedFormat) => {
+                return Some(
+                    did_scid::resolve_with_options(&did_str, None, options)
+                        .await
+                        .map_err(scid_error),
+                );
+            }
+            Err(e) => return Some(Err(scid_error(e))),
         }
-        Err(e) => return Some(Err(scid_error(e))),
+    } else {
+        // A bare DID: the known sources, most recent first.
+        let mut last = Err(did_scid::errors::DIDSCIDError::MissingPeerSource);
+        for src in &known {
+            last = did_scid::resolve_scid(
+                &did_str,
+                Some(did_scid::ScidMethod::WebVH(src.clone())),
+                options.clone(),
+            )
+            .await;
+            if last.is_ok() {
+                break;
+            }
+        }
+        match last {
+            Ok(resolution) => resolution,
+            Err(e) => return Some(Err(scid_error(e))),
+        }
     };
+
+    // A source the book has not seen for this identity is the presenter's own
+    // choice, and could serve a copy of the log it took before a rotation.
+    // Check what the known sources serve now; a newer log there means the
+    // presented one is stale.
+    if let Some(presented) = presented
+        && !known.is_empty()
+        && !known.contains(&presented)
+    {
+        for src in &known {
+            if let Ok(current) = did_scid::resolve_scid(
+                &key,
+                Some(did_scid::ScidMethod::WebVH(src.clone())),
+                options.clone(),
+            )
+            .await
+            {
+                if let Err(e) = ScidSourceBook::below_floor(
+                    Some(&(current.version_number, current.version_id.clone())),
+                    &key,
+                    &resolution.source,
+                    resolution.version_number,
+                    &resolution.version_id,
+                ) {
+                    error!("did:scid resolution refused: {e}");
+                    return Some(Err(e));
+                }
+                break;
+            }
+        }
+    }
 
     if let Some(book) = sources
         && let Err(e) = book.accept(

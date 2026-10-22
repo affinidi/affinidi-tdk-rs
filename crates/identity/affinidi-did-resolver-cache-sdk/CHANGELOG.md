@@ -1,5 +1,23 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.43) — did:scid version floors that survive a restart
+
+- **Behaviour (security):** a did:scid DID URL whose `src` the source book
+  does not know for that identity is also checked against the sources it does
+  know, and refused when they serve a newer log. The `src` is the presenter's
+  choice, and a portable log that has moved still names its former host in its
+  early entries, so that host can serve the pre-move log under the same
+  did:scid. Before, the book caught this only once it had verified a newer
+  version in this process.
+- **Behaviour:** the book keeps up to four sources per identity
+  (`ScidSourceBook::MAX_SOURCES`), most recent first; a bare did:scid tries
+  each in turn. `localhost:8000` and `localhost%3A8000` are one source.
+- **Added:** `ScidSourceRecord` / `ScidVersion` (serde, camelCase),
+  `ScidSourceBook::{sources, record, records, seed, set_listener}`. A service
+  that authorises did:scid identities persists the records (from `records()`
+  or the listener) and seeds them back at boot; `seed` raises a floor but
+  never lowers it (VTI-KEY-162).
+
 ## Unreleased (0.8.42) — native did:scid resolution
 
 - **Behaviour (breaking for did:scid callers):** a `did:scid:vh:1` DID resolves
