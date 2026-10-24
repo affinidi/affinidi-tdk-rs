@@ -32,7 +32,8 @@ jobs:
       # disk, and the vta-sdk crossing's second trust-tasks-rs (~3 GB) killed
       # the runner mid-build (#940). Local builds keep the default.
       rustflags: "-D warnings --cfg tracing_unstable -C debuginfo=line-tables-only"
-      # quinn-proto (RUSTSEC-2024-0373) and paste (RUSTSEC-2024-0436, below) are
+      # quinn-proto (RUSTSEC-2024-0373), paste (RUSTSEC-2024-0436, below) and
+      # crypto-bigint 0.5 (RUSTSEC-2026-0387, below) are
       # suppressed.
       #
       # The four entries that used to sit here went with did:cheqd in cache-sdk
@@ -51,7 +52,14 @@ jobs:
       # ravif -> rav1e; OpenEXR: exr -> pulp). text-client uses `image` with
       # both off, so it is never compiled. The latest releases (image 0.25.10, rav1e 0.8.1, pulp 0.22.3) still use it.
       # Clears when rav1e and pulp move off `paste`: delete it then (#779).
-      auditIgnore: "RUSTSEC-2024-0373,RUSTSEC-2024-0436"
+      #
+      # RUSTSEC-2026-0387 (crypto-bigint, constant-time timing variability) is
+      # accepted for 0.5.5 only: 0.7.x is on 0.7.6, the fix. 0.5.5 is reached
+      # solely through affinidi-bbs -> bls12_381_plus 0.9, which links
+      # elliptic-curve 0.13 (non-optionally) beside 0.14 for legacy trait
+      # compatibility; the advisory names no 0.5.x fix and no newer
+      # bls12_381_plus exists. Delete it when bls12_381_plus drops 0.13.
+      auditIgnore: "RUSTSEC-2024-0373,RUSTSEC-2024-0436,RUSTSEC-2026-0387"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       # PR-only. `verify-publish` resolves each crate from the registry in
       # isolation, which is a useful pre-merge gate but is *expected* to fail on
