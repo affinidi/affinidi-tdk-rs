@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.40.0) — trust-tasks 0.34
+
+Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.34. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.34 (trustoverip/dtgwg-trust-tasks-tf#884, #901) narrows `vault/credentials/query` by `subjectDid` and adds new spec versions that spell instants, pagination, `since` and `created` one way. None of it touches anything here. No source change.
+
 ## Unreleased (0.39.0) — TSP 1.0
 
 **Breaking on the wire (feature `tsp`).** Requires `affinidi-tsp` 0.3, which
