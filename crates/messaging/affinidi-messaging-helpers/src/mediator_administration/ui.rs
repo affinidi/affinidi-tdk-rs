@@ -51,6 +51,8 @@ pub(crate) async fn administration_accounts_menu(
 
 /// The mediator's administrator accounts — `account/list` filtered per admin
 /// role (`rootAdmin`, then `admin`), replacing the retired `admin/list` task.
+// The 0.1 task is what mediators serve; see `affinidi_messaging_sdk::protocols::trust_tasks`.
+#[allow(deprecated)]
 async fn admin_accounts(
     atm: &ATM,
     profile: &Arc<ATMProfile>,

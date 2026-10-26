@@ -1,5 +1,9 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.33.0) — SDK 0.41
+
+The facade re-exports `affinidi-messaging-sdk`, which moves to 0.41 for `trust-tasks-rs` 0.35. So this crate moves a minor. No source change.
+
 ## Unreleased (0.32.0) — SDK 0.40
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.40 for `trust-tasks-rs` 0.34. So this crate moves a minor. No source change.

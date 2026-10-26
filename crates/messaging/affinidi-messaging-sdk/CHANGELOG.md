@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (0.41.0) — trust-tasks 0.35
+
+Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.35. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.35 (trustoverip/dtgwg-trust-tasks-tf#910, #912, #917) adds `rooms/keys/act` 0.8 and `vtc/storage/configs/retire` 0.2, and generates an `anyOf` of required members as a struct of optional fields rather than an untagged enum. None of it touches the wire here.
+
+0.35 also marks the 0.1 types of `messaging/*` and `audit/list` deprecated in favour of their 0.2 versions (dtgwg-trust-tasks-tf#901, #911). Mediators serve 0.1 only, so the SDK keeps sending 0.1 and allows the deprecation in `protocols::trust_tasks`; it moves to 0.2 once mediators serve both. Code that names those types through this crate (`account_list`'s `Response`, for example) sees the same deprecation warnings.
+
 ## Unreleased (0.40.0) — trust-tasks 0.34
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.34. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.34 (trustoverip/dtgwg-trust-tasks-tf#884, #901) narrows `vault/credentials/query` by `subjectDid` and adds new spec versions that spell instants, pagination, `since` and `created` one way. None of it touches anything here. No source change.
