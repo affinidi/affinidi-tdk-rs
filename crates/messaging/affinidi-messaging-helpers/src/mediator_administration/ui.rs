@@ -1,14 +1,14 @@
 //! UI Related functions
 use affinidi_messaging_sdk::errors::ATMError;
+use affinidi_messaging_sdk::tasks::messaging::account;
+use affinidi_messaging_sdk::tasks::messaging::account::list::v0_1::AccountType;
+use affinidi_messaging_sdk::tasks::messaging::account::update::v0_1::AccountType as UpdateAccountType;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use console::style;
 use dialoguer::{Confirm, Input, MultiSelect, Select, theme::ColorfulTheme};
 use regex::Regex;
 use sha256::digest;
 use std::sync::Arc;
-use affinidi_messaging_sdk::tasks::messaging::account;
-use affinidi_messaging_sdk::tasks::messaging::account::list::v0_1::AccountType;
-use affinidi_messaging_sdk::tasks::messaging::account::update::v0_1::AccountType as UpdateAccountType;
 
 use crate::SharedConfig;
 

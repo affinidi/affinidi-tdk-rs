@@ -1,11 +1,11 @@
 use crate::{SharedConfig, account_management::acl_management::manage_account_acls};
 use affinidi_messaging_helpers::common::did::manually_enter_did_or_hash;
+use affinidi_messaging_sdk::tasks::messaging::account;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use console::style;
 use dialoguer::{Input, Select, theme::ColorfulTheme};
 use regex::Regex;
 use std::sync::Arc;
-use affinidi_messaging_sdk::tasks::messaging::account;
 
 /// All the `messaging/account/*` Trust Tasks return a per-module `Account` struct,
 /// but they share one schema. This converts any of them back to the canonical

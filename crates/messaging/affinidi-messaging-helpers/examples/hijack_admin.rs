@@ -17,6 +17,7 @@
  * */
 
 use affinidi_messaging_didcomm::message::Message;
+use affinidi_messaging_sdk::tasks::messaging::account::{self, get::v0_1::AccountType};
 use affinidi_messaging_sdk::{
     ATM, errors::ATMError, profiles::ATMProfile, protocols::trust_tasks::ENVELOPE_TYPE,
 };
@@ -27,7 +28,6 @@ use std::{env, str::FromStr, sync::Arc, time::SystemTime};
 use tracing::{info, warn};
 use tracing_subscriber::filter;
 use trust_tasks_rs::TrustTask;
-use affinidi_messaging_sdk::tasks::messaging::account::{self, get::v0_1::AccountType};
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]

@@ -37,6 +37,9 @@
 //! exchange with a compact round-trip latency measurement loop.
 
 use affinidi_messaging_didcomm::message::Message;
+use affinidi_messaging_sdk::tasks::messaging::account::{
+    self, get::v0_1::MediatorAclAccessListMode,
+};
 use affinidi_messaging_sdk::{ATM, errors::ATMError, profiles::ATMProfile};
 use affinidi_tdk::{
     TDK,
@@ -52,7 +55,6 @@ use std::{
 };
 use tracing::info;
 use tracing_subscriber::filter;
-use affinidi_messaging_sdk::tasks::messaging::account::{self, get::v0_1::MediatorAclAccessListMode};
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]

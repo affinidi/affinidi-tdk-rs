@@ -8,6 +8,7 @@ use affinidi_messaging_sdk::ATM;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::problem_report::ProblemReport;
 use affinidi_messaging_sdk::protocols::message_pickup::{MessagePickup, MessagePickupStatusReply};
+use affinidi_messaging_sdk::tasks::messaging::account::get::v0_1::MediatorAclAccessListMode;
 use base64::prelude::*;
 use rand::RngExt;
 use rand::distr::Alphanumeric;
@@ -16,7 +17,6 @@ use serde_json::json;
 use sha256::digest;
 use tracing::error;
 use tracing::{info, warn};
-use affinidi_messaging_sdk::tasks::messaging::account::get::v0_1::MediatorAclAccessListMode;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
