@@ -477,6 +477,8 @@ pub(crate) async fn select_did(
     }
 }
 
+// The 0.1 task is what mediators serve; see `affinidi_messaging_sdk::protocols::trust_tasks`.
+#[allow(deprecated)]
 async fn _select_from_existing_dids(
     atm: &ATM,
     profile: &Arc<ATMProfile>,

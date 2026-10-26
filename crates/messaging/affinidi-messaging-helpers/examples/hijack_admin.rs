@@ -291,6 +291,8 @@ async fn main() -> Result<(), ATMError> {
 /// A `messaging/account/update` Trust Task promoting `mallory_hash` to admin,
 /// wrapped in the DIDComm binding envelope. `issuer` is the DID the document
 /// and the envelope claim to come from; `None` leaves both anonymous.
+// The 0.1 task is what mediators serve; see `affinidi_messaging_sdk::protocols::trust_tasks`.
+#[allow(deprecated)]
 fn promote_to_admin(
     mallory_hash: &str,
     mediator: &str,

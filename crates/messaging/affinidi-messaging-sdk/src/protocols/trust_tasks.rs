@@ -17,6 +17,13 @@
 //! `admin/audit-log` / `admin/config`.
 //!
 //! [Trust Tasks]: https://trusttasks.org
+//!
+//! The wire stays on the 0.1 versions of the `messaging/*` and `audit/list`
+//! tasks. `trust-tasks-rs` 0.35 marks their types deprecated in favour of 0.2,
+//! but mediators serve 0.1 only, so sending 0.2 would be refused. This module
+//! moves once mediators serve both versions.
+
+#![allow(deprecated)]
 
 use std::str::FromStr;
 use std::sync::Arc;
