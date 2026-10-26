@@ -374,8 +374,10 @@ impl DID {
     /// use affinidi_did_common::{DID, KeyMaterial};
     /// use affinidi_crypto::KeyType;
     ///
+    /// # #[cfg(feature = "ed25519")] {
     /// let (did, key) = DID::generate_key(KeyType::Ed25519).unwrap();
     /// assert!(did.to_string().starts_with("did:key:z6Mk"));
+    /// # }
     /// ```
     pub fn generate_key(
         key_type: affinidi_crypto::KeyType,
@@ -407,6 +409,7 @@ impl DID {
     /// ```
     /// use affinidi_did_common::{DID, PeerCreateKey, PeerKeyPurpose, PeerKeyType};
     ///
+    /// # #[cfg(feature = "ed25519")] {
     /// // Generate a did:peer with new keys
     /// let keys = vec![
     ///     PeerCreateKey::new(PeerKeyPurpose::Verification, PeerKeyType::Ed25519),
@@ -415,6 +418,7 @@ impl DID {
     /// let (did, created_keys) = DID::generate_peer(&keys, None).unwrap();
     /// assert!(did.to_string().starts_with("did:peer:2"));
     /// assert_eq!(created_keys.len(), 2);
+    /// # }
     /// ```
     pub fn generate_peer(
         keys: &[PeerCreateKey],

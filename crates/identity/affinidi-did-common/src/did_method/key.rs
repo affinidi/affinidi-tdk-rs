@@ -119,12 +119,20 @@ impl KeyMaterial {
     // ========== Generation Methods ==========
 
     /// Generate a new key pair of the specified type
+    ///
+    /// A curve whose feature is off is unsupported here, the same as a key
+    /// type this crate has no generator for.
     pub fn generate(key_type: KeyType) -> Result<Self, KeyError> {
         match key_type {
+            #[cfg(feature = "ed25519")]
             KeyType::Ed25519 => Ok(Self::generate_ed25519(None)),
+            #[cfg(feature = "ed25519")]
             KeyType::X25519 => Self::generate_x25519(None),
+            #[cfg(feature = "p256")]
             KeyType::P256 => Self::generate_p256(None),
+            #[cfg(feature = "p384")]
             KeyType::P384 => Self::generate_p384(None),
+            #[cfg(feature = "k256")]
             KeyType::Secp256k1 => Self::generate_secp256k1(None),
             _ => Err(KeyError::UnsupportedKeyType(format!("{key_type:?}"))),
         }
@@ -186,6 +194,12 @@ impl KeyMaterial {
     }
 
     /// Create KeyMaterial from raw key parts
+    #[cfg(any(
+        feature = "ed25519",
+        feature = "p256",
+        feature = "p384",
+        feature = "k256"
+    ))]
     fn from_parts(
         key_type: KeyType,
         private_bytes: Vec<u8>,
