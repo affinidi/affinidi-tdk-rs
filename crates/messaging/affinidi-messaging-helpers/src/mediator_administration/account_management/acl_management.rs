@@ -8,7 +8,7 @@ use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use console::style;
 use dialoguer::{MultiSelect, Select, theme::ColorfulTheme};
 use std::sync::Arc;
-use trust_tasks_rs::specs::messaging::account;
+use affinidi_messaging_sdk::tasks::messaging::account;
 
 /// Convert a partial / per-module `MediatorAcl` into the canonical
 /// `account::get::v0_1::MediatorAcl` we hold on the account across the screen.

@@ -40,10 +40,10 @@ use sha256::digest;
 use tracing::warn;
 use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
 use trust_tasks_rs::TrustTask;
-use trust_tasks_rs::specs::messaging::{
+use crate::tasks::messaging::{
     access_list, account, acl, message, monitor, ping, queue, stats,
 };
-use trust_tasks_rs::specs::{audit, config};
+use crate::tasks::{audit, config};
 use uuid::Uuid;
 
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};

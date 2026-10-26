@@ -5,7 +5,7 @@ use console::style;
 use dialoguer::{Input, Select, theme::ColorfulTheme};
 use regex::Regex;
 use std::sync::Arc;
-use trust_tasks_rs::specs::messaging::account;
+use affinidi_messaging_sdk::tasks::messaging::account;
 
 /// All the `messaging/account/*` Trust Tasks return a per-module `Account` struct,
 /// but they share one schema. This converts any of them back to the canonical

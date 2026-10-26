@@ -7,7 +7,7 @@ use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use sha256::digest;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
-use trust_tasks_rs::specs::messaging::account;
+use affinidi_messaging_sdk::tasks::messaging::account;
 
 use super::listener::Listener;
 use crate::error::{DIDCommServiceError, StartupError};

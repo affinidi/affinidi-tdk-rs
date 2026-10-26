@@ -8,7 +8,7 @@ use affinidi_tdk::{
 use anyhow::anyhow;
 use sha256::digest;
 use tracing::warn;
-use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
+use affinidi_messaging_sdk::tasks::messaging::account::get::v0_1::MediatorAclAccessListMode;
 
 pub async fn manual_connect_setup(
     state: &mut State,

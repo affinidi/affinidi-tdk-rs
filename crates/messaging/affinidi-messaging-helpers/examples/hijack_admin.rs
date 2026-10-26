@@ -27,7 +27,7 @@ use std::{env, str::FromStr, sync::Arc, time::SystemTime};
 use tracing::{info, warn};
 use tracing_subscriber::filter;
 use trust_tasks_rs::TrustTask;
-use trust_tasks_rs::specs::messaging::account::{self, get::v0_1::AccountType};
+use affinidi_messaging_sdk::tasks::messaging::account::{self, get::v0_1::AccountType};
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]

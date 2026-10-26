@@ -52,7 +52,7 @@ use std::{
 };
 use tracing::info;
 use tracing_subscriber::filter;
-use trust_tasks_rs::specs::messaging::account::{self, get::v0_1::MediatorAclAccessListMode};
+use affinidi_messaging_sdk::tasks::messaging::account::{self, get::v0_1::MediatorAclAccessListMode};
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]

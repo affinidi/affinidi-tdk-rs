@@ -18,8 +18,8 @@ use std::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::warn;
-use trust_tasks_rs::specs::messaging::account;
-use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
+use affinidi_messaging_sdk::tasks::messaging::account;
+use affinidi_messaging_sdk::tasks::messaging::account::get::v0_1::MediatorAclAccessListMode;
 use uuid::Uuid;
 
 use crate::state_store::{

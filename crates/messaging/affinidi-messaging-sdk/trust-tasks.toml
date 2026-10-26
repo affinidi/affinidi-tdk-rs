@@ -1,0 +1,30 @@
+# The Trust Task specifications this application uses. `trust-tasks add`,
+# `remove` and `update` edit this file; `trust-tasks.lock` records what each
+# entry resolved to. A value is an exact version ("0.4") or "latest".
+# Tasks from a third-party source are named "<source>:<slug>", with the
+# source declared as [sources.<source>] url = "https://…" (or path = "…").
+[tasks]
+"audit/list" = "0.1"
+"config/patch" = "0.1"
+"config/reload" = "0.1"
+"config/show" = "0.1"
+"messaging/access-list/list" = "0.1"
+"messaging/access-list/update" = "0.1"
+"messaging/account/add" = "0.1"
+"messaging/account/get" = "0.1"
+"messaging/account/list" = "0.1"
+"messaging/account/remove" = "0.1"
+"messaging/account/update" = "0.1"
+"messaging/acl/get" = "0.1"
+"messaging/message/delete" = "0.1"
+"messaging/message/get" = "0.1"
+"messaging/message/list" = "0.1"
+"messaging/message/status" = "0.1"
+"messaging/monitor/event" = "0.1"
+"messaging/monitor/subscribe" = "0.1"
+"messaging/monitor/unsubscribe" = "0.1"
+"messaging/ping" = "0.1"
+"messaging/queue/list" = "0.1"
+"messaging/queue/purge" = "0.1"
+"messaging/queue/status" = "0.1"
+"messaging/stats/show" = "0.1"

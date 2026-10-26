@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (0.42.0) — Trust Task types generated at build time
+
+The Trust Task types this SDK speaks are now generated at build time from the
+24 versions pinned in `trust-tasks.lock` (vendored under `trust-tasks/`,
+checked against their digests by `build.rs`), and exposed as
+`affinidi_messaging_sdk::tasks`, with the same module paths as
+`trust_tasks_rs::specs` (`tasks::messaging::account::get::v0_1`, …).
+`trust-tasks-rs` 0.35.3 is a dependency with `default-features = false`, so
+the ~900 prebuilt specification modules are no longer compiled for anyone
+using the SDK (0.35.3's `trust-tasks-proof` no longer switches them on,
+trustoverip/dtgwg-trust-tasks-tf#939).
+
+**Breaking:** values passed to or returned by `ATM::trust_tasks()` are
+`affinidi_messaging_sdk::tasks` types. Code that named them through
+`trust_tasks_rs::specs::…` changes its `use` lines to
+`affinidi_messaging_sdk::tasks::…`; nothing else changes. Pins move with the
+`trust-tasks` CLI (`trust-tasks update`), never by hand. The wire is
+unchanged: every pin is the version spoken before.
+
 ## Unreleased (0.41.0) — trust-tasks 0.35
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.35. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.35 (trustoverip/dtgwg-trust-tasks-tf#910, #912, #917) adds `rooms/keys/act` 0.8 and `vtc/storage/configs/retire` 0.2, and generates an `anyOf` of required members as a struct of optional fields rather than an untagged enum. None of it touches the wire here.

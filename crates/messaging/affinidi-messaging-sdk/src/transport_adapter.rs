@@ -247,7 +247,7 @@ impl MessageTransport for DidCommTransport {
         &self,
         hop_ids: &[String],
     ) -> Result<Option<std::collections::HashMap<String, OutboxStatus>>, MessagingError> {
-        use trust_tasks_rs::specs::messaging::message::status::v0_1::MessageState;
+        use crate::tasks::messaging::message::status::v0_1::MessageState;
 
         if hop_ids.is_empty() {
             return Ok(Some(std::collections::HashMap::new()));

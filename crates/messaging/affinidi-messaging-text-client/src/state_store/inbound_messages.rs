@@ -16,7 +16,7 @@ use serde_json::json;
 use sha256::digest;
 use tracing::error;
 use tracing::{info, warn};
-use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
+use affinidi_messaging_sdk::tasks::messaging::account::get::v0_1::MediatorAclAccessListMode;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]

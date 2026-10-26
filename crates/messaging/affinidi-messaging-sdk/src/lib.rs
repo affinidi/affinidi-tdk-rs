@@ -231,6 +231,18 @@ pub mod transport_adapter;
 pub mod transports;
 pub mod tsp_wire;
 
+/// The Trust Task types this SDK speaks, generated at build time from the
+/// versions pinned in this crate's `trust-tasks.lock`. The module paths match
+/// `trust_tasks_rs::specs` (e.g. `tasks::messaging::account::get::v0_1`).
+///
+/// Use these types for values passed to or returned by
+/// [`ATM::trust_tasks`]. A crate that generates the same task itself gets a
+/// distinct Rust type, so it must use this module for anything it exchanges
+/// with the SDK.
+pub mod tasks {
+    include!(concat!(env!("OUT_DIR"), "/trust_tasks_generated.rs"));
+}
+
 pub use transport_adapter::DidCommTransport;
 pub use transports::websockets::ReceiveHealth;
 pub use tsp_wire::{TSP_MAGIC_BYTE, TSP_MAGIC_BYTE_LONG, looks_like_tsp};
@@ -272,6 +284,10 @@ impl ATM {
     /// Creates a new instance of the SDK with a given configuration
     /// You need to add at least the DID Method for the SDK DID to work
     pub async fn new(config: ATMConfig, tdk_common: Arc<TDKSharedState>) -> Result<ATM, ATMError> {
+        // Let a dispatcher route a newer version that `extends` a pinned one.
+        // Idempotent, so building several ATMs is fine.
+        tasks::declare_extends();
+
         // Create a new channel with a capacity of at most 32. This communicates from SDK to the deletion handler
         let (sdk_deletion_tx, deletion_sdk_rx) = mpsc::channel::<DeletionHandlerCommands>(32);
 

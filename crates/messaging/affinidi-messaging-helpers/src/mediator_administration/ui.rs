@@ -6,9 +6,9 @@ use dialoguer::{Confirm, Input, MultiSelect, Select, theme::ColorfulTheme};
 use regex::Regex;
 use sha256::digest;
 use std::sync::Arc;
-use trust_tasks_rs::specs::messaging::account;
-use trust_tasks_rs::specs::messaging::account::list::v0_1::AccountType;
-use trust_tasks_rs::specs::messaging::account::update::v0_1::AccountType as UpdateAccountType;
+use affinidi_messaging_sdk::tasks::messaging::account;
+use affinidi_messaging_sdk::tasks::messaging::account::list::v0_1::AccountType;
+use affinidi_messaging_sdk::tasks::messaging::account::update::v0_1::AccountType as UpdateAccountType;
 
 use crate::SharedConfig;
 

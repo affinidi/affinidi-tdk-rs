@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.41.0"
+version = "0.42.0"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -24,6 +24,10 @@ tsp = [
   "dep:hyper",
 ]
 
+[build-dependencies]
+# Generates `crate::tasks` from trust-tasks.lock and the bundles in trust-tasks/.
+trust-tasks-build = "0.1.2"
+
 [dependencies]
 # Affinidi Crates
 affinidi-tdk-common = { version = "0.7", path = "../../tdk/affinidi-tdk-common" }
@@ -32,12 +36,13 @@ affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version =
 # Protocol-agnostic messaging vocabulary (ConnState, the future MessageTransport
 # trait). The websocket transport publishes ConnState over a watch channel.
 affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.11" }
-## Trust Tasks framework — typed request/response documents for the messaging
-## tasks (ping / account / acl / access-list), carried over the binding envelope.
-trust-tasks-rs = "0.35"
+## Trust Tasks runtime. The task types themselves are generated at build time
+## from the versions pinned in trust-tasks.lock (see build.rs and `crate::tasks`),
+## so no prebuilt specification module is compiled.
+trust-tasks-rs = { version = "0.35.3", default-features = false }
 # Signs every outgoing Trust Task (eddsa-jcs-2022 Data Integrity proof) — the
 # sign-side counterpart of the verifier consumers run.
-trust-tasks-proof = { version = "0.35", default-features = false, features = ["affinidi"] }
+trust-tasks-proof = { version = "0.35.3", default-features = false, features = ["affinidi"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
 affinidi-tsp = { path = "../affinidi-tsp", version = "0.3", optional = true }
