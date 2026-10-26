@@ -29,6 +29,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use crate::tasks::messaging::{access_list, account, acl, message, monitor, ping, queue, stats};
+use crate::tasks::{audit, config};
 use affinidi_did_common::DocumentExt;
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_secrets_resolver::SecretsResolver;
@@ -40,10 +42,6 @@ use sha256::digest;
 use tracing::warn;
 use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
 use trust_tasks_rs::TrustTask;
-use trust_tasks_rs::specs::messaging::{
-    access_list, account, acl, message, monitor, ping, queue, stats,
-};
-use trust_tasks_rs::specs::{audit, config};
 use uuid::Uuid;
 
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.27.0) — SDK 0.42
+
+Moves to `affinidi-messaging-sdk` 0.42, and takes the Trust Task types from `affinidi_messaging_sdk::tasks` instead of `trust-tasks-rs`, which is no longer a dependency. The SDK is a public dependency here, so this crate moves a minor.
+
 ## Unreleased (0.26.0) — SDK 0.41, trust-tasks 0.35
 
 Moves to `affinidi-messaging-sdk` 0.41 and `trust-tasks-rs` 0.35. The SDK is a public dependency here, so this crate moves a minor. No source change.

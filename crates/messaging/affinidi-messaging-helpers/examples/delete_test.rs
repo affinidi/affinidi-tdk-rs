@@ -1,4 +1,5 @@
 use affinidi_messaging_didcomm::message::Message;
+use affinidi_messaging_sdk::tasks::messaging::account::get::v0_1::MediatorAclAccessListMode;
 use affinidi_messaging_sdk::{
     errors::ATMError,
     messages::{DeleteMessageRequest, FetchDeletePolicy, Folder, fetch::FetchOptions},
@@ -10,7 +11,6 @@ use serde_json::json;
 use std::env;
 use tracing::info;
 use tracing_subscriber::filter;
-use trust_tasks_rs::specs::messaging::account::get::v0_1::MediatorAclAccessListMode;
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]

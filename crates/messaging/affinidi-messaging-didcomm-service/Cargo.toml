@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-didcomm-service"
-version = "0.26.0"
+version = "0.27.0"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
 authors.workspace = true
@@ -29,10 +29,8 @@ affinidi-tdk-common = { version = "0.7", path = "../../tdk/affinidi-tdk-common" 
 # rather than the workspace one — which is how a third `trust-tasks-rs` node
 # survived the 0.12 move and produced `expected MediatorAcl, found a different
 # MediatorAcl` from inside this workspace.
-affinidi-messaging-sdk = { version = "0.41", path = "../affinidi-messaging-sdk" }
+affinidi-messaging-sdk = { version = "0.42", path = "../affinidi-messaging-sdk" }
 affinidi-messaging-didcomm = "0.15.9"
-## Trust Tasks payload types (the atm.trust_tasks() surface accepts these).
-trust-tasks-rs = "0.35"
 affinidi-secrets-resolver = "0.5"
 ## Reads the cleartext sender VID off a TSP envelope, to keep each peer's
 ## inbound frames in order (`tsp` feature only).
