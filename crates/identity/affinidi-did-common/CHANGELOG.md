@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.4.5) — builds with its default features off
+
+`affinidi-did-common` with `default-features = false` failed to compile:
+`KeyMaterial::generate` named every curve's generator, but each is behind its
+own feature (`ed25519`, `p256`, `p384`, `k256`). A crate that took did-common
+for its identifier helpers alone, and was built on its own (`cargo test -p`),
+could not build. `generate` now returns `UnsupportedKeyType` for a curve whose
+feature is off. With the default features nothing changes.
+
 ## Unreleased (0.4.4) — did:scid references match by DID
 
 - **Added:** the `scid` module: `strip_scid_src`, `scid_src`, `with_scid_src`
