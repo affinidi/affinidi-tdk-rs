@@ -38,7 +38,7 @@
 
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_sdk::tasks::messaging::account::{
-    self, get::v0_1::MediatorAclAccessListMode,
+    self, get::v0_2::MediatorAclAccessListMode,
 };
 use affinidi_messaging_sdk::{ATM, errors::ATMError, profiles::ATMProfile};
 use affinidi_tdk::{
@@ -353,7 +353,7 @@ async fn ensure_account(
                 .account_add(
                     &party.profile,
                     hash,
-                    account::add::v0_1::AccountType::Standard,
+                    account::add::v0_2::AccountType::Standard,
                     None,
                 )
                 .await?;
@@ -370,8 +370,8 @@ async fn ensure_account(
 
 /// All the `messaging/account/*` Trust Tasks return a per-module `Account`
 /// struct, but they share one schema. Converts any of them back to the
-/// canonical `account::get::v0_1::Account`.
-fn to_get_account<T: serde::Serialize>(a: &T) -> account::get::v0_1::Account {
+/// canonical `account::get::v0_2::Account`.
+fn to_get_account<T: serde::Serialize>(a: &T) -> account::get::v0_2::Account {
     serde_json::from_value(serde_json::to_value(a).expect("serialize"))
         .expect("messaging Account types share one schema")
 }

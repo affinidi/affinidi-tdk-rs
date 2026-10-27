@@ -1,6 +1,6 @@
 use super::chat_list::ChatStatus;
 use crate::state_store::State;
-use affinidi_messaging_sdk::tasks::messaging::account::get::v0_1::MediatorAclAccessListMode;
+use affinidi_messaging_sdk::tasks::messaging::account::get::v0_2::MediatorAclAccessListMode;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use affinidi_tdk::{
     dids::{DID, KeyType, PeerKeyRole},

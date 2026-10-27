@@ -17,7 +17,7 @@
  * */
 
 use affinidi_messaging_didcomm::message::Message;
-use affinidi_messaging_sdk::tasks::messaging::account::{self, get::v0_1::AccountType};
+use affinidi_messaging_sdk::tasks::messaging::account::{self, get::v0_2::AccountType};
 use affinidi_messaging_sdk::{
     ATM, errors::ATMError, profiles::ATMProfile, protocols::trust_tasks::ENVELOPE_TYPE,
 };
@@ -186,7 +186,7 @@ async fn main() -> Result<(), ATMError> {
         .account_update(
             &atm_mallory,
             Some(mallory_hash.clone()),
-            Some(account::update::v0_1::AccountType::Admin),
+            Some(account::update::v0_2::AccountType::Admin),
             None,
             None,
         )
@@ -291,19 +291,17 @@ async fn main() -> Result<(), ATMError> {
 /// A `messaging/account/update` Trust Task promoting `mallory_hash` to admin,
 /// wrapped in the DIDComm binding envelope. `issuer` is the DID the document
 /// and the envelope claim to come from; `None` leaves both anonymous.
-// The 0.1 task is what mediators serve; see `affinidi_messaging_sdk::protocols::trust_tasks`.
-#[allow(deprecated)]
 fn promote_to_admin(
     mallory_hash: &str,
     mediator: &str,
     issuer: Option<&str>,
 ) -> Result<Message, ATMError> {
-    let payload: account::update::v0_1::Payload = account::update::v0_1::Payload::builder()
+    let payload: account::update::v0_2::Payload = account::update::v0_2::Payload::builder()
         .did(
-            account::update::v0_1::Vid::from_str(mallory_hash)
+            account::update::v0_2::Vid::from_str(mallory_hash)
                 .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?,
         )
-        .account_type(Some(account::update::v0_1::AccountType::Admin))
+        .account_type(Some(account::update::v0_2::AccountType::Admin))
         .try_into()
         .map_err(|e| ATMError::MsgSendError(format!("invalid trust-task payload: {e}")))?;
     let mut task = TrustTask::for_payload(Uuid::new_v4().to_string(), payload);

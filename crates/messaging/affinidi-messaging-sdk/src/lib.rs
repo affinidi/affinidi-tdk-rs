@@ -263,6 +263,11 @@ pub(crate) struct SharedState {
     /// Shutdown token for the supervised deletion-handler task. Cancelling it
     /// stops the handler (and tells its supervisor not to restart it).
     pub(crate) deletion_shutdown: CancellationToken,
+    /// Which messaging Trust Task version each mediator (by DID) is known to
+    /// serve; see `protocols::trust_task_versions`. Learnt once per mediator.
+    pub(crate) mediator_speaks: std::sync::Mutex<
+        std::collections::HashMap<String, protocols::trust_task_versions::MediatorSpeaks>,
+    >,
     /// Per-peer key-state freshness bookkeeping for TSP (spec Rev 3 §7.4.2):
     /// when each VID was last heard from, and when it was last resolved.
     #[cfg(feature = "tsp")]
@@ -301,6 +306,7 @@ impl ATM {
             deletion_handler_send_stream: sdk_deletion_tx,
             deletion_handler_recv_stream: Mutex::new(sdk_deletion_rx),
             deletion_shutdown: CancellationToken::new(),
+            mediator_speaks: std::sync::Mutex::new(std::collections::HashMap::new()),
             #[cfg(feature = "tsp")]
             tsp_key_state: affinidi_tsp::keystate::KeyStateTracker::new(),
         };

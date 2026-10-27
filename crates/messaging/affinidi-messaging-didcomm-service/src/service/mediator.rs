@@ -33,13 +33,13 @@ impl Listener {
         // self-service gating applies it (the rest of the ACL is left unchanged).
         let mode = match acl_mode {
             AccessListModeType::ExplicitAllow => {
-                account::update::v0_1::MediatorAclAccessListMode::ExplicitAllow
+                account::update::v0_2::MediatorAclAccessListMode::ExplicitAllow
             }
             AccessListModeType::ExplicitDeny => {
-                account::update::v0_1::MediatorAclAccessListMode::ExplicitDeny
+                account::update::v0_2::MediatorAclAccessListMode::ExplicitDeny
             }
         };
-        let acl: account::update::v0_1::MediatorAcl = account::update::v0_1::MediatorAcl::builder()
+        let acl: account::update::v0_2::MediatorAcl = account::update::v0_2::MediatorAcl::builder()
             .access_list_mode(Some(mode))
             .try_into()
             .expect("MediatorAcl has no required member");

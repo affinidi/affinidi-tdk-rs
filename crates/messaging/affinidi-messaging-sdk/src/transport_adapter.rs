@@ -241,13 +241,11 @@ impl MessageTransport for DidCommTransport {
         Ok(Some(list.into_iter().map(|m| m.msg_id).collect()))
     }
 
-    // `message/status` 0.1 is what mediators serve; see `protocols::trust_tasks`.
-    #[allow(deprecated)]
     async fn outbox_status(
         &self,
         hop_ids: &[String],
     ) -> Result<Option<std::collections::HashMap<String, OutboxStatus>>, MessagingError> {
-        use crate::tasks::messaging::message::status::v0_1::MessageState;
+        use crate::tasks::messaging::message::status::v0_2::MessageState;
 
         if hop_ids.is_empty() {
             return Ok(Some(std::collections::HashMap::new()));

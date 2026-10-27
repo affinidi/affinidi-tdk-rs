@@ -27,6 +27,7 @@ pub mod message_pickup;
 pub mod oob_discovery;
 pub mod routing;
 pub mod trust_ping;
+pub(crate) mod trust_task_versions;
 pub mod trust_tasks;
 #[cfg(feature = "tsp")]
 pub mod tsp;

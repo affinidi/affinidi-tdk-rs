@@ -11,8 +11,8 @@ use dialoguer::{MultiSelect, Select, theme::ColorfulTheme};
 use std::sync::Arc;
 
 /// Convert a partial / per-module `MediatorAcl` into the canonical
-/// `account::get::v0_1::MediatorAcl` we hold on the account across the screen.
-fn to_get_acl<T: serde::Serialize>(acl: &T) -> account::get::v0_1::MediatorAcl {
+/// `account::get::v0_2::MediatorAcl` we hold on the account across the screen.
+fn to_get_acl<T: serde::Serialize>(acl: &T) -> account::get::v0_2::MediatorAcl {
     serde_json::from_value(serde_json::to_value(acl).expect("serialize"))
         .expect("messaging MediatorAcl types share one schema")
 }
@@ -22,8 +22,8 @@ pub(crate) async fn manage_account_acls(
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
     mediator_config: &SharedConfig,
-    account: &account::get::v0_1::Account,
-) -> Result<account::get::v0_1::Account, Box<dyn std::error::Error>> {
+    account: &account::get::v0_2::Account,
+) -> Result<account::get::v0_2::Account, Box<dyn std::error::Error>> {
     let selections = &[
         "Modify ACL Flags",
         "Access List - List",
@@ -119,8 +119,8 @@ async fn _modify_acl_flags(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    account: &account::get::v0_1::Account,
-) -> Result<account::get::v0_1::MediatorAcl, Box<dyn std::error::Error>> {
+    account: &account::get::v0_2::Account,
+) -> Result<account::get::v0_2::MediatorAcl, Box<dyn std::error::Error>> {
     println!("self-change? : If set, allows the DID to change its own ACL flag");
 
     let acl = &account.acl;
@@ -128,7 +128,7 @@ async fn _modify_acl_flags(
         (
             "Access List Mode: explicit_deny if set, explicit_allow if not",
             acl.access_list_mode
-                == Some(account::get::v0_1::MediatorAclAccessListMode::ExplicitDeny),
+                == Some(account::get::v0_2::MediatorAclAccessListMode::ExplicitDeny),
         ),
         (
             "blocked - DID is blocked from authentication?",
@@ -179,11 +179,11 @@ async fn _modify_acl_flags(
     }
 
     // Build a full ACL set from the chosen flags.
-    let new_acl: account::update::v0_1::MediatorAcl = account::update::v0_1::MediatorAcl::builder()
+    let new_acl: account::update::v0_2::MediatorAcl = account::update::v0_2::MediatorAcl::builder()
         .access_list_mode(Some(if flags[0] {
-            account::update::v0_1::MediatorAclAccessListMode::ExplicitDeny
+            account::update::v0_2::MediatorAclAccessListMode::ExplicitDeny
         } else {
-            account::update::v0_1::MediatorAclAccessListMode::ExplicitAllow
+            account::update::v0_2::MediatorAclAccessListMode::ExplicitAllow
         }))
         .blocked(Some(flags[1]))
         .local(Some(flags[2]))
@@ -232,7 +232,7 @@ async fn _modify_acl_flags(
 async fn _access_list_list(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    account: &account::get::v0_1::Account,
+    account: &account::get::v0_2::Account,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut cursor: Option<String> = None;
     loop {
@@ -264,7 +264,7 @@ async fn _access_list_add(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    account: &account::get::v0_1::Account,
+    account: &account::get::v0_2::Account,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     if let Some(hash) = manually_enter_did_or_hash(theme) {
         atm.trust_tasks()
@@ -286,7 +286,7 @@ async fn _access_list_remove(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    account: &account::get::v0_1::Account,
+    account: &account::get::v0_2::Account,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     if let Some(hash) = manually_enter_did_or_hash(theme) {
         let response = atm
@@ -309,7 +309,7 @@ async fn _access_list_get(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    account: &account::get::v0_1::Account,
+    account: &account::get::v0_2::Account,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(hash) = manually_enter_did_or_hash(theme) {
         let result = atm
@@ -337,7 +337,7 @@ async fn _access_list_get(
 async fn _access_list_clear(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    account: &account::get::v0_1::Account,
+    account: &account::get::v0_2::Account,
 ) -> Result<(), Box<dyn std::error::Error>> {
     atm.trust_tasks()
         .access_list_update(

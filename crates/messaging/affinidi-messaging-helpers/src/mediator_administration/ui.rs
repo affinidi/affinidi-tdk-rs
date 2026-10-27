@@ -1,8 +1,8 @@
 //! UI Related functions
 use affinidi_messaging_sdk::errors::ATMError;
 use affinidi_messaging_sdk::tasks::messaging::account;
-use affinidi_messaging_sdk::tasks::messaging::account::list::v0_1::AccountType;
-use affinidi_messaging_sdk::tasks::messaging::account::update::v0_1::AccountType as UpdateAccountType;
+use affinidi_messaging_sdk::tasks::messaging::account::list::v0_2::AccountType;
+use affinidi_messaging_sdk::tasks::messaging::account::update::v0_2::AccountType as UpdateAccountType;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use console::style;
 use dialoguer::{Confirm, Input, MultiSelect, Select, theme::ColorfulTheme};
@@ -51,12 +51,10 @@ pub(crate) async fn administration_accounts_menu(
 
 /// The mediator's administrator accounts — `account/list` filtered per admin
 /// role (`rootAdmin`, then `admin`), replacing the retired `admin/list` task.
-// The 0.1 task is what mediators serve; see `affinidi_messaging_sdk::protocols::trust_tasks`.
-#[allow(deprecated)]
 async fn admin_accounts(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-) -> Result<Vec<account::list::v0_1::Account>, ATMError> {
+) -> Result<Vec<account::list::v0_2::Account>, ATMError> {
     let mut accounts = Vec::new();
     for role in [AccountType::RootAdmin, AccountType::Admin] {
         accounts.extend(

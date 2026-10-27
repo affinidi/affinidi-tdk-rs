@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 /// All the `messaging/account/*` Trust Tasks return a per-module `Account` struct,
 /// but they share one schema. This converts any of them back to the canonical
-/// `account::get::v0_1::Account` we hold across the screen.
-fn to_get_account<T: serde::Serialize>(a: &T) -> account::get::v0_1::Account {
+/// `account::get::v0_2::Account` we hold across the screen.
+fn to_get_account<T: serde::Serialize>(a: &T) -> account::get::v0_2::Account {
     serde_json::from_value(serde_json::to_value(a).expect("serialize"))
         .expect("messaging Account types share one schema")
 }
@@ -80,7 +80,7 @@ pub(crate) async fn create_account_menu(
         .account_add(
             profile,
             new_did_hash.clone(),
-            account::add::v0_1::AccountType::Standard,
+            account::add::v0_2::AccountType::Standard,
             None,
         )
         .await?;
@@ -102,7 +102,7 @@ pub(crate) async fn manage_account_menu(
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
     mediator_config: &SharedConfig,
-    account: &account::get::v0_1::Account,
+    account: &account::get::v0_2::Account,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let selections = &[
         "Modify ACLs",
@@ -256,13 +256,13 @@ async fn _change_account_type(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    account: &account::get::v0_1::Account,
-) -> Result<account::get::v0_1::Account, Box<dyn std::error::Error>> {
+    account: &account::get::v0_2::Account,
+) -> Result<account::get::v0_2::Account, Box<dyn std::error::Error>> {
     let options = [
-        account::update::v0_1::AccountType::Standard,
-        account::update::v0_1::AccountType::Admin,
-        account::update::v0_1::AccountType::RootAdmin,
-        account::update::v0_1::AccountType::Mediator,
+        account::update::v0_2::AccountType::Standard,
+        account::update::v0_2::AccountType::Admin,
+        account::update::v0_2::AccountType::RootAdmin,
+        account::update::v0_2::AccountType::Mediator,
     ];
 
     let mut selections = options
@@ -313,8 +313,8 @@ async fn _change_account_queue_limit(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
-    account: &account::get::v0_1::Account,
-) -> Result<Option<account::get::v0_1::Account>, Box<dyn std::error::Error>> {
+    account: &account::get::v0_2::Account,
+) -> Result<Option<account::get::v0_2::Account>, Box<dyn std::error::Error>> {
     let send_input = Input::with_theme(theme)
         .with_prompt("New Send Queue Limit? (-2 = Reset, -1 = Unlimited, n = limit, blank = no change, exit = cancel")
         .validate_with(|input: &String| -> Result<(), &str> {
@@ -409,7 +409,7 @@ async fn _change_account_queue_limit(
             None,
             None,
             Some(
-                account::update::v0_1::QueueLimits::builder()
+                account::update::v0_2::QueueLimits::builder()
                     .send_queue_limit(send_queue_limit)
                     .receive_queue_limit(receive_queue_limit)
                     .try_into()
@@ -477,15 +477,13 @@ pub(crate) async fn select_did(
     }
 }
 
-// The 0.1 task is what mediators serve; see `affinidi_messaging_sdk::protocols::trust_tasks`.
-#[allow(deprecated)]
 async fn _select_from_existing_dids(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
     theme: &ColorfulTheme,
     cursor: Option<String>,
     mediator_config: &SharedConfig,
-) -> Result<Option<account::get::v0_1::Account>, Box<dyn std::error::Error>> {
+) -> Result<Option<account::get::v0_2::Account>, Box<dyn std::error::Error>> {
     let dids = atm
         .trust_tasks()
         .account_list(profile, cursor, Some(2), None)

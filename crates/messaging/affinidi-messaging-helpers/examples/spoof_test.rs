@@ -2,7 +2,7 @@
 //! Mallory send to Bob, but inner envelope pretends to be Alice
 
 use affinidi_messaging_didcomm::message::Message;
-use affinidi_messaging_sdk::tasks::messaging::account::get::v0_1::MediatorAclAccessListMode;
+use affinidi_messaging_sdk::tasks::messaging::account::get::v0_2::MediatorAclAccessListMode;
 use affinidi_messaging_sdk::{errors::ATMError, profiles::ATMProfile};
 use affinidi_tdk::{TDK, common::config::TDKConfig};
 use clap::Parser;

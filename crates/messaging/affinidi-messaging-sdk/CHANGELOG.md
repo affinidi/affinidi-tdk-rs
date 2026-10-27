@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased (0.43.0) — the messaging tasks at 0.2
+
+`ping`, `account/get`, `account/list`, `account/add`, `account/update`,
+`audit/list` and `message/status` are spoken at 0.2, and their methods return
+the 0.2 types (`tasks::messaging::ping::v0_2::Response`, …); the 0.1 types of
+these seven are no longer generated. What changes for a caller:
+
+- `ping`: `server_time` → `responded_at`.
+- an account's `last_received_at` / `last_authenticated_at` are timestamps
+  (RFC 3339 on the wire) rather than Unix seconds.
+- `audit_list` takes `limit` (was `page_size`) and returns `next_cursor` (was
+  `cursor`); `truncated` is gone — `next_cursor` is absent on the last page.
+- `message_status`: each status's `at` → `reached_at`.
+
+**Older mediators keep working.** A mediator before 0.47.0 serves 0.1 only. Over
+DIDComm it refuses 0.2 at once (`…protocol.trust_task.unsupported`), and the SDK
+re-sends the request as 0.1 and converts the reply to the 0.2 type. Over TSP it
+would file a 0.2 request as mail and never answer, so the SDK reads the
+mediator's version from `/readyz` once and sends 0.2 only to 0.47.0 or later.
+What each mediator speaks is remembered per mediator DID for the life of the
+`ATM`. `monitor/event` is still decoded at 0.1.
+
+**Breaking:** the seven methods' parameter and return types move from the
+`v0_1` modules to `v0_2`, and `audit_list`'s `page_size` is now `limit`.
+
 ## Unreleased (0.42.0) — Trust Task types generated at build time
 
 The Trust Task types this SDK speaks are now generated at build time from the
