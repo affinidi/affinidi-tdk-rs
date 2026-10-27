@@ -1,6 +1,6 @@
 use affinidi_messaging_didcomm::message::{Attachment, Message};
 use affinidi_messaging_sdk::tasks::messaging::account;
-use affinidi_messaging_sdk::tasks::messaging::account::get::v0_1::MediatorAclAccessListMode;
+use affinidi_messaging_sdk::tasks::messaging::account::get::v0_2::MediatorAclAccessListMode;
 use affinidi_messaging_sdk::{ATM, messages::SuccessResponse, profiles::ATMProfile};
 use affinidi_tdk::dids::{DID as DIDKey, KeyType};
 use affinidi_tdk::secrets_resolver::SecretsResolver;
@@ -502,10 +502,10 @@ pub async fn create_invitation(
                             // Flip the access-list mode to explicit_deny. This is a
                             // self-service change; the mediator refuses it if this account
                             // may not self-manage its access-list mode.
-                            let new_acl: account::update::v0_1::MediatorAcl =
-                                account::update::v0_1::MediatorAcl::builder()
+                            let new_acl: account::update::v0_2::MediatorAcl =
+                                account::update::v0_2::MediatorAcl::builder()
                                     .access_list_mode(Some(
-                                        account::update::v0_1::MediatorAclAccessListMode::ExplicitDeny,
+                                        account::update::v0_2::MediatorAclAccessListMode::ExplicitDeny,
                                     ))
                                     .try_into()
                                     .expect("MediatorAcl has no required member");

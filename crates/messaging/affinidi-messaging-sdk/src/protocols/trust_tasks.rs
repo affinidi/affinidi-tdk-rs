@@ -18,10 +18,14 @@
 //!
 //! [Trust Tasks]: https://trusttasks.org
 //!
-//! The wire stays on the 0.1 versions of the `messaging/*` and `audit/list`
-//! tasks. `trust-tasks-rs` 0.35 marks their types deprecated in favour of 0.2,
-//! but mediators serve 0.1 only, so sending 0.2 would be refused. This module
-//! moves once mediators serve both versions.
+//! `ping`, `account/{get,list,add,update}`, `audit/list` and `message/status`
+//! are spoken at 0.2, falling back to 0.1 for a mediator that predates 0.2
+//! (see [`trust_task_versions`](super::trust_task_versions)); callers only see
+//! the 0.2 types. The other tasks have no 0.2.
+//!
+//! `monitor/event` is still decoded at 0.1, which `trust-tasks-rs` marks
+//! superseded: the mediator pushes it on a subscription that names no event
+//! version.
 
 #![allow(deprecated)]
 
@@ -44,6 +48,9 @@ use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
 use trust_tasks_rs::TrustTask;
 use uuid::Uuid;
 
+use crate::protocols::trust_task_versions::{
+    Current, MediatorSpeaks, is_unsupported_type, speaks_from_version,
+};
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};
 
 /// DIDComm `type` URI of a Trust Tasks binding envelope.
@@ -86,14 +93,15 @@ impl TrustTasksOps<'_> {
         &self,
         profile: &Arc<ATMProfile>,
         nonce: Option<String>,
-    ) -> Result<ping::v0_1::Response, ATMError> {
+    ) -> Result<ping::v0_2::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
-        let p: ping::v0_1::Payload = payload(ping::v0_1::Payload::builder().nonce(nonce))?;
+        let p: ping::v0_2::Payload = payload(ping::v0_2::Payload::builder().nonce(nonce))?;
         let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
-        let response: TrustTask<ping::v0_1::Response> = self.exchange(profile, task).await?;
+        let response: TrustTask<ping::v0_2::Response> =
+            self.exchange_current(profile, task, Current::Ping).await?;
         Ok(response.payload)
     }
 
@@ -105,7 +113,7 @@ impl TrustTasksOps<'_> {
         &self,
         profile: &Arc<ATMProfile>,
         did_hash: Option<String>,
-    ) -> Result<account::get::v0_1::Account, ATMError> {
+    ) -> Result<account::get::v0_2::Account, ATMError> {
         self.account_get_with_activity(profile, did_hash, false)
             .await
     }
@@ -123,7 +131,7 @@ impl TrustTasksOps<'_> {
         profile: &Arc<ATMProfile>,
         did_hash: Option<String>,
         include_activity: bool,
-    ) -> Result<account::get::v0_1::Account, ATMError> {
+    ) -> Result<account::get::v0_2::Account, ATMError> {
         self.account_get_detailed(profile, did_hash, include_activity, false)
             .await
     }
@@ -141,14 +149,14 @@ impl TrustTasksOps<'_> {
         did_hash: Option<String>,
         include_activity: bool,
         include_stats: bool,
-    ) -> Result<account::get::v0_1::Account, ATMError> {
+    ) -> Result<account::get::v0_2::Account, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
         let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
 
-        let did = account::get::v0_1::Vid::from_str(&target)
+        let did = account::get::v0_2::Vid::from_str(&target)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let p: account::get::v0_1::Payload = payload(
-            account::get::v0_1::Payload::builder()
+        let p: account::get::v0_2::Payload = payload(
+            account::get::v0_2::Payload::builder()
                 .did(did)
                 .include_activity(include_activity.then_some(true))
                 .include_stats(include_stats.then_some(true)),
@@ -157,8 +165,9 @@ impl TrustTasksOps<'_> {
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
-        let response: TrustTask<account::get::v0_1::Response> =
-            self.exchange(profile, task).await?;
+        let response: TrustTask<account::get::v0_2::Response> = self
+            .exchange_current(profile, task, Current::AccountGet)
+            .await?;
         Ok(response.payload.account)
     }
 
@@ -173,8 +182,8 @@ impl TrustTasksOps<'_> {
         profile: &Arc<ATMProfile>,
         cursor: Option<String>,
         limit: Option<u32>,
-        account_type: Option<account::list::v0_1::AccountType>,
-    ) -> Result<account::list::v0_1::Response, ATMError> {
+        account_type: Option<account::list::v0_2::AccountType>,
+    ) -> Result<account::list::v0_2::Response, ATMError> {
         self.account_list_with_activity(profile, cursor, limit, account_type, false)
             .await
     }
@@ -187,9 +196,9 @@ impl TrustTasksOps<'_> {
         profile: &Arc<ATMProfile>,
         cursor: Option<String>,
         limit: Option<u32>,
-        account_type: Option<account::list::v0_1::AccountType>,
+        account_type: Option<account::list::v0_2::AccountType>,
         include_activity: bool,
-    ) -> Result<account::list::v0_1::Response, ATMError> {
+    ) -> Result<account::list::v0_2::Response, ATMError> {
         self.account_list_detailed(
             profile,
             cursor,
@@ -210,20 +219,20 @@ impl TrustTasksOps<'_> {
         profile: &Arc<ATMProfile>,
         cursor: Option<String>,
         limit: Option<u32>,
-        account_type: Option<account::list::v0_1::AccountType>,
+        account_type: Option<account::list::v0_2::AccountType>,
         include_activity: bool,
         include_stats: bool,
-    ) -> Result<account::list::v0_1::Response, ATMError> {
+    ) -> Result<account::list::v0_2::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
 
         let cursor = cursor
-            .map(|c| account::list::v0_1::PayloadCursor::from_str(&c))
+            .map(|c| account::list::v0_2::PayloadCursor::from_str(&c))
             .transpose()
             .map_err(|e| ATMError::MsgSendError(format!("invalid cursor: {e}")))?;
         let limit = limit.and_then(|l| std::num::NonZeroU64::new(l as u64));
 
-        let p: account::list::v0_1::Payload = payload(
-            account::list::v0_1::Payload::builder()
+        let p: account::list::v0_2::Payload = payload(
+            account::list::v0_2::Payload::builder()
                 .account_type(account_type)
                 .cursor(cursor)
                 .include_activity(include_activity.then_some(true))
@@ -234,8 +243,9 @@ impl TrustTasksOps<'_> {
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
-        let response: TrustTask<account::list::v0_1::Response> =
-            self.exchange(profile, task).await?;
+        let response: TrustTask<account::list::v0_2::Response> = self
+            .exchange_current(profile, task, Current::AccountList)
+            .await?;
         Ok(response.payload)
     }
 
@@ -257,17 +267,17 @@ impl TrustTasksOps<'_> {
         &self,
         profile: &Arc<ATMProfile>,
         did_hash: Option<String>,
-        account_type: Option<account::update::v0_1::AccountType>,
-        acl: Option<account::update::v0_1::MediatorAcl>,
-        queue_limits: Option<account::update::v0_1::QueueLimits>,
-    ) -> Result<account::update::v0_1::Account, ATMError> {
+        account_type: Option<account::update::v0_2::AccountType>,
+        acl: Option<account::update::v0_2::MediatorAcl>,
+        queue_limits: Option<account::update::v0_2::QueueLimits>,
+    ) -> Result<account::update::v0_2::Account, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
         let target = did_hash.unwrap_or_else(|| digest(&profile.inner.did));
 
-        let did = account::update::v0_1::Vid::from_str(&target)
+        let did = account::update::v0_2::Vid::from_str(&target)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
-        let p: account::update::v0_1::Payload = payload(
-            account::update::v0_1::Payload::builder()
+        let p: account::update::v0_2::Payload = payload(
+            account::update::v0_2::Payload::builder()
                 .account_type(account_type)
                 .acl(acl)
                 .did(did)
@@ -277,8 +287,9 @@ impl TrustTasksOps<'_> {
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
-        let response: TrustTask<account::update::v0_1::Response> =
-            self.exchange(profile, task).await?;
+        let response: TrustTask<account::update::v0_2::Response> = self
+            .exchange_current(profile, task, Current::AccountUpdate)
+            .await?;
         Ok(response.payload.account)
     }
 
@@ -338,17 +349,17 @@ impl TrustTasksOps<'_> {
         &self,
         profile: &Arc<ATMProfile>,
         did_hash: String,
-        account_type: account::add::v0_1::AccountType,
-        acl: Option<account::add::v0_1::MediatorAcl>,
-    ) -> Result<account::add::v0_1::Account, ATMError> {
+        account_type: account::add::v0_2::AccountType,
+        acl: Option<account::add::v0_2::MediatorAcl>,
+    ) -> Result<account::add::v0_2::Account, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
 
-        let did = account::add::v0_1::Vid::from_str(&did_hash)
+        let did = account::add::v0_2::Vid::from_str(&did_hash)
             .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))?;
         // Initial queue limits are left unset so the mediator default applies;
         // adjust with `account_update` after creation.
-        let p: account::add::v0_1::Payload = payload(
-            account::add::v0_1::Payload::builder()
+        let p: account::add::v0_2::Payload = payload(
+            account::add::v0_2::Payload::builder()
                 .account_type(account_type)
                 .acl(acl)
                 .did(did),
@@ -357,8 +368,9 @@ impl TrustTasksOps<'_> {
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
-        let response: TrustTask<account::add::v0_1::Response> =
-            self.exchange(profile, task).await?;
+        let response: TrustTask<account::add::v0_2::Response> = self
+            .exchange_current(profile, task, Current::AccountAdd)
+            .await?;
         Ok(response.payload.account)
     }
 
@@ -450,21 +462,23 @@ impl TrustTasksOps<'_> {
         &self,
         profile: &Arc<ATMProfile>,
         cursor: Option<String>,
-        page_size: Option<u32>,
-    ) -> Result<audit::list::v0_1::Response, ATMError> {
+        limit: Option<u32>,
+    ) -> Result<audit::list::v0_2::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
         // Only the two members this method exposes are set; `action`, `actor`,
         // `contextId`, `from`, `outcome` and `to` are filters the builder leaves
         // unset, which is an unfiltered listing.
-        let p: audit::list::v0_1::Payload = payload(
-            audit::list::v0_1::Payload::builder()
+        let p: audit::list::v0_2::Payload = payload(
+            audit::list::v0_2::Payload::builder()
                 .cursor(cursor)
-                .page_size(page_size.and_then(|l| std::num::NonZeroU64::new(l as u64))),
+                .limit(limit.and_then(|l| std::num::NonZeroU64::new(l as u64))),
         )?;
         let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
-        let response: TrustTask<audit::list::v0_1::Response> = self.exchange(profile, task).await?;
+        let response: TrustTask<audit::list::v0_2::Response> = self
+            .exchange_current(profile, task, Current::AuditList)
+            .await?;
         Ok(response.payload)
     }
 
@@ -795,22 +809,23 @@ impl TrustTasksOps<'_> {
         &self,
         profile: &Arc<ATMProfile>,
         msg_ids: &[String],
-    ) -> Result<message::status::v0_1::Response, ATMError> {
+    ) -> Result<message::status::v0_2::Response, ATMError> {
         let (profile_did, mediator_did) = profile.dids()?;
 
         let ids = msg_ids
             .iter()
-            .map(|id| message::status::v0_1::PayloadMsgIdsItem::from_str(id))
+            .map(|id| message::status::v0_2::PayloadMsgIdsItem::from_str(id))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| ATMError::MsgSendError(format!("invalid message id: {e}")))?;
-        let p: message::status::v0_1::Payload =
-            payload(message::status::v0_1::Payload::builder().msg_ids(ids))?;
+        let p: message::status::v0_2::Payload =
+            payload(message::status::v0_2::Payload::builder().msg_ids(ids))?;
         let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
-        let response: TrustTask<message::status::v0_1::Response> =
-            self.exchange(profile, task).await?;
+        let response: TrustTask<message::status::v0_2::Response> = self
+            .exchange_current(profile, task, Current::MessageStatus)
+            .await?;
         Ok(response.payload)
     }
 
@@ -887,6 +902,121 @@ impl TrustTasksOps<'_> {
 
         let response: TrustTask<queue::list::v0_1::Response> = self.exchange(profile, task).await?;
         Ok(response.payload)
+    }
+
+    /// Exchange a task the SDK speaks at 0.2 (see
+    /// [`trust_task_versions`](super::trust_task_versions)): as 0.2 to a
+    /// mediator that serves it, otherwise as 0.1 with the reply converted to
+    /// the 0.2 shape. Either way the caller gets the 0.2 `R`.
+    async fn exchange_current<P, R>(
+        &self,
+        profile: &Arc<ATMProfile>,
+        task: TrustTask<P>,
+        current: Current,
+    ) -> Result<TrustTask<R>, ATMError>
+    where
+        P: Serialize,
+        R: DeserializeOwned,
+    {
+        let (_, mediator_did) = profile.dids()?;
+        let doc = serde_json::to_value(&task)
+            .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))?;
+
+        if self.mediator_speaks(profile).await? == MediatorSpeaks::V0_2 {
+            match self
+                .exchange::<Value, R>(profile, value_task(doc.clone())?)
+                .await
+            {
+                // Refused before any handler ran: nothing was done, so the
+                // same request is re-sent as 0.1 below.
+                Err(ATMError::ProblemReport(code, ..)) if is_unsupported_type(&code) => {
+                    self.remember_speaks(mediator_did, MediatorSpeaks::V0_1Only);
+                }
+                other => return other,
+            }
+        }
+
+        let mut doc = doc;
+        current
+            .to_v0_1_request(&mut doc)
+            .map_err(ATMError::MsgSendError)?;
+        // A fresh id: the 0.1 document is a different request.
+        doc["id"] = Value::String(new_id());
+        let reply: TrustTask<Value> = self.exchange(profile, value_task(doc)?).await?;
+        let mut reply = serde_json::to_value(&reply)
+            .map_err(|e| ATMError::MsgReceiveError(format!("couldn't read the reply: {e}")))?;
+        current
+            .to_v0_2_reply(&mut reply)
+            .map_err(ATMError::MsgReceiveError)?;
+        decode_body(&reply)
+    }
+
+    /// What the profile's mediator serves, learnt once per mediator.
+    ///
+    /// Over DIDComm the answer is 0.2 until the mediator refuses it, which an
+    /// older one does at once. Over TSP an older mediator files an unknown type
+    /// as mail and never answers, so its version is read from `/readyz` first.
+    async fn mediator_speaks(&self, profile: &Arc<ATMProfile>) -> Result<MediatorSpeaks, ATMError> {
+        let (_, mediator_did) = profile.dids()?;
+        if let Some(known) = self
+            .atm
+            .inner
+            .mediator_speaks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(mediator_did)
+            .copied()
+        {
+            return Ok(known);
+        }
+
+        #[cfg(feature = "tsp")]
+        {
+            use crate::protocols::tsp::SendProtocol;
+            if self
+                .atm
+                .tsp()
+                .select_protocol(profile, mediator_did)
+                .await?
+                == SendProtocol::Tsp
+            {
+                let version = self.probe_mediator_version(profile).await;
+                let speaks = speaks_from_version(version.as_deref());
+                self.remember_speaks(mediator_did, speaks);
+                return Ok(speaks);
+            }
+        }
+        #[cfg(not(feature = "tsp"))]
+        let _ = speaks_from_version;
+
+        Ok(MediatorSpeaks::V0_2)
+    }
+
+    fn remember_speaks(&self, mediator_did: &str, speaks: MediatorSpeaks) {
+        self.atm
+            .inner
+            .mediator_speaks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(mediator_did.to_string(), speaks);
+    }
+
+    /// The mediator's version from its `/readyz`, if it answers in time.
+    #[cfg(feature = "tsp")]
+    async fn probe_mediator_version(&self, profile: &ATMProfile) -> Option<String> {
+        let base = profile.get_mediator_rest_endpoint()?;
+        let url = format!("{}/readyz", base.trim_end_matches('/'));
+        let response = self
+            .atm
+            .get_tdk()
+            .client()
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .ok()?;
+        let body: Value = response.json().await.ok()?;
+        body["version"].as_str().map(str::to_string)
     }
 
     /// Stamp `issuedAt`, sign, wrap the `TrustTask<P>` in the DIDComm binding
@@ -1175,6 +1305,12 @@ pub fn decode_monitor_event(message: &Message) -> Option<TrustTask<monitor::even
     serde_json::from_value(message.body.clone()).ok()
 }
 
+/// A serialised Trust Task document, as a `TrustTask<Value>` to send as-is.
+fn value_task(doc: Value) -> Result<TrustTask<Value>, ATMError> {
+    serde_json::from_value(doc)
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))
+}
+
 fn new_id() -> String {
     format!("urn:uuid:{}", Uuid::new_v4())
 }
@@ -1219,8 +1355,8 @@ mod tests {
         // verifies, so the proof this SDK emits must round-trip through the typed
         // document — not merely verify as loose JSON.
         let (did, secret) = did_key_secret();
-        let p: ping::v0_1::Payload =
-            payload(ping::v0_1::Payload::builder().nonce(Some("n".into()))).unwrap();
+        let p: ping::v0_2::Payload =
+            payload(ping::v0_2::Payload::builder().nonce(Some("n".into()))).unwrap();
         let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(did.clone());
         task.recipient = Some("did:web:mediator.example".into());
@@ -1233,7 +1369,7 @@ mod tests {
         )
         .await
         .expect("sign");
-        let typed: TrustTask<ping::v0_1::Payload> =
+        let typed: TrustTask<ping::v0_2::Payload> =
             serde_json::from_value(signed).expect("signed document parses as typed");
 
         assert!(typed.proof.is_some());
@@ -1247,8 +1383,8 @@ mod tests {
     #[tokio::test]
     async fn a_tampered_payload_fails_verification() {
         let (did, secret) = did_key_secret();
-        let p: ping::v0_1::Payload =
-            payload(ping::v0_1::Payload::builder().nonce(Some("n".into()))).unwrap();
+        let p: ping::v0_2::Payload =
+            payload(ping::v0_2::Payload::builder().nonce(Some("n".into()))).unwrap();
         let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(did);
         task.recipient = Some("did:web:mediator.example".into());
@@ -1261,7 +1397,7 @@ mod tests {
         .await
         .expect("sign");
         signed["payload"]["nonce"] = Value::String("changed".into());
-        let typed: TrustTask<ping::v0_1::Payload> = serde_json::from_value(signed).unwrap();
+        let typed: TrustTask<ping::v0_2::Payload> = serde_json::from_value(signed).unwrap();
 
         assert!(Verifier::for_did_key().verify(&typed).await.is_err());
     }

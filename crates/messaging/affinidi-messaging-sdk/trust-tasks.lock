@@ -4,144 +4,144 @@ registry = "https://trusttasks.org"
 
 [[task]]
 slug = "audit/list"
-version = "0.1"
-type_uri = "https://trusttasks.org/spec/audit/list/0.1"
-digest = "sha256:d2f52e0c140038a2ce6934e9d557513636c56ba98616dfcb68fc6272aba15bf1"
+version = "0.2"
+type_uri = "https://trusttasks.org/spec/audit/list/0.2"
+digest = "sha256:fe4a6e1b284e7b0edfb15f71f0540aa4ff7a7ec70692908979771b90e6c8a8ec"
 
 [[task]]
 slug = "config/patch"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/config/patch/0.1"
-digest = "sha256:a57755a52e8f31539df806d42987eca3c03fba4ec5fd39786bd698afcda68148"
+digest = "sha256:887b27922eecee00204d2aa34ea4b1743a1ba939b85a8a05473d25ab1c8cee1b"
 
 [[task]]
 slug = "config/reload"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/config/reload/0.1"
-digest = "sha256:779da2d20163f63830565e41980403f386e09fdd26bd0fe4664ef66fc1a67106"
+digest = "sha256:0c4e3b8f9293634442dbfef61076ea55ef12be40f21c51635968f740d2e950fa"
 
 [[task]]
 slug = "config/show"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/config/show/0.1"
-digest = "sha256:f764f019e7ad588ab937bb68caca19cb63ca21db38c3d28e103d74469746e879"
+digest = "sha256:e60a3497bbf9761c027e7ab88a6a0f439c9444fbab5a4a6f6ad333c205b88ac6"
 
 [[task]]
 slug = "messaging/access-list/list"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/access-list/list/0.1"
-digest = "sha256:bdaa88e79ec6000e8d8f9f2f54c62e8c59bfa8416af443b0c4513b7857c2b81c"
+digest = "sha256:b7d662af4ea3e2458c5c23b2483ddcd956c440e04fd0a9a9f66be2bf43cafa81"
 
 [[task]]
 slug = "messaging/access-list/update"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/access-list/update/0.1"
-digest = "sha256:ebcd7cf47f563db958f184f005364862fc6b5e7bd0bf523f2a729b1a42521e73"
+digest = "sha256:06dd16823d384020cd2ad65a6aee54b74011bc0a6091c84fe104216cdea96c37"
 
 [[task]]
 slug = "messaging/account/add"
-version = "0.1"
-type_uri = "https://trusttasks.org/spec/messaging/account/add/0.1"
-digest = "sha256:f38776af6dc4dc580c1ff6b4b6aa693c2735299505afef53119789c0da51e09e"
+version = "0.2"
+type_uri = "https://trusttasks.org/spec/messaging/account/add/0.2"
+digest = "sha256:cfdf56722586c61640fc451de89440f6d772024629357bdf7a8307ca8186836e"
 
 [[task]]
 slug = "messaging/account/get"
-version = "0.1"
-type_uri = "https://trusttasks.org/spec/messaging/account/get/0.1"
-digest = "sha256:f7b562bb4ede26dbc94176e68b0fc97f7312dd05e22c36b05c50eee4b744fe06"
+version = "0.2"
+type_uri = "https://trusttasks.org/spec/messaging/account/get/0.2"
+digest = "sha256:bd6783a7dd3f817dec403a28af7a2ce120998d2a400cbc4607c187fc998bf6f0"
 
 [[task]]
 slug = "messaging/account/list"
-version = "0.1"
-type_uri = "https://trusttasks.org/spec/messaging/account/list/0.1"
-digest = "sha256:75d5b713944dba7ca201209f11093f8820b17c61cd154affeba6a31fef3c2fab"
+version = "0.2"
+type_uri = "https://trusttasks.org/spec/messaging/account/list/0.2"
+digest = "sha256:77e9a2b9abd01466c8cfdb202b0cbfbc07897f25601b00055e89bba23699c6ca"
 
 [[task]]
 slug = "messaging/account/remove"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/account/remove/0.1"
-digest = "sha256:d16eec01b27edf55cd946864cebcd69104035d4d1570466c0a5544874f35cf8a"
+digest = "sha256:299eacbfa19dee50170d03ff2a9cb3c232a5a44d591f8033c4012b6d833ee7e1"
 
 [[task]]
 slug = "messaging/account/update"
-version = "0.1"
-type_uri = "https://trusttasks.org/spec/messaging/account/update/0.1"
-digest = "sha256:c27c32c3fceb3a98bc5ae9fa129a1897cc07c8ca1455bd6fc98377bfd3f141f6"
+version = "0.2"
+type_uri = "https://trusttasks.org/spec/messaging/account/update/0.2"
+digest = "sha256:e2c83dc3938d0f47669e2230bb5ad795840890f51cc7ac32dce5f8a605bcfe98"
 
 [[task]]
 slug = "messaging/acl/get"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/acl/get/0.1"
-digest = "sha256:1f8f540116667532965118c9d20ef9ee82a081aada7e1d81e39a6fd77491aba5"
+digest = "sha256:109be133b68d2af28ac707b88752ebc1650a63f0e4b242d9c410604695a99447"
 
 [[task]]
 slug = "messaging/message/delete"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/message/delete/0.1"
-digest = "sha256:ac871d763e85074e3fe7d53f7bdc1345752254cb5ca94c0b24b86c9bfe5adca8"
+digest = "sha256:26193a837835ecacfd3b56ad6421aa956e99db5bbe9d74cabd12828d0eef93cd"
 
 [[task]]
 slug = "messaging/message/get"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/message/get/0.1"
-digest = "sha256:5d9524a0106e94f5f0b21a33ba0e58a3f6b4bc39689fe15583645f5d19e50df2"
+digest = "sha256:915c00baad7ed8ff12a06b5e149655cafbe98ce71e5861581d1e85304f5bc7a6"
 
 [[task]]
 slug = "messaging/message/list"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/message/list/0.1"
-digest = "sha256:46e830fc24a08b5ec9830b0e6653a369de481435b79b5ea80494b35493510d1e"
+digest = "sha256:01b2015537e17aae734a5270d381868f40b7ba09191c3d096f8c6b780f25c389"
 
 [[task]]
 slug = "messaging/message/status"
-version = "0.1"
-type_uri = "https://trusttasks.org/spec/messaging/message/status/0.1"
-digest = "sha256:02c7b78b76941594037300f959b8de3002002ff2926bcd95b47ca732089265d1"
+version = "0.2"
+type_uri = "https://trusttasks.org/spec/messaging/message/status/0.2"
+digest = "sha256:1893fabb483d24671e95a0916dc00590026d0966eddcb16d7f2a2d9ad73e7d8e"
 
 [[task]]
 slug = "messaging/monitor/event"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/monitor/event/0.1"
-digest = "sha256:4753f03ac5163d520a0006d1ec73ad4952a2ea7b502c52e905a9ab4b972ace2f"
+digest = "sha256:5db087f1e3f01dc1d7014de05b1055591c86ca3d93fc1fa0230588f9615200ec"
 
 [[task]]
 slug = "messaging/monitor/subscribe"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/monitor/subscribe/0.1"
-digest = "sha256:b8a54cacf6717f678e0e8cedc0e4d1cf5f2336e4f5a80c49f96b5bb9159bf203"
+digest = "sha256:6969ac62e8016132a0c2a4950f28a25b7894127558cb940383902f68e9de3785"
 
 [[task]]
 slug = "messaging/monitor/unsubscribe"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/monitor/unsubscribe/0.1"
-digest = "sha256:bc69f41dcca069c8ac67af8ff1a1adb6101136c7c627cc7da3c47684ead20250"
+digest = "sha256:3c0578ac3c034ed24f0bc80080509c872ab8c205b748db91ab0cad519f3c8ecd"
 
 [[task]]
 slug = "messaging/ping"
-version = "0.1"
-type_uri = "https://trusttasks.org/spec/messaging/ping/0.1"
-digest = "sha256:1e57215fd326800985c4adea72a51456cf9d53fb2be1935f6127fd590c953142"
+version = "0.2"
+type_uri = "https://trusttasks.org/spec/messaging/ping/0.2"
+digest = "sha256:9414c5c59bdf9f8c143fd90a1c7ac4e54fd30903596cf70628a084a47f2ce9db"
 
 [[task]]
 slug = "messaging/queue/list"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/queue/list/0.1"
-digest = "sha256:760678b29427a761f5c3f47c885b28436528b8f1263c1d64f2da919ca9cdcb6c"
+digest = "sha256:f0cba2c0c015ae76bbc24f6969fc1431f3ce344fba7281ce83fcadd83e1bf3f0"
 
 [[task]]
 slug = "messaging/queue/purge"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/queue/purge/0.1"
-digest = "sha256:88d59fa0e522b2dcf1b414520a02d4532bb6abae108b8c88bcbf5a901ac7b74d"
+digest = "sha256:13538e34bad915a5067f25edf7c5ccfdb084013b0e5632cec5ee4a8d95b8f39c"
 
 [[task]]
 slug = "messaging/queue/status"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/queue/status/0.1"
-digest = "sha256:4ae01be8f187f308a85a7c4678110feda5730d07da84defb77855adae96a64b7"
+digest = "sha256:fe9a91fde1fb5497a1bcf0e5185e82940fecc56532dd3fcc1f017192e62a5d52"
 
 [[task]]
 slug = "messaging/stats/show"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/stats/show/0.1"
-digest = "sha256:8fecfd3432316a63ee71a50605eea78819c7e4ac790e269449d0c4f06b636c86"
+digest = "sha256:afb8e7e8a159c5aa546b949b006bf880506e6463812124a964180c2ceb50fddd"
