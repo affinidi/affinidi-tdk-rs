@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.43.0"
+version = "0.44.0"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -39,10 +39,10 @@ affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.
 ## Trust Tasks runtime. The task types themselves are generated at build time
 ## from the versions pinned in trust-tasks.lock (see build.rs and `crate::tasks`),
 ## so no prebuilt specification module is compiled.
-trust-tasks-rs = { version = "0.35.3", default-features = false }
+trust-tasks-rs = { version = "0.36", default-features = false }
 # Signs every outgoing Trust Task (eddsa-jcs-2022 Data Integrity proof) — the
 # sign-side counterpart of the verifier consumers run.
-trust-tasks-proof = { version = "0.35.3", default-features = false, features = ["affinidi"] }
+trust-tasks-proof = { version = "0.36", default-features = false, features = ["affinidi"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
 affinidi-tsp = { path = "../affinidi-tsp", version = "0.3", optional = true }

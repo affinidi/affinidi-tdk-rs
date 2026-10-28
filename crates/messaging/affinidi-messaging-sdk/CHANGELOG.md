@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (0.44.0) — trust-tasks 0.36, monitor/event 0.2
+
+Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.36. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.36 (trustoverip/dtgwg-trust-tasks-tf) adopts `trust-task-error/0.6` (two new standard codes, `unsupportedExtension` and `indeterminate`, behind the already `#[non_exhaustive]` `StandardCode`) and adds new spec versions; none of it touches the tasks this SDK speaks.
+
+`messaging/monitor/event` is pinned at 0.2 (0.1 is superseded) and `decode_monitor_event` returns `tasks::messaging::monitor::event::v0_2::Payload`. 0.2 renames each event's `at` to `occurred_at` (`occurredAt` on the wire) and changes nothing else. A mediator that still pushes 0.1 batches keeps working: such a batch is converted to the 0.2 shape and parsed as the 0.2 type, so callers only see 0.2.
+
+Every pinned task is now at its latest live version, and the SDK no longer allows deprecation warnings in `protocols::trust_tasks`.
+
+**Breaking:** `decode_monitor_event`'s return type moves from `v0_1` to `v0_2`, and `MonitorEvent::at` is now `occurred_at`.
+
 ## Unreleased (0.43.0) — the messaging tasks at 0.2
 
 `ping`, `account/get`, `account/list`, `account/add`, `account/update`,

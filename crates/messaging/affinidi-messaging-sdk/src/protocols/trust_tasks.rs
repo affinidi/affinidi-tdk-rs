@@ -23,11 +23,8 @@
 //! (see [`trust_task_versions`](super::trust_task_versions)); callers only see
 //! the 0.2 types. The other tasks have no 0.2.
 //!
-//! `monitor/event` is still decoded at 0.1, which `trust-tasks-rs` marks
-//! superseded: the mediator pushes it on a subscription that names no event
-//! version.
-
-#![allow(deprecated)]
+//! `monitor/event` is decoded at 0.2; a 0.1 batch from an older mediator is
+//! converted to it (see [`decode_monitor_event`]).
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -1294,15 +1291,46 @@ impl TrustTasksOps<'_> {
 ///
 /// Returns `None` for anything else, so a live-stream reader can route monitor
 /// batches to its display and pass every other message on.
-pub fn decode_monitor_event(message: &Message) -> Option<TrustTask<monitor::event::v0_1::Payload>> {
+///
+/// A mediator before 0.48.0 pushes 0.1 batches; one is converted to the 0.2
+/// shape (each event's `at` → `occurredAt`) and parsed as the 0.2 type, so
+/// callers only see 0.2.
+pub fn decode_monitor_event(message: &Message) -> Option<TrustTask<monitor::event::v0_2::Payload>> {
     use trust_tasks_rs::Payload as _;
-    if message.typ != ENVELOPE_TYPE
-        || message.body.get("type").and_then(Value::as_str)
-            != Some(monitor::event::v0_1::Payload::TYPE_URI)
-    {
+    if message.typ != ENVELOPE_TYPE {
         return None;
     }
-    serde_json::from_value(message.body.clone()).ok()
+    let ty = message.body.get("type").and_then(Value::as_str)?;
+    if ty == monitor::event::v0_2::Payload::TYPE_URI {
+        return serde_json::from_value(message.body.clone()).ok();
+    }
+    if ty != MONITOR_EVENT_V0_1 {
+        return None;
+    }
+    let mut doc = message.body.clone();
+    monitor_event_to_v0_2(&mut doc);
+    serde_json::from_value(doc).ok()
+}
+
+/// The `messaging/monitor/event` Type URI a mediator before 0.48.0 pushes.
+const MONITOR_EVENT_V0_1: &str = "https://trusttasks.org/spec/messaging/monitor/event/0.1";
+
+/// Rewrite a 0.1 monitor batch as the 0.2 one, in place: 0.2 renames each
+/// event's `at` to `occurredAt` and changes nothing else.
+fn monitor_event_to_v0_2(doc: &mut Value) {
+    use trust_tasks_rs::Payload as _;
+    doc["type"] = Value::String(monitor::event::v0_2::Payload::TYPE_URI.to_string());
+    if let Some(events) = doc
+        .get_mut("payload")
+        .and_then(|p| p.get_mut("events"))
+        .and_then(Value::as_array_mut)
+    {
+        for event in events.iter_mut().filter_map(Value::as_object_mut) {
+            if let Some(at) = event.remove("at") {
+                event.insert("occurredAt".to_string(), at);
+            }
+        }
+    }
 }
 
 /// A serialised Trust Task document, as a `TrustTask<Value>` to send as-is.
@@ -1347,6 +1375,65 @@ mod tests {
         let did = format!("did:key:{mb}");
         let secret = Secret::generate_ed25519(Some(&format!("{did}#{mb}")), Some(&seed));
         (did, secret)
+    }
+
+    fn monitor_message(ty: &str, event: Value) -> Message {
+        Message::build(
+            new_id(),
+            ENVELOPE_TYPE.to_string(),
+            serde_json::json!({
+                "id": "urn:uuid:00000000-0000-4000-8000-000000000003",
+                "type": ty,
+                "payload": {
+                    "subscriptionId": "s1",
+                    "seq": 1,
+                    "events": [event],
+                    "dropped": 0,
+                    "expiresAt": "2026-10-28T10:00:00Z",
+                },
+            }),
+        )
+        .finalize()
+    }
+
+    fn monitor_event(instant_member: &str) -> Value {
+        serde_json::json!({
+            instant_member: "2026-10-28T09:00:00.123Z",
+            "direction": "inbound",
+            "stage": "received",
+            "channel": "websocket",
+            "protocol": "didcomm",
+        })
+    }
+
+    #[test]
+    fn a_0_2_monitor_batch_decodes() {
+        use trust_tasks_rs::Payload as _;
+        let message = monitor_message(
+            monitor::event::v0_2::Payload::TYPE_URI,
+            monitor_event("occurredAt"),
+        );
+        let batch = decode_monitor_event(&message).expect("a 0.2 batch");
+        assert_eq!(batch.payload.events.len(), 1);
+    }
+
+    #[test]
+    fn a_0_1_monitor_batch_decodes_as_0_2() {
+        let message = monitor_message(MONITOR_EVENT_V0_1, monitor_event("at"));
+        let batch = decode_monitor_event(&message).expect("a 0.1 batch, converted");
+        assert_eq!(
+            batch.payload.events[0].occurred_at.to_rfc3339(),
+            "2026-10-28T09:00:00.123+00:00"
+        );
+    }
+
+    #[test]
+    fn other_messages_are_not_monitor_batches() {
+        let message = monitor_message(
+            "https://trusttasks.org/spec/messaging/ping/0.2",
+            monitor_event("occurredAt"),
+        );
+        assert!(decode_monitor_event(&message).is_none());
     }
 
     #[tokio::test]
