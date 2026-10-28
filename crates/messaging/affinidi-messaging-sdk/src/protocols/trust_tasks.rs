@@ -1295,21 +1295,32 @@ impl TrustTasksOps<'_> {
 /// A mediator before 0.48.0 pushes 0.1 batches; one is converted to the 0.2
 /// shape (each event's `at` → `occurredAt`) and parsed as the 0.2 type, so
 /// callers only see 0.2.
+///
+/// A batch is one document, so one event that does not parse refuses the
+/// whole batch, as it did at 0.1. That is logged at `warn` with the reason,
+/// so a dropped batch is visible rather than indistinguishable from a
+/// message that was never a monitor batch.
 pub fn decode_monitor_event(message: &Message) -> Option<TrustTask<monitor::event::v0_2::Payload>> {
+    use serde::Deserialize as _;
     use trust_tasks_rs::Payload as _;
     if message.typ != ENVELOPE_TYPE {
         return None;
     }
     let ty = message.body.get("type").and_then(Value::as_str)?;
-    if ty == monitor::event::v0_2::Payload::TYPE_URI {
-        return serde_json::from_value(message.body.clone()).ok();
-    }
-    if ty != MONITOR_EVENT_V0_1 {
+    let parsed = if ty == monitor::event::v0_2::Payload::TYPE_URI {
+        // Deserialised from the borrowed body: no copy on the current version.
+        TrustTask::<monitor::event::v0_2::Payload>::deserialize(&message.body)
+    } else if ty == MONITOR_EVENT_V0_1 {
+        // The rename needs an owned copy; only a pre-0.48.0 mediator sends this.
+        let mut doc = message.body.clone();
+        monitor_event_to_v0_2(&mut doc);
+        TrustTask::<monitor::event::v0_2::Payload>::deserialize(doc)
+    } else {
         return None;
-    }
-    let mut doc = message.body.clone();
-    monitor_event_to_v0_2(&mut doc);
-    serde_json::from_value(doc).ok()
+    };
+    parsed
+        .inspect_err(|e| warn!(r#type = ty, error = %e, "dropping a monitor/event batch that does not parse"))
+        .ok()
 }
 
 /// The `messaging/monitor/event` Type URI a mediator before 0.48.0 pushes.
@@ -1425,6 +1436,15 @@ mod tests {
             batch.payload.events[0].occurred_at.to_rfc3339(),
             "2026-10-28T09:00:00.123+00:00"
         );
+    }
+
+    #[test]
+    fn a_batch_with_a_malformed_event_is_refused() {
+        // `at` that is not a date-time, in a 0.1 batch: refused whole, as at 0.1.
+        let mut event = monitor_event("at");
+        event["at"] = Value::String("yesterday".into());
+        let message = monitor_message(MONITOR_EVENT_V0_1, event);
+        assert!(decode_monitor_event(&message).is_none());
     }
 
     #[test]
