@@ -100,9 +100,9 @@ digest = "sha256:1893fabb483d24671e95a0916dc00590026d0966eddcb16d7f2a2d9ad73e7d8
 
 [[task]]
 slug = "messaging/monitor/event"
-version = "0.1"
-type_uri = "https://trusttasks.org/spec/messaging/monitor/event/0.1"
-digest = "sha256:5db087f1e3f01dc1d7014de05b1055591c86ca3d93fc1fa0230588f9615200ec"
+version = "0.2"
+type_uri = "https://trusttasks.org/spec/messaging/monitor/event/0.2"
+digest = "sha256:a69e1e7c826b09edf5443c3004625e53fd72fcd8da271b67a890b24d0c054cce"
 
 [[task]]
 slug = "messaging/monitor/subscribe"
