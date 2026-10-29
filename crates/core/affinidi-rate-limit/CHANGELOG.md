@@ -4,6 +4,22 @@ All notable changes to `affinidi-rate-limit` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `RateLimitLayer::trusted_proxies(Vec<IpNetwork>)` to opt into trusted-proxy
+  `X-Forwarded-For` attribution with right-to-left parsing and first-untrusted
+  selection.
+
+### Security
+
+- In trusted-proxy mode, malformed `X-Forwarded-For` from a trusted proxy is
+  now rejected with `400 Bad Request` (`Refusal::InvalidForwardedFor`) instead
+  of being attributed to a fallback IP.
+- Client IP canonicalisation now uses `IpAddr::to_canonical()` semantics, so
+  only IPv4-mapped IPv6 addresses are unwrapped.
+
 ## [0.1.2] - 2026-09-16
 
 Bound the number of distinct source IPs the limiter tracks, closing an

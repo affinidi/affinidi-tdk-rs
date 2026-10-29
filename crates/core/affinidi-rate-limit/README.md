@@ -15,6 +15,20 @@ let app = Router::new().layer(RateLimitLayer::new(limiter));
 
 `per_second = 0` disables limiting and the layer becomes a pass-through.
 
+To trust `X-Forwarded-For` only from known reverse proxies:
+
+```rust
+let app = Router::new().layer(
+    RateLimitLayer::new(limiter).trusted_proxies(vec![
+        "10.0.0.0/8".parse().unwrap(),
+        "2001:db8::/32".parse().unwrap(),
+    ]),
+);
+```
+
+When `trusted_proxies` is set, malformed `X-Forwarded-For` from a trusted proxy
+is rejected with `400 Bad Request`.
+
 ## Two things that are easy to get wrong
 
 **The keyed state store must be swept.** `governor` never reclaims keys on its
@@ -36,6 +50,10 @@ client exceed its quota.
 meaningless without an IP, and failing open would be a trivial bypass. Serve with
 `into_make_service_with_connect_info::<SocketAddr>()` so `ConnectInfo` is
 attached.
+
+**Trusted-proxy mode assumes controlled ingress.** Configure only proxies that
+append their own hop to `X-Forwarded-For`, and do not expose the service
+directly except through those proxies.
 
 ## Observing refusals
 

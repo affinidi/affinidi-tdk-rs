@@ -78,6 +78,7 @@ use governor::{
     },
 };
 use http::{HeaderName, HeaderValue, Request, StatusCode, header};
+use ipnetwork::IpNetwork;
 use tokio_util::sync::CancellationToken;
 use tower::{Layer, Service};
 use tracing::{debug, warn};
@@ -183,6 +184,8 @@ pub const SOURCE_HEADER: &str = "x-rate-limit-source";
 pub const RATE_LIMITED_ERROR: &str = "rate_limited";
 
 const RATE_LIMITED_MESSAGE: &str = "Rate limit exceeded. Please try again later.";
+const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
+const MAX_FORWARDED_ENTRIES: usize = 64;
 
 /// Why a request was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +196,106 @@ pub enum Refusal {
     RateLimited { retry_after_secs: u64 },
     /// No client IP was available, so the request could not be attributed.
     NoClientIp,
+    /// The request came from a trusted proxy but supplied an invalid
+    /// `X-Forwarded-For` chain.
+    InvalidForwardedFor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClientIpExtractionError {
+    MissingPeer,
+    InvalidForwardedFor,
+}
+
+/// Extracts a chargeable client address from either the socket peer directly
+/// or the peer + trusted-proxy `X-Forwarded-For` chain.
+///
+/// When trusted CIDRs are configured, the socket peer must be one of them
+/// before `X-Forwarded-For` is considered; otherwise the socket peer is used.
+/// The chain is walked right-to-left and the first untrusted hop is the
+/// client. This assumes trusted proxies append their own hop and the service is
+/// reachable only through those proxies.
+#[derive(Clone, Debug)]
+struct ClientIpExtractor {
+    trusted_proxy_cidrs: Vec<IpNetwork>,
+}
+
+impl ClientIpExtractor {
+    fn direct_peer() -> Self {
+        Self {
+            trusted_proxy_cidrs: Vec::new(),
+        }
+    }
+
+    fn with_trusted_proxies(trusted_proxy_cidrs: Vec<IpNetwork>) -> Self {
+        Self {
+            trusted_proxy_cidrs,
+        }
+    }
+
+    fn is_trusted_proxy(&self, ip: IpAddr) -> bool {
+        self.trusted_proxy_cidrs
+            .iter()
+            .any(|cidr| cidr.contains(ip))
+    }
+
+    fn client_from_xff_chain(
+        &self,
+        headers: &http::HeaderMap,
+    ) -> Result<Option<IpAddr>, ClientIpExtractionError> {
+        let mut entries = Vec::new();
+        for value in headers.get_all(X_FORWARDED_FOR) {
+            let value = value
+                .to_str()
+                .map_err(|_| ClientIpExtractionError::InvalidForwardedFor)?;
+            for entry in value.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+                if entries.len() == MAX_FORWARDED_ENTRIES {
+                    return Err(ClientIpExtractionError::InvalidForwardedFor);
+                }
+                entries.push(entry);
+            }
+        }
+
+        for entry in entries.iter().rev() {
+            let ip =
+                parse_forwarded_ip(entry).ok_or(ClientIpExtractionError::InvalidForwardedFor)?;
+            if !self.is_trusted_proxy(ip) {
+                return Ok(Some(ip));
+            }
+        }
+        Ok(None)
+    }
+
+    fn extract(&self, request: &Request<Body>) -> Result<IpAddr, ClientIpExtractionError> {
+        let peer = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip().to_canonical())
+            .ok_or(ClientIpExtractionError::MissingPeer)?;
+
+        if self.trusted_proxy_cidrs.is_empty() || !self.is_trusted_proxy(peer) {
+            return Ok(peer);
+        }
+
+        Ok(self
+            .client_from_xff_chain(request.headers())?
+            .unwrap_or(peer))
+    }
+}
+
+fn parse_forwarded_ip(value: &str) -> Option<IpAddr> {
+    if let Ok(ip) = value.parse::<IpAddr>() {
+        return Some(ip.to_canonical());
+    }
+    if let Ok(address) = value.parse::<SocketAddr>() {
+        return Some(address.ip().to_canonical());
+    }
+    value
+        .strip_prefix('[')?
+        .strip_suffix(']')?
+        .parse::<IpAddr>()
+        .ok()
+        .map(|ip| ip.to_canonical())
 }
 
 /// The live limiter, present only when limiting is enabled. Bundles the
@@ -468,6 +571,11 @@ impl RateLimiterState {
                 "Rate limiting requires client IP; request rejected.",
             )
                 .into_response(),
+            Refusal::InvalidForwardedFor => (
+                StatusCode::BAD_REQUEST,
+                "Invalid X-Forwarded-For header; request rejected.",
+            )
+                .into_response(),
         }
     }
 }
@@ -476,11 +584,27 @@ impl RateLimiterState {
 #[derive(Clone, Debug)]
 pub struct RateLimitLayer {
     state: RateLimiterState,
+    client_ip_extractor: ClientIpExtractor,
 }
 
 impl RateLimitLayer {
     pub fn new(state: RateLimiterState) -> Self {
-        Self { state }
+        Self {
+            state,
+            client_ip_extractor: ClientIpExtractor::direct_peer(),
+        }
+    }
+
+    /// Trust `X-Forwarded-For` only when the socket peer falls inside one of
+    /// the configured CIDRs.
+    ///
+    /// This is opt-in. Without this call, the layer keys on the socket peer.
+    /// For secure attribution, list only proxies that append their own hop to
+    /// `X-Forwarded-For`, and do not expose the service directly except through
+    /// those proxies.
+    pub fn trusted_proxies(mut self, trusted_proxy_cidrs: Vec<IpNetwork>) -> Self {
+        self.client_ip_extractor = ClientIpExtractor::with_trusted_proxies(trusted_proxy_cidrs);
+        self
     }
 }
 
@@ -491,6 +615,7 @@ impl<S> Layer<S> for RateLimitLayer {
         RateLimitService {
             inner,
             state: self.state.clone(),
+            client_ip_extractor: self.client_ip_extractor.clone(),
         }
     }
 }
@@ -500,6 +625,7 @@ impl<S> Layer<S> for RateLimitLayer {
 pub struct RateLimitService<S> {
     inner: S,
     state: RateLimiterState,
+    client_ip_extractor: ClientIpExtractor,
 }
 
 impl<S> Service<Request<Body>> for RateLimitService<S>
@@ -526,15 +652,20 @@ where
             return Box::pin(async move { inner.call(req).await });
         }
 
-        let ip = req
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0.ip());
-
-        let Some(ip) = ip else {
-            warn!("No client IP available; rejecting request (rate limiting requires client IP)");
-            let response = self.state.refuse(&Refusal::NoClientIp);
-            return Box::pin(async move { Ok(response) });
+        let ip = match self.client_ip_extractor.extract(&req) {
+            Ok(ip) => ip,
+            Err(ClientIpExtractionError::MissingPeer) => {
+                warn!(
+                    "No client IP available; rejecting request (rate limiting requires client IP)"
+                );
+                let response = self.state.refuse(&Refusal::NoClientIp);
+                return Box::pin(async move { Ok(response) });
+            }
+            Err(ClientIpExtractionError::InvalidForwardedFor) => {
+                warn!("Invalid X-Forwarded-For header; rejecting request");
+                let response = self.state.refuse(&Refusal::InvalidForwardedFor);
+                return Box::pin(async move { Ok(response) });
+            }
         };
 
         if let Err(refusal) = self.state.check(ip) {
@@ -748,6 +879,13 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
+    #[test]
+    fn invalid_forwarded_for_is_refused() {
+        let limiter = RateLimiterState::new(1, 1);
+        let response = limiter.refuse(&Refusal::InvalidForwardedFor);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
     async fn body_json(response: Response) -> serde_json::Value {
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -835,6 +973,136 @@ mod tests {
         let body = body_json(refused).await;
         assert_eq!(body["limiter"], "mediator");
         assert_eq!(body["retryAfterSecs"], retry_after);
+    }
+
+    #[tokio::test]
+    async fn trusted_proxy_uses_rightmost_untrusted_xff_entry() {
+        use tower::ServiceExt;
+
+        let app = axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(
+                RateLimitLayer::new(RateLimiterState::new(1, 1))
+                    .trusted_proxies(vec!["10.0.0.0/8".parse().unwrap()]),
+            );
+
+        let request = || {
+            let mut request = Request::builder().uri("/").body(Body::empty()).unwrap();
+            request.headers_mut().insert(
+                X_FORWARDED_FOR,
+                HeaderValue::from_static("198.51.100.7, 10.0.0.5"),
+            );
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 4000))));
+            request
+        };
+
+        let allowed = app.clone().oneshot(request()).await.unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let refused = app.oneshot(request()).await.unwrap();
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn malformed_xff_from_trusted_proxy_is_rejected() {
+        use tower::ServiceExt;
+
+        let app = axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(
+                RateLimitLayer::new(RateLimiterState::new(1, 1))
+                    .trusted_proxies(vec!["10.0.0.0/8".parse().unwrap()]),
+            );
+
+        let mut request = Request::builder().uri("/").body(Body::empty()).unwrap();
+        request.headers_mut().insert(
+            X_FORWARDED_FOR,
+            HeaderValue::from_static("198.51.100.7, not-an-ip"),
+        );
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 4000))));
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    fn xff_request(peer: [u8; 4], xff: &str) -> Request<Body> {
+        let mut request = Request::builder().uri("/").body(Body::empty()).unwrap();
+        request
+            .headers_mut()
+            .insert(X_FORWARDED_FOR, HeaderValue::from_str(xff).unwrap());
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from((peer, 4000))));
+        request
+    }
+
+    fn trusted_app(burst: u32) -> axum::Router {
+        axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(
+                RateLimitLayer::new(RateLimiterState::new(1, burst))
+                    .trusted_proxies(vec!["10.0.0.0/8".parse().unwrap()]),
+            )
+    }
+
+    #[tokio::test]
+    async fn oversized_xff_chain_from_trusted_proxy_is_rejected() {
+        use tower::ServiceExt;
+
+        let xff = vec!["203.0.113.1"; MAX_FORWARDED_ENTRIES + 1].join(", ");
+        let response = trusted_app(1)
+            .oneshot(xff_request([10, 0, 0, 5], &xff))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn untrusted_peer_cannot_choose_its_key_via_xff() {
+        use tower::ServiceExt;
+
+        let app = trusted_app(1);
+        let first = app
+            .clone()
+            .oneshot(xff_request([192, 0, 2, 1], "198.51.100.1"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        // A different spoofed XFF from the same peer shares the peer's bucket.
+        let second = app
+            .oneshot(xff_request([192, 0, 2, 1], "198.51.100.2"))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn all_trusted_chain_falls_back_to_the_peer() {
+        use tower::ServiceExt;
+
+        let app = trusted_app(1);
+        let first = app
+            .clone()
+            .oneshot(xff_request([10, 0, 0, 5], "10.0.0.7"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let second = app
+            .oneshot(xff_request([10, 0, 0, 5], "10.0.0.8"))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn canonicalises_only_ipv4_mapped_addresses() {
+        let loopback = parse_forwarded_ip("::1").unwrap();
+        assert_eq!(loopback, "::1".parse::<IpAddr>().unwrap());
+        let mapped = parse_forwarded_ip("::ffff:192.0.2.1").unwrap();
+        assert_eq!(mapped, "192.0.2.1".parse::<IpAddr>().unwrap());
     }
 
     #[test]
