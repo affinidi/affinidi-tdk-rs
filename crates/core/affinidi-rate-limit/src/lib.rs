@@ -248,7 +248,11 @@ impl ClientIpExtractor {
             let value = value
                 .to_str()
                 .map_err(|_| ClientIpExtractionError::InvalidForwardedFor)?;
-            for entry in value.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            for entry in value
+                .split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+            {
                 if entries.len() == MAX_FORWARDED_ENTRIES {
                     return Err(ClientIpExtractionError::InvalidForwardedFor);
                 }
@@ -1071,12 +1075,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first.status(), StatusCode::OK);
-        // A different spoofed XFF from the same peer shares the peer's bucket.
-        let second = app
+        let spoofed = app
             .oneshot(xff_request([192, 0, 2, 1], "198.51.100.2"))
             .await
             .unwrap();
-        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            spoofed.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "a spoofed X-Forwarded-For from an untrusted peer must share the peer's bucket"
+        );
     }
 
     #[tokio::test]

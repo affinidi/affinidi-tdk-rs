@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-29
+
+Opt-in trusted-proxy attribution, so clients behind a load balancer stop
+sharing one bucket.
+
 ### Added
 
 - `RateLimitLayer::trusted_proxies(Vec<IpNetwork>)` to opt into trusted-proxy
