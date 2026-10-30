@@ -42,7 +42,8 @@ Per-crate version history is summarised here; for the full code history see
   socket peer is inside a trusted CIDR, so clients behind a load balancer no
   longer share one bucket. A malformed or over-long chain from a trusted proxy
   is refused with `400` (`Refusal::InvalidForwardedFor`). Opt-in; without it
-  the limiter keys on the socket peer as before.
+  the limiter keys on the socket peer, now canonicalised in every mode, so an
+  IPv4-mapped IPv6 peer is keyed as its IPv4 address.
 
 ### Fixed
 

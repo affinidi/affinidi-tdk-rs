@@ -13,17 +13,28 @@ sharing one bucket.
 
 ### Added
 
-- `RateLimitLayer::trusted_proxies(Vec<IpNetwork>)` to opt into trusted-proxy
+- `RateLimitLayer::trusted_proxies(Vec<IpNet>)` to opt into trusted-proxy
   `X-Forwarded-For` attribution with right-to-left parsing and first-untrusted
-  selection.
+  selection. `IpNet` is `ipnet::IpNet`, re-exported from this crate.
+- `Refusal::InvalidForwardedFor` (`Refusal` is `#[non_exhaustive]`).
+
+### Changed
+
+- The socket peer is now canonicalised with `IpAddr::to_canonical()` in every
+  mode, including the default one without `trusted_proxies`. Previously the
+  peer was used exactly as accepted. An IPv4-mapped IPv6 peer
+  (`::ffff:a.b.c.d`, as a dual-stack listener reports IPv4 clients) is now
+  keyed as its IPv4 address, so it shares one bucket with the same client
+  connecting over IPv4. Other addresses, including `::1`, are unchanged. This
+  is the one behaviour change that applies without opting in.
 
 ### Security
 
-- In trusted-proxy mode, malformed `X-Forwarded-For` from a trusted proxy is
-  now rejected with `400 Bad Request` (`Refusal::InvalidForwardedFor`) instead
-  of being attributed to a fallback IP.
-- Client IP canonicalisation now uses `IpAddr::to_canonical()` semantics, so
-  only IPv4-mapped IPv6 addresses are unwrapped.
+- In trusted-proxy mode, a malformed `X-Forwarded-For` entry from the client
+  entry rightwards is rejected with `400 Bad Request`
+  (`Refusal::InvalidForwardedFor`) instead of being attributed to a fallback
+  IP. Entries left of the client entry are client-supplied and never parsed
+  as addresses; they still count towards the 64-entry cap.
 
 ## [0.1.2] - 2026-09-16
 

@@ -78,7 +78,9 @@ use governor::{
     },
 };
 use http::{HeaderName, HeaderValue, Request, StatusCode, header};
-use ipnetwork::IpNetwork;
+/// The CIDR type [`RateLimitLayer::trusted_proxies`] takes, re-exported so
+/// callers need not depend on `ipnet` themselves.
+pub use ipnet::IpNet;
 use tokio_util::sync::CancellationToken;
 use tower::{Layer, Service};
 use tracing::{debug, warn};
@@ -213,11 +215,17 @@ enum ClientIpExtractionError {
 /// When trusted CIDRs are configured, the socket peer must be one of them
 /// before `X-Forwarded-For` is considered; otherwise the socket peer is used.
 /// The chain is walked right-to-left and the first untrusted hop is the
-/// client. This assumes trusted proxies append their own hop and the service is
-/// reachable only through those proxies.
+/// client. This assumes each trusted proxy appends the address of the peer it
+/// received the connection from (an ALB appends the client IP), and that the
+/// service is reachable only through those proxies.
+///
+/// Entries left of the client are never parsed as addresses, so client-supplied
+/// junk there is ignored rather than refused. They still count towards
+/// [`MAX_FORWARDED_ENTRIES`], and a header value that is not visible ASCII is
+/// refused whole.
 #[derive(Clone, Debug)]
 struct ClientIpExtractor {
-    trusted_proxy_cidrs: Vec<IpNetwork>,
+    trusted_proxy_cidrs: Vec<IpNet>,
 }
 
 impl ClientIpExtractor {
@@ -227,7 +235,7 @@ impl ClientIpExtractor {
         }
     }
 
-    fn with_trusted_proxies(trusted_proxy_cidrs: Vec<IpNetwork>) -> Self {
+    fn with_trusted_proxies(trusted_proxy_cidrs: Vec<IpNet>) -> Self {
         Self {
             trusted_proxy_cidrs,
         }
@@ -236,7 +244,7 @@ impl ClientIpExtractor {
     fn is_trusted_proxy(&self, ip: IpAddr) -> bool {
         self.trusted_proxy_cidrs
             .iter()
-            .any(|cidr| cidr.contains(ip))
+            .any(|cidr| cidr.contains(&ip))
     }
 
     fn client_from_xff_chain(
@@ -603,10 +611,11 @@ impl RateLimitLayer {
     /// the configured CIDRs.
     ///
     /// This is opt-in. Without this call, the layer keys on the socket peer.
-    /// For secure attribution, list only proxies that append their own hop to
-    /// `X-Forwarded-For`, and do not expose the service directly except through
-    /// those proxies.
-    pub fn trusted_proxies(mut self, trusted_proxy_cidrs: Vec<IpNetwork>) -> Self {
+    /// For secure attribution, list only proxies that append the address of
+    /// the peer they received the connection from to `X-Forwarded-For` (an ALB
+    /// appends the client IP), and do not expose the service directly except
+    /// through those proxies.
+    pub fn trusted_proxies(mut self, trusted_proxy_cidrs: Vec<IpNet>) -> Self {
         self.client_ip_extractor = ClientIpExtractor::with_trusted_proxies(trusted_proxy_cidrs);
         self
     }
@@ -1006,6 +1015,36 @@ mod tests {
         assert_eq!(allowed.status(), StatusCode::OK);
         let refused = app.oneshot(request()).await.unwrap();
         assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn junk_left_of_the_client_entry_is_ignored_not_refused() {
+        use tower::ServiceExt;
+
+        let app = trusted_app(1);
+        let first = app
+            .clone()
+            .oneshot(xff_request([10, 0, 0, 5], "garbage, 198.51.100.7"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let other_junk = app
+            .clone()
+            .oneshot(xff_request([10, 0, 0, 5], "more-garbage, 198.51.100.7"))
+            .await
+            .unwrap();
+        assert_eq!(
+            other_junk.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "changing client-supplied junk must not give the client a new bucket"
+        );
+
+        let other_client = app
+            .oneshot(xff_request([10, 0, 0, 5], "garbage, 198.51.100.8"))
+            .await
+            .unwrap();
+        assert_eq!(other_client.status(), StatusCode::OK);
     }
 
     #[tokio::test]
