@@ -51,6 +51,8 @@ pub struct DIDCacheConfig {
     #[cfg(feature = "agent-names")]
     pub(crate) resolve_shortcuts: bool,
     pub(crate) host_policy: HostPolicy,
+    #[cfg(feature = "did-scid")]
+    pub(crate) scid_witnesses_required: bool,
 }
 
 /// DID Cache Config Builder to construct options required for the client.
@@ -82,6 +84,8 @@ pub struct DIDCacheConfigBuilder {
     #[cfg(feature = "agent-names")]
     resolve_shortcuts: bool,
     host_policy: HostPolicy,
+    #[cfg(feature = "did-scid")]
+    scid_witnesses_required: bool,
 }
 
 impl Default for DIDCacheConfigBuilder {
@@ -106,6 +110,8 @@ impl Default for DIDCacheConfigBuilder {
             #[cfg(feature = "agent-names")]
             resolve_shortcuts: false,
             host_policy: HostPolicy::PublicOnly,
+            #[cfg(feature = "did-scid")]
+            scid_witnesses_required: false,
         }
     }
 }
@@ -244,6 +250,26 @@ impl DIDCacheConfigBuilder {
         self
     }
 
+    /// Refuse a `did:scid:vh:1` whose latest log version is not witnessed.
+    ///
+    /// A version floor refuses a fork of a log this client has verified
+    /// before, but a client meeting an identity for the first time has nothing
+    /// to compare against, and a fork signed with a leaked update key is a
+    /// valid log on its own. did:webvh witnesses are what refuse it there: a
+    /// fork carries no approvals from the witnesses the genuine log names.
+    /// VTI requires an identity presented as did:scid to be witnessed
+    /// (VTI-KEY-165); turn this on where every did:scid you accept is.
+    ///
+    /// This checks that a threshold is set and met, not who the witnesses
+    /// are: a forger who names witnesses of their own one version before the
+    /// forged ones can meet it.
+    /// Default: `false`
+    #[cfg(feature = "did-scid")]
+    pub fn with_scid_witnesses_required(mut self, required: bool) -> Self {
+        self.scid_witnesses_required = required;
+        self
+    }
+
     /// Build the [ClientConfig].
     pub fn build(self) -> DIDCacheConfig {
         DIDCacheConfig {
@@ -266,6 +292,8 @@ impl DIDCacheConfigBuilder {
             #[cfg(feature = "agent-names")]
             resolve_shortcuts: self.resolve_shortcuts,
             host_policy: self.host_policy,
+            #[cfg(feature = "did-scid")]
+            scid_witnesses_required: self.scid_witnesses_required,
         }
     }
 }

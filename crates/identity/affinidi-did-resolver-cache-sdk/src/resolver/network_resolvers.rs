@@ -422,7 +422,7 @@ impl AsyncResolver for ScidResolver {
         &'a self,
         did: &'a DID,
     ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
-        Box::pin(resolve_scid(did, HostPolicy::PublicOnly, None))
+        Box::pin(resolve_scid(did, HostPolicy::PublicOnly, None, false))
     }
 }
 
@@ -468,9 +468,12 @@ pub type ScidSourceListener = std::sync::Arc<dyn Fn(&ScidSourceRecord) + Send + 
 /// A did:scid identity is the bare DID; `?src=` is only a locator (VTI-KEY-160).
 /// The book lets the bare DID resolve after a source has been seen, and refuses
 /// an older copy of the log from any source (VTI-KEY-162): the SCID makes a
-/// copy unforgeable, not current. Because the `src` a peer presents is its own
-/// choice, a DID URL whose source the book does not know is also checked
-/// against the sources it does know, and refused when they hold a newer log.
+/// copy unforgeable, not current. It also refuses a log that does not contain
+/// the version it verified: whoever holds a leaked update key can sign a fork
+/// past that version and serve it from any host under the same DID. Because
+/// the `src` a peer presents is its own choice, a DID URL whose source the book
+/// does not know is also checked against the sources it does know, and refused
+/// when they hold a newer log or one it forks from.
 ///
 /// It is in memory and bounded at [`ScidSourceBook::CAPACITY`] identities of
 /// [`ScidSourceBook::MAX_SOURCES`] sources each. A service that authorises
@@ -657,35 +660,62 @@ impl ScidSourceBook {
         }
     }
 
-    /// Refuses a version older than the floor, or a different entry at the
-    /// floor's number (a fork).
+    /// Refuses a log older than the floor, or one whose entry at the floor's
+    /// number is not the floor's (a fork, at that version or before it).
     fn below_floor(
         floor: Option<&(u32, String)>,
         key: &str,
-        source: &str,
-        version_number: u32,
-        version_id: &str,
+        resolution: &did_scid::ScidResolution,
     ) -> Result<(), ResolverError> {
-        if let Some((latest, latest_id)) = floor
-            && (version_number < *latest || (version_number == *latest && version_id != latest_id))
-        {
+        let Some((latest, latest_id)) = floor else {
+            return Ok(());
+        };
+        // The refusal names neither the source nor the versions: a caller may
+        // pass it on, and the details are for the operator's log.
+        if resolution.version_number < *latest {
+            tracing::warn!(
+                did = %key,
+                source = %resolution.source,
+                presented = %resolution.version_id,
+                verified = %latest_id,
+                "did:scid log refused: behind the version verified"
+            );
             return Err(ResolverError::ResolutionFailed(format!(
-                "{key}: the log at {source} is at version {version_id}, behind {latest_id} \
-                 already verified for this SCID"
+                "{key}: refused: the log is behind the version already verified for this SCID"
+            )));
+        }
+        let prefix = format!("{latest}-");
+        let at_floor = resolution
+            .version_ids
+            .iter()
+            .find(|id| id.starts_with(&prefix));
+        if at_floor != Some(latest_id) {
+            tracing::warn!(
+                did = %key,
+                source = %resolution.source,
+                presented = at_floor.map_or("missing", String::as_str),
+                verified = %latest_id,
+                "did:scid log refused: forks from the version verified"
+            );
+            return Err(ResolverError::ResolutionFailed(format!(
+                "{key}: refused: the log forks from the version already verified for this SCID"
             )));
         }
         Ok(())
     }
 
-    /// Accepts a verified resolution, or refuses it as older than one already
-    /// verified for the same SCID.
+    /// Accepts a verified resolution, or refuses it as older than, or a fork
+    /// of, one already verified for the same SCID.
     fn accept(
         &self,
         did: &str,
-        source: &str,
-        version_number: u32,
-        version_id: &str,
+        resolution: &did_scid::ScidResolution,
     ) -> Result<(), ResolverError> {
+        let (source, version_number, version_id) = (
+            resolution.source.as_str(),
+            resolution.version_number,
+            resolution.version_id.as_str(),
+        );
         let key = Self::key(did);
         let record = {
             let mut seen = self.seen.lock().map_err(|_| {
@@ -694,9 +724,7 @@ impl ScidSourceBook {
             Self::below_floor(
                 seen.get(&key).and_then(|s| s.version.as_ref()),
                 &key,
-                source,
-                version_number,
-                version_id,
+                resolution,
             )?;
             if !seen.contains_key(&key) {
                 Self::make_room(&mut seen);
@@ -729,6 +757,7 @@ impl ScidSourceBook {
 pub struct ScidResolverWithPolicy {
     policy: HostPolicy,
     sources: std::sync::Arc<ScidSourceBook>,
+    witnesses_required: bool,
 }
 
 #[cfg(feature = "did-scid")]
@@ -742,7 +771,18 @@ impl ScidResolverWithPolicy {
     /// Create a resolver that records into, and resolves bare DIDs from, a
     /// shared source book.
     pub fn with_sources(policy: HostPolicy, sources: std::sync::Arc<ScidSourceBook>) -> Self {
-        Self { policy, sources }
+        Self {
+            policy,
+            sources,
+            witnesses_required: false,
+        }
+    }
+
+    /// Refuse a DID whose latest log version is not witnessed (see
+    /// [`DIDCacheConfigBuilder::with_scid_witnesses_required`](crate::config::DIDCacheConfigBuilder::with_scid_witnesses_required)).
+    pub fn witnesses_required(mut self, required: bool) -> Self {
+        self.witnesses_required = required;
+        self
     }
 }
 
@@ -756,7 +796,12 @@ impl AsyncResolver for ScidResolverWithPolicy {
         &'a self,
         did: &'a DID,
     ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
-        Box::pin(resolve_scid(did, self.policy, Some(&self.sources)))
+        Box::pin(resolve_scid(
+            did,
+            self.policy,
+            Some(&self.sources),
+            self.witnesses_required,
+        ))
     }
 }
 
@@ -765,6 +810,7 @@ async fn resolve_scid(
     did: &DID,
     policy: HostPolicy,
     sources: Option<&ScidSourceBook>,
+    witnesses_required: bool,
 ) -> Resolution {
     if !matches!(did.method(), DIDMethod::Scid { .. }) {
         return None;
@@ -816,10 +862,22 @@ async fn resolve_scid(
         }
     };
 
+    if witnesses_required && resolution.witness_threshold.is_none() {
+        tracing::warn!(
+            did = %key,
+            source = %resolution.source,
+            version = %resolution.version_id,
+            "did:scid resolution refused: the latest log version is not witnessed"
+        );
+        return Some(Err(ResolverError::ResolutionFailed(format!(
+            "{key}: refused: the log is not witnessed"
+        ))));
+    }
+
     // A source the book has not seen for this identity is the presenter's own
-    // choice, and could serve a copy of the log it took before a rotation.
-    // Check what the known sources serve now; a newer log there means the
-    // presented one is stale.
+    // choice, and could serve a copy of the log it took before a rotation, or
+    // a fork signed with a leaked update key. Check what the known sources
+    // serve now: the presented log must contain it.
     if let Some(presented) = presented
         && !known.is_empty()
         && !known.contains(&presented)
@@ -835,9 +893,7 @@ async fn resolve_scid(
                 if let Err(e) = ScidSourceBook::below_floor(
                     Some(&(current.version_number, current.version_id.clone())),
                     &key,
-                    &resolution.source,
-                    resolution.version_number,
-                    &resolution.version_id,
+                    &resolution,
                 ) {
                     error!("did:scid resolution refused: {e}");
                     return Some(Err(e));
@@ -848,12 +904,7 @@ async fn resolve_scid(
     }
 
     if let Some(book) = sources
-        && let Err(e) = book.accept(
-            &did_str,
-            &resolution.source,
-            resolution.version_number,
-            &resolution.version_id,
-        )
+        && let Err(e) = book.accept(&did_str, &resolution)
     {
         error!("did:scid resolution refused: {e}");
         return Some(Err(e));

@@ -100,7 +100,10 @@ pub async fn resolve(
 /// The `src` of a did:scid DID URL is a locator, not part of the identity, so
 /// a caller that wants to resolve the bare DID later keeps [`source`](Self::source),
 /// and one that wants to refuse an older copy of the log served from another
-/// source keeps [`version_number`](Self::version_number).
+/// source keeps [`version_number`](Self::version_number). A copy that is not
+/// older can still be a fork, signed with a leaked update key and served from a
+/// host of the forger's choosing; [`version_ids`](Self::version_ids) lets a
+/// caller check that it contains the version it already verified.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ScidResolution {
@@ -116,6 +119,13 @@ pub struct ScidResolution {
     pub version_number: u32,
     /// The latest log entry's version id.
     pub version_id: String,
+    /// The version id of every entry verified, oldest first.
+    pub version_ids: Vec<String>,
+    /// The did:webvh witness threshold the latest entry was verified against:
+    /// how many approvals from the witnesses named by the entry before it it
+    /// carries. `None` when that entry names no witnesses, so the latest
+    /// version is unwitnessed.
+    pub witness_threshold: Option<u32>,
 }
 
 /// Resolve a `did:scid:vh:1` DID to its own document, reporting the source and
@@ -168,6 +178,17 @@ async fn resolve_webvh_native(
                 source,
                 version_number: metadata.version_number,
                 version_id: metadata.version_id,
+                version_ids: method
+                    .log_entries()
+                    .iter()
+                    .map(|entry| entry.get_version_id().to_string())
+                    .collect(),
+                witness_threshold: method
+                    .log_entries()
+                    .last()
+                    .and_then(|entry| entry.validated_parameters.active_witness.as_deref())
+                    .and_then(|witnesses| witnesses.threshold())
+                    .filter(|threshold| *threshold > 0),
             })
         }
         Err(e) => {
