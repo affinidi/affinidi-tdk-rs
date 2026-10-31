@@ -468,9 +468,12 @@ pub type ScidSourceListener = std::sync::Arc<dyn Fn(&ScidSourceRecord) + Send + 
 /// A did:scid identity is the bare DID; `?src=` is only a locator (VTI-KEY-160).
 /// The book lets the bare DID resolve after a source has been seen, and refuses
 /// an older copy of the log from any source (VTI-KEY-162): the SCID makes a
-/// copy unforgeable, not current. Because the `src` a peer presents is its own
-/// choice, a DID URL whose source the book does not know is also checked
-/// against the sources it does know, and refused when they hold a newer log.
+/// copy unforgeable, not current. It also refuses a log that does not contain
+/// the version it verified: whoever holds a leaked update key can sign a fork
+/// past that version and serve it from any host under the same DID. Because
+/// the `src` a peer presents is its own choice, a DID URL whose source the book
+/// does not know is also checked against the sources it does know, and refused
+/// when they hold a newer log or one it forks from.
 ///
 /// It is in memory and bounded at [`ScidSourceBook::CAPACITY`] identities of
 /// [`ScidSourceBook::MAX_SOURCES`] sources each. A service that authorises
@@ -657,35 +660,51 @@ impl ScidSourceBook {
         }
     }
 
-    /// Refuses a version older than the floor, or a different entry at the
-    /// floor's number (a fork).
+    /// Refuses a log older than the floor, or one whose entry at the floor's
+    /// number is not the floor's (a fork, at that version or before it).
     fn below_floor(
         floor: Option<&(u32, String)>,
         key: &str,
-        source: &str,
-        version_number: u32,
-        version_id: &str,
+        resolution: &did_scid::ScidResolution,
     ) -> Result<(), ResolverError> {
-        if let Some((latest, latest_id)) = floor
-            && (version_number < *latest || (version_number == *latest && version_id != latest_id))
-        {
+        let Some((latest, latest_id)) = floor else {
+            return Ok(());
+        };
+        let source = &resolution.source;
+        if resolution.version_number < *latest {
             return Err(ResolverError::ResolutionFailed(format!(
-                "{key}: the log at {source} is at version {version_id}, behind {latest_id} \
-                 already verified for this SCID"
+                "{key}: the log at {source} is at version {}, behind {latest_id} \
+                 already verified for this SCID",
+                resolution.version_id
+            )));
+        }
+        let prefix = format!("{latest}-");
+        let at_floor = resolution
+            .version_ids
+            .iter()
+            .find(|id| id.starts_with(&prefix));
+        if at_floor != Some(latest_id) {
+            return Err(ResolverError::ResolutionFailed(format!(
+                "{key}: the log at {source} forks from the one verified for this SCID: \
+                 its version {latest} is {}, not {latest_id}",
+                at_floor.map_or("missing", String::as_str)
             )));
         }
         Ok(())
     }
 
-    /// Accepts a verified resolution, or refuses it as older than one already
-    /// verified for the same SCID.
+    /// Accepts a verified resolution, or refuses it as older than, or a fork
+    /// of, one already verified for the same SCID.
     fn accept(
         &self,
         did: &str,
-        source: &str,
-        version_number: u32,
-        version_id: &str,
+        resolution: &did_scid::ScidResolution,
     ) -> Result<(), ResolverError> {
+        let (source, version_number, version_id) = (
+            resolution.source.as_str(),
+            resolution.version_number,
+            resolution.version_id.as_str(),
+        );
         let key = Self::key(did);
         let record = {
             let mut seen = self.seen.lock().map_err(|_| {
@@ -694,9 +713,7 @@ impl ScidSourceBook {
             Self::below_floor(
                 seen.get(&key).and_then(|s| s.version.as_ref()),
                 &key,
-                source,
-                version_number,
-                version_id,
+                resolution,
             )?;
             if !seen.contains_key(&key) {
                 Self::make_room(&mut seen);
@@ -817,9 +834,9 @@ async fn resolve_scid(
     };
 
     // A source the book has not seen for this identity is the presenter's own
-    // choice, and could serve a copy of the log it took before a rotation.
-    // Check what the known sources serve now; a newer log there means the
-    // presented one is stale.
+    // choice, and could serve a copy of the log it took before a rotation, or
+    // a fork signed with a leaked update key. Check what the known sources
+    // serve now: the presented log must contain it.
     if let Some(presented) = presented
         && !known.is_empty()
         && !known.contains(&presented)
@@ -835,9 +852,7 @@ async fn resolve_scid(
                 if let Err(e) = ScidSourceBook::below_floor(
                     Some(&(current.version_number, current.version_id.clone())),
                     &key,
-                    &resolution.source,
-                    resolution.version_number,
-                    &resolution.version_id,
+                    &resolution,
                 ) {
                     error!("did:scid resolution refused: {e}");
                     return Some(Err(e));
@@ -848,12 +863,7 @@ async fn resolve_scid(
     }
 
     if let Some(book) = sources
-        && let Err(e) = book.accept(
-            &did_str,
-            &resolution.source,
-            resolution.version_number,
-            &resolution.version_id,
-        )
+        && let Err(e) = book.accept(&did_str, &resolution)
     {
         error!("did:scid resolution refused: {e}");
         return Some(Err(e));

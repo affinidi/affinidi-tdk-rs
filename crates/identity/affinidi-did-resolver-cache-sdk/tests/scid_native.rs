@@ -417,3 +417,199 @@ async fn seeding_never_lowers_the_floor() {
         version: None,
     }));
 }
+
+#[tokio::test]
+async fn a_log_that_extends_the_verified_one_resolves() {
+    let listener = LogListener::start().await;
+    let (webvh, logs) = signed_log(listener.port, 2).await;
+    let (did, url) = scid_forms(&webvh, listener.port);
+    let client = client().await;
+
+    listener.serve(&logs[0]);
+    resolve(&client, &url)
+        .await
+        .expect("first version resolves");
+    listener.serve(&logs[1]);
+    client.remove(&did).await;
+    resolve(&client, &url)
+        .await
+        .expect("a later version of the same log resolves");
+    assert_eq!(
+        client
+            .scid_sources()
+            .record(&did)
+            .unwrap()
+            .version
+            .unwrap()
+            .number,
+        2
+    );
+}
+
+/// A portable log whose update key has leaked: `genuine` serves the
+/// controller's log at version 2, `fork` serves a fork of version 1 that the
+/// key's thief moved to their own host and took to version 3. Returns the bare
+/// did:scid DID.
+async fn forked_log(genuine: &LogListener, fork: &LogListener) -> String {
+    use didwebvh_rs::update::{UpdateDIDConfig, update_did};
+
+    let mut key = Secret::generate_ed25519(None, None);
+    let pk = key.get_public_keymultibase().expect("public key");
+    key.id = format!("did:key:{pk}#{pk}");
+    let template = format!("did:webvh:{{SCID}}:localhost%3A{}", genuine.port);
+    let doc = json!({
+        "id": template,
+        "@context": ["https://www.w3.org/ns/did/v1"],
+        "verificationMethod": [{
+            "id": format!("{template}#key-0"),
+            "type": "Multikey",
+            "publicKeyMultibase": pk,
+            "controller": template
+        }],
+        "authentication": [format!("{template}#key-0")],
+    });
+    let params = Parameters {
+        update_keys: Some(Arc::new(vec![Multibase::new(pk)])),
+        portable: Some(true),
+        ..Default::default()
+    };
+    let start = (chrono::Utc::now() - chrono::Duration::seconds(100)).fixed_offset();
+    let mut state = DIDWebVHState::default();
+    state
+        .create_log_entry(Some(start), &doc, &params, &key)
+        .await
+        .expect("genesis entry");
+    // The thief's copy of version 1, taken before the controller's version 2:
+    // the same genesis inputs give the same entry and SCID.
+    let mut stolen = DIDWebVHState::default();
+    stolen
+        .create_log_entry(Some(start), &doc, &params, &key)
+        .await
+        .expect("copy of the genesis entry");
+    assert_eq!(
+        stolen.log_entries()[0].get_version_id(),
+        state.log_entries()[0].get_version_id()
+    );
+    let jsonl = |state: &DIDWebVHState| {
+        state
+            .log_entries()
+            .iter()
+            .map(|e| serde_json::to_string(&e.log_entry).expect("serialize entry"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let latest_doc = |state: &DIDWebVHState, aka: &str| {
+        let mut doc = state
+            .log_entries()
+            .last()
+            .unwrap()
+            .log_entry
+            .get_did_document()
+            .expect("document");
+        // Appended: a moved log keeps its former DID here.
+        let mut aliases = doc["alsoKnownAs"].as_array().cloned().unwrap_or_default();
+        aliases.push(json!(aka));
+        doc["alsoKnownAs"] = json!(aliases);
+        doc
+    };
+    let webvh = state.log_entries()[0].log_entry.get_did_document().unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let doc_v2 = latest_doc(&state, "https://example.com/genuine");
+    let genuine_log = update_did(
+        UpdateDIDConfig::builder()
+            .state(state)
+            .signing_key(key.clone())
+            .document(doc_v2)
+            .build()
+            .expect("update config"),
+    )
+    .await
+    .expect("genuine version 2");
+    genuine.serve(&jsonl(genuine_log.state()));
+
+    let moved = update_did(
+        UpdateDIDConfig::builder()
+            .state(stolen)
+            .signing_key(key.clone())
+            .migrate_to(format!("http://localhost:{}/", fork.port))
+            .build()
+            .expect("migration config"),
+    )
+    .await
+    .expect("forged version 2");
+    let moved = moved.into_state();
+    // Each version must be timed after the one before, to the second.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let doc_v3 = latest_doc(&moved, "https://example.com/forged");
+    let forged = update_did(
+        UpdateDIDConfig::builder()
+            .state(moved)
+            .signing_key(key)
+            .document(doc_v3)
+            .build()
+            .expect("update config"),
+    )
+    .await
+    .expect("forged version 3");
+    assert_eq!(forged.state().log_entries().len(), 3);
+    fork.serve(&jsonl(forged.state()));
+
+    format!("did:scid:vh:1:{}", webvh.split(':').nth(2).unwrap())
+}
+
+#[tokio::test]
+async fn a_fork_past_the_floor_is_refused() {
+    let (genuine, fork) = (LogListener::start().await, LogListener::start().await);
+    let did = forked_log(&genuine, &fork).await;
+    let client = client().await;
+
+    resolve(&client, &format!("{did}?src=localhost:{}", genuine.port))
+        .await
+        .expect("the controller's log resolves");
+    client.remove(&did).await;
+    // With the genuine host unreachable, only the floor stands between the
+    // verifier and the fork, which is a version ahead of it.
+    drop(genuine);
+
+    let error = resolve(&client, &format!("{did}?src=localhost:{}", fork.port))
+        .await
+        .expect_err("the fork does not contain the version verified");
+    assert!(error.contains("forks"), "{error}");
+}
+
+#[tokio::test]
+async fn a_known_source_refuses_a_fork_before_any_version_is_verified() {
+    use affinidi_did_resolver_cache_sdk::network_resolvers::ScidSourceRecord;
+
+    let (genuine, fork) = (LogListener::start().await, LogListener::start().await);
+    let did = forked_log(&genuine, &fork).await;
+    let client = client().await;
+    assert!(client.scid_sources().seed(&ScidSourceRecord {
+        did: did.clone(),
+        sources: vec![format!("localhost:{}", genuine.port)],
+        version: None,
+    }));
+
+    let error = resolve(&client, &format!("{did}?src=localhost:{}", fork.port))
+        .await
+        .expect_err("the fork does not contain what the known source serves");
+    assert!(error.contains("forks"), "{error}");
+}
+
+#[tokio::test]
+async fn a_fork_resolves_where_nothing_is_known_about_the_scid() {
+    // The limit of this check: a verifier with no floor and no other source
+    // has nothing to compare against. Witnesses or watchers close this.
+    let (genuine, fork) = (LogListener::start().await, LogListener::start().await);
+    let did = forked_log(&genuine, &fork).await;
+
+    resolve(
+        &client().await,
+        &format!("{did}?src=localhost:{}", fork.port),
+    )
+    .await
+    .expect("an unwitnessed fork is a valid log on its own");
+}

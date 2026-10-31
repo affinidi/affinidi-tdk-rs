@@ -1,5 +1,19 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.44) — did:scid forks are refused
+
+- **Behaviour (security):** the did:scid source book refuses a log that does
+  not contain the version it has verified for that SCID, at that version's
+  number. Before, it refused an older log, or a different entry at the same
+  number, but accepted a fork numbered past the floor. The `src` of a did:scid
+  is the presenter's choice, so whoever holds a leaked update key could sign a
+  fork from an earlier version, move it to a host of their own, number it past
+  the controller's latest, and have it accepted as the same identity, even
+  while the known sources served the real log. The check against known
+  sources applies the same rule. A verifier with no floor and no known source
+  still has nothing to compare against: did:webvh witnesses are what stop a
+  fork there. Requires did-scid 0.4.1.
+
 ## Unreleased (0.8.43) — did:scid version floors that survive a restart
 
 - **Behaviour (security):** a did:scid DID URL whose `src` the source book

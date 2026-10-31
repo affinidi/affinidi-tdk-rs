@@ -1,5 +1,13 @@
 # did:scid
 
+## Unreleased (0.4.1) — the version ids of a resolved log
+
+- **Added:** `ScidResolution::version_ids`, the `versionId` of every log entry
+  verified, oldest first. A caller holding a version it verified earlier can
+  check that a newer log still contains it: a log that does not is a fork,
+  which anyone holding a leaked update key can sign and serve from any host
+  under the same did:scid.
+
 ## Unreleased (0.4.0) — a did:scid resolves to its own document
 
 - **Behaviour (breaking for did:scid callers):** `resolve` and
