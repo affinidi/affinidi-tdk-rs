@@ -766,11 +766,12 @@ dependencies = [
 
 [[package]]
 name = "affinidi-rate-limit"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "axum",
  "governor",
  "http",
+ "ipnet",
  "serde_json",
  "tokio",
  "tokio-util",

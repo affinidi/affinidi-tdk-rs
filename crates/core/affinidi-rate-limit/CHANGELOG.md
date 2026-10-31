@@ -4,6 +4,38 @@ All notable changes to `affinidi-rate-limit` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.1.3] - 2026-10-29
+
+Opt-in trusted-proxy attribution, so clients behind a load balancer stop
+sharing one bucket.
+
+### Added
+
+- `RateLimitLayer::trusted_proxies(Vec<IpNet>)` to opt into trusted-proxy
+  `X-Forwarded-For` attribution with right-to-left parsing and first-untrusted
+  selection. `IpNet` is `ipnet::IpNet`, re-exported from this crate.
+- `Refusal::InvalidForwardedFor` (`Refusal` is `#[non_exhaustive]`).
+
+### Changed
+
+- The socket peer is now canonicalised with `IpAddr::to_canonical()` in every
+  mode, including the default one without `trusted_proxies`. Previously the
+  peer was used exactly as accepted. An IPv4-mapped IPv6 peer
+  (`::ffff:a.b.c.d`, as a dual-stack listener reports IPv4 clients) is now
+  keyed as its IPv4 address, so it shares one bucket with the same client
+  connecting over IPv4. Other addresses, including `::1`, are unchanged. This
+  is the one behaviour change that applies without opting in.
+
+### Security
+
+- In trusted-proxy mode, a malformed `X-Forwarded-For` entry from the client
+  entry rightwards is rejected with `400 Bad Request`
+  (`Refusal::InvalidForwardedFor`) instead of being attributed to a fallback
+  IP. Entries left of the client entry are client-supplied and never parsed
+  as addresses; they still count towards the 64-entry cap.
+
 ## [0.1.2] - 2026-09-16
 
 Bound the number of distinct source IPs the limiter tracks, closing an
