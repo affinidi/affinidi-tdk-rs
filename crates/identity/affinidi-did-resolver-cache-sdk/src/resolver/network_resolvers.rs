@@ -422,7 +422,7 @@ impl AsyncResolver for ScidResolver {
         &'a self,
         did: &'a DID,
     ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
-        Box::pin(resolve_scid(did, HostPolicy::PublicOnly, None))
+        Box::pin(resolve_scid(did, HostPolicy::PublicOnly, None, false))
     }
 }
 
@@ -670,12 +670,18 @@ impl ScidSourceBook {
         let Some((latest, latest_id)) = floor else {
             return Ok(());
         };
-        let source = &resolution.source;
+        // The refusal names neither the source nor the versions: a caller may
+        // pass it on, and the details are for the operator's log.
         if resolution.version_number < *latest {
+            tracing::warn!(
+                did = %key,
+                source = %resolution.source,
+                presented = %resolution.version_id,
+                verified = %latest_id,
+                "did:scid log refused: behind the version verified"
+            );
             return Err(ResolverError::ResolutionFailed(format!(
-                "{key}: the log at {source} is at version {}, behind {latest_id} \
-                 already verified for this SCID",
-                resolution.version_id
+                "{key}: refused: the log is behind the version already verified for this SCID"
             )));
         }
         let prefix = format!("{latest}-");
@@ -684,10 +690,15 @@ impl ScidSourceBook {
             .iter()
             .find(|id| id.starts_with(&prefix));
         if at_floor != Some(latest_id) {
+            tracing::warn!(
+                did = %key,
+                source = %resolution.source,
+                presented = at_floor.map_or("missing", String::as_str),
+                verified = %latest_id,
+                "did:scid log refused: forks from the version verified"
+            );
             return Err(ResolverError::ResolutionFailed(format!(
-                "{key}: the log at {source} forks from the one verified for this SCID: \
-                 its version {latest} is {}, not {latest_id}",
-                at_floor.map_or("missing", String::as_str)
+                "{key}: refused: the log forks from the version already verified for this SCID"
             )));
         }
         Ok(())
@@ -746,6 +757,7 @@ impl ScidSourceBook {
 pub struct ScidResolverWithPolicy {
     policy: HostPolicy,
     sources: std::sync::Arc<ScidSourceBook>,
+    witnesses_required: bool,
 }
 
 #[cfg(feature = "did-scid")]
@@ -759,7 +771,18 @@ impl ScidResolverWithPolicy {
     /// Create a resolver that records into, and resolves bare DIDs from, a
     /// shared source book.
     pub fn with_sources(policy: HostPolicy, sources: std::sync::Arc<ScidSourceBook>) -> Self {
-        Self { policy, sources }
+        Self {
+            policy,
+            sources,
+            witnesses_required: false,
+        }
+    }
+
+    /// Refuse a DID whose latest log version is not witnessed (see
+    /// [`DIDCacheConfigBuilder::with_scid_witnesses_required`](crate::config::DIDCacheConfigBuilder::with_scid_witnesses_required)).
+    pub fn witnesses_required(mut self, required: bool) -> Self {
+        self.witnesses_required = required;
+        self
     }
 }
 
@@ -773,7 +796,12 @@ impl AsyncResolver for ScidResolverWithPolicy {
         &'a self,
         did: &'a DID,
     ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
-        Box::pin(resolve_scid(did, self.policy, Some(&self.sources)))
+        Box::pin(resolve_scid(
+            did,
+            self.policy,
+            Some(&self.sources),
+            self.witnesses_required,
+        ))
     }
 }
 
@@ -782,6 +810,7 @@ async fn resolve_scid(
     did: &DID,
     policy: HostPolicy,
     sources: Option<&ScidSourceBook>,
+    witnesses_required: bool,
 ) -> Resolution {
     if !matches!(did.method(), DIDMethod::Scid { .. }) {
         return None;
@@ -832,6 +861,18 @@ async fn resolve_scid(
             Err(e) => return Some(Err(scid_error(e))),
         }
     };
+
+    if witnesses_required && resolution.witness_threshold.is_none() {
+        tracing::warn!(
+            did = %key,
+            source = %resolution.source,
+            version = %resolution.version_id,
+            "did:scid resolution refused: the latest log version is not witnessed"
+        );
+        return Some(Err(ResolverError::ResolutionFailed(format!(
+            "{key}: refused: the log is not witnessed"
+        ))));
+    }
 
     // A source the book has not seen for this identity is the presenter's own
     // choice, and could serve a copy of the log it took before a rotation, or

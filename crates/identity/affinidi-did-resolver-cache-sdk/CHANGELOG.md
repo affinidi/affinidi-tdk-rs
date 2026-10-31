@@ -10,9 +10,18 @@
   fork from an earlier version, move it to a host of their own, number it past
   the controller's latest, and have it accepted as the same identity, even
   while the known sources served the real log. The check against known
-  sources applies the same rule. A verifier with no floor and no known source
-  still has nothing to compare against: did:webvh witnesses are what stop a
-  fork there. Requires did-scid 0.4.1.
+  sources applies the same rule. Requires did-scid 0.4.1.
+- **Added:** `DIDCacheConfigBuilder::with_scid_witnesses_required` (and
+  `ScidResolverWithPolicy::witnesses_required`), off by default: refuse a
+  did:scid whose latest log version carries no did:webvh witness threshold. A
+  verifier meeting an identity for the first time has no floor to compare a
+  fork against; a fork carries no approvals from the witnesses the genuine log
+  names. VTI requires did:scid identities to be witnessed (VTI-KEY-165); turn
+  it on where every did:scid accepted is. It checks that a threshold is set and
+  met, not who the witnesses are.
+- **Behaviour:** a refused did:scid resolution no longer names the source or
+  the version ids in its error text, which a caller may pass on; they are
+  logged at `warn` for the operator.
 
 ## Unreleased (0.8.43) — did:scid version floors that survive a restart
 

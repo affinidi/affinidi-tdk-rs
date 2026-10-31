@@ -29,10 +29,12 @@ use tokio::{
 
 const RESOLVE_DEADLINE: Duration = Duration::from_secs(20);
 
-/// A loopback HTTP listener serving whatever `body` holds as `did.jsonl`.
+/// A loopback HTTP listener serving whatever `body` holds as `did.jsonl`, and
+/// `witness` as `did-witness.json` (404 while it is empty).
 struct LogListener {
     port: u16,
     body: Arc<Mutex<String>>,
+    witness: Arc<Mutex<String>>,
     accept_task: JoinHandle<()>,
 }
 
@@ -43,17 +45,31 @@ impl LogListener {
             .expect("bind loopback listener");
         let port = listener.local_addr().expect("listener address").port();
         let body = Arc::new(Mutex::new(String::new()));
-        let served = body.clone();
+        let witness = Arc::new(Mutex::new(String::new()));
+        let (served, served_witness) = (body.clone(), witness.clone());
         let accept_task = tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
                 let body = served.lock().unwrap().clone();
+                let witness = served_witness.lock().unwrap().clone();
                 tokio::spawn(async move {
                     let mut request = [0u8; 4096];
-                    let _ = stream.read(&mut request).await;
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\ncontent-type: text/jsonl\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                        body.len()
-                    );
+                    let read = stream.read(&mut request).await.unwrap_or_default();
+                    let request = String::from_utf8_lossy(&request[..read]);
+                    let path = request.split_whitespace().nth(1).unwrap_or_default();
+                    let response = if !path.ends_with("did-witness.json") {
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: text/jsonl\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    } else if witness.is_empty() {
+                        "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                            .to_string()
+                    } else {
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{witness}",
+                            witness.len()
+                        )
+                    };
                     let _ = stream.write_all(response.as_bytes()).await;
                 });
             }
@@ -61,12 +77,17 @@ impl LogListener {
         Self {
             port,
             body,
+            witness,
             accept_task,
         }
     }
 
     fn serve(&self, jsonl: &str) {
         *self.body.lock().unwrap() = jsonl.to_string();
+    }
+
+    fn serve_witness_proofs(&self, json: &str) {
+        *self.witness.lock().unwrap() = json.to_string();
     }
 }
 
@@ -601,8 +622,9 @@ async fn a_known_source_refuses_a_fork_before_any_version_is_verified() {
 
 #[tokio::test]
 async fn a_fork_resolves_where_nothing_is_known_about_the_scid() {
-    // The limit of this check: a verifier with no floor and no other source
-    // has nothing to compare against. Witnesses or watchers close this.
+    // The limit of the floor: a verifier with no floor and no other source
+    // has nothing to compare against. Requiring witnesses closes this
+    // (`requiring_witnesses_refuses_an_unwitnessed_fork_on_first_contact`).
     let (genuine, fork) = (LogListener::start().await, LogListener::start().await);
     let did = forked_log(&genuine, &fork).await;
 
@@ -612,4 +634,97 @@ async fn a_fork_resolves_where_nothing_is_known_about_the_scid() {
     )
     .await
     .expect("an unwitnessed fork is a valid log on its own");
+}
+
+/// A one-version log for `localhost:{port}` witnessed by one witness with a
+/// threshold of one, served with its witness proof. Returns the did:scid DID URL.
+async fn witnessed_log(listener: &LogListener) -> String {
+    use didwebvh_rs::{
+        create::{CreateDIDConfig, create_did},
+        witness::Witnesses,
+    };
+
+    let mut key = Secret::generate_ed25519(None, None);
+    let pk = key.get_public_keymultibase().expect("public key");
+    key.id = format!("did:key:{pk}#{pk}");
+    let mut witness = Secret::generate_ed25519(None, None);
+    let wk = witness.get_public_keymultibase().expect("witness key");
+    witness.id = format!("did:key:{wk}#{wk}");
+
+    let template = format!("did:webvh:{{SCID}}:localhost%3A{}", listener.port);
+    let doc = json!({
+        "id": template,
+        "@context": ["https://www.w3.org/ns/did/v1"],
+        "verificationMethod": [{
+            "id": format!("{template}#key-0"),
+            "type": "Multikey",
+            "publicKeyMultibase": pk,
+            "controller": template
+        }],
+        "authentication": [format!("{template}#key-0")],
+    });
+    let params = Parameters {
+        update_keys: Some(Arc::new(vec![Multibase::new(pk)])),
+        portable: Some(false),
+        witness: Some(Arc::new(
+            Witnesses::builder()
+                .threshold(1)
+                .witness(Multibase::new(wk.clone()))
+                .build()
+                .expect("witness config"),
+        )),
+        ..Default::default()
+    };
+    let created = create_did(
+        CreateDIDConfig::builder()
+            .address(format!("http://localhost:{}/", listener.port))
+            .authorization_key(key)
+            .did_document(doc)
+            .parameters(params)
+            .witness_secret(format!("did:key:{wk}"), witness)
+            .build()
+            .expect("create config"),
+    )
+    .await
+    .expect("witnessed log");
+    listener.serve(&serde_json::to_string(created.log_entry()).expect("serialize entry"));
+    listener.serve_witness_proofs(
+        &serde_json::to_string(created.witness_proofs()).expect("serialize proofs"),
+    );
+    scid_forms(created.did(), listener.port).1
+}
+
+async fn client_requiring_witnesses() -> DIDCacheClient {
+    DIDCacheClient::new(
+        DIDCacheConfigBuilder::default()
+            .with_host_policy(HostPolicy::AllowPrivate)
+            .with_scid_witnesses_required(true)
+            .build(),
+    )
+    .await
+    .expect("build cache client")
+}
+
+#[tokio::test]
+async fn requiring_witnesses_refuses_an_unwitnessed_fork_on_first_contact() {
+    let (genuine, fork) = (LogListener::start().await, LogListener::start().await);
+    let did = forked_log(&genuine, &fork).await;
+
+    let error = resolve(
+        &client_requiring_witnesses().await,
+        &format!("{did}?src=localhost:{}", fork.port),
+    )
+    .await
+    .expect_err("the fork carries no witness approvals");
+    assert!(error.contains("not witnessed"), "{error}");
+}
+
+#[tokio::test]
+async fn requiring_witnesses_resolves_a_witnessed_log() {
+    let listener = LogListener::start().await;
+    let url = witnessed_log(&listener).await;
+
+    resolve(&client_requiring_witnesses().await, &url)
+        .await
+        .expect("a witnessed log resolves");
 }

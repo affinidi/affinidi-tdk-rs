@@ -121,6 +121,11 @@ pub struct ScidResolution {
     pub version_id: String,
     /// The version id of every entry verified, oldest first.
     pub version_ids: Vec<String>,
+    /// The did:webvh witness threshold the latest entry was verified against:
+    /// how many approvals from the witnesses named by the entry before it it
+    /// carries. `None` when that entry names no witnesses, so the latest
+    /// version is unwitnessed.
+    pub witness_threshold: Option<u32>,
 }
 
 /// Resolve a `did:scid:vh:1` DID to its own document, reporting the source and
@@ -178,6 +183,12 @@ async fn resolve_webvh_native(
                     .iter()
                     .map(|entry| entry.get_version_id().to_string())
                     .collect(),
+                witness_threshold: method
+                    .log_entries()
+                    .last()
+                    .and_then(|entry| entry.validated_parameters.active_witness.as_deref())
+                    .and_then(|witnesses| witnesses.threshold())
+                    .filter(|threshold| *threshold > 0),
             })
         }
         Err(e) => {

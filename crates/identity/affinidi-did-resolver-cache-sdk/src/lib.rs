@@ -865,7 +865,8 @@ impl DIDCacheClient {
                 network_resolvers::ScidResolverWithPolicy::with_sources(
                     config.host_policy,
                     scid_sources.clone(),
-                ),
+                )
+                .witnesses_required(config.scid_witnesses_required),
             ));
         #[cfg(feature = "did-ebsi")]
         resolvers

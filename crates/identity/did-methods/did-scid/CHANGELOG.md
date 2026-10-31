@@ -7,6 +7,9 @@
   check that a newer log still contains it: a log that does not is a fork,
   which anyone holding a leaked update key can sign and serve from any host
   under the same did:scid.
+- **Added:** `ScidResolution::witness_threshold`, the did:webvh witness
+  threshold the latest entry was verified against, or `None` when it is
+  unwitnessed.
 
 ## Unreleased (0.4.0) — a did:scid resolves to its own document
 
