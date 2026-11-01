@@ -52,6 +52,7 @@
  */
 
 use std::{
+    fmt,
     net::IpAddr,
     net::SocketAddr,
     num::NonZeroU32,
@@ -78,6 +79,9 @@ use governor::{
     },
 };
 use http::{HeaderName, HeaderValue, Request, StatusCode, header};
+/// The CIDR type [`RateLimitLayer::trusted_proxies`] takes, re-exported so
+/// callers need not depend on `ipnet` themselves.
+pub use ipnet::IpNet;
 use tokio_util::sync::CancellationToken;
 use tower::{Layer, Service};
 use tracing::{debug, warn};
@@ -183,6 +187,15 @@ pub const SOURCE_HEADER: &str = "x-rate-limit-source";
 pub const RATE_LIMITED_ERROR: &str = "rate_limited";
 
 const RATE_LIMITED_MESSAGE: &str = "Rate limit exceeded. Please try again later.";
+const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
+const MAX_FORWARDED_ENTRIES: usize = 64;
+
+/// The `error` value of an attributed [`Refusal::InvalidForwardedFor`] body.
+pub const INVALID_FORWARDED_FOR_ERROR: &str = "invalid_forwarded_for";
+
+const INVALID_FORWARDED_FOR_MESSAGE: &str = "Invalid X-Forwarded-For header; request rejected.";
+
+const NO_CLIENT_IP_MESSAGE: &str = "Rate limiting requires client IP; request rejected.";
 
 /// Why a request was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +206,146 @@ pub enum Refusal {
     RateLimited { retry_after_secs: u64 },
     /// No client IP was available, so the request could not be attributed.
     NoClientIp,
+    /// The request came from a trusted proxy but supplied an invalid
+    /// `X-Forwarded-For` chain.
+    InvalidForwardedFor,
+}
+
+/// A trusted-proxy range [`RateLimitLayer::trusted_proxies`] refuses: one with
+/// prefix length 0 (`0.0.0.0/0`, `::/0`).
+///
+/// Such a range trusts every peer, so any client that can reach the socket
+/// sends its own `X-Forwarded-For` and picks its own bucket — and because every
+/// hop is then "trusted" too, IPv4 clients behind a real proxy are still all
+/// charged to the proxy. It is never what an operator meant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidTrustedProxy {
+    /// The offending range.
+    pub cidr: IpNet,
+}
+
+impl fmt::Display for InvalidTrustedProxy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "trusted proxy range {} covers every address; list the proxies' own ranges",
+            self.cidr
+        )
+    }
+}
+
+impl std::error::Error for InvalidTrustedProxy {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClientIpExtractionError {
+    MissingPeer,
+    InvalidForwardedFor,
+}
+
+/// Extracts a chargeable client address from either the socket peer directly
+/// or the peer + trusted-proxy `X-Forwarded-For` chain.
+///
+/// When trusted CIDRs are configured, the socket peer must be one of them
+/// before `X-Forwarded-For` is considered; otherwise the socket peer is used.
+/// The chain is walked right-to-left and the first untrusted hop is the
+/// client. This assumes each trusted proxy appends the address of the peer it
+/// received the connection from (an ALB appends the client IP), and that the
+/// service is reachable only through those proxies.
+///
+/// Entries left of the client are never parsed as addresses, so client-supplied
+/// junk there is ignored rather than refused. They still count towards
+/// [`MAX_FORWARDED_ENTRIES`], and a header value that is not visible ASCII is
+/// refused whole.
+#[derive(Clone, Debug)]
+struct ClientIpExtractor {
+    trusted_proxy_cidrs: Vec<IpNet>,
+}
+
+impl ClientIpExtractor {
+    fn direct_peer() -> Self {
+        Self {
+            trusted_proxy_cidrs: Vec::new(),
+        }
+    }
+
+    fn with_trusted_proxies(trusted_proxy_cidrs: Vec<IpNet>) -> Self {
+        Self {
+            trusted_proxy_cidrs,
+        }
+    }
+
+    fn is_trusted_proxy(&self, ip: IpAddr) -> bool {
+        self.trusted_proxy_cidrs
+            .iter()
+            .any(|cidr| cidr.contains(&ip))
+    }
+
+    fn client_from_xff_chain(
+        &self,
+        headers: &http::HeaderMap,
+    ) -> Result<Option<IpAddr>, ClientIpExtractionError> {
+        // Walk right to left without collecting: the last header line holds
+        // the newest hops, and each line's entries are read last first. Once
+        // the client is found, the entries left of it are only counted (for
+        // the cap), never parsed.
+        let mut entries = 0;
+        let mut client = None;
+        for value in headers.get_all(X_FORWARDED_FOR).iter().rev() {
+            let value = value
+                .to_str()
+                .map_err(|_| ClientIpExtractionError::InvalidForwardedFor)?;
+            for entry in value
+                .rsplit(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+            {
+                entries += 1;
+                if entries > MAX_FORWARDED_ENTRIES {
+                    return Err(ClientIpExtractionError::InvalidForwardedFor);
+                }
+                if client.is_some() {
+                    continue;
+                }
+                let ip = parse_forwarded_ip(entry)
+                    .ok_or(ClientIpExtractionError::InvalidForwardedFor)?;
+                if !self.is_trusted_proxy(ip) {
+                    client = Some(ip);
+                }
+            }
+        }
+        Ok(client)
+    }
+
+    fn extract(&self, request: &Request<Body>) -> Result<IpAddr, ClientIpExtractionError> {
+        let peer = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip().to_canonical())
+            .ok_or(ClientIpExtractionError::MissingPeer)?;
+
+        if self.trusted_proxy_cidrs.is_empty() || !self.is_trusted_proxy(peer) {
+            return Ok(peer);
+        }
+
+        Ok(self
+            .client_from_xff_chain(request.headers())?
+            .unwrap_or(peer))
+    }
+}
+
+fn parse_forwarded_ip(value: &str) -> Option<IpAddr> {
+    if let Ok(ip) = value.parse::<IpAddr>() {
+        return Some(ip.to_canonical());
+    }
+    if let Ok(address) = value.parse::<SocketAddr>() {
+        return Some(address.ip().to_canonical());
+    }
+    value
+        .strip_prefix('[')?
+        .strip_suffix(']')?
+        .parse::<IpAddr>()
+        .ok()
+        .map(|ip| ip.to_canonical())
 }
 
 /// The live limiter, present only when limiting is enabled. Bundles the
@@ -438,37 +591,58 @@ impl RateLimiterState {
         if let Some(cb) = &self.on_refused {
             cb(refusal);
         }
-        match refusal {
+        let mut response = match refusal {
             Refusal::RateLimited { retry_after_secs } => {
-                let mut response = match self.source() {
-                    Some(limiter) => (
-                        StatusCode::TOO_MANY_REQUESTS,
-                        Json(serde_json::json!({
-                            "error": RATE_LIMITED_ERROR,
-                            "limiter": limiter,
-                            "message": RATE_LIMITED_MESSAGE,
-                            "retryAfterSecs": retry_after_secs,
-                        })),
-                    )
-                        .into_response(),
-                    None => (StatusCode::TOO_MANY_REQUESTS, RATE_LIMITED_MESSAGE).into_response(),
-                };
-                if let Some(source) = &self.source {
-                    response
-                        .headers_mut()
-                        .insert(HeaderName::from_static(SOURCE_HEADER), source.clone());
-                }
+                let mut response = self.refusal_body(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    RATE_LIMITED_ERROR,
+                    RATE_LIMITED_MESSAGE,
+                    Some(*retry_after_secs),
+                );
                 response
                     .headers_mut()
                     .insert(header::RETRY_AFTER, HeaderValue::from(*retry_after_secs));
                 response
             }
-            Refusal::NoClientIp => (
-                StatusCode::FORBIDDEN,
-                "Rate limiting requires client IP; request rejected.",
-            )
-                .into_response(),
+            Refusal::InvalidForwardedFor => self.refusal_body(
+                StatusCode::BAD_REQUEST,
+                INVALID_FORWARDED_FOR_ERROR,
+                INVALID_FORWARDED_FOR_MESSAGE,
+                None,
+            ),
+            Refusal::NoClientIp => (StatusCode::FORBIDDEN, NO_CLIENT_IP_MESSAGE).into_response(),
+        };
+        // Every refusal from a named limiter says who refused, so a `400` or
+        // `403` from behind several hops is as traceable as a `429`.
+        if let Some(source) = &self.source {
+            response
+                .headers_mut()
+                .insert(HeaderName::from_static(SOURCE_HEADER), source.clone());
         }
+        response
+    }
+
+    /// A refusal body: the attributed JSON form when the limiter is named, the
+    /// plain-text message otherwise.
+    fn refusal_body(
+        &self,
+        status: StatusCode,
+        error: &str,
+        message: &'static str,
+        retry_after_secs: Option<u64>,
+    ) -> Response {
+        let Some(limiter) = self.source() else {
+            return (status, message).into_response();
+        };
+        let mut body = serde_json::json!({
+            "error": error,
+            "limiter": limiter,
+            "message": message,
+        });
+        if let Some(secs) = retry_after_secs {
+            body["retryAfterSecs"] = secs.into();
+        }
+        (status, Json(body)).into_response()
     }
 }
 
@@ -476,11 +650,42 @@ impl RateLimiterState {
 #[derive(Clone, Debug)]
 pub struct RateLimitLayer {
     state: RateLimiterState,
+    client_ip_extractor: ClientIpExtractor,
 }
 
 impl RateLimitLayer {
     pub fn new(state: RateLimiterState) -> Self {
-        Self { state }
+        Self {
+            state,
+            client_ip_extractor: ClientIpExtractor::direct_peer(),
+        }
+    }
+
+    /// Trust `X-Forwarded-For` only when the socket peer falls inside one of
+    /// the configured CIDRs.
+    ///
+    /// This is opt-in. Without this call, the layer keys on the socket peer.
+    /// For secure attribution, list only proxies that append the address of
+    /// the peer they received the connection from to `X-Forwarded-For` (an ALB
+    /// appends the client IP), and do not expose the service directly except
+    /// through those proxies.
+    ///
+    /// # Errors
+    ///
+    /// [`InvalidTrustedProxy`] if a range has prefix length 0 (`0.0.0.0/0`,
+    /// `::/0`), which would trust every peer.
+    pub fn trusted_proxies(
+        mut self,
+        trusted_proxy_cidrs: Vec<IpNet>,
+    ) -> Result<Self, InvalidTrustedProxy> {
+        if let Some(cidr) = trusted_proxy_cidrs
+            .iter()
+            .find(|cidr| cidr.prefix_len() == 0)
+        {
+            return Err(InvalidTrustedProxy { cidr: *cidr });
+        }
+        self.client_ip_extractor = ClientIpExtractor::with_trusted_proxies(trusted_proxy_cidrs);
+        Ok(self)
     }
 }
 
@@ -491,6 +696,7 @@ impl<S> Layer<S> for RateLimitLayer {
         RateLimitService {
             inner,
             state: self.state.clone(),
+            client_ip_extractor: self.client_ip_extractor.clone(),
         }
     }
 }
@@ -500,6 +706,7 @@ impl<S> Layer<S> for RateLimitLayer {
 pub struct RateLimitService<S> {
     inner: S,
     state: RateLimiterState,
+    client_ip_extractor: ClientIpExtractor,
 }
 
 impl<S> Service<Request<Body>> for RateLimitService<S>
@@ -521,20 +728,29 @@ where
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
+        // `poll_ready` readied `self.inner`; call *that* service and leave a
+        // fresh clone for the next `poll_ready`, as tower's contract requires.
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
+
         if !self.state.is_enabled() {
-            let mut inner = self.inner.clone();
             return Box::pin(async move { inner.call(req).await });
         }
 
-        let ip = req
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0.ip());
-
-        let Some(ip) = ip else {
-            warn!("No client IP available; rejecting request (rate limiting requires client IP)");
-            let response = self.state.refuse(&Refusal::NoClientIp);
-            return Box::pin(async move { Ok(response) });
+        let ip = match self.client_ip_extractor.extract(&req) {
+            Ok(ip) => ip,
+            Err(ClientIpExtractionError::MissingPeer) => {
+                warn!(
+                    "No client IP available; rejecting request (rate limiting requires client IP)"
+                );
+                let response = self.state.refuse(&Refusal::NoClientIp);
+                return Box::pin(async move { Ok(response) });
+            }
+            Err(ClientIpExtractionError::InvalidForwardedFor) => {
+                warn!("Invalid X-Forwarded-For header; rejecting request");
+                let response = self.state.refuse(&Refusal::InvalidForwardedFor);
+                return Box::pin(async move { Ok(response) });
+            }
         };
 
         if let Err(refusal) = self.state.check(ip) {
@@ -543,7 +759,6 @@ where
             return Box::pin(async move { Ok(response) });
         }
 
-        let mut inner = self.inner.clone();
         Box::pin(async move { inner.call(req).await })
     }
 }
@@ -748,6 +963,13 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
+    #[test]
+    fn invalid_forwarded_for_is_refused() {
+        let limiter = RateLimiterState::new(1, 1);
+        let response = limiter.refuse(&Refusal::InvalidForwardedFor);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
     async fn body_json(response: Response) -> serde_json::Value {
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -835,6 +1057,323 @@ mod tests {
         let body = body_json(refused).await;
         assert_eq!(body["limiter"], "mediator");
         assert_eq!(body["retryAfterSecs"], retry_after);
+    }
+
+    #[tokio::test]
+    async fn trusted_proxy_uses_rightmost_untrusted_xff_entry() {
+        use tower::ServiceExt;
+
+        let app = axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(
+                RateLimitLayer::new(RateLimiterState::new(1, 1))
+                    .trusted_proxies(vec!["10.0.0.0/8".parse().unwrap()])
+                    .unwrap(),
+            );
+
+        let request = || {
+            let mut request = Request::builder().uri("/").body(Body::empty()).unwrap();
+            request.headers_mut().insert(
+                X_FORWARDED_FOR,
+                HeaderValue::from_static("198.51.100.7, 10.0.0.5"),
+            );
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 4000))));
+            request
+        };
+
+        let allowed = app.clone().oneshot(request()).await.unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let refused = app.oneshot(request()).await.unwrap();
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn junk_left_of_the_client_entry_is_ignored_not_refused() {
+        use tower::ServiceExt;
+
+        let app = trusted_app(1);
+        let first = app
+            .clone()
+            .oneshot(xff_request([10, 0, 0, 5], "garbage, 198.51.100.7"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let other_junk = app
+            .clone()
+            .oneshot(xff_request([10, 0, 0, 5], "more-garbage, 198.51.100.7"))
+            .await
+            .unwrap();
+        assert_eq!(
+            other_junk.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "changing client-supplied junk must not give the client a new bucket"
+        );
+
+        let other_client = app
+            .oneshot(xff_request([10, 0, 0, 5], "garbage, 198.51.100.8"))
+            .await
+            .unwrap();
+        assert_eq!(other_client.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn malformed_xff_from_trusted_proxy_is_rejected() {
+        use tower::ServiceExt;
+
+        let app = axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(
+                RateLimitLayer::new(RateLimiterState::new(1, 1))
+                    .trusted_proxies(vec!["10.0.0.0/8".parse().unwrap()])
+                    .unwrap(),
+            );
+
+        let mut request = Request::builder().uri("/").body(Body::empty()).unwrap();
+        request.headers_mut().insert(
+            X_FORWARDED_FOR,
+            HeaderValue::from_static("198.51.100.7, not-an-ip"),
+        );
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 4000))));
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    fn xff_request(peer: [u8; 4], xff: &str) -> Request<Body> {
+        let mut request = Request::builder().uri("/").body(Body::empty()).unwrap();
+        request
+            .headers_mut()
+            .insert(X_FORWARDED_FOR, HeaderValue::from_str(xff).unwrap());
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from((peer, 4000))));
+        request
+    }
+
+    fn trusted_app(burst: u32) -> axum::Router {
+        axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(
+                RateLimitLayer::new(RateLimiterState::new(1, burst))
+                    .trusted_proxies(vec!["10.0.0.0/8".parse().unwrap()])
+                    .unwrap(),
+            )
+    }
+
+    #[tokio::test]
+    async fn oversized_xff_chain_from_trusted_proxy_is_rejected() {
+        use tower::ServiceExt;
+
+        let xff = vec!["203.0.113.1"; MAX_FORWARDED_ENTRIES + 1].join(", ");
+        let response = trusted_app(1)
+            .oneshot(xff_request([10, 0, 0, 5], &xff))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn untrusted_peer_cannot_choose_its_key_via_xff() {
+        use tower::ServiceExt;
+
+        let app = trusted_app(1);
+        let first = app
+            .clone()
+            .oneshot(xff_request([192, 0, 2, 1], "198.51.100.1"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let spoofed = app
+            .oneshot(xff_request([192, 0, 2, 1], "198.51.100.2"))
+            .await
+            .unwrap();
+        assert_eq!(
+            spoofed.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "a spoofed X-Forwarded-For from an untrusted peer must share the peer's bucket"
+        );
+    }
+
+    #[tokio::test]
+    async fn all_trusted_chain_falls_back_to_the_peer() {
+        use tower::ServiceExt;
+
+        let app = trusted_app(1);
+        let first = app
+            .clone()
+            .oneshot(xff_request([10, 0, 0, 5], "10.0.0.7"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let second = app
+            .oneshot(xff_request([10, 0, 0, 5], "10.0.0.8"))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn canonicalises_only_ipv4_mapped_addresses() {
+        let loopback = parse_forwarded_ip("::1").unwrap();
+        assert_eq!(loopback, "::1".parse::<IpAddr>().unwrap());
+        let mapped = parse_forwarded_ip("::ffff:192.0.2.1").unwrap();
+        assert_eq!(mapped, "192.0.2.1".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn catch_all_trusted_ranges_are_refused() {
+        for net in ["0.0.0.0/0", "::/0"] {
+            let err = RateLimitLayer::new(RateLimiterState::new(1, 1))
+                .trusted_proxies(vec!["10.0.0.0/8".parse().unwrap(), net.parse().unwrap()])
+                .unwrap_err();
+            assert_eq!(err.cidr, net.parse::<IpNet>().unwrap());
+            assert!(err.to_string().contains(net));
+        }
+    }
+
+    /// A named limiter's `400` carries the attribution contract and reaches
+    /// the refusal callback, so an operator can see and count it.
+    #[tokio::test]
+    async fn invalid_forwarded_for_is_attributed_and_observed() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let limiter = RateLimiterState::new(1, 1)
+            .with_source("mediator")
+            .on_refused(move |refusal| {
+                assert_eq!(refusal, &Refusal::InvalidForwardedFor);
+                counter.fetch_add(1, Ordering::SeqCst);
+            });
+        let response = limiter.refuse(&Refusal::InvalidForwardedFor);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers().get(SOURCE_HEADER).unwrap(), "mediator");
+        assert!(response.headers().get(header::RETRY_AFTER).is_none());
+        assert_eq!(
+            body_json(response).await,
+            serde_json::json!({
+                "error": "invalid_forwarded_for",
+                "limiter": "mediator",
+                "message": "Invalid X-Forwarded-For header; request rejected.",
+            })
+        );
+
+        let unnamed = RateLimiterState::new(1, 1).refuse(&Refusal::InvalidForwardedFor);
+        assert_eq!(unnamed.status(), StatusCode::BAD_REQUEST);
+        assert!(unnamed.headers().get(SOURCE_HEADER).is_none());
+    }
+
+    #[test]
+    fn named_limiter_no_client_ip_refusal_says_who_refused() {
+        let response = RateLimiterState::new(1, 1)
+            .with_source("mediator")
+            .refuse(&Refusal::NoClientIp);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.headers().get(SOURCE_HEADER).unwrap(), "mediator");
+    }
+
+    /// Later header lines are newer hops, so the walk reads the last line
+    /// first.
+    #[test]
+    fn later_xff_lines_are_newer_hops() {
+        let extractor =
+            ClientIpExtractor::with_trusted_proxies(vec!["10.0.0.0/8".parse().unwrap()]);
+        let mut headers = http::HeaderMap::new();
+        headers.append(X_FORWARDED_FOR, HeaderValue::from_static("9.9.9.9"));
+        headers.append(
+            X_FORWARDED_FOR,
+            HeaderValue::from_static("203.0.113.1, 10.0.0.3"),
+        );
+        assert_eq!(
+            extractor.client_from_xff_chain(&headers),
+            Ok(Some("203.0.113.1".parse().unwrap()))
+        );
+    }
+
+    /// A proxy on IPv6 loopback must match `::1/128`: `::1` is not `0.0.0.1`.
+    #[tokio::test]
+    async fn ipv6_loopback_proxy_is_trusted() {
+        use tower::ServiceExt;
+
+        let app = axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(
+                RateLimitLayer::new(RateLimiterState::new(1, 1))
+                    .trusted_proxies(vec!["::1/128".parse().unwrap()])
+                    .unwrap(),
+            );
+        let request = |client: &'static str| {
+            let mut request = Request::builder().uri("/").body(Body::empty()).unwrap();
+            request
+                .headers_mut()
+                .insert(X_FORWARDED_FOR, HeaderValue::from_static(client));
+            request
+                .extensions_mut()
+                .insert(ConnectInfo("[::1]:4000".parse::<SocketAddr>().unwrap()));
+            request
+        };
+        let status = |client| {
+            let app = app.clone();
+            async move { app.oneshot(request(client)).await.unwrap().status() }
+        };
+        assert_eq!(status("198.51.100.1").await, StatusCode::OK);
+        assert_eq!(status("198.51.100.2").await, StatusCode::OK);
+    }
+
+    /// A service that must be readied before each call. A clone starts
+    /// unready, so calling a fresh clone instead of the readied service panics.
+    struct NeedsReady {
+        ready: bool,
+    }
+
+    impl Clone for NeedsReady {
+        fn clone(&self) -> Self {
+            Self { ready: false }
+        }
+    }
+
+    impl Service<Request<Body>> for NeedsReady {
+        type Response = Response;
+        type Error = std::convert::Infallible;
+        type Future = std::future::Ready<Result<Response, Self::Error>>;
+
+        fn poll_ready(
+            &mut self,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            self.ready = true;
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, _: Request<Body>) -> Self::Future {
+            assert!(self.ready, "called before poll_ready");
+            self.ready = false;
+            std::future::ready(Ok(StatusCode::OK.into_response()))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_readied_service_is_the_one_called() {
+        use tower::ServiceExt;
+
+        for state in [
+            RateLimiterState::new(100, 100),
+            RateLimiterState::disabled(),
+        ] {
+            let mut service = RateLimitLayer::new(state).layer(NeedsReady { ready: false });
+            for _ in 0..3 {
+                let mut request = Request::builder().uri("/").body(Body::empty()).unwrap();
+                request
+                    .extensions_mut()
+                    .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 1))));
+                let response = service.ready().await.unwrap().call(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+            }
+        }
     }
 
     #[test]

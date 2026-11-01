@@ -36,6 +36,17 @@ Per-crate version history is summarised here; for the full code history see
   which checks a `statuslist+jwt` signature (caller-supplied) before reading
   `typ`, `sub` = the referenced `uri`, `iat` and `exp`, and only then
   decompresses. Additive; the CWT form is not implemented.
+- **Trusted-proxy client attribution.** **`affinidi-rate-limit` 0.1.3**.
+  `RateLimitLayer::trusted_proxies(cidrs)` keys the per-IP limiter on the
+  first untrusted `X-Forwarded-For` address, walked right to left, when the
+  socket peer is inside a trusted CIDR, so clients behind a load balancer no
+  longer share one bucket. A malformed or over-long chain from a trusted proxy
+  is refused with `400` (`Refusal::InvalidForwardedFor`), attributed with
+  `x-rate-limit-source` when the limiter is named; a catch-all trusted range
+  is refused. Opt-in; without it
+  the limiter keys on the socket peer, now canonicalised in every mode, so an
+  IPv4-mapped IPv6 peer is keyed as its IPv4 address. The layer now calls the
+  inner service `poll_ready` readied rather than a fresh clone.
 
 ### Fixed
 
