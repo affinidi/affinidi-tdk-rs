@@ -20,11 +20,14 @@ To trust `X-Forwarded-For` only from known reverse proxies:
 ```rust
 let app = Router::new().layer(
     RateLimitLayer::new(limiter).trusted_proxies(vec![
-        "10.0.0.0/8".parse().unwrap(),
-        "2001:db8::/32".parse().unwrap(),
-    ]),
+        "10.0.0.0/8".parse()?,
+        "2001:db8::/32".parse()?,
+    ])?,
 );
 ```
+
+A catch-all range (`0.0.0.0/0`, `::/0`) is refused with `InvalidTrustedProxy`:
+it would let any client choose its own bucket.
 
 The CIDRs are [`ipnet::IpNet`](https://docs.rs/ipnet), re-exported as
 `affinidi_rate_limit::IpNet`.
@@ -32,7 +35,9 @@ The CIDRs are [`ipnet::IpNet`](https://docs.rs/ipnet), re-exported as
 When `trusted_proxies` is set, a malformed entry from the client entry
 rightwards (the part trusted proxies wrote) is rejected with
 `400 Bad Request`, as is a chain of more than 64 entries or a header value that
-is not visible ASCII. Entries left of the client entry are never parsed as
+is not visible ASCII. The `400` goes through `on_refused`, and a named limiter
+sends it with `x-rate-limit-source` and a JSON body
+(`{"error":"invalid_forwarded_for","limiter":…,"message":…}`). Entries left of the client entry are never parsed as
 addresses, so client-supplied junk there is ignored.
 
 ## Two things that are easy to get wrong
