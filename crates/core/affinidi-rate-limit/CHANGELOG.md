@@ -6,6 +6,47 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-03
+
+What a service needs to run all its limiters on this crate, not only the
+layer: limits inside handlers, other keys, window-shaped limits, and named
+limits. Existing callers compile unchanged.
+
+### Added
+
+- `KeyedRateLimiterState<K>`: the limiter over any `Hash + Eq + Clone` key
+  (a sender string, or `()` for one shared budget), with the same distinct-key
+  cap and GC. `RateLimiterState` is now its `IpAddr` alias, so
+  `RateLimiterState::new(..)` resolves as before. Its `Debug` output now names
+  `KeyedRateLimiterState`.
+- `per_window(max_per_window, window)`: a burst of up to `max_per_window`,
+  refilled evenly across `window`. `0` or a zero window disables limiting.
+- `with_limiter_name(name)` and `limiter_name()`: a refusal body's `limiter`
+  names the limit that fired, while `x-rate-limit-source` still names the
+  service. Unset, the body is unchanged.
+- `first_refusal_in_window(key)`: records a refusal and says whether it is the
+  key's first in its window, so handler code can log once per window.
+- `ClientIpExtractor` is public. `direct_peer()`, `trusted_proxies(cidrs)` and
+  `ipv6_prefix(len)` configure it; `client_key(peer, headers)` gives the key
+  the layer charges, and `client_ip(peer, headers)` the unmasked client
+  address. `RateLimitLayer::client_ip_extractor` hands one to the layer.
+- `RateLimitLayer::ipv6_prefix(len)` charges an IPv6 client to its `/len`
+  network, so rotating addresses inside a `/64` does not escape the limit.
+  `InvalidIpv6Prefix` refuses 0 and lengths above 128.
+- `InvalidForwardedFor`, the error `client_ip` and `client_key` return for a
+  chain they cannot attribute, and `MAX_FORWARDED_ENTRIES` (64), now public.
+
+### Changed
+
+- The layer logs a client's first refusal in each window (the time its bucket
+  takes to refill) rather than every refused request. `on_refused` still runs
+  for every refusal.
+
+### Fixed
+
+- `Retry-After` is rounded up to whole seconds rather than down, so a client
+  retrying when told no longer arrives just before its next token.
+
 ## [0.1.3] - 2026-10-29
 
 Opt-in trusted-proxy attribution, so clients behind a load balancer stop

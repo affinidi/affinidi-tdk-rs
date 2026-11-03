@@ -1,7 +1,7 @@
 # affinidi-rate-limit
 
-Per-IP request rate limiting for `axum` services — a token bucket keyed by
-client IP, applied as a `tower` layer.
+Request rate limiting for `axum` services: a token bucket keyed by client IP,
+applied as a `tower` layer, or keyed by anything a handler chooses.
 
 ```rust
 use affinidi_rate_limit::{RateLimitLayer, RateLimiterState};
@@ -14,6 +14,35 @@ let app = Router::new().layer(RateLimitLayer::new(limiter));
 ```
 
 `per_second = 0` disables limiting and the layer becomes a pass-through.
+`RateLimiterState::per_window(max, Duration::from_secs(60))` states the same
+bucket as `max` requests per minute.
+
+To limit from a handler, on any key, charging the same client the layer would:
+
+```rust
+let clients = ClientIpExtractor::trusted_proxies(vec!["10.0.0.0/8".parse()?])?
+    .ipv6_prefix(64)?;
+let per_client = RateLimiterState::per_window(10, Duration::from_secs(60))
+    .with_limiter_name("auth-challenge-per-ip");
+
+let client = clients.client_key(peer.ip(), &headers)?;
+if let Err(Refusal::RateLimited { retry_after_secs }) = per_client.check(client) {
+    if per_client.first_refusal_in_window(&client) {
+        tracing::warn!(%client, "client over the rate limit");
+    }
+    // Answer with the service's own 429, naming per_client.limiter_name().
+}
+```
+
+`check` only decides: the crate builds a refusal response, and applies
+`with_source` and `with_limiter_name` to it, only in the layer.
+`KeyedRateLimiterState<K>` takes any hashable key, such as a `String` sender or
+`()` for one shared budget. `ClientIpExtractor::client_ip` gives the unmasked
+address, for anything other than limiting.
+
+`RateLimitLayer::ipv6_prefix(64)` charges an IPv6 client to its `/64`. The
+layer logs a client's first refusal in each window (the time its bucket takes
+to refill), not every refused request.
 
 To trust `X-Forwarded-For` only from known reverse proxies:
 

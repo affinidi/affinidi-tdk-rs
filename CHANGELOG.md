@@ -36,6 +36,14 @@ Per-crate version history is summarised here; for the full code history see
   which checks a `statuslist+jwt` signature (caller-supplied) before reading
   `typ`, `sub` = the referenced `uri`, `iat` and `exp`, and only then
   decompresses. Additive; the CWT form is not implemented.
+- **Rate limits inside handlers, on any key.** **`affinidi-rate-limit`
+  0.1.4**. `KeyedRateLimiterState<K>` limits on any hashable key
+  (`RateLimiterState` is its `IpAddr` alias), `per_window(max, window)` states
+  a limit as requests per window, `with_limiter_name` names the limit that
+  fired in the refusal body, and a public `ClientIpExtractor` gives handlers
+  the key the layer charges, `/64` grouping included
+  (`RateLimitLayer::ipv6_prefix`). The layer now logs a client's first refusal
+  per window rather than every one, and `Retry-After` rounds up.
 - **Trusted-proxy client attribution.** **`affinidi-rate-limit` 0.1.3**.
   `RateLimitLayer::trusted_proxies(cidrs)` keys the per-IP limiter on the
   first untrusted `X-Forwarded-For` address, walked right to left, when the
