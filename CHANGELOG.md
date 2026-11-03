@@ -40,7 +40,8 @@ Per-crate version history is summarised here; for the full code history see
   0.1.4**. `KeyedRateLimiterState<K>` limits on any hashable key
   (`RateLimiterState` is its `IpAddr` alias), `per_window(max, window)` and
   `per_period(period, burst)` state limits as requests per window or one per
-  period, `with_limiter_name` names the limit that
+  period, `charge` refuses with only the retry time, `with_max_tracked_keys`
+  bounds a limiter's keys, `with_limiter_name` names the limit that
   fired in the refusal body, and a public `ClientIpExtractor` gives handlers
   the key the layer charges, `/64` grouping included
   (`RateLimitLayer::ipv6_prefix`). The layer now logs a client's first refusal,

@@ -272,6 +272,22 @@ impl fmt::Display for InvalidForwardedFor {
 
 impl std::error::Error for InvalidForwardedFor {}
 
+/// A request refused by [`KeyedRateLimiterState::charge`]: its key is over the
+/// limit, or the limiter is full of other keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TooManyRequests {
+    /// Seconds until a retry can succeed, rounded up, at least 1.
+    pub retry_after_secs: u64,
+}
+
+impl fmt::Display for TooManyRequests {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "rate limited; retry after {} s", self.retry_after_secs)
+    }
+}
+
+impl std::error::Error for TooManyRequests {}
+
 /// A prefix length [`ClientIpExtractor::ipv6_prefix`] refuses: 0, which would
 /// put every IPv6 client in one bucket, or more than 128.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -672,7 +688,7 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
     ///
     /// `per_second == 0` disables limiting; `burst == 0` is treated as 1.
     pub fn new(per_second: u32, burst: u32) -> Self {
-        Self::from_quota(per_second_quota(per_second, burst), MAX_TRACKED_KEYS)
+        Self::from_quota(per_second_quota(per_second, burst))
     }
 
     /// Build a limiter allowing `max_per_window` requests per key per
@@ -685,7 +701,7 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
     ///
     /// `max_per_window == 0` or a zero `window` disables limiting.
     pub fn per_window(max_per_window: u32, window: Duration) -> Self {
-        Self::from_quota(per_window_quota(max_per_window, window), MAX_TRACKED_KEYS)
+        Self::from_quota(per_window_quota(max_per_window, window))
     }
 
     /// Build a limiter that gives each key one request every `period`, with
@@ -695,19 +711,11 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
     ///
     /// A zero `period` disables limiting; `burst == 0` is treated as 1.
     pub fn per_period(period: Duration, burst: u32) -> Self {
-        Self::from_quota(per_period_quota(period, burst), MAX_TRACKED_KEYS)
-    }
-
-    /// As [`Self::new`], but with an explicit distinct-key cap. The public
-    /// constructors always use [`MAX_TRACKED_KEYS`]; tests use a small cap so
-    /// the admission-control path can be exercised without inserting 250k keys.
-    #[cfg(test)]
-    fn with_capacity(per_second: u32, burst: u32, max_tracked: usize) -> Self {
-        Self::from_quota(per_second_quota(per_second, burst), max_tracked)
+        Self::from_quota(per_period_quota(period, burst))
     }
 
     /// A limiter for `quota`, or a disabled one for `None`.
-    fn from_quota(quota: Option<Quota>, max_tracked: usize) -> Self {
+    fn from_quota(quota: Option<Quota>) -> Self {
         let Some(quota) = quota else {
             return Self::disabled();
         };
@@ -715,14 +723,12 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
         // read membership/length from the exact map the limiter mutates.
         let store = SharedDashMapStore(Arc::new(DashMapStateStore::default()));
         let window = quota.burst_size_replenished_in();
-        let max_tracked = max_tracked.max(1);
+        let max_tracked = MAX_TRACKED_KEYS;
         let limiter = RateLimiter::new(quota, store.clone(), DefaultClock::default());
         Self {
             active: Some(Active {
                 limiter: Arc::new(limiter),
                 store,
-                // A cap of 0 would refuse every IP; clamp so a misconfigured
-                // caller degrades to "track one" rather than "deny all".
                 max_tracked,
                 epoch: Instant::now()
                     .checked_sub(INLINE_RECLAIM_MIN_INTERVAL)
@@ -792,6 +798,26 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
         self
     }
 
+    /// Track at most `max_tracked_keys` distinct keys at once, rather than
+    /// 250,000. When the limiter is full, a new key is refused (after
+    /// reclaiming the keys whose budget has refilled), while a key already
+    /// tracked is unaffected. A small cap suits a limiter whose keys are few
+    /// or large; `0` is treated as 1. The refusal log is bounded the same way.
+    ///
+    /// Set it while building the limiter: clones taken earlier keep the cap
+    /// they were cloned with.
+    ///
+    /// Default: 250,000.
+    pub fn with_max_tracked_keys(mut self, max_tracked_keys: usize) -> Self {
+        if let Some(active) = &mut self.active {
+            let max_tracked = max_tracked_keys.max(1);
+            active.max_tracked = max_tracked;
+            active.refusals_reported.max_tracked = max_tracked;
+            active.invalid_forwarded_reported.max_tracked = max_tracked;
+        }
+        self
+    }
+
     /// The name given with [`Self::with_limiter_name`], if any.
     pub fn limiter_name(&self) -> Option<&'static str> {
         self.limiter_name
@@ -822,13 +848,26 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
         self.active.as_ref().map_or(0, |a| a.tracked())
     }
 
+    /// Charge one request against `key`'s bucket, as [`Self::charge`] does,
+    /// with the refusal as the layer's [`Refusal`].
+    ///
+    /// It only ever refuses with [`Refusal::RateLimited`]; the other
+    /// refusals are about a request's client address, which the layer works
+    /// out. Code that limits from its own handlers can match on
+    /// [`TooManyRequests`] with [`Self::charge`] instead.
+    pub fn check(&self, key: K) -> Result<(), Refusal> {
+        self.charge(key).map_err(
+            |TooManyRequests { retry_after_secs }| Refusal::RateLimited { retry_after_secs },
+        )
+    }
+
     /// Charge one request against `key`'s bucket.
     ///
     /// This is the whole decision, separated from the middleware so a service
     /// can call it from its own code. It does not run the
     /// [`on_refused`](Self::on_refused) callback, which belongs to the
     /// refusal responses the layer sends.
-    pub fn check(&self, key: K) -> Result<(), Refusal> {
+    pub fn charge(&self, key: K) -> Result<(), TooManyRequests> {
         let Some(active) = &self.active else {
             return Ok(());
         };
@@ -847,7 +886,7 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
             if !active.is_tracked(&key) && active.tracked() >= active.max_tracked {
                 // Still full: fail closed for the new IP rather than grow
                 // unbounded. Same 429 contract as a quota refusal.
-                return Err(Refusal::RateLimited {
+                return Err(TooManyRequests {
                     retry_after_secs: CAPACITY_RETRY_AFTER_SECS,
                 });
             }
@@ -861,7 +900,7 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
                 // rounded-down time arrives before the token and fails again.
                 let wait = not_until.wait_time_from(DefaultClock::default().now());
                 let retry_after_secs = (wait.as_secs() + u64::from(wait.subsec_nanos() > 0)).max(1);
-                Err(Refusal::RateLimited { retry_after_secs })
+                Err(TooManyRequests { retry_after_secs })
             }
         }
     }
@@ -1174,7 +1213,7 @@ mod tests {
     /// full and the only refusal is the capacity one.
     #[test]
     fn cap_fails_closed_for_a_new_ip_when_full() {
-        let limiter = RateLimiterState::with_capacity(1, 5, 2);
+        let limiter = RateLimiterState::new(1, 5).with_max_tracked_keys(2);
 
         assert!(limiter.check(ip("1.1.1.1")).is_ok());
         assert!(limiter.check(ip("2.2.2.2")).is_ok());
@@ -1210,7 +1249,7 @@ mod tests {
     /// A set of distinct IPs comfortably under the cap is never refused by it.
     #[test]
     fn a_client_set_under_the_cap_is_never_refused() {
-        let limiter = RateLimiterState::with_capacity(1000, 1000, 200);
+        let limiter = RateLimiterState::new(1000, 1000).with_max_tracked_keys(200);
         for i in 0..150u32 {
             let o = i.to_be_bytes();
             assert!(
@@ -1225,7 +1264,7 @@ mod tests {
     #[test]
     fn reclaim_frees_capacity_for_new_ips() {
         // burst 1 at 1000/s: a charged bucket fully replenishes in ~1ms.
-        let limiter = RateLimiterState::with_capacity(1000, 1, 2);
+        let limiter = RateLimiterState::new(1000, 1).with_max_tracked_keys(2);
         assert!(limiter.check(ip("1.1.1.1")).is_ok());
         assert!(limiter.check(ip("2.2.2.2")).is_ok());
 
@@ -1899,6 +1938,53 @@ mod tests {
         assert!(RateLimiterState::disabled().first_refusal_in_window(&client));
     }
 
+    /// `charge` answers with only what can happen on a handler's path, and
+    /// `check` with the same refusal as the layer's `Refusal`.
+    #[test]
+    fn charge_refuses_with_the_retry_time_and_check_agrees() {
+        let limiter = RateLimiterState::per_period(Duration::from_secs(5), 1);
+        let client = ip("203.0.113.1");
+        assert_eq!(limiter.charge(client), Ok(()));
+        assert_eq!(
+            limiter.charge(client),
+            Err(TooManyRequests {
+                retry_after_secs: 5
+            })
+        );
+        assert_eq!(
+            limiter.check(client),
+            Err(Refusal::RateLimited {
+                retry_after_secs: 5
+            })
+        );
+    }
+
+    /// A small cap refuses a new key once full of live ones, and never a key
+    /// it already tracks; a cap of 0 tracks one key rather than none.
+    #[test]
+    fn max_tracked_keys_bounds_new_keys_only() {
+        let limiter = KeyedRateLimiterState::<String>::per_period(Duration::from_secs(3600), 5)
+            .with_max_tracked_keys(2);
+        assert!(limiter.charge("a".to_owned()).is_ok());
+        assert!(limiter.charge("b".to_owned()).is_ok());
+        assert_eq!(
+            limiter.charge("c".to_owned()),
+            Err(TooManyRequests {
+                retry_after_secs: CAPACITY_RETRY_AFTER_SECS
+            })
+        );
+        assert!(limiter.charge("a".to_owned()).is_ok());
+
+        let one =
+            RateLimiterState::per_period(Duration::from_secs(3600), 5).with_max_tracked_keys(0);
+        assert!(one.charge(ip("203.0.113.1")).is_ok());
+        assert!(one.charge(ip("203.0.113.2")).is_err());
+
+        let disabled = RateLimiterState::disabled().with_max_tracked_keys(1);
+        assert!(disabled.charge(ip("203.0.113.1")).is_ok());
+        assert!(disabled.charge(ip("203.0.113.2")).is_ok());
+    }
+
     /// One request every period after the burst: slower than one a second,
     /// which `new` cannot state.
     #[test]
@@ -1959,7 +2045,7 @@ mod tests {
     /// growing it.
     #[test]
     fn the_refusal_record_is_bounded() {
-        let limiter = RateLimiterState::with_capacity(1, 1, 4);
+        let limiter = RateLimiterState::new(1, 1).with_max_tracked_keys(4);
         for last_octet in 0..20u8 {
             assert!(limiter.first_refusal_in_window(&IpAddr::from([198, 51, 100, last_octet])));
         }

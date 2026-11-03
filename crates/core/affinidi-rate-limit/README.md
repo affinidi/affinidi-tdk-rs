@@ -28,7 +28,7 @@ let per_client = RateLimiterState::per_window(10, Duration::from_secs(60))
     .with_limiter_name("auth-challenge-per-ip");
 
 let client = clients.client_key(peer.ip(), &headers)?;
-if let Err(Refusal::RateLimited { retry_after_secs }) = per_client.check(client) {
+if let Err(TooManyRequests { retry_after_secs }) = per_client.charge(client) {
     if per_client.first_refusal_in_window(&client) {
         tracing::warn!(%client, "client over the rate limit");
     }
@@ -36,11 +36,12 @@ if let Err(Refusal::RateLimited { retry_after_secs }) = per_client.check(client)
 }
 ```
 
-`check` only decides: the crate builds a refusal response, and applies
+`charge` only decides: the crate builds a refusal response, and applies
 `with_source` and `with_limiter_name` to it, only in the layer.
 `KeyedRateLimiterState<K>` takes any hashable key, such as a `String` sender or
-`()` for one shared budget. `ClientIpExtractor::client_ip` gives the unmasked
-address, for anything other than limiting.
+`()` for one shared budget, and `with_max_tracked_keys(n)` holds it to `n` keys
+rather than 250,000. `ClientIpExtractor::client_ip` gives the unmasked address,
+for anything other than limiting.
 
 `RateLimitLayer::ipv6_prefix(64)` charges an IPv6 client to its `/64`. The
 layer logs a client's first refusal in each window (the time its bucket takes

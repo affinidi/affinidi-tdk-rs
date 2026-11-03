@@ -3,7 +3,7 @@
 use std::{net::SocketAddr, time::Duration};
 
 use affinidi_rate_limit::{
-    ClientIpExtractor, KeyedRateLimiterState, RateLimitLayer, RateLimiterState, Refusal,
+    ClientIpExtractor, KeyedRateLimiterState, RateLimitLayer, RateLimiterState, TooManyRequests,
 };
 use axum::{
     Router,
@@ -51,11 +51,8 @@ async fn handler_and_layer_charge_the_same_client() {
     let rotated = extractor()
         .client_key(proxy, &forwarded("2001:db8:1:2::2"))
         .unwrap();
-    assert!(in_handler.check(first).is_ok());
-    assert!(matches!(
-        in_handler.check(rotated),
-        Err(Refusal::RateLimited { .. })
-    ));
+    assert!(in_handler.charge(first).is_ok());
+    assert!(in_handler.charge(rotated).is_err());
 
     let app = Router::new().route("/", get(|| async { "ok" })).layer(
         RateLimitLayer::new(RateLimiterState::per_window(1, Duration::from_secs(60)))
@@ -82,14 +79,13 @@ fn a_per_source_limit_names_itself_and_reports_once() {
         .with_limiter_name("passkey-redeem-per-source");
     let source = "vid:did:example:alice".to_owned();
 
-    assert!(per_source.check(source.clone()).is_ok());
-    let refusal = per_source.check(source.clone()).unwrap_err();
-    assert!(matches!(
-        refusal,
-        Refusal::RateLimited {
+    assert!(per_source.charge(source.clone()).is_ok());
+    assert_eq!(
+        per_source.charge(source.clone()),
+        Err(TooManyRequests {
             retry_after_secs: 60
-        }
-    ));
+        })
+    );
     let name: Option<&'static str> = per_source.limiter_name();
     assert_eq!(name, Some("passkey-redeem-per-source"));
     assert!(per_source.first_refusal_in_window(&source));

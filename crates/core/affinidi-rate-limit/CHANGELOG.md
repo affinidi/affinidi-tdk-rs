@@ -27,6 +27,12 @@ limits. Existing callers compile unchanged.
 - `with_limiter_name(name)` and `limiter_name()`: a refusal body's `limiter`
   names the limit that fired, while `x-rate-limit-source` still names the
   service. Unset, the body is unchanged.
+- `charge(key)`, returning `TooManyRequests { retry_after_secs }`: the
+  handler-side check, refusing only for the rate. `check(key)` is unchanged
+  and now delegates to it.
+- `with_max_tracked_keys(n)`: holds a limiter to `n` distinct keys rather than
+  250,000, refusing new keys once full of live ones. The refusal log is
+  bounded the same way.
 - `first_refusal_in_window(key)`: records a refusal and says whether it is the
   key's first in its window, so handler code can log once per window.
 - `ClientIpExtractor` is public. `direct_peer()`, `trusted_proxies(cidrs)` and
