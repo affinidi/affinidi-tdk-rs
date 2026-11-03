@@ -15,7 +15,9 @@ let app = Router::new().layer(RateLimitLayer::new(limiter));
 
 `per_second = 0` disables limiting and the layer becomes a pass-through.
 `RateLimiterState::per_window(max, Duration::from_secs(60))` states the same
-bucket as `max` requests per minute.
+bucket as `max` requests per minute, and
+`RateLimiterState::per_period(Duration::from_secs(5), 10)` as 10 back-to-back
+requests, then one every 5 s.
 
 To limit from a handler, on any key, charging the same client the layer would:
 
@@ -67,7 +69,17 @@ rightwards (the part trusted proxies wrote) is rejected with
 is not visible ASCII. The `400` goes through `on_refused`, and a named limiter
 sends it with `x-rate-limit-source` and a JSON body
 (`{"error":"invalid_forwarded_for","limiter":…,"message":…}`). Entries left of the client entry are never parsed as
-addresses, so client-supplied junk there is ignored.
+addresses, so client-supplied junk there is ignored. A proxy's invalid chain
+is logged once per window per proxy address, though every such request is
+refused.
+
+The `400` is deliberate, and differs from resolvers that fall back to the
+proxy's address (the DID hosting service's and `vti-common`'s, for example).
+Behind a load balancer only a client inside a trusted range, a misbehaving
+proxy, or a client padding the header past 64 entries can reach it. Falling
+back would give such a client the proxy's bucket on top of its own, and would
+hide a misconfigured proxy behind unexplained `429`s. A service moving to
+this crate from such a resolver starts answering those requests with `400`.
 
 ## Two things that are easy to get wrong
 

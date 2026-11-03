@@ -21,6 +21,9 @@ limits. Existing callers compile unchanged.
   `KeyedRateLimiterState`.
 - `per_window(max_per_window, window)`: a burst of up to `max_per_window`,
   refilled evenly across `window`. `0` or a zero window disables limiting.
+- `per_period(period, burst)`: one request every `period` after a burst of
+  `burst`, for limits slower than one a second. A zero period disables
+  limiting.
 - `with_limiter_name(name)` and `limiter_name()`: a refusal body's `limiter`
   names the limit that fired, while `x-rate-limit-source` still names the
   service. Unset, the body is unchanged.
@@ -41,6 +44,13 @@ limits. Existing callers compile unchanged.
 - The layer logs a client's first refusal in each window (the time its bucket
   takes to refill) rather than every refused request. `on_refused` still runs
   for every refusal.
+- An invalid `X-Forwarded-For` from a trusted proxy is logged once per window
+  per proxy address, on a record separate from quota refusals, rather than on
+  every request. Every such request is still refused with `400`.
+- The `400` for an invalid chain is documented as deliberate. A service moving
+  here from a resolver that falls back to the proxy's address, such as the
+  DID hosting service's or `vti-common`'s, starts answering those requests
+  with `400` rather than charging them to the proxy's bucket.
 
 ### Fixed
 

@@ -295,7 +295,7 @@ impl std::error::Error for InvalidIpv6Prefix {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ClientIpExtractionError {
     MissingPeer,
-    InvalidForwardedFor,
+    InvalidForwardedFor { peer: IpAddr },
 }
 
 /// Works out the client address a request is charged to: the socket peer, or,
@@ -467,7 +467,11 @@ impl ClientIpExtractor {
             .map(|ci| ci.0.ip())
             .ok_or(ClientIpExtractionError::MissingPeer)?;
         self.client_key(peer, request.headers())
-            .map_err(|InvalidForwardedFor| ClientIpExtractionError::InvalidForwardedFor)
+            .map_err(
+                |InvalidForwardedFor| ClientIpExtractionError::InvalidForwardedFor {
+                    peer: peer.to_canonical(),
+                },
+            )
     }
 }
 
@@ -502,24 +506,40 @@ struct Active<K: Hash + Eq + Clone> {
     /// Milliseconds (since `epoch`) of the last inline reclaim, `0` until the
     /// first. Shared so all clones throttle against one another.
     last_reclaim_ms: Arc<AtomicU64>,
-    /// How long an empty bucket takes to refill completely: the window a
-    /// refusal is logged once in.
-    window: Duration,
-    /// When each recently refused key was last reported as a first refusal.
-    /// Touched only on the refusal path, never for an admitted request.
-    refusals_reported: Arc<Mutex<HashMap<K, Instant>>>,
+    /// Keys whose quota refusal has been logged this window.
+    refusals_reported: RefusalLog<K>,
+    /// Peers whose invalid `X-Forwarded-For` has been logged this window. Kept
+    /// apart from `refusals_reported`, so a proxy's bad chain cannot hide a
+    /// quota refusal of the same address, or the other way round.
+    invalid_forwarded_reported: RefusalLog<IpAddr>,
 }
 
-impl<K: Hash + Eq + Clone> Active<K> {
+/// When each recently refused key was last logged, so a refusal is logged
+/// once per window rather than once per request. Touched only on refusal
+/// paths, never for an admitted request, and bounded like the buckets.
+#[derive(Clone)]
+struct RefusalLog<K: Hash + Eq + Clone> {
+    /// How long an empty bucket takes to refill completely.
+    window: Duration,
+    max_tracked: usize,
+    reported: Arc<Mutex<HashMap<K, Instant>>>,
+}
+
+impl<K: Hash + Eq + Clone> RefusalLog<K> {
+    fn new(window: Duration, max_tracked: usize) -> Self {
+        Self {
+            window,
+            max_tracked,
+            reported: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
     /// Record a refusal of `key`; `true` if it is the first in the key's
     /// window.
-    fn first_refusal_in_window(&self, key: &K) -> bool {
+    fn first_in_window(&self, key: &K) -> bool {
         let now = Instant::now();
         let window = self.window;
-        let mut reported = self
-            .refusals_reported
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut reported = self.reported.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(last) = reported.get(key)
             && now.duration_since(*last) < window
         {
@@ -537,16 +557,26 @@ impl<K: Hash + Eq + Clone> Active<K> {
         true
     }
 
-    /// Forget refusals reported more than a window ago.
-    fn sweep_refusals_reported(&self) {
+    /// Forget refusals logged more than a window ago.
+    fn sweep(&self) {
         let now = Instant::now();
         let window = self.window;
-        self.refusals_reported
+        self.reported
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|_, last| now.duration_since(*last) < window);
     }
 
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.reported
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
+}
+
+impl<K: Hash + Eq + Clone> Active<K> {
     /// Number of distinct keys currently tracked.
     fn tracked(&self) -> usize {
         self.store.0.len()
@@ -622,6 +652,11 @@ fn per_second_quota(per_second: u32, burst: u32) -> Option<Quota> {
     Some(Quota::per_second(per_second).allow_burst(burst))
 }
 
+fn per_period_quota(period: Duration, burst: u32) -> Option<Quota> {
+    let burst = NonZeroU32::new(burst).unwrap_or(NonZeroU32::MIN);
+    Some(Quota::with_period(period)?.allow_burst(burst))
+}
+
 fn per_window_quota(max_per_window: u32, window: Duration) -> Option<Quota> {
     let max_per_window = NonZeroU32::new(max_per_window)?;
     if window.is_zero() {
@@ -653,6 +688,16 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
         Self::from_quota(per_window_quota(max_per_window, window), MAX_TRACKED_KEYS)
     }
 
+    /// Build a limiter that gives each key one request every `period`, with
+    /// bursts up to `burst`: `(Duration::from_secs(5), 10)` is 10 back-to-back
+    /// requests, then one every 5 s. For limits slower than one a second,
+    /// which [`Self::new`] cannot state.
+    ///
+    /// A zero `period` disables limiting; `burst == 0` is treated as 1.
+    pub fn per_period(period: Duration, burst: u32) -> Self {
+        Self::from_quota(per_period_quota(period, burst), MAX_TRACKED_KEYS)
+    }
+
     /// As [`Self::new`], but with an explicit distinct-key cap. The public
     /// constructors always use [`MAX_TRACKED_KEYS`]; tests use a small cap so
     /// the admission-control path can be exercised without inserting 250k keys.
@@ -670,6 +715,7 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
         // read membership/length from the exact map the limiter mutates.
         let store = SharedDashMapStore(Arc::new(DashMapStateStore::default()));
         let window = quota.burst_size_replenished_in();
+        let max_tracked = max_tracked.max(1);
         let limiter = RateLimiter::new(quota, store.clone(), DefaultClock::default());
         Self {
             active: Some(Active {
@@ -677,13 +723,13 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
                 store,
                 // A cap of 0 would refuse every IP; clamp so a misconfigured
                 // caller degrades to "track one" rather than "deny all".
-                max_tracked: max_tracked.max(1),
+                max_tracked,
                 epoch: Instant::now()
                     .checked_sub(INLINE_RECLAIM_MIN_INTERVAL)
                     .unwrap_or_else(Instant::now),
                 last_reclaim_ms: Arc::new(AtomicU64::new(0)),
-                window,
-                refusals_reported: Arc::new(Mutex::new(HashMap::new())),
+                refusals_reported: RefusalLog::new(window, max_tracked),
+                invalid_forwarded_reported: RefusalLog::new(window, max_tracked),
             }),
             on_refused: None,
             source: None,
@@ -763,7 +809,7 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
     pub fn first_refusal_in_window(&self, key: &K) -> bool {
         self.active
             .as_ref()
-            .is_none_or(|active| active.first_refusal_in_window(key))
+            .is_none_or(|active| active.refusals_reported.first_in_window(key))
     }
 
     /// Is limiting active?
@@ -821,6 +867,16 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
     }
 }
 
+impl KeyedRateLimiterState<IpAddr> {
+    /// Record an invalid `X-Forwarded-For` from `peer`; `true` if it is the
+    /// first from that peer in the window.
+    fn first_invalid_forwarded_in_window(&self, peer: &IpAddr) -> bool {
+        self.active
+            .as_ref()
+            .is_none_or(|active| active.invalid_forwarded_reported.first_in_window(peer))
+    }
+}
+
 impl<K: Hash + Eq + Clone + Send + Sync + 'static> KeyedRateLimiterState<K> {
     /// Sweep fully-replenished buckets out of the keyed store every
     /// [`GC_INTERVAL`], until `shutdown` fires.
@@ -845,7 +901,8 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> KeyedRateLimiterState<K> {
                         let before = limiter.len();
                         limiter.retain_recent();
                         limiter.shrink_to_fit();
-                        active.sweep_refusals_reported();
+                        active.refusals_reported.sweep();
+                        active.invalid_forwarded_reported.sweep();
                         let after = limiter.len();
                         if before != after {
                             debug!(
@@ -1042,8 +1099,10 @@ where
                 let response = self.state.refuse(&Refusal::NoClientIp);
                 return Box::pin(async move { Ok(response) });
             }
-            Err(ClientIpExtractionError::InvalidForwardedFor) => {
-                warn!("Invalid X-Forwarded-For header; rejecting request");
+            Err(ClientIpExtractionError::InvalidForwardedFor { peer }) => {
+                if self.state.first_invalid_forwarded_in_window(&peer) {
+                    warn!(%peer, "trusted proxy sent an invalid X-Forwarded-For; rejecting its requests with 400");
+                }
                 let response = self.state.refuse(&Refusal::InvalidForwardedFor);
                 return Box::pin(async move { Ok(response) });
             }
@@ -1840,6 +1899,62 @@ mod tests {
         assert!(RateLimiterState::disabled().first_refusal_in_window(&client));
     }
 
+    /// One request every period after the burst: slower than one a second,
+    /// which `new` cannot state.
+    #[test]
+    fn per_period_spends_the_burst_then_one_per_period() {
+        let limiter = RateLimiterState::per_period(Duration::from_secs(5), 2);
+        let client = ip("203.0.113.1");
+        assert!(limiter.check(client).is_ok());
+        assert!(limiter.check(client).is_ok());
+        assert_eq!(
+            limiter.check(client),
+            Err(Refusal::RateLimited {
+                retry_after_secs: 5
+            })
+        );
+    }
+
+    #[test]
+    fn per_period_of_zero_disables_limiting() {
+        assert!(!RateLimiterState::per_period(Duration::ZERO, 10).is_enabled());
+        let burst_of_zero = RateLimiterState::per_period(Duration::from_secs(5), 0);
+        assert!(burst_of_zero.check(ip("203.0.113.1")).is_ok());
+        assert!(burst_of_zero.check(ip("203.0.113.1")).is_err());
+    }
+
+    /// A proxy's bad chain is logged once per window, and on a record of its
+    /// own: it neither hides nor is hidden by a quota refusal of the same
+    /// address.
+    #[test]
+    fn an_invalid_chain_is_logged_once_per_peer_on_its_own_record() {
+        let limiter = RateLimiterState::per_window(1, Duration::from_secs(60));
+        let proxy = ip("10.0.0.5");
+        assert!(limiter.first_invalid_forwarded_in_window(&proxy));
+        assert!(!limiter.first_invalid_forwarded_in_window(&proxy));
+        assert!(limiter.first_invalid_forwarded_in_window(&ip("10.0.0.6")));
+        assert!(
+            limiter.first_refusal_in_window(&proxy),
+            "a quota refusal of the proxy's own address is still logged"
+        );
+    }
+
+    /// Logging once does not mean refusing once: every bad chain gets its 400.
+    #[tokio::test]
+    async fn every_invalid_chain_is_refused_though_logged_once() {
+        use tower::ServiceExt;
+
+        let app = trusted_app(100);
+        for _ in 0..3 {
+            let response = app
+                .clone()
+                .oneshot(xff_request([10, 0, 0, 5], "not-an-address"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
     /// A flood of new keys past the cap clears the record rather than
     /// growing it.
     #[test]
@@ -1848,14 +1963,7 @@ mod tests {
         for last_octet in 0..20u8 {
             assert!(limiter.first_refusal_in_window(&IpAddr::from([198, 51, 100, last_octet])));
         }
-        let reported = limiter
-            .active
-            .as_ref()
-            .unwrap()
-            .refusals_reported
-            .lock()
-            .unwrap()
-            .len();
+        let reported = limiter.active.as_ref().unwrap().refusals_reported.len();
         assert!(reported <= 4, "got {reported}");
     }
 
