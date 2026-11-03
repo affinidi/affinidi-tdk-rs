@@ -24,7 +24,7 @@
  *
  * A service that limits after reading the request (by sender, by task, or
  * against one global budget) uses [`KeyedRateLimiterState`] with any hashable
- * key and calls [`check`](KeyedRateLimiterState::check) itself.
+ * key and calls [`charge`](KeyedRateLimiterState::charge) itself.
  * [`ClientIpExtractor::client_key`] gives it the same key the layer would
  * charge, including behind trusted proxies. [`RateLimiterState`] is the
  * `IpAddr`-keyed limiter the layer takes.
@@ -175,9 +175,10 @@ pub const GC_INTERVAL: Duration = Duration::from_secs(60);
 /// to roughly tens of MB for `IpAddr` keys (an address plus a few words of
 /// bucket state per entry; a larger key, such as a `String`, costs more). When
 /// the cap is hit, a *new* key fails closed — the same `429` a quota refusal
-/// returns — rather than growing the map; a key already tracked is unaffected. It is a constant rather than a config knob because it is a
-/// safety backstop, not a tuning parameter, and operators size the real limit
-/// via `per_second` / `burst`.
+/// returns — rather than growing the map; a key already tracked is unaffected.
+/// It is the default, not a tuning parameter: operators size the real limit
+/// with the quota. [`KeyedRateLimiterState::with_max_tracked_keys`] changes it
+/// for a limiter whose keys are few or large.
 const MAX_TRACKED_KEYS: usize = 250_000;
 
 /// `Retry-After` (seconds) on a *capacity* refusal (the cap is full), as
@@ -311,8 +312,11 @@ impl std::error::Error for InvalidIpv6Prefix {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ClientIpExtractionError {
     MissingPeer,
-    InvalidForwardedFor { peer: IpAddr },
+    InvalidForwardedFor,
 }
+
+/// How long a proxy's invalid `X-Forwarded-For` is logged once in.
+const INVALID_CHAIN_LOG_WINDOW: Duration = Duration::from_secs(60);
 
 /// Works out the client address a request is charged to: the socket peer, or,
 /// when the peer is a trusted proxy, the client its `X-Forwarded-For` chain
@@ -321,7 +325,10 @@ enum ClientIpExtractionError {
 /// [`RateLimitLayer`] uses one internally; a service that needs the client
 /// address itself (to limit inside a handler, or for anything else) builds its
 /// own and calls [`client_ip`](Self::client_ip), so both agree on who the
-/// client is.
+/// client is. Build it once and share it (clones share one log): a trusted
+/// proxy's invalid chain is logged as a warning once a minute per proxy, by
+/// whichever caller meets it, so a misbehaving proxy shows up in the logs
+/// however the request was limited.
 ///
 /// When trusted CIDRs are configured, the socket peer must be one of them
 /// before `X-Forwarded-For` is considered; otherwise the socket peer is used.
@@ -334,10 +341,31 @@ enum ClientIpExtractionError {
 /// junk there is ignored rather than refused. They still count towards the
 /// [`MAX_FORWARDED_ENTRIES`] cap, and a header value that is not visible ASCII
 /// is refused whole.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
 pub struct ClientIpExtractor {
     trusted_proxy_cidrs: Vec<IpNet>,
     ipv6_prefix_len: Option<u8>,
+    /// Proxies whose invalid chain has been logged this window.
+    invalid_chains_logged: RefusalLog<IpAddr>,
+}
+
+impl Default for ClientIpExtractor {
+    fn default() -> Self {
+        Self {
+            trusted_proxy_cidrs: Vec::new(),
+            ipv6_prefix_len: None,
+            invalid_chains_logged: RefusalLog::new(INVALID_CHAIN_LOG_WINDOW, MAX_TRACKED_KEYS),
+        }
+    }
+}
+
+impl fmt::Debug for ClientIpExtractor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientIpExtractor")
+            .field("trusted_proxy_cidrs", &self.trusted_proxy_cidrs)
+            .field("ipv6_prefix_len", &self.ipv6_prefix_len)
+            .finish()
+    }
 }
 
 impl ClientIpExtractor {
@@ -359,16 +387,27 @@ impl ClientIpExtractor {
     /// [`InvalidTrustedProxy`] if a range has prefix length 0 (`0.0.0.0/0`,
     /// `::/0`), which would trust every peer.
     pub fn trusted_proxies(trusted_proxy_cidrs: Vec<IpNet>) -> Result<Self, InvalidTrustedProxy> {
+        Self::default().with_trusted_proxies(trusted_proxy_cidrs)
+    }
+
+    /// As [`Self::trusted_proxies`], keeping this extractor's other settings
+    /// (its [`ipv6_prefix`](Self::ipv6_prefix)).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::trusted_proxies`].
+    pub fn with_trusted_proxies(
+        mut self,
+        trusted_proxy_cidrs: Vec<IpNet>,
+    ) -> Result<Self, InvalidTrustedProxy> {
         if let Some(cidr) = trusted_proxy_cidrs
             .iter()
             .find(|cidr| cidr.prefix_len() == 0)
         {
             return Err(InvalidTrustedProxy { cidr: *cidr });
         }
-        Ok(Self {
-            trusted_proxy_cidrs,
-            ipv6_prefix_len: None,
-        })
+        self.trusted_proxy_cidrs = trusted_proxy_cidrs;
+        Ok(self)
     }
 
     /// Charge an IPv6 client to its `/prefix_len` network rather than its
@@ -424,7 +463,8 @@ impl ClientIpExtractor {
     ///
     /// [`InvalidForwardedFor`] when a trusted proxy sent a chain that cannot be
     /// attributed. Falling back to the proxy's address instead would charge
-    /// every client behind it to one bucket.
+    /// every client behind it to one bucket. The first such chain from a
+    /// proxy in each minute is logged as a warning naming the proxy.
     pub fn client_ip(
         &self,
         peer: IpAddr,
@@ -434,7 +474,15 @@ impl ClientIpExtractor {
         if !self.is_trusted_proxy(peer) {
             return Ok(peer);
         }
-        Ok(self.client_from_xff_chain(headers)?.unwrap_or(peer))
+        match self.client_from_xff_chain(headers) {
+            Ok(client) => Ok(client.unwrap_or(peer)),
+            Err(InvalidForwardedFor) => {
+                if self.invalid_chains_logged.first_in_window(&peer) {
+                    warn!(%peer, "trusted proxy sent an invalid X-Forwarded-For; rejecting its requests with 400");
+                }
+                Err(InvalidForwardedFor)
+            }
+        }
     }
 
     fn is_trusted_proxy(&self, ip: IpAddr) -> bool {
@@ -483,11 +531,7 @@ impl ClientIpExtractor {
             .map(|ci| ci.0.ip())
             .ok_or(ClientIpExtractionError::MissingPeer)?;
         self.client_key(peer, request.headers())
-            .map_err(
-                |InvalidForwardedFor| ClientIpExtractionError::InvalidForwardedFor {
-                    peer: peer.to_canonical(),
-                },
-            )
+            .map_err(|InvalidForwardedFor| ClientIpExtractionError::InvalidForwardedFor)
     }
 }
 
@@ -524,10 +568,6 @@ struct Active<K: Hash + Eq + Clone> {
     last_reclaim_ms: Arc<AtomicU64>,
     /// Keys whose quota refusal has been logged this window.
     refusals_reported: RefusalLog<K>,
-    /// Peers whose invalid `X-Forwarded-For` has been logged this window. Kept
-    /// apart from `refusals_reported`, so a proxy's bad chain cannot hide a
-    /// quota refusal of the same address, or the other way round.
-    invalid_forwarded_reported: RefusalLog<IpAddr>,
 }
 
 /// When each recently refused key was last logged, so a refusal is logged
@@ -535,7 +575,7 @@ struct Active<K: Hash + Eq + Clone> {
 /// paths, never for an admitted request, and bounded like the buckets.
 #[derive(Clone)]
 struct RefusalLog<K: Hash + Eq + Clone> {
-    /// How long an empty bucket takes to refill completely.
+    /// How long a key is logged once in.
     window: Duration,
     max_tracked: usize,
     reported: Arc<Mutex<HashMap<K, Instant>>>,
@@ -627,8 +667,8 @@ impl<K: Hash + Eq + Clone> Active<K> {
 ///
 /// The key is whatever a request is charged to: a client address, a sender,
 /// or `()` for one budget shared by every caller. [`RateLimitLayer`] takes the
-/// `IpAddr`-keyed [`RateLimiterState`]; any other key is checked from the
-/// service's own code with [`check`](Self::check).
+/// `IpAddr`-keyed [`RateLimiterState`]; any other key is charged from the
+/// service's own code with [`charge`](Self::charge).
 ///
 /// # Examples
 ///
@@ -668,8 +708,17 @@ fn per_second_quota(per_second: u32, burst: u32) -> Option<Quota> {
     Some(Quota::per_second(per_second).allow_burst(burst))
 }
 
+/// The longest full refill a limiter is given: 100 years. `governor` counts in
+/// `u64` nanoseconds (about 584 years) and adds the refill to the process's
+/// own clock, so anything near that panics or wraps; a limit that takes a
+/// century to refill has stopped refilling in practice anyway.
+const LONGEST_REFILL: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
+
 fn per_period_quota(period: Duration, burst: u32) -> Option<Quota> {
     let burst = NonZeroU32::new(burst).unwrap_or(NonZeroU32::MIN);
+    // A full refill (`period * burst`) must fit governor's clock; past it the
+    // limit never refills in practice, so holding it there changes nothing.
+    let period = period.min(LONGEST_REFILL / burst.get());
     Some(Quota::with_period(period)?.allow_burst(burst))
 }
 
@@ -678,6 +727,7 @@ fn per_window_quota(max_per_window: u32, window: Duration) -> Option<Quota> {
     if window.is_zero() {
         return None;
     }
+    let window = window.min(LONGEST_REFILL);
     let period = (window / max_per_window.get()).max(Duration::from_nanos(1));
     Some(Quota::with_period(period)?.allow_burst(max_per_window))
 }
@@ -699,7 +749,8 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
     /// its double burst either side of a window boundary. `Retry-After` is the
     /// time to the next request, not to the end of a window.
     ///
-    /// `max_per_window == 0` or a zero `window` disables limiting.
+    /// `max_per_window == 0` or a zero `window` disables limiting. A window
+    /// over 100 years is held there.
     pub fn per_window(max_per_window: u32, window: Duration) -> Self {
         Self::from_quota(per_window_quota(max_per_window, window))
     }
@@ -709,7 +760,8 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
     /// requests, then one every 5 s. For limits slower than one a second,
     /// which [`Self::new`] cannot state.
     ///
-    /// A zero `period` disables limiting; `burst == 0` is treated as 1.
+    /// A zero `period` disables limiting; `burst == 0` is treated as 1. A full
+    /// refill (`period * burst`) over 100 years is held there.
     pub fn per_period(period: Duration, burst: u32) -> Self {
         Self::from_quota(per_period_quota(period, burst))
     }
@@ -735,7 +787,6 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
                     .unwrap_or_else(Instant::now),
                 last_reclaim_ms: Arc::new(AtomicU64::new(0)),
                 refusals_reported: RefusalLog::new(window, max_tracked),
-                invalid_forwarded_reported: RefusalLog::new(window, max_tracked),
             }),
             on_refused: None,
             source: None,
@@ -813,7 +864,6 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
             let max_tracked = max_tracked_keys.max(1);
             active.max_tracked = max_tracked;
             active.refusals_reported.max_tracked = max_tracked;
-            active.invalid_forwarded_reported.max_tracked = max_tracked;
         }
         self
     }
@@ -829,9 +879,9 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
     /// this way; call it after a refused [`check`](Self::check) to do the
     /// same.
     ///
-    /// Best effort: at most 250,000 keys are remembered, and
-    /// under a flood of more the record is cleared, so a key may be reported
-    /// again early. Always `true` when limiting is disabled.
+    /// Best effort: at most as many keys are remembered as the limiter tracks
+    /// ([`Self::with_max_tracked_keys`]), and under a flood of more the record
+    /// is cleared, so a key may be reported again early. Always `true` when limiting is disabled.
     pub fn first_refusal_in_window(&self, key: &K) -> bool {
         self.active
             .as_ref()
@@ -872,19 +922,20 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
             return Ok(());
         };
 
-        // Admission control (CWE-770). The store is keyed on unauthenticated,
-        // client-chosen IPs, so without a ceiling a client rotating addresses
-        // (an IPv6 /64, say) grows it without bound between GC sweeps. Only the
-        // *insertion of a new key* is gated: an IP already tracked falls through
-        // to its bucket below, so a legitimate steady-state set of clients under
-        // the cap is never refused and no in-window IP is evicted by this path.
+        // Admission control (CWE-770). The store is often keyed on
+        // unauthenticated, client-chosen input (an address, a sender), so without
+        // a ceiling a client rotating keys (an IPv6 /64, say) grows it without
+        // bound between GC sweeps. Only the *insertion of a new key* is gated: a
+        // key already tracked falls through to its bucket below, so a legitimate
+        // steady-state set of clients under the cap is never refused and no
+        // in-window key is evicted by this path.
         if !active.is_tracked(&key) && active.tracked() >= active.max_tracked {
             // Try to make room before refusing: reclaim fully-replenished
             // buckets, throttled so this pre-auth path can't amplify an
             // O(tracked) scan across a flood (see `throttled_reclaim`).
             active.throttled_reclaim();
             if !active.is_tracked(&key) && active.tracked() >= active.max_tracked {
-                // Still full: fail closed for the new IP rather than grow
+                // Still full: fail closed for the new key rather than grow
                 // unbounded. Same 429 contract as a quota refusal.
                 return Err(TooManyRequests {
                     retry_after_secs: CAPACITY_RETRY_AFTER_SECS,
@@ -903,16 +954,6 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
                 Err(TooManyRequests { retry_after_secs })
             }
         }
-    }
-}
-
-impl KeyedRateLimiterState<IpAddr> {
-    /// Record an invalid `X-Forwarded-For` from `peer`; `true` if it is the
-    /// first from that peer in the window.
-    fn first_invalid_forwarded_in_window(&self, peer: &IpAddr) -> bool {
-        self.active
-            .as_ref()
-            .is_none_or(|active| active.invalid_forwarded_reported.first_in_window(peer))
     }
 }
 
@@ -941,7 +982,6 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> KeyedRateLimiterState<K> {
                         limiter.retain_recent();
                         limiter.shrink_to_fit();
                         active.refusals_reported.sweep();
-                        active.invalid_forwarded_reported.sweep();
                         let after = limiter.len();
                         if before != after {
                             debug!(
@@ -956,7 +996,11 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> KeyedRateLimiterState<K> {
         });
     }
 
-    fn refuse(&self, refusal: &Refusal) -> Response {
+    /// The response the layer sends for `refusal`, after running the
+    /// [`on_refused`](Self::on_refused) callback: for handler code that wants
+    /// its refusal to look exactly like the layer's (status, attribution
+    /// header, JSON body when named, `Retry-After`).
+    pub fn refuse(&self, refusal: &Refusal) -> Response {
         if let Some(cb) = &self.on_refused {
             cb(refusal);
         }
@@ -1072,11 +1116,9 @@ impl RateLimitLayer {
         mut self,
         trusted_proxy_cidrs: Vec<IpNet>,
     ) -> Result<Self, InvalidTrustedProxy> {
-        let ipv6_prefix_len = self.client_ip_extractor.ipv6_prefix_len;
-        self.client_ip_extractor = ClientIpExtractor {
-            ipv6_prefix_len,
-            ..ClientIpExtractor::trusted_proxies(trusted_proxy_cidrs)?
-        };
+        self.client_ip_extractor = self
+            .client_ip_extractor
+            .with_trusted_proxies(trusted_proxy_cidrs)?;
         Ok(self)
     }
 }
@@ -1138,10 +1180,7 @@ where
                 let response = self.state.refuse(&Refusal::NoClientIp);
                 return Box::pin(async move { Ok(response) });
             }
-            Err(ClientIpExtractionError::InvalidForwardedFor { peer }) => {
-                if self.state.first_invalid_forwarded_in_window(&peer) {
-                    warn!(%peer, "trusted proxy sent an invalid X-Forwarded-For; rejecting its requests with 400");
-                }
+            Err(ClientIpExtractionError::InvalidForwardedFor) => {
                 let response = self.state.refuse(&Refusal::InvalidForwardedFor);
                 return Box::pin(async move { Ok(response) });
             }
@@ -1924,15 +1963,19 @@ mod tests {
     /// passed; another key is reported on its own.
     #[test]
     fn a_refusal_is_reported_once_per_window() {
-        let limiter = RateLimiterState::per_window(1, Duration::from_millis(50));
+        let limiter = RateLimiterState::per_window(1, Duration::from_secs(60));
         let client = ip("203.0.113.1");
         assert!(limiter.first_refusal_in_window(&client));
         assert!(!limiter.first_refusal_in_window(&client));
         assert!(limiter.first_refusal_in_window(&ip("203.0.113.2")));
 
+        // A short window, only to see it pass: a slow scheduler can only make
+        // the sleep longer, never flip the result.
+        let short = RateLimiterState::per_window(1, Duration::from_millis(50));
+        assert!(short.first_refusal_in_window(&client));
         std::thread::sleep(Duration::from_millis(60));
         assert!(
-            limiter.first_refusal_in_window(&client),
+            short.first_refusal_in_window(&client),
             "a new window reports again"
         );
         assert!(RateLimiterState::disabled().first_refusal_in_window(&client));
@@ -2009,28 +2052,57 @@ mod tests {
         assert!(burst_of_zero.check(ip("203.0.113.1")).is_err());
     }
 
-    /// A proxy's bad chain is logged once per window, and on a record of its
-    /// own: it neither hides nor is hidden by a quota refusal of the same
-    /// address.
+    /// A proxy's bad chain is recorded for logging once per proxy, on the
+    /// extractor, however it was reached: a handler's `client_ip` and the
+    /// layer share it, and a quota refusal of the same address is apart.
     #[test]
-    fn an_invalid_chain_is_logged_once_per_peer_on_its_own_record() {
-        let limiter = RateLimiterState::per_window(1, Duration::from_secs(60));
-        let proxy = ip("10.0.0.5");
-        assert!(limiter.first_invalid_forwarded_in_window(&proxy));
-        assert!(!limiter.first_invalid_forwarded_in_window(&proxy));
-        assert!(limiter.first_invalid_forwarded_in_window(&ip("10.0.0.6")));
+    fn an_invalid_chain_is_logged_once_per_proxy() {
+        let extractor =
+            ClientIpExtractor::trusted_proxies(vec!["10.0.0.0/8".parse().unwrap()]).unwrap();
+        let bad = forwarded_for("not-an-address");
+        for _ in 0..3 {
+            assert_eq!(
+                extractor.client_ip(ip("10.0.0.5"), &bad),
+                Err(InvalidForwardedFor)
+            );
+        }
+        assert_eq!(
+            extractor.clone().client_key(ip("10.0.0.6"), &bad),
+            Err(InvalidForwardedFor)
+        );
+        assert_eq!(
+            extractor.invalid_chains_logged.len(),
+            2,
+            "one record per proxy"
+        );
         assert!(
-            limiter.first_refusal_in_window(&proxy),
+            !extractor
+                .invalid_chains_logged
+                .first_in_window(&ip("10.0.0.5")),
+            "already logged this window"
+        );
+
+        let limiter = RateLimiterState::per_window(1, Duration::from_secs(60));
+        assert!(
+            limiter.first_refusal_in_window(&ip("10.0.0.5")),
             "a quota refusal of the proxy's own address is still logged"
         );
     }
 
-    /// Logging once does not mean refusing once: every bad chain gets its 400.
+    /// Logging once does not mean refusing once: every bad chain through the
+    /// layer gets its 400, and the layer's extractor logs it once.
     #[tokio::test]
     async fn every_invalid_chain_is_refused_though_logged_once() {
         use tower::ServiceExt;
 
-        let app = trusted_app(100);
+        let extractor =
+            ClientIpExtractor::trusted_proxies(vec!["10.0.0.0/8".parse().unwrap()]).unwrap();
+        let app = axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(
+                RateLimitLayer::new(RateLimiterState::new(1, 100))
+                    .client_ip_extractor(extractor.clone()),
+            );
         for _ in 0..3 {
             let response = app
                 .clone()
@@ -2038,6 +2110,23 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(extractor.invalid_chains_logged.len(), 1);
+    }
+
+    /// Limits too slow for governor's nanosecond clock are held at its
+    /// longest, rather than panicking or wrapping into a wrong burst.
+    #[test]
+    fn very_slow_limits_are_held_at_the_longest_refill() {
+        for limiter in [
+            RateLimiterState::per_period(Duration::from_secs(3_000_000_000), 10),
+            RateLimiterState::per_period(Duration::MAX, 10),
+            RateLimiterState::per_window(10, Duration::MAX),
+        ] {
+            assert!(limiter.is_enabled());
+            let client = ip("203.0.113.1");
+            while limiter.charge(client).is_ok() {}
+            assert!(limiter.charge(client).is_err());
         }
     }
 

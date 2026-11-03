@@ -71,8 +71,9 @@ is not visible ASCII. The `400` goes through `on_refused`, and a named limiter
 sends it with `x-rate-limit-source` and a JSON body
 (`{"error":"invalid_forwarded_for","limiter":…,"message":…}`). Entries left of the client entry are never parsed as
 addresses, so client-supplied junk there is ignored. A proxy's invalid chain
-is logged once per window per proxy address, though every such request is
-refused.
+is logged once a minute per proxy address by the extractor that met it,
+whether the layer or a handler's `client_ip` call, though every such request
+is refused. Build one extractor and share it, so the record is shared too.
 
 The `400` is deliberate, and differs from resolvers that fall back to the
 proxy's address (the DID hosting service's and `vti-common`'s, for example).

@@ -42,11 +42,12 @@ Per-crate version history is summarised here; for the full code history see
   `per_period(period, burst)` state limits as requests per window or one per
   period, `charge` refuses with only the retry time, `with_max_tracked_keys`
   bounds a limiter's keys, `with_limiter_name` names the limit that
-  fired in the refusal body, and a public `ClientIpExtractor` gives handlers
-  the key the layer charges, `/64` grouping included
-  (`RateLimitLayer::ipv6_prefix`). The layer now logs a client's first refusal,
-  and a proxy's first invalid `X-Forwarded-For`, per window rather than every
-  one, and `Retry-After` rounds up.
+  fired in the refusal body, `refuse` gives handlers the layer's refusal
+  response, and a public `ClientIpExtractor` gives handlers the key the layer
+  charges, `/64` grouping included (`RateLimitLayer::ipv6_prefix`). The layer
+  now logs a client's first refusal per window rather than every one, a
+  proxy's invalid `X-Forwarded-For` is logged once a minute wherever it is
+  met, and `Retry-After` rounds up.
 - **Trusted-proxy client attribution.** **`affinidi-rate-limit` 0.1.3**.
   `RateLimitLayer::trusted_proxies(cidrs)` keys the per-IP limiter on the
   first untrusted `X-Forwarded-For` address, walked right to left, when the
