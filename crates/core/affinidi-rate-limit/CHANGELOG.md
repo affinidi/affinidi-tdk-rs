@@ -6,7 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.1.4] - 2026-11-03
+## [0.1.4] - 2026-11-04
 
 What a service needs to run all its limiters on this crate, not only the
 layer: limits inside handlers, other keys, window-shaped limits, and named
@@ -40,9 +40,10 @@ limits. Existing callers compile unchanged.
 - `first_refusal_in_window(key)`: records a refusal and says whether it is the
   key's first in its window, so handler code can log once per window.
 - `ClientIpExtractor` is public. `direct_peer()`, `trusted_proxies(cidrs)`,
-  `with_trusted_proxies(cidrs)` and `ipv6_prefix(len)` configure it; `client_key(peer, headers)` gives the key
-  the layer charges, and `client_ip(peer, headers)` the unmasked client
-  address. `RateLimitLayer::client_ip_extractor` hands one to the layer.
+  `with_trusted_proxies(cidrs)` and `ipv6_prefix(len)` configure it;
+  `client_key(peer, headers)` gives the key the layer charges, and
+  `client_ip(peer, headers)` the unmasked client address.
+  `RateLimitLayer::client_ip_extractor` hands one to the layer.
 - `RateLimitLayer::ipv6_prefix(len)` charges an IPv6 client to its `/len`
   network, so rotating addresses inside a `/64` does not escape the limit.
   `InvalidIpv6Prefix` refuses 0 and lengths above 128.

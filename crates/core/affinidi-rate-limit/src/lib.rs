@@ -881,7 +881,8 @@ impl<K: Hash + Eq + Clone> KeyedRateLimiterState<K> {
     ///
     /// Best effort: at most as many keys are remembered as the limiter tracks
     /// ([`Self::with_max_tracked_keys`]), and under a flood of more the record
-    /// is cleared, so a key may be reported again early. Always `true` when limiting is disabled.
+    /// is cleared, so a key may be reported again early. Always `true` when
+    /// limiting is disabled.
     pub fn first_refusal_in_window(&self, key: &K) -> bool {
         self.active
             .as_ref()
