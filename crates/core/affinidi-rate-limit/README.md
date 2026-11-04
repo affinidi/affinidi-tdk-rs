@@ -1,7 +1,7 @@
 # affinidi-rate-limit
 
-Per-IP request rate limiting for `axum` services — a token bucket keyed by
-client IP, applied as a `tower` layer.
+Request rate limiting for `axum` services: a token bucket keyed by client IP,
+applied as a `tower` layer, or keyed by anything a handler chooses.
 
 ```rust
 use affinidi_rate_limit::{RateLimitLayer, RateLimiterState};
@@ -14,6 +14,38 @@ let app = Router::new().layer(RateLimitLayer::new(limiter));
 ```
 
 `per_second = 0` disables limiting and the layer becomes a pass-through.
+`RateLimiterState::per_window(max, Duration::from_secs(60))` states the same
+bucket as `max` requests per minute, and
+`RateLimiterState::per_period(Duration::from_secs(5), 10)` as 10 back-to-back
+requests, then one every 5 s.
+
+To limit from a handler, on any key, charging the same client the layer would:
+
+```rust
+let clients = ClientIpExtractor::trusted_proxies(vec!["10.0.0.0/8".parse()?])?
+    .ipv6_prefix(64)?;
+let per_client = RateLimiterState::per_window(10, Duration::from_secs(60))
+    .with_limiter_name("auth-challenge-per-ip");
+
+let client = clients.client_key(peer.ip(), &headers)?;
+if let Err(TooManyRequests { retry_after_secs }) = per_client.charge(client) {
+    if per_client.first_refusal_in_window(&client) {
+        tracing::warn!(%client, "client over the rate limit");
+    }
+    // Answer with the service's own 429, naming per_client.limiter_name().
+}
+```
+
+`charge` only decides: the crate builds a refusal response, and applies
+`with_source` and `with_limiter_name` to it, only in the layer.
+`KeyedRateLimiterState<K>` takes any hashable key, such as a `String` sender or
+`()` for one shared budget, and `with_max_tracked_keys(n)` holds it to `n` keys
+rather than 250,000. `ClientIpExtractor::client_ip` gives the unmasked address,
+for anything other than limiting.
+
+`RateLimitLayer::ipv6_prefix(64)` charges an IPv6 client to its `/64`. The
+layer logs a client's first refusal in each window (the time its bucket takes
+to refill), not every refused request.
 
 To trust `X-Forwarded-For` only from known reverse proxies:
 
@@ -38,7 +70,18 @@ rightwards (the part trusted proxies wrote) is rejected with
 is not visible ASCII. The `400` goes through `on_refused`, and a named limiter
 sends it with `x-rate-limit-source` and a JSON body
 (`{"error":"invalid_forwarded_for","limiter":…,"message":…}`). Entries left of the client entry are never parsed as
-addresses, so client-supplied junk there is ignored.
+addresses, so client-supplied junk there is ignored. A proxy's invalid chain
+is logged once a minute per proxy address by the extractor that met it,
+whether the layer or a handler's `client_ip` call, though every such request
+is refused. Build one extractor and share it, so the record is shared too.
+
+The `400` is deliberate, and differs from resolvers that fall back to the
+proxy's address (the DID hosting service's and `vti-common`'s, for example).
+Behind a load balancer only a client inside a trusted range, a misbehaving
+proxy, or a client padding the header past 64 entries can reach it. Falling
+back would give such a client the proxy's bucket on top of its own, and would
+hide a misconfigured proxy behind unexplained `429`s. A service moving to
+this crate from such a resolver starts answering those requests with `400`.
 
 ## Two things that are easy to get wrong
 

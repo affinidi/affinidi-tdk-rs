@@ -6,6 +6,69 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-04
+
+What a service needs to run all its limiters on this crate, not only the
+layer: limits inside handlers, other keys, window-shaped limits, and named
+limits. Existing callers compile unchanged.
+
+### Added
+
+- `KeyedRateLimiterState<K>`: the limiter over any `Hash + Eq + Clone` key
+  (a sender string, or `()` for one shared budget), with the same distinct-key
+  cap and GC. `RateLimiterState` is now its `IpAddr` alias, so
+  `RateLimiterState::new(..)` resolves as before. Its `Debug` output now names
+  `KeyedRateLimiterState`.
+- `per_window(max_per_window, window)`: a burst of up to `max_per_window`,
+  refilled evenly across `window`. `0` or a zero window disables limiting.
+  A window over 100 years is held there.
+- `per_period(period, burst)`: one request every `period` after a burst of
+  `burst`, for limits slower than one a second. A zero period disables
+  limiting. A full refill over 100 years is held there, rather than
+  overflowing `governor`'s nanosecond clock.
+- `with_limiter_name(name)` and `limiter_name()`: a refusal body's `limiter`
+  names the limit that fired, while `x-rate-limit-source` still names the
+  service. Unset, the body is unchanged.
+- `charge(key)`, returning `TooManyRequests { retry_after_secs }`: the
+  handler-side check, refusing only for the rate. `check(key)` is unchanged
+  and now delegates to it.
+- `with_max_tracked_keys(n)`: holds a limiter to `n` distinct keys rather than
+  250,000, refusing new keys once full of live ones. The refusal log is
+  bounded the same way.
+- `refuse(&refusal)`: the response the layer sends for a refusal, for handler
+  code whose refusals should look the same.
+- `first_refusal_in_window(key)`: records a refusal and says whether it is the
+  key's first in its window, so handler code can log once per window.
+- `ClientIpExtractor` is public. `direct_peer()`, `trusted_proxies(cidrs)`,
+  `with_trusted_proxies(cidrs)` and `ipv6_prefix(len)` configure it;
+  `client_key(peer, headers)` gives the key the layer charges, and
+  `client_ip(peer, headers)` the unmasked client address.
+  `RateLimitLayer::client_ip_extractor` hands one to the layer.
+- `RateLimitLayer::ipv6_prefix(len)` charges an IPv6 client to its `/len`
+  network, so rotating addresses inside a `/64` does not escape the limit.
+  `InvalidIpv6Prefix` refuses 0 and lengths above 128.
+- `InvalidForwardedFor`, the error `client_ip` and `client_key` return for a
+  chain they cannot attribute, and `MAX_FORWARDED_ENTRIES` (64), now public.
+
+### Changed
+
+- The layer logs a client's first refusal in each window (the time its bucket
+  takes to refill) rather than every refused request. `on_refused` still runs
+  for every refusal.
+- An invalid `X-Forwarded-For` from a trusted proxy is logged once a minute
+  per proxy address by the `ClientIpExtractor` that met it, rather than on
+  every request, so handler code calling `client_ip` logs it too. Every such
+  request is still refused with `400`.
+- The `400` for an invalid chain is documented as deliberate. A service moving
+  here from a resolver that falls back to the proxy's address, such as the
+  DID hosting service's or `vti-common`'s, starts answering those requests
+  with `400` rather than charging them to the proxy's bucket.
+
+### Fixed
+
+- `Retry-After` is rounded up to whole seconds rather than down, so a client
+  retrying when told no longer arrives just before its next token.
+
 ## [0.1.3] - 2026-10-29
 
 Opt-in trusted-proxy attribution, so clients behind a load balancer stop
