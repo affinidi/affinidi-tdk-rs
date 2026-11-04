@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.45.0) — trust-tasks 0.37
+
+Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.37. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.37 (trustoverip/dtgwg-trust-tasks-tf #1021) changes how `validate_freshness` treats a document that states an `expiresAt`: the maximum age no longer applies to it, and an expiry beyond the policy's new `expiry_horizon` is clamped to the horizon. `FreshnessPolicy` gains `expiry_horizon` and is now `#[non_exhaustive]`. This SDK does not apply a freshness policy, so its behaviour does not change. No source change.
+
 ## Unreleased (0.44.0) — trust-tasks 0.36, monitor/event 0.2
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.36. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.36 (trustoverip/dtgwg-trust-tasks-tf) adopts `trust-task-error/0.6` (two new standard codes, `unsupportedExtension` and `indeterminate`, behind the already `#[non_exhaustive]` `StandardCode`) and adds new spec versions; none of it touches the tasks this SDK speaks.

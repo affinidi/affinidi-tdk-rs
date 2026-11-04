@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.30.0) — SDK 0.45
+
+Moves to `affinidi-messaging-sdk` 0.45 (`trust-tasks-rs` 0.37). The SDK is a public dependency here, so this crate moves a minor. No source change.
+
 ## Unreleased (0.29.0) — SDK 0.44
 
 Moves to `affinidi-messaging-sdk` 0.44 (`trust-tasks-rs` 0.36). The SDK is a public dependency here, so this crate moves a minor. No source change.
