@@ -2,6 +2,69 @@
 
 All notable changes to this crate are documented here.
 
+## [0.8.0] - 2026-11-08
+
+Brought into line with the `did:webs` specification (KSWG, August 2026), and
+checked against the reference implementation's artifacts.
+
+### Security
+
+- **Signatures are held to the signing threshold.** A reply or
+  designated-aliases attestation was accepted on one valid signature whatever
+  the key state's threshold, so one key of a multi-key identifier could
+  redirect its services or designate aliases. Signature groups are now counted
+  against the threshold of the key state at the establishment event they name,
+  and a group naming an interaction event is refused. Creation signs with every
+  current key.
+- **Replies are ordered as BADA orders them.** Supersedence compared `dt`
+  strings alone, so a rotated-out key could sign a reply dated far in the
+  future and win every later comparison. Replies are now ordered by the
+  establishment event that signed them, then by `dt` parsed as RFC 3339; a reply
+  whose `dt` is not a timestamp is ignored.
+- **One key of a multi-key identifier no longer authenticates alone.** With
+  `kt` > 1 or weighted, every key was listed in `authentication` and
+  `assertionMethod`. Only the `ConditionalProof2022` method is now (§
+  Thresholds); a weighted threshold with more than one clause, which one
+  condition cannot express, fails resolution rather than being weakened.
+
+### Changed (breaking)
+
+- **A DID its AID has not designated does not resolve** (§ Read, step 4):
+  `DidWebsError::NotDesignated`. `create` therefore always designates the DID,
+  its `did:web` twin and `did:keri:<AID>`.
+- **`alsoKnownAs` is only what was designated.** The `did:web` twin is no longer
+  added unconditionally. Aliases are the union of every verified, unrevoked
+  attestation, and a revocation counts once anchored in the KEL.
+- **`Change::AlsoKnownAs` replaces the designation**, revoking the attestations
+  in force. An empty list is accepted and leaves the three required entries.
+- **`did.json` is the `did:web` form** (§ Transformation to `did:web` DID
+  document), with relative verification method ids, a `controller`, no
+  `@context`, and no `"d": null` in its JWKs. `alsoKnownAs` always includes
+  `did:keri:<AID>` (§ Also Known As). It is compared with the
+  derivation as a whole — methods, services, aliases, relationships — rather
+  than by `id` and keys alone.
+- **`WebsResolver` fails when `did.json` cannot be fetched** (§ Read).
+- **`DidWebs::did()` is the DID without query or fragment**, and the `did:web`
+  twin keeps the percent-encoding the DID was written with.
+- `document::document_from_keys` is replaced by `document::derive_document`,
+  which returns the specification's JSON form; `document::into_document` turns
+  it into a `Document`.
+- `CreateConfig` is `#[non_exhaustive]`: build it with `CreateConfig::builder`.
+- `chrono` is a non-optional dependency (without its clock, which `create`
+  enables).
+
+### Added
+
+- `resolve_with_metadata` and `WebsResolver::resolve_with_metadata`, returning
+  `versionId`, `nextVersionId`, `equivalentId` and `deactivated`; the
+  `versionId` DID parameter (`DidWebs::version_id`) resolves as of a key event.
+- Witness services from the key state's witness list (§ Witness Service
+  Endpoint); an `/end/role/add` in role `witness` no longer makes one.
+- `DelegatorOOBI` services for delegated identifiers (§ Delegator Service
+  Endpoint), as `delegator_service`.
+- `Kels::verify_signature_group`, `Kels::sequence_numbers`, `Kels::as_of`,
+  `Kels::is_deactivated`, `DidWebs::did_keri`.
+
 ## [0.7.0] - 2026-08-23
 
 ### Added

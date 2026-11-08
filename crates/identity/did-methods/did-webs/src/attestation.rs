@@ -23,9 +23,64 @@ use affinidi_keri_core::serder::Serder;
 use affinidi_keri_core::version::SerializationKind;
 use serde_json::{Value, json};
 
-use crate::aliases::DESIGNATED_ALIASES_SCHEMA;
+use crate::aliases::{Attestation, DESIGNATED_ALIASES_SCHEMA};
 use crate::endpoints::{fix_version, sign_with_group, timestamp};
 use crate::errors::DidWebsError;
+use crate::identifier::DidWebs;
+
+/// The identifiers every designated-aliases attestation for `did` carries,
+/// followed by `extra`, without repeats.
+///
+/// * the `did:webs` DID itself — § Read refuses a DID its AID has not
+///   designated;
+/// * its `did:web` twin — `did.json` is the `did:web` form of the document, and
+///   that transformation is only valid when the twin is designated;
+/// * `did:keri:<AID>` — § Also Known As: "`did:webs` DIDs MUST provide the
+///   corresponding `did:keri`", and an alias appears only if designated.
+pub(crate) fn designation(did: &DidWebs, extra: &[String]) -> Vec<String> {
+    let mut ids = vec![did.did().to_string(), did.did_web_twin(), did.did_keri()];
+    for id in extra {
+        if !ids.contains(id) {
+            ids.push(id.clone());
+        }
+    }
+    ids
+}
+
+/// Revoke a designated-aliases attestation: a `rev` event in its registry,
+/// anchored by an interaction event in the key event log.
+///
+/// An attestation names *the* designated aliases, and a resolver reads every
+/// unrevoked one, so replacing a designation means withdrawing the old one —
+/// otherwise an alias the controller has since dropped would still be listed.
+///
+/// # Errors
+/// Returns [`DidWebsError::Create`] if the event cannot be built or anchored.
+pub(crate) fn revoke(hab: &mut Hab, attestation: &Attestation) -> Result<Vec<u8>, DidWebsError> {
+    let mut rev = json!({
+        "v": "KERI10JSON000000_",
+        "t": "rev",
+        "d": "",
+        "i": attestation.said,
+        "s": "1",
+        "ri": attestation.registry,
+        "p": attestation.issuance,
+        "dt": timestamp(),
+    });
+    fix_version(&mut rev)?;
+    let rev_said = said::compute_said(&mut rev, "d", "E", SerializationKind::Json)
+        .map_err(|e| DidWebsError::Create(format!("revocation SAID: {e}")))?;
+    let rev = Serder::new(SerializationKind::Json, rev)
+        .map_err(|e| DidWebsError::Create(format!("revocation: {e}")))?;
+
+    let anchor = hab
+        .interact_event(&[json!({ "i": attestation.said, "s": "1", "d": rev_said })])
+        .map_err(|e| DidWebsError::Create(format!("anchoring the revocation: {e}")))?;
+
+    let mut out = anchor.composed;
+    out.extend_from_slice(rev.raw());
+    Ok(out)
+}
 
 /// The rules block of the designated-aliases attestation.
 ///
@@ -184,8 +239,9 @@ fn fix_acdc_version(sad: &mut Value) -> Result<(), DidWebsError> {
     Ok(())
 }
 
-/// A registry nonce, derived from the identifier's own key material so that
-/// creating the same identifier twice yields the same registry.
+/// A registry nonce, derived from the identifier's own key material and the
+/// point its log has reached, so that creating the same identifier twice yields
+/// the same registry while each later designation gets a registry of its own.
 fn nonce(hab: &Hab) -> Result<String, DidWebsError> {
     let signer = hab
         .signers()
@@ -196,7 +252,8 @@ fn nonce(hab: &Hab) -> Result<String, DidWebsError> {
         .qb64()
         .map_err(|e| DidWebsError::Create(format!("key: {e}")))?;
 
-    let digest = affinidi_keri_crypto::Diger::from_data("E", key.as_bytes())
+    let seed = format!("{key}:{}", hab.sn());
+    let digest = affinidi_keri_crypto::Diger::from_data("E", seed.as_bytes())
         .and_then(|d| d.qb64())
         .map_err(|e| DidWebsError::Create(format!("nonce: {e}")))?;
     // A salt-coded primitive, as keripy uses for the registry nonce.

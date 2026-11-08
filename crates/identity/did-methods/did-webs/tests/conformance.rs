@@ -36,6 +36,117 @@ fn resolves_a_real_identifier() {
     // The published did.json carries exactly this key material.
     assert_eq!(jwk["crv"], "Ed25519");
     assert_eq!(jwk["x"], "evT4j6Yw3uHpwsw5NEmSR8-4x3S-BA-s6Thjd51oeOs");
+
+    // § Verification Relationships, derived although keripy's did.json omits
+    // them: with kt = 1 the key authenticates and asserts.
+    assert_eq!(doc.authentication.len(), 1);
+    assert_eq!(doc.assertion_method.len(), 1);
+
+    // § Also Known As: what the AID designated, without itself, and its
+    // did:keri form. The did:web twin is there because it is designated, not
+    // by default.
+    let mut aka = doc.also_known_as.clone();
+    aka.sort();
+    assert_eq!(
+        aka,
+        vec![
+            // § Also Known As: always provided, designated or not.
+            format!("did:keri:{AID}"),
+            format!("did:web:did-webs-service%3a7676:{AID}"),
+            format!("did:web:example.com:{AID}"),
+            format!("did:web:foo.com:{AID}"),
+            format!("did:webs:foo.com:{AID}"),
+        ],
+    );
+}
+
+#[test]
+fn reports_the_document_metadata() {
+    let resolution = affinidi_did_webs::resolve_with_metadata(&did(), KERI_CESR, Some(DID_JSON))
+        .expect("resolves");
+    let metadata = resolution.metadata;
+    // The fixture's KEL is an inception and the interactions anchoring its
+    // alias registry and issuance.
+    assert_eq!(metadata.version_id, 2);
+    assert_eq!(metadata.next_version_id, None);
+    // § Use of equivalentId: the other did:webs DIDs the AID designated.
+    assert_eq!(
+        metadata.equivalent_id,
+        vec![format!("did:webs:foo.com:{AID}")]
+    );
+    assert!(!metadata.deactivated);
+}
+
+#[test]
+fn resolves_as_of_an_earlier_version() {
+    // § Support for versionId. At sequence number 1 the registry is anchored
+    // but the issuance is not, so nothing designates the DID yet — and a DID
+    // its AID had not yet designated did not resolve then either.
+    let at = |sn: u64| {
+        DidWebs::parse(&format!(
+            "did:webs:did-webs-service%3a7676:{AID}?versionId={sn}"
+        ))
+        .expect("valid did")
+    };
+    let err = resolve_from_artifacts(&at(1), KERI_CESR, None).expect_err("not yet designated");
+    assert!(
+        matches!(err, affinidi_did_webs::DidWebsError::NotDesignated(_)),
+        "{err}"
+    );
+
+    let latest =
+        affinidi_did_webs::resolve_with_metadata(&at(2), KERI_CESR, None).expect("resolves");
+    assert_eq!(latest.metadata.version_id, 2);
+    assert!(
+        resolve_from_artifacts(&at(3), KERI_CESR, None).is_err(),
+        "no such event"
+    );
+}
+
+#[test]
+fn a_did_json_adding_a_member_is_rejected() {
+    // The published document may omit what the key state implies, never add.
+    let mut published: serde_json::Value = serde_json::from_slice(DID_JSON).expect("valid json");
+    published["keyAgreement"] = serde_json::json!([format!("#{SIGNING_KEY}")]);
+    let bytes = serde_json::to_vec(&published).expect("serializes");
+    assert!(resolve_from_artifacts(&did(), KERI_CESR, Some(&bytes)).is_err());
+
+    let mut published: serde_json::Value = serde_json::from_slice(DID_JSON).expect("valid json");
+    published["unexplained"] = serde_json::json!("value");
+    let bytes = serde_json::to_vec(&published).expect("serializes");
+    assert!(resolve_from_artifacts(&did(), KERI_CESR, Some(&bytes)).is_err());
+}
+
+#[test]
+fn a_did_json_listing_an_undesignated_alias_is_rejected() {
+    let mut published: serde_json::Value = serde_json::from_slice(DID_JSON).expect("valid json");
+    published["alsoKnownAs"]
+        .as_array_mut()
+        .expect("array")
+        .push(serde_json::json!("did:web:attacker.example:alice"));
+    let bytes = serde_json::to_vec(&published).expect("serializes");
+    let err = resolve_from_artifacts(&did(), KERI_CESR, Some(&bytes)).expect_err("refused");
+    assert!(err.to_string().contains("alsoKnownAs"), "{err}");
+}
+
+#[test]
+fn a_did_json_publishing_a_service_the_stream_does_not_authorise_is_rejected() {
+    let mut published: serde_json::Value = serde_json::from_slice(DID_JSON).expect("valid json");
+    published["service"] = serde_json::json!([{
+        "id": "#mallory/agent",
+        "type": "agent",
+        "serviceEndpoint": {"https": "https://attacker.example"},
+    }]);
+    let bytes = serde_json::to_vec(&published).expect("serializes");
+    assert!(resolve_from_artifacts(&did(), KERI_CESR, Some(&bytes)).is_err());
+}
+
+#[test]
+fn a_did_json_weakening_a_relationship_is_rejected() {
+    let mut published: serde_json::Value = serde_json::from_slice(DID_JSON).expect("valid json");
+    published["authentication"] = serde_json::json!([]);
+    let bytes = serde_json::to_vec(&published).expect("serializes");
+    assert!(resolve_from_artifacts(&did(), KERI_CESR, Some(&bytes)).is_err());
 }
 
 #[test]
@@ -137,18 +248,24 @@ fn a_stream_for_a_different_aid_is_rejected() {
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Serve the real artifacts and resolve them, so URL derivation and the fetch
-/// path are exercised rather than assumed.
+/// Serve the real artifacts and resolve them over the network, so URL
+/// derivation and the fetch path are exercised rather than assumed.
+///
+/// The stream designates `did-webs-service:7676`, not the test server's
+/// address, so a conforming resolver refuses it: a KEL that verifies does not
+/// make every host serving it a publisher of the DID (§ Read, step 4).
 #[tokio::test]
-async fn resolves_over_http() {
+async fn a_real_stream_served_from_a_host_it_does_not_designate_is_refused() {
     let server = MockServer::start().await;
     let host = server.address().to_string().replace(':', "%3A");
 
-    Mock::given(method("GET"))
-        .and(path(format!("/{AID}/keri.cesr")))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(KERI_CESR))
-        .mount(&server)
-        .await;
+    for (file, body) in [("keri.cesr", KERI_CESR), ("did.json", DID_JSON)] {
+        Mock::given(method("GET"))
+            .and(path(format!("/{AID}/{file}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+            .mount(&server)
+            .await;
+    }
 
     let parsed = did_from_host(&host);
     assert_eq!(
@@ -157,36 +274,43 @@ async fn resolves_over_http() {
         "artifact URL puts the AID before the file name",
     );
 
-    let cesr = reqwest::get(format!("{}/{AID}/keri.cesr", server.uri()))
+    let err = affinidi_did_webs::WebsResolver::new()
+        .resolve(parsed.did())
         .await
-        .expect("fetch")
-        .bytes()
-        .await
-        .expect("body");
-
-    // No did.json here: the fixture's is bound to its own host (see the next
-    // test), and the key event log alone fully determines the answer.
-    let doc = resolve_from_artifacts(&parsed, &cesr, None).expect("served artifacts resolve");
-    assert_eq!(doc.verification_method.len(), 1);
+        .expect_err("an undesignated host must not resolve");
     assert!(
-        doc.verification_method[0]
-            .id
-            .as_str()
-            .ends_with(&format!("#{SIGNING_KEY}")),
+        matches!(err, affinidi_did_webs::DidWebsError::NotDesignated(_)),
+        "{err}"
     );
 }
 
 /// A published document names the identifier it belongs to, so the same
-/// `did.json` served from a different host is refused. Without this, a
-/// document could be lifted from one host and replayed at another.
+/// `did.json` served for another of the AID's designated DIDs is refused.
+/// Without this, a document could be lifted from one host and replayed at
+/// another.
 #[test]
 fn a_did_json_cannot_be_reused_at_another_host() {
-    let elsewhere =
-        DidWebs::parse(&format!("did:webs:someone-else.example:{AID}")).expect("valid did");
+    // `did:webs:foo.com:<AID>` is designated in the fixture's own attestation,
+    // so the stream resolves for it — but its did.json is another host's.
+    let elsewhere = DidWebs::parse(&format!("did:webs:foo.com:{AID}")).expect("valid did");
+    resolve_from_artifacts(&elsewhere, KERI_CESR, None).expect("the DID is designated");
 
     let err = resolve_from_artifacts(&elsewhere, KERI_CESR, Some(DID_JSON))
         .expect_err("a document bound to another host must be refused");
     assert!(err.to_string().contains("which is neither"), "{err}");
+}
+
+#[test]
+fn a_did_the_aid_never_designated_does_not_resolve() {
+    // The KEL verifies, but nothing the AID signed publishes it at this host.
+    let elsewhere =
+        DidWebs::parse(&format!("did:webs:someone-else.example:{AID}")).expect("valid did");
+    let err = resolve_from_artifacts(&elsewhere, KERI_CESR, None)
+        .expect_err("an undesignated DID must be refused");
+    assert!(
+        matches!(err, affinidi_did_webs::DidWebsError::NotDesignated(_)),
+        "{err}"
+    );
 }
 
 fn did_from_host(host: &str) -> DidWebs {
@@ -327,8 +451,11 @@ fn an_attestation_without_its_issuance_designates_nothing() {
 }
 
 #[test]
-fn a_revoked_attestation_designates_nothing() {
-    // A claimed revocation is enough to stop repeating the aliases.
+fn an_unanchored_revocation_is_not_the_aids_act() {
+    // A revocation, like an issuance, is the AID's only once its KEL anchors
+    // it. Anyone able to append to the served stream could otherwise withdraw
+    // the designation that makes the DID resolvable. (An anchored revocation
+    // is exercised through `update`, in tests/create.rs.)
     let mut stream = KERI_CESR.to_vec();
     stream.extend_from_slice(&keri_event(serde_json::json!({
         "v": "KERI10JSON000000_",
@@ -342,19 +469,7 @@ fn a_revoked_attestation_designates_nothing() {
 
     let kels = Kels::parse(&stream).expect("parses");
     let found = designated_aliases(&kels, AID).expect("KEL verifies");
-    assert!(
-        found.aliases.is_empty(),
-        "a revoked attestation must designate nothing, got {:?}",
-        found.aliases,
-    );
-    assert!(
-        found
-            .rejected
-            .as_deref()
-            .is_some_and(|r| r.contains("revoked")),
-        "{:?}",
-        found.rejected,
-    );
+    assert_eq!(found.aliases.len(), 5, "got {:?}", found.aliases);
 }
 
 #[test]

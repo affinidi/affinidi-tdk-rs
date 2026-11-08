@@ -1,5 +1,12 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.45) — affinidi-did-webs 0.8
+
+- **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.8, which
+  resolves as the did:webs specification requires: a DID resolves only when its
+  AID designates it, signatures are held to the signing threshold, replies are
+  ordered by BADA, and the published `did.json` is compared as a whole.
+
 ## Unreleased (0.8.44) — did:scid forks are refused
 
 - **Behaviour (security):** the did:scid source book refuses a log that does

@@ -35,15 +35,17 @@ pub enum Change {
     /// resolver can verify them. Existing designations are superseded by
     /// timestamp, so re-designating a role replaces where it points.
     Services(Vec<SelfEndpoint>),
-    /// Designate `alsoKnownAs` identifiers.
+    /// Replace the designated `alsoKnownAs` identifiers.
     ///
-    /// Issues a fresh attestation in a new registry, listing exactly these
-    /// aliases. It does not add to an earlier one — an attestation names *the*
-    /// designated aliases, so a caller wanting to keep existing entries passes
-    /// them again.
+    /// Revokes every attestation in force and issues a fresh one in a new
+    /// registry, naming the three identifiers every `did:webs` DID designates
+    /// (itself, its `did:web` twin and `did:keri:<AID>`) followed by exactly
+    /// these. It does not add to the earlier designation: a caller wanting to
+    /// keep existing entries passes them again, and an empty list leaves only
+    /// the three.
     ///
-    /// Appends two interaction events to the key event log, since both the
-    /// registry and the issuance must be anchored in it.
+    /// Appends one interaction event per revocation, and two for the new
+    /// attestation, since each must be anchored in the key event log.
     AlsoKnownAs(Vec<String>),
 }
 
@@ -144,12 +146,19 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
             keri_cesr.extend_from_slice(&event.composed);
         }
         Change::AlsoKnownAs(aliases) => {
+            // A resolver reads every unrevoked attestation, so the ones in
+            // force are withdrawn first — otherwise an alias dropped here
+            // would still be listed.
+            let mut rejected = None;
+            for prior in crate::aliases::attestations(&kels, did.aid(), &mut rejected)? {
+                keri_cesr.extend_from_slice(&crate::attestation::revoke(&mut hab, &prior)?);
+            }
             let establishment = last_establishment_said(&kels, did.aid())?;
             let attestation = crate::attestation::issue_designated_aliases(
                 &mut hab,
                 did.aid(),
                 &establishment,
-                aliases,
+                &crate::attestation::designation(&did, aliases),
             )?;
             keri_cesr.extend_from_slice(&attestation);
         }

@@ -48,7 +48,7 @@ pub use errors::DidWebsError;
 pub use fetch::{WebsResolver, resolve};
 pub use identifier::{DID_JSON, DidWebs, KERI_CESR};
 pub use kel::Kels;
-pub use resolver::resolve_from_artifacts;
-pub use services::{ServiceEndpoint, service_endpoints};
+pub use resolver::{DocumentMetadata, Resolution, resolve_from_artifacts, resolve_with_metadata};
+pub use services::{ServiceEndpoint, delegator_service, service_endpoints};
 #[cfg(feature = "create")]
 pub use update::{Change, UpdateConfig, UpdateResult, update};

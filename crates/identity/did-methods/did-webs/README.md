@@ -20,7 +20,15 @@ A `did:webs` identifier ends in a KERI **AID**, and publishes two artifacts:
 The document this crate returns is **derived from the verified key event log**,
 never copied from the published `did.json`. `did.json` carries no authority on
 its own: it is cross-checked against the derivation, and a disagreement fails
-the resolution rather than being resolved in either direction.
+the resolution rather than being resolved in either direction. As the
+specification requires, a resolution fails if either artifact cannot be
+fetched, and fails if no designated-aliases attestation in the stream names the
+DID being resolved — a log that verifies does not make every host serving it a
+publisher of the DID.
+
+`resolve_with_metadata` also returns the DID document metadata — `versionId`,
+`nextVersionId`, `equivalentId` and `deactivated` — and a DID URL carrying
+`?versionId=<sn>` resolves the document as of that key event.
 
 ```rust,no_run
 # async fn run() -> Result<(), affinidi_did_webs::DidWebsError> {
@@ -49,6 +57,12 @@ let doc = resolve_from_artifacts(&did, keri_cesr, Some(did_json))?;
 - Every key event's SAID, before any of its fields are trusted.
 - The prior-event digest chain, and sequence ordering.
 - Controller signatures, against the keys each event type is signed by.
+- **Signing thresholds**, everywhere a signature counts: on key events, and on
+  the replies and attestations signed outside the log, which must meet the
+  threshold of the key state at the establishment event they name — one key of
+  a 2-of-3 identifier speaks for nobody. A threshold above one key is published
+  as a `ConditionalProof2022` method, which alone is in `authentication` and
+  `assertionMethod`.
 - Pre-rotation commitments on every rotation.
 - **Delegation**: a delegated event is accepted only if the delegator's own
   verified KEL, present in the same stream, anchors a seal naming that exact
@@ -58,8 +72,10 @@ let doc = resolve_from_artifacts(&did, keri_cesr, Some(did_json))?;
   AID issued a credential saying so, and that credential is anchored in the
   AID's own key event log. The whole chain is checked — registry inception
   anchored, issuance anchored, attestation signed by the AID's key state, and
-  not revoked. A break anywhere yields no aliases rather than a
-  partially-trusted list.
+  no revocation anchored. A break anywhere yields no aliases from that
+  attestation rather than a partially-trusted list. The aliases are those of
+  every attestation that verifies, and the `did:web` twin and `did:keri` form
+  appear only when designated.
 - **Witness receipts**, when the key event log declares witnesses. An event
   whose own key state names backers and a threshold is only accepted once that
   many designated witnesses have receipted it — from the event's attachments or
@@ -67,10 +83,18 @@ let doc = resolve_from_artifacts(&did, keri_cesr, Some(did_json))?;
 - **Service endpoints**, from signed KERI endpoint authorisations. An endpoint
   appears only when two signed replies agree: `/end/role/add` from this AID
   authorising an identifier in a role, and `/loc/scheme` from *that* identifier
-  saying where it is. `/end/role/cut` withdraws it, and the latest `dt` wins.
-- The published `did.json`, against the derived key state: it must name this
-  identifier (or its `did:web` twin) and publish exactly the keys the KEL
-  authorised — no more and no fewer.
+  saying where it is. `/end/role/cut` withdraws it. Replies supersede one
+  another by KERI's BADA rule — the later establishment event first, then the
+  later `dt` — so a key the controller has rotated away from cannot outrank
+  the current one with a future-dated reply. Witness services come from the key
+  state's witness list plus each witness's own location, and a delegated
+  identifier publishes a `DelegatorOOBI` service.
+- The published `did.json`, transformed back from its `did:web` form, against
+  the derived document: the same verification methods, services and aliases,
+  and the same `controller` and relationships where it publishes them. The
+  reference implementation publishes no `controller`, `authentication` or
+  `assertionMethod`, so a document may omit those — but never add to or change
+  anything the stream establishes.
 
 ## HTTPS, and the loopback exception
 
@@ -153,11 +177,17 @@ carrying any alias back. `create` takes `also_known_as`, and `update` takes
 That format code is *proposed* in the did:scid registry rather than registered,
 so its spelling may change.
 
-There is no `also_known_as_web` switch: the `did:web` twin shares this
-identifier's location and document, and the resolver adds it unconditionally, so
-the switch could only ever be on.
+Every identifier designates itself, its `did:web` twin and `did:keri:<AID>` in
+the attestation creation issues: a resolver refuses a DID its AID has not
+designated, `did.json` is published in the `did:web` form (valid only when the
+twin is designated), and the specification requires the `did:keri` alias. There
+is no switch for any of them.
 
 ## What is not verified yet
+
+- **Deactivation.** A rotation committing to no next keys is reported as
+  `deactivated`, but `affinidi-keri-core` 0.4 does not yet accept the
+  `nt: "0"` such a rotation carries, so the log fails to verify instead.
 
 - **Credential schema validation.** A designated-aliases attestation is matched
   by its schema SAID and its issuance chain is verified, but the credential body

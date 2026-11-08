@@ -33,6 +33,12 @@ pub enum DidWebsError {
     #[error("did.json does not match the verified key state: {0}")]
     DocumentMismatch(String),
 
+    /// No valid, unrevoked designated-aliases attestation in the stream
+    /// authorises the DID being resolved, so the stream does not publish it
+    /// (§ Read: a `did:webs` DID resolves only when its AID designated it).
+    #[error("{0} is not designated by its AID")]
+    NotDesignated(String),
+
     /// An identifier could not be created or continued.
     #[error("could not create: {0}")]
     Create(String),

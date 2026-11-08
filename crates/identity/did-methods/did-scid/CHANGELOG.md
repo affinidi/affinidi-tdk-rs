@@ -1,5 +1,12 @@
 # did:scid
 
+## Unreleased (0.4.2) — affinidi-did-webs 0.8
+
+- **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.8, which
+  resolves as the did:webs specification requires: a DID resolves only when its
+  AID designates it, signatures are held to the signing threshold, replies are
+  ordered by BADA, and the published `did.json` is compared as a whole.
+
 ## Unreleased (0.4.1) — the version ids of a resolved log
 
 - **Added:** `ScidResolution::version_ids`, the `versionId` of every log entry

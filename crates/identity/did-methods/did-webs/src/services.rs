@@ -13,15 +13,26 @@
 //! pointing nowhere; the second without the first is a stranger volunteering to
 //! act on someone's behalf. Neither is published.
 //!
+//! A **witness** is the exception: its role comes from the key state (the `b`
+//! list of the latest establishment event), not from an `/end/role/add`, and
+//! only its location is a reply (§ Witness Service Endpoint). A delegated
+//! identifier also publishes a `DelegatorOOBI` service naming where its
+//! delegator's key state can be fetched (§ Delegator Service Endpoint).
+//!
 //! `/end/role/cut` withdraws an authorisation. Where the same subject is
-//! addressed more than once the latest `dt` wins, which is how KERI reply
-//! messages supersede one another.
+//! addressed more than once, KERI's BADA rule picks the reply that stands: the
+//! one signed under the **later establishment event**, and between replies
+//! signed under the same one, the later `dt`. Ordering by `dt` alone would let
+//! a key that has since been rotated out — the compromised key rotation exists
+//! to retire — sign a reply dated far in the future and win every comparison
+//! after it.
 
 use std::collections::BTreeMap;
 
 use affinidi_keri_core::parser::{Attachment, ParsedMessage};
 use affinidi_keri_crypto::Verfer;
-use serde_json::Value;
+use chrono::{DateTime, FixedOffset};
+use serde_json::{Value, json};
 
 use crate::errors::DidWebsError;
 use crate::kel::Kels;
@@ -46,16 +57,35 @@ impl ServiceEndpoint {
     pub fn id(&self) -> String {
         format!("#{}/{}", self.eid, self.role)
     }
+
+    /// The service entry this endpoint becomes in a DID document: `type` is
+    /// the role, and `serviceEndpoint` maps each scheme to its URL.
+    pub fn to_service(&self) -> Value {
+        json!({
+            "id": self.id(),
+            "type": self.role,
+            "serviceEndpoint": self.urls,
+        })
+    }
 }
 
-/// One `/end/role/*` authorisation, kept with its timestamp so a later reply
+/// Where a reply stands in BADA order.
+///
+/// The sequence number of the establishment event whose keys signed it, then
+/// its `dt`. A non-transferable signer's key never changes, so its replies all
+/// share sequence number 0 and are ordered by `dt` alone.
+type Seniority = (u64, DateTime<FixedOffset>);
+
+/// One `/end/role/*` authorisation, kept with its seniority so a later reply
 /// can supersede it.
 struct RoleRecord {
     added: bool,
-    dt: String,
+    seniority: Seniority,
 }
 
-/// Collect the service endpoints `aid` has authorised.
+/// Collect the service endpoints `aid` has authorised: the endpoints its
+/// signed replies designate, then the witnesses its key state names that have
+/// published a location.
 ///
 /// # Errors
 /// Returns [`DidWebsError::Kel`] if `aid`'s own key event log does not verify.
@@ -63,6 +93,18 @@ struct RoleRecord {
 /// reply must not cost an identifier its other endpoints.
 pub fn service_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoint>, DidWebsError> {
     // Fails loudly: an authorisation signed by an unverified AID means nothing.
+    let state = kels.key_state(aid)?;
+    let mut endpoints = role_endpoints(kels, aid)?;
+    endpoints.extend(witness_endpoints(kels, &state.backers));
+    Ok(endpoints)
+}
+
+/// The endpoints `aid`'s signed `/end/role` replies designate, under current
+/// BADA reply state.
+///
+/// # Errors
+/// Returns [`DidWebsError::Kel`] if `aid`'s own key event log does not verify.
+pub(crate) fn role_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoint>, DidWebsError> {
     kels.key_state(aid)?;
 
     let mut roles: BTreeMap<(String, String), RoleRecord> = BTreeMap::new();
@@ -91,30 +133,28 @@ pub fn service_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoint>,
         if cid != aid {
             continue;
         }
-        if !signed_by(kels, rpy, aid) {
+        let Some(seniority) = reply_seniority(kels, rpy, aid) else {
             continue;
-        }
-
-        let dt = sad
-            .get("dt")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+        };
         let key = (role.to_string(), eid.to_string());
 
-        // Reply messages supersede by timestamp, so a `cut` older than the
-        // `add` it tries to withdraw does not take effect.
+        // A `cut` junior to the `add` it tries to withdraw does not take
+        // effect, and neither does a replay of an older `add`. Equal seniority
+        // is not newer, as in keripy.
         match roles.get(&key) {
-            Some(existing) if existing.dt >= dt => {}
+            Some(existing) if existing.seniority >= seniority => {}
             _ => {
-                roles.insert(key, RoleRecord { added, dt });
+                roles.insert(key, RoleRecord { added, seniority });
             }
         }
     }
 
     let mut endpoints = Vec::new();
     for ((role, eid), record) in roles {
-        if !record.added {
+        // A witness is designated by the key state, not by a reply: an
+        // `/end/role/add` naming one must not make a witness of an identifier
+        // the KEL never listed, nor keep one the KEL has rotated out.
+        if !record.added || role == "witness" {
             continue;
         }
         let urls = location_schemes(kels, &eid);
@@ -129,9 +169,64 @@ pub fn service_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoint>,
     Ok(endpoints)
 }
 
+/// The witnesses in `backers` that have published a location for themselves.
+pub(crate) fn witness_endpoints(kels: &Kels, backers: &[String]) -> Vec<ServiceEndpoint> {
+    backers
+        .iter()
+        .filter_map(|witness| {
+            let urls = location_schemes(kels, witness);
+            (!urls.is_empty()).then(|| ServiceEndpoint {
+                eid: witness.clone(),
+                role: "witness".to_string(),
+                urls,
+            })
+        })
+        .collect()
+}
+
+/// The `DelegatorOOBI` service of a delegated identifier, or `None` for one
+/// that is not delegated.
+///
+/// § Delegator Service Endpoint: its `id` identifies the seal in the
+/// delegator's KEL that commits to the delegated inception — rendered, as the
+/// reference implementation renders it, by the seal's digest, which is the
+/// SAID of the `dip` event — and its `serviceEndpoint` is an OOBI URL for the
+/// delegator. The URL is built from a location the delegator signed for
+/// itself in the stream; with none, there is nowhere to point, and the service
+/// is omitted rather than invented.
+///
+/// The service is a pointer, not a proof: the delegation itself is verified
+/// from the delegator's KEL when the delegated events are.
+///
+/// # Errors
+/// Returns [`DidWebsError::Kel`] if `aid`'s key event log does not verify.
+pub fn delegator_service(kels: &Kels, aid: &str) -> Result<Option<Value>, DidWebsError> {
+    let state = kels.key_state(aid)?;
+    let Some(delegator) = state.delegator.as_deref() else {
+        return Ok(None);
+    };
+    let Some(seal) = kels.inception_said(aid) else {
+        return Ok(None);
+    };
+
+    let locations = location_schemes(kels, delegator);
+    let Some(url) = ["https", "http"]
+        .iter()
+        .find_map(|scheme| locations.get(*scheme))
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(json!({
+        "id": seal,
+        "type": "DelegatorOOBI",
+        "serviceEndpoint": format!("{}/oobi/{delegator}/controller", url.trim_end_matches('/')),
+    })))
+}
+
 /// The verified location schemes `eid` has published for itself.
 fn location_schemes(kels: &Kels, eid: &str) -> BTreeMap<String, String> {
-    let mut latest: BTreeMap<String, (String, String)> = BTreeMap::new();
+    let mut latest: BTreeMap<String, (Seniority, String)> = BTreeMap::new();
 
     for rpy in kels.messages_with_ilk("rpy") {
         let sad = rpy.serder.sad();
@@ -153,19 +248,13 @@ fn location_schemes(kels: &Kels, eid: &str) -> BTreeMap<String, String> {
         }
         // The endpoint has to say this about *itself*. A third party asserting
         // where someone else can be reached is a redirection, not a location.
-        if !signed_by(kels, rpy, eid) {
+        let Some(seniority) = reply_seniority(kels, rpy, eid) else {
             continue;
-        }
-
-        let dt = sad
-            .get("dt")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+        };
         match latest.get(scheme) {
-            Some((existing_dt, _)) if *existing_dt >= dt => {}
+            Some((existing, _)) if *existing >= seniority => {}
             _ => {
-                latest.insert(scheme.to_string(), (dt, url.to_string()));
+                latest.insert(scheme.to_string(), (seniority, url.to_string()));
             }
         }
     }
@@ -176,37 +265,35 @@ fn location_schemes(kels: &Kels, eid: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Whether `msg` carries a signature from `signer` that verifies.
+/// Verify that `msg` is signed by `signer`, and say where it stands in BADA
+/// order. `None` if it is not signed by `signer`, or its `dt` is not a
+/// timestamp — a reply that cannot be ordered cannot supersede anything.
 ///
 /// Two shapes, because KERI identifiers come in two kinds:
 ///
 /// * a **transferable** identifier signs with indexed signatures in a
-///   transferable signature group, checked against the key state its own KEL
-///   establishes — so that KEL must be in the stream and must verify;
+///   transferable signature group, checked against the key state at the
+///   establishment event the group names — which must meet that key state's
+///   signing threshold, not merely include one good signature;
 /// * a **non-transferable** identifier — a witness, typically — has its public
 ///   key *as* its prefix, so a receipt couple can be checked directly.
-fn signed_by(kels: &Kels, msg: &ParsedMessage, signer: &str) -> bool {
-    // Transferable: indexed signatures against verified key state.
+fn reply_seniority(kels: &Kels, msg: &ParsedMessage, signer: &str) -> Option<Seniority> {
+    let dt = msg.serder.sad().get("dt").and_then(Value::as_str)?;
+    let dt = DateTime::parse_from_rfc3339(dt).ok()?;
+
+    // Transferable: indexed signatures against verified key state. The group
+    // names the establishment event whose keys signed; using the *current*
+    // state instead would make every rotation invalidate every authorisation
+    // the identifier had ever given.
     if let Some(group) = msg
         .trans_idx_sig_groups()
         .iter()
         .find(|g| g.prefix == signer)
-        // The group names the establishment event whose keys signed. Using the
-        // *current* state instead would make every rotation invalidate every
-        // authorisation the identifier had ever given.
-        && let Ok(state) = kels.key_state_at(signer, &group.said)
     {
-        for sig in &group.sigs {
-            let Some(key) = state.keys.get(sig.index()) else {
-                continue;
-            };
-            let Ok(verfer) = Verfer::from_qb64(key) else {
-                continue;
-            };
-            if verfer.verify(msg.serder.raw(), sig.raw()).unwrap_or(false) {
-                return true;
-            }
-        }
+        return kels
+            .verify_signature_group(signer, msg.serder.raw(), group)
+            .ok()
+            .map(|state| (state.sn, dt));
     }
 
     // Non-transferable: the prefix is the key.
@@ -222,10 +309,10 @@ fn signed_by(kels: &Kels, msg: &ParsedMessage, signer: &str) -> bool {
                 continue;
             };
             if verfer.verify(msg.serder.raw(), sig).unwrap_or(false) {
-                return true;
+                return Some((0, dt));
             }
         }
     }
 
-    false
+    None
 }
