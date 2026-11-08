@@ -346,6 +346,7 @@ dependencies = [
  "affinidi-keri",
  "affinidi-keri-core",
  "affinidi-keri-crypto",
+ "base64 0.23.1",
  "chrono",
  "reqwest",
  "serde",
