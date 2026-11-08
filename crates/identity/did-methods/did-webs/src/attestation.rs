@@ -23,7 +23,8 @@ use affinidi_keri_core::serder::Serder;
 use affinidi_keri_core::version::SerializationKind;
 use serde_json::{Value, json};
 
-use crate::aliases::{Attestation, DESIGNATED_ALIASES_SCHEMA};
+use crate::aliases::DESIGNATED_ALIASES_SCHEMA;
+use crate::designation::Designation;
 use crate::endpoints::{fix_version, sign_with_group, timestamp};
 use crate::errors::DidWebsError;
 use crate::identifier::DidWebs;
@@ -56,7 +57,7 @@ pub(crate) fn designation(did: &DidWebs, extra: &[String]) -> Vec<String> {
 ///
 /// # Errors
 /// Returns [`DidWebsError::Create`] if the event cannot be built or anchored.
-pub(crate) fn revoke(hab: &mut Hab, attestation: &Attestation) -> Result<Vec<u8>, DidWebsError> {
+pub(crate) fn revoke(hab: &mut Hab, attestation: &Designation) -> Result<Vec<u8>, DidWebsError> {
     let mut rev = json!({
         "v": "KERI10JSON000000_",
         "t": "rev",
@@ -124,7 +125,145 @@ pub(crate) fn issue_designated_aliases(
             "a designated-aliases attestation with no aliases designates nothing".into(),
         ));
     }
+    issue(
+        hab,
+        aid,
+        establishment_said,
+        DESIGNATED_ALIASES_SCHEMA,
+        json!({ "ids": aliases }),
+        rules(),
+    )
+}
 
+/// Issue a key agreement designation for `keys`.
+///
+/// # Errors
+/// Returns [`DidWebsError::Create`] if `keys` is empty or repeats a key, and
+/// [`DidWebsError::InvalidKey`] if a key is not publishable or is a key of the
+/// current key state — the change authority must not double as an encryption
+/// key, and a resolver drops one that does.
+pub(crate) fn issue_key_agreement(
+    hab: &mut Hab,
+    aid: &str,
+    establishment_said: &str,
+    keys: &[crate::key_agreement::KeyAgreementKey],
+) -> Result<Vec<u8>, DidWebsError> {
+    if keys.is_empty() {
+        return Err(DidWebsError::Create(
+            "a key agreement designation with no keys designates nothing".into(),
+        ));
+    }
+    let signing: Vec<Vec<u8>> = hab
+        .signers()
+        .iter()
+        .filter_map(|s| s.verfer().qb64().ok())
+        .filter_map(|k| affinidi_cesr::Matter::from_qb64(&k).ok())
+        .map(|m| m.raw().to_vec())
+        .collect();
+    let mut encoded = Vec::with_capacity(keys.len());
+    for key in keys {
+        key.public_jwk()?;
+        if signing.iter().any(|raw| raw.as_slice() == key.raw()) {
+            return Err(DidWebsError::InvalidKey(
+                "a key of the identifier's key state cannot be designated for key agreement".into(),
+            ));
+        }
+        let qb64 = key.to_cesr()?;
+        if encoded.contains(&qb64) {
+            return Err(DidWebsError::Create(format!("{qb64} is designated twice")));
+        }
+        encoded.push(qb64);
+    }
+    issue(
+        hab,
+        aid,
+        establishment_said,
+        crate::key_agreement::KEY_AGREEMENT_SCHEMA,
+        json!({ "keys": encoded }),
+        rules_from_schema(crate::key_agreement::KEY_AGREEMENT_SCHEMA_JSON)?,
+    )
+}
+
+/// Issue a service designation for `services`.
+///
+/// # Errors
+/// Returns [`DidWebsError::Create`] if `services` is empty, an entry is not a
+/// service a DID document can carry, or two share an `id`.
+pub(crate) fn issue_services(
+    hab: &mut Hab,
+    aid: &str,
+    establishment_said: &str,
+    services: &[crate::designated_services::DesignatedService],
+) -> Result<Vec<u8>, DidWebsError> {
+    if services.is_empty() {
+        return Err(DidWebsError::Create(
+            "a service designation with no services designates nothing".into(),
+        ));
+    }
+    let mut entries: Vec<Value> = Vec::with_capacity(services.len());
+    for service in services {
+        let entry = service.to_service();
+        crate::designated_services::check_service(&entry).map_err(DidWebsError::Create)?;
+        if entries.iter().any(|e| e["id"] == entry["id"]) {
+            return Err(DidWebsError::Create(format!(
+                "service id {} is designated twice",
+                service.id
+            )));
+        }
+        entries.push(entry);
+    }
+    issue(
+        hab,
+        aid,
+        establishment_said,
+        crate::designated_services::SERVICE_SCHEMA,
+        json!({ "services": entries }),
+        rules_from_schema(crate::designated_services::SERVICE_SCHEMA_JSON)?,
+    )
+}
+
+/// The rules block a designation of `schema_json` carries: each rule's fixed
+/// text, read from the schema itself so the credential and its schema cannot
+/// disagree.
+///
+/// # Errors
+/// Returns [`DidWebsError::Create`] if the schema has no rules block.
+pub(crate) fn rules_from_schema(schema_json: &str) -> Result<Value, DidWebsError> {
+    let schema: Value = serde_json::from_str(schema_json)?;
+    let properties = schema["properties"]["r"]["oneOf"]
+        .as_array()
+        .and_then(|alternatives| alternatives.iter().find(|a| a["type"] == "object"))
+        .and_then(|block| block["properties"].as_object())
+        .ok_or_else(|| DidWebsError::Create("schema has no rules block".into()))?;
+    let mut rules = serde_json::Map::new();
+    rules.insert("d".into(), json!(""));
+    for (name, rule) in properties {
+        if let Some(text) = rule["properties"]["l"]["const"].as_str() {
+            rules.insert(name.clone(), json!({ "l": text }));
+        }
+    }
+    Ok(Value::Object(rules))
+}
+
+/// Issue a designation: a credential of `schema` whose attribute block is
+/// `attributes` (to which `d` and `dt` are added), with `rules` as its rules
+/// block.
+///
+/// Appends two interaction events to the identifier's key event log — the
+/// anchors — and returns the CESR bytes for those plus the registry, the
+/// issuance and the signed credential.
+///
+/// # Errors
+/// Returns [`DidWebsError::Create`] if any part of the chain cannot be built,
+/// signed, or anchored.
+pub(crate) fn issue(
+    hab: &mut Hab,
+    aid: &str,
+    establishment_said: &str,
+    schema: &str,
+    attributes: Value,
+    rules: Value,
+) -> Result<Vec<u8>, DidWebsError> {
     // 1. The registry. Its identifier is its own SAID, so it is self-addressing
     //    and both `d` and `i` are dummied while it is computed.
     let mut vcp = json!({
@@ -151,7 +290,7 @@ pub(crate) fn issue_designated_aliases(
         .map_err(|e| DidWebsError::Create(format!("anchoring the registry: {e}")))?;
 
     // 3. The credential.
-    let acdc_sad = build_attestation(aid, &registry, aliases)?;
+    let acdc_sad = build_attestation(aid, &registry, schema, attributes, rules)?;
     let acdc_said = acdc_sad["d"]
         .as_str()
         .ok_or_else(|| DidWebsError::Create("attestation has no SAID".into()))?
@@ -198,16 +337,23 @@ pub(crate) fn issue_designated_aliases(
 /// The attribute and rules blocks carry their own SAIDs, and those are part of
 /// the bytes the outer SAID covers — so they have to be computed first, or the
 /// credential's identifier would not match its contents.
-fn build_attestation(aid: &str, registry: &str, aliases: &[String]) -> Result<Value, DidWebsError> {
-    let mut attributes = json!({
-        "d": "",
-        "dt": timestamp(),
-        "ids": aliases,
-    });
+fn build_attestation(
+    aid: &str,
+    registry: &str,
+    schema: &str,
+    content: Value,
+    mut rules: Value,
+) -> Result<Value, DidWebsError> {
+    let mut attributes = serde_json::Map::new();
+    attributes.insert("d".into(), json!(""));
+    attributes.insert("dt".into(), json!(timestamp()));
+    if let Value::Object(content) = content {
+        attributes.extend(content);
+    }
+    let mut attributes = Value::Object(attributes);
     said::compute_said(&mut attributes, "d", "E", SerializationKind::Json)
         .map_err(|e| DidWebsError::Create(format!("attribute SAID: {e}")))?;
 
-    let mut rules = rules();
     said::compute_said(&mut rules, "d", "E", SerializationKind::Json)
         .map_err(|e| DidWebsError::Create(format!("rules SAID: {e}")))?;
 
@@ -216,7 +362,7 @@ fn build_attestation(aid: &str, registry: &str, aliases: &[String]) -> Result<Va
         "d": "",
         "i": aid,
         "ri": registry,
-        "s": DESIGNATED_ALIASES_SCHEMA,
+        "s": schema,
         "a": attributes,
         "r": rules,
     });

@@ -39,10 +39,14 @@ use affinidi_did_common::Document;
 use serde_json::{Map, Value, json};
 
 use crate::aliases::designated_aliases;
-use crate::document::{RELATIONSHIPS, derive_document, from_did_web, into_document, same_did};
+use crate::designated_services::designated_services;
+use crate::document::{
+    RELATIONSHIPS, derive_document, from_did_web, into_document, same_did, with_key_agreement,
+};
 use crate::errors::DidWebsError;
 use crate::identifier::DidWebs;
 use crate::kel::Kels;
+use crate::key_agreement::{KeyAgreementKey, designated_key_agreement};
 use crate::services::{delegator_service, role_endpoints, witness_endpoints};
 
 /// A resolved document with the DID document metadata the method defines.
@@ -222,7 +226,33 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
         services.push(delegator);
     }
 
+    // Services of any type, designated by the AID. Anchored in the KEL like
+    // its aliases, they follow `versionId`. One whose id KERI's own endpoint
+    // data already uses is dropped: an id names one service.
+    for service in designated_services(kels, aid)?.services {
+        if services.iter().all(|s| s["id"] != service["id"]) {
+            services.push(service);
+        }
+    }
+
+    // Key agreement keys, designated by the AID. A key of the current key
+    // state is never one: the change authority does not double as an
+    // encryption key.
+    let key_agreement: Vec<String> = designated_key_agreement(kels, aid)?
+        .keys
+        .into_iter()
+        .filter(|key| {
+            let Ok(designated) = KeyAgreementKey::from_cesr(key) else {
+                return false;
+            };
+            !state.keys.iter().any(|k| {
+                affinidi_cesr::Matter::from_qb64(k).is_ok_and(|m| m.raw() == designated.raw())
+            })
+        })
+        .collect();
+
     let document = derive_document(did, &state.keys, &state.threshold, &aliases, &services)?;
+    let document = with_key_agreement(document, did, &key_agreement)?;
 
     Ok(Derived {
         document,

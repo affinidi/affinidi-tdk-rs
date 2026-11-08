@@ -55,6 +55,16 @@ checked against the reference implementation's artifacts.
 
 ### Added
 
+- **Key agreement and services of any type, by designation.** Two ACDC schemas
+  of this crate's (`schemas/`), issued by the AID to itself and anchored in its
+  KEL, verified like designated aliases: a key agreement designation (X25519,
+  P-256 or secp256k1 keys, published as `JsonWebKey` methods in
+  `keyAgreement`) and a service designation (DID document service entries such
+  as `DIDCommMessaging` or `TSPTransport`). `CreateConfig::key_agreement`,
+  `CreateConfig::designated_service`, `Change::KeyAgreement` and
+  `Change::DesignatedServices` designate and replace them without rotating the
+  identifier. A key of the current key state is refused as a key agreement key,
+  and a designated service cannot take an id KERI's own endpoint data uses.
 - `resolve_with_metadata` and `WebsResolver::resolve_with_metadata`, returning
   `versionId`, `nextVersionId`, `equivalentId` and `deactivated`; the
   `versionId` DID parameter (`DidWebs::version_id`) resolves as of a key event.

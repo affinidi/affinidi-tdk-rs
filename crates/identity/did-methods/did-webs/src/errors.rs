@@ -39,6 +39,10 @@ pub enum DidWebsError {
     #[error("{0} is not designated by its AID")]
     NotDesignated(String),
 
+    /// A key is not one this implementation can publish for its purpose.
+    #[error("invalid key: {0}")]
+    InvalidKey(String),
+
     /// An identifier could not be created or continued.
     #[error("could not create: {0}")]
     Create(String),

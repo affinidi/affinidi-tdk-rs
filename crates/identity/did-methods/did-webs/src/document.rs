@@ -94,6 +94,42 @@ pub fn derive_document(
     Ok(Value::Object(doc))
 }
 
+/// Add designated key agreement keys to a derived document: a `JsonWebKey`
+/// verification method for each (id `#<key qb64>`, as for the key state's
+/// keys), referenced from `keyAgreement`. With no keys the document is
+/// unchanged, and carries no `keyAgreement` member.
+///
+/// # Errors
+/// Returns [`DidWebsError::InvalidKey`] if a key is not a key agreement key.
+pub fn with_key_agreement(
+    mut doc: Value,
+    did: &DidWebs,
+    keys: &[String],
+) -> Result<Value, DidWebsError> {
+    if keys.is_empty() {
+        return Ok(doc);
+    }
+    let mut references = Vec::with_capacity(keys.len());
+    let mut methods = Vec::with_capacity(keys.len());
+    for key in keys {
+        let jwk = crate::key_agreement::KeyAgreementKey::from_cesr(key)?.public_jwk()?;
+        methods.push(json!({
+            "id": format!("#{key}"),
+            "type": "JsonWebKey",
+            "controller": did.did(),
+            "publicKeyJwk": jwk,
+        }));
+        references.push(json!(format!("#{key}")));
+    }
+    if let Some(Value::Array(existing)) = doc.get_mut("verificationMethod") {
+        existing.extend(methods);
+    }
+    if let Some(obj) = doc.as_object_mut() {
+        obj.insert("keyAgreement".into(), Value::Array(references));
+    }
+    Ok(doc)
+}
+
 /// The `ConditionalProof2022` method for a threshold above one key, or `None`
 /// when `kt` is 1.
 ///
@@ -181,7 +217,7 @@ fn lcm(a: u64, b: u64) -> Option<u64> {
 /// and the reciprocal `alsoKnownAs` entry — and nothing else is touched.
 ///
 /// The caller must only publish the result when the `did:web` twin is
-/// designated; [`crate::create`] always designates it.
+/// designated; [`crate::create()`] always designates it.
 pub fn to_did_web(doc: &Value, did: &DidWebs) -> Value {
     swap_subject(doc, did.did(), &did.did_web_twin())
 }

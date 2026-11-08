@@ -1,0 +1,155 @@
+{
+  "$id": "EJZrf6N4vbhA1hQIujWiIiQmNi455EGS3iXdhxLSwvAi",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "did:webs Key Agreement Designation",
+  "description": "A public attestation listing the key agreement keys of an AID controller, rendered as the keyAgreement verification relationship of its did:webs DID document.",
+  "type": "object",
+  "credentialType": "DidWebsKeyAgreementDesignation",
+  "version": "1.0.0",
+  "properties": {
+    "v": {
+      "description": "Version",
+      "type": "string"
+    },
+    "d": {
+      "description": "Attestation SAID",
+      "type": "string"
+    },
+    "i": {
+      "description": "Controller AID",
+      "type": "string"
+    },
+    "ri": {
+      "description": "Attestation status registry",
+      "type": "string"
+    },
+    "s": {
+      "description": "schema section",
+      "oneOf": [
+        {
+          "description": "schema section SAID",
+          "type": "string"
+        },
+        {
+          "description": "schema detail",
+          "type": "object"
+        }
+      ]
+    },
+    "a": {
+      "oneOf": [
+        {
+          "description": "Attributes block SAID",
+          "type": "string"
+        },
+        {
+          "$id": "EEFNjaDbY6XxVo2NCl4Aq9AAQUVwYDgGikyG83SICY2G",
+          "description": "Attributes block",
+          "type": "object",
+          "properties": {
+            "d": {
+              "description": "Attributes block SAID",
+              "type": "string"
+            },
+            "dt": {
+              "description": "Designation date time",
+              "type": "string",
+              "format": "date-time"
+            },
+            "keys": {
+              "description": "CESR-encoded public keys the AID controller designates for key agreement",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "d",
+            "dt",
+            "keys"
+          ]
+        }
+      ]
+    },
+    "r": {
+      "oneOf": [
+        {
+          "description": "Rules block SAID",
+          "type": "string"
+        },
+        {
+          "$id": "ECg4tZsDlbuoyfH-a4dD1OuEmFoVzznTjOY4_J_2h5ed",
+          "description": "Rules block",
+          "type": "object",
+          "properties": {
+            "d": {
+              "description": "Rules block SAID",
+              "type": "string"
+            },
+            "keyDesignation": {
+              "description": "Key designation",
+              "type": "object",
+              "properties": {
+                "l": {
+                  "type": "string",
+                  "const": "The issuer of this ACDC designates the keys in the keys field as the only key agreement keys of the issuer's AID."
+                }
+              }
+            },
+            "usageDisclaimer": {
+              "description": "Usage Disclaimer",
+              "type": "object",
+              "properties": {
+                "l": {
+                  "type": "string",
+                  "const": "This attestation designates keys for establishing encrypted communication with the controller of the AID. It does not authorize any designated key to sign on behalf of the AID, and no key of the AID's key state is designated by it."
+                }
+              }
+            },
+            "issuanceDisclaimer": {
+              "description": "Issuance Disclaimer",
+              "type": "object",
+              "properties": {
+                "l": {
+                  "type": "string",
+                  "const": "All information in a valid and non-revoked key agreement key designation is accurate as of the date specified."
+                }
+              }
+            },
+            "termsOfUse": {
+              "description": "Terms of use",
+              "type": "object",
+              "properties": {
+                "l": {
+                  "type": "string",
+                  "const": "Designated key agreement keys of the AID must only be used in a manner consistent with the expressed intent of the AID controller."
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "d",
+            "keyDesignation",
+            "usageDisclaimer",
+            "issuanceDisclaimer",
+            "termsOfUse"
+          ]
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "d",
+    "i",
+    "ri",
+    "s",
+    "a",
+    "r"
+  ]
+}

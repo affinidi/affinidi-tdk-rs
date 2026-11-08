@@ -14,9 +14,11 @@ use affinidi_keri::hab::Hab;
 use crate::artifacts::Artifacts;
 use crate::create::{SelfEndpoint, artifacts_for};
 use crate::custody::KeyCustody;
+use crate::designated_services::DesignatedService;
 use crate::errors::DidWebsError;
 use crate::identifier::DidWebs;
 use crate::kel::Kels;
+use crate::key_agreement::KeyAgreementKey;
 
 /// What to add to an identifier's key event log.
 #[derive(Debug, Clone)]
@@ -47,6 +49,19 @@ pub enum Change {
     /// Appends one interaction event per revocation, and two for the new
     /// attestation, since each must be anchored in the key event log.
     AlsoKnownAs(Vec<String>),
+    /// Replace the designated key agreement keys.
+    ///
+    /// Revokes the key agreement designations in force and, unless the list is
+    /// empty, designates exactly these keys. An empty list leaves the document
+    /// with no `keyAgreement`. The identifier's key state is not touched: an
+    /// encryption key changes without a rotation.
+    KeyAgreement(Vec<KeyAgreementKey>),
+    /// Replace the designated services.
+    ///
+    /// Revokes the service designations in force and, unless the list is
+    /// empty, designates exactly these. KERI role endpoints (`Services`) are
+    /// unaffected.
+    DesignatedServices(Vec<DesignatedService>),
 }
 
 /// How to continue an identifier.
@@ -149,10 +164,12 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
             // A resolver reads every unrevoked attestation, so the ones in
             // force are withdrawn first — otherwise an alias dropped here
             // would still be listed.
-            let mut rejected = None;
-            for prior in crate::aliases::attestations(&kels, did.aid(), &mut rejected)? {
-                keri_cesr.extend_from_slice(&crate::attestation::revoke(&mut hab, &prior)?);
-            }
+            keri_cesr.extend_from_slice(&revoke_all(
+                &kels,
+                &mut hab,
+                did.aid(),
+                crate::aliases::DESIGNATED_ALIASES_SCHEMA,
+            )?);
             let establishment = last_establishment_said(&kels, did.aid())?;
             let attestation = crate::attestation::issue_designated_aliases(
                 &mut hab,
@@ -161,6 +178,40 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
                 &crate::attestation::designation(&did, aliases),
             )?;
             keri_cesr.extend_from_slice(&attestation);
+        }
+        Change::KeyAgreement(keys) => {
+            keri_cesr.extend_from_slice(&revoke_all(
+                &kels,
+                &mut hab,
+                did.aid(),
+                crate::key_agreement::KEY_AGREEMENT_SCHEMA,
+            )?);
+            if !keys.is_empty() {
+                let establishment = last_establishment_said(&kels, did.aid())?;
+                keri_cesr.extend_from_slice(&crate::attestation::issue_key_agreement(
+                    &mut hab,
+                    did.aid(),
+                    &establishment,
+                    keys,
+                )?);
+            }
+        }
+        Change::DesignatedServices(services) => {
+            keri_cesr.extend_from_slice(&revoke_all(
+                &kels,
+                &mut hab,
+                did.aid(),
+                crate::designated_services::SERVICE_SCHEMA,
+            )?);
+            if !services.is_empty() {
+                let establishment = last_establishment_said(&kels, did.aid())?;
+                keri_cesr.extend_from_slice(&crate::attestation::issue_services(
+                    &mut hab,
+                    did.aid(),
+                    &establishment,
+                    services,
+                )?);
+            }
         }
         Change::Services(services) => {
             // Replies are not key events, so nothing is appended to the log
@@ -184,6 +235,21 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
         artifacts,
         custody: KeyCustody::new(hab.state()),
     })
+}
+
+/// Revoke every designation of `schema` in force, anchoring each revocation.
+fn revoke_all(
+    kels: &Kels,
+    hab: &mut Hab,
+    aid: &str,
+    schema: &str,
+) -> Result<Vec<u8>, DidWebsError> {
+    let mut rejected = None;
+    let mut out = Vec::new();
+    for prior in crate::designation::designations(kels, aid, schema, &mut rejected)? {
+        out.extend_from_slice(&crate::attestation::revoke(hab, &prior)?);
+    }
+    Ok(out)
 }
 
 /// The SAID of the most recent establishment event in an identifier's log.

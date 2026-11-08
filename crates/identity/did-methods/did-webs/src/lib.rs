@@ -13,6 +13,11 @@
  * `did.json` carries no authority on its own — it is checked against the
  * document derived from the verified key state, and a disagreement is an
  * error rather than a preference for one or the other.
+ *
+ * What the key state cannot express — key agreement keys, and services of
+ * types KERI's endpoint data cannot carry — the AID adds by designation: an
+ * ACDC it issues to itself and anchors in its KEL ([`key_agreement`],
+ * [`designated_services`](mod@designated_services)).
  */
 
 #[cfg(feature = "create")]
@@ -29,11 +34,14 @@ pub mod endpoints;
 pub mod update;
 
 pub mod aliases;
+pub mod designated_services;
+pub(crate) mod designation;
 pub mod document;
 pub mod errors;
 pub mod fetch;
 pub mod identifier;
 pub mod kel;
+pub mod key_agreement;
 pub mod resolver;
 pub mod services;
 
@@ -44,10 +52,12 @@ pub use artifacts::Artifacts;
 pub use create::{CreateConfig, CreateResult, SelfEndpoint, create};
 #[cfg(feature = "create")]
 pub use custody::KeyCustody;
+pub use designated_services::{DesignatedService, DesignatedServices, designated_services};
 pub use errors::DidWebsError;
 pub use fetch::{WebsResolver, resolve};
 pub use identifier::{DID_JSON, DidWebs, KERI_CESR};
 pub use kel::Kels;
+pub use key_agreement::{DesignatedKeys, KeyAgreementKey, designated_key_agreement};
 pub use resolver::{DocumentMetadata, Resolution, resolve_from_artifacts, resolve_with_metadata};
 pub use services::{ServiceEndpoint, delegator_service, service_endpoints};
 #[cfg(feature = "create")]
