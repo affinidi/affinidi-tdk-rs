@@ -27,7 +27,7 @@
 //! `did:webs` one, so the `vcp`/`iss`/`rev` handling here belongs in
 //! `affinidi-keri-core` once something other than `did:webs` needs it.
 
-use serde_json::Value;
+use affinidi_keri_core::SadValue;
 
 use crate::errors::DidWebsError;
 use crate::kel::Kels;
@@ -44,7 +44,7 @@ pub(crate) struct Designation {
     /// The SAID of its issuance event, which a revocation names as prior.
     pub issuance: String,
     /// Its attribute block, `a`.
-    pub attributes: Value,
+    pub attributes: SadValue,
 }
 
 /// Every credential of `schema` that `aid` issued to itself, verified, and not

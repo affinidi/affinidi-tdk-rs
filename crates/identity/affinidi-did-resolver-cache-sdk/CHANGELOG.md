@@ -1,5 +1,11 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.47) — affinidi-did-webs 0.9
+
+- **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.9, which
+  no longer turns on `serde_json`'s `preserve_order` for the whole build. A
+  consumer enabling `did-webs` keeps its own JSON key order and `Value` size.
+
 ## Unreleased (0.8.46) — did:webs obeys the host policy
 
 - **Behaviour (security):** `did:webs` resolution follows

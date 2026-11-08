@@ -1,5 +1,10 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.37.2) — affinidi-did-webs 0.9
+
+- **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.9, which
+  no longer turns on `serde_json`'s `preserve_order` for the whole build.
+
 ## Unreleased (0.37.1) — affinidi-did-webs 0.8
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.8, which
