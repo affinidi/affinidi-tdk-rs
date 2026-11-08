@@ -148,36 +148,11 @@ fn verify_signed_by(
 
     // Verified against the key state at the establishment event the signature
     // group names, not the current one — otherwise a rotation would silently
-    // withdraw an attestation the identifier never revoked.
-    let state = kels
-        .key_state_at(aid, &group.said)
-        .map_err(|e| format!("cannot check the attestation signature: {e}"))?;
-
-    let verfers: Vec<affinidi_keri_crypto::Verfer> = state
-        .keys
-        .iter()
-        .map(|k| affinidi_keri_crypto::Verfer::from_qb64(k))
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("key state has an unusable key: {e}"))?;
-
-    let mut valid = 0usize;
-    for sig in &group.sigs {
-        let Some(verfer) = verfers.get(sig.index()) else {
-            continue;
-        };
-        if verfer
-            .verify(acdc.serder.raw(), sig.raw())
-            .map_err(|e| format!("signature check failed: {e}"))?
-        {
-            valid += 1;
-        }
-    }
-
-    if valid == 0 {
-        return Err(format!(
-            "no signature on the attestation verifies against {aid}'s key state"
-        ));
-    }
+    // withdraw an attestation the identifier never revoked — and against that
+    // key state's signing threshold, so one key of a multi-key identifier
+    // cannot designate aliases on its own.
+    kels.verify_signature_group(aid, acdc.serder.raw(), group)
+        .map_err(|e| format!("the attestation signature does not verify: {e}"))?;
 
     Ok(())
 }

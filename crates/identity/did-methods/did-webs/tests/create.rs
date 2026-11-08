@@ -187,6 +187,36 @@ fn a_service_designated_at_creation_survives_resolution() {
 }
 
 #[test]
+fn a_multi_key_identifier_signs_its_services_with_enough_keys() {
+    // The resolver holds a reply to the key state's signing threshold, so a
+    // 2-of-2 identifier has to sign with both keys or its own service would be
+    // dropped on the way back.
+    let config = CreateConfig::builder(HOST)
+        .inception(
+            InceptionConfig::builder()
+                .salt(SALT.to_vec())
+                .count(2)
+                .threshold(2)
+                .next_count(2)
+                .next_threshold(2)
+                .build(),
+        )
+        .service(agent_endpoint())
+        .also_known_as(OTHER)
+        .build();
+
+    let result = create(config).expect("create");
+    let doc = resolve(result.did(), result.artifacts());
+
+    assert_eq!(doc.service.len(), 1, "got {:?}", doc.service);
+    assert!(
+        doc.also_known_as.iter().any(|a| a == OTHER),
+        "the alias attestation must also meet the threshold: {:?}",
+        doc.also_known_as,
+    );
+}
+
+#[test]
 fn a_service_added_later_survives_resolution() {
     let created = create(config()).expect("create");
     assert!(

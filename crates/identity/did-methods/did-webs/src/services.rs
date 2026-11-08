@@ -14,13 +14,18 @@
 //! act on someone's behalf. Neither is published.
 //!
 //! `/end/role/cut` withdraws an authorisation. Where the same subject is
-//! addressed more than once the latest `dt` wins, which is how KERI reply
-//! messages supersede one another.
+//! addressed more than once, KERI's BADA rule picks the reply that stands: the
+//! one signed under the **later establishment event**, and between replies
+//! signed under the same one, the later `dt`. Ordering by `dt` alone would let
+//! a key that has since been rotated out — the compromised key rotation exists
+//! to retire — sign a reply dated far in the future and win every comparison
+//! after it.
 
 use std::collections::BTreeMap;
 
 use affinidi_keri_core::parser::{Attachment, ParsedMessage};
 use affinidi_keri_crypto::Verfer;
+use chrono::{DateTime, FixedOffset};
 use serde_json::Value;
 
 use crate::errors::DidWebsError;
@@ -48,11 +53,18 @@ impl ServiceEndpoint {
     }
 }
 
-/// One `/end/role/*` authorisation, kept with its timestamp so a later reply
+/// Where a reply stands in BADA order.
+///
+/// The sequence number of the establishment event whose keys signed it, then
+/// its `dt`. A non-transferable signer's key never changes, so its replies all
+/// share sequence number 0 and are ordered by `dt` alone.
+type Seniority = (u64, DateTime<FixedOffset>);
+
+/// One `/end/role/*` authorisation, kept with its seniority so a later reply
 /// can supersede it.
 struct RoleRecord {
     added: bool,
-    dt: String,
+    seniority: Seniority,
 }
 
 /// Collect the service endpoints `aid` has authorised.
@@ -91,23 +103,18 @@ pub fn service_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoint>,
         if cid != aid {
             continue;
         }
-        if !signed_by(kels, rpy, aid) {
+        let Some(seniority) = reply_seniority(kels, rpy, aid) else {
             continue;
-        }
-
-        let dt = sad
-            .get("dt")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+        };
         let key = (role.to_string(), eid.to_string());
 
-        // Reply messages supersede by timestamp, so a `cut` older than the
-        // `add` it tries to withdraw does not take effect.
+        // A `cut` junior to the `add` it tries to withdraw does not take
+        // effect, and neither does a replay of an older `add`. Equal seniority
+        // is not newer, as in keripy.
         match roles.get(&key) {
-            Some(existing) if existing.dt >= dt => {}
+            Some(existing) if existing.seniority >= seniority => {}
             _ => {
-                roles.insert(key, RoleRecord { added, dt });
+                roles.insert(key, RoleRecord { added, seniority });
             }
         }
     }
@@ -131,7 +138,7 @@ pub fn service_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoint>,
 
 /// The verified location schemes `eid` has published for itself.
 fn location_schemes(kels: &Kels, eid: &str) -> BTreeMap<String, String> {
-    let mut latest: BTreeMap<String, (String, String)> = BTreeMap::new();
+    let mut latest: BTreeMap<String, (Seniority, String)> = BTreeMap::new();
 
     for rpy in kels.messages_with_ilk("rpy") {
         let sad = rpy.serder.sad();
@@ -153,19 +160,13 @@ fn location_schemes(kels: &Kels, eid: &str) -> BTreeMap<String, String> {
         }
         // The endpoint has to say this about *itself*. A third party asserting
         // where someone else can be reached is a redirection, not a location.
-        if !signed_by(kels, rpy, eid) {
+        let Some(seniority) = reply_seniority(kels, rpy, eid) else {
             continue;
-        }
-
-        let dt = sad
-            .get("dt")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+        };
         match latest.get(scheme) {
-            Some((existing_dt, _)) if *existing_dt >= dt => {}
+            Some((existing, _)) if *existing >= seniority => {}
             _ => {
-                latest.insert(scheme.to_string(), (dt, url.to_string()));
+                latest.insert(scheme.to_string(), (seniority, url.to_string()));
             }
         }
     }
@@ -176,37 +177,35 @@ fn location_schemes(kels: &Kels, eid: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Whether `msg` carries a signature from `signer` that verifies.
+/// Verify that `msg` is signed by `signer`, and say where it stands in BADA
+/// order. `None` if it is not signed by `signer`, or its `dt` is not a
+/// timestamp — a reply that cannot be ordered cannot supersede anything.
 ///
 /// Two shapes, because KERI identifiers come in two kinds:
 ///
 /// * a **transferable** identifier signs with indexed signatures in a
-///   transferable signature group, checked against the key state its own KEL
-///   establishes — so that KEL must be in the stream and must verify;
+///   transferable signature group, checked against the key state at the
+///   establishment event the group names — which must meet that key state's
+///   signing threshold, not merely include one good signature;
 /// * a **non-transferable** identifier — a witness, typically — has its public
 ///   key *as* its prefix, so a receipt couple can be checked directly.
-fn signed_by(kels: &Kels, msg: &ParsedMessage, signer: &str) -> bool {
-    // Transferable: indexed signatures against verified key state.
+fn reply_seniority(kels: &Kels, msg: &ParsedMessage, signer: &str) -> Option<Seniority> {
+    let dt = msg.serder.sad().get("dt").and_then(Value::as_str)?;
+    let dt = DateTime::parse_from_rfc3339(dt).ok()?;
+
+    // Transferable: indexed signatures against verified key state. The group
+    // names the establishment event whose keys signed; using the *current*
+    // state instead would make every rotation invalidate every authorisation
+    // the identifier had ever given.
     if let Some(group) = msg
         .trans_idx_sig_groups()
         .iter()
         .find(|g| g.prefix == signer)
-        // The group names the establishment event whose keys signed. Using the
-        // *current* state instead would make every rotation invalidate every
-        // authorisation the identifier had ever given.
-        && let Ok(state) = kels.key_state_at(signer, &group.said)
     {
-        for sig in &group.sigs {
-            let Some(key) = state.keys.get(sig.index()) else {
-                continue;
-            };
-            let Ok(verfer) = Verfer::from_qb64(key) else {
-                continue;
-            };
-            if verfer.verify(msg.serder.raw(), sig.raw()).unwrap_or(false) {
-                return true;
-            }
-        }
+        return kels
+            .verify_signature_group(signer, msg.serder.raw(), group)
+            .ok()
+            .map(|state| (state.sn, dt));
     }
 
     // Non-transferable: the prefix is the key.
@@ -222,10 +221,10 @@ fn signed_by(kels: &Kels, msg: &ParsedMessage, signer: &str) -> bool {
                 continue;
             };
             if verfer.verify(msg.serder.raw(), sig).unwrap_or(false) {
-                return true;
+                return Some((0, dt));
             }
         }
     }
 
-    false
+    None
 }

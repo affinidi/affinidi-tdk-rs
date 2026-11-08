@@ -91,16 +91,23 @@ pub(crate) fn sign_with_group(
     establishment_said: &str,
     serder: &Serder,
 ) -> Result<Vec<u8>, DidWebsError> {
-    let signer = hab
-        .signers()
-        .first()
-        .ok_or_else(|| DidWebsError::Create("identifier has no signing key".into()))?;
-    let signature = signer
-        .sign_indexed(serder.raw(), 0, true)
-        .and_then(|s| s.qb64())
-        .map_err(|e| DidWebsError::Create(format!("could not sign reply: {e}")))?;
+    let signers = hab.signers();
+    if signers.is_empty() {
+        return Err(DidWebsError::Create("identifier has no signing key".into()));
+    }
+    // Every current key signs, at its own index. A resolver holds the group to
+    // the key state's signing threshold, so signing with the first key alone
+    // would produce something a multi-key identifier's own resolver rejects.
+    let mut signatures = String::new();
+    for (index, signer) in signers.iter().enumerate() {
+        let signature = signer
+            .sign_indexed(serder.raw(), index, true)
+            .and_then(|s| s.qb64())
+            .map_err(|e| DidWebsError::Create(format!("could not sign reply: {e}")))?;
+        signatures.push_str(&signature);
+    }
 
-    let inner = Counter::new("-A", 1)
+    let inner = Counter::new("-A", signers.len())
         .and_then(|c| c.qb64())
         .map_err(|e| DidWebsError::Create(format!("counter: {e}")))?;
     let outer = Counter::new("-F", 1)
@@ -116,7 +123,7 @@ pub(crate) fn sign_with_group(
     // signature — not simply the latest event, which may be an interaction.
     out.extend_from_slice(establishment_said.as_bytes());
     out.extend_from_slice(inner.as_bytes());
-    out.extend_from_slice(signature.as_bytes());
+    out.extend_from_slice(signatures.as_bytes());
     Ok(out)
 }
 

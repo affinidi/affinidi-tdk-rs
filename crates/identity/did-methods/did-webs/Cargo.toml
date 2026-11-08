@@ -20,12 +20,14 @@ default = []
 # Creating identifiers, as opposed to resolving them. Optional because it pulls
 # `affinidi-keri`, and with it an LMDB-backed store this crate never uses for
 # resolution — see `create` for why the store is not required at runtime.
-create = ["dep:affinidi-keri", "dep:serde", "dep:chrono"]
+create = ["dep:affinidi-keri", "dep:serde", "chrono/clock"]
 
 [dependencies]
 affinidi-cesr = "0.1.3"
 affinidi-keri = { version = "0.4", optional = true }
-chrono = { version = "0.4", optional = true }
+# Resolution parses the `dt` of KERI replies, which BADA orders by; creation
+# also stamps them, which needs the clock.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 affinidi-crypto = "0.2"
 affinidi-keri-core = "0.4"
 affinidi-keri-crypto = "0.4"

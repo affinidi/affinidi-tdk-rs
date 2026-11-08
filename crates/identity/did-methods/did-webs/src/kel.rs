@@ -18,7 +18,7 @@ use affinidi_keri_core::delegation::{DelegationProof, DelegatorAnchors};
 use affinidi_keri_core::error::CoreError;
 use affinidi_keri_core::kever::Kever;
 use affinidi_keri_core::key_state::KeyState;
-use affinidi_keri_core::parser::{self, Attachment, ParsedMessage};
+use affinidi_keri_core::parser::{self, Attachment, ParsedMessage, TransIdxSigGroup};
 use affinidi_keri_crypto::Verfer;
 
 use crate::errors::DidWebsError;
@@ -215,7 +215,86 @@ impl Kels {
     pub fn key_state_at(&self, aid: &str, said: &str) -> Result<KeyState, DidWebsError> {
         // The log must verify in full before any point in it is trusted.
         self.key_state(aid)?;
+
+        // A signature group names the establishment event whose keys signed.
+        // An interaction event carries the same keys, but its sequence number
+        // is not the key state's, and BADA orders replies by that number.
+        let named = self
+            .by_prefix
+            .get(aid)
+            .into_iter()
+            .flatten()
+            .map(|i| &self.messages[*i])
+            .find(|m| m.serder.said().ok().as_deref() == Some(said))
+            .ok_or_else(|| {
+                DidWebsError::Kel(format!("{aid} has no event with SAID {said} to sign under"))
+            })?;
+        let ilk = named.serder.ilk().unwrap_or_default();
+        if !matches!(ilk.as_str(), "icp" | "rot" | "dip" | "drt") {
+            return Err(DidWebsError::Kel(format!(
+                "{said} is a {ilk:?} event, not an establishment event, so it names no key state"
+            )));
+        }
+
         self.replay(aid, Some(said))
+    }
+
+    /// Verify a transferable signature group from `signer` over `raw`.
+    ///
+    /// The signatures are checked against the key state at the establishment
+    /// event the group names, and together they must meet **that key state's
+    /// signing threshold**. One valid signature is not enough for a 2-of-3
+    /// identifier: accepting it would let a single compromised key speak for
+    /// the controller, which is what the threshold exists to prevent.
+    ///
+    /// Returns the key state the signatures verified under, whose `sn` is the
+    /// establishment event's sequence number — the first half of BADA
+    /// ordering.
+    ///
+    /// # Errors
+    /// Returns [`DidWebsError::Kel`] if the group names no establishment event
+    /// in `signer`'s verified log, or the valid signatures do not meet its
+    /// threshold.
+    pub fn verify_signature_group(
+        &self,
+        signer: &str,
+        raw: &[u8],
+        group: &TransIdxSigGroup,
+    ) -> Result<KeyState, DidWebsError> {
+        if group.prefix != signer {
+            return Err(DidWebsError::Kel(format!(
+                "signature group is from {}, not {signer}",
+                group.prefix
+            )));
+        }
+        let state = self.key_state_at(signer, &group.said)?;
+
+        let mut verified: Vec<usize> = Vec::new();
+        for sig in &group.sigs {
+            let index = sig.index();
+            if verified.contains(&index) {
+                // Two signatures at one index are one signer, not two.
+                continue;
+            }
+            let Some(key) = state.keys.get(index) else {
+                continue;
+            };
+            let verfer = Verfer::from_qb64(key).map_err(|e| {
+                DidWebsError::Kel(format!("{signer} key state has an unusable key: {e}"))
+            })?;
+            if verfer.verify(raw, sig.raw()).unwrap_or(false) {
+                verified.push(index);
+            }
+        }
+
+        if !state.threshold.is_satisfied(&verified, state.keys.len()) {
+            return Err(DidWebsError::Kel(format!(
+                "{} valid signature(s) from {signer} do not meet its signing threshold at sn {}",
+                verified.len(),
+                state.sn,
+            )));
+        }
+        Ok(state)
     }
 
     /// Replay one identifier's KEL from its inception.
