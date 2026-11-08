@@ -1,0 +1,193 @@
+{
+  "$id": "ELj0Sdf2Boi7BMiIFAEJ9_MSFJU8t-LavLN-gMb8oXM8",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "did:webs Service Designation",
+  "description": "A public attestation listing service endpoints of an AID controller, rendered in the service property of its did:webs DID document.",
+  "type": "object",
+  "credentialType": "DidWebsServiceDesignation",
+  "version": "1.0.0",
+  "properties": {
+    "v": {
+      "description": "Version",
+      "type": "string"
+    },
+    "d": {
+      "description": "Attestation SAID",
+      "type": "string"
+    },
+    "i": {
+      "description": "Controller AID",
+      "type": "string"
+    },
+    "ri": {
+      "description": "Attestation status registry",
+      "type": "string"
+    },
+    "s": {
+      "description": "schema section",
+      "oneOf": [
+        {
+          "description": "schema section SAID",
+          "type": "string"
+        },
+        {
+          "description": "schema detail",
+          "type": "object"
+        }
+      ]
+    },
+    "a": {
+      "oneOf": [
+        {
+          "description": "Attributes block SAID",
+          "type": "string"
+        },
+        {
+          "$id": "EBkO9W9QKOpOhVgbmhXjIAeGDncIFpTHZsgRpIj3SCy6",
+          "description": "Attributes block",
+          "type": "object",
+          "properties": {
+            "d": {
+              "description": "Attributes block SAID",
+              "type": "string"
+            },
+            "dt": {
+              "description": "Designation date time",
+              "type": "string",
+              "format": "date-time"
+            },
+            "services": {
+              "description": "Services the AID controller designates, each a DID document service entry whose id is a relative DID URL",
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^#"
+                  },
+                  "type": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 1
+                      }
+                    ]
+                  },
+                  "serviceEndpoint": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object"
+                      },
+                      {
+                        "type": "array"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "type",
+                  "serviceEndpoint"
+                ]
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "d",
+            "dt",
+            "services"
+          ]
+        }
+      ]
+    },
+    "r": {
+      "oneOf": [
+        {
+          "description": "Rules block SAID",
+          "type": "string"
+        },
+        {
+          "$id": "EBYNIKABSYtVwyHP8mw-9Fj2hp44pfriAmLCpk9O8hmf",
+          "description": "Rules block",
+          "type": "object",
+          "properties": {
+            "d": {
+              "description": "Rules block SAID",
+              "type": "string"
+            },
+            "serviceDesignation": {
+              "description": "Service designation",
+              "type": "object",
+              "properties": {
+                "l": {
+                  "type": "string",
+                  "const": "The issuer of this ACDC designates the services in the services field as the only service endpoints of the issuer's AID beyond those its KERI endpoint role authorizations establish."
+                }
+              }
+            },
+            "usageDisclaimer": {
+              "description": "Usage Disclaimer",
+              "type": "object",
+              "properties": {
+                "l": {
+                  "type": "string",
+                  "const": "This attestation asserts where the controller of the AID may be reached. It does not assert that the controller of the AID operates the infrastructure behind any designated endpoint."
+                }
+              }
+            },
+            "issuanceDisclaimer": {
+              "description": "Issuance Disclaimer",
+              "type": "object",
+              "properties": {
+                "l": {
+                  "type": "string",
+                  "const": "All information in a valid and non-revoked service designation is accurate as of the date specified."
+                }
+              }
+            },
+            "termsOfUse": {
+              "description": "Terms of use",
+              "type": "object",
+              "properties": {
+                "l": {
+                  "type": "string",
+                  "const": "Designated services of the AID must only be used in a manner consistent with the expressed intent of the AID controller."
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "d",
+            "serviceDesignation",
+            "usageDisclaimer",
+            "issuanceDisclaimer",
+            "termsOfUse"
+          ]
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "d",
+    "i",
+    "ri",
+    "s",
+    "a",
+    "r"
+  ]
+}

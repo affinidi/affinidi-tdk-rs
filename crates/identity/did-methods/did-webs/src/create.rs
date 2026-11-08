@@ -43,9 +43,11 @@ use affinidi_keri::hab::Hab;
 
 use crate::artifacts::Artifacts;
 use crate::custody::KeyCustody;
+use crate::designated_services::DesignatedService;
 use crate::document::to_did_web;
 use crate::errors::DidWebsError;
 use crate::identifier::DidWebs;
+use crate::key_agreement::KeyAgreementKey;
 
 /// A service endpoint to publish at creation time.
 ///
@@ -88,6 +90,12 @@ pub struct CreateConfig {
     /// The AID is not known until the inception event exists, so this is a
     /// switch rather than something the caller can pass in `also_known_as`.
     pub also_known_as_scid: bool,
+    /// Keys to designate for key agreement — the document's `keyAgreement`
+    /// (see [`crate::key_agreement`]). Separate keys, never the signing keys.
+    pub key_agreement: Vec<KeyAgreementKey>,
+    /// Services of any type to designate, such as `DIDCommMessaging` or
+    /// `TSPTransport` (see [`crate::designated_services`](mod@crate::designated_services)).
+    pub designated_services: Vec<DesignatedService>,
 }
 
 impl CreateConfig {
@@ -100,6 +108,8 @@ impl CreateConfig {
                 services: Vec::new(),
                 also_known_as: Vec::new(),
                 also_known_as_scid: false,
+                key_agreement: Vec::new(),
+                designated_services: Vec::new(),
             },
         }
     }
@@ -135,6 +145,18 @@ impl CreateConfigBuilder {
     /// than registered, so this asserts an identity whose spelling may change.
     pub fn also_known_as_scid(mut self, enabled: bool) -> Self {
         self.config.also_known_as_scid = enabled;
+        self
+    }
+
+    /// Designate a key for key agreement.
+    pub fn key_agreement(mut self, key: KeyAgreementKey) -> Self {
+        self.config.key_agreement.push(key);
+        self
+    }
+
+    /// Designate a service of any type.
+    pub fn designated_service(mut self, service: DesignatedService) -> Self {
+        self.config.designated_services.push(service);
         self
     }
 
@@ -211,6 +233,25 @@ pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
         &aliases,
     )?;
     keri_cesr.extend_from_slice(&attestation);
+
+    // Key agreement keys and typed services, each a designation of its own so
+    // that either can be replaced without touching the other.
+    if !config.key_agreement.is_empty() {
+        keri_cesr.extend_from_slice(&crate::attestation::issue_key_agreement(
+            &mut hab,
+            &aid,
+            &establishment_said,
+            &config.key_agreement,
+        )?);
+    }
+    if !config.designated_services.is_empty() {
+        keri_cesr.extend_from_slice(&crate::attestation::issue_services(
+            &mut hab,
+            &aid,
+            &establishment_said,
+            &config.designated_services,
+        )?);
+    }
 
     // Endpoints are published as signed replies rather than written into the
     // document, so that a resolver can verify them instead of taking the

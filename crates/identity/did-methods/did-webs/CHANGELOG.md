@@ -2,6 +2,21 @@
 
 All notable changes to this crate are documented here.
 
+## [0.8.1] - 2026-11-08
+
+### Added
+
+- **Key agreement and services of any type, by designation.** Two ACDC schemas
+  of this crate's (`schemas/`), issued by the AID to itself and anchored in its
+  KEL, verified like designated aliases: a key agreement designation (X25519,
+  P-256 or secp256k1 keys, published as `JsonWebKey` methods in
+  `keyAgreement`) and a service designation (DID document service entries such
+  as `DIDCommMessaging` or `TSPTransport`). `CreateConfig::key_agreement`,
+  `CreateConfig::designated_service`, `Change::KeyAgreement` and
+  `Change::DesignatedServices` designate and replace them without rotating the
+  identifier. A key of the current key state is refused as a key agreement key,
+  and a designated service cannot take an id KERI's own endpoint data uses.
+
 ## [0.8.0] - 2026-11-08
 
 Brought into line with the `did:webs` specification (KSWG, August 2026), and

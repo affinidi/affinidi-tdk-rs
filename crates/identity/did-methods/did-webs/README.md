@@ -96,6 +96,54 @@ let doc = resolve_from_artifacts(&did, keri_cesr, Some(did_json))?;
   `assertionMethod`, so a document may omit those — but never add to or change
   anything the stream establishes.
 
+## Key agreement and services of any type
+
+A document derived from key state alone has signing keys and KERI role
+endpoints, and nothing to encrypt to or to reach a `DIDCommMessaging` or
+`TSPTransport` service at. KERI's endpoint replies cannot carry those (keripy
+accepts only its own roles, and `tcp`/`http`/`https` URLs), and converting the
+identifier's Ed25519 signing key to X25519 would make its change authority an
+encryption key.
+
+So both are **designations**: ACDCs the AID issues to itself and anchors in
+its KEL, verified exactly as designated aliases are — the mechanism the
+specification's Implementors Guide calls "the best" for key agreement.
+
+| Designation | Schema | Becomes |
+|---|---|---|
+| Key agreement (`a.keys`: CESR keys — X25519 `C`, P-256 `1AAJ`, secp256k1 `1AAB`) | [`schemas/key-agreement-designation.json`](schemas/key-agreement-designation.json) `EJZrf6N4vbhA1hQIujWiIiQmNi455EGS3iXdhxLSwvAi` | `JsonWebKey` methods in `keyAgreement` |
+| Services (`a.services`: DID document service entries) | [`schemas/service-designation.json`](schemas/service-designation.json) `ELj0Sdf2Boi7BMiIFAEJ9_MSFJU8t-LavLN-gMb8oXM8` | entries in `service` |
+
+```rust,no_run
+use affinidi_did_webs::create::{CreateConfig, create};
+use affinidi_did_webs::{DesignatedService, KeyAgreementKey};
+use serde_json::json;
+
+# fn run(x25519_public: [u8; 32]) -> Result<(), affinidi_did_webs::DidWebsError> {
+let result = create(
+    CreateConfig::builder("example.com")
+        .key_agreement(KeyAgreementKey::X25519(x25519_public))
+        .designated_service(DesignatedService::new(
+            "#didcomm",
+            "DIDCommMessaging",
+            json!({ "uri": "did:webvh:QmMediator:mediator.example", "accept": ["didcomm/v2"] }),
+        ))
+        .build(),
+)?;
+# Ok(())
+# }
+```
+
+`Change::KeyAgreement` and `Change::DesignatedServices` replace either set —
+revoking the designation in force — without rotating the identifier. A key of
+the current key state is never a key agreement key, and a designated service
+cannot reuse the id of an endpoint KERI's own data establishes.
+
+These schemas are this crate's, proposed to the `did:webs` specification; until
+another implementation reads them, a resolver that derives the document from
+KERI data alone will not reproduce `keyAgreement` or the designated services,
+and will reject a `did.json` carrying them.
+
 ## HTTPS, and the loopback exception
 
 Artifacts are fetched over **HTTPS**. Two exceptions use plain HTTP:
