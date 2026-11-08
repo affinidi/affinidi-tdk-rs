@@ -80,6 +80,7 @@ impl DesignatedService {
     /// # Errors
     /// Returns why the entry is not a service a DID document can carry, so no
     /// caller can designate one unchecked.
+    #[cfg(feature = "create")]
     pub(crate) fn to_sad(&self) -> Result<SadValue, String> {
         let entry = self.entry();
         check_service(&entry)?;
@@ -197,10 +198,11 @@ mod tests {
             "DIDCommMessaging",
             json!({"uri": "did:webvh:QmMediator:mediator.example", "accept": ["didcomm/v2"]}),
         );
-        assert!(service.to_sad().is_ok());
+        assert!(check_service(&service.entry()).is_ok());
     }
 
     #[test]
+    #[cfg(feature = "create")]
     fn an_invalid_entry_cannot_be_designated() {
         let service = DesignatedService::new("no-fragment", "LinkedDomains", json!("https://x"));
         assert!(service.to_sad().is_err());
@@ -215,7 +217,7 @@ mod tests {
     fn an_absolute_or_empty_id_is_refused() {
         for id in ["did:webs:example.com:E1#x", "#", "x", "#a#b"] {
             let service = DesignatedService::new(id, "LinkedDomains", json!("https://x"));
-            assert!(service.to_sad().is_err(), "{id}");
+            assert!(check_service(&service.entry()).is_err(), "{id}");
         }
     }
 
