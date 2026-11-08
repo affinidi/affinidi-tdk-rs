@@ -2,6 +2,32 @@
 
 All notable changes to this crate are documented here.
 
+## [0.8.2] - 2026-11-09
+
+### Security
+
+- **Resolution refuses hosts that are not public.** A `did:webs` DID names
+  the host its `keri.cesr` and `did.json` are fetched from, so a DID anyone
+  supplies could aim the resolver at loopback, a private network or the cloud
+  metadata address (SSRF). `WebsResolver` checked no host and followed
+  redirects. It now takes a `HostPolicy`, default `PublicOnly`, enforced as
+  `affinidi-did-web` enforces it, through `affinidi-net-guard`: the host the
+  DID names is checked before any request, a hostname is checked against what
+  it resolves to at connect time, and the client it builds follows no
+  redirect. A refusal is `DidWebsError::BlockedHost`.
+
+### Changed
+
+- **A loopback DID resolves only under `HostPolicy::AllowPrivate`.**
+  `WebsResolver::new()` fetched a loopback host over plain HTTP. It now
+  refuses it; `WebsResolver::with_policy(HostPolicy::AllowPrivate)` restores
+  that, for a local stack or the reference implementation.
+
+### Added
+
+- `HostPolicy`, `WebsResolver::with_policy`,
+  `WebsResolver::with_client_and_policy`, `DidWebsError::BlockedHost`.
+
 ## [0.8.1] - 2026-11-08
 
 ### Added

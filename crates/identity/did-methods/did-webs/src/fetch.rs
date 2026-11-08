@@ -26,40 +26,82 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 /// turned into unbounded memory use by anyone who can serve a URL.
 pub const MAX_ARTIFACT_BYTES: usize = 4 * 1024 * 1024;
 
+/// Which hosts resolution may fetch from.
+///
+/// A `did:webs` identifier names its own host, so a DID an attacker supplies
+/// can aim the resolver at loopback, a private network or a cloud-metadata
+/// address (SSRF), unless the resolver refuses to go there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum HostPolicy {
+    /// Fetch only from globally routable addresses. Refuses loopback,
+    /// private, carrier-grade NAT and link-local addresses, and special-use
+    /// names such as `localhost`, `*.local`, `*.internal` and single-label
+    /// names. That covers both a host the DID names as a literal and a
+    /// hostname that *resolves* to such an address, checked at connect time
+    /// so a DNS answer cannot change between the check and the connection.
+    /// The rules are `affinidi-net-guard`'s `EgressPolicy::public_internet`.
+    /// The default.
+    #[default]
+    PublicOnly,
+    /// Fetch from any host, including loopback and private ones, and over
+    /// plain HTTP from a loopback host.
+    ///
+    /// This reopens the SSRF exposure [`HostPolicy::PublicOnly`] closes, so
+    /// choose it only where the DIDs themselves are trusted, such as a
+    /// local development or test stack or an internal deployment.
+    AllowPrivate,
+}
+
 /// A `did:webs` resolver holding a reusable HTTP client.
 ///
 /// Resolution fetches two artifacts from the same host, so sharing a client —
 /// and its connection pool — across them and across calls is worth doing.
+///
+/// Redirects are never followed by the client this builds: the DID names the
+/// host, and a redirect would let that host send the resolver anywhere.
 #[derive(Debug, Clone)]
 pub struct WebsResolver {
     client: reqwest::Client,
     allow_http: bool,
+    policy: HostPolicy,
 }
 
 impl WebsResolver {
-    /// A resolver with the default client.
-    ///
-    /// # Panics
-    /// Panics only if the platform TLS backend cannot be initialised, which is
-    /// the same condition under which `reqwest::Client::new` panics.
+    /// A resolver with the default client, under [`HostPolicy::PublicOnly`].
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .user_agent(concat!("affinidi-did-webs/", env!("CARGO_PKG_VERSION")))
-            .timeout(DEFAULT_TIMEOUT)
-            .build()
-            .unwrap_or_default();
+        Self::with_policy(HostPolicy::PublicOnly)
+    }
+
+    /// A resolver with the default client, under an explicit [`HostPolicy`].
+    pub fn with_policy(policy: HostPolicy) -> Self {
         Self {
-            client,
+            client: default_client(policy),
             allow_http: false,
+            policy,
         }
     }
 
     /// A resolver over a caller-supplied client, for custom timeouts, proxies,
-    /// or a client shared with the rest of an application.
+    /// or a client shared with the rest of an application, under
+    /// [`HostPolicy::PublicOnly`].
+    ///
+    /// The host the DID names is still checked before any request. The other
+    /// half of the guard, a hostname that resolves to a non-routable address,
+    /// lives in the client's DNS resolver, so a caller supplying a client owns
+    /// it: install `affinidi_net_guard::guarded_dns_resolver`, and disable
+    /// redirects.
     pub fn with_client(client: reqwest::Client) -> Self {
+        Self::with_client_and_policy(client, HostPolicy::PublicOnly)
+    }
+
+    /// A resolver over a caller-supplied client under an explicit
+    /// [`HostPolicy`]. Same caveat as [`with_client`](Self::with_client).
+    pub fn with_client_and_policy(client: reqwest::Client, policy: HostPolicy) -> Self {
         Self {
             client,
             allow_http: false,
+            policy,
         }
     }
 
@@ -81,8 +123,11 @@ impl WebsResolver {
     }
 
     /// The scheme to fetch this DID's artifacts over.
+    ///
+    /// A loopback host is fetched over plain HTTP only where loopback is
+    /// reachable at all, under [`HostPolicy::AllowPrivate`].
     fn scheme(&self, did: &DidWebs) -> &'static str {
-        if self.allow_http || did.is_loopback() {
+        if self.allow_http || (self.policy == HostPolicy::AllowPrivate && did.is_loopback()) {
             "http"
         } else {
             "https"
@@ -120,15 +165,23 @@ impl WebsResolver {
 
     /// Fetch one artifact, refusing anything larger than [`MAX_ARTIFACT_BYTES`].
     async fn fetch(&self, url: &str) -> Result<Vec<u8>, DidWebsError> {
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| DidWebsError::Fetch {
-                url: url.to_string(),
-                reason: e.to_string(),
-            })?;
+        let parsed = reqwest::Url::parse(url).map_err(|e| DidWebsError::Fetch {
+            url: url.to_string(),
+            reason: format!("not a valid URL: {e}"),
+        })?;
+        if self.policy == HostPolicy::PublicOnly {
+            vet_public(&parsed)?;
+        }
+
+        let response = self.client.get(parsed).send().await.map_err(|e| {
+            match affinidi_net_guard::blocked_in_chain(&e) {
+                Some(refusal) => DidWebsError::BlockedHost(refusal.to_string()),
+                None => DidWebsError::Fetch {
+                    url: url.to_string(),
+                    reason: e.to_string(),
+                },
+            }
+        })?;
 
         if !response.status().is_success() {
             return Err(DidWebsError::Fetch {
@@ -166,6 +219,43 @@ impl WebsResolver {
 
         Ok(bytes.to_vec())
     }
+}
+
+/// Check the URL's host, port and userinfo under
+/// `EgressPolicy::public_internet`, before any request is made.
+///
+/// This half sees literal addresses, which never reach a DNS resolver. The
+/// URL is checked in its `https` form, because the scheme is not what this
+/// guards: `affinidi-net-guard` admits plain HTTP only for loopback, while
+/// [`WebsResolver::allow_http`] is an explicit choice to fetch public hosts
+/// over HTTP.
+fn vet_public(url: &reqwest::Url) -> Result<(), DidWebsError> {
+    let mut https = url.clone();
+    if https.scheme() != "https" && https.set_scheme("https").is_err() {
+        return Err(DidWebsError::BlockedHost(format!(
+            "{url} cannot be checked as an https URL"
+        )));
+    }
+    affinidi_net_guard::EgressPolicy::public_internet()
+        .vet_url(&https)
+        .map(|_| ())
+        .map_err(|e| DidWebsError::BlockedHost(e.to_string()))
+}
+
+/// The HTTP client [`WebsResolver::with_policy`] builds.
+fn default_client(policy: HostPolicy) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder()
+        .user_agent(concat!("affinidi-did-webs/", env!("CARGO_PKG_VERSION")))
+        .timeout(DEFAULT_TIMEOUT)
+        // The DID names the host. Following a redirect lets that host send
+        // the resolver to an internal address the literal check never saw.
+        .redirect(reqwest::redirect::Policy::none());
+    if policy == HostPolicy::PublicOnly {
+        builder = builder.dns_resolver(affinidi_net_guard::guarded_dns_resolver(
+            affinidi_net_guard::EgressPolicy::public_internet(),
+        ));
+    }
+    builder.build().unwrap_or_default()
 }
 
 impl Default for WebsResolver {

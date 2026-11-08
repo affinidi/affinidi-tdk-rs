@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-webs"
-version = "0.8.1"
+version = "0.8.2"
 description = "Implementation of the did:webs DID method: did:web discovery with KERI-verified key state"
 repository.workspace = true
 edition.workspace = true
@@ -33,6 +33,8 @@ affinidi-crypto = "0.2"
 affinidi-keri-core = "0.4"
 affinidi-keri-crypto = "0.4"
 affinidi-did-common = "0.4"
+# The SSRF guard: a did:webs DID names the host its artifacts are fetched from.
+affinidi-net-guard = "0.1.1"
 reqwest = { version = "0.13", default-features = false, features = [
   "rustls",
   "charset",

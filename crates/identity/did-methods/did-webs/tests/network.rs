@@ -10,7 +10,7 @@
 //! resolution to succeed therefore create an identifier for the mock's address
 //! (and need the `create` feature); the failure paths use the fixture.
 
-use affinidi_did_webs::WebsResolver;
+use affinidi_did_webs::{DidWebsError, HostPolicy, WebsResolver};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -20,9 +20,10 @@ const AID: &str = "ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe";
 
 /// A DID pointing at the mock server.
 ///
-/// The mock listens on 127.0.0.1, which the resolver recognises as loopback
-/// and therefore fetches over plain HTTP — the same accommodation that lets it
-/// talk to the reference implementation.
+/// The mock listens on 127.0.0.1. Loopback is reachable only under
+/// `HostPolicy::AllowPrivate`, which these tests use, and there the resolver
+/// fetches it over plain HTTP — the same accommodation that lets it talk to
+/// the reference implementation.
 fn did_for(server: &MockServer) -> String {
     format!("did:webs:{}:{AID}", host_of(server))
 }
@@ -71,7 +72,7 @@ async fn resolves_a_did_over_the_network() {
     serve_for(&server, &aid, "keri.cesr", &artifacts.keri_cesr).await;
     serve_for(&server, &aid, "did.json", &artifacts.did_json).await;
 
-    let resolution = WebsResolver::new()
+    let resolution = WebsResolver::with_policy(HostPolicy::AllowPrivate)
         .resolve_with_metadata(&did)
         .await
         .expect("a served did:webs must resolve");
@@ -97,7 +98,7 @@ async fn a_version_id_resolves_an_earlier_document() {
 
     // At sequence number 1 the alias registry is anchored but not yet the
     // issuance, so the DID was not yet designated.
-    let err = WebsResolver::new()
+    let err = WebsResolver::with_policy(HostPolicy::AllowPrivate)
         .resolve(&format!("{did}?versionId=1"))
         .await
         .expect_err("not yet designated at sn 1");
@@ -115,7 +116,7 @@ async fn a_missing_did_json_fails_resolution() {
     let server = MockServer::start().await;
     serve(&server, "keri.cesr", KERI_CESR).await;
 
-    let err = WebsResolver::new()
+    let err = WebsResolver::with_policy(HostPolicy::AllowPrivate)
         .resolve(&did_for(&server))
         .await
         .expect_err("a missing did.json must fail resolution");
@@ -129,7 +130,7 @@ async fn a_missing_keri_cesr_fails_resolution() {
     let server = MockServer::start().await;
     serve(&server, "did.json", DID_JSON).await;
 
-    let err = WebsResolver::new()
+    let err = WebsResolver::with_policy(HostPolicy::AllowPrivate)
         .resolve(&did_for(&server))
         .await
         .expect_err("no key event log means no resolution");
@@ -145,7 +146,7 @@ async fn a_server_error_is_surfaced_not_swallowed() {
         .mount(&server)
         .await;
 
-    let err = WebsResolver::new()
+    let err = WebsResolver::with_policy(HostPolicy::AllowPrivate)
         .resolve(&did_for(&server))
         .await
         .expect_err("a 500 must fail resolution");
@@ -169,7 +170,7 @@ async fn an_oversized_artifact_is_refused() {
         .mount(&server)
         .await;
 
-    let err = WebsResolver::new()
+    let err = WebsResolver::with_policy(HostPolicy::AllowPrivate)
         .resolve(&did_for(&server))
         .await
         .expect_err("an oversized artifact must be refused");
@@ -202,7 +203,7 @@ async fn a_did_json_that_disagrees_fails_resolution() {
     )
     .await;
 
-    let err = WebsResolver::new()
+    let err = WebsResolver::with_policy(HostPolicy::AllowPrivate)
         .resolve(&did)
         .await
         .expect_err("a did.json publishing an unauthorised key must fail resolution");
@@ -224,12 +225,74 @@ async fn a_non_loopback_host_is_fetched_over_https() {
     let port = server.address().port();
     let did = format!("did:webs:localtest.me%3A{port}:{AID}");
 
-    let err = WebsResolver::new()
+    let err = WebsResolver::with_policy(HostPolicy::AllowPrivate)
         .resolve(&did)
         .await
         .expect_err("a non-loopback host must not be fetched over plain HTTP");
     assert!(
         !err.to_string().contains("key event log verification"),
         "should have failed to fetch, not to verify: {err}",
+    );
+}
+
+// -- host policy ----------------------------------------------------------
+
+/// Under the default policy a DID naming a loopback, private, link-local or
+/// special-use host is refused before any request is made: the DID names the
+/// host, so otherwise anyone who can hand the resolver a DID can make it
+/// fetch from inside the network it runs on.
+#[tokio::test]
+async fn the_default_policy_refuses_a_host_that_is_not_public() {
+    let server = MockServer::start().await;
+    serve(&server, "keri.cesr", KERI_CESR).await;
+    serve(&server, "did.json", DID_JSON).await;
+
+    for host in [
+        host_of(&server),
+        "localhost%3A8080".to_string(),
+        "169.254.169.254".to_string(),
+        "10.0.0.1".to_string(),
+        "printer.local".to_string(),
+        "did-webs-service%3A7676".to_string(),
+    ] {
+        let did = format!("did:webs:{host}:{AID}");
+        let err = WebsResolver::new()
+            .resolve(&did)
+            .await
+            .expect_err("a non-public host must be refused");
+        assert!(matches!(err, DidWebsError::BlockedHost(_)), "{did}: {err}");
+    }
+    let requests = server.received_requests().await.expect("recorded");
+    assert!(
+        requests.is_empty(),
+        "the refused host was contacted: {requests:?}"
+    );
+}
+
+/// A redirect is not followed: the DID names the host, and a 3xx would let it
+/// send the resolver to an address the host check never saw.
+#[tokio::test]
+async fn a_redirect_is_not_followed() {
+    let server = MockServer::start().await;
+    let target = MockServer::start().await;
+    serve(&target, "keri.cesr", KERI_CESR).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{AID}/keri.cesr")))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", format!("{}/{AID}/keri.cesr", target.uri())),
+        )
+        .mount(&server)
+        .await;
+
+    let err = WebsResolver::with_policy(HostPolicy::AllowPrivate)
+        .resolve(&did_for(&server))
+        .await
+        .expect_err("a redirected artifact must not be fetched");
+    assert!(err.to_string().contains("302"), "{err}");
+    let requests = target.received_requests().await.expect("recorded");
+    assert!(
+        requests.is_empty(),
+        "the redirect was followed: {requests:?}"
     );
 }
