@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+  # Start a release by hand. A re-run reuses the pipeline-rust commit its
+  # first attempt resolved from `@main`, so it never picks up a pipeline
+  # fix; a dispatch resolves `@main` afresh.
+  workflow_dispatch:
 
 jobs:
   rust-pipeline:
