@@ -29,6 +29,17 @@ All notable changes to this crate are documented here.
 - **`HostPolicy::AllowPrivate` is logged.** Building a resolver under it
   emits a warning, so a deployment running without SSRF protection says so.
 
+- **Requires `affinidi-keri-core` 0.4.1**, which refuses a rotation that
+  does not meet the signing threshold the previous event committed to. Under
+  0.4.0, someone holding one of several pre-committed next keys could rotate
+  the identifier alone.
+
+### Fixed
+
+- **A `did:webs` identifier can be deactivated.** Rotating to no next keys
+  (`nt: "0"`, an empty `n`) was refused by `affinidi-keri-core` 0.4.0; under
+  0.4.1 it resolves, with `deactivated: true` in the document metadata.
+
 ### Changed
 
 - **A loopback DID resolves only under `HostPolicy::AllowPrivate`.**

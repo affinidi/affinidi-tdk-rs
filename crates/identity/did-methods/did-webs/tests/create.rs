@@ -266,8 +266,6 @@ fn a_multi_key_identifier_signs_its_services_with_enough_keys() {
 }
 
 #[test]
-#[ignore = "affinidi-keri-core 0.4 rejects `nt: \"0\"`, which is how KERI commits to no next keys; \
-            un-ignore once it accepts a zero next threshold with an empty `n`"]
 fn rotating_to_no_next_keys_deactivates_the_identifier() {
     // § Deactivate: a rotation committing to no next keys renders the AID
     // non-transferable, and resolution reports it.
