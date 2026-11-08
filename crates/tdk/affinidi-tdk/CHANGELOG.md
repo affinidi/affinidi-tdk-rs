@@ -1,5 +1,12 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.37.1) — affinidi-did-webs 0.8
+
+- **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.8, which
+  resolves as the did:webs specification requires: a DID resolves only when its
+  AID designates it, signatures are held to the signing threshold, replies are
+  ordered by BADA, and the published `did.json` is compared as a whole.
+
 ## Unreleased (0.37.0) — SDK 0.45
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.45 (`trust-tasks-rs` 0.37). So this crate moves a minor. No source change.

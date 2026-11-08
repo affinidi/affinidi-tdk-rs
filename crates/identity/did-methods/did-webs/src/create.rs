@@ -63,7 +63,11 @@ pub struct SelfEndpoint {
 }
 
 /// How to create a new `did:webs` identifier.
+///
+/// Built with [`CreateConfig::builder`]; non-exhaustive so that what an
+/// identifier can be created with may grow without breaking callers.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CreateConfig {
     /// Where the artifacts will be published: `example.com`, or
     /// `example.com/dids` for a path. The AID becomes the final path element.

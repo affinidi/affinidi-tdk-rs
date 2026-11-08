@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.44"
+version = "0.8.45"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-webs"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "affinidi-cesr",
  "affinidi-crypto",
@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.37.0"
+version = "0.37.1"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -2641,7 +2641,7 @@ dependencies = [
 
 [[package]]
 name = "did-scid"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-webs",

@@ -2,7 +2,7 @@
 
 All notable changes to this crate are documented here.
 
-## [Unreleased]
+## [0.8.0] - 2026-11-08
 
 Brought into line with the `did:webs` specification (KSWG, August 2026), and
 checked against the reference implementation's artifacts.
@@ -49,6 +49,7 @@ checked against the reference implementation's artifacts.
 - `document::document_from_keys` is replaced by `document::derive_document`,
   which returns the specification's JSON form; `document::into_document` turns
   it into a `Document`.
+- `CreateConfig` is `#[non_exhaustive]`: build it with `CreateConfig::builder`.
 - `chrono` is a non-optional dependency (without its clock, which `create`
   enables).
 
