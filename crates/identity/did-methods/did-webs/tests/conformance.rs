@@ -42,13 +42,16 @@ fn resolves_a_real_identifier() {
     assert_eq!(doc.authentication.len(), 1);
     assert_eq!(doc.assertion_method.len(), 1);
 
-    // § Also Known As: exactly what the AID designated, without itself. The
-    // did:web twin is there because it is designated, not by default.
+    // § Also Known As: what the AID designated, without itself, and its
+    // did:keri form. The did:web twin is there because it is designated, not
+    // by default.
     let mut aka = doc.also_known_as.clone();
     aka.sort();
     assert_eq!(
         aka,
         vec![
+            // § Also Known As: always provided, designated or not.
+            format!("did:keri:{AID}"),
             format!("did:web:did-webs-service%3a7676:{AID}"),
             format!("did:web:example.com:{AID}"),
             format!("did:web:foo.com:{AID}"),

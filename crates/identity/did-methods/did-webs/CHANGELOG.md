@@ -39,7 +39,8 @@ checked against the reference implementation's artifacts.
   in force. An empty list is accepted and leaves the three required entries.
 - **`did.json` is the `did:web` form** (§ Transformation to `did:web` DID
   document), with relative verification method ids, a `controller`, no
-  `@context`, and no `"d": null` in its JWKs. It is compared with the
+  `@context`, and no `"d": null` in its JWKs. `alsoKnownAs` always includes
+  `did:keri:<AID>` (§ Also Known As). It is compared with the
   derivation as a whole — methods, services, aliases, relationships — rather
   than by `id` and keys alone.
 - **`WebsResolver` fails when `did.json` cannot be fetched** (§ Read).

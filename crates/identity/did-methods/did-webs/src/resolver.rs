@@ -26,10 +26,10 @@
 //! * `id`, every verification method, every service and every alias must
 //!   match, as sets, with relative and absolute references treated alike and
 //!   the subject's alias of itself ignored;
-//! * `controller` and each verification relationship must match **when
-//!   published**; omitting `controller`, `authentication` or
-//!   `assertionMethod` is accepted, because those are derived from the key
-//!   state regardless;
+//! * `controller`, each verification relationship and the `did:keri` alias
+//!   must match **when published**; omitting `controller`, `authentication`,
+//!   `assertionMethod` or `did:keri` is accepted, because those are derived
+//!   from the key state regardless;
 //! * any other member is a disagreement, except `@context`.
 //!
 //! A published document can therefore leave out what the derivation implies,
@@ -197,6 +197,13 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
             aliases.push(alias);
         }
     }
+    // § Also Known As: "`did:webs` DIDs MUST provide the corresponding
+    // `did:keri`", and the specification's example lists it although its
+    // attestation does not designate it. It names the same AID by
+    // construction, so nothing beyond the verified KEL is needed to assert it.
+    if !aliases.iter().any(|a| a == &did.did_keri()) {
+        aliases.push(did.did_keri());
+    }
     let twin_designated = aliases.iter().any(|a| same_did(a, &did.did_web_twin()));
     let equivalent_id = aliases
         .iter()
@@ -358,10 +365,19 @@ fn check_published(derived: &Derived, published: &Value) -> Result<(), DidWebsEr
         }
         out
     };
-    let (our_aliases, their_aliases) = (
+    let (mut our_aliases, their_aliases) = (
         aliases(ours.get("alsoKnownAs")),
         aliases(theirs.get("alsoKnownAs")),
     );
+    // The `did:keri` form is implied by the AID; the reference implementation
+    // does not publish it, and leaving it out adds nothing.
+    let did_keri = format!(
+        "did:keri:{}",
+        subject.rsplit(':').next().unwrap_or_default()
+    );
+    if !their_aliases.contains(&did_keri) {
+        our_aliases.retain(|a| a != &did_keri);
+    }
     if !same_set(&our_aliases, &their_aliases) {
         return mismatch(format!(
             "did.json's alsoKnownAs is {their_aliases:?}, but the AID designated {our_aliases:?}"
