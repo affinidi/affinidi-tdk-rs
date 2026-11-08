@@ -84,6 +84,94 @@ impl Kels {
         &self.messages
     }
 
+    /// The SAID of `prefix`'s first key event, if the stream carries one.
+    pub fn inception_said(&self, prefix: &str) -> Option<String> {
+        let first = self.by_prefix.get(prefix)?.first()?;
+        self.messages[*first].serder.said().ok()
+    }
+
+    /// The sequence numbers of `prefix`'s key events, in stream order.
+    pub fn sequence_numbers(&self, prefix: &str) -> Vec<u64> {
+        self.by_prefix
+            .get(prefix)
+            .into_iter()
+            .flatten()
+            .filter_map(|i| {
+                self.messages[*i]
+                    .serder
+                    .sad()
+                    .get("s")?
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .filter_map(|s| u64::from_str_radix(&s, 16).ok())
+            .collect()
+    }
+
+    /// This stream with `prefix`'s key events after sequence number `sn`
+    /// set aside.
+    ///
+    /// § Support for `versionId`: a document resolved as of a version is built
+    /// from the events up to and including it. Every KEL lookup — key state,
+    /// and the anchors that make an alias attestation or its revocation count —
+    /// goes through the per-prefix index this narrows, so all of it then sees
+    /// only that much of the log.
+    ///
+    /// # Errors
+    /// Returns [`DidWebsError::Kel`] if `prefix` has no event at `sn`.
+    pub fn as_of(mut self, prefix: &str, sn: u64) -> Result<Self, DidWebsError> {
+        if !self.sequence_numbers(prefix).contains(&sn) {
+            return Err(DidWebsError::Kel(format!(
+                "{prefix} has no key event at sequence number {sn}"
+            )));
+        }
+        let messages = &self.messages;
+        if let Some(indices) = self.by_prefix.get_mut(prefix) {
+            indices.retain(|i| {
+                messages[*i]
+                    .serder
+                    .sad()
+                    .get("s")
+                    .and_then(|s| s.as_str())
+                    .and_then(|s| u64::from_str_radix(s, 16).ok())
+                    .is_some_and(|event_sn| event_sn <= sn)
+            });
+        }
+        self.verified.borrow_mut().clear();
+        Ok(self)
+    }
+
+    /// Whether `prefix`'s latest establishment event committed to no next
+    /// keys after inception — the `did:webs` deactivation (§ Deactivate).
+    ///
+    /// An identifier incepted non-transferable was never rotatable; it is not
+    /// "deactivated", it was born that way. Only a rotation to no next keys
+    /// is a deactivation.
+    pub fn is_deactivated(&self, prefix: &str) -> bool {
+        let Some(indices) = self.by_prefix.get(prefix) else {
+            return false;
+        };
+        indices
+            .iter()
+            .map(|i| &self.messages[*i])
+            .filter(|m| {
+                matches!(
+                    m.serder.ilk().ok().as_deref(),
+                    Some("icp" | "rot" | "dip" | "drt")
+                )
+            })
+            .last()
+            .is_some_and(|last| {
+                matches!(last.serder.ilk().ok().as_deref(), Some("rot" | "drt"))
+                    && last
+                        .serder
+                        .sad()
+                        .get("n")
+                        .and_then(|n| n.as_array())
+                        .is_some_and(Vec::is_empty)
+            })
+    }
+
     /// Verify `prefix`'s key event log and return the resulting key state.
     ///
     /// # Errors

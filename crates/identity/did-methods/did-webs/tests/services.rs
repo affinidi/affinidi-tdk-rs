@@ -6,7 +6,7 @@
 //! real keys and real signatures.
 
 use affinidi_cesr::Counter;
-use affinidi_did_webs::{DidWebs, Kels, resolve_from_artifacts, service_endpoints};
+use affinidi_did_webs::{Kels, service_endpoints};
 use affinidi_keri_core::said;
 use affinidi_keri_core::serder::Serder;
 use affinidi_keri_core::version::SerializationKind;
@@ -194,17 +194,26 @@ fn an_authorised_endpoint_becomes_a_service() {
 }
 
 #[test]
-fn the_resolved_document_carries_it() {
+fn it_becomes_a_service_entry_typed_by_its_role() {
+    // Resolving a whole document needs a designated-aliases attestation, which
+    // these hand-built streams do not carry; tests/create.rs resolves services
+    // end to end. Here: the entry each endpoint renders to (§ Agent Service
+    // Endpoint).
     let f = authorised(
         "2026-01-01T00:00:00.000000+00:00",
         "2026-01-01T00:00:00.000000+00:00",
         None,
     );
-    let did = DidWebs::parse(&format!("did:webs:example.com:{}", f.aid)).expect("valid did");
-
-    let doc = resolve_from_artifacts(&did, &f.stream, None).expect("resolves");
-    assert_eq!(doc.service.len(), 1, "got {:?}", doc.service);
-    assert_eq!(doc.service[0].type_, vec!["agent".to_string()]);
+    let kels = Kels::parse(&f.stream).expect("parses");
+    let services = service_endpoints(&kels, &f.aid).expect("verifies");
+    assert_eq!(
+        services[0].to_service(),
+        json!({
+            "id": format!("#{}/agent", f.agent),
+            "type": "agent",
+            "serviceEndpoint": {"http": "http://agent.example:5642"},
+        }),
+    );
 }
 
 #[test]
@@ -622,5 +631,213 @@ fn a_reply_whose_dt_is_not_a_timestamp_is_ignored() {
         service_endpoints(&kels, &f.aid)
             .expect("verifies")
             .is_empty()
+    );
+}
+
+// ── Witness and delegator services ──────────────────────────────────────────
+
+/// Append a reply signed by a non-transferable identifier as a receipt couple
+/// (`-C`), which is how a witness signs its own location.
+fn push_couple_signed(out: &mut Vec<u8>, serder: &Serder, s: &Signer) {
+    out.extend_from_slice(serder.raw());
+    out.extend_from_slice(
+        Counter::new("-C", 1)
+            .expect("counter")
+            .qb64()
+            .expect("qb64")
+            .as_bytes(),
+    );
+    out.extend_from_slice(s.verfer().qb64().expect("qb64").as_bytes());
+    out.extend_from_slice(
+        s.sign(serder.raw())
+            .expect("sign")
+            .qb64()
+            .expect("qb64")
+            .as_bytes(),
+    );
+}
+
+fn witnessed(controller: &Signer, next: &Signer, witness: &Signer) -> Serder {
+    let mut sad = json!({
+        "v": "KERI10JSON000000_", "t": "icp", "d": "", "i": "", "s": "0",
+        "kt": "1", "k": [controller.verfer().qb64().expect("qb64")],
+        "nt": "1", "n": [digest_of(next)],
+        "bt": "1", "b": [witness.verfer().qb64().expect("qb64")], "c": [], "a": [],
+    });
+    fix_version(&mut sad);
+    said::compute_said(&mut sad, "d", "E", SerializationKind::Json).expect("said");
+    Serder::new(SerializationKind::Json, sad).expect("serder")
+}
+
+#[test]
+fn a_witness_named_by_the_key_state_becomes_a_witness_service() {
+    // § Witness Service Endpoint: the role comes from the KEL's `b` list, and
+    // only the location is a reply — signed by the witness itself.
+    let (controller, next, witness) = (signer(41), signer(42), signer(43));
+    let icp = witnessed(&controller, &next, &witness);
+    let aid = icp.prefix().expect("prefix");
+    let witness_prefix = witness.verfer().qb64().expect("qb64");
+
+    let mut stream = Vec::new();
+    push_signed(&mut stream, &icp, &controller);
+    // The witness receipts the inception, which the KEL requires.
+    stream.extend_from_slice(
+        Counter::new("-C", 1)
+            .expect("counter")
+            .qb64()
+            .expect("qb64")
+            .as_bytes(),
+    );
+    stream.extend_from_slice(witness_prefix.as_bytes());
+    stream.extend_from_slice(
+        witness
+            .sign(icp.raw())
+            .expect("sign")
+            .qb64()
+            .expect("qb64")
+            .as_bytes(),
+    );
+
+    let loc = reply(
+        "/loc/scheme",
+        json!({"eid": witness_prefix, "scheme": "https", "url": "https://wit.example:5641/"}),
+        "2026-01-01T00:00:00.000000+00:00",
+    );
+    push_couple_signed(&mut stream, &loc, &witness);
+
+    let kels = Kels::parse(&stream).expect("parses");
+    let services = service_endpoints(&kels, &aid).expect("verifies");
+    assert_eq!(services.len(), 1, "got {services:?}");
+    assert_eq!(
+        services[0].to_service(),
+        json!({
+            "id": format!("#{witness_prefix}/witness"),
+            "type": "witness",
+            "serviceEndpoint": {"https": "https://wit.example:5641/"},
+        }),
+    );
+}
+
+#[test]
+fn an_end_role_reply_cannot_make_a_witness_of_an_identifier_the_kel_never_named() {
+    // The witness role is established by key state. An `/end/role/add` with
+    // role `witness` would otherwise let a reply add witnesses the controller's
+    // establishment events never declared.
+    let f = authorised(
+        "2026-01-01T00:00:00.000000+00:00",
+        "2026-01-01T00:00:00.000000+00:00",
+        None,
+    );
+    // Re-sign the same shape with role `witness` instead of `agent`.
+    let (controller, next) = (signer(1), signer(2));
+    let icp = inception(&controller, &next);
+    let mut stream = f.stream.clone();
+    let add = reply(
+        "/end/role/add",
+        json!({"cid": f.aid, "role": "witness", "eid": f.agent}),
+        "2026-02-01T00:00:00.000000+00:00",
+    );
+    push_reply(
+        &mut stream,
+        &add,
+        &f.aid,
+        &icp.said().expect("said"),
+        &controller,
+    );
+
+    let kels = Kels::parse(&stream).expect("parses");
+    let services = service_endpoints(&kels, &f.aid).expect("verifies");
+    assert!(
+        services.iter().all(|s| s.role != "witness"),
+        "got {services:?}"
+    );
+}
+
+#[test]
+fn a_delegated_identifier_publishes_where_its_delegator_is() {
+    // § Delegator Service Endpoint. The delegator anchors the delegated
+    // inception, signs a location for itself, and the delegate's document
+    // carries a `DelegatorOOBI` service identified by the delegation's seal.
+    let (del_key, del_next) = (signer(51), signer(52));
+    let delegator_icp = inception(&del_key, &del_next);
+    let delegator = delegator_icp.prefix().expect("prefix");
+
+    let (key, next) = (signer(53), signer(54));
+    let mut dip = json!({
+        "v": "KERI10JSON000000_", "t": "dip", "d": "", "i": "", "s": "0",
+        "kt": "1", "k": [key.verfer().qb64().expect("qb64")],
+        "nt": "1", "n": [digest_of(&next)],
+        "bt": "0", "b": [], "c": [], "a": [], "di": delegator,
+    });
+    fix_version(&mut dip);
+    said::compute_said(&mut dip, "d", "E", SerializationKind::Json).expect("said");
+    let dip = Serder::new(SerializationKind::Json, dip).expect("serder");
+    let aid = dip.prefix().expect("prefix");
+    let dip_said = dip.said().expect("said");
+
+    // The delegator's interaction anchoring the delegated inception.
+    let mut ixn = json!({
+        "v": "KERI10JSON000000_", "t": "ixn", "d": "", "i": delegator, "s": "1",
+        "p": delegator_icp.said().expect("said"),
+        "a": [{"i": aid, "s": "0", "d": dip_said}],
+    });
+    fix_version(&mut ixn);
+    said::compute_said(&mut ixn, "d", "E", SerializationKind::Json).expect("said");
+    let ixn = Serder::new(SerializationKind::Json, ixn).expect("serder");
+
+    let mut stream = Vec::new();
+    push_signed(&mut stream, &delegator_icp, &del_key);
+    push_signed(&mut stream, &ixn, &del_key);
+    push_signed(&mut stream, &dip, &key);
+    // The seal source couple: where in the delegator's KEL the anchor is.
+    let sn = affinidi_cesr::Matter::new("0A", {
+        let mut raw = vec![0u8; 16];
+        raw[15] = 1;
+        raw
+    })
+    .expect("number")
+    .qb64()
+    .expect("qb64");
+    stream.extend_from_slice(
+        Counter::new("-G", 1)
+            .expect("counter")
+            .qb64()
+            .expect("qb64")
+            .as_bytes(),
+    );
+    stream.extend_from_slice(sn.as_bytes());
+    stream.extend_from_slice(ixn.said().expect("said").as_bytes());
+
+    let loc = reply(
+        "/loc/scheme",
+        json!({"eid": delegator, "scheme": "https", "url": "https://delegator.example/"}),
+        "2026-01-01T00:00:00.000000+00:00",
+    );
+    push_reply(
+        &mut stream,
+        &loc,
+        &delegator,
+        &delegator_icp.said().expect("said"),
+        &del_key,
+    );
+
+    let kels = Kels::parse(&stream).expect("parses");
+    let service = affinidi_did_webs::delegator_service(&kels, &aid)
+        .expect("the delegation verifies")
+        .expect("a delegated identifier has a delegator service");
+    assert_eq!(
+        service,
+        json!({
+            "id": dip_said,
+            "type": "DelegatorOOBI",
+            "serviceEndpoint": format!("https://delegator.example/oobi/{delegator}/controller"),
+        }),
+    );
+
+    // An identifier that is not delegated has none.
+    assert!(
+        affinidi_did_webs::delegator_service(&kels, &delegator)
+            .expect("verifies")
+            .is_none()
     );
 }

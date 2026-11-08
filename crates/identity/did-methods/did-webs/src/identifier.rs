@@ -22,8 +22,11 @@ pub const KERI_CESR: &str = "keri.cesr";
 /// A parsed `did:webs` identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DidWebs {
-    /// The full DID as written, e.g. `did:webs:example.com:path:EAid…`.
+    /// The DID, without any query or fragment, e.g.
+    /// `did:webs:example.com:path:EAid…`.
     did: String,
+    /// The `versionId` DID parameter, when the DID URL carried one.
+    version_id: Option<u64>,
     /// Host, with the port decoded if one was present (`example.com:3000`).
     host: String,
     /// Path segments between the host and the AID.
@@ -44,11 +47,13 @@ impl DidWebs {
         })?;
 
         // A DID URL's query/fragment is not part of the method-specific id.
-        let rest = rest
-            .split(['?', '#'])
-            .next()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| DidWebsError::InvalidDid("empty method-specific identifier".into()))?;
+        let (rest, query) = split_query(rest);
+        if rest.is_empty() {
+            return Err(DidWebsError::InvalidDid(
+                "empty method-specific identifier".into(),
+            ));
+        }
+        let version_id = parse_version_id(query, did)?;
 
         let labels: Vec<&str> = rest.split(':').collect();
         if labels.len() < 2 {
@@ -79,16 +84,28 @@ impl DidWebs {
             .collect();
 
         Ok(Self {
-            did: did.to_string(),
+            did: format!("did:webs:{rest}"),
+            version_id,
             host,
             path,
             aid,
         })
     }
 
-    /// The DID as written.
+    /// The DID, without any query or fragment the DID URL carried.
     pub fn did(&self) -> &str {
         &self.did
+    }
+
+    /// The `versionId` DID parameter: the sequence number of the KERI event
+    /// the document should be resolved as of, when one was asked for.
+    pub fn version_id(&self) -> Option<u64> {
+        self.version_id
+    }
+
+    /// The `did:keri` form of this identifier's AID.
+    pub fn did_keri(&self) -> String {
+        format!("did:keri:{}", self.aid)
     }
 
     /// The KERI AID — the identifier whose key event log authorises this DID.
@@ -151,15 +168,40 @@ impl DidWebs {
     /// actually carries — so it is also what a fetched document must be
     /// compared against.
     pub fn did_web_twin(&self) -> String {
-        let mut did = format!("did:web:{}", encode_port_separator(&self.host));
-        for segment in &self.path {
-            did.push(':');
-            did.push_str(segment);
-        }
-        did.push(':');
-        did.push_str(&self.aid);
-        did
+        // Formed by replacing the prefix, as the specification describes, so
+        // the twin keeps exactly the encoding the DID was written with.
+        format!("did:web:{}", &self.did["did:webs:".len()..])
     }
+}
+
+/// Split a method-specific identifier from its query, dropping any fragment.
+fn split_query(rest: &str) -> (&str, Option<&str>) {
+    let rest = rest.split('#').next().unwrap_or_default();
+    match rest.split_once('?') {
+        Some((id, query)) => (id, Some(query)),
+        None => (rest, None),
+    }
+}
+
+/// The `versionId` parameter, as a decimal sequence number.
+///
+/// Decimal because that is how resolution metadata reports `versionId`, and how
+/// the reference implementation reads it back.
+fn parse_version_id(query: Option<&str>, did: &str) -> Result<Option<u64>, DidWebsError> {
+    let Some(query) = query else {
+        return Ok(None);
+    };
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key == "versionId" {
+            return value.parse().map(Some).map_err(|_| {
+                DidWebsError::InvalidDid(format!(
+                    "{did:?} has a versionId that is not a sequence number: {value:?}"
+                ))
+            });
+        }
+    }
+    Ok(None)
 }
 
 /// Reject anything that is not plausibly a CESR primitive.
@@ -202,11 +244,6 @@ fn decode_port_separator(host: &str) -> String {
         }
     }
     out
-}
-
-/// `:` to `%3A`, for writing a host back into a DID.
-fn encode_port_separator(host: &str) -> String {
-    host.replace(':', "%3A")
 }
 
 #[cfg(test)]
@@ -283,10 +320,32 @@ mod tests {
 
     #[test]
     fn query_and_fragment_are_not_part_of_the_identifier() {
-        let d = DidWebs::parse(&format!("did:webs:example.com:{AID}#key-0")).expect("valid");
+        let d =
+            DidWebs::parse(&format!("did:webs:example.com:{AID}?versionId=1#key")).expect("valid");
         assert_eq!(d.aid(), AID);
-        let d = DidWebs::parse(&format!("did:webs:example.com:{AID}?versionId=1")).expect("valid");
-        assert_eq!(d.aid(), AID);
+        // The DID is the identifier alone, so it can be a document's `id`.
+        assert_eq!(d.did(), format!("did:webs:example.com:{AID}"));
+        assert_eq!(d.version_id(), Some(1));
+    }
+
+    #[test]
+    fn a_did_without_version_id_asks_for_the_latest() {
+        let d = DidWebs::parse(&format!("did:webs:example.com:{AID}?other=x")).expect("valid");
+        assert_eq!(d.version_id(), None);
+    }
+
+    #[test]
+    fn a_version_id_that_is_not_a_number_is_refused() {
+        assert!(DidWebs::parse(&format!("did:webs:example.com:{AID}?versionId=latest")).is_err());
+    }
+
+    #[test]
+    fn the_did_web_twin_keeps_the_encoding_the_did_was_written_with() {
+        // Designated aliases are compared against the twin, and real artifacts
+        // write the port separator lowercase.
+        let d = DidWebs::parse(&format!("did:webs:host%3a7676:{AID}")).expect("valid");
+        assert_eq!(d.did_web_twin(), format!("did:web:host%3a7676:{AID}"));
+        assert_eq!(d.did_keri(), format!("did:keri:{AID}"));
     }
 
     #[test]

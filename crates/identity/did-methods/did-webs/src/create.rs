@@ -24,15 +24,17 @@
 //! attestation the identifier issues to itself. The resolver verifies each and
 //! derives the document from what it verified.
 //!
-//! # One knob from `didwebvh-rs`, and one that cannot exist
+//! # What every identifier designates
 //!
-//! `also_known_as_scid` is offered, and is real: the `did:scid:ke` form is
-//! designated in the attestation like any other alias.
+//! § Create requires the identifier to designate itself: a resolver refuses a
+//! `did:webs` DID that no attestation names. Creation therefore always issues
+//! one, naming the DID, its `did:web` twin (`did.json` is published in the
+//! `did:web` form, which is only valid when the twin is designated) and
+//! `did:keri:<AID>` (which § Also Known As requires), followed by
+//! `also_known_as`. There is no switch for any of the three: turning one off
+//! would produce artifacts that do not resolve.
 //!
-//! There is no `also_known_as_web`. The `did:web` twin shares this identifier's
-//! location and document, and the resolver adds it unconditionally — so the
-//! switch could only ever be on, and a switch that cannot be turned off is a
-//! lie about what the caller controls.
+//! `also_known_as_scid` designates the `did:scid:ke` form like any other alias.
 //!
 //! [`KeriStore`]: affinidi_keri_db::KeriStore
 
@@ -41,10 +43,9 @@ use affinidi_keri::hab::Hab;
 
 use crate::artifacts::Artifacts;
 use crate::custody::KeyCustody;
-use crate::document::document_from_keys;
+use crate::document::to_did_web;
 use crate::errors::DidWebsError;
 use crate::identifier::DidWebs;
-use crate::services::ServiceEndpoint;
 
 /// A service endpoint to publish at creation time.
 ///
@@ -72,10 +73,11 @@ pub struct CreateConfig {
     pub inception: InceptionConfig,
     /// Endpoints this identifier designates for itself.
     pub services: Vec<SelfEndpoint>,
-    /// Identifiers to designate as `alsoKnownAs`.
+    /// Identifiers to designate as `alsoKnownAs`, beyond the three every
+    /// identifier designates (see the module documentation).
     ///
     /// Published as a signed attestation the identifier issues to itself, not
-    /// written into the document — see [`crate::attestation`].
+    /// written into the document.
     pub also_known_as: Vec<String>,
     /// Also designate this identifier's `did:scid:ke:1` form.
     ///
@@ -191,20 +193,20 @@ pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
     let mut keri_cesr = inception.composed;
 
     // Aliases are published as a signed attestation the identifier issues to
-    // itself. The document is not allowed to simply claim them.
-    let mut aliases = config.also_known_as.clone();
+    // itself. The document is not allowed to simply claim them — and the DID
+    // itself has to be among them, or it does not resolve.
+    let mut extra = config.also_known_as.clone();
     if config.also_known_as_scid {
-        aliases.push(format!("did:scid:ke:1:{aid}?src={}", config.host));
+        extra.push(format!("did:scid:ke:1:{aid}?src={}", config.host));
     }
-    if !aliases.is_empty() {
-        let attestation = crate::attestation::issue_designated_aliases(
-            &mut hab,
-            &aid,
-            &establishment_said,
-            &aliases,
-        )?;
-        keri_cesr.extend_from_slice(&attestation);
-    }
+    let aliases = crate::attestation::designation(&did, &extra);
+    let attestation = crate::attestation::issue_designated_aliases(
+        &mut hab,
+        &aid,
+        &establishment_said,
+        &aliases,
+    )?;
+    keri_cesr.extend_from_slice(&attestation);
 
     // Endpoints are published as signed replies rather than written into the
     // document, so that a resolver can verify them instead of taking the
@@ -230,18 +232,14 @@ pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
 
 /// Build the published artifacts from a key event log, by resolving it.
 ///
-/// The document is not assembled independently — it is whatever
-/// [`crate::resolve_from_artifacts`] would derive from this stream. Producing
-/// it any other way would let creation and resolution drift apart, and the
-/// resolver is the side that decides.
+/// The document is not assembled independently — it is whatever the resolver
+/// derives from this stream, transformed to the `did:web` form `did.json`
+/// publishes (§ Transformation to `did:web` DID document). Producing it any
+/// other way would let creation and resolution drift apart, and the resolver
+/// is the side that decides.
 pub(crate) fn artifacts_for(did: &DidWebs, keri_cesr: &[u8]) -> Result<Artifacts, DidWebsError> {
-    let kels = crate::kel::Kels::parse(keri_cesr)?;
-    let state = kels.key_state(did.aid())?;
-    let aliases = crate::aliases::designated_aliases(&kels, did.aid())?;
-    let services: Vec<ServiceEndpoint> = crate::services::service_endpoints(&kels, did.aid())?;
-
-    let document = document_from_keys(did, &state.keys, &aliases.aliases, &services)?;
-    let did_json = serde_json::to_vec(&document)?;
+    let derived = crate::resolver::derive(did, keri_cesr)?;
+    let did_json = serde_json::to_vec(&to_did_web(&derived.document, did))?;
 
     Ok(Artifacts {
         keri_cesr: keri_cesr.to_vec(),

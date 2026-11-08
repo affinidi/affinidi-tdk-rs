@@ -2,9 +2,10 @@
 //!
 //! Both are fetched, and both are needed for different reasons: `keri.cesr`
 //! is the only thing that carries authority, and `did.json` is what the
-//! verified key state is checked against. A published document that cannot be
-//! fetched is not fatal — the resolution is still fully determined by the KEL
-//! — but a document that *disagrees* is.
+//! verified key state is checked against. § Read fails a resolution when
+//! either cannot be fetched: a host serving a log but no document has not
+//! published the DID completely, and quietly accepting that would make the
+//! cross-check optional for whoever controls the host.
 
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use tracing::debug;
 
 use crate::errors::DidWebsError;
 use crate::identifier::{DID_JSON, DidWebs, KERI_CESR};
-use crate::resolver::resolve_from_artifacts;
+use crate::resolver::{Resolution, resolve_with_metadata};
 
 /// Default request timeout, matching the in-tree `did:web` resolver.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -91,30 +92,30 @@ impl WebsResolver {
     /// Resolve a `did:webs` identifier.
     ///
     /// # Errors
-    /// Returns [`DidWebsError`] if the DID is malformed, `keri.cesr` cannot be
-    /// fetched or read, the key event log does not verify, or the published
-    /// `did.json` disagrees with the verified key state.
+    /// Returns [`DidWebsError`] if the DID is malformed, either artifact cannot
+    /// be fetched, the key event log does not verify, the DID is not
+    /// designated by its AID, or the published `did.json` disagrees with the
+    /// verified state.
     pub async fn resolve(&self, did: &str) -> Result<Document, DidWebsError> {
+        self.resolve_with_metadata(did).await.map(|r| r.document)
+    }
+
+    /// Resolve a `did:webs` identifier, with its DID document metadata. A DID
+    /// URL with a `versionId` parameter resolves as of that key event.
+    ///
+    /// # Errors
+    /// As [`resolve`](Self::resolve).
+    pub async fn resolve_with_metadata(&self, did: &str) -> Result<Resolution, DidWebsError> {
         let parsed = DidWebs::parse(did)?;
-
         let scheme = self.scheme(&parsed);
+
         let cesr_url = parsed.artifact_url_with_scheme(scheme, KERI_CESR);
-        let keri_cesr = self.fetch(&cesr_url).await?;
-
-        // A missing or unreadable did.json does not change the answer, because
-        // the answer comes from the KEL. It is only ever a cross-check, so a
-        // fetch failure is logged rather than propagated — while a document
-        // that *disagrees* is refused inside `resolve_from_artifacts`.
         let did_json_url = parsed.artifact_url_with_scheme(scheme, DID_JSON);
-        let did_json = match self.fetch(&did_json_url).await {
-            Ok(bytes) => Some(bytes),
-            Err(e) => {
-                debug!("{did_json_url} could not be fetched, resolving from keri.cesr alone: {e}");
-                None
-            }
-        };
+        let keri_cesr = self.fetch(&cesr_url).await?;
+        let did_json = self.fetch(&did_json_url).await?;
+        debug!("fetched {cesr_url} and {did_json_url}");
 
-        resolve_from_artifacts(&parsed, &keri_cesr, did_json.as_deref())
+        resolve_with_metadata(&parsed, &keri_cesr, Some(&did_json))
     }
 
     /// Fetch one artifact, refusing anything larger than [`MAX_ARTIFACT_BYTES`].

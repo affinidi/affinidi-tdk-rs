@@ -13,6 +13,12 @@
 //! pointing nowhere; the second without the first is a stranger volunteering to
 //! act on someone's behalf. Neither is published.
 //!
+//! A **witness** is the exception: its role comes from the key state (the `b`
+//! list of the latest establishment event), not from an `/end/role/add`, and
+//! only its location is a reply (§ Witness Service Endpoint). A delegated
+//! identifier also publishes a `DelegatorOOBI` service naming where its
+//! delegator's key state can be fetched (§ Delegator Service Endpoint).
+//!
 //! `/end/role/cut` withdraws an authorisation. Where the same subject is
 //! addressed more than once, KERI's BADA rule picks the reply that stands: the
 //! one signed under the **later establishment event**, and between replies
@@ -26,7 +32,7 @@ use std::collections::BTreeMap;
 use affinidi_keri_core::parser::{Attachment, ParsedMessage};
 use affinidi_keri_crypto::Verfer;
 use chrono::{DateTime, FixedOffset};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::errors::DidWebsError;
 use crate::kel::Kels;
@@ -51,6 +57,16 @@ impl ServiceEndpoint {
     pub fn id(&self) -> String {
         format!("#{}/{}", self.eid, self.role)
     }
+
+    /// The service entry this endpoint becomes in a DID document: `type` is
+    /// the role, and `serviceEndpoint` maps each scheme to its URL.
+    pub fn to_service(&self) -> Value {
+        json!({
+            "id": self.id(),
+            "type": self.role,
+            "serviceEndpoint": self.urls,
+        })
+    }
 }
 
 /// Where a reply stands in BADA order.
@@ -67,7 +83,9 @@ struct RoleRecord {
     seniority: Seniority,
 }
 
-/// Collect the service endpoints `aid` has authorised.
+/// Collect the service endpoints `aid` has authorised: the endpoints its
+/// signed replies designate, then the witnesses its key state names that have
+/// published a location.
 ///
 /// # Errors
 /// Returns [`DidWebsError::Kel`] if `aid`'s own key event log does not verify.
@@ -75,6 +93,18 @@ struct RoleRecord {
 /// reply must not cost an identifier its other endpoints.
 pub fn service_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoint>, DidWebsError> {
     // Fails loudly: an authorisation signed by an unverified AID means nothing.
+    let state = kels.key_state(aid)?;
+    let mut endpoints = role_endpoints(kels, aid)?;
+    endpoints.extend(witness_endpoints(kels, &state.backers));
+    Ok(endpoints)
+}
+
+/// The endpoints `aid`'s signed `/end/role` replies designate, under current
+/// BADA reply state.
+///
+/// # Errors
+/// Returns [`DidWebsError::Kel`] if `aid`'s own key event log does not verify.
+pub(crate) fn role_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoint>, DidWebsError> {
     kels.key_state(aid)?;
 
     let mut roles: BTreeMap<(String, String), RoleRecord> = BTreeMap::new();
@@ -121,7 +151,10 @@ pub fn service_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoint>,
 
     let mut endpoints = Vec::new();
     for ((role, eid), record) in roles {
-        if !record.added {
+        // A witness is designated by the key state, not by a reply: an
+        // `/end/role/add` naming one must not make a witness of an identifier
+        // the KEL never listed, nor keep one the KEL has rotated out.
+        if !record.added || role == "witness" {
             continue;
         }
         let urls = location_schemes(kels, &eid);
@@ -134,6 +167,61 @@ pub fn service_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoint>,
     }
 
     Ok(endpoints)
+}
+
+/// The witnesses in `backers` that have published a location for themselves.
+pub(crate) fn witness_endpoints(kels: &Kels, backers: &[String]) -> Vec<ServiceEndpoint> {
+    backers
+        .iter()
+        .filter_map(|witness| {
+            let urls = location_schemes(kels, witness);
+            (!urls.is_empty()).then(|| ServiceEndpoint {
+                eid: witness.clone(),
+                role: "witness".to_string(),
+                urls,
+            })
+        })
+        .collect()
+}
+
+/// The `DelegatorOOBI` service of a delegated identifier, or `None` for one
+/// that is not delegated.
+///
+/// § Delegator Service Endpoint: its `id` identifies the seal in the
+/// delegator's KEL that commits to the delegated inception — rendered, as the
+/// reference implementation renders it, by the seal's digest, which is the
+/// SAID of the `dip` event — and its `serviceEndpoint` is an OOBI URL for the
+/// delegator. The URL is built from a location the delegator signed for
+/// itself in the stream; with none, there is nowhere to point, and the service
+/// is omitted rather than invented.
+///
+/// The service is a pointer, not a proof: the delegation itself is verified
+/// from the delegator's KEL when the delegated events are.
+///
+/// # Errors
+/// Returns [`DidWebsError::Kel`] if `aid`'s key event log does not verify.
+pub fn delegator_service(kels: &Kels, aid: &str) -> Result<Option<Value>, DidWebsError> {
+    let state = kels.key_state(aid)?;
+    let Some(delegator) = state.delegator.as_deref() else {
+        return Ok(None);
+    };
+    let Some(seal) = kels.inception_said(aid) else {
+        return Ok(None);
+    };
+
+    let locations = location_schemes(kels, delegator);
+    let Some(url) = ["https", "http"]
+        .iter()
+        .find_map(|scheme| locations.get(*scheme))
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(json!({
+        "id": seal,
+        "type": "DelegatorOOBI",
+        "serviceEndpoint": format!("{}/oobi/{delegator}/controller", url.trim_end_matches('/')),
+    })))
 }
 
 /// The verified location schemes `eid` has published for itself.

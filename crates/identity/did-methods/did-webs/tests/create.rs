@@ -48,14 +48,35 @@ fn the_published_document_is_what_resolution_returns() {
     // Not merely "it resolves" — the bytes published and the document derived
     // have to be the same document. Anything else means a consumer reading
     // did.json and a consumer resolving it disagree.
+    //
+    // did.json is the did:web form (§ Transformation to did:web DID document),
+    // so it is compared after transforming it back.
     let result = create(config()).expect("create");
+    let did = DidWebs::parse(result.did()).expect("parse");
     let published: serde_json::Value =
         serde_json::from_slice(&result.artifacts().did_json).expect("did.json is JSON");
+    assert_eq!(
+        published["id"],
+        did.did_web_twin(),
+        "did.json is the did:web document"
+    );
 
-    let resolved = resolve(result.did(), result.artifacts());
-    let resolved = serde_json::to_value(&resolved).expect("serializes");
+    let as_webs = affinidi_did_webs::document::from_did_web(&published, &did, true)
+        .expect("the twin is designated");
+    let published = affinidi_did_webs::document::into_document(&as_webs, &did).expect("document");
 
-    assert_eq!(published, resolved);
+    assert_eq!(published, resolve(result.did(), result.artifacts()));
+}
+
+#[test]
+fn every_identifier_designates_itself_its_twin_and_its_did_keri() {
+    // § Create and § Also Known As: a resolver refuses a did:webs DID no
+    // attestation names, the did:web form of the document needs its twin
+    // designated, and the did:keri form must be listed.
+    let result = create(config()).expect("create");
+    let did = DidWebs::parse(result.did()).expect("parse");
+    let doc = resolve(result.did(), result.artifacts());
+    assert_eq!(doc.also_known_as, vec![did.did_web_twin(), did.did_keri()]);
 }
 
 #[test]
@@ -81,10 +102,23 @@ fn creation_is_deterministic_for_a_salt() {
     // The AID is the inception event's SAID, so the same salt and config must
     // yield the same identifier. If it did not, a caller could never recreate
     // an identifier from a backed-up salt.
+    //
+    // The artifacts as a whole are not byte-identical: the designated-aliases
+    // attestation every identifier carries is dated when it is issued. What a
+    // salt must reproduce is the identifier and its key state.
     let a = create(config()).expect("create");
     let b = create(config()).expect("create");
     assert_eq!(a.did(), b.did());
-    assert_eq!(a.artifacts(), b.artifacts());
+    let (ca, cb) = (&a.custody().state, &b.custody().state);
+    assert_eq!(
+        (&ca.prefix, ca.signer_gen, ca.next_gen, ca.key_gen, ca.sn),
+        (&cb.prefix, cb.signer_gen, cb.next_gen, cb.key_gen, cb.sn),
+    );
+    let inception = |r: &affinidi_did_webs::CreateResult| {
+        let text = String::from_utf8(r.artifacts().keri_cesr.clone()).expect("ascii");
+        text[..text.find("-A").expect("signatures follow the inception")].to_string()
+    };
+    assert_eq!(inception(&a), inception(&b));
 }
 
 #[test]
@@ -214,6 +248,63 @@ fn a_multi_key_identifier_signs_its_services_with_enough_keys() {
         "the alias attestation must also meet the threshold: {:?}",
         doc.also_known_as,
     );
+
+    // § Thresholds: no single key of a 2-of-2 identifier authenticates; the
+    // ConditionalProof2022 over both does.
+    let aid = DidWebs::parse(result.did())
+        .expect("parse")
+        .aid()
+        .to_string();
+    let condition = doc
+        .verification_method
+        .iter()
+        .find(|vm| vm.type_ == "ConditionalProof2022")
+        .expect("a threshold condition");
+    assert_eq!(condition.id.as_str(), format!("{}#{aid}", result.did()));
+    let auth = serde_json::to_value(&doc.authentication).expect("serializes");
+    assert_eq!(auth, serde_json::json!([format!("{}#{aid}", result.did())]));
+}
+
+#[test]
+#[ignore = "affinidi-keri-core 0.4 rejects `nt: \"0\"`, which is how KERI commits to no next keys; \
+            un-ignore once it accepts a zero next threshold with an empty `n`"]
+fn rotating_to_no_next_keys_deactivates_the_identifier() {
+    // § Deactivate: a rotation committing to no next keys renders the AID
+    // non-transferable, and resolution reports it.
+    let created = create(config()).expect("create");
+    let did = DidWebs::parse(created.did()).expect("parse");
+    let fresh = affinidi_did_webs::resolve_with_metadata(
+        &did,
+        &created.artifacts().keri_cesr,
+        Some(&created.artifacts().did_json),
+    )
+    .expect("resolves");
+    assert!(!fresh.metadata.deactivated);
+
+    let rotation = RotationConfig {
+        next_count: 0,
+        next_threshold: 0,
+        ..RotationConfig::default()
+    };
+    let updated = update(
+        UpdateConfig {
+            did: created.did().to_string(),
+            prior: created.artifacts().clone(),
+            custody: created.custody().clone(),
+            change: Change::Rotate(rotation),
+        },
+        SALT,
+    )
+    .expect("rotate to no next keys");
+
+    let resolution = affinidi_did_webs::resolve_with_metadata(
+        &did,
+        &updated.artifacts().keri_cesr,
+        Some(&updated.artifacts().did_json),
+    )
+    .expect("a deactivated identifier still resolves");
+    assert!(resolution.metadata.deactivated);
+    assert_eq!(resolution.metadata.to_json()["deactivated"], true);
 }
 
 #[test]
@@ -417,8 +508,8 @@ fn aliases_can_be_designated_after_creation() {
         resolve(created.did(), created.artifacts())
             .also_known_as
             .len(),
-        1,
-        "only the did:web twin to begin with",
+        2,
+        "only the did:web twin and did:keri to begin with",
     );
 
     let updated = update(
@@ -469,22 +560,46 @@ fn an_alias_survives_a_later_rotation() {
 }
 
 #[test]
-fn designating_nothing_is_refused() {
-    let config = CreateConfig::builder(HOST).inception(inception()).build();
+fn a_replaced_designation_withdraws_the_old_aliases() {
+    // `AlsoKnownAs` replaces the designation. A resolver reads every
+    // unrevoked attestation, so the old one has to be revoked — by an anchored
+    // revocation — or a dropped alias would still be listed.
+    let config = CreateConfig::builder(HOST)
+        .inception(inception())
+        .also_known_as(OTHER)
+        .build();
     let created = create(config).expect("create");
+    let did = DidWebs::parse(created.did()).expect("parse");
 
+    let updated = update(
+        UpdateConfig {
+            did: created.did().to_string(),
+            prior: created.artifacts().clone(),
+            custody: created.custody().clone(),
+            change: Change::AlsoKnownAs(vec![]),
+        },
+        SALT,
+    )
+    .expect("an empty list leaves the three every identifier designates");
+
+    let doc = resolve(updated.did(), updated.artifacts());
+    assert_eq!(doc.also_known_as, vec![did.did_web_twin(), did.did_keri()]);
+
+    // As of the version before the revocation was anchored, the alias stood.
+    let resolution = affinidi_did_webs::resolve_with_metadata(
+        &did,
+        &updated.artifacts().keri_cesr,
+        Some(&updated.artifacts().did_json),
+    )
+    .expect("resolves");
+    let before = resolution.metadata.version_id - 3;
+    let then = DidWebs::parse(&format!("{}?versionId={before}", did.did())).expect("parse");
+    let doc =
+        resolve_from_artifacts(&then, &updated.artifacts().keri_cesr, None).expect("resolves");
     assert!(
-        update(
-            UpdateConfig {
-                did: created.did().to_string(),
-                prior: created.artifacts().clone(),
-                custody: created.custody().clone(),
-                change: Change::AlsoKnownAs(vec![]),
-            },
-            SALT,
-        )
-        .is_err(),
-        "an attestation with no aliases designates nothing",
+        doc.also_known_as.iter().any(|a| a == OTHER),
+        "got {:?}",
+        doc.also_known_as
     );
 }
 
@@ -497,7 +612,7 @@ fn an_unanchored_attestation_is_not_carried_back() {
     //
     // The key event log still verifies after the strip — the inception stands
     // alone — so this exercises the anchor check rather than merely breaking
-    // the log, which would prove nothing.
+    // the log, which would prove nothing. (`Kels` below confirms it.)
     let config = CreateConfig::builder(HOST)
         .inception(inception())
         .also_known_as(OTHER)
@@ -511,14 +626,17 @@ fn an_unanchored_attestation_is_not_carried_back() {
         "the credential itself must still be present",
     );
 
+    // With its only attestation unanchored, nothing designates the DID, so it
+    // does not resolve at all — rather than resolving without the alias.
+    let kels = affinidi_did_webs::Kels::parse(stripped.as_bytes()).expect("parses");
     let did = DidWebs::parse(created.did()).expect("parse");
-    let doc = resolve_from_artifacts(&did, stripped.as_bytes(), None)
-        .expect("the key event log still verifies without its interactions");
-
+    kels.key_state(did.aid())
+        .expect("the key event log still verifies");
+    let err = resolve_from_artifacts(&did, stripped.as_bytes(), None)
+        .expect_err("an unanchored attestation designates nothing");
     assert!(
-        !doc.also_known_as.iter().any(|a| a == OTHER),
-        "an unanchored attestation must not be carried back, got {:?}",
-        doc.also_known_as,
+        matches!(err, affinidi_did_webs::DidWebsError::NotDesignated(_)),
+        "{err}"
     );
 }
 

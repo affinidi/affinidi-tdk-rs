@@ -3,8 +3,12 @@
 //! Every other test here verifies artifacts already in hand. These drive
 //! `WebsResolver::resolve` itself — the URLs it actually requests, the order it
 //! requests them in, what it does when one is missing, and the size caps — by
-//! serving the real conformance artifacts from a local server and resolving a
-//! DID that points at it.
+//! serving artifacts from a local server and resolving a DID that points at it.
+//!
+//! A DID resolves only at a host its AID designated, and the conformance
+//! fixture designates its own host, not the mock's. The tests that need a
+//! resolution to succeed therefore create an identifier for the mock's address
+//! (and need the `create` feature); the failure paths use the fixture.
 
 use affinidi_did_webs::WebsResolver;
 use wiremock::matchers::{method, path};
@@ -13,7 +17,6 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const KERI_CESR: &[u8] = include_bytes!("fixtures/ENro7uf0.keri.cesr");
 const DID_JSON: &[u8] = include_bytes!("fixtures/ENro7uf0.did.json");
 const AID: &str = "ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe";
-const SIGNING_KEY: &str = "DHr0-I-mMN7h6cLMOTRJkkfPuMd0vgQPrOk4Y3edaHjr";
 
 /// A DID pointing at the mock server.
 ///
@@ -21,71 +24,102 @@ const SIGNING_KEY: &str = "DHr0-I-mMN7h6cLMOTRJkkfPuMd0vgQPrOk4Y3edaHjr";
 /// and therefore fetches over plain HTTP — the same accommodation that lets it
 /// talk to the reference implementation.
 fn did_for(server: &MockServer) -> String {
-    let host = server.address().to_string().replace(':', "%3A");
-    format!("did:webs:{host}:{AID}")
+    format!("did:webs:{}:{AID}", host_of(server))
 }
 
-/// The fixture's `did.json` names the host it was published on, and the
-/// host-binding check refuses it anywhere else — deliberately, so a document
-/// cannot be lifted from one host and replayed at another. Retarget it at the
-/// mock so the *rest* of the resolution is what these tests exercise.
-fn did_json_for(server: &MockServer) -> serde_json::Value {
-    let host = server.address().to_string().replace(':', "%3A");
-    let mut doc: serde_json::Value = serde_json::from_slice(DID_JSON).expect("json");
-    doc["id"] = serde_json::json!(format!("did:web:{host}:{AID}"));
-    doc
+/// The mock's address, as a `did:webs` host label.
+fn host_of(server: &MockServer) -> String {
+    server.address().to_string().replace(':', "%3A")
+}
+
+/// An identifier created for the mock's address, and its artifacts.
+#[cfg(feature = "create")]
+fn created_for(server: &MockServer) -> (String, String, affinidi_did_webs::Artifacts) {
+    use affinidi_did_webs::create::{CreateConfig, create};
+    use affinidi_keri::config::InceptionConfig;
+
+    let result = create(
+        CreateConfig::builder(host_of(server))
+            .inception(InceptionConfig::builder().salt(vec![7u8; 16]).build())
+            .build(),
+    )
+    .expect("create");
+    let aid = affinidi_did_webs::DidWebs::parse(result.did())
+        .expect("parse")
+        .aid()
+        .to_string();
+    (result.did().to_string(), aid, result.into_artifacts())
 }
 
 async fn serve(server: &MockServer, artifact: &str, body: &[u8]) {
+    serve_for(server, AID, artifact, body).await;
+}
+
+async fn serve_for(server: &MockServer, aid: &str, artifact: &str, body: &[u8]) {
     Mock::given(method("GET"))
-        .and(path(format!("/{AID}/{artifact}")))
+        .and(path(format!("/{aid}/{artifact}")))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
         .mount(server)
         .await;
 }
 
+#[cfg(feature = "create")]
 #[tokio::test]
 async fn resolves_a_did_over_the_network() {
     let server = MockServer::start().await;
-    serve(&server, "keri.cesr", KERI_CESR).await;
-    let published = serde_json::to_vec(&did_json_for(&server)).expect("serializes");
-    serve(&server, "did.json", &published).await;
+    let (did, aid, artifacts) = created_for(&server);
+    serve_for(&server, &aid, "keri.cesr", &artifacts.keri_cesr).await;
+    serve_for(&server, &aid, "did.json", &artifacts.did_json).await;
 
-    let did = did_for(&server);
-    let doc = WebsResolver::new()
-        .resolve(&did)
+    let resolution = WebsResolver::new()
+        .resolve_with_metadata(&did)
         .await
         .expect("a served did:webs must resolve");
 
-    assert_eq!(doc.id.as_str(), did);
-    assert_eq!(doc.verification_method.len(), 1);
-    assert!(
-        doc.verification_method[0]
-            .id
-            .as_str()
-            .ends_with(&format!("#{SIGNING_KEY}")),
-    );
+    assert_eq!(resolution.document.id.as_str(), did);
+    assert_eq!(resolution.document.verification_method.len(), 1);
+    assert_eq!(resolution.metadata.version_id, 2);
 
     // Both artifacts were actually requested, at the paths we derive.
     let requests = server.received_requests().await.expect("recorded");
     let paths: Vec<String> = requests.iter().map(|r| r.url.path().to_string()).collect();
-    assert!(paths.contains(&format!("/{AID}/keri.cesr")), "{paths:?}");
-    assert!(paths.contains(&format!("/{AID}/did.json")), "{paths:?}");
+    assert!(paths.contains(&format!("/{aid}/keri.cesr")), "{paths:?}");
+    assert!(paths.contains(&format!("/{aid}/did.json")), "{paths:?}");
+}
+
+#[cfg(feature = "create")]
+#[tokio::test]
+async fn a_version_id_resolves_an_earlier_document() {
+    let server = MockServer::start().await;
+    let (did, aid, artifacts) = created_for(&server);
+    serve_for(&server, &aid, "keri.cesr", &artifacts.keri_cesr).await;
+    serve_for(&server, &aid, "did.json", &artifacts.did_json).await;
+
+    // At sequence number 1 the alias registry is anchored but not yet the
+    // issuance, so the DID was not yet designated.
+    let err = WebsResolver::new()
+        .resolve(&format!("{did}?versionId=1"))
+        .await
+        .expect_err("not yet designated at sn 1");
+    assert!(
+        matches!(err, affinidi_did_webs::DidWebsError::NotDesignated(_)),
+        "{err}"
+    );
 }
 
 #[tokio::test]
-async fn resolves_when_did_json_is_missing() {
-    // did.json carries no authority — it is only ever cross-checked. A 404 for
-    // it must not stop resolution, because the key event log alone determines
-    // the answer.
+async fn a_missing_did_json_fails_resolution() {
+    // § Read: if either request fails, resolution fails. A host serving a log
+    // but no document has not published the DID completely, and accepting it
+    // would make the did.json cross-check optional for whoever runs the host.
     let server = MockServer::start().await;
     serve(&server, "keri.cesr", KERI_CESR).await;
 
-    let doc = WebsResolver::new()
+    let err = WebsResolver::new()
         .resolve(&did_for(&server))
         .await
-        .expect("a missing did.json must not fail resolution");
-    assert_eq!(doc.verification_method.len(), 1);
+        .expect_err("a missing did.json must fail resolution");
+    assert!(err.to_string().contains("did.json"), "{err}");
 }
 
 #[tokio::test]
@@ -142,13 +176,15 @@ async fn an_oversized_artifact_is_refused() {
     assert!(err.to_string().contains("cap"), "{err}");
 }
 
+#[cfg(feature = "create")]
 #[tokio::test]
 async fn a_did_json_that_disagrees_fails_resolution() {
     // Served alongside a valid key event log, but publishing a key the log
     // never authorised. Resolution must fail rather than pick a winner.
     let server = MockServer::start().await;
-    // Retargeted at this host, so the only thing wrong with it is the key.
-    let mut published = did_json_for(&server);
+    let (did, aid, artifacts) = created_for(&server);
+    let mut published: serde_json::Value =
+        serde_json::from_slice(&artifacts.did_json).expect("json");
     let mut extra = published["verificationMethod"][0].clone();
     extra["id"] = serde_json::json!("#DNotAuthorised000000000000000000000000000");
     extra["publicKeyJwk"]["kid"] = serde_json::json!("DNotAuthorised000000000000000000000000000");
@@ -157,16 +193,17 @@ async fn a_did_json_that_disagrees_fails_resolution() {
         .expect("array")
         .push(extra);
 
-    serve(&server, "keri.cesr", KERI_CESR).await;
-    serve(
+    serve_for(&server, &aid, "keri.cesr", &artifacts.keri_cesr).await;
+    serve_for(
         &server,
+        &aid,
         "did.json",
         &serde_json::to_vec(&published).expect("serializes"),
     )
     .await;
 
     let err = WebsResolver::new()
-        .resolve(&did_for(&server))
+        .resolve(&did)
         .await
         .expect_err("a did.json publishing an unauthorised key must fail resolution");
     assert!(
