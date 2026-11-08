@@ -993,10 +993,21 @@ pub struct WebsResolver {
 
 #[cfg(feature = "did-webs")]
 impl WebsResolver {
-    /// A resolver with its own HTTP client and connection pool.
+    /// A resolver with its own HTTP client and connection pool, under
+    /// [`HostPolicy::PublicOnly`].
     pub fn new() -> Self {
+        Self::with_policy(HostPolicy::PublicOnly)
+    }
+
+    /// A resolver under an explicit [`HostPolicy`]. A `did:webs` DID names
+    /// the host its artifacts are fetched from, exactly as a `did:web` does.
+    pub fn with_policy(policy: HostPolicy) -> Self {
+        let policy = match policy {
+            HostPolicy::AllowPrivate => affinidi_did_webs::HostPolicy::AllowPrivate,
+            _ => affinidi_did_webs::HostPolicy::PublicOnly,
+        };
         Self {
-            inner: affinidi_did_webs::WebsResolver::new(),
+            inner: affinidi_did_webs::WebsResolver::with_policy(policy),
         }
     }
 }

@@ -54,7 +54,7 @@ pub use create::{CreateConfig, CreateResult, SelfEndpoint, create};
 pub use custody::KeyCustody;
 pub use designated_services::{DesignatedService, DesignatedServices, designated_services};
 pub use errors::DidWebsError;
-pub use fetch::{WebsResolver, resolve};
+pub use fetch::{HostPolicy, WebsResolver, resolve};
 pub use identifier::{DID_JSON, DidWebs, KERI_CESR};
 pub use kel::Kels;
 pub use key_agreement::{DesignatedKeys, KeyAgreementKey, designated_key_agreement};

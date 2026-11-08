@@ -63,7 +63,7 @@ pub struct DIDCacheConfig {
 /// - cache_ttl: The time-to-live in seconds for each item in the local cache (default: 300 (5 Minutes)).
 /// - network_timeout: The timeout for network requests in milliseconds (default: 5000 (5 seconds)).
 /// - network_cache_limit_count: The maximum number of items to store in the network cache (default: 100).
-/// - host_policy: Which hosts did:web and did:webvh resolution may contact (default: `PublicOnly`).
+/// - host_policy: Which hosts did:web, did:webvh, did:scid and did:webs resolution may contact (default: `PublicOnly`).
 pub struct DIDCacheConfigBuilder {
     #[cfg(feature = "network")]
     service_address: Option<String>,
@@ -229,8 +229,8 @@ impl DIDCacheConfigBuilder {
         self
     }
 
-    /// Set which hosts `did:web`, `did:webvh` and `did:scid` resolution may
-    /// contact.
+    /// Set which hosts `did:web`, `did:webvh`, `did:scid` and `did:webs`
+    /// resolution may contact.
     ///
     /// Each names the host its document is fetched from (`did:scid` in its
     /// `src`), so whoever
@@ -241,7 +241,7 @@ impl DIDCacheConfigBuilder {
     /// lifts that, for local development (`did:webvh:{SCID}:localhost%3A8000`)
     /// and for deployments whose DID hosts are trusted and on a private network.
     ///
-    /// Applies to the built-in did:web, did:webvh and did:scid resolvers. A resolver
+    /// Applies to the built-in did:web, did:webvh, did:scid and did:webs resolvers. A resolver
     /// installed with [`set_resolver`](crate::DIDCacheClient::set_resolver)
     /// carries its own policy.
     /// Default: `PublicOnly`

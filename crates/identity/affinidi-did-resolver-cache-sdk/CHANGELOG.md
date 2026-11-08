@@ -1,5 +1,14 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.46) — did:webs obeys the host policy
+
+- **Behaviour (security):** `did:webs` resolution follows
+  `DIDCacheConfigBuilder::with_host_policy`, as did:web, did:webvh and did:scid
+  do. It was registered without the policy, so a `did:webs` DID naming
+  loopback, a private address or the cloud metadata address was fetched under
+  the default `PublicOnly`. Requires affinidi-did-webs 0.8.2.
+- **Added:** `network_resolvers::WebsResolver::with_policy`.
+
 ## Unreleased (0.8.45) — affinidi-did-webs 0.8
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.8, which

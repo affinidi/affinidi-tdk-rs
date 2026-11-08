@@ -2,6 +2,60 @@
 
 All notable changes to this crate are documented here.
 
+## [0.8.2] - 2026-11-09
+
+### Security
+
+- **Resolution refuses hosts that are not public.** A `did:webs` DID names
+  the host its `keri.cesr` and `did.json` are fetched from, so a DID anyone
+  supplies could aim the resolver at loopback, a private network or the cloud
+  metadata address (SSRF). `WebsResolver` checked no host and followed
+  redirects. It now takes a `HostPolicy`, default `PublicOnly`, enforced as
+  `affinidi-did-web` enforces it, through `affinidi-net-guard`: the host the
+  DID names is checked before any request, a hostname is checked against what
+  it resolves to at connect time, and the client it builds follows no
+  redirect or proxy (not even one named by `HTTPS_PROXY`, since a proxy
+  resolves the hostname itself and the DNS check would never see it). A
+  refusal is `DidWebsError::BlockedHost`.
+- **A caller's client can no longer carry less than the guard.**
+  `WebsResolver::with_client_builder` takes a `reqwest::ClientBuilder` and
+  applies the guard settings after the caller's, so a caller's redirect,
+  proxy or resolver setting cannot undo them. `WebsResolver::with_client`,
+  which takes a built client that cannot be inspected, is deprecated: under
+  it only the host the DID names is checked.
+- **Building the client fails closed.** A client that could not be built fell
+  back to `reqwest`'s default, which has none of the guard. It now panics, as
+  `reqwest::Client::new` does, and `with_client_builder` returns the error.
+- **`HostPolicy::AllowPrivate` is logged.** Building a resolver under it
+  emits a warning, so a deployment running without SSRF protection says so.
+
+- **Requires `affinidi-keri-core` 0.4.1**, which refuses a rotation that
+  does not meet the signing threshold the previous event committed to. Under
+  0.4.0, someone holding one of several pre-committed next keys could rotate
+  the identifier alone.
+
+### Fixed
+
+- **A `did:webs` identifier can be deactivated.** Rotating to no next keys
+  (`nt: "0"`, an empty `n`) was refused by `affinidi-keri-core` 0.4.0; under
+  0.4.1 it resolves, with `deactivated: true` in the document metadata.
+
+### Changed
+
+- **A loopback DID resolves only under `HostPolicy::AllowPrivate`.**
+  `WebsResolver::new()` fetched a loopback host over plain HTTP. It now
+  refuses it; `WebsResolver::with_policy(HostPolicy::AllowPrivate)` restores
+  that, for a local stack or the reference implementation.
+
+### Added
+
+- `HostPolicy`, `WebsResolver::with_policy`,
+  `WebsResolver::with_client_builder`, `DidWebsError::BlockedHost`.
+
+### Deprecated
+
+- `WebsResolver::with_client`: use `WebsResolver::with_client_builder`.
+
 ## [0.8.1] - 2026-11-08
 
 ### Added

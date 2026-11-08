@@ -19,6 +19,11 @@ pub enum DidWebsError {
         reason: String,
     },
 
+    /// The host the DID names is not one the resolver's
+    /// [`HostPolicy`](crate::fetch::HostPolicy) lets it fetch from.
+    #[error("did:webs host refused by host policy: {0}")]
+    BlockedHost(String),
+
     /// The CESR stream could not be parsed, or carried something this
     /// implementation will not interpret.
     #[error("keri.cesr could not be read: {0}")]

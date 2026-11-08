@@ -881,7 +881,9 @@ impl DIDCacheClient {
         resolvers
             .entry(MethodName::Other("webs".to_string()))
             .or_default()
-            .push_back(Box::new(network_resolvers::WebsResolver::new()));
+            .push_back(Box::new(network_resolvers::WebsResolver::with_policy(
+                config.host_policy,
+            )));
 
         let resolvers = Arc::new(resolvers);
 

@@ -193,3 +193,36 @@ async fn scid_localhost_is_contacted_under_allow_private() {
         "the same setting must let did:scid reach the local host ({error:?})"
     );
 }
+
+#[cfg(feature = "did-webs")]
+const AID: &str = "ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe";
+
+#[cfg(feature = "did-webs")]
+#[tokio::test]
+async fn webs_localhost_is_refused_by_default_without_connecting() {
+    let listener = CountingListener::start().await;
+    let did = format!("did:webs:localhost%3A{}:{AID}", listener.port);
+
+    let error = resolve(&cache_client(None).await, &did)
+        .await
+        .expect_err("a localhost did:webs must not resolve under the default policy");
+
+    assert!(format!("{error:?}").contains("host policy"), "{error:?}");
+    assert_eq!(listener.connections_after_grace().await, 0);
+}
+
+#[cfg(feature = "did-webs")]
+#[tokio::test]
+async fn webs_localhost_is_contacted_under_allow_private() {
+    let listener = CountingListener::start().await;
+    let did = format!("did:webs:localhost%3A{}:{AID}", listener.port);
+
+    let error = resolve(&cache_client(Some(HostPolicy::AllowPrivate)).await, &did)
+        .await
+        .expect_err("the listener serves no key event log");
+
+    assert!(
+        listener.connections_after_grace().await > 0,
+        "AllowPrivate must let did:webs reach the local host ({error:?})"
+    );
+}

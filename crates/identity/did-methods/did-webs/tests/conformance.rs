@@ -274,10 +274,11 @@ async fn a_real_stream_served_from_a_host_it_does_not_designate_is_refused() {
         "artifact URL puts the AID before the file name",
     );
 
-    let err = affinidi_did_webs::WebsResolver::new()
-        .resolve(parsed.did())
-        .await
-        .expect_err("an undesignated host must not resolve");
+    let err =
+        affinidi_did_webs::WebsResolver::with_policy(affinidi_did_webs::HostPolicy::AllowPrivate)
+            .resolve(parsed.did())
+            .await
+            .expect_err("an undesignated host must not resolve");
     assert!(
         matches!(err, affinidi_did_webs::DidWebsError::NotDesignated(_)),
         "{err}"
