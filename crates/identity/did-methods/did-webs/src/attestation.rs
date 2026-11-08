@@ -203,8 +203,7 @@ pub(crate) fn issue_services(
     }
     let mut entries: Vec<SadValue> = Vec::with_capacity(services.len());
     for service in services {
-        let entry = service.to_sad();
-        crate::designated_services::check_service(&entry).map_err(DidWebsError::Create)?;
+        let entry = service.to_sad().map_err(DidWebsError::Create)?;
         if entries.iter().any(|e| e["id"] == entry["id"]) {
             return Err(DidWebsError::Create(format!(
                 "service id {} is designated twice",

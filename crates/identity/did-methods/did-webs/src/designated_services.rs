@@ -65,15 +65,28 @@ impl DesignatedService {
     }
 
     /// The service entry as it is designated and published.
+    ///
+    /// The entry is returned as written, valid or not; designating it checks
+    /// it.
     pub fn to_service(&self) -> Value {
-        self.to_sad().to_json_value()
+        self.entry().to_json_value()
     }
 
     /// The entry as it goes into the designation: `id`, `type`,
     /// `serviceEndpoint`, then the other members, in that order. The
     /// designation's SAID covers these bytes, so the order is fixed here
     /// rather than left to how `serde_json` was built.
-    pub(crate) fn to_sad(&self) -> SadValue {
+    ///
+    /// # Errors
+    /// Returns why the entry is not a service a DID document can carry, so no
+    /// caller can designate one unchecked.
+    pub(crate) fn to_sad(&self) -> Result<SadValue, String> {
+        let entry = self.entry();
+        check_service(&entry)?;
+        Ok(entry)
+    }
+
+    fn entry(&self) -> SadValue {
         let mut entry = SadMap::new();
         entry.insert("id".into(), SadValue::from(self.id.as_str()));
         entry.insert("type".into(), SadValue::from_json_value(&self.type_));
@@ -184,14 +197,25 @@ mod tests {
             "DIDCommMessaging",
             json!({"uri": "did:webvh:QmMediator:mediator.example", "accept": ["didcomm/v2"]}),
         );
-        assert!(check_service(&service.to_sad()).is_ok());
+        assert!(service.to_sad().is_ok());
+    }
+
+    #[test]
+    fn an_invalid_entry_cannot_be_designated() {
+        let service = DesignatedService::new("no-fragment", "LinkedDomains", json!("https://x"));
+        assert!(service.to_sad().is_err());
+        assert!(
+            DesignatedService::new("#ok", "LinkedDomains", json!("https://x"))
+                .to_sad()
+                .is_ok()
+        );
     }
 
     #[test]
     fn an_absolute_or_empty_id_is_refused() {
         for id in ["did:webs:example.com:E1#x", "#", "x", "#a#b"] {
             let service = DesignatedService::new(id, "LinkedDomains", json!("https://x"));
-            assert!(check_service(&service.to_sad()).is_err(), "{id}");
+            assert!(service.to_sad().is_err(), "{id}");
         }
     }
 

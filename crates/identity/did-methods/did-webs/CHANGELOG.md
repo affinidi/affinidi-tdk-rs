@@ -19,6 +19,19 @@ All notable changes to this crate are documented here.
   then its other members, in that order, whatever `serde_json` was built
   with. `DesignatedService::to_service` still returns a `serde_json::Value`.
 
+### Fixed
+
+- **A service entry is checked wherever it is designated.** The check that an
+  entry is a service a DID document can carry ran in the one caller; it now
+  runs when the entry is built for a designation, so no caller can skip it.
+
+### Added
+
+- A test that every message this crate builds — `icp`, `rot`, `ixn`, `rpy`,
+  `vcp`, `iss`, `rev` and the ACDC, with its attributes and a designated
+  service entry — is written in KERI and ACDC field order, so a reordered
+  literal fails CI rather than shipping events keripy refuses.
+
 ## [0.8.2] - 2026-11-09
 
 ### Security
