@@ -296,3 +296,58 @@ async fn a_redirect_is_not_followed() {
         "the redirect was followed: {requests:?}"
     );
 }
+
+/// A caller's builder cannot turn redirects back on: the guard settings are
+/// applied after the caller's.
+#[tokio::test]
+async fn a_callers_builder_cannot_turn_redirects_back_on() {
+    let server = MockServer::start().await;
+    let target = MockServer::start().await;
+    serve(&target, "keri.cesr", KERI_CESR).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{AID}/keri.cesr")))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", format!("{}/{AID}/keri.cesr", target.uri())),
+        )
+        .mount(&server)
+        .await;
+
+    let builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::limited(5));
+    let err = WebsResolver::with_client_builder(builder, HostPolicy::AllowPrivate)
+        .expect("builds")
+        .resolve(&did_for(&server))
+        .await
+        .expect_err("a redirected artifact must not be fetched");
+    assert!(err.to_string().contains("302"), "{err}");
+    let requests = target.received_requests().await.expect("recorded");
+    assert!(
+        requests.is_empty(),
+        "the redirect was followed: {requests:?}"
+    );
+}
+
+/// Under `PublicOnly` no proxy is used, even one the caller's builder names: a
+/// proxy resolves the hostname itself, so the DNS check would never see where
+/// the request went.
+#[tokio::test]
+async fn public_only_uses_no_proxy_even_one_the_caller_names() {
+    let proxy = MockServer::start().await;
+    serve(&proxy, "keri.cesr", KERI_CESR).await;
+
+    let builder = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all(proxy.uri()).expect("proxy url"))
+        .timeout(std::time::Duration::from_secs(5));
+    let resolver = WebsResolver::with_client_builder(builder, HostPolicy::PublicOnly)
+        .expect("builds")
+        // Plain HTTP so a proxied request would reach the mock as a GET.
+        .allow_http(true);
+    let did = format!("did:webs:did-webs-proxy-test.example.com:{AID}");
+    resolver
+        .resolve(&did)
+        .await
+        .expect_err("the host does not exist");
+
+    let requests = proxy.received_requests().await.expect("recorded");
+    assert!(requests.is_empty(), "the proxy was used: {requests:?}");
+}

@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use affinidi_did_common::Document;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::errors::DidWebsError;
 use crate::identifier::{DID_JSON, DidWebs, KERI_CESR};
@@ -74,34 +74,67 @@ impl WebsResolver {
     }
 
     /// A resolver with the default client, under an explicit [`HostPolicy`].
-    pub fn with_policy(policy: HostPolicy) -> Self {
-        Self {
-            client: default_client(policy),
-            allow_http: false,
-            policy,
-        }
-    }
-
-    /// A resolver over a caller-supplied client, for custom timeouts, proxies,
-    /// or a client shared with the rest of an application, under
-    /// [`HostPolicy::PublicOnly`].
     ///
-    /// The host the DID names is still checked before any request. The other
-    /// half of the guard, a hostname that resolves to a non-routable address,
-    /// lives in the client's DNS resolver, so a caller supplying a client owns
-    /// it: install `affinidi_net_guard::guarded_dns_resolver`, and disable
-    /// redirects.
-    pub fn with_client(client: reqwest::Client) -> Self {
-        Self::with_client_and_policy(client, HostPolicy::PublicOnly)
+    /// # Panics
+    /// If the HTTP client cannot be built (the TLS backend fails to
+    /// initialise), as `reqwest::Client::new` does.
+    pub fn with_policy(policy: HostPolicy) -> Self {
+        Self::with_client_builder(reqwest::Client::builder(), policy)
+            .expect("the did:webs HTTP client can be built")
     }
 
-    /// A resolver over a caller-supplied client under an explicit
-    /// [`HostPolicy`]. Same caveat as [`with_client`](Self::with_client).
-    pub fn with_client_and_policy(client: reqwest::Client, policy: HostPolicy) -> Self {
-        Self {
+    /// A resolver over a client the caller configures (timeouts, user agent,
+    /// TLS, connection pool), under an explicit [`HostPolicy`].
+    ///
+    /// The guard settings are applied last, so nothing set on `builder` can
+    /// undo them: redirects are never followed, and under
+    /// [`HostPolicy::PublicOnly`] the guarded DNS resolver is installed and
+    /// every proxy, including one named by `HTTPS_PROXY`, is turned off,
+    /// because a proxy resolves the hostname itself and the DNS check would
+    /// never see it.
+    ///
+    /// # Errors
+    /// Returns [`DidWebsError::Fetch`] if `reqwest` cannot build the client.
+    pub fn with_client_builder(
+        builder: reqwest::ClientBuilder,
+        policy: HostPolicy,
+    ) -> Result<Self, DidWebsError> {
+        if policy == HostPolicy::AllowPrivate {
+            warn!(
+                "did:webs resolver built with HostPolicy::AllowPrivate: it will fetch from \
+                 loopback and private hosts, so SSRF protection is off. Use it only where the \
+                 DIDs resolved are trusted."
+            );
+        }
+        let client = guard(default_settings(builder), policy)
+            .build()
+            .map_err(|e| DidWebsError::Fetch {
+                url: String::new(),
+                reason: format!("cannot build the HTTP client: {e}"),
+            })?;
+        Ok(Self {
             client,
             allow_http: false,
             policy,
+        })
+    }
+
+    /// A resolver over a caller-built client, under
+    /// [`HostPolicy::PublicOnly`].
+    ///
+    /// Only the host the DID names is checked. A built client cannot be
+    /// inspected or changed, so a hostname that resolves to a private
+    /// address, a redirect, or a proxy is stopped only if the caller built the
+    /// client to stop it.
+    #[deprecated(
+        since = "0.8.2",
+        note = "a built client may not carry the DNS guard; use `with_client_builder`, which applies it"
+    )]
+    pub fn with_client(client: reqwest::Client) -> Self {
+        Self {
+            client,
+            allow_http: false,
+            policy: HostPolicy::PublicOnly,
         }
     }
 
@@ -242,20 +275,31 @@ fn vet_public(url: &reqwest::Url) -> Result<(), DidWebsError> {
         .map_err(|e| DidWebsError::BlockedHost(e.to_string()))
 }
 
-/// The HTTP client [`WebsResolver::with_policy`] builds.
-fn default_client(policy: HostPolicy) -> reqwest::Client {
-    let mut builder = reqwest::Client::builder()
+/// The defaults a caller's builder starts from. Applied first, so the caller
+/// may override them.
+fn default_settings(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    builder
         .user_agent(concat!("affinidi-did-webs/", env!("CARGO_PKG_VERSION")))
         .timeout(DEFAULT_TIMEOUT)
-        // The DID names the host. Following a redirect lets that host send
-        // the resolver to an internal address the literal check never saw.
-        .redirect(reqwest::redirect::Policy::none());
-    if policy == HostPolicy::PublicOnly {
-        builder = builder.dns_resolver(affinidi_net_guard::guarded_dns_resolver(
-            affinidi_net_guard::EgressPolicy::public_internet(),
-        ));
+}
+
+/// The guard settings. Applied last, so nothing set before can undo them.
+fn guard(builder: reqwest::ClientBuilder, policy: HostPolicy) -> reqwest::ClientBuilder {
+    // The DID names the host. Following a redirect lets that host send the
+    // resolver to an internal address the literal check never saw.
+    let builder = builder
+        .redirect(reqwest::redirect::Policy::none())
+        .referer(false);
+    match policy {
+        HostPolicy::AllowPrivate => builder,
+        // A proxy resolves the hostname itself, so the guarded resolver would
+        // see only the proxy's name.
+        HostPolicy::PublicOnly => builder
+            .dns_resolver(affinidi_net_guard::guarded_dns_resolver(
+                affinidi_net_guard::EgressPolicy::public_internet(),
+            ))
+            .no_proxy(),
     }
-    builder.build().unwrap_or_default()
 }
 
 impl Default for WebsResolver {
