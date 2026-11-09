@@ -70,7 +70,7 @@ cargo build -p affinidi-did-resolver-cache-server --features network
 cargo build -p affinidi-did-resolver-cache-server --no-default-features
 ```
 
-The DID methods the server resolves (did:web, did:webvh, did:cheqd, did:scid,
+The DID methods the server resolves (did:web, did:webvh, did:webs, did:cheqd, did:scid,
 did:ethr, did:pkh, did:jwk, did:ebsi, did:key, did:peer) are configured via
 the `affinidi-did-resolver-cache-sdk` dependency's own feature flags. If you
 need a different method mix, edit the SDK's default feature set at
