@@ -12,6 +12,16 @@
 //!   (both from that connection's `ready` event), gone when it closes.
 //! - [`sign_revoke_all`]: voids every grant the member issued under an epoch.
 //!
+//! The mediator also stores durable `messaging/mux/notice` documents in the
+//! principal's (or, for `grantsPresent`, the member's) inbox: grants
+//! suspended (recreate them), revoked, expiring, or present on a DID. On a mux
+//! connection the transport verifies each one and hands it to
+//! [`ATMProfile::mux_notices`](crate::profiles::ATMProfile::mux_notices)
+//! instead of the ordinary message stream; acknowledge it with
+//! [`ack_mux_notice`] once handled, which deletes it. Elsewhere use
+//! [`verify_mux_notice`] on a received message. The `ready` event's
+//! [`MuxReady::pending_notices`] says how many wait.
+//!
 //! **Nothing here happens by default.** Every grant and attach is an explicit
 //! call with an explicit scope; there is no implicit membership, renewal or
 //! re-attach.
@@ -43,12 +53,17 @@ const NOTICE_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/notice/0.1"
 /// to. A new value arrives with every (re)connect; the nonce from an earlier
 /// connection is useless on a new one.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MuxReady {
     pub session_id: String,
     pub mux_nonce: String,
     pub max_dids_per_connection: Option<u64>,
     pub max_attach_lifetime_seconds: Option<u64>,
     pub max_grant_lifetime_seconds: Option<u64>,
+    /// How many `messaging/mux/notice` documents wait in the principal's
+    /// inbox. Non-zero means drain them before trusting the member set.
+    /// `None` from a mediator that does not report it.
+    pub pending_notices: Option<u64>,
 }
 
 impl MuxReady {
@@ -63,6 +78,7 @@ impl MuxReady {
             max_dids_per_connection: u("maxDidsPerConnection"),
             max_attach_lifetime_seconds: u("maxAttachLifetimeSeconds"),
             max_grant_lifetime_seconds: u("maxGrantLifetimeSeconds"),
+            pending_notices: u("pendingNotices"),
         })
     }
 }
@@ -71,12 +87,30 @@ impl MuxReady {
 /// `refused`), as the generated type.
 pub type MuxEvent = mux::event::v0_1::Payload;
 
+/// A `messaging/mux/notice` payload (`grantsSuspended`, `grantsRevoked`,
+/// `grantsExpiring`, `grantsPresent`), as the generated type.
+pub type MuxNotice = mux::notice::v0_1::Payload;
+
+/// A durable notice delivered on a mux connection, already verified (its
+/// proof, and that the profile's mediator issued it). It stays in the inbox
+/// until [`ack_mux_notice`] deletes it, so one not acknowledged is delivered
+/// again on the next connection (at least once). The same notice may arrive
+/// twice: `document.id` identifies it.
+#[derive(Clone, Debug)]
+pub struct MuxNoticeDelivery {
+    /// The signed notice document.
+    pub document: TrustTask<MuxNotice>,
+    /// The stored message's id at the mediator, for [`ack_mux_notice`].
+    pub message_id: String,
+}
+
 /// The receive side of a mux connection, installed on the profile's
 /// mediator by the websocket transport.
 #[derive(Debug)]
 pub(crate) struct MuxHandles {
     pub(crate) ready_rx: tokio::sync::watch::Receiver<Option<MuxReady>>,
     pub(crate) events_tx: tokio::sync::broadcast::Sender<MuxEvent>,
+    pub(crate) notices_tx: tokio::sync::broadcast::Sender<MuxNoticeDelivery>,
 }
 
 /// The transport's half of [`MuxHandles`].
@@ -84,6 +118,9 @@ pub(crate) struct MuxHandles {
 pub(crate) struct MuxSides {
     pub(crate) ready_tx: tokio::sync::watch::Sender<Option<MuxReady>>,
     pub(crate) events_tx: tokio::sync::broadcast::Sender<MuxEvent>,
+    pub(crate) notices_tx: tokio::sync::broadcast::Sender<MuxNoticeDelivery>,
+    /// The profile's mediator: the only issuer a notice is accepted from.
+    pub(crate) mediator_did: String,
 }
 
 impl MuxSides {
@@ -105,6 +142,34 @@ impl MuxSides {
         }
         let _ = self.events_tx.send(task.payload);
         true
+    }
+}
+
+impl MuxSides {
+    /// Take a durable notice out of the ordinary message stream: verify it,
+    /// then hand it to [`ATMProfile::mux_notices`] subscribers. Returns
+    /// whether it was taken. A notice that does not verify, or that nobody
+    /// is subscribed to, stays an ordinary message (it is still in the inbox
+    /// either way; nothing is deleted here).
+    ///
+    /// [`ATMProfile::mux_notices`]: crate::profiles::ATMProfile::mux_notices
+    pub(crate) async fn take_notice(&self, atm: &ATM, message: &Message, message_id: &str) -> bool {
+        if decode_mux_notice(message).is_none() || self.notices_tx.receiver_count() == 0 {
+            return false;
+        }
+        match verify_mux_notice(atm, message, &self.mediator_did).await {
+            Ok(document) => self
+                .notices_tx
+                .send(MuxNoticeDelivery {
+                    document,
+                    message_id: message_id.to_string(),
+                })
+                .is_ok(),
+            Err(e) => {
+                warn!(error = %e, "a mux notice did not verify; passing it on as an ordinary message");
+                false
+            }
+        }
     }
 }
 
@@ -285,6 +350,65 @@ pub fn decode_mux_notice(message: &Message) -> Option<TrustTask<mux::notice::v0_
     decode(message, NOTICE_TYPE)
 }
 
+/// Verify a received `messaging/mux/notice` before acting on it (spec consumer
+/// rule 1): its Data Integrity proof verifies, binds to its `issuer`, and
+/// that issuer is `mediator_did`. Returns the typed notice.
+pub async fn verify_mux_notice(
+    atm: &ATM,
+    message: &Message,
+    mediator_did: &str,
+) -> Result<TrustTask<MuxNotice>, ATMError> {
+    use std::sync::Arc;
+    use trust_tasks_proof::affinidi::CachedDidResolver;
+    let resolver = CachedDidResolver::new(Arc::new(atm.inner.tdk_common.did_resolver().clone()));
+    verify_notice_with(Arc::new(resolver), message, mediator_did).await
+}
+
+async fn verify_notice_with(
+    resolver: std::sync::Arc<dyn trust_tasks_proof::affinidi::ProofPurposeResolver>,
+    message: &Message,
+    mediator_did: &str,
+) -> Result<TrustTask<MuxNotice>, ATMError> {
+    use trust_tasks_proof::affinidi::Verifier;
+    let document = decode_mux_notice(message)
+        .ok_or_else(|| ATMError::MsgReceiveError("not a messaging/mux/notice".to_string()))?;
+    if message.body.get("issuer").and_then(Value::as_str) != Some(mediator_did) {
+        return Err(ATMError::MsgReceiveError(format!(
+            "mux notice not issued by the mediator {mediator_did}"
+        )));
+    }
+    Verifier::with_resolver(resolver)
+        .verify_raw(&message.body)
+        .await
+        .map_err(|e| ATMError::MsgReceiveError(format!("mux notice proof: {e}")))?;
+    Ok(document)
+}
+
+/// Acknowledge a handled notice: delete it from the inbox (spec consumer
+/// rule 2). Call only after acting on it; until then it is redelivered.
+pub async fn ack_mux_notice(
+    atm: &ATM,
+    profile: &std::sync::Arc<crate::profiles::ATMProfile>,
+    delivery: &MuxNoticeDelivery,
+) -> Result<(), ATMError> {
+    let r = atm
+        .delete_messages_direct(
+            profile,
+            &crate::messages::DeleteMessageRequest {
+                message_ids: vec![delivery.message_id.clone()],
+            },
+        )
+        .await?;
+    if r.success.iter().any(|id| id == &delivery.message_id) {
+        Ok(())
+    } else {
+        Err(ATMError::MsgSendError(format!(
+            "mux notice {} not deleted: {:?}",
+            delivery.message_id, r.errors
+        )))
+    }
+}
+
 /// Which DID an unpacked message on a mux connection was for: the DID of the
 /// first key it was encrypted to. A dispatcher routes on this (R1.7: one demux
 /// owner per socket) so each member's consumer sees only its own messages.
@@ -323,14 +447,18 @@ mod tests {
     async fn the_transport_absorbs_events_and_tracks_ready() {
         let (ready_tx, mut ready_rx) = tokio::sync::watch::channel(None);
         let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(4);
+        let (notices_tx, _) = tokio::sync::broadcast::channel(4);
         let sides = MuxSides {
             ready_tx,
             events_tx,
+            notices_tx,
+            mediator_did: "did:example:m".to_string(),
         };
 
         let ready = event_message(json!({
             "event": "ready", "sessionId": "sess", "muxNonce": NONCE,
             "maxDidsPerConnection": 10, "maxAttachLifetimeSeconds": 600,
+            "pendingNotices": 2,
         }));
         assert!(
             sides.absorb(&ready),
@@ -341,6 +469,7 @@ mod tests {
         assert_eq!(got.session_id, "sess");
         assert_eq!(got.mux_nonce, NONCE);
         assert_eq!(got.max_dids_per_connection, Some(10));
+        assert_eq!(got.pending_notices, Some(2));
         assert_eq!(
             serde_json::to_value(events_rx.recv().await.unwrap()).unwrap()["event"],
             "ready"
@@ -372,5 +501,85 @@ mod tests {
         let ev = decode_mux_event(&msg).expect("a ready event");
         assert_eq!(serde_json::to_value(&ev.payload).unwrap()["event"], "ready");
         assert!(decode_mux_notice(&msg).is_none());
+    }
+
+    async fn signed_notice(secret: &Secret, issuer: &str) -> Message {
+        let doc = json!({
+            "id": "urn:uuid:5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d01",
+            "type": NOTICE_TYPE,
+            "issuer": issuer,
+            "recipient": "did:example:phone",
+            "issuedAt": "2026-11-09T10:42:17Z",
+            "payload": {
+                "notice": "grantsSuspended",
+                "suspensions": [{
+                    "did": "did:example:work",
+                    "grantIds": ["g1"],
+                    "reason": "suspendedUnknownKey",
+                    "suspendedAt": "2026-11-09T10:42:17Z"
+                }]
+            }
+        });
+        let signed = sign_trust_task(&doc, secret, SignOptions::new())
+            .await
+            .unwrap();
+        Message::build("n1".to_string(), ENVELOPE_TYPE.to_string(), signed).finalize()
+    }
+
+    fn mediator_key() -> (String, Secret) {
+        let seed = [7u8; 32];
+        let mb = Secret::generate_ed25519(None, Some(&seed))
+            .get_public_keymultibase()
+            .unwrap();
+        let did = format!("did:key:{mb}");
+        let secret = Secret::generate_ed25519(Some(&format!("{did}#{mb}")), Some(&seed));
+        (did, secret)
+    }
+
+    #[tokio::test]
+    async fn a_notice_is_accepted_only_from_the_mediator_with_a_valid_proof() {
+        use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+        use std::sync::Arc;
+        use trust_tasks_proof::affinidi::CachedDidResolver;
+        let client = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let resolver: Arc<dyn trust_tasks_proof::affinidi::ProofPurposeResolver> =
+            Arc::new(CachedDidResolver::new(Arc::new(client)));
+        let (mediator, secret) = mediator_key();
+        let msg = signed_notice(&secret, &mediator).await;
+
+        let n = verify_notice_with(resolver.clone(), &msg, &mediator)
+            .await
+            .expect("the mediator's signed notice");
+        assert_eq!(
+            serde_json::to_value(&n.payload).unwrap()["notice"],
+            "grantsSuspended"
+        );
+
+        // Issued by anyone else: refused, even with a valid proof.
+        assert!(
+            verify_notice_with(resolver.clone(), &msg, "did:example:other-mediator")
+                .await
+                .is_err()
+        );
+
+        // Tampered after signing: the proof no longer verifies.
+        let mut forged = msg.clone();
+        forged.body["payload"]["suspensions"][0]["grantIds"] = json!(["g2"]);
+        assert!(
+            verify_notice_with(resolver.clone(), &forged, &mediator)
+                .await
+                .is_err()
+        );
+
+        // Unsigned: refused.
+        let mut unsigned = msg.clone();
+        unsigned.body.as_object_mut().unwrap().remove("proof");
+        assert!(
+            verify_notice_with(resolver.clone(), &unsigned, &mediator)
+                .await
+                .is_err()
+        );
     }
 }

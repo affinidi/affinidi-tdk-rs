@@ -356,7 +356,10 @@ impl WebSocketTransport {
         let mux_sides = if mux {
             let (ready_tx, ready_rx) = watch::channel(None);
             let (events_tx, _) = broadcast::channel(crate::protocols::mux::MUX_EVENT_CAPACITY);
+            let (notices_tx, _) = broadcast::channel(crate::protocols::mux::MUX_EVENT_CAPACITY);
+            let mut mediator_did = String::new();
             if let Some(mediator) = profile.inner.mediator.as_ref().as_ref() {
+                mediator_did = mediator.did.clone();
                 mediator
                     .mux
                     .write()
@@ -364,11 +367,14 @@ impl WebSocketTransport {
                     .replace(crate::protocols::mux::MuxHandles {
                         ready_rx,
                         events_tx: events_tx.clone(),
+                        notices_tx: notices_tx.clone(),
                     });
             }
             Some(crate::protocols::mux::MuxSides {
                 ready_tx,
                 events_tx,
+                notices_tx,
+                mediator_did,
             })
         } else {
             None
@@ -1011,6 +1017,14 @@ impl WebSocketTransport {
                 // there is nothing to delete.
                 if let Some(mux) = &self.mux
                     && mux.absorb(&message)
+                {
+                    return;
+                }
+                // Durable notices go to `ATMProfile::mux_notices`, verified,
+                // when someone is listening. They stay stored until the
+                // application acknowledges them.
+                if let Some(mux) = &self.mux
+                    && mux.take_notice(atm, &message, &metadata.sha256_hash).await
                 {
                     return;
                 }

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.45.2 — DID multiplexing notices
+
+Durable `messaging/mux/notice/0.1` documents (grants suspended, revoked,
+expiring, or present on a DID) on the client side. Mediator side:
+affinidi-messaging-mediator with mux notices (0.52).
+
+- `ATMProfile::mux_notices()`: verified notices arriving on the profile's mux
+  connection. While anything is subscribed, notices are taken out of the
+  ordinary message stream; with no subscriber they arrive as ordinary
+  messages, as before. A notice stays in the inbox until
+  `protocols::mux::ack_mux_notice` deletes it, so one not acknowledged is
+  delivered again on the next connection.
+- `protocols::mux::verify_mux_notice`: check a received notice before acting
+  on it. Its Data Integrity proof must verify, bind to its `issuer`, and that
+  issuer must be the profile's mediator. A notice that fails is never
+  handed to `mux_notices()`.
+- `MuxReady::pending_notices`: how many notices wait in the principal's
+  inbox (the `ready` event's `pendingNotices`). `MuxReady` is now
+  `#[non_exhaustive]`; it is produced by the SDK, never built by callers.
+
+Nothing changes unless the application subscribes: no notice is deleted,
+and nothing grants, renews or recreates anything on its own.
+
 ## 0.45.1 — DID multiplexing client (`messaging/mux/*/0.1`)
 
 One mediator WebSocket can now carry many DIDs. The profile that opens it is

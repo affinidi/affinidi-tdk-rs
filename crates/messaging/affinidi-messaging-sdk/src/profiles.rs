@@ -274,6 +274,23 @@ impl ATMProfile {
             .map(|h| h.events_tx.subscribe())
     }
 
+    /// Durable `messaging/mux/notice` documents arriving on this profile's
+    /// mux connection, verified. While at least one receiver exists they are
+    /// taken out of the ordinary message stream; acknowledge each with
+    /// [`ack_mux_notice`](crate::protocols::mux::ack_mux_notice) once handled.
+    /// `None` when there is no mux connection.
+    pub async fn mux_notices(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<crate::protocols::mux::MuxNoticeDelivery>> {
+        let mediator = self.inner.mediator.as_ref().as_ref()?;
+        mediator
+            .mux
+            .read()
+            .await
+            .as_ref()
+            .map(|h| h.notices_tx.subscribe())
+    }
+
     /// Drop the current websocket and connect again at once, without backoff.
     ///
     /// The fresh connect re-authenticates and re-enables live delivery, which
