@@ -17,7 +17,7 @@
 //! the price of an alias meaning anything: a document that merely claims one is
 //! claiming it about itself.
 
-use affinidi_keri::hab::Hab;
+use crate::signing::Controller;
 use affinidi_keri_core::sad;
 use affinidi_keri_core::sad::{SadMap, SadValue};
 use affinidi_keri_core::said;
@@ -58,7 +58,10 @@ pub(crate) fn designation(did: &DidWebs, extra: &[String]) -> Vec<String> {
 ///
 /// # Errors
 /// Returns [`DidWebsError::Create`] if the event cannot be built or anchored.
-pub(crate) fn revoke(hab: &mut Hab, attestation: &Designation) -> Result<Vec<u8>, DidWebsError> {
+pub(crate) fn revoke(
+    hab: &mut dyn Controller,
+    attestation: &Designation,
+) -> Result<Vec<u8>, DidWebsError> {
     let mut rev = sad!({
         "v": "KERI10JSON000000_",
         "t": "rev",
@@ -76,7 +79,7 @@ pub(crate) fn revoke(hab: &mut Hab, attestation: &Designation) -> Result<Vec<u8>
         .map_err(|e| DidWebsError::Create(format!("revocation: {e}")))?;
 
     let anchor = hab
-        .interact_event(&[sad!({ "i": attestation.said, "s": "1", "d": rev_said })])
+        .interact(&[sad!({ "i": attestation.said, "s": "1", "d": rev_said })])
         .map_err(|e| DidWebsError::Create(format!("anchoring the revocation: {e}")))?;
 
     let mut out = anchor.composed;
@@ -116,7 +119,7 @@ fn rules() -> SadValue {
 /// Returns [`DidWebsError::Create`] if any part of the chain cannot be built,
 /// signed, or anchored.
 pub(crate) fn issue_designated_aliases(
-    hab: &mut Hab,
+    hab: &mut dyn Controller,
     aid: &str,
     establishment_said: &str,
     aliases: &[String],
@@ -144,7 +147,7 @@ pub(crate) fn issue_designated_aliases(
 /// current key state — the change authority must not double as an encryption
 /// key, and a resolver drops one that does.
 pub(crate) fn issue_key_agreement(
-    hab: &mut Hab,
+    hab: &mut dyn Controller,
     aid: &str,
     establishment_said: &str,
     keys: &[crate::key_agreement::KeyAgreementKey],
@@ -155,10 +158,9 @@ pub(crate) fn issue_key_agreement(
         ));
     }
     let signing: Vec<Vec<u8>> = hab
-        .signers()
+        .current_keys()?
         .iter()
-        .filter_map(|s| s.verfer().qb64().ok())
-        .filter_map(|k| affinidi_cesr::Matter::from_qb64(&k).ok())
+        .filter_map(|k| affinidi_cesr::Matter::from_qb64(k).ok())
         .map(|m| m.raw().to_vec())
         .collect();
     let mut encoded = Vec::with_capacity(keys.len());
@@ -198,7 +200,7 @@ pub(crate) fn issue_key_agreement(
 /// [`DidWebsError::InvalidKey`] if a key is not one its role binds or is a key
 /// of the key state or of its next-key commitment.
 pub(crate) fn issue_key_roles(
-    hab: &mut Hab,
+    hab: &mut dyn Controller,
     aid: &str,
     establishment_said: &str,
     state: &affinidi_keri_core::key_state::KeyState,
@@ -276,7 +278,7 @@ pub(crate) fn issue_key_roles(
 /// Returns [`DidWebsError::Create`] if `services` is empty, an entry is not a
 /// service a DID document can carry, or two share an `id`.
 pub(crate) fn issue_services(
-    hab: &mut Hab,
+    hab: &mut dyn Controller,
     aid: &str,
     establishment_said: &str,
     services: &[crate::designated_services::DesignatedService],
@@ -342,7 +344,7 @@ pub(crate) fn rules_from_schema(schema_json: &str) -> Result<SadValue, DidWebsEr
 /// Returns [`DidWebsError::Create`] if any part of the chain cannot be built,
 /// signed, or anchored.
 pub(crate) fn issue(
-    hab: &mut Hab,
+    hab: &mut dyn Controller,
     aid: &str,
     establishment_said: &str,
     schema: &str,
@@ -371,7 +373,7 @@ pub(crate) fn issue(
 
     // 2. Anchor it. Without this the registry is just a document somebody wrote.
     let anchor_registry = hab
-        .interact_event(&[sad!({ "i": registry, "s": "0", "d": registry })])
+        .interact(&[sad!({ "i": registry, "s": "0", "d": registry })])
         .map_err(|e| DidWebsError::Create(format!("anchoring the registry: {e}")))?;
 
     // 3. The credential.
@@ -402,7 +404,7 @@ pub(crate) fn issue(
     // 5. Anchor the issuance too — the registry existing does not say anything
     //    was issued in it.
     let anchor_issuance = hab
-        .interact_event(&[sad!({ "i": acdc_said, "s": "0", "d": iss_said })])
+        .interact(&[sad!({ "i": acdc_said, "s": "0", "d": iss_said })])
         .map_err(|e| DidWebsError::Create(format!("anchoring the issuance: {e}")))?;
 
     // Key events first, in order, then the transaction events and the
@@ -473,15 +475,12 @@ fn fix_acdc_version(sad: &mut SadValue) -> Result<(), DidWebsError> {
 /// A registry nonce, derived from the identifier's own key material and the
 /// point its log has reached, so that creating the same identifier twice yields
 /// the same registry while each later designation gets a registry of its own.
-fn nonce(hab: &Hab) -> Result<String, DidWebsError> {
-    let signer = hab
-        .signers()
-        .first()
+fn nonce(hab: &dyn Controller) -> Result<String, DidWebsError> {
+    let key = hab
+        .current_keys()?
+        .into_iter()
+        .next()
         .ok_or_else(|| DidWebsError::Create("identifier has no signing key".into()))?;
-    let key = signer
-        .verfer()
-        .qb64()
-        .map_err(|e| DidWebsError::Create(format!("key: {e}")))?;
 
     let seed = format!("{key}:{}", hab.sn());
     let digest = affinidi_keri_crypto::Diger::from_data("E", seed.as_bytes())

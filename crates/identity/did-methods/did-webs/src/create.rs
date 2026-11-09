@@ -39,7 +39,8 @@
 //! [`KeriStore`]: affinidi_keri_db::KeriStore
 
 use affinidi_keri::config::InceptionConfig;
-use affinidi_keri::hab::Hab;
+use affinidi_keri::controller::{ControllerState, Inception, KeySigner};
+use affinidi_keri::hab::{Hab, SignedEvent};
 
 use crate::artifacts::Artifacts;
 use crate::custody::KeyCustody;
@@ -102,6 +103,10 @@ pub struct CreateConfig {
     /// state's, and `messaging` takes the place of `key_agreement`, which must
     /// then be empty.
     pub key_roles: Option<KeyRoles>,
+    /// Inception from keys the caller holds, for [`create_controlled`]: the
+    /// current keys, the committed successors and their thresholds. When set,
+    /// `inception` is not used.
+    pub controlled: Option<Inception>,
 }
 
 impl CreateConfig {
@@ -117,6 +122,7 @@ impl CreateConfig {
                 key_agreement: Vec::new(),
                 designated_services: Vec::new(),
                 key_roles: None,
+                controlled: None,
             },
         }
     }
@@ -173,6 +179,12 @@ impl CreateConfigBuilder {
         self
     }
 
+    /// Incept from keys the caller holds (see [`create_controlled`]).
+    pub fn controlled(mut self, inception: Inception) -> Self {
+        self.config.controlled = Some(inception);
+        self
+    }
+
     /// Finish.
     pub fn build(self) -> CreateConfig {
         self.config
@@ -221,15 +233,117 @@ impl CreateResult {
 /// do not resolve back — which would mean this crate had emitted something its
 /// own resolver rejects.
 pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
+    if config.controlled.is_some() {
+        return Err(DidWebsError::Create(
+            "this configuration incepts from caller-held keys; use create_controlled".into(),
+        ));
+    }
     let (mut hab, inception) = Hab::incept_event("did:webs", &config.inception)
         .map_err(|e| DidWebsError::Create(format!("inception failed: {e}")))?;
+    let (did, keri_cesr) = build(&config, &mut hab, inception)?;
+    let artifacts = artifacts_for(&did, &keri_cesr)?;
 
+    Ok(CreateResult {
+        did: did.did().to_string(),
+        artifacts,
+        custody: KeyCustody::new(hab.state()),
+    })
+}
+
+/// An identifier created or updated from caller-held keys.
+#[derive(Debug, Clone)]
+pub struct ControlledResult {
+    did: String,
+    artifacts: Artifacts,
+    state: ControllerState,
+}
+
+impl ControlledResult {
+    /// The `did:webs` identifier.
+    pub fn did(&self) -> &str {
+        &self.did
+    }
+
+    /// The bytes to publish, replacing any previous ones.
+    pub fn artifacts(&self) -> &Artifacts {
+        &self.artifacts
+    }
+
+    /// The state to continue from, which **replaces** any previous one.
+    /// Nothing in it is secret.
+    pub fn state(&self) -> &ControllerState {
+        &self.state
+    }
+
+    /// Take the artifacts and state.
+    pub fn into_parts(self) -> (Artifacts, ControllerState) {
+        (self.artifacts, self.state)
+    }
+
+    pub(crate) fn new(did: String, artifacts: Artifacts, state: ControllerState) -> Self {
+        Self {
+            did,
+            artifacts,
+            state,
+        }
+    }
+}
+
+/// Create a `did:webs` identifier from keys the caller holds.
+///
+/// [`CreateConfig::controlled`] gives the current keys, the successors as
+/// digests or public keys — a recovery custodian's key can be committed by its
+/// digest alone — and the thresholds. `signers` hold the current keys and
+/// must meet the signing threshold; they sign the inception event and every
+/// event and message that follows it here. No secret enters or leaves this
+/// crate.
+///
+/// # Errors
+/// As [`create`], and [`DidWebsError::Create`] if `controlled` is not set or
+/// the signers do not meet the signing threshold.
+pub fn create_controlled(
+    config: CreateConfig,
+    signers: &[&dyn KeySigner],
+) -> Result<ControlledResult, DidWebsError> {
+    let inception = config.controlled.as_ref().ok_or_else(|| {
+        DidWebsError::Create("create_controlled needs CreateConfig::controlled".into())
+    })?;
+    let mut pending = affinidi_keri::controller::incept(inception)
+        .map_err(|e| DidWebsError::Create(format!("inception failed: {e}")))?;
+    for signer in signers {
+        pending
+            .sign_with(*signer)
+            .map_err(|e| DidWebsError::Create(format!("inception: {e}")))?;
+    }
+    let (event, state) = pending.finish().map_err(|e| {
+        DidWebsError::Create(format!(
+            "the signers given do not meet the signing threshold: {e}"
+        ))
+    })?;
+    let mut held = crate::signing::Held::new(state, signers)?;
+    let (did, keri_cesr) = build(&config, &mut held, event)?;
+    let artifacts = artifacts_for(&did, &keri_cesr)?;
+    Ok(ControlledResult::new(
+        did.did().to_string(),
+        artifacts,
+        held.state,
+    ))
+}
+
+/// Everything after inception, whoever signs: the designations and endpoint
+/// replies every created identifier carries.
+fn build(
+    config: &CreateConfig,
+    hab: &mut dyn crate::signing::Controller,
+    inception: SignedEvent,
+) -> Result<(DidWebs, Vec<u8>), DidWebsError> {
     let aid = hab.prefix().to_string();
     let did = DidWebs::parse(&format!("did:webs:{}:{aid}", config.host))
         .map_err(|e| DidWebsError::Create(format!("{} is not a usable host: {e}", config.host)))?;
 
     let establishment_said = inception.said.clone();
     let mut keri_cesr = inception.composed;
+    let hab = &mut *hab;
 
     // Aliases are published as a signed attestation the identifier issues to
     // itself. The document is not allowed to simply claim them — and the DID
@@ -239,12 +353,8 @@ pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
         extra.push(format!("did:scid:ke:1:{aid}?src={}", config.host));
     }
     let aliases = crate::attestation::designation(&did, &extra);
-    let attestation = crate::attestation::issue_designated_aliases(
-        &mut hab,
-        &aid,
-        &establishment_said,
-        &aliases,
-    )?;
+    let attestation =
+        crate::attestation::issue_designated_aliases(hab, &aid, &establishment_said, &aliases)?;
     keri_cesr.extend_from_slice(&attestation);
 
     // Key roles: the role keys replace the key state's in the document, and
@@ -259,7 +369,7 @@ pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
         }
         let state = crate::kel::Kels::parse(&keri_cesr)?.key_state(&aid)?;
         keri_cesr.extend_from_slice(&crate::attestation::issue_key_roles(
-            &mut hab,
+            hab,
             &aid,
             &establishment_said,
             &state,
@@ -272,7 +382,7 @@ pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
     // that either can be replaced without touching the other.
     if !config.key_agreement.is_empty() {
         keri_cesr.extend_from_slice(&crate::attestation::issue_key_agreement(
-            &mut hab,
+            hab,
             &aid,
             &establishment_said,
             &config.key_agreement,
@@ -280,7 +390,7 @@ pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
     }
     if !config.designated_services.is_empty() {
         keri_cesr.extend_from_slice(&crate::attestation::issue_services(
-            &mut hab,
+            hab,
             &aid,
             &establishment_said,
             &config.designated_services,
@@ -292,7 +402,7 @@ pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
     // document's word for it.
     if !config.services.is_empty() {
         let replies = crate::endpoints::self_designated_replies(
-            &hab,
+            hab,
             &aid,
             &establishment_said,
             &config.services,
@@ -300,13 +410,7 @@ pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
         keri_cesr.extend_from_slice(&replies);
     }
 
-    let artifacts = artifacts_for(&did, &keri_cesr)?;
-
-    Ok(CreateResult {
-        did: did.did().to_string(),
-        artifacts,
-        custody: KeyCustody::new(hab.state()),
-    })
+    Ok((did, keri_cesr))
 }
 
 /// Build the published artifacts from a key event log, by resolving it.
