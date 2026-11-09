@@ -2,6 +2,33 @@
 
 All notable changes to this crate are documented here.
 
+## [0.9.1] - 2026-11-09
+
+### Added
+
+- **Key role designations — a proposed extension to `did:webs`, as a proof of
+  concept** (`key_roles`, [docs/key-role-designation.md](docs/key-role-designation.md)).
+  An AID binds other keys to roles — `attestation` (`assertionMethod`),
+  `operational` (`authentication`), `messaging` (`keyAgreement`) — by an ACDC
+  it issues to itself and anchors in its KEL (schema
+  `EPulJFl5SEb8qb3ca5teXHRGiWmTsTkylGTrS2vB4ZQx`). Once it has, its document
+  lists the role keys, each in its role's relationship only, a top-level
+  `keyRoles`, and no key of the key state: the KEL alone is the update
+  authority. Keys revoked for compromise stay listed with `revoked`, in no
+  relationship, for the life of the identifier; the resolver reads them from
+  every designation ever issued, so a later one cannot drop a revocation.
+  A designation that does not verify as a whole binds nothing, and the
+  document never falls back to the key state's keys.
+- `KeyRoles`, `KeyRole`, `VerificationKey`, `RevokedKey`,
+  `designated_key_roles`, `document::derive_key_role_document`;
+  `CreateConfigBuilder::key_roles`; `Change::KeyRoles` and
+  `Change::RevokeRoleKey`.
+
+Identifiers that issue no key role designation resolve exactly as before. A
+resolver that does not implement the extension refuses the `did.json` of one
+that does — the interoperability gap adopting it in the specification would
+close.
+
 ## [0.9.0] - 2026-11-09
 
 ### Changed (breaking)

@@ -185,6 +185,91 @@ pub(crate) fn issue_key_agreement(
     )
 }
 
+/// Issue a key role designation (see [`crate::key_roles`]).
+///
+/// `state` is the key state the designation is issued under, and
+/// `prior_revoked` every key an earlier key role designation revoked: each is
+/// carried forward, so a revocation for compromise is never dropped
+/// (VTI-KEY-127).
+///
+/// # Errors
+/// Returns [`DidWebsError::Create`] if no key is bound, a key is bound twice
+/// or both bound and revoked, or a compromise time is not RFC 3339, and
+/// [`DidWebsError::InvalidKey`] if a key is not one its role binds or is a key
+/// of the key state or of its next-key commitment.
+pub(crate) fn issue_key_roles(
+    hab: &mut Hab,
+    aid: &str,
+    establishment_said: &str,
+    state: &affinidi_keri_core::key_state::KeyState,
+    roles: &crate::key_roles::KeyRoles,
+    prior_revoked: &[crate::key_roles::RevokedKey],
+) -> Result<Vec<u8>, DidWebsError> {
+    use crate::key_roles::{RevokedKey, check_role_key, raw_of, revoked_key_jwk, role_key_jwk};
+
+    // Every earlier revocation, then the new ones; the earlier time stands.
+    let mut revoked: Vec<RevokedKey> = prior_revoked.to_vec();
+    for entry in &roles.revoked {
+        chrono::DateTime::parse_from_rfc3339(&entry.compromised_at).map_err(|e| {
+            DidWebsError::Create(format!(
+                "compromise time {:?} of {} is not RFC 3339: {e}",
+                entry.compromised_at, entry.key
+            ))
+        })?;
+        revoked_key_jwk(&entry.key).map_err(DidWebsError::InvalidKey)?;
+        if !revoked.iter().any(|r| r.key == entry.key) {
+            revoked.push(entry.clone());
+        }
+    }
+
+    // A designation binding no key is still a statement when it revokes one:
+    // the last key of an identifier can be compromised too.
+    let encoded = roles.encoded()?;
+    if encoded.iter().all(|(_, keys)| keys.is_empty()) && revoked.is_empty() {
+        return Err(DidWebsError::Create(
+            "a key role designation that binds and revokes no key designates nothing".into(),
+        ));
+    }
+    let mut seen: Vec<Vec<u8>> = Vec::new();
+    let mut role_map = SadMap::new();
+    for (role, keys) in &encoded {
+        if keys.is_empty() {
+            continue;
+        }
+        for key in keys {
+            role_key_jwk(*role, key).map_err(DidWebsError::InvalidKey)?;
+            check_role_key(key, &state.keys, &state.next_keys, &revoked)
+                .map_err(DidWebsError::InvalidKey)?;
+            let raw = raw_of(key).ok_or_else(|| DidWebsError::InvalidKey(key.clone()))?;
+            if seen.contains(&raw) {
+                return Err(DidWebsError::Create(format!(
+                    "{key} is bound to more than one role"
+                )));
+            }
+            seen.push(raw);
+        }
+        role_map.insert(role.name().into(), sad!(keys));
+    }
+
+    let mut attributes = SadMap::new();
+    attributes.insert("roles".into(), SadValue::Object(role_map));
+    if !revoked.is_empty() {
+        let entries: Vec<SadValue> = revoked
+            .iter()
+            .map(|r| sad!({ "key": r.key, "compromisedAt": r.compromised_at }))
+            .collect();
+        attributes.insert("revoked".into(), SadValue::Array(entries));
+    }
+    issue(
+        hab,
+        aid,
+        establishment_said,
+        crate::key_roles::KEY_ROLE_SCHEMA,
+        SadValue::Object(attributes),
+        rules_from_schema(crate::key_roles::KEY_ROLE_SCHEMA_JSON)?,
+    )
+}
+
 /// Issue a service designation for `services`.
 ///
 /// # Errors

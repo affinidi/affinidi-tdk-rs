@@ -13,7 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use affinidi_did_webs::create::{CreateConfig, SelfEndpoint, create};
 use affinidi_did_webs::update::{Change, UpdateConfig, update};
-use affinidi_did_webs::{DesignatedService, Kels, KeyAgreementKey};
+use affinidi_did_webs::{
+    DesignatedService, Kels, KeyAgreementKey, KeyRoles, RevokedKey, VerificationKey,
+};
 use affinidi_keri::config::{InceptionConfig, RotationConfig};
 use affinidi_keri_core::SadValue;
 use serde_json::json;
@@ -63,11 +65,32 @@ fn every_built_message_is_in_keri_and_acdc_field_order() {
         SALT,
     )
     .expect("replace the aliases");
-    let rotated = update(
+    // A key role designation (a proposed extension) that revokes one key.
+    let with_roles = update(
         UpdateConfig {
             did: replaced.did().to_string(),
             prior: replaced.artifacts().clone(),
             custody: replaced.custody().clone(),
+            change: Change::KeyRoles(
+                KeyRoles::new()
+                    .with_attestation(VerificationKey::Ed25519([0x51; 32]))
+                    .with_messaging(KeyAgreementKey::X25519([0x52; 32]))
+                    .with_revoked(RevokedKey::new(
+                        VerificationKey::Ed25519([0x53; 32])
+                            .to_cesr()
+                            .expect("cesr"),
+                        "2026-11-01T00:00:00Z",
+                    )),
+            ),
+        },
+        SALT,
+    )
+    .expect("designate key roles");
+    let rotated = update(
+        UpdateConfig {
+            did: with_roles.did().to_string(),
+            prior: with_roles.artifacts().clone(),
+            custody: with_roles.custody().clone(),
             change: Change::Rotate(RotationConfig::default()),
         },
         SALT,
@@ -105,6 +128,17 @@ fn every_built_message_is_in_keri_and_acdc_field_order() {
         if kind == "acdc" {
             let attributes = &sad["a"];
             assert_eq!(&keys(attributes)[..2], ["d", "dt"], "{attributes:?}");
+            if let Some(roles) = attributes.get("roles") {
+                assert_eq!(
+                    keys(attributes),
+                    ["d", "dt", "roles", "revoked"],
+                    "{attributes:?}"
+                );
+                assert_eq!(keys(roles), ["attestation", "messaging"], "{roles:?}");
+                let entry = &attributes["revoked"].as_array().expect("a list")[0];
+                assert_eq!(keys(entry), ["key", "compromisedAt"], "{entry:?}");
+                seen.insert("key roles".to_string());
+            }
             if let Some(services) = attributes.get("services") {
                 let entry = &services.as_array().expect("a list")[0];
                 assert_eq!(
@@ -117,9 +151,19 @@ fn every_built_message_is_in_keri_and_acdc_field_order() {
         seen.insert(kind);
     }
 
-    let all: BTreeSet<String> = ["icp", "rot", "ixn", "rpy", "vcp", "iss", "rev", "acdc"]
-        .into_iter()
-        .map(String::from)
-        .collect();
+    let all: BTreeSet<String> = [
+        "icp",
+        "rot",
+        "ixn",
+        "rpy",
+        "vcp",
+        "iss",
+        "rev",
+        "acdc",
+        "key roles",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
     assert_eq!(seen, all, "the stream should carry every message type");
 }

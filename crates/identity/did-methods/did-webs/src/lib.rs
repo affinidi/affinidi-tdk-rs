@@ -18,6 +18,10 @@
  * types KERI's endpoint data cannot carry — the AID adds by designation: an
  * ACDC it issues to itself and anchors in its KEL ([`key_agreement`],
  * [`designated_services`](mod@designated_services)).
+ *
+ * [`key_roles`] is a proposed extension to the specification, built as a proof
+ * of concept: a designation binding keys to roles, so that the key state's
+ * keys, the identifier's change authority, sign nothing but key events.
  */
 
 #[cfg(feature = "create")]
@@ -42,6 +46,7 @@ pub mod fetch;
 pub mod identifier;
 pub mod kel;
 pub mod key_agreement;
+pub mod key_roles;
 pub mod resolver;
 pub mod services;
 
@@ -58,6 +63,9 @@ pub use fetch::{HostPolicy, WebsResolver, resolve};
 pub use identifier::{DID_JSON, DidWebs, KERI_CESR};
 pub use kel::Kels;
 pub use key_agreement::{DesignatedKeys, KeyAgreementKey, designated_key_agreement};
+pub use key_roles::{
+    DesignatedKeyRoles, KeyRole, KeyRoles, RevokedKey, VerificationKey, designated_key_roles,
+};
 pub use resolver::{DocumentMetadata, Resolution, resolve_from_artifacts, resolve_with_metadata};
 pub use services::{ServiceEndpoint, delegator_service, service_endpoints};
 #[cfg(feature = "create")]
