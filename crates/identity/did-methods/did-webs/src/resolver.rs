@@ -41,12 +41,14 @@ use serde_json::{Map, Value, json};
 use crate::aliases::designated_aliases;
 use crate::designated_services::designated_services;
 use crate::document::{
-    RELATIONSHIPS, derive_document, from_did_web, into_document, same_did, with_key_agreement,
+    RELATIONSHIPS, derive_document, derive_key_role_document, from_did_web, into_document,
+    same_did, with_key_agreement,
 };
 use crate::errors::DidWebsError;
 use crate::identifier::DidWebs;
 use crate::kel::Kels;
 use crate::key_agreement::{KeyAgreementKey, designated_key_agreement};
+use crate::key_roles::designated_key_roles;
 use crate::services::{delegator_service, role_endpoints, witness_endpoints};
 
 /// A resolved document with the DID document metadata the method defines.
@@ -235,6 +237,43 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
         }
     }
 
+    // Key roles, designated by the AID (a proposed extension; see
+    // `crate::key_roles`). Once the AID has designated any, the document is
+    // built from role keys alone and the key state's keys are rendered
+    // nowhere; the `messaging` role takes the place of key agreement
+    // designations.
+    let key_roles = designated_key_roles(kels, aid)?;
+    if key_roles.issued {
+        if let Some(reason) = &key_roles.rejected {
+            tracing::warn!(did = did.did(), %reason, "a key role designation binds nothing");
+        }
+        let document = derive_key_role_document(
+            did,
+            &key_roles.roles,
+            &key_roles.revoked,
+            &aliases,
+            &services,
+        )?;
+        return Ok(Derived {
+            document,
+            metadata: DocumentMetadata {
+                version_id: version,
+                next_version_id: sequence_numbers
+                    .iter()
+                    .copied()
+                    .filter(|sn| *sn > version)
+                    .min(),
+                equivalent_id,
+                deactivated: kels.is_deactivated(aid),
+            },
+            twin_designated,
+            delegation_seal: state
+                .delegator
+                .as_ref()
+                .and_then(|_| full.inception_said(aid)),
+        });
+    }
+
     // Key agreement keys, designated by the AID. A key of the current key
     // state is never one: the change authority does not double as an
     // encryption key.
@@ -289,7 +328,8 @@ fn check_published(derived: &Derived, published: &Value) -> Result<(), DidWebsEr
         let known = matches!(
             member.as_str(),
             "@context" | "id" | "controller" | "verificationMethod" | "service" | "alsoKnownAs"
-        ) || RELATIONSHIPS.contains(&member.as_str());
+        ) || RELATIONSHIPS.contains(&member.as_str())
+            || (member == "keyRoles" && ours.get("keyRoles").is_some());
         if !known {
             return mismatch(format!(
                 "did.json carries {member:?}, which nothing in the key event stream establishes"
@@ -348,6 +388,28 @@ fn check_published(derived: &Derived, published: &Value) -> Result<(), DidWebsEr
             return mismatch(format!(
                 "did.json's {relationship} is {theirs:?}, but the verified state implies {ours:?}"
             ));
+        }
+    }
+
+    // Key roles: the same binding, role by role, whenever the AID designates
+    // roles. Unlike a relationship it may not be left out: a verifier selects
+    // keys by it (VTI-KEY-094).
+    if let Some(our_roles) = ours.get("keyRoles").and_then(Value::as_object) {
+        let their_roles = theirs.get("keyRoles").and_then(Value::as_object);
+        let Some(their_roles) = their_roles else {
+            return mismatch("did.json does not publish keyRoles".into());
+        };
+        let same = our_roles.len() == their_roles.len()
+            && our_roles.iter().all(|(role, refs_ours)| {
+                their_roles.get(role).is_some_and(|refs_theirs| {
+                    same_set(
+                        &refs(Some(refs_ours), subject),
+                        &refs(Some(refs_theirs), subject),
+                    )
+                })
+            });
+        if !same {
+            return mismatch("did.json's keyRoles differ from those the AID designated".into());
         }
     }
 

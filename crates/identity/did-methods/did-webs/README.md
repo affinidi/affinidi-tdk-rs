@@ -144,6 +144,49 @@ another implementation reads them, a resolver that derives the document from
 KERI data alone will not reproduce `keyAgreement` or the designated services,
 and will reject a `did.json` carrying them.
 
+## Key roles (proposed extension)
+
+A document derived from key state places every key of the key state — the
+identifier's change authority — in both `authentication` and
+`assertionMethod`. A verifier that selects keys by role, such as the
+Verifiable Trust Infrastructure's `keyRoles` (VTI-KEY-090 to VTI-KEY-096), has
+nothing to select by, and the change authority signs everything.
+
+A **key role designation** ([`schemas/key-role-designation.json`](schemas/key-role-designation.json)
+`EPulJFl5SEb8qb3ca5teXHRGiWmTsTkylGTrS2vB4ZQx`) binds other keys to roles —
+`attestation` (rendered in `assertionMethod`), `operational`
+(`authentication`), `messaging` (`keyAgreement`) — and once an identifier has
+issued one, its document lists those role keys, each in its role's
+relationship only, plus a top-level `keyRoles`, and **no key of the key state
+at all**. Keys revoked for compromise stay listed with `revoked`, in no
+relationship, for the life of the identifier.
+
+```rust,no_run
+use affinidi_did_webs::create::{CreateConfig, create};
+use affinidi_did_webs::{KeyAgreementKey, KeyRoles, VerificationKey};
+
+# fn run(sign: [u8; 32], op: [u8; 32], x25519: [u8; 32]) -> Result<(), affinidi_did_webs::DidWebsError> {
+let result = create(
+    CreateConfig::builder("example.com")
+        .key_roles(
+            KeyRoles::new()
+                .with_attestation(VerificationKey::Ed25519(sign))
+                .with_operational(VerificationKey::Ed25519(op))
+                .with_messaging(KeyAgreementKey::X25519(x25519)),
+        )
+        .build(),
+)?;
+# Ok(())
+# }
+```
+
+`Change::KeyRoles` replaces the binding (a key left out is retired), and
+`Change::RevokeRoleKey` revokes one for compromise. This is a proof of concept
+of an extension proposed to the `did:webs` specification
+([docs/key-role-designation.md](docs/key-role-designation.md)): a resolver
+that does not implement it derives the key-state document instead, and refuses
+the `did.json` of an identifier that uses it.
+
 ## HTTPS, and the loopback exception
 
 Artifacts are fetched over **HTTPS**. Two exceptions use plain HTTP:

@@ -10,6 +10,7 @@
 use affinidi_did_webs::create::{CreateConfig, CreateResult, SelfEndpoint, create};
 use affinidi_did_webs::designated_services::{SERVICE_SCHEMA, SERVICE_SCHEMA_JSON};
 use affinidi_did_webs::key_agreement::{KEY_AGREEMENT_SCHEMA, KEY_AGREEMENT_SCHEMA_JSON};
+use affinidi_did_webs::key_roles::{KEY_ROLE_SCHEMA, KEY_ROLE_SCHEMA_JSON};
 use affinidi_did_webs::update::{Change, UpdateConfig, UpdateResult, update};
 use affinidi_did_webs::{
     Artifacts, DesignatedService, DidWebs, KeyAgreementKey, resolve_from_artifacts,
@@ -110,6 +111,7 @@ fn the_bundled_schemas_are_what_their_saids_say() {
     for (json, expected) in [
         (KEY_AGREEMENT_SCHEMA_JSON, KEY_AGREEMENT_SCHEMA),
         (SERVICE_SCHEMA_JSON, SERVICE_SCHEMA),
+        (KEY_ROLE_SCHEMA_JSON, KEY_ROLE_SCHEMA),
     ] {
         // Parsed in file order: a schema's SAID covers its bytes as written.
         let mut schema: SadValue = serde_json::from_str(json).expect("json");

@@ -48,6 +48,7 @@ use crate::document::to_did_web;
 use crate::errors::DidWebsError;
 use crate::identifier::DidWebs;
 use crate::key_agreement::KeyAgreementKey;
+use crate::key_roles::KeyRoles;
 
 /// A service endpoint to publish at creation time.
 ///
@@ -96,6 +97,11 @@ pub struct CreateConfig {
     /// Services of any type to designate, such as `DIDCommMessaging` or
     /// `TSPTransport` (see [`crate::designated_services`](mod@crate::designated_services)).
     pub designated_services: Vec<DesignatedService>,
+    /// Keys to bind to roles (see [`crate::key_roles`], a proposed
+    /// extension). With them, the document lists role keys instead of the key
+    /// state's, and `messaging` takes the place of `key_agreement`, which must
+    /// then be empty.
+    pub key_roles: Option<KeyRoles>,
 }
 
 impl CreateConfig {
@@ -110,6 +116,7 @@ impl CreateConfig {
                 also_known_as_scid: false,
                 key_agreement: Vec::new(),
                 designated_services: Vec::new(),
+                key_roles: None,
             },
         }
     }
@@ -157,6 +164,12 @@ impl CreateConfigBuilder {
     /// Designate a service of any type.
     pub fn designated_service(mut self, service: DesignatedService) -> Self {
         self.config.designated_services.push(service);
+        self
+    }
+
+    /// Bind keys to roles (see [`crate::key_roles`]).
+    pub fn key_roles(mut self, roles: KeyRoles) -> Self {
+        self.config.key_roles = Some(roles);
         self
     }
 
@@ -233,6 +246,27 @@ pub fn create(config: CreateConfig) -> Result<CreateResult, DidWebsError> {
         &aliases,
     )?;
     keri_cesr.extend_from_slice(&attestation);
+
+    // Key roles: the role keys replace the key state's in the document, and
+    // `messaging` replaces key agreement designations, which would be ignored.
+    if let Some(roles) = &config.key_roles {
+        if !config.key_agreement.is_empty() {
+            return Err(DidWebsError::Create(
+                "key agreement keys are bound to the messaging role when key roles are \
+                 designated; pass them there"
+                    .into(),
+            ));
+        }
+        let state = crate::kel::Kels::parse(&keri_cesr)?.key_state(&aid)?;
+        keri_cesr.extend_from_slice(&crate::attestation::issue_key_roles(
+            &mut hab,
+            &aid,
+            &establishment_said,
+            &state,
+            roles,
+            &[],
+        )?);
+    }
 
     // Key agreement keys and typed services, each a designation of its own so
     // that either can be replaced without touching the other.

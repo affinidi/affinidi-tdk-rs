@@ -1,0 +1,181 @@
+{
+  "$id": "EPulJFl5SEb8qb3ca5teXHRGiWmTsTkylGTrS2vB4ZQx",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "did:webs Key Role Designation",
+  "description": "A public attestation binding keys of an AID controller to key roles, rendered as the verification methods, verification relationships and keyRoles of its did:webs DID document in place of the key state's keys. Proposed extension to the did:webs specification.",
+  "type": "object",
+  "credentialType": "DidWebsKeyRoleDesignation",
+  "version": "1.0.0",
+  "properties": {
+    "v": {
+      "description": "Version",
+      "type": "string"
+    },
+    "d": {
+      "description": "Attestation SAID",
+      "type": "string"
+    },
+    "i": {
+      "description": "Controller AID",
+      "type": "string"
+    },
+    "ri": {
+      "description": "Attestation status registry",
+      "type": "string"
+    },
+    "s": {
+      "description": "schema section",
+      "oneOf": [
+        {
+          "description": "schema section SAID",
+          "type": "string"
+        },
+        {
+          "description": "schema detail",
+          "type": "object"
+        }
+      ]
+    },
+    "a": {
+      "oneOf": [
+        {
+          "description": "Attributes block SAID",
+          "type": "string"
+        },
+        {
+          "$id": "EDNdvozfkWqqJsaZ_J6_hKuIV0USZyUTwqjVwV0FbU2R",
+          "description": "Attributes block",
+          "type": "object",
+          "properties": {
+            "d": {
+              "description": "Attributes block SAID",
+              "type": "string"
+            },
+            "dt": {
+              "description": "Designation date time",
+              "type": "string",
+              "format": "date-time"
+            },
+            "roles": {
+              "description": "Key role name to the CESR-encoded public keys bound to it. Registered roles: attestation (assertionMethod), operational (authentication), messaging (keyAgreement). A role a reader does not recognise is ignored.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              }
+            },
+            "revoked": {
+              "description": "Keys revoked for compromise, each with the time from which it is to be treated as compromised. Every entry of an earlier designation is carried forward.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "description": "The CESR-encoded public key",
+                    "type": "string"
+                  },
+                  "compromisedAt": {
+                    "description": "The compromise time",
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "key",
+                  "compromisedAt"
+                ]
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "d",
+            "dt",
+            "roles"
+          ]
+        }
+      ]
+    },
+    "r": {
+      "oneOf": [
+        {
+          "description": "Rules block SAID",
+          "type": "string"
+        },
+        {
+          "$id": "EAAlZXPbQR-tn-iyS4T6Ac-jJ5vmAK0BLo-yka3Lj69s",
+          "description": "Rules block",
+          "type": "object",
+          "properties": {
+            "d": {
+              "description": "Rules block SAID",
+              "type": "string"
+            },
+            "roleDesignation": {
+              "description": "Role designation",
+              "type": "object",
+              "properties": {
+                "l": {
+                  "type": "string",
+                  "const": "The issuer of this ACDC binds each key in the roles field to the one key role it is listed under, as the only keys of the issuer's AID for those roles, and revokes for compromise every key in the revoked field from the time given."
+                }
+              }
+            },
+            "usageDisclaimer": {
+              "description": "Usage Disclaimer",
+              "type": "object",
+              "properties": {
+                "l": {
+                  "type": "string",
+                  "const": "This attestation binds keys to roles for verifiers of the controller's DID document. No key of the AID's key state is designated by it: the key state remains the identifier's update authority and signs nothing else."
+                }
+              }
+            },
+            "issuanceDisclaimer": {
+              "description": "Issuance Disclaimer",
+              "type": "object",
+              "properties": {
+                "l": {
+                  "type": "string",
+                  "const": "All information in a valid and non-revoked key role designation is accurate as of the date specified."
+                }
+              }
+            },
+            "termsOfUse": {
+              "description": "Terms of use",
+              "type": "object",
+              "properties": {
+                "l": {
+                  "type": "string",
+                  "const": "A key bound to a role must only be relied on for the use that role permits."
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "d",
+            "roleDesignation",
+            "usageDisclaimer",
+            "issuanceDisclaimer",
+            "termsOfUse"
+          ]
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "d",
+    "i",
+    "ri",
+    "s",
+    "a",
+    "r"
+  ]
+}

@@ -94,6 +94,88 @@ pub fn derive_document(
     Ok(Value::Object(doc))
 }
 
+/// Build the document of an identifier that designates key roles (see
+/// [`crate::key_roles`]).
+///
+/// * `roles` are the standing designation's keys, role by role in document
+///   order; each becomes a `JsonWebKey` verification method (id `#<key
+///   qb64>`) in its role's relationship and no other, and `keyRoles` maps the
+///   role to them;
+/// * `revoked` keys stay as verification methods carrying `revoked`, in no
+///   relationship and not in `keyRoles`;
+/// * the key state's keys and their threshold are rendered nowhere: the key
+///   event log alone states the update authority.
+///
+/// # Errors
+/// Returns [`DidWebsError::InvalidKey`] if a key is not one its role binds.
+pub fn derive_key_role_document(
+    did: &DidWebs,
+    roles: &[(crate::key_roles::KeyRole, Vec<String>)],
+    revoked: &[crate::key_roles::RevokedKey],
+    aliases: &[String],
+    services: &[Value],
+) -> Result<Value, DidWebsError> {
+    use crate::key_roles::{KeyRole, revoked_key_jwk, role_key_jwk};
+    let subject = did.did();
+
+    let mut methods = Vec::new();
+    let mut key_roles = Map::new();
+    let mut relationships: Vec<(&str, Vec<Value>)> = vec![
+        ("authentication", Vec::new()),
+        ("assertionMethod", Vec::new()),
+        (KeyRole::Messaging.relationship(), Vec::new()),
+    ];
+    for (role, keys) in roles {
+        if keys.is_empty() {
+            continue;
+        }
+        let mut ids = Vec::with_capacity(keys.len());
+        for key in keys {
+            let jwk = role_key_jwk(*role, key).map_err(DidWebsError::InvalidKey)?;
+            methods.push(json!({
+                "id": format!("#{key}"),
+                "type": "JsonWebKey",
+                "controller": subject,
+                "publicKeyJwk": jwk,
+            }));
+            ids.push(json!(format!("#{key}")));
+        }
+        if let Some((_, refs)) = relationships
+            .iter_mut()
+            .find(|(name, _)| *name == role.relationship())
+        {
+            refs.extend(ids.iter().cloned());
+        }
+        key_roles.insert(role.name().into(), Value::Array(ids));
+    }
+    for entry in revoked {
+        let jwk = revoked_key_jwk(&entry.key).map_err(DidWebsError::InvalidKey)?;
+        methods.push(json!({
+            "id": format!("#{}", entry.key),
+            "type": "JsonWebKey",
+            "controller": subject,
+            "publicKeyJwk": jwk,
+            "revoked": entry.compromised_at,
+        }));
+    }
+
+    let mut doc = Map::new();
+    doc.insert("id".into(), json!(subject));
+    doc.insert("controller".into(), json!(subject));
+    doc.insert("verificationMethod".into(), Value::Array(methods));
+    for (name, refs) in relationships {
+        // `authentication` and `assertionMethod` are always present in a
+        // did:webs document; `keyAgreement` only when it has keys.
+        if !refs.is_empty() || name != KeyRole::Messaging.relationship() {
+            doc.insert(name.into(), Value::Array(refs));
+        }
+    }
+    doc.insert("keyRoles".into(), Value::Object(key_roles));
+    doc.insert("service".into(), Value::Array(services.to_vec()));
+    doc.insert("alsoKnownAs".into(), json!(aliases));
+    Ok(Value::Object(doc))
+}
+
 /// Add designated key agreement keys to a derived document: a `JsonWebKey`
 /// verification method for each (id `#<key qb64>`, as for the key state's
 /// keys), referenced from `keyAgreement`. With no keys the document is
@@ -342,6 +424,15 @@ pub fn into_document(doc: &Value, did: &DidWebs) -> Result<Document, DidWebsErro
                 absolutize_field(service, "id", subject);
             }
         }
+        if let Some(Value::Object(roles)) = obj.get_mut("keyRoles") {
+            for refs in roles.values_mut() {
+                if let Value::Array(refs) = refs {
+                    for r in refs {
+                        absolutize(r, subject);
+                    }
+                }
+            }
+        }
     }
 
     Ok(serde_json::from_value(out)?)
@@ -404,7 +495,7 @@ pub(crate) fn normalize_percent_encoding(s: &str) -> String {
 /// point is actually on its curve while decompressing it. That check matters:
 /// a compressed point is 33 bytes of attacker-supplied data, and a key that is
 /// not on the curve must be refused rather than published in a document.
-fn jwk_from_cesr_key(key_qb64: &str) -> Result<Value, DidWebsError> {
+pub(crate) fn jwk_from_cesr_key(key_qb64: &str) -> Result<Value, DidWebsError> {
     let matter = Matter::from_qb64(key_qb64)
         .map_err(|e| DidWebsError::Kel(format!("key {key_qb64:?} is not a CESR primitive: {e}")))?;
 

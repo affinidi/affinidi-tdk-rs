@@ -19,6 +19,7 @@ use crate::errors::DidWebsError;
 use crate::identifier::DidWebs;
 use crate::kel::Kels;
 use crate::key_agreement::KeyAgreementKey;
+use crate::key_roles::{KeyRoles, RevokedKey, designated_key_roles};
 
 /// What to add to an identifier's key event log.
 #[derive(Debug, Clone)]
@@ -62,6 +63,20 @@ pub enum Change {
     /// empty, designates exactly these. KERI role endpoints (`Services`) are
     /// unaffected.
     DesignatedServices(Vec<DesignatedService>),
+    /// Replace the keys bound to roles (see [`crate::key_roles`], a proposed
+    /// extension).
+    ///
+    /// Revokes the key role designation in force and designates exactly these
+    /// keys. A key left out is retired by planned rotation and leaves the
+    /// document. Every key an earlier designation revoked for compromise is
+    /// carried forward, whether listed here or not.
+    KeyRoles(KeyRoles),
+    /// Revoke a role key for compromise, from the time given.
+    ///
+    /// Takes the key out of the role the standing designation binds it to and
+    /// designates the rest, with the key listed as revoked: it stays in the
+    /// document carrying `revoked`, in no relationship.
+    RevokeRoleKey(RevokedKey),
 }
 
 /// How to continue an identifier.
@@ -179,7 +194,65 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
             )?;
             keri_cesr.extend_from_slice(&attestation);
         }
+        Change::KeyRoles(roles) => {
+            let prior = designated_key_roles(&kels, did.aid())?;
+            keri_cesr.extend_from_slice(&revoke_all(
+                &kels,
+                &mut hab,
+                did.aid(),
+                crate::key_roles::KEY_ROLE_SCHEMA,
+            )?);
+            let establishment = last_establishment_said(&kels, did.aid())?;
+            keri_cesr.extend_from_slice(&crate::attestation::issue_key_roles(
+                &mut hab,
+                did.aid(),
+                &establishment,
+                &state,
+                roles,
+                &prior.revoked,
+            )?);
+        }
+        Change::RevokeRoleKey(compromised) => {
+            let prior = designated_key_roles(&kels, did.aid())?;
+            let mut roles = prior.roles.clone();
+            let mut found = false;
+            for (_, keys) in &mut roles {
+                let before = keys.len();
+                keys.retain(|k| k != &compromised.key);
+                found |= keys.len() != before;
+            }
+            if !found {
+                return Err(DidWebsError::Create(format!(
+                    "{} is not bound to a role by the standing key role designation",
+                    compromised.key
+                )));
+            }
+            let next =
+                KeyRoles::from_standing(&roles, &prior.revoked)?.with_revoked(compromised.clone());
+            keri_cesr.extend_from_slice(&revoke_all(
+                &kels,
+                &mut hab,
+                did.aid(),
+                crate::key_roles::KEY_ROLE_SCHEMA,
+            )?);
+            let establishment = last_establishment_said(&kels, did.aid())?;
+            keri_cesr.extend_from_slice(&crate::attestation::issue_key_roles(
+                &mut hab,
+                did.aid(),
+                &establishment,
+                &state,
+                &next,
+                &prior.revoked,
+            )?);
+        }
         Change::KeyAgreement(keys) => {
+            if designated_key_roles(&kels, did.aid())?.issued {
+                return Err(DidWebsError::Create(
+                    "this identifier designates key roles; key agreement keys are bound to the \
+                     messaging role (Change::KeyRoles)"
+                        .into(),
+                ));
+            }
             keri_cesr.extend_from_slice(&revoke_all(
                 &kels,
                 &mut hab,

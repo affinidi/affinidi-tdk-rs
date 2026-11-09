@@ -59,6 +59,29 @@ pub(crate) fn designations(
     schema: &str,
     rejected: &mut Option<String>,
 ) -> Result<Vec<Designation>, DidWebsError> {
+    Ok(issued_designations(kels, aid, schema, rejected)?
+        .into_iter()
+        .filter(|(_, withdrawn)| !withdrawn)
+        .map(|(designation, _)| designation)
+        .collect())
+}
+
+/// Every credential of `schema` that `aid` issued to itself and that
+/// verifies, each with whether its issuer has since revoked it.
+///
+/// A withdrawn designation still says what its issuer stated while it stood;
+/// a reader that must not forget a statement — a key revoked for compromise
+/// stays revoked — reads these.
+///
+/// # Errors
+/// Returns [`DidWebsError::Kel`] only if `aid`'s own key event log does not
+/// verify.
+pub(crate) fn issued_designations(
+    kels: &Kels,
+    aid: &str,
+    schema: &str,
+    rejected: &mut Option<String>,
+) -> Result<Vec<(Designation, bool)>, DidWebsError> {
     // Fails loudly: everything below is meaningless without a verified KEL.
     kels.key_state(aid)?;
 
@@ -72,9 +95,7 @@ pub(crate) fn designations(
             continue;
         }
         match verify(kels, aid, acdc) {
-            Ok(Some(designation)) => out.push(designation),
-            // Revoked: verified, and withdrawn by its issuer.
-            Ok(None) => {}
+            Ok(found) => out.push(found),
             Err(e) => {
                 rejected.get_or_insert(e);
             }
@@ -83,14 +104,13 @@ pub(crate) fn designations(
     Ok(out)
 }
 
-/// Verify one designation end to end.
-///
-/// `Ok(None)` for a credential that verifies but has been revoked.
+/// Verify one designation end to end, returning it with whether it has been
+/// revoked.
 fn verify(
     kels: &Kels,
     aid: &str,
     acdc: &affinidi_keri_core::parser::ParsedMessage,
-) -> Result<Option<Designation>, String> {
+) -> Result<(Designation, bool), String> {
     let sad = acdc.serder.sad();
     let acdc_said = acdc
         .serder
@@ -114,10 +134,8 @@ fn verify(
     //    anchored in the key event log.
     let issuance = verify_issued(kels, aid, registry, &acdc_said)?;
 
-    // 5. It has not been revoked.
-    if is_revoked(kels, aid, &acdc_said)? {
-        return Ok(None);
-    }
+    // 5. Whether it has been revoked.
+    let withdrawn = is_revoked(kels, aid, &acdc_said)?;
 
     // 6. Only then is its content worth reading.
     let attributes = sad
@@ -126,12 +144,15 @@ fn verify(
         .cloned()
         .ok_or_else(|| "attestation carries no attribute block".to_string())?;
 
-    Ok(Some(Designation {
-        said: acdc_said,
-        registry: registry.to_string(),
-        issuance,
-        attributes,
-    }))
+    Ok((
+        Designation {
+            said: acdc_said,
+            registry: registry.to_string(),
+            issuance,
+            attributes,
+        },
+        withdrawn,
+    ))
 }
 
 /// The attestation must carry a transferable indexed signature group from the
