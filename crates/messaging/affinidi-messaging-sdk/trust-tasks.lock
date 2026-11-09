@@ -117,6 +117,60 @@ type_uri = "https://trusttasks.org/spec/messaging/monitor/unsubscribe/0.1"
 digest = "sha256:3c0578ac3c034ed24f0bc80080509c872ab8c205b748db91ab0cad519f3c8ecd"
 
 [[task]]
+slug = "messaging/mux/attach"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/attach/0.1"
+digest = "sha256:9d9abcd52ca4860082a02e201098a99f372022a3407e288265243060261d824a"
+
+[[task]]
+slug = "messaging/mux/detach"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/detach/0.1"
+digest = "sha256:66ead81440e3c8a6f264ba46f3c72de6c2db02d5362b0384ca90fb8014d95d07"
+
+[[task]]
+slug = "messaging/mux/event"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/event/0.1"
+digest = "sha256:1c1a56f5688e9b1e92a9b9a6cdd030c13bb9ea263e3d4773dc8bd55afcfe9edd"
+
+[[task]]
+slug = "messaging/mux/grant"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/grant/0.1"
+digest = "sha256:7801a8c712e821d1c998d9cdb066d3f65a8115e58a2d809e46ee8176e3fe5a27"
+
+[[task]]
+slug = "messaging/mux/list"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/list/0.1"
+digest = "sha256:8879f4125157a304d5dbde40234164b065f32cee8b33f844b1fc371cc13d08a8"
+
+[[task]]
+slug = "messaging/mux/notice"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/notice/0.1"
+digest = "sha256:f2bf565f3b062fbdf7ae58adf65f33ee8dbbeb0158cdf6445f8f6ee5b1df9e15"
+
+[[task]]
+slug = "messaging/mux/revoke"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/revoke/0.1"
+digest = "sha256:9667ced8e21a6bd8c8816bff81919a8053a470ebe3f3cfef53d4fd392b044fc5"
+
+[[task]]
+slug = "messaging/mux/revoke-all"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/revoke-all/0.1"
+digest = "sha256:18d73224a913c08259e02116aea36d7f1f234c681b2dcf142dfe4f79fdbbe455"
+
+[[task]]
+slug = "messaging/mux/update"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/update/0.1"
+digest = "sha256:921172f16a164319182bb6f53a41c5faa827d350eced64ad5d1908e48de9c94c"
+
+[[task]]
 slug = "messaging/ping"
 version = "0.2"
 type_uri = "https://trusttasks.org/spec/messaging/ping/0.2"

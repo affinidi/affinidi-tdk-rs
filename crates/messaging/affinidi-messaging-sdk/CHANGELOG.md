@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.45.1 — DID multiplexing client (`messaging/mux/*/0.1`)
+
+One mediator WebSocket can now carry many DIDs. The profile that opens it is
+the *principal*; each *member* DID lets it carry its traffic with a signed
+statement. Mediator side: affinidi-messaging-mediator 0.51 with mux enabled
+(`[limits.mux] enabled = "true"`, off by default). Spec:
+trustoverip/dtgwg-trust-tasks-tf#1068.
+
+- `ATM::profile_enable_mux_websocket(profile)` opens the profile's websocket as
+  a mux connection (`affinidi-mux` subprotocol). It **fails** if the mediator
+  does not select the subprotocol: there is no silent fallback to an ordinary
+  connection.
+- `ATMProfile::mux_ready()`: a watch of the connection's `ready` event
+  (session id and attach nonce). Reset on every disconnect and new socket.
+  `ATMProfile::mux_events()`: every `messaging/mux/event`. Mux events are taken
+  out of the ordinary message stream.
+- `protocols::mux::{sign_grant, sign_attach, sign_revoke_all}` sign statements
+  with the member's **authentication** key (Data Integrity, `eddsa-jcs-2022`).
+  The member's secrets must be in this ATM's secrets resolver.
+- `TrustTasksOps::{mux_grant, mux_attach, mux_detach, mux_list, mux_update,
+  mux_revoke, mux_revoke_all}`. `mux_attach` and `mux_detach` always travel
+  on the mux socket (DIDComm), never TSP.
+- `protocols::mux::{mux_recipient, decode_mux_event, decode_mux_notice}`:
+  route an unpacked message to the member it was for (one demux owner per
+  socket, R1.7), and recognise mux documents.
+- The `messaging/mux/*/0.1` types are generated into `tasks::messaging::mux`.
+
+**Nothing is muxed by default.** No profile becomes a member, and no grant is
+made, renewed or re-attached, unless the application asks. Acknowledging a
+member's message with `auto_delete` needs a mediator that accepts member
+deletes over REST (affinidi/affinidi-messaging-mediator#68). Seeing a grant
+take effect without reconnecting needs affinidi/affinidi-messaging-mediator#69.
+
+Additive: no existing signature or behaviour changes for non-mux profiles.
+
 ## Unreleased (0.45.0) — trust-tasks 0.37
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.37. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.37 (trustoverip/dtgwg-trust-tasks-tf #1021) changes how `validate_freshness` treats a document that states an `expiresAt`: the maximum age no longer applies to it, and an expiry beyond the policy's new `expiry_horizon` is clamped to the horizon. `FreshnessPolicy` gains `expiry_horizon` and is now `#[non_exhaustive]`. This SDK does not apply a freshness policy, so its behaviour does not change. No source change.
