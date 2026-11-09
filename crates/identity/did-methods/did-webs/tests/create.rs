@@ -179,7 +179,7 @@ fn several_rotations_resolve() {
 #[test]
 fn an_interaction_resolves() {
     let created = create(config()).expect("create");
-    let anchors = vec![serde_json::json!({"d": "ESomeAnchor"})];
+    let anchors = vec![affinidi_keri_core::sad!({"d": "ESomeAnchor"})];
 
     let updated = update(
         UpdateConfig {

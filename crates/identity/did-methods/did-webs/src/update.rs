@@ -30,7 +30,7 @@ pub enum Change {
     /// keys, and the only one that can recover from a compromised signing key.
     Rotate(RotationConfig),
     /// Anchor seals in the log without changing keys.
-    Interact(Vec<serde_json::Value>),
+    Interact(Vec<affinidi_keri_core::SadValue>),
     /// Designate service endpoints for this identifier.
     ///
     /// Emitted as signed replies rather than written into the document, so a

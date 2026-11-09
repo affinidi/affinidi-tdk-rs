@@ -572,7 +572,7 @@ impl DelegatorAnchors for Kels {
         delegator: &str,
         sn: u64,
         said: &str,
-    ) -> Result<Option<Vec<serde_json::Value>>, CoreError> {
+    ) -> Result<Option<Vec<affinidi_keri_core::SadValue>>, CoreError> {
         // Verifying the delegator's own KEL first is the whole contract of this
         // trait. Returning anchors from events that merely parsed would let any
         // stream claim any delegation.

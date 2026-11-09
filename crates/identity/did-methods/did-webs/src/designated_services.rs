@@ -15,6 +15,8 @@
 //! derived from KERI's replies ([`crate::services`]); a designation adds to
 //! them, and a designated service whose `id` is already taken is dropped.
 
+use affinidi_keri_core::SadValue;
+use affinidi_keri_core::sad::SadMap;
 use serde_json::{Map, Value, json};
 
 use crate::designation::designations;
@@ -63,15 +65,42 @@ impl DesignatedService {
     }
 
     /// The service entry as it is designated and published.
+    ///
+    /// The entry is returned as written, valid or not; designating it checks
+    /// it.
     pub fn to_service(&self) -> Value {
-        let mut entry = Map::new();
-        entry.insert("id".into(), json!(self.id));
-        entry.insert("type".into(), self.type_.clone());
-        entry.insert("serviceEndpoint".into(), self.service_endpoint.clone());
+        self.entry().to_json_value()
+    }
+
+    /// The entry as it goes into the designation: `id`, `type`,
+    /// `serviceEndpoint`, then the other members, in that order. The
+    /// designation's SAID covers these bytes, so the order is fixed here
+    /// rather than left to how `serde_json` was built.
+    ///
+    /// # Errors
+    /// Returns why the entry is not a service a DID document can carry, so no
+    /// caller can designate one unchecked.
+    #[cfg(feature = "create")]
+    pub(crate) fn to_sad(&self) -> Result<SadValue, String> {
+        let entry = self.entry();
+        check_service(&entry)?;
+        Ok(entry)
+    }
+
+    fn entry(&self) -> SadValue {
+        let mut entry = SadMap::new();
+        entry.insert("id".into(), SadValue::from(self.id.as_str()));
+        entry.insert("type".into(), SadValue::from_json_value(&self.type_));
+        entry.insert(
+            "serviceEndpoint".into(),
+            SadValue::from_json_value(&self.service_endpoint),
+        );
         for (k, v) in &self.properties {
-            entry.entry(k.clone()).or_insert_with(|| v.clone());
+            entry
+                .entry(k.clone())
+                .or_insert_with(|| SadValue::from_json_value(v));
         }
-        Value::Object(entry)
+        SadValue::Object(entry)
     }
 }
 
@@ -116,23 +145,23 @@ pub fn designated_services(kels: &Kels, aid: &str) -> Result<DesignatedServices,
     Ok(out)
 }
 
-fn read_services(attributes: &Value) -> Result<Vec<Value>, String> {
+fn read_services(attributes: &SadValue) -> Result<Vec<Value>, String> {
     let services = attributes
         .get("services")
-        .and_then(Value::as_array)
+        .and_then(|v| v.as_array())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "service designation carries no `a.services`".to_string())?;
     services
         .iter()
-        .map(|s| check_service(s).map(|()| s.clone()))
+        .map(|s| check_service(s).map(|()| s.to_json_value()))
         .collect()
 }
 
 /// Whether an entry is a service a DID document can carry.
-pub(crate) fn check_service(service: &Value) -> Result<(), String> {
+pub(crate) fn check_service(service: &SadValue) -> Result<(), String> {
     let id = service
         .get("id")
-        .and_then(Value::as_str)
+        .and_then(|v| v.as_str())
         .ok_or_else(|| "a designated service has no `id`".to_string())?;
     if !id.starts_with('#') || id.len() < 2 || id[1..].contains('#') {
         return Err(format!(
@@ -140,8 +169,8 @@ pub(crate) fn check_service(service: &Value) -> Result<(), String> {
         ));
     }
     let type_ok = match service.get("type") {
-        Some(Value::String(t)) => !t.is_empty(),
-        Some(Value::Array(ts)) => {
+        Some(SadValue::String(t)) => !t.is_empty(),
+        Some(SadValue::Array(ts)) => {
             !ts.is_empty() && ts.iter().all(|t| t.as_str().is_some_and(|t| !t.is_empty()))
         }
         _ => false,
@@ -151,7 +180,7 @@ pub(crate) fn check_service(service: &Value) -> Result<(), String> {
     }
     if !matches!(
         service.get("serviceEndpoint"),
-        Some(Value::String(_) | Value::Object(_) | Value::Array(_))
+        Some(SadValue::String(_) | SadValue::Object(_) | SadValue::Array(_))
     ) {
         return Err(format!("designated service {id} has no `serviceEndpoint`"));
     }
@@ -169,25 +198,47 @@ mod tests {
             "DIDCommMessaging",
             json!({"uri": "did:webvh:QmMediator:mediator.example", "accept": ["didcomm/v2"]}),
         );
-        assert!(check_service(&service.to_service()).is_ok());
+        assert!(check_service(&service.entry()).is_ok());
+    }
+
+    #[test]
+    #[cfg(feature = "create")]
+    fn an_invalid_entry_cannot_be_designated() {
+        let service = DesignatedService::new("no-fragment", "LinkedDomains", json!("https://x"));
+        assert!(service.to_sad().is_err());
+        assert!(
+            DesignatedService::new("#ok", "LinkedDomains", json!("https://x"))
+                .to_sad()
+                .is_ok()
+        );
     }
 
     #[test]
     fn an_absolute_or_empty_id_is_refused() {
         for id in ["did:webs:example.com:E1#x", "#", "x", "#a#b"] {
             let service = DesignatedService::new(id, "LinkedDomains", json!("https://x"));
-            assert!(check_service(&service.to_service()).is_err(), "{id}");
+            assert!(check_service(&service.entry()).is_err(), "{id}");
         }
     }
 
     #[test]
     fn a_service_needs_a_type_and_an_endpoint() {
-        assert!(check_service(&json!({"id": "#x", "serviceEndpoint": "https://x"})).is_err());
         assert!(
-            check_service(&json!({"id": "#x", "type": [], "serviceEndpoint": "https://x"}))
+            check_service(&affinidi_keri_core::sad!({"id": "#x", "serviceEndpoint": "https://x"}))
                 .is_err()
         );
-        assert!(check_service(&json!({"id": "#x", "type": "T"})).is_err());
-        assert!(check_service(&json!({"id": "#x", "type": "T", "serviceEndpoint": 3})).is_err());
+        assert!(
+            check_service(
+                &affinidi_keri_core::sad!({"id": "#x", "type": [], "serviceEndpoint": "https://x"})
+            )
+            .is_err()
+        );
+        assert!(check_service(&affinidi_keri_core::sad!({"id": "#x", "type": "T"})).is_err());
+        assert!(
+            check_service(
+                &affinidi_keri_core::sad!({"id": "#x", "type": "T", "serviceEndpoint": 3})
+            )
+            .is_err()
+        );
     }
 }

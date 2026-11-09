@@ -111,7 +111,7 @@ pub(crate) fn role_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoi
 
     for rpy in kels.messages_with_ilk("rpy") {
         let sad = rpy.serder.sad();
-        let route = sad.get("r").and_then(Value::as_str).unwrap_or_default();
+        let route = sad.get("r").and_then(|v| v.as_str()).unwrap_or_default();
         let added = match route {
             "/end/role/add" => true,
             "/end/role/cut" => false,
@@ -120,9 +120,9 @@ pub(crate) fn role_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoi
 
         let attrs = sad.get("a");
         let (Some(cid), Some(role), Some(eid)) = (
-            attrs.and_then(|a| a.get("cid")).and_then(Value::as_str),
-            attrs.and_then(|a| a.get("role")).and_then(Value::as_str),
-            attrs.and_then(|a| a.get("eid")).and_then(Value::as_str),
+            attrs.and_then(|a| a.get("cid")).and_then(|v| v.as_str()),
+            attrs.and_then(|a| a.get("role")).and_then(|v| v.as_str()),
+            attrs.and_then(|a| a.get("eid")).and_then(|v| v.as_str()),
         ) else {
             continue;
         };
@@ -230,15 +230,15 @@ fn location_schemes(kels: &Kels, eid: &str) -> BTreeMap<String, String> {
 
     for rpy in kels.messages_with_ilk("rpy") {
         let sad = rpy.serder.sad();
-        if sad.get("r").and_then(Value::as_str) != Some("/loc/scheme") {
+        if sad.get("r").and_then(|v| v.as_str()) != Some("/loc/scheme") {
             continue;
         }
 
         let attrs = sad.get("a");
         let (Some(subject), Some(scheme), Some(url)) = (
-            attrs.and_then(|a| a.get("eid")).and_then(Value::as_str),
-            attrs.and_then(|a| a.get("scheme")).and_then(Value::as_str),
-            attrs.and_then(|a| a.get("url")).and_then(Value::as_str),
+            attrs.and_then(|a| a.get("eid")).and_then(|v| v.as_str()),
+            attrs.and_then(|a| a.get("scheme")).and_then(|v| v.as_str()),
+            attrs.and_then(|a| a.get("url")).and_then(|v| v.as_str()),
         ) else {
             continue;
         };
@@ -278,7 +278,7 @@ fn location_schemes(kels: &Kels, eid: &str) -> BTreeMap<String, String> {
 /// * a **non-transferable** identifier — a witness, typically — has its public
 ///   key *as* its prefix, so a receipt couple can be checked directly.
 fn reply_seniority(kels: &Kels, msg: &ParsedMessage, signer: &str) -> Option<Seniority> {
-    let dt = msg.serder.sad().get("dt").and_then(Value::as_str)?;
+    let dt = msg.serder.sad().get("dt").and_then(|v| v.as_str())?;
     let dt = DateTime::parse_from_rfc3339(dt).ok()?;
 
     // Transferable: indexed signatures against verified key state. The group

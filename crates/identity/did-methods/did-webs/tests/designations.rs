@@ -16,6 +16,7 @@ use affinidi_did_webs::{
     resolve_with_metadata,
 };
 use affinidi_keri::config::{InceptionConfig, RotationConfig};
+use affinidi_keri_core::SadValue;
 use affinidi_keri_core::said;
 use affinidi_keri_core::version::SerializationKind;
 use serde_json::{Value, json};
@@ -93,10 +94,10 @@ fn key_agreement_refs(doc: &affinidi_did_common::Document) -> Vec<String> {
 // ── Schemas ────────────────────────────────────────────────────────────────
 
 /// SAIDify a schema as keripy does: every nested `$id` first, then the whole.
-fn saidify(value: &mut Value) {
+fn saidify(value: &mut SadValue) {
     match value {
-        Value::Object(map) => map.values_mut().for_each(saidify),
-        Value::Array(items) => items.iter_mut().for_each(saidify),
+        SadValue::Object(map) => map.values_mut().for_each(saidify),
+        SadValue::Array(items) => items.iter_mut().for_each(saidify),
         _ => {}
     }
     if value.get("$id").is_some() {
@@ -110,7 +111,8 @@ fn the_bundled_schemas_are_what_their_saids_say() {
         (KEY_AGREEMENT_SCHEMA_JSON, KEY_AGREEMENT_SCHEMA),
         (SERVICE_SCHEMA_JSON, SERVICE_SCHEMA),
     ] {
-        let mut schema: Value = serde_json::from_str(json).expect("json");
+        // Parsed in file order: a schema's SAID covers its bytes as written.
+        let mut schema: SadValue = serde_json::from_str(json).expect("json");
         assert_eq!(schema["$id"], expected);
         saidify(&mut schema);
         assert_eq!(

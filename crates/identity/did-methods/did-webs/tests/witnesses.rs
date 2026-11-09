@@ -10,8 +10,8 @@ use affinidi_did_webs::{DidWebs, Kels, resolve_from_artifacts};
 use affinidi_keri_core::said;
 use affinidi_keri_core::serder::Serder;
 use affinidi_keri_core::version::SerializationKind;
+use affinidi_keri_core::{SadValue, sad};
 use affinidi_keri_crypto::Signer;
-use serde_json::json;
 
 fn signer(seed: u8, transferable: bool) -> Signer {
     let code = "A";
@@ -25,16 +25,16 @@ fn signer(seed: u8, transferable: bool) -> Signer {
 
 /// Fix the `v` size before computing the SAID, so the SAID covers the bytes
 /// the event is actually serialized as.
-fn fix_version(sad: &mut serde_json::Value) {
+fn fix_version(sad: &mut SadValue) {
     let placeholder = "#".repeat(44);
     let (d, i) = (sad["d"].clone(), sad["i"].clone());
     let self_addressing = d == i;
-    sad["d"] = json!(placeholder);
+    sad["d"] = sad!(placeholder);
     if self_addressing {
-        sad["i"] = json!(placeholder);
+        sad["i"] = sad!(placeholder);
     }
     let len = serde_json::to_vec(sad).expect("serialize").len();
-    sad["v"] = json!(format!("KERI10JSON{len:06x}_"));
+    sad["v"] = sad!(format!("KERI10JSON{len:06x}_"));
     sad["d"] = d;
     sad["i"] = i;
 }
@@ -47,7 +47,7 @@ fn witnessed_inception(controller: &Signer, next: &Signer, witness_prefix: &str)
             .qb64()
             .expect("qb64");
 
-    let mut sad = json!({
+    let mut sad = sad!({
         "v": "KERI10JSON000000_",
         "t": "icp",
         "d": "",

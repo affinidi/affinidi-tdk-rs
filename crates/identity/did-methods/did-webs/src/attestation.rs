@@ -18,10 +18,11 @@
 //! claiming it about itself.
 
 use affinidi_keri::hab::Hab;
+use affinidi_keri_core::sad;
+use affinidi_keri_core::sad::{SadMap, SadValue};
 use affinidi_keri_core::said;
 use affinidi_keri_core::serder::Serder;
 use affinidi_keri_core::version::SerializationKind;
-use serde_json::{Value, json};
 
 use crate::aliases::DESIGNATED_ALIASES_SCHEMA;
 use crate::designation::Designation;
@@ -58,7 +59,7 @@ pub(crate) fn designation(did: &DidWebs, extra: &[String]) -> Vec<String> {
 /// # Errors
 /// Returns [`DidWebsError::Create`] if the event cannot be built or anchored.
 pub(crate) fn revoke(hab: &mut Hab, attestation: &Designation) -> Result<Vec<u8>, DidWebsError> {
-    let mut rev = json!({
+    let mut rev = sad!({
         "v": "KERI10JSON000000_",
         "t": "rev",
         "d": "",
@@ -75,7 +76,7 @@ pub(crate) fn revoke(hab: &mut Hab, attestation: &Designation) -> Result<Vec<u8>
         .map_err(|e| DidWebsError::Create(format!("revocation: {e}")))?;
 
     let anchor = hab
-        .interact_event(&[json!({ "i": attestation.said, "s": "1", "d": rev_said })])
+        .interact_event(&[sad!({ "i": attestation.said, "s": "1", "d": rev_said })])
         .map_err(|e| DidWebsError::Create(format!("anchoring the revocation: {e}")))?;
 
     let mut out = anchor.composed;
@@ -87,8 +88,8 @@ pub(crate) fn revoke(hab: &mut Hab, attestation: &Designation) -> Result<Vec<u8>
 ///
 /// Fixed by the credential's schema, and reproduced verbatim so the attestation
 /// this crate issues is the same credential the rest of the ecosystem reads.
-fn rules() -> Value {
-    json!({
+fn rules() -> SadValue {
+    sad!({
         "d": "",
         "aliasDesignation": {
             "l": "The issuer of this ACDC designates the identifiers in the ids field as the only allowed namespaced aliases of the issuer's AID."
@@ -130,7 +131,7 @@ pub(crate) fn issue_designated_aliases(
         aid,
         establishment_said,
         DESIGNATED_ALIASES_SCHEMA,
-        json!({ "ids": aliases }),
+        sad!({ "ids": aliases }),
         rules(),
     )
 }
@@ -179,7 +180,7 @@ pub(crate) fn issue_key_agreement(
         aid,
         establishment_said,
         crate::key_agreement::KEY_AGREEMENT_SCHEMA,
-        json!({ "keys": encoded }),
+        sad!({ "keys": encoded }),
         rules_from_schema(crate::key_agreement::KEY_AGREEMENT_SCHEMA_JSON)?,
     )
 }
@@ -200,10 +201,9 @@ pub(crate) fn issue_services(
             "a service designation with no services designates nothing".into(),
         ));
     }
-    let mut entries: Vec<Value> = Vec::with_capacity(services.len());
+    let mut entries: Vec<SadValue> = Vec::with_capacity(services.len());
     for service in services {
-        let entry = service.to_service();
-        crate::designated_services::check_service(&entry).map_err(DidWebsError::Create)?;
+        let entry = service.to_sad().map_err(DidWebsError::Create)?;
         if entries.iter().any(|e| e["id"] == entry["id"]) {
             return Err(DidWebsError::Create(format!(
                 "service id {} is designated twice",
@@ -217,7 +217,7 @@ pub(crate) fn issue_services(
         aid,
         establishment_said,
         crate::designated_services::SERVICE_SCHEMA,
-        json!({ "services": entries }),
+        sad!({ "services": entries }),
         rules_from_schema(crate::designated_services::SERVICE_SCHEMA_JSON)?,
     )
 }
@@ -228,21 +228,21 @@ pub(crate) fn issue_services(
 ///
 /// # Errors
 /// Returns [`DidWebsError::Create`] if the schema has no rules block.
-pub(crate) fn rules_from_schema(schema_json: &str) -> Result<Value, DidWebsError> {
-    let schema: Value = serde_json::from_str(schema_json)?;
+pub(crate) fn rules_from_schema(schema_json: &str) -> Result<SadValue, DidWebsError> {
+    let schema: SadValue = serde_json::from_str(schema_json)?;
     let properties = schema["properties"]["r"]["oneOf"]
         .as_array()
         .and_then(|alternatives| alternatives.iter().find(|a| a["type"] == "object"))
         .and_then(|block| block["properties"].as_object())
         .ok_or_else(|| DidWebsError::Create("schema has no rules block".into()))?;
-    let mut rules = serde_json::Map::new();
-    rules.insert("d".into(), json!(""));
+    let mut rules = SadMap::new();
+    rules.insert("d".into(), sad!(""));
     for (name, rule) in properties {
         if let Some(text) = rule["properties"]["l"]["const"].as_str() {
-            rules.insert(name.clone(), json!({ "l": text }));
+            rules.insert(name.clone(), sad!({ "l": text }));
         }
     }
-    Ok(Value::Object(rules))
+    Ok(SadValue::Object(rules))
 }
 
 /// Issue a designation: a credential of `schema` whose attribute block is
@@ -261,12 +261,12 @@ pub(crate) fn issue(
     aid: &str,
     establishment_said: &str,
     schema: &str,
-    attributes: Value,
-    rules: Value,
+    attributes: SadValue,
+    rules: SadValue,
 ) -> Result<Vec<u8>, DidWebsError> {
     // 1. The registry. Its identifier is its own SAID, so it is self-addressing
     //    and both `d` and `i` are dummied while it is computed.
-    let mut vcp = json!({
+    let mut vcp = sad!({
         "v": "KERI10JSON000000_",
         "t": "vcp",
         "d": "",
@@ -286,7 +286,7 @@ pub(crate) fn issue(
 
     // 2. Anchor it. Without this the registry is just a document somebody wrote.
     let anchor_registry = hab
-        .interact_event(&[json!({ "i": registry, "s": "0", "d": registry })])
+        .interact_event(&[sad!({ "i": registry, "s": "0", "d": registry })])
         .map_err(|e| DidWebsError::Create(format!("anchoring the registry: {e}")))?;
 
     // 3. The credential.
@@ -299,7 +299,7 @@ pub(crate) fn issue(
         .map_err(|e| DidWebsError::Create(format!("attestation: {e}")))?;
 
     // 4. The issuance.
-    let mut iss = json!({
+    let mut iss = sad!({
         "v": "KERI10JSON000000_",
         "t": "iss",
         "d": "",
@@ -317,7 +317,7 @@ pub(crate) fn issue(
     // 5. Anchor the issuance too — the registry existing does not say anything
     //    was issued in it.
     let anchor_issuance = hab
-        .interact_event(&[json!({ "i": acdc_said, "s": "0", "d": iss_said })])
+        .interact_event(&[sad!({ "i": acdc_said, "s": "0", "d": iss_said })])
         .map_err(|e| DidWebsError::Create(format!("anchoring the issuance: {e}")))?;
 
     // Key events first, in order, then the transaction events and the
@@ -341,23 +341,23 @@ fn build_attestation(
     aid: &str,
     registry: &str,
     schema: &str,
-    content: Value,
-    mut rules: Value,
-) -> Result<Value, DidWebsError> {
-    let mut attributes = serde_json::Map::new();
-    attributes.insert("d".into(), json!(""));
-    attributes.insert("dt".into(), json!(timestamp()));
-    if let Value::Object(content) = content {
+    content: SadValue,
+    mut rules: SadValue,
+) -> Result<SadValue, DidWebsError> {
+    let mut attributes = SadMap::new();
+    attributes.insert("d".into(), sad!(""));
+    attributes.insert("dt".into(), sad!(timestamp()));
+    if let SadValue::Object(content) = content {
         attributes.extend(content);
     }
-    let mut attributes = Value::Object(attributes);
+    let mut attributes = SadValue::Object(attributes);
     said::compute_said(&mut attributes, "d", "E", SerializationKind::Json)
         .map_err(|e| DidWebsError::Create(format!("attribute SAID: {e}")))?;
 
     said::compute_said(&mut rules, "d", "E", SerializationKind::Json)
         .map_err(|e| DidWebsError::Create(format!("rules SAID: {e}")))?;
 
-    let mut acdc = json!({
+    let mut acdc = sad!({
         "v": "ACDC10JSON000000_",
         "d": "",
         "i": aid,
@@ -375,12 +375,12 @@ fn build_attestation(
 
 /// An ACDC declares its length the same way a KERI event does, but under its
 /// own protocol tag.
-fn fix_acdc_version(sad: &mut Value) -> Result<(), DidWebsError> {
+fn fix_acdc_version(sad: &mut SadValue) -> Result<(), DidWebsError> {
     let placeholder = "#".repeat(44);
     let original = sad["d"].clone();
-    sad["d"] = json!(placeholder);
+    sad["d"] = sad!(placeholder);
     let len = serde_json::to_vec(sad)?.len();
-    sad["v"] = json!(format!("ACDC10JSON{len:06x}_"));
+    sad["v"] = sad!(format!("ACDC10JSON{len:06x}_"));
     sad["d"] = original;
     Ok(())
 }

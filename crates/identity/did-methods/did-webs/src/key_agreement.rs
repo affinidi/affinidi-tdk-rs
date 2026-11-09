@@ -175,10 +175,10 @@ pub fn designated_key_agreement(kels: &Kels, aid: &str) -> Result<DesignatedKeys
     Ok(out)
 }
 
-fn read_keys(attributes: &Value) -> Result<Vec<String>, String> {
+fn read_keys(attributes: &affinidi_keri_core::SadValue) -> Result<Vec<String>, String> {
     let keys = attributes
         .get("keys")
-        .and_then(Value::as_array)
+        .and_then(|v| v.as_array())
         .filter(|keys| !keys.is_empty())
         .ok_or_else(|| "key agreement designation carries no `a.keys`".to_string())?;
     keys.iter()

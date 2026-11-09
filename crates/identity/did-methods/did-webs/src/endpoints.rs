@@ -16,10 +16,11 @@
 
 use affinidi_cesr::Counter;
 use affinidi_keri::hab::Hab;
+use affinidi_keri_core::sad;
+use affinidi_keri_core::sad::SadValue;
 use affinidi_keri_core::said;
 use affinidi_keri_core::serder::Serder;
 use affinidi_keri_core::version::SerializationKind;
-use serde_json::{Value, json};
 
 use crate::create::SelfEndpoint;
 use crate::errors::DidWebsError;
@@ -48,14 +49,14 @@ pub(crate) fn self_designated_replies(
 
         let authorise = reply(
             "/end/role/add",
-            json!({ "cid": aid, "role": service.role, "eid": aid }),
+            sad!({ "cid": aid, "role": service.role, "eid": aid }),
         )?;
         out.extend_from_slice(&sign_with_group(hab, establishment_said, &authorise)?);
 
         for (scheme, url) in &service.urls {
             let location = reply(
                 "/loc/scheme",
-                json!({ "eid": aid, "scheme": scheme, "url": url }),
+                sad!({ "eid": aid, "scheme": scheme, "url": url }),
             )?;
             out.extend_from_slice(&sign_with_group(hab, establishment_said, &location)?);
         }
@@ -65,8 +66,8 @@ pub(crate) fn self_designated_replies(
 }
 
 /// A `rpy` message with its SAID computed.
-fn reply(route: &str, attrs: Value) -> Result<Serder, DidWebsError> {
-    let mut sad = json!({
+fn reply(route: &str, attrs: SadValue) -> Result<Serder, DidWebsError> {
+    let mut sad = sad!({
         "v": "KERI10JSON000000_",
         "t": "rpy",
         "d": "",
@@ -137,12 +138,12 @@ fn sequence_number_qb64(sn: u64) -> String {
 
 /// Fix the `v` size before computing the SAID, so the SAID covers the bytes the
 /// message is actually serialized as.
-pub(crate) fn fix_version(sad: &mut Value) -> Result<(), DidWebsError> {
+pub(crate) fn fix_version(sad: &mut SadValue) -> Result<(), DidWebsError> {
     let placeholder = "#".repeat(44);
     let original = sad["d"].clone();
-    sad["d"] = json!(placeholder);
+    sad["d"] = sad!(placeholder);
     let len = serde_json::to_vec(sad)?.len();
-    sad["v"] = json!(format!("KERI10JSON{len:06x}_"));
+    sad["v"] = sad!(format!("KERI10JSON{len:06x}_"));
     sad["d"] = original;
     Ok(())
 }

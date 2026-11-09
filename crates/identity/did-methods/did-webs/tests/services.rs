@@ -10,6 +10,7 @@ use affinidi_did_webs::{Kels, service_endpoints};
 use affinidi_keri_core::said;
 use affinidi_keri_core::serder::Serder;
 use affinidi_keri_core::version::SerializationKind;
+use affinidi_keri_core::{SadValue, sad};
 use affinidi_keri_crypto::{Diger, Signer};
 use serde_json::json;
 
@@ -17,16 +18,16 @@ fn signer(seed: u8) -> Signer {
     Signer::new("A", [seed; 32].to_vec()).expect("signer")
 }
 
-fn fix_version(sad: &mut serde_json::Value) {
+fn fix_version(sad: &mut SadValue) {
     let placeholder = "#".repeat(44);
     let (d, i) = (sad["d"].clone(), sad.get("i").cloned());
     let self_addressing = i.as_ref() == Some(&d);
-    sad["d"] = json!(placeholder);
+    sad["d"] = sad!(placeholder);
     if self_addressing {
-        sad["i"] = json!(placeholder);
+        sad["i"] = sad!(placeholder);
     }
     let len = serde_json::to_vec(sad).expect("serialize").len();
-    sad["v"] = json!(format!("KERI10JSON{len:06x}_"));
+    sad["v"] = sad!(format!("KERI10JSON{len:06x}_"));
     sad["d"] = d;
     if let Some(i) = i {
         sad["i"] = i;
@@ -38,7 +39,7 @@ fn inception(controller: &Signer, next: &Signer) -> Serder {
         .expect("digest")
         .qb64()
         .expect("qb64");
-    let mut sad = json!({
+    let mut sad = sad!({
         "v": "KERI10JSON000000_", "t": "icp", "d": "", "i": "", "s": "0",
         "kt": "1", "k": [controller.verfer().qb64().expect("qb64")],
         "nt": "1", "n": [next_digest],
@@ -50,8 +51,8 @@ fn inception(controller: &Signer, next: &Signer) -> Serder {
 }
 
 /// A `rpy` message. `dt` drives supersedence, so it is explicit.
-fn reply(route: &str, attrs: serde_json::Value, dt: &str) -> Serder {
-    let mut sad = json!({
+fn reply(route: &str, attrs: SadValue, dt: &str) -> Serder {
+    let mut sad = sad!({
         "v": "KERI10JSON000000_", "t": "rpy", "d": "", "dt": dt,
         "r": route, "a": attrs,
     });
@@ -131,7 +132,7 @@ fn authorised(role_dt: &str, loc_dt: &str, cut: Option<&str>) -> Fixture {
 
     let add = reply(
         "/end/role/add",
-        json!({"cid": aid, "role": "agent", "eid": agent}),
+        sad!({"cid": aid, "role": "agent", "eid": agent}),
         role_dt,
     );
     push_reply(
@@ -145,7 +146,7 @@ fn authorised(role_dt: &str, loc_dt: &str, cut: Option<&str>) -> Fixture {
     if let Some(cut_dt) = cut {
         let cut_rpy = reply(
             "/end/role/cut",
-            json!({"cid": aid, "role": "agent", "eid": agent}),
+            sad!({"cid": aid, "role": "agent", "eid": agent}),
             cut_dt,
         );
         push_reply(
@@ -159,7 +160,7 @@ fn authorised(role_dt: &str, loc_dt: &str, cut: Option<&str>) -> Fixture {
 
     let loc = reply(
         "/loc/scheme",
-        json!({"eid": agent, "scheme": "http", "url": "http://agent.example:5642"}),
+        sad!({"eid": agent, "scheme": "http", "url": "http://agent.example:5642"}),
         loc_dt,
     );
     push_reply(
@@ -283,7 +284,7 @@ fn an_endpoint_that_never_said_where_it_is_publishes_nothing() {
     push_signed(&mut stream, &agent_icp, &agent_key);
     let add = reply(
         "/end/role/add",
-        json!({"cid": aid, "role": "agent", "eid": agent}),
+        sad!({"cid": aid, "role": "agent", "eid": agent}),
         "2026-01-01T00:00:00.000000+00:00",
     );
     push_reply(
@@ -318,7 +319,7 @@ fn a_location_signed_by_someone_else_is_ignored() {
     push_signed(&mut stream, &agent_icp, &agent_key);
     let add = reply(
         "/end/role/add",
-        json!({"cid": aid, "role": "agent", "eid": agent}),
+        sad!({"cid": aid, "role": "agent", "eid": agent}),
         "2026-01-01T00:00:00.000000+00:00",
     );
     push_reply(
@@ -331,7 +332,7 @@ fn a_location_signed_by_someone_else_is_ignored() {
 
     let loc = reply(
         "/loc/scheme",
-        json!({"eid": agent, "scheme": "http", "url": "http://attacker.example"}),
+        sad!({"eid": agent, "scheme": "http", "url": "http://attacker.example"}),
         "2026-01-01T00:00:00.000000+00:00",
     );
     // Signed by the controller, claiming to be the agent's location.
@@ -366,14 +367,14 @@ fn an_unsigned_authorisation_is_ignored() {
     // Appended with no signature at all.
     let add = reply(
         "/end/role/add",
-        json!({"cid": aid, "role": "agent", "eid": agent}),
+        sad!({"cid": aid, "role": "agent", "eid": agent}),
         "2026-01-01T00:00:00.000000+00:00",
     );
     stream.extend_from_slice(add.raw());
 
     let loc = reply(
         "/loc/scheme",
-        json!({"eid": agent, "scheme": "http", "url": "http://agent.example:5642"}),
+        sad!({"eid": agent, "scheme": "http", "url": "http://agent.example:5642"}),
         "2026-01-01T00:00:00.000000+00:00",
     );
     push_reply(
@@ -402,7 +403,7 @@ fn digest_of(s: &Signer) -> String {
 
 /// An inception with several current keys and a signing threshold.
 fn multi_key_inception(keys: &[&Signer], next: &[&Signer], kt: usize) -> Serder {
-    let mut sad = json!({
+    let mut sad = sad!({
         "v": "KERI10JSON000000_", "t": "icp", "d": "", "i": "", "s": "0",
         "kt": kt.to_string(),
         "k": keys.iter().map(|k| k.verfer().qb64().expect("qb64")).collect::<Vec<_>>(),
@@ -417,7 +418,7 @@ fn multi_key_inception(keys: &[&Signer], next: &[&Signer], kt: usize) -> Serder 
 
 /// A rotation to `new_key`, committing to `next`.
 fn rotation(prefix: &str, prior: &str, sn: u64, new_key: &Signer, next: &Signer) -> Serder {
-    let mut sad = json!({
+    let mut sad = sad!({
         "v": "KERI10JSON000000_", "t": "rot", "d": "", "i": prefix,
         "s": format!("{sn:x}"), "p": prior,
         "kt": "1", "k": [new_key.verfer().qb64().expect("qb64")],
@@ -488,7 +489,7 @@ fn two_of_two(role_signers: &[usize]) -> (String, Vec<u8>) {
     let dt = "2026-01-01T00:00:00.000000+00:00";
     let add = reply(
         "/end/role/add",
-        json!({"cid": aid, "role": "agent", "eid": aid}),
+        sad!({"cid": aid, "role": "agent", "eid": aid}),
         dt,
     );
     let signers: Vec<(usize, &Signer)> = role_signers.iter().map(|i| (*i, &keys[*i])).collect();
@@ -496,7 +497,7 @@ fn two_of_two(role_signers: &[usize]) -> (String, Vec<u8>) {
 
     let loc = reply(
         "/loc/scheme",
-        json!({"eid": aid, "scheme": "https", "url": "https://agent.example/"}),
+        sad!({"eid": aid, "scheme": "https", "url": "https://agent.example/"}),
         dt,
     );
     push_reply_signed_by(
@@ -558,7 +559,7 @@ fn a_rotated_out_key_cannot_outrank_the_current_key_with_a_future_dt() {
     // The old key's forged withdrawal, dated far in the future.
     let forged_cut = reply(
         "/end/role/cut",
-        json!({"cid": aid, "role": "agent", "eid": aid}),
+        sad!({"cid": aid, "role": "agent", "eid": aid}),
         "2099-01-01T00:00:00.000000+00:00",
     );
     push_reply(&mut stream, &forged_cut, &aid, &icp_said, &k0);
@@ -567,13 +568,13 @@ fn a_rotated_out_key_cannot_outrank_the_current_key_with_a_future_dt() {
     let dt = "2026-06-01T00:00:00.000000+00:00";
     let add = reply(
         "/end/role/add",
-        json!({"cid": aid, "role": "agent", "eid": aid}),
+        sad!({"cid": aid, "role": "agent", "eid": aid}),
         dt,
     );
     push_reply(&mut stream, &add, &aid, &rot_said, &k1);
     let loc = reply(
         "/loc/scheme",
-        json!({"eid": aid, "scheme": "https", "url": "https://agent.example/"}),
+        sad!({"eid": aid, "scheme": "https", "url": "https://agent.example/"}),
         dt,
     );
     push_reply(&mut stream, &loc, &aid, &rot_said, &k1);
@@ -593,7 +594,7 @@ fn a_reply_naming_an_interaction_event_is_not_signed_under_any_key_state() {
     let (k0, k1) = (signer(31), signer(32));
     let icp = inception(&k0, &k1);
     let aid = icp.prefix().expect("prefix");
-    let mut ixn = json!({
+    let mut ixn = sad!({
         "v": "KERI10JSON000000_", "t": "ixn", "d": "", "i": aid, "s": "1",
         "p": icp.said().expect("said"), "a": [],
     });
@@ -608,13 +609,13 @@ fn a_reply_naming_an_interaction_event_is_not_signed_under_any_key_state() {
     let dt = "2026-01-01T00:00:00.000000+00:00";
     let add = reply(
         "/end/role/add",
-        json!({"cid": aid, "role": "agent", "eid": aid}),
+        sad!({"cid": aid, "role": "agent", "eid": aid}),
         dt,
     );
     push_reply(&mut stream, &add, &aid, &ixn.said().expect("said"), &k0);
     let loc = reply(
         "/loc/scheme",
-        json!({"eid": aid, "scheme": "https", "url": "https://agent.example/"}),
+        sad!({"eid": aid, "scheme": "https", "url": "https://agent.example/"}),
         dt,
     );
     push_reply(&mut stream, &loc, &aid, &icp.said().expect("said"), &k0);
@@ -658,7 +659,7 @@ fn push_couple_signed(out: &mut Vec<u8>, serder: &Serder, s: &Signer) {
 }
 
 fn witnessed(controller: &Signer, next: &Signer, witness: &Signer) -> Serder {
-    let mut sad = json!({
+    let mut sad = sad!({
         "v": "KERI10JSON000000_", "t": "icp", "d": "", "i": "", "s": "0",
         "kt": "1", "k": [controller.verfer().qb64().expect("qb64")],
         "nt": "1", "n": [digest_of(next)],
@@ -700,7 +701,7 @@ fn a_witness_named_by_the_key_state_becomes_a_witness_service() {
 
     let loc = reply(
         "/loc/scheme",
-        json!({"eid": witness_prefix, "scheme": "https", "url": "https://wit.example:5641/"}),
+        sad!({"eid": witness_prefix, "scheme": "https", "url": "https://wit.example:5641/"}),
         "2026-01-01T00:00:00.000000+00:00",
     );
     push_couple_signed(&mut stream, &loc, &witness);
@@ -734,7 +735,7 @@ fn an_end_role_reply_cannot_make_a_witness_of_an_identifier_the_kel_never_named(
     let mut stream = f.stream.clone();
     let add = reply(
         "/end/role/add",
-        json!({"cid": f.aid, "role": "witness", "eid": f.agent}),
+        sad!({"cid": f.aid, "role": "witness", "eid": f.agent}),
         "2026-02-01T00:00:00.000000+00:00",
     );
     push_reply(
@@ -763,7 +764,7 @@ fn a_delegated_identifier_publishes_where_its_delegator_is() {
     let delegator = delegator_icp.prefix().expect("prefix");
 
     let (key, next) = (signer(53), signer(54));
-    let mut dip = json!({
+    let mut dip = sad!({
         "v": "KERI10JSON000000_", "t": "dip", "d": "", "i": "", "s": "0",
         "kt": "1", "k": [key.verfer().qb64().expect("qb64")],
         "nt": "1", "n": [digest_of(&next)],
@@ -776,7 +777,7 @@ fn a_delegated_identifier_publishes_where_its_delegator_is() {
     let dip_said = dip.said().expect("said");
 
     // The delegator's interaction anchoring the delegated inception.
-    let mut ixn = json!({
+    let mut ixn = sad!({
         "v": "KERI10JSON000000_", "t": "ixn", "d": "", "i": delegator, "s": "1",
         "p": delegator_icp.said().expect("said"),
         "a": [{"i": aid, "s": "0", "d": dip_said}],
@@ -810,7 +811,7 @@ fn a_delegated_identifier_publishes_where_its_delegator_is() {
 
     let loc = reply(
         "/loc/scheme",
-        json!({"eid": delegator, "scheme": "https", "url": "https://delegator.example/"}),
+        sad!({"eid": delegator, "scheme": "https", "url": "https://delegator.example/"}),
         "2026-01-01T00:00:00.000000+00:00",
     );
     push_reply(

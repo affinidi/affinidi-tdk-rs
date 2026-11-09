@@ -2,6 +2,36 @@
 
 All notable changes to this crate are documented here.
 
+## [0.9.0] - 2026-11-09
+
+### Changed (breaking)
+
+- **No more global `preserve_order`.** This crate turned on `serde_json`'s
+  `preserve_order` feature, and cargo unifies features, so depending on it
+  changed how every crate in the build serialized JSON: maps became
+  insertion-ordered and every `Value` grew. KERI and ACDC field order is now
+  kept by `affinidi_keri_core::SadValue`, whatever features `serde_json` was
+  built with. Requires `affinidi-keri-core` 0.5.
+- `Change::Interact` carries `affinidi_keri_core::SadValue` seals, not
+  `serde_json::Value`: a seal's `i`, `s`, `d` order is part of the event its
+  SAID covers. Build one with `affinidi_keri_core::sad!`.
+- A designated service's entry is written `id`, `type`, `serviceEndpoint`,
+  then its other members, in that order, whatever `serde_json` was built
+  with. `DesignatedService::to_service` still returns a `serde_json::Value`.
+
+### Fixed
+
+- **A service entry is checked wherever it is designated.** The check that an
+  entry is a service a DID document can carry ran in the one caller; it now
+  runs when the entry is built for a designation, so no caller can skip it.
+
+### Added
+
+- A test that every message this crate builds — `icp`, `rot`, `ixn`, `rpy`,
+  `vcp`, `iss`, `rev` and the ACDC, with its attributes and a designated
+  service entry — is written in KERI and ACDC field order, so a reordered
+  literal fails CI rather than shipping events keripy refuses.
+
 ## [0.8.2] - 2026-11-09
 
 ### Security
