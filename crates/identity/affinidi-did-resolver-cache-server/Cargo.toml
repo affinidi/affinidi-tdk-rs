@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-server"
-version = "0.9.15"
+version = "0.9.16"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
@@ -28,7 +28,9 @@ network = ["affinidi-did-resolver-cache-sdk/network"]
 # it keeps full method coverage. `did-jwk` was advertised in the README but not
 # actually enabled here between 0.8.22 and now — the SDK gating in #674 moved
 # it behind a feature and only `did-ethr` / `did-pkh` were opted back in.
-affinidi-did-resolver-cache-sdk = { version = "0.8.37", default-features = true, features = ["did-ethr", "did-pkh", "did-jwk"], path = "../affinidi-did-resolver-cache-sdk/" }
+# `did-webs` needs 0.8.47: from 0.8.46 did:webs obeys the host policy, and
+# 0.8.47 no longer turns on serde_json's `preserve_order` for the whole build.
+affinidi-did-resolver-cache-sdk = { version = "0.8.47", default-features = true, features = ["did-ethr", "did-pkh", "did-jwk", "did-webs"], path = "../affinidi-did-resolver-cache-sdk/" }
 affinidi-did-common = "0.4"
 # Shared background-task supervision (restart-on-failure + health registry)
 affinidi-task-utils = "0.1"

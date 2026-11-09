@@ -1,5 +1,13 @@
 # Affinidi DID Resolver Cache Server
 
+## Unreleased (0.9.16) — did:webs
+
+Resolves `did:webs`: the SDK's `did-webs` feature is on, and the SDK floor is
+0.8.47. A did:webs resolves only when its KERI key event log verifies and the
+published `did.json` matches the verified key state. Like did:web, did:webvh
+and did:scid, it fetches only from public hosts under the default
+`HostPolicy::PublicOnly`, follows no redirect and uses no proxy.
+
 ## Unreleased (0.9.15) — didwebvh-rs 0.8
 
 Moves to `didwebvh-rs` 0.8 (on `affinidi-data-integrity` 0.8), and picks up
