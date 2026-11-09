@@ -202,6 +202,7 @@ impl ATMProfile {
         // installed by the next `WebSocketTransport::start`.
         let _ = mediator.ws_conn_state_rx.write().await.take();
         let _ = mediator.ws_receive_health_rx.write().await.take();
+        let _ = mediator.mux.write().await.take();
 
         if let Some(channel) = channel {
             channel.send(WebSocketCommands::Stop).await.map_err(|err| {
@@ -240,6 +241,37 @@ impl ATMProfile {
     pub async fn receive_health(&self) -> Option<watch::Receiver<ReceiveHealth>> {
         let mediator = self.inner.mediator.as_ref().as_ref()?;
         mediator.ws_receive_health_rx.read().await.clone()
+    }
+
+    /// The current mux connection's `ready` (session id and attach nonce):
+    /// `None` inside the watch until the mediator sends it, and again after
+    /// every disconnect. `None` overall when this profile has no mux
+    /// connection. Watch it to know when (re-)attaching is possible.
+    pub async fn mux_ready(
+        &self,
+    ) -> Option<watch::Receiver<Option<crate::protocols::mux::MuxReady>>> {
+        let mediator = self.inner.mediator.as_ref().as_ref()?;
+        mediator
+            .mux
+            .read()
+            .await
+            .as_ref()
+            .map(|h| h.ready_rx.clone())
+    }
+
+    /// Every `messaging/mux/event` (`ready`, `attached`, `detached`,
+    /// `refused`) on this profile's mux connection. These are taken out of
+    /// the ordinary message stream. `None` when there is no mux connection.
+    pub async fn mux_events(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<crate::protocols::mux::MuxEvent>> {
+        let mediator = self.inner.mediator.as_ref().as_ref()?;
+        mediator
+            .mux
+            .read()
+            .await
+            .as_ref()
+            .map(|h| h.events_tx.subscribe())
     }
 
     /// Drop the current websocket and connect again at once, without backoff.
@@ -293,6 +325,10 @@ pub struct Mediator {
     /// Cloned out by [`ATMProfile::receive_health`].
     pub(crate) ws_receive_health_rx: RwLock<Option<watch::Receiver<ReceiveHealth>>>,
 
+    /// The receive side of a DID-multiplexing connection, when this profile's
+    /// websocket was opened with [`ATM::profile_enable_mux_websocket`].
+    pub(crate) mux: RwLock<Option<crate::protocols::mux::MuxHandles>>,
+
     /// Unique ID that is used for anything requiring a unique transaction identifier
     pub(crate) tx_uuid: AtomicU32,
 }
@@ -315,6 +351,7 @@ impl Mediator {
             ws_channel_tx: RwLock::new(None),
             ws_conn_state_rx: RwLock::new(None),
             ws_receive_health_rx: RwLock::new(None),
+            mux: RwLock::new(None),
             tx_uuid: AtomicU32::new(0),
         };
 
@@ -414,6 +451,7 @@ impl Mediator {
         // a fresh one is installed on the next `WebSocketTransport::start`.
         let _ = self.ws_conn_state_rx.write().await.take();
         let _ = self.ws_receive_health_rx.write().await.take();
+        let _ = self.mux.write().await.take();
         if let Some(sender) = sender {
             let _ = sender.send(WebSocketCommands::Stop).await;
         }
@@ -546,6 +584,60 @@ impl ATM {
         // Every error path past WebSocketTransport::start MUST clear the
         // sender slot and tell the spawned task to stop. Otherwise the task
         // stays alive forever via an Arc cycle (see Mediator::cleanup_failed_websocket).
+        match Self::wait_for_websocket_ready(mediator, &profile.inner.alias).await {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                mediator.cleanup_failed_websocket().await;
+                Err(err)
+            }
+        }
+    }
+
+    /// Open this profile's websocket as a **DID-multiplexing** connection
+    /// (`messaging/mux`): the profile is the principal, and the mediator also
+    /// delivers to every member DID that granted it (or is attached to it) on
+    /// this one socket.
+    ///
+    /// Opt-in and explicit: nothing becomes a member by calling this. Stored
+    /// grants are admitted by the mediator on connect; session attaches need
+    /// [`ATMProfile::mux_ready`]'s nonce and a `mux_attach` call, and are not
+    /// re-sent after a reconnect unless the application does so.
+    ///
+    /// Fails if the mediator does not offer mux (it must echo the
+    /// `affinidi-mux` subprotocol); there is no silent fallback to an
+    /// ordinary connection. Member DIDs' secrets must be in this ATM's
+    /// secrets resolver for their messages to unpack.
+    pub async fn profile_enable_mux_websocket(
+        &self,
+        profile: &Arc<ATMProfile>,
+    ) -> Result<(), ATMError> {
+        let Some(mediator) = &*profile.inner.mediator else {
+            return Err(ATMError::ConfigError(
+                "No Mediator is configured for this Profile".to_string(),
+            ));
+        };
+        if mediator.ws_channel_tx.read().await.is_some() {
+            // A plain websocket can't be turned into a mux one in place.
+            if mediator.mux.read().await.is_some() {
+                return Ok(());
+            }
+            return Err(ATMError::ConfigError(format!(
+                "Profile ({}) already has an ordinary websocket; stop it before opening a mux connection",
+                profile.inner.alias
+            )));
+        }
+        let (_, ws_channel, conn_state_rx) = WebSocketTransport::start_mux(
+            profile.clone(),
+            self.inner.clone(),
+            self.inner.config.inbound_message_channel.clone(),
+        )
+        .await;
+        mediator.ws_channel_tx.write().await.replace(ws_channel);
+        mediator
+            .ws_conn_state_rx
+            .write()
+            .await
+            .replace(conn_state_rx);
         match Self::wait_for_websocket_ready(mediator, &profile.inner.alias).await {
             Ok(()) => Ok(()),
             Err(err) => {
@@ -691,6 +783,7 @@ mod tests {
             ws_channel_tx: RwLock::new(None),
             ws_conn_state_rx: RwLock::new(None),
             ws_receive_health_rx: RwLock::new(None),
+            mux: RwLock::new(None),
             tx_uuid: AtomicU32::new(0),
         };
         Arc::new(ATMProfile {

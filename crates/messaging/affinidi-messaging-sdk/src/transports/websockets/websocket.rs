@@ -247,6 +247,9 @@ pub(crate) struct WebSocketTransport {
     /// boot-time latch. The matching `Receiver` is handed to the caller by
     /// `start`/`start_with_options` and stored on the `Mediator`.
     conn_state_tx: watch::Sender<ConnState>,
+
+    /// Set on a DID-multiplexing connection: where its `ready` and events go.
+    mux: Option<crate::protocols::mux::MuxSides>,
 }
 
 /// WebSocket Commands
@@ -302,6 +305,19 @@ impl WebSocketTransport {
         Self::start_with_options(profile, shared, direct_channel, false, false).await
     }
 
+    /// Start a DID-multiplexing connection (`affinidi-mux`).
+    pub(crate) async fn start_mux(
+        profile: Arc<ATMProfile>,
+        shared: Arc<SharedState>,
+        direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
+    ) -> (
+        JoinHandle<()>,
+        Sender<WebSocketCommands>,
+        watch::Receiver<ConnState>,
+    ) {
+        Self::start_inner(profile, shared, direct_channel, false, false, true).await
+    }
+
     pub(crate) async fn start_with_options(
         profile: Arc<ATMProfile>,
         shared: Arc<SharedState>,
@@ -313,6 +329,50 @@ impl WebSocketTransport {
         Sender<WebSocketCommands>,
         watch::Receiver<ConnState>,
     ) {
+        Self::start_inner(
+            profile,
+            shared,
+            direct_channel,
+            skip_toggle_live_delivery,
+            skip_unpack_messages,
+            false,
+        )
+        .await
+    }
+
+    async fn start_inner(
+        profile: Arc<ATMProfile>,
+        shared: Arc<SharedState>,
+        direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
+        skip_toggle_live_delivery: bool,
+        skip_unpack_messages: bool,
+        mux: bool,
+    ) -> (
+        JoinHandle<()>,
+        Sender<WebSocketCommands>,
+        watch::Receiver<ConnState>,
+    ) {
+        // Install the mux receive side before the task can publish to it.
+        let mux_sides = if mux {
+            let (ready_tx, ready_rx) = watch::channel(None);
+            let (events_tx, _) = broadcast::channel(crate::protocols::mux::MUX_EVENT_CAPACITY);
+            if let Some(mediator) = profile.inner.mediator.as_ref().as_ref() {
+                mediator
+                    .mux
+                    .write()
+                    .await
+                    .replace(crate::protocols::mux::MuxHandles {
+                        ready_rx,
+                        events_tx: events_tx.clone(),
+                    });
+            }
+            Some(crate::protocols::mux::MuxSides {
+                ready_tx,
+                events_tx,
+            })
+        } else {
+            None
+        };
         let (task_tx, mut task_rx) = mpsc::channel::<WebSocketCommands>(32);
         let (conn_state_tx, conn_state_rx) = watch::channel(ConnState::Connecting);
         let (health_tx, health_rx) = watch::channel(ReceiveHealth::default());
@@ -335,6 +395,7 @@ impl WebSocketTransport {
                 conn_state_tx,
                 health_tx,
             );
+            websocket.mux = mux_sides;
             websocket.run(&mut task_rx).await;
         });
         (handle, task_tx, conn_state_rx)
@@ -380,6 +441,7 @@ impl WebSocketTransport {
             health: ReceiveHealth::default(),
             health_tx,
             conn_state_tx,
+            mux: None,
         }
     }
 
@@ -942,6 +1004,17 @@ impl WebSocketTransport {
                     return;
                 }
 
+                // On a mux connection the mediator's own `mux/event`
+                // documents are control traffic for this transport (the
+                // `ready` nonce) and for `ATMProfile::mux_events`, not
+                // application messages. They are pushed, never stored, so
+                // there is nothing to delete.
+                if let Some(mux) = &self.mux
+                    && mux.absorb(&message)
+                {
+                    return;
+                }
+
                 // An unpacked message has the same rule as a packed frame above:
                 // every home that turns it away hands it to the next, and it ends
                 // in the cache rather than falling off the end. Each `send` below
@@ -1333,6 +1406,9 @@ impl WebSocketTransport {
         self.web_socket = None;
         self.awaiting_pong = false;
         let _ = self.conn_state_tx.send(ConnState::Disconnected);
+        if let Some(mux) = &self.mux {
+            mux.reset();
+        }
         // Self-initiated reconnect (not a failure): keep the immediate retry,
         // but clear the stability marker so the fresh socket has to earn its
         // own reset.
@@ -1539,10 +1615,15 @@ impl WebSocketTransport {
                 80
             });
 
-        let builder = ClientRequestBuilder::new(uri)
+        let mut builder = ClientRequestBuilder::new(uri)
             .with_header("Authorization", ["Bearer ", &tokens.access_token].concat());
+        if let Some(mux) = &self.mux {
+            // Every socket is a new mux session with a new nonce.
+            mux.reset();
+            builder = builder.with_sub_protocol(crate::protocols::mux::MUX_SUBPROTOCOL);
+        }
 
-        let (web_socket, _) = super::proxy::connect_websocket(builder, &host, port)
+        let (web_socket, response) = super::proxy::connect_websocket(builder, &host, port)
             .await
             .map_err(|e| match e {
                 // Keep a refused upgrade typed, so a caller can see it was
@@ -1562,6 +1643,25 @@ impl WebSocketTransport {
             })?;
 
         debug!("Completed websocket connection");
+
+        // A mux connection is only one if the mediator selected the marker.
+        // An older mediator, or one with mux disabled, does not echo it; that
+        // is a refusal, not a cue to carry on as an ordinary socket.
+        if self.mux.is_some() {
+            let selected = response
+                .headers()
+                .get("sec-websocket-protocol")
+                .and_then(|v| v.to_str().ok());
+            if selected != Some(crate::protocols::mux::MUX_SUBPROTOCOL) {
+                return Err(ATMError::ConfigError(format!(
+                    "Profile '{}' → mediator {}: the mediator did not accept a DID-multiplexing \
+                     connection (it must select the `{}` subprotocol; mux may be disabled)",
+                    self.profile.inner.alias,
+                    mediator.did,
+                    crate::protocols::mux::MUX_SUBPROTOCOL
+                )));
+            }
+        }
 
         Ok(web_socket)
     }

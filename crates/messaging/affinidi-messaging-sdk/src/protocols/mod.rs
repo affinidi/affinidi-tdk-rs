@@ -24,6 +24,7 @@ pub struct Protocols {
 pub mod discover_features;
 pub mod mediator;
 pub mod message_pickup;
+pub mod mux;
 pub mod oob_discovery;
 pub mod routing;
 pub mod trust_ping;

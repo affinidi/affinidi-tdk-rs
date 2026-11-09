@@ -38,7 +38,7 @@ use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_secrets_resolver::secrets::{KeyType, Secret};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha256::digest;
 use tracing::warn;
 use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
@@ -1368,6 +1368,173 @@ fn decode_body<R: DeserializeOwned>(body: &Value) -> Result<TrustTask<R>, ATMErr
     serde_json::from_value(body.clone()).map_err(|e| {
         ATMError::MsgReceiveError(format!("response is not a Trust Task document: {e}"))
     })
+}
+
+// ─── DID multiplexing (`messaging/mux/*/0.1`) ────────────────────────────────
+
+use crate::protocols::mux::MuxCapability;
+use crate::tasks::messaging::mux as mux_tasks;
+
+/// Build a `messaging/mux/*` task from a JSON payload, letting the generated
+/// type check its shape before anything is sent.
+fn mux_task<P>(profile: &Arc<ATMProfile>, payload: Value) -> Result<TrustTask<P>, ATMError>
+where
+    P: trust_tasks_rs::Payload + DeserializeOwned,
+{
+    let (profile_did, mediator_did) = profile.dids()?;
+    let p: P = serde_json::from_value(payload)
+        .map_err(|e| ATMError::MsgSendError(format!("invalid mux payload: {e}")))?;
+    let mut task = TrustTask::for_payload(new_id(), p);
+    task.issuer = Some(profile_did.to_string());
+    task.recipient = Some(mediator_did.to_string());
+    Ok(task)
+}
+
+impl TrustTasksOps<'_> {
+    /// Sign and send on this profile's own DIDComm connection, never over
+    /// TSP: `attach` and `detach` act on the mux connection they arrive on,
+    /// so they must travel on the mux socket.
+    async fn exchange_on_socket<P, R>(
+        &self,
+        profile: &Arc<ATMProfile>,
+        mut task: TrustTask<P>,
+    ) -> Result<TrustTask<R>, ATMError>
+    where
+        P: Serialize,
+        R: DeserializeOwned,
+    {
+        let (profile_did, _) = profile.dids()?;
+        task.issued_at = Some(chrono::Utc::now());
+        let body = serde_json::to_value(&task)
+            .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))?;
+        let body = self.sign(profile_did, body).await?;
+        self.exchange_didcomm(profile, body).await
+    }
+
+    /// `messaging/mux/grant`: store grant statements (from
+    /// [`sign_grant`](crate::protocols::mux::sign_grant)). Either the member
+    /// or the principal may send them; each is accepted or refused on its own.
+    pub async fn mux_grant(
+        &self,
+        profile: &Arc<ATMProfile>,
+        statements: Vec<Value>,
+    ) -> Result<mux_tasks::grant::v0_1::Response, ATMError> {
+        let task =
+            mux_task::<mux_tasks::grant::v0_1::Payload>(profile, json!({ "grants": statements }))?;
+        let r: TrustTask<mux_tasks::grant::v0_1::Response> = self.exchange(profile, task).await?;
+        Ok(r.payload)
+    }
+
+    /// `messaging/mux/attach` on this profile's **mux connection**: attach
+    /// statements (from [`sign_attach`](crate::protocols::mux::sign_attach),
+    /// bound to the connection's current [`MuxReady`](crate::protocols::mux::MuxReady)).
+    pub async fn mux_attach(
+        &self,
+        profile: &Arc<ATMProfile>,
+        statements: Vec<Value>,
+    ) -> Result<mux_tasks::attach::v0_1::Response, ATMError> {
+        let task = mux_task::<mux_tasks::attach::v0_1::Payload>(
+            profile,
+            json!({ "attachments": statements }),
+        )?;
+        let r: TrustTask<mux_tasks::attach::v0_1::Response> =
+            self.exchange_on_socket(profile, task).await?;
+        Ok(r.payload)
+    }
+
+    /// `messaging/mux/detach` on this profile's mux connection: drop session
+    /// attaches. A DID carried by a stored grant stays (revoke it instead).
+    pub async fn mux_detach(
+        &self,
+        profile: &Arc<ATMProfile>,
+        dids: Vec<String>,
+    ) -> Result<mux_tasks::detach::v0_1::Response, ATMError> {
+        let task = mux_task::<mux_tasks::detach::v0_1::Payload>(profile, json!({ "dids": dids }))?;
+        let r: TrustTask<mux_tasks::detach::v0_1::Response> =
+            self.exchange_on_socket(profile, task).await?;
+        Ok(r.payload)
+    }
+
+    /// `messaging/mux/list`: the grants this profile holds as a principal, or
+    /// (`as_member`) the grants on its own DID and its current epoch.
+    pub async fn mux_list(
+        &self,
+        profile: &Arc<ATMProfile>,
+        as_member: bool,
+        cursor: Option<String>,
+        limit: Option<u64>,
+    ) -> Result<mux_tasks::list::v0_1::Response, ATMError> {
+        let mut payload = json!({ "as": if as_member { "member" } else { "principal" } });
+        if let Some(c) = cursor {
+            payload["cursor"] = json!(c);
+        }
+        if let Some(l) = limit {
+            payload["limit"] = json!(l);
+        }
+        let task = mux_task::<mux_tasks::list::v0_1::Payload>(profile, payload)?;
+        let r: TrustTask<mux_tasks::list::v0_1::Response> = self.exchange(profile, task).await?;
+        Ok(r.payload)
+    }
+
+    /// `messaging/mux/update`: narrow a grant (smaller scope and/or earlier
+    /// expiry). Either party may; widening needs a new grant.
+    pub async fn mux_update(
+        &self,
+        profile: &Arc<ATMProfile>,
+        grant_id: &str,
+        scope: Option<&[MuxCapability]>,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<mux_tasks::update::v0_1::Response, ATMError> {
+        let mut payload = json!({ "grantId": grant_id });
+        if let Some(s) = scope {
+            payload["scope"] = json!(s);
+        }
+        if let Some(e) = expires_at {
+            payload["expiresAt"] = json!(e.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        }
+        let task = mux_task::<mux_tasks::update::v0_1::Payload>(profile, payload)?;
+        let r: TrustTask<mux_tasks::update::v0_1::Response> = self.exchange(profile, task).await?;
+        Ok(r.payload)
+    }
+
+    /// `messaging/mux/revoke`. As principal: `dids` are member DIDs to drop.
+    /// As member (`as_member`): `dids` are principals to remove. `grant_ids`
+    /// name grants directly either way.
+    pub async fn mux_revoke(
+        &self,
+        profile: &Arc<ATMProfile>,
+        as_member: bool,
+        grant_ids: Vec<String>,
+        dids: Vec<String>,
+    ) -> Result<mux_tasks::revoke::v0_1::Response, ATMError> {
+        let mut payload = json!({ "as": if as_member { "member" } else { "principal" } });
+        if !grant_ids.is_empty() {
+            payload["grantIds"] = json!(grant_ids);
+        }
+        if !dids.is_empty() {
+            payload["dids"] = json!(dids);
+        }
+        let task = mux_task::<mux_tasks::revoke::v0_1::Payload>(profile, payload)?;
+        let r: TrustTask<mux_tasks::revoke::v0_1::Response> = self.exchange(profile, task).await?;
+        Ok(r.payload)
+    }
+
+    /// `messaging/mux/revoke-all`: void every grant a member issued under an
+    /// epoch, with a statement from
+    /// [`sign_revoke_all`](crate::protocols::mux::sign_revoke_all).
+    pub async fn mux_revoke_all(
+        &self,
+        profile: &Arc<ATMProfile>,
+        statement: Value,
+    ) -> Result<mux_tasks::revoke_all::v0_1::Response, ATMError> {
+        let task = mux_task::<mux_tasks::revoke_all::v0_1::Payload>(
+            profile,
+            json!({ "revocation": statement }),
+        )?;
+        let r: TrustTask<mux_tasks::revoke_all::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(r.payload)
+    }
 }
 
 #[cfg(test)]
