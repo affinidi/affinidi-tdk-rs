@@ -9,10 +9,13 @@
 //! the basis of a signed event.
 
 use affinidi_keri::config::RotationConfig;
+use affinidi_keri::controller::{ControllerState, KeySigner, PendingEvent, Rotation};
 use affinidi_keri::hab::Hab;
 
+use crate::signing::{Controller, Held};
+
 use crate::artifacts::Artifacts;
-use crate::create::{SelfEndpoint, artifacts_for};
+use crate::create::{ControlledResult, SelfEndpoint, artifacts_for};
 use crate::custody::KeyCustody;
 use crate::designated_services::DesignatedService;
 use crate::errors::DidWebsError;
@@ -169,10 +172,190 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
                 .map_err(|e| DidWebsError::Create(format!("rotation failed: {e}")))?;
             keri_cesr.extend_from_slice(&event.composed);
         }
+        change => apply(&did, &kels, &state, &mut hab, change, &mut keri_cesr)?,
+    }
+
+    let artifacts = artifacts_for(&did, &keri_cesr)?;
+
+    Ok(UpdateResult {
+        did: did.did().to_string(),
+        artifacts,
+        custody: KeyCustody::new(hab.state()),
+    })
+}
+
+/// How to continue an identifier whose keys the caller holds.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ControlledUpdate {
+    /// The DID being updated.
+    pub did: String,
+    /// Its currently published artifacts.
+    pub prior: Artifacts,
+    /// The state the last create or update returned.
+    pub state: ControllerState,
+    /// What to append. A rotation is not one of these: see
+    /// [`prepare_rotation`].
+    pub change: Change,
+}
+
+impl ControlledUpdate {
+    /// Append `change` to the identifier at `prior`.
+    pub fn new(
+        did: impl Into<String>,
+        prior: Artifacts,
+        state: ControllerState,
+        change: Change,
+    ) -> Self {
+        Self {
+            did: did.into(),
+            prior,
+            state,
+            change,
+        }
+    }
+}
+
+/// Verify the published log, and that `state` is where it has got to.
+fn verified_prior(
+    did: &DidWebs,
+    prior: &Artifacts,
+    state: &ControllerState,
+) -> Result<(Kels, affinidi_keri_core::key_state::KeyState), DidWebsError> {
+    let kels = Kels::parse(&prior.keri_cesr)?;
+    let key_state = kels.key_state(did.aid())?;
+    if state.prefix != did.aid() {
+        return Err(DidWebsError::Create(format!(
+            "state is for {}, not {}",
+            state.prefix,
+            did.aid()
+        )));
+    }
+    if state.sn != key_state.sn || state.last_said != key_state.last_event_digest {
+        return Err(DidWebsError::Create(format!(
+            "state is at sequence number {} but the published log is at {} — one of \
+             them is stale, and signing from the wrong point would produce an event \
+             nothing accepts",
+            state.sn, key_state.sn,
+        )));
+    }
+    if state.keys != key_state.keys || state.next_digests != key_state.next_keys {
+        return Err(DidWebsError::Create(
+            "state's keys are not the published log's key state".into(),
+        ));
+    }
+    Ok((kels, key_state))
+}
+
+/// Append to an identifier whose keys the caller holds, and rebuild its
+/// artifacts: every change but a rotation, signed by `signers`, which must
+/// meet the current signing threshold.
+///
+/// # Errors
+/// As [`update`], and [`DidWebsError::Create`] for [`Change::Rotate`] (see
+/// [`prepare_rotation`]) or signers that do not meet the threshold.
+pub fn update_controlled(
+    config: ControlledUpdate,
+    signers: &[&dyn KeySigner],
+) -> Result<ControlledResult, DidWebsError> {
+    let did = DidWebs::parse(&config.did)?;
+    if matches!(config.change, Change::Rotate(_)) {
+        return Err(DidWebsError::Create(
+            "a rotation of caller-held keys is prepared with prepare_rotation and finished \
+             with complete_rotation, since the keys that sign it may be held by others"
+                .into(),
+        ));
+    }
+    let (kels, key_state) = verified_prior(&did, &config.prior, &config.state)?;
+    let mut held = Held::new(config.state, signers)?;
+    let mut keri_cesr = config.prior.keri_cesr.clone();
+    apply(
+        &did,
+        &kels,
+        &key_state,
+        &mut held,
+        &config.change,
+        &mut keri_cesr,
+    )?;
+    let artifacts = artifacts_for(&did, &keri_cesr)?;
+    Ok(ControlledResult::new(
+        did.did().to_string(),
+        artifacts,
+        held.state,
+    ))
+}
+
+/// Build a rotation of an identifier whose keys the caller holds.
+///
+/// `keys` are the successors the latest establishment event committed to,
+/// all of them and in order. The returned event is signed by those keys'
+/// holders — [`PendingEvent::sign_with`] or [`PendingEvent::add_signature`],
+/// in this process or elsewhere — and then passed to [`complete_rotation`].
+/// With a recovery custodian committed under a weighted `nt`, that means the
+/// custodian's signature (see `affinidi_keri::controller`).
+///
+/// # Errors
+/// Returns [`DidWebsError`] if the prior log does not verify, `state` is not
+/// its current state, or the rotation cannot be built.
+pub fn prepare_rotation(
+    did: &str,
+    prior: &Artifacts,
+    state: &ControllerState,
+    keys: &[String],
+    rotation: &Rotation,
+) -> Result<PendingEvent, DidWebsError> {
+    let did = DidWebs::parse(did)?;
+    verified_prior(&did, prior, state)?;
+    state
+        .rotate(keys, rotation)
+        .map_err(|e| DidWebsError::Create(format!("rotation: {e}")))
+}
+
+/// Append a signed rotation built by [`prepare_rotation`].
+///
+/// # Errors
+/// Returns [`DidWebsError`] if the signatures do not meet the rotation's `kt`
+/// and the prior `nt`, the event does not follow `prior`, or the new artifacts
+/// do not resolve back.
+pub fn complete_rotation(
+    did: &str,
+    prior: &Artifacts,
+    pending: PendingEvent,
+) -> Result<ControlledResult, DidWebsError> {
+    let did = DidWebs::parse(did)?;
+    let (event, state) = pending.finish().map_err(|e| {
+        DidWebsError::Create(format!(
+            "the rotation's signatures do not meet its thresholds: {e}"
+        ))
+    })?;
+    let mut keri_cesr = prior.keri_cesr.clone();
+    keri_cesr.extend_from_slice(&event.composed);
+    // Resolving the result verifies the rotation against the prior log.
+    let artifacts = artifacts_for(&did, &keri_cesr)?;
+    Ok(ControlledResult::new(
+        did.did().to_string(),
+        artifacts,
+        state,
+    ))
+}
+
+/// Append everything but a rotation, whoever signs.
+fn apply(
+    did: &DidWebs,
+    kels: &Kels,
+    state: &affinidi_keri_core::key_state::KeyState,
+    hab: &mut dyn Controller,
+    change: &Change,
+    keri_cesr: &mut Vec<u8>,
+) -> Result<(), DidWebsError> {
+    match change {
+        Change::Rotate(_) => {
+            return Err(DidWebsError::Create(
+                "a rotation is not applied here; see update and prepare_rotation".into(),
+            ));
+        }
         Change::Interact(anchors) => {
-            let event = hab
-                .interact_event(anchors)
-                .map_err(|e| DidWebsError::Create(format!("interaction failed: {e}")))?;
+            let event = hab.interact(anchors)?;
             keri_cesr.extend_from_slice(&event.composed);
         }
         Change::AlsoKnownAs(aliases) => {
@@ -180,40 +363,40 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
             // force are withdrawn first — otherwise an alias dropped here
             // would still be listed.
             keri_cesr.extend_from_slice(&revoke_all(
-                &kels,
-                &mut hab,
+                kels,
+                hab,
                 did.aid(),
                 crate::aliases::DESIGNATED_ALIASES_SCHEMA,
             )?);
-            let establishment = last_establishment_said(&kels, did.aid())?;
+            let establishment = last_establishment_said(kels, did.aid())?;
             let attestation = crate::attestation::issue_designated_aliases(
-                &mut hab,
+                hab,
                 did.aid(),
                 &establishment,
-                &crate::attestation::designation(&did, aliases),
+                &crate::attestation::designation(did, aliases),
             )?;
             keri_cesr.extend_from_slice(&attestation);
         }
         Change::KeyRoles(roles) => {
-            let prior = designated_key_roles(&kels, did.aid())?;
+            let prior = designated_key_roles(kels, did.aid())?;
             keri_cesr.extend_from_slice(&revoke_all(
-                &kels,
-                &mut hab,
+                kels,
+                hab,
                 did.aid(),
                 crate::key_roles::KEY_ROLE_SCHEMA,
             )?);
-            let establishment = last_establishment_said(&kels, did.aid())?;
+            let establishment = last_establishment_said(kels, did.aid())?;
             keri_cesr.extend_from_slice(&crate::attestation::issue_key_roles(
-                &mut hab,
+                hab,
                 did.aid(),
                 &establishment,
-                &state,
+                state,
                 roles,
                 &prior.revoked,
             )?);
         }
         Change::RevokeRoleKey(compromised) => {
-            let prior = designated_key_roles(&kels, did.aid())?;
+            let prior = designated_key_roles(kels, did.aid())?;
             let mut roles = prior.roles.clone();
             let mut found = false;
             for (_, keys) in &mut roles {
@@ -230,23 +413,23 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
             let next =
                 KeyRoles::from_standing(&roles, &prior.revoked)?.with_revoked(compromised.clone());
             keri_cesr.extend_from_slice(&revoke_all(
-                &kels,
-                &mut hab,
+                kels,
+                hab,
                 did.aid(),
                 crate::key_roles::KEY_ROLE_SCHEMA,
             )?);
-            let establishment = last_establishment_said(&kels, did.aid())?;
+            let establishment = last_establishment_said(kels, did.aid())?;
             keri_cesr.extend_from_slice(&crate::attestation::issue_key_roles(
-                &mut hab,
+                hab,
                 did.aid(),
                 &establishment,
-                &state,
+                state,
                 &next,
                 &prior.revoked,
             )?);
         }
         Change::KeyAgreement(keys) => {
-            if designated_key_roles(&kels, did.aid())?.issued {
+            if designated_key_roles(kels, did.aid())?.issued {
                 return Err(DidWebsError::Create(
                     "this identifier designates key roles; key agreement keys are bound to the \
                      messaging role (Change::KeyRoles)"
@@ -254,15 +437,15 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
                 ));
             }
             keri_cesr.extend_from_slice(&revoke_all(
-                &kels,
-                &mut hab,
+                kels,
+                hab,
                 did.aid(),
                 crate::key_agreement::KEY_AGREEMENT_SCHEMA,
             )?);
             if !keys.is_empty() {
-                let establishment = last_establishment_said(&kels, did.aid())?;
+                let establishment = last_establishment_said(kels, did.aid())?;
                 keri_cesr.extend_from_slice(&crate::attestation::issue_key_agreement(
-                    &mut hab,
+                    hab,
                     did.aid(),
                     &establishment,
                     keys,
@@ -271,15 +454,15 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
         }
         Change::DesignatedServices(services) => {
             keri_cesr.extend_from_slice(&revoke_all(
-                &kels,
-                &mut hab,
+                kels,
+                hab,
                 did.aid(),
                 crate::designated_services::SERVICE_SCHEMA,
             )?);
             if !services.is_empty() {
-                let establishment = last_establishment_said(&kels, did.aid())?;
+                let establishment = last_establishment_said(kels, did.aid())?;
                 keri_cesr.extend_from_slice(&crate::attestation::issue_services(
-                    &mut hab,
+                    hab,
                     did.aid(),
                     &establishment,
                     services,
@@ -290,9 +473,9 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
             // Replies are not key events, so nothing is appended to the log
             // itself — but they must name the establishment event whose keys
             // sign them, which is not necessarily the latest event.
-            let establishment = last_establishment_said(&kels, did.aid())?;
+            let establishment = last_establishment_said(kels, did.aid())?;
             let replies = crate::endpoints::self_designated_replies(
-                &hab,
+                hab,
                 did.aid(),
                 &establishment,
                 services,
@@ -300,20 +483,13 @@ pub fn update(config: UpdateConfig, salt: &[u8]) -> Result<UpdateResult, DidWebs
             keri_cesr.extend_from_slice(&replies);
         }
     }
-
-    let artifacts = artifacts_for(&did, &keri_cesr)?;
-
-    Ok(UpdateResult {
-        did: did.did().to_string(),
-        artifacts,
-        custody: KeyCustody::new(hab.state()),
-    })
+    Ok(())
 }
 
 /// Revoke every designation of `schema` in force, anchoring each revocation.
 fn revoke_all(
     kels: &Kels,
-    hab: &mut Hab,
+    hab: &mut dyn Controller,
     aid: &str,
     schema: &str,
 ) -> Result<Vec<u8>, DidWebsError> {

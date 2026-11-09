@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-webs"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "affinidi-cesr",
  "affinidi-crypto",
@@ -372,9 +372,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-keri"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e98050e25ddfb1fdaca966f4bc1e3f47856d6639ccf045f124d383ed494cd23e"
+checksum = "417f8f3a9bc0574fc0251865fff9b4b732ba10faa26d5d62f2e38da5d7c25cce"
 dependencies = [
  "affinidi-cesr",
  "affinidi-keri-core",
@@ -388,9 +388,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-keri-core"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f44114f2dd34555182b83331291ac10d8a727f515b0622037a8e4e1c87429be2"
+checksum = "36e77de019c6f9cdc8b9012ef17adb502eaf2fc2f8fe4b9dc7babeb9288806e8"
 dependencies = [
  "affinidi-cesr",
  "affinidi-keri-crypto",
@@ -406,9 +406,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-keri-crypto"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "122a93049f2c5c4da2402fc2cad211686049258b936c1c87969f3ca7c0ef9cd4"
+checksum = "9cabd0b03dbbea760b2bb238fd8b93ed6b2a924af747708f69bded67b7d236c6"
 dependencies = [
  "affinidi-cesr",
  "argon2",
@@ -427,9 +427,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-keri-db"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c738faa676259f43d397132c8bcc70773a5d3b69769e14eee6069e134054ae86"
+checksum = "353d8dfcf31a0a5fb0d1b02813f28015fe404aba9e649bb801c3f8cde88e6ec2"
 dependencies = [
  "affinidi-cesr",
  "affinidi-keri-core",
@@ -2453,7 +2453,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.7",
 ]
 
 [[package]]
@@ -2910,7 +2910,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4546,7 +4546,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5350,7 +5350,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5896,7 +5896,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5954,7 +5954,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6765,10 +6765,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7816,7 +7816,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

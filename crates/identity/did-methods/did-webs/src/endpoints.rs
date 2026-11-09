@@ -14,8 +14,8 @@
 //! signed by *their* key, which this crate does not hold, so those must arrive
 //! pre-signed.
 
+use crate::signing::Controller;
 use affinidi_cesr::Counter;
-use affinidi_keri::hab::Hab;
 use affinidi_keri_core::sad;
 use affinidi_keri_core::sad::SadValue;
 use affinidi_keri_core::said;
@@ -31,7 +31,7 @@ use crate::errors::DidWebsError;
 /// # Errors
 /// Returns [`DidWebsError::Create`] if a reply cannot be built or signed.
 pub(crate) fn self_designated_replies(
-    hab: &Hab,
+    hab: &dyn Controller,
     aid: &str,
     establishment_said: &str,
     services: &[SelfEndpoint],
@@ -88,27 +88,20 @@ fn reply(route: &str, attrs: SadValue) -> Result<Serder, DidWebsError> {
 /// Attach a transferable indexed signature group — how a transferable
 /// identifier signs anything that is not part of its own key event log.
 pub(crate) fn sign_with_group(
-    hab: &Hab,
+    hab: &dyn Controller,
     establishment_said: &str,
     serder: &Serder,
 ) -> Result<Vec<u8>, DidWebsError> {
-    let signers = hab.signers();
-    if signers.is_empty() {
+    // Enough current keys to meet the signing threshold, each at its own
+    // index: a resolver holds the group to that threshold.
+    let signatures = hab.sign_current(serder.raw())?;
+    if signatures.is_empty() {
         return Err(DidWebsError::Create("identifier has no signing key".into()));
     }
-    // Every current key signs, at its own index. A resolver holds the group to
-    // the key state's signing threshold, so signing with the first key alone
-    // would produce something a multi-key identifier's own resolver rejects.
-    let mut signatures = String::new();
-    for (index, signer) in signers.iter().enumerate() {
-        let signature = signer
-            .sign_indexed(serder.raw(), index, true)
-            .and_then(|s| s.qb64())
-            .map_err(|e| DidWebsError::Create(format!("could not sign reply: {e}")))?;
-        signatures.push_str(&signature);
-    }
+    let count = signatures.len();
+    let signatures = signatures.concat();
 
-    let inner = Counter::new("-A", signers.len())
+    let inner = Counter::new("-A", count)
         .and_then(|c| c.qb64())
         .map_err(|e| DidWebsError::Create(format!("counter: {e}")))?;
     let outer = Counter::new("-F", 1)

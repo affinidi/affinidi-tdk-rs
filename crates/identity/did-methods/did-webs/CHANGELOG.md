@@ -2,6 +2,30 @@
 
 All notable changes to this crate are documented here.
 
+## [0.9.3] - 2026-11-09
+
+### Added
+
+- **Identifiers whose keys the caller holds.** `create` and `update` derive
+  every key from a salt. A custodian whose keys live in an HSM, an enclave or a
+  key service — and one sharing control with a recovery custodian — now has a
+  path of its own, built on `affinidi_keri::controller` (affinidi-keri 0.5.1):
+  - `CreateConfigBuilder::controlled(Inception)` and `create_controlled(config,
+    signers)`: the current keys, the successors as digests or public keys, and
+    the thresholds; `signers` are `KeySigner`s for the current keys.
+  - `update_controlled(ControlledUpdate, signers)`: every `Change` but a
+    rotation, signed by the current keys under their threshold.
+  - `prepare_rotation` → `PendingEvent` → `complete_rotation`: a rotation's
+    signatures can come from elsewhere, later — a recovery custodian's
+    included — and are checked against its `kt` and the prior `nt`.
+  - `ControlledResult` carries the artifacts and the non-secret
+    `ControllerState` to continue from.
+
+  With `n = [H(R′), H(K)]` and `nt = [["1/2", "1"]]` (the arrangement the VTI
+  did:webs method profile states) the custodian's `K` is committed by digest
+  alone, `R′` cannot rotate without it, and after rotating `R′` signs routine
+  changes alone. The salt-based path is unchanged.
+
 ## [0.9.2] - 2026-11-09
 
 ### Added

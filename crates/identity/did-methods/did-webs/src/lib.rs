@@ -35,6 +35,8 @@ pub mod custody;
 #[cfg(feature = "create")]
 pub mod endpoints;
 #[cfg(feature = "create")]
+pub(crate) mod signing;
+#[cfg(feature = "create")]
 pub mod update;
 
 pub mod aliases;
@@ -54,7 +56,9 @@ pub use aliases::{DesignatedAliases, designated_aliases};
 #[cfg(feature = "create")]
 pub use artifacts::Artifacts;
 #[cfg(feature = "create")]
-pub use create::{CreateConfig, CreateResult, SelfEndpoint, create};
+pub use create::{
+    ControlledResult, CreateConfig, CreateResult, SelfEndpoint, create, create_controlled,
+};
 #[cfg(feature = "create")]
 pub use custody::KeyCustody;
 pub use designated_services::{DesignatedService, DesignatedServices, designated_services};
@@ -69,4 +73,7 @@ pub use key_roles::{
 pub use resolver::{DocumentMetadata, Resolution, resolve_from_artifacts, resolve_with_metadata};
 pub use services::{ServiceEndpoint, delegator_service, service_endpoints};
 #[cfg(feature = "create")]
-pub use update::{Change, UpdateConfig, UpdateResult, update};
+pub use update::{
+    Change, ControlledUpdate, UpdateConfig, UpdateResult, complete_rotation, prepare_rotation,
+    update, update_controlled,
+};

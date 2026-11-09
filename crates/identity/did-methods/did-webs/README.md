@@ -160,6 +160,41 @@ another implementation reads them, a resolver that derives the document from
 KERI data alone will not reproduce `keyAgreement` or the designated services,
 and will reject a `did.json` carrying them.
 
+## Keys the caller holds
+
+`create` and `update` derive every key from a salt. When keys live elsewhere —
+an HSM, an enclave, a key service — or a recovery key is held by someone else,
+use the controlled path, which never sees a secret:
+
+```rust,no_run
+use affinidi_did_webs::create::{CreateConfig, create_controlled};
+use affinidi_keri::controller::{Inception, KeySigner, NextKey};
+use affinidi_keri_core::threshold::Threshold;
+
+# fn run(routine: &dyn KeySigner, successor: String, custodian_digest: String)
+#     -> Result<(), Box<dyn std::error::Error>> {
+let created = create_controlled(
+    CreateConfig::builder("example.com")
+        .controlled(Inception::new(
+            vec![routine.public_key()?],
+            Threshold::Simple(1),
+            // The custodian hands over only its key's digest.
+            vec![NextKey::PublicKey(successor), NextKey::Digest(custodian_digest)],
+            Threshold::from_json_value(&serde_json::json!([["1/2", "1"]]))?,
+        ))
+        .build(),
+    &[routine],
+)?;
+# Ok(())
+# }
+```
+
+`update_controlled` applies every change but a rotation. A rotation is
+`prepare_rotation`, then signatures — `PendingEvent::sign_with` here, or
+`add_signature` with one made elsewhere (a `PendingEvent` serializes) — then
+`complete_rotation`. Under the weighted `nt` above the custodian's key must
+sign; the routine successor alone cannot rotate.
+
 ## Key roles (proposed extension)
 
 A document derived from key state places every key of the key state — the
