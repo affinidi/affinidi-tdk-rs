@@ -40,7 +40,9 @@ fn a_created_identifier_resolves() {
     let doc = resolve(result.did(), result.artifacts());
 
     assert_eq!(doc.id.as_str(), result.did());
-    assert_eq!(doc.verification_method.len(), 1);
+    // The signing key and the X25519 key converted from it.
+    assert_eq!(doc.verification_method.len(), 2);
+    assert_eq!(doc.key_agreement.len(), 1);
 }
 
 #[test]
@@ -63,6 +65,20 @@ fn the_published_document_is_what_resolution_returns() {
 
     let as_webs = affinidi_did_webs::document::from_did_web(&published, &did, true)
         .expect("the twin is designated");
+    // What is published is the specification's derivation; resolution adds
+    // only the key agreement keys converted from the key state, which a
+    // publisher never publishes (it would bind the encryption key to the
+    // change authority for every reader, not only those that choose to).
+    assert!(as_webs.get("keyAgreement").is_none(), "{as_webs}");
+    let state_keys = affinidi_did_webs::kel::Kels::parse(&result.artifacts().keri_cesr)
+        .expect("kel")
+        .key_state(did.aid())
+        .expect("key state")
+        .keys;
+    let converted = affinidi_did_webs::key_agreement::converted_key_agreement(&state_keys);
+    assert_eq!(converted.len(), 1);
+    let as_webs = affinidi_did_webs::document::with_key_agreement(as_webs, &did, &converted)
+        .expect("converted keys render");
     let published = affinidi_did_webs::document::into_document(&as_webs, &did).expect("document");
 
     assert_eq!(published, resolve(result.did(), result.artifacts()));
@@ -651,4 +667,58 @@ fn strip_interactions(stream: &str) -> String {
         }
     }
     out
+}
+
+/// The created identifier's did.json in its `did:webs` form, and the keys
+/// converted from its key state.
+fn published_and_converted(
+    result: &affinidi_did_webs::CreateResult,
+) -> (DidWebs, serde_json::Value, Vec<String>) {
+    let did = DidWebs::parse(result.did()).expect("parse");
+    let published: serde_json::Value =
+        serde_json::from_slice(&result.artifacts().did_json).expect("did.json is JSON");
+    let as_webs = affinidi_did_webs::document::from_did_web(&published, &did, true)
+        .expect("the twin is designated");
+    let state_keys = affinidi_did_webs::kel::Kels::parse(&result.artifacts().keri_cesr)
+        .expect("kel")
+        .key_state(did.aid())
+        .expect("key state")
+        .keys;
+    let converted = affinidi_did_webs::key_agreement::converted_key_agreement(&state_keys);
+    (did, as_webs, converted)
+}
+
+#[test]
+fn a_did_json_publishing_the_converted_keys_also_agrees() {
+    // Another implementation may publish the keys it converts. That adds
+    // nothing the key state does not already imply, so it is not a
+    // disagreement.
+    let result = create(config()).expect("create");
+    let (did, as_webs, converted) = published_and_converted(&result);
+    let with = affinidi_did_webs::document::with_key_agreement(as_webs, &did, &converted)
+        .expect("converted keys render");
+    let did_json = serde_json::to_vec(&affinidi_did_webs::document::to_did_web(&with, &did))
+        .expect("did.json");
+
+    let doc = resolve_from_artifacts(&did, &result.artifacts().keri_cesr, Some(&did_json))
+        .expect("a did.json with the converted keys resolves");
+    assert_eq!(doc, resolve(result.did(), result.artifacts()));
+}
+
+#[test]
+fn a_did_json_publishing_some_other_key_agreement_key_is_still_refused() {
+    let result = create(config()).expect("create");
+    let (did, as_webs, _) = published_and_converted(&result);
+    let other = affinidi_did_webs::KeyAgreementKey::X25519([5u8; 32])
+        .to_cesr()
+        .expect("cesr");
+    let with =
+        affinidi_did_webs::document::with_key_agreement(as_webs, &did, &[other]).expect("renders");
+    let did_json = serde_json::to_vec(&affinidi_did_webs::document::to_did_web(&with, &did))
+        .expect("did.json");
+
+    assert!(
+        resolve_from_artifacts(&did, &result.artifacts().keri_cesr, Some(&did_json)).is_err(),
+        "a key agreement key the KEL never authorised is a disagreement",
+    );
 }

@@ -47,7 +47,7 @@ use crate::document::{
 use crate::errors::DidWebsError;
 use crate::identifier::DidWebs;
 use crate::kel::Kels;
-use crate::key_agreement::{KeyAgreementKey, designated_key_agreement};
+use crate::key_agreement::{KeyAgreementKey, converted_key_agreement, designated_key_agreement};
 use crate::key_roles::designated_key_roles;
 use crate::services::{delegator_service, role_endpoints, witness_endpoints};
 
@@ -98,6 +98,7 @@ impl DocumentMetadata {
 /// What a stream implies for a DID: the document in its `did:webs` form, its
 /// metadata, and whether the `did:web` twin is designated (the precondition
 /// for publishing or reading the `did:web` form).
+#[derive(Clone)]
 pub(crate) struct Derived {
     pub document: Value,
     pub metadata: DocumentMetadata,
@@ -105,6 +106,11 @@ pub(crate) struct Derived {
     /// The SAID a `DelegatorOOBI` service of this DID must carry, when the
     /// identifier is delegated.
     pub delegation_seal: Option<String>,
+    /// X25519 keys converted from the key state's Ed25519 keys, rendered into
+    /// `keyAgreement` after the published document is checked. Empty unless
+    /// the AID has never designated key agreement or key roles
+    /// (`crate::key_agreement`, *Identifiers that designate none*).
+    pub converted_key_agreement: Vec<String>,
 }
 
 /// Resolve a `did:webs` identifier from artifacts already fetched.
@@ -143,9 +149,26 @@ pub fn resolve_with_metadata(
     if let Some(published) = did_json {
         let published: Value = serde_json::from_slice(published)?;
         let published = from_did_web(&published, did, derived.twin_designated)?;
-        check_published(&derived, &published)?;
+        // The converted keys are not part of the derivation the specification
+        // defines, so a document published without them — the reference
+        // implementation's — agrees. One published with them agrees too.
+        if let Err(e) = check_published(&derived, &published) {
+            if derived.converted_key_agreement.is_empty() {
+                return Err(e);
+            }
+            let with_converted = Derived {
+                document: with_key_agreement(
+                    derived.document.clone(),
+                    did,
+                    &derived.converted_key_agreement,
+                )?,
+                ..derived.clone()
+            };
+            check_published(&with_converted, &published).map_err(|_| e)?;
+        }
         carry_delegator_service(&derived, &published, &mut document);
     }
+    let document = with_key_agreement(document, did, &derived.converted_key_agreement)?;
 
     Ok(Resolution {
         document: into_document(&document, did)?,
@@ -271,13 +294,25 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
                 .delegator
                 .as_ref()
                 .and_then(|_| full.inception_said(aid)),
+            converted_key_agreement: Vec::new(),
         });
     }
 
     // Key agreement keys, designated by the AID. A key of the current key
     // state is never one: the change authority does not double as an
     // encryption key.
-    let key_agreement: Vec<String> = designated_key_agreement(kels, aid)?
+    let designated_ka = designated_key_agreement(kels, aid)?;
+    // An AID that designates nothing gets the keys KERI practice converts
+    // from its key state. One that ever designated keys chose separate ones,
+    // and a deactivated one is addressed by no one.
+    let deactivated = kels.is_deactivated(aid);
+    let converted_key_agreement =
+        if designated_ka.issued || designated_ka.rejected.is_some() || deactivated {
+            Vec::new()
+        } else {
+            converted_key_agreement(&state.keys)
+        };
+    let key_agreement: Vec<String> = designated_ka
         .keys
         .into_iter()
         .filter(|key| {
@@ -303,13 +338,14 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
                 .filter(|sn| *sn > version)
                 .min(),
             equivalent_id,
-            deactivated: kels.is_deactivated(aid),
+            deactivated,
         },
         twin_designated,
         delegation_seal: state
             .delegator
             .as_ref()
             .and_then(|_| full.inception_said(aid)),
+        converted_key_agreement,
     })
 }
 
