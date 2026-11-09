@@ -178,21 +178,56 @@ impl DIDWeb {
 
     /// Build a resolver with a default HTTP client under an explicit
     /// [`HostPolicy`].
+    ///
+    /// # Panics
+    /// If the HTTP client cannot be built (the TLS backend fails to
+    /// initialise), as `reqwest::Client::new` does.
     pub fn with_policy(policy: HostPolicy) -> Self {
-        Self {
-            client: default_client(policy),
-            policy,
-        }
+        Self::with_client_builder(reqwest::Client::builder(), policy)
+            .expect("reqwest client with default config")
     }
 
-    /// Build a resolver from a caller-supplied client. Use this when you need
-    /// custom timeouts, proxies, additional headers, or a shared client across
-    /// multiple HTTP integrations.
+    /// Build a resolver over a client the caller configures (timeouts,
+    /// headers, TLS, connection pool), under an explicit [`HostPolicy`].
     ///
-    /// The literal-address check still applies, but the connect-time check does
-    /// not: it lives in the DNS resolver of the client built by [`DIDWeb::new`].
-    /// A caller supplying their own client owns that half of the guard — see
-    /// [`guarded_dns_resolver`].
+    /// The guard settings are applied after the caller's, so nothing set on
+    /// `builder` can undo them: redirects are never followed, and under
+    /// [`HostPolicy::PublicOnly`] the [`guarded_dns_resolver`] is installed
+    /// and every proxy, including one named by `HTTPS_PROXY`, is turned off,
+    /// because a proxy resolves the hostname itself and the connect-time
+    /// check would never see the address.
+    ///
+    /// # Errors
+    /// Returns [`DidWebError::Http`] if `reqwest` cannot build the client.
+    pub fn with_client_builder(
+        builder: reqwest::ClientBuilder,
+        policy: HostPolicy,
+    ) -> Result<Self, DidWebError> {
+        if policy == HostPolicy::AllowPrivate {
+            tracing::warn!(
+                target: "affinidi_did_web",
+                "did:web resolver built with HostPolicy::AllowPrivate: it will fetch from \
+                 loopback and private hosts, so SSRF protection is off. Use it only where the \
+                 DIDs resolved are trusted."
+            );
+        }
+        let client = guard(default_settings(builder), policy)
+            .build()
+            .map_err(|e| DidWebError::Http(format!("cannot build the HTTP client: {e}")))?;
+        Ok(Self { client, policy })
+    }
+
+    /// Build a resolver from a caller-built client, under
+    /// [`HostPolicy::PublicOnly`].
+    ///
+    /// Only the host the DID names is checked. A built client cannot be
+    /// inspected or changed, so a hostname that resolves to a private
+    /// address, a redirect, or a proxy is stopped only if the caller built the
+    /// client to stop it.
+    #[deprecated(
+        since = "0.1.7",
+        note = "a built client may not carry the connect-time guard; use `with_client_builder`, which applies it"
+    )]
     pub fn with_client(client: reqwest::Client) -> Self {
         Self {
             client,
@@ -200,8 +235,12 @@ impl DIDWeb {
         }
     }
 
-    /// Build a resolver from a caller-supplied client under an explicit
+    /// Build a resolver from a caller-built client under an explicit
     /// [`HostPolicy`]. Same caveat as [`DIDWeb::with_client`].
+    #[deprecated(
+        since = "0.1.7",
+        note = "a built client may not carry the connect-time guard; use `with_client_builder`, which applies it"
+    )]
     pub fn with_client_and_policy(client: reqwest::Client, policy: HostPolicy) -> Self {
         Self { client, policy }
     }
@@ -391,14 +430,14 @@ fn blocked_address_in_chain<'a>(
 /// addresses returned here, it also closes the DNS-rebinding window: there is
 /// no second, unchecked lookup between the guard and the connect.
 ///
-/// Install it on a caller-supplied client to get the same protection as the
-/// client [`DIDWeb::new`] builds:
+/// [`DIDWeb::new`], [`DIDWeb::with_policy`] and [`DIDWeb::with_client_builder`]
+/// install it. It is public for clients built for other purposes:
 ///
 /// ```no_run
 /// let client = reqwest::Client::builder()
 ///     .dns_resolver(affinidi_did_web::guarded_dns_resolver())
+///     .no_proxy()
 ///     .build()?;
-/// let resolver = affinidi_did_web::DIDWeb::with_client(client);
 /// # Ok::<(), reqwest::Error>(())
 /// ```
 pub fn guarded_dns_resolver() -> Arc<dyn reqwest::dns::Resolve> {
@@ -424,20 +463,27 @@ impl reqwest::dns::Resolve for GuardedResolver {
     }
 }
 
-/// The HTTP client [`DIDWeb::new`] and [`DIDWeb::with_policy`] build.
-fn default_client(policy: HostPolicy) -> reqwest::Client {
-    let mut builder = reqwest::Client::builder()
+/// The defaults a caller's builder starts from. Applied first, so the caller
+/// may override them.
+fn default_settings(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    builder
         .user_agent(concat!("affinidi-did-web/", env!("CARGO_PKG_VERSION")))
         .timeout(DEFAULT_TIMEOUT)
-        // The DID names the host. Following a 3xx lets that host pivot the
-        // resolver to an arbitrary internal address (SSRF), so refuse.
-        .redirect(reqwest::redirect::Policy::none());
+}
 
-    if policy == HostPolicy::PublicOnly {
-        builder = builder.dns_resolver(guarded_dns_resolver());
+/// The guard settings. Applied last, so nothing set before can undo them.
+fn guard(builder: reqwest::ClientBuilder, policy: HostPolicy) -> reqwest::ClientBuilder {
+    // The DID names the host. Following a 3xx lets that host pivot the
+    // resolver to an arbitrary internal address (SSRF), so refuse.
+    let builder = builder
+        .redirect(reqwest::redirect::Policy::none())
+        .referer(false);
+    match policy {
+        HostPolicy::AllowPrivate => builder,
+        // A proxy resolves the hostname itself, so the guarded resolver would
+        // see only the proxy's name.
+        HostPolicy::PublicOnly => builder.dns_resolver(guarded_dns_resolver()).no_proxy(),
     }
-
-    builder.build().expect("reqwest client with default config")
 }
 
 /// Build the HTTPS URL for a `did:web` document from its parsed components.
@@ -728,7 +774,7 @@ mod tests {
     /// for `localhost` is local and the connection is never made.
     #[tokio::test]
     async fn dns_guard_surfaces_as_blocked_host() {
-        let client = default_client(HostPolicy::PublicOnly);
+        let client = DIDWeb::new().client;
         let err = client
             .get("http://localhost/.well-known/did.json")
             .send()
@@ -742,8 +788,62 @@ mod tests {
 
     /// A client built without the guarded resolver keeps the literal check.
     #[test]
+    #[allow(deprecated)]
     fn with_client_defaults_to_public_only() {
         let resolver = DIDWeb::with_client(reqwest::Client::new());
         assert_eq!(resolver.policy, HostPolicy::PublicOnly);
+    }
+
+    /// Under `PublicOnly` no proxy is used, even one the caller's builder
+    /// names: a proxy resolves the hostname itself, so the connect-time check
+    /// would never see the address the request went to. The "proxy" here is a
+    /// bare listener that counts connections; an honoured proxy would be
+    /// connected to for the CONNECT tunnel.
+    #[tokio::test]
+    async fn public_only_uses_no_proxy_even_one_the_caller_names() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = format!("http://{}", listener.local_addr().unwrap());
+        let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = accepted.clone();
+        tokio::spawn(async move {
+            while let Ok((_socket, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+
+        let builder = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::all(&proxy).unwrap())
+            .timeout(std::time::Duration::from_secs(5));
+        let resolver = DIDWeb::with_client_builder(builder, HostPolicy::PublicOnly).unwrap();
+        resolver
+            .resolve("did:web:did-web-proxy-test.example.com")
+            .await
+            .expect_err("the host does not exist");
+
+        assert_eq!(
+            accepted.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the proxy was used"
+        );
+    }
+
+    /// A caller's builder keeps the guard: a loopback name is still refused at
+    /// connect time when the caller supplied the builder.
+    #[tokio::test]
+    async fn a_callers_builder_keeps_the_dns_guard() {
+        let builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5));
+        let resolver = DIDWeb::with_client_builder(builder, HostPolicy::PublicOnly).unwrap();
+        // Drive the client directly: `localhost` would be refused by name
+        // before any request, and only the DNS guard is under test here.
+        let err = resolver
+            .client
+            .get("https://localhost:1/")
+            .send()
+            .await
+            .expect_err("the guarded resolver must refuse localhost");
+        assert!(
+            blocked_address_in_chain(&err).is_some(),
+            "expected the DNS guard to refuse, got {err:?}"
+        );
     }
 }

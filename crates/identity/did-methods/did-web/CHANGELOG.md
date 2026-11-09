@@ -1,5 +1,20 @@
 # Affinidi DID Web
 
+## 0.1.7 — the guard holds behind a proxy and for a caller's client
+
+- **No proxy under `HostPolicy::PublicOnly`.** The default client honoured
+  `HTTPS_PROXY` and the other proxy variables. A proxy resolves the hostname
+  itself, so the connect-time check never saw the address a request went to,
+  and a hostname pointing at a private or cloud-metadata address got through.
+  The client now uses no proxy under `PublicOnly`.
+- **`DIDWeb::with_client_builder`** takes a `reqwest::ClientBuilder` and
+  applies the guard settings (no redirects, the guarded resolver, no proxy,
+  no `Referer`) after the caller's, so nothing the caller sets can undo them.
+- **Deprecated:** `DIDWeb::with_client` and `DIDWeb::with_client_and_policy`.
+  A built client cannot be inspected, so under them only the host the DID
+  names is checked. Use `with_client_builder`.
+- Building a resolver under `HostPolicy::AllowPrivate` logs a warning.
+
 ## 0.1.6 — the fetched document must name the requested DID
 
 - Resolution now refuses a fetched DID document whose `id` is not the DID
