@@ -11,6 +11,7 @@ const DID_JSON: &[u8] = include_bytes!("fixtures/ENro7uf0.did.json");
 
 const AID: &str = "ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe";
 const SIGNING_KEY: &str = "DHr0-I-mMN7h6cLMOTRJkkfPuMd0vgQPrOk4Y3edaHjr";
+const CONVERTED_KEY: &str = "CPz5wadpRpL4rGHeRSLHIc-2jMndx_mYBhuPhcr7WFRg";
 
 fn did() -> DidWebs {
     DidWebs::parse(&format!("did:webs:did-webs-service%3a7676:{AID}")).expect("valid did")
@@ -27,7 +28,9 @@ fn resolves_a_real_identifier() {
         "the resolved document is for the DID asked about",
     );
 
-    assert_eq!(doc.verification_method.len(), 1);
+    // The signing key, and the X25519 key converted from it (no key agreement
+    // is designated, so KERI practice applies; keripy's did.json omits it).
+    assert_eq!(doc.verification_method.len(), 2);
     let vm = &doc.verification_method[0];
     assert_eq!(vm.type_, "JsonWebKey");
     assert!(vm.id.as_str().ends_with(&format!("#{SIGNING_KEY}")));
@@ -41,6 +44,15 @@ fn resolves_a_real_identifier() {
     // them: with kt = 1 the key authenticates and asserts.
     assert_eq!(doc.authentication.len(), 1);
     assert_eq!(doc.assertion_method.len(), 1);
+
+    // The converted key: libsodium's `crypto_sign_ed25519_pk_to_curve25519`
+    // of the key above, computed independently with PyNaCl.
+    let ka = &doc.verification_method[1];
+    assert!(ka.id.as_str().ends_with(&format!("#{CONVERTED_KEY}")));
+    let jwk = ka.property_set.get("publicKeyJwk").expect("has a jwk");
+    assert_eq!(jwk["crv"], "X25519");
+    assert_eq!(jwk["x"], "_PnBp2lGkvisYd5FIschz7aMyd3H-ZgGG4-FyvtYVGA");
+    assert_eq!(doc.key_agreement.len(), 1);
 
     // § Also Known As: what the AID designated, without itself, and its
     // did:keri form. The did:web twin is there because it is designated, not

@@ -78,7 +78,8 @@ async fn resolves_a_did_over_the_network() {
         .expect("a served did:webs must resolve");
 
     assert_eq!(resolution.document.id.as_str(), did);
-    assert_eq!(resolution.document.verification_method.len(), 1);
+    // The signing key and the X25519 key converted from it.
+    assert_eq!(resolution.document.verification_method.len(), 2);
     assert_eq!(resolution.metadata.version_id, 2);
 
     // Both artifacts were actually requested, at the paths we derive.

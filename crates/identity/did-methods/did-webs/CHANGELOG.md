@@ -2,6 +2,22 @@
 
 All notable changes to this crate are documented here.
 
+## [0.9.2] - 2026-11-09
+
+### Added
+
+- **Key agreement for identifiers that designate none.** An AID that has never
+  issued a key agreement or key role designation, and is not deactivated, now
+  resolves with the X25519 key converted from each Ed25519 key of its current
+  key state in `keyAgreement` — the keys KERI practice, and the reference
+  implementation's DIDComm support, encrypt to. Before, such an identifier
+  (any keripy- or KERIA-made one) had no key agreement key, so nothing could
+  encrypt to it over DIDComm or TSP. The keys are rendered after the published
+  `did.json` is checked: a `did.json` without them agrees, as does one listing
+  exactly them. They are never published by `create` or `update`, and an AID
+  that has designated keys — even if since revoked — gets none.
+- `key_agreement::converted_key_agreement`; `DesignatedKeys::issued`.
+
 ## [0.9.1] - 2026-11-09
 
 ### Added

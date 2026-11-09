@@ -139,6 +139,22 @@ revoking the designation in force — without rotating the identifier. A key of
 the current key state is never a key agreement key, and a designated service
 cannot reuse the id of an endpoint KERI's own data establishes.
 
+### Identifiers that designate no key agreement keys
+
+Most KERI identifiers designate none, and KERI practice — including the
+reference implementation's DIDComm support — encrypts to the X25519 key
+converted from each Ed25519 key of the current key state. Resolution does the
+same: an identifier that has never issued a key agreement or key role
+designation, and is not deactivated, resolves with those converted keys in
+`keyAgreement` (`key_agreement::converted_key_agreement`). Rotation replaces
+them with the key state.
+
+They are rendered after the published `did.json` is checked, because the
+specification's derivation does not include them: a `did.json` without them —
+keripy's — agrees, and one listing exactly them agrees too. This crate never
+publishes them, and an identifier that has designated keys, even one whose
+designation is since revoked, never gets them.
+
 These schemas are this crate's, proposed to the `did:webs` specification; until
 another implementation reads them, a resolver that derives the document from
 KERI data alone will not reproduce `keyAgreement` or the designated services,

@@ -17,6 +17,17 @@
 //! with no rotation. A designated key equal to a key of the current key state
 //! is dropped on resolution for the same reason.
 //!
+//! # Identifiers that designate none
+//!
+//! Most KERI identifiers designate nothing: KERI practice, and the reference
+//! implementation's DIDComm support, encrypt to the X25519 key converted from
+//! each Ed25519 key of the current key state. [`converted_key_agreement`]
+//! computes those keys, and resolution renders them into `keyAgreement`
+//! (`crate::resolver`) — but only for an AID that has never issued a key
+//! agreement or key role designation. An AID that has issued one chose separate
+//! keys, and a revoked designation is not a return to conversion: such an AID
+//! has no key agreement until it designates another.
+//!
 //! | Key | CESR code | `publicKeyJwk` |
 //! |---|---|---|
 //! | X25519 | `C` | `OKP` / `X25519` |
@@ -31,7 +42,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::{Value, json};
 
-use crate::designation::designations;
+use crate::designation::issued_designations;
 use crate::errors::DidWebsError;
 use crate::kel::Kels;
 
@@ -146,6 +157,9 @@ pub struct DesignatedKeys {
     /// Why a designation the stream carried produced no keys, when one did not
     /// verify.
     pub rejected: Option<String>,
+    /// Whether the AID has issued any key agreement designation that verifies,
+    /// standing or since revoked.
+    pub issued: bool,
 }
 
 /// Collect the key agreement keys `aid` has designated.
@@ -158,7 +172,13 @@ pub struct DesignatedKeys {
 /// verify.
 pub fn designated_key_agreement(kels: &Kels, aid: &str) -> Result<DesignatedKeys, DidWebsError> {
     let mut out = DesignatedKeys::default();
-    for designation in designations(kels, aid, KEY_AGREEMENT_SCHEMA, &mut out.rejected)? {
+    let issued = issued_designations(kels, aid, KEY_AGREEMENT_SCHEMA, &mut out.rejected)?;
+    out.issued = !issued.is_empty();
+    let standing = issued
+        .into_iter()
+        .filter(|(_, withdrawn)| !withdrawn)
+        .map(|(designation, _)| designation);
+    for designation in standing {
         match read_keys(&designation.attributes) {
             Ok(keys) => {
                 for key in keys {
@@ -173,6 +193,42 @@ pub fn designated_key_agreement(kels: &Kels, aid: &str) -> Result<DesignatedKeys
         }
     }
     Ok(out)
+}
+
+/// The X25519 keys converted from the Ed25519 keys of a key state, CESR-encoded
+/// (`C`), in key-state order.
+///
+/// This is the conversion KERI practice uses for an AID that designates no key
+/// agreement keys (see the module documentation). A key that is not Ed25519
+/// (`D`, or `B` non-transferable), does not decode to a curve point, or is of
+/// small order converts to nothing: Diffie-Hellman with a small-order point
+/// yields a value an attacker can predict.
+pub fn converted_key_agreement(state_keys: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for key in state_keys {
+        let Ok(matter) = Matter::from_qb64(key) else {
+            continue;
+        };
+        if !matches!(matter.code(), "D" | "B") {
+            continue;
+        }
+        let Ok(raw) = <[u8; 32]>::try_from(matter.raw()) else {
+            continue;
+        };
+        let Ok(verifying) = ed25519_dalek::VerifyingKey::from_bytes(&raw) else {
+            continue;
+        };
+        if verifying.is_weak() {
+            continue;
+        }
+        let converted = KeyAgreementKey::X25519(verifying.to_montgomery().to_bytes());
+        if let Ok(qb64) = converted.to_cesr()
+            && !out.contains(&qb64)
+        {
+            out.push(qb64);
+        }
+    }
+    out
 }
 
 fn read_keys(attributes: &affinidi_keri_core::SadValue) -> Result<Vec<String>, String> {
@@ -209,6 +265,43 @@ mod tests {
         assert_eq!(jwk["kty"], "OKP");
         assert_eq!(jwk["crv"], "X25519");
         assert_eq!(jwk["kid"], qb64);
+    }
+
+    #[test]
+    fn an_ed25519_state_key_converts_to_its_x25519_key() {
+        // RFC 8032 test 1's public key; its Montgomery form is what
+        // `crypto_sign_pk_to_box_pk` (libsodium, which keripy uses) returns.
+        let ed = hex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
+        let state_key = Matter::new("D", ed).expect("matter").qb64().expect("qb64");
+        // libsodium's answer, computed independently with PyNaCl.
+        let x: [u8; 32] = hex("d85e07ec22b0ad881537c2f44d662d1a143cf830c57aca4305d85c7a90f6b62e")
+            .try_into()
+            .unwrap();
+
+        let converted = converted_key_agreement(&[state_key.clone(), state_key]);
+        assert_eq!(converted.len(), 1, "one key converts once");
+        assert_eq!(
+            KeyAgreementKey::from_cesr(&converted[0]).expect("decodes"),
+            KeyAgreementKey::X25519(x)
+        );
+    }
+
+    #[test]
+    fn a_key_that_is_not_ed25519_or_is_weak_converts_to_nothing() {
+        // The identity point (small order), as an Ed25519 key.
+        let mut identity = vec![0u8; 32];
+        identity[0] = 1;
+        let weak = Matter::new("D", identity).unwrap().qb64().unwrap();
+        // An X25519 key is already one, and a secp256k1 key has no conversion.
+        let x = KeyAgreementKey::X25519([9u8; 32]).to_cesr().unwrap();
+        assert!(converted_key_agreement(&[weak, x, "not cesr".into()]).is_empty());
+    }
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]
