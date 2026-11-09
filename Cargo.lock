@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-data-integrity"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "affinidi-bbs",
  "affinidi-crypto",
