@@ -315,7 +315,22 @@ impl DataIntegrityProof {
         R: VerificationMethodResolver + ?Sized,
     {
         let resolved = resolver.resolve_vm(&self.verification_method).await?;
+        self.verify_with_resolved_key(data_doc, &resolved, &options)
+    }
 
+    /// Verifies against a key already resolved from this proof's
+    /// `verificationMethod`, including the key-type check. Shared by
+    /// [`verify`](Self::verify) and [`multi::verify_multi`], which needs
+    /// the resolved key afterwards to count distinct signers.
+    pub(crate) fn verify_with_resolved_key<S>(
+        &self,
+        data_doc: &S,
+        resolved: &ResolvedKey,
+        options: &VerifyOptions,
+    ) -> Result<(), DataIntegrityError>
+    where
+        S: Serialize,
+    {
         // Belt-and-braces key-type check. The CryptoSuiteOps verify will
         // fail on a mismatched key anyway, but a typed error here is
         // clearer to callers and saves the canonicalization work.
@@ -331,7 +346,7 @@ impl DataIntegrityProof {
             });
         }
 
-        verify_proof_internal(self, data_doc, &resolved.public_key_bytes, &options)
+        verify_proof_internal(self, data_doc, &resolved.public_key_bytes, options)
     }
 }
 

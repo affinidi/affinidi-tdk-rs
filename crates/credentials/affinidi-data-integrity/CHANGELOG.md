@@ -1,6 +1,37 @@
 # Affinidi Data Integrity Changelog
 
-## Unreleased (0.8.0) — `affinidi-bbs` 0.4, versioned correctly
+## 0.8.1 — `RequireThreshold` counts distinct signers (security)
+
+**Security fix; behaviour change.** `verify_multi` with
+`VerifyPolicy::RequireThreshold(t)` counted valid proof *entries*, not
+distinct signers. One signer could satisfy a t-of-N quorum alone by
+repeating its proof `t` times, either as identical copies or as separate
+signatures with the same key (for example with different `created`
+values). No signature was forged and the signed content could not change,
+but the independent approvals the threshold exists to require were not
+enforced.
+
+`RequireThreshold` now counts each distinct resolved public key once. It
+compares the resolved key bytes rather than `verificationMethod` strings,
+so one key named under two URIs also counts once. `RequireAll`,
+`RequireAny` and `RequireThreshold(0)` are unchanged.
+
+- New field `MultiVerifyResult::distinct_signers`: the count the
+  threshold is compared against. `passed` still lists every passing
+  proof, duplicates included, for the audit trail.
+- A distinct key is not a distinct party. A controller holding several
+  keys counts once per key. For a witness quorum, verify against a fixed
+  list of the witnesses' keys and require each one at most once.
+
+Documents previously accepted with fewer distinct signers than the
+threshold are now rejected. That is the intended fix, but callers that
+relied on the old counting should check their inputs.
+
+**Workaround on 0.8.0 or earlier:** before trusting `policy_satisfied`,
+count the distinct signing keys among `MultiVerifyResult::passed` and
+compare that count with the threshold.
+
+## 0.8.0 — `affinidi-bbs` 0.4, versioned correctly
 
 **Breaking.** The same code as 0.7.14, released under the version it needed.
 `affinidi-bbs` is a public dependency here. `bbs_2023_transform::{
