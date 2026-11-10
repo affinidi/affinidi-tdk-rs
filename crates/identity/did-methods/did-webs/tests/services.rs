@@ -72,7 +72,7 @@ fn push_signed(out: &mut Vec<u8>, serder: &Serder, s: &Signer) {
             .as_bytes(),
     );
     out.extend_from_slice(
-        s.sign_indexed(serder.raw(), 0, true)
+        s.sign_indexed(serder.raw(), 0, false)
             .expect("sign")
             .qb64()
             .expect("qb64")
@@ -107,7 +107,7 @@ fn push_reply(out: &mut Vec<u8>, serder: &Serder, signer_prefix: &str, said: &st
     out.extend_from_slice(serder.raw());
 
     let sig = s
-        .sign_indexed(serder.raw(), 0, true)
+        .sign_indexed(serder.raw(), 0, false)
         .expect("sign")
         .qb64()
         .expect("qb64");
@@ -460,7 +460,7 @@ fn push_multi_signed(out: &mut Vec<u8>, serder: &Serder, signers: &[&Signer]) {
     let counter = Counter::new("-A", signers.len()).expect("counter");
     out.extend_from_slice(counter.qb64().expect("qb64").as_bytes());
     for (i, s) in signers.iter().enumerate() {
-        let sig = s.sign_indexed(serder.raw(), i, true).expect("sign");
+        let sig = s.sign_indexed(serder.raw(), i, false).expect("sign");
         out.extend_from_slice(sig.qb64().expect("qb64").as_bytes());
     }
 }
@@ -481,7 +481,7 @@ fn push_reply_signed_by(
         .expect("qb64");
     for (index, s) in signers {
         inner.push_str(
-            &s.sign_indexed(serder.raw(), *index, true)
+            &s.sign_indexed(serder.raw(), *index, false)
                 .expect("sign")
                 .qb64()
                 .expect("qb64"),

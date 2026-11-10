@@ -82,7 +82,7 @@ impl Controller for Hab {
             .enumerate()
             .map(|(index, signer)| {
                 signer
-                    .sign_indexed(message, index, true)
+                    .sign_indexed(message, index, false)
                     .and_then(|s| s.qb64())
                     .map_err(|e| DidWebsError::Create(format!("could not sign: {e}")))
             })

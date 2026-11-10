@@ -46,6 +46,19 @@ pub struct Kels {
     verified: RefCell<HashMap<String, KeyState>>,
     /// Prefixes currently being verified, to catch a delegation cycle.
     in_progress: RefCell<Vec<String>>,
+    /// Indices into `messages` of interaction events a rotation superseded,
+    /// by prefix, as the last verification of that prefix found them. They
+    /// are not part of the log: nothing they anchor counts (P7).
+    superseded: RefCell<HashMap<String, Vec<usize>>>,
+}
+
+/// What a replay records for the registry reader.
+#[derive(Default)]
+struct Recorded {
+    /// The log's events, superseded ones removed.
+    events: Vec<affinidi_keri_core::registry::LoggedEvent>,
+    /// The events a rotation superseded.
+    superseded: Vec<affinidi_keri_core::registry::LoggedEvent>,
 }
 
 impl Kels {
@@ -83,6 +96,7 @@ impl Kels {
             limits: HashMap::new(),
             verified: RefCell::new(HashMap::new()),
             in_progress: RefCell::new(Vec::new()),
+            superseded: RefCell::new(HashMap::new()),
         })
     }
 
@@ -146,6 +160,7 @@ impl Kels {
         }
         self.limits.insert(prefix.to_string(), sn);
         self.verified.borrow_mut().clear();
+        self.superseded.borrow_mut().clear();
         Ok(self)
     }
 
@@ -241,9 +256,10 @@ impl Kels {
         let Some(indices) = self.by_prefix.get(aid) else {
             return Ok(false);
         };
+        let superseded = self.superseded_of(aid);
 
         let expected_sn = format!("{sn:x}");
-        for i in indices {
+        for i in indices.iter().filter(|i| !superseded.contains(i)) {
             let anchors = self.messages[*i]
                 .serder
                 .sad()
@@ -333,6 +349,16 @@ impl Kels {
         }
 
         self.replay(aid, Some(said))
+    }
+
+    /// Stream indices of `prefix`'s superseded events, as its last
+    /// verification found them. Call after [`Kels::key_state`].
+    fn superseded_of(&self, prefix: &str) -> Vec<usize> {
+        self.superseded
+            .borrow()
+            .get(prefix)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Verify a transferable signature group from `signer` over `raw`.
@@ -429,10 +455,13 @@ impl Kels {
         let indices = self.full_by_prefix.get(aid).ok_or_else(|| {
             DidWebsError::Kel(format!("keri.cesr carries no key events for {aid}"))
         })?;
-        let mut events = Vec::new();
-        self.replay_over(aid, indices, None, Some(&mut events))?;
-        Ok(affinidi_keri_core::registry::IssuerLog::new(aid, events)
-            .as_of(self.limits.get(aid).copied()))
+        let mut recorded = Recorded::default();
+        self.replay_over(aid, indices, None, Some(&mut recorded))?;
+        Ok(
+            affinidi_keri_core::registry::IssuerLog::new(aid, recorded.events)
+                .with_superseded(recorded.superseded)
+                .as_of(self.limits.get(aid).copied()),
+        )
     }
 
     /// Replay a KEL, optionally stopping once a given event has been applied.
@@ -445,30 +474,37 @@ impl Kels {
 
     /// Replay the events at `indices`, optionally stopping once a given event
     /// has been applied, and optionally recording each accepted event.
+    ///
+    /// A rotation that supersedes interaction events takes the log back to
+    /// its own sequence number; the events it superseded are recorded apart.
     fn replay_over(
         &self,
         prefix: &str,
         indices: &[usize],
         stop_after: Option<&str>,
-        mut log: Option<&mut Vec<affinidi_keri_core::registry::LoggedEvent>>,
+        mut log: Option<&mut Recorded>,
     ) -> Result<KeyState, DidWebsError> {
-        let mut events = indices.iter().map(|i| &self.messages[*i]);
-        let first = events.next().ok_or_else(|| {
+        let mut events = indices.iter().map(|i| (*i, &self.messages[*i]));
+        let (first_index, first) = events.next().ok_or_else(|| {
             DidWebsError::Kel(format!("keri.cesr carries no events for {prefix}"))
         })?;
 
         let mut kever = self.incept(prefix, first)?;
         self.require_witness_receipts(prefix, first, kever.state())?;
         if let Some(log) = log.as_deref_mut() {
-            log.push(logged(first, kever.state(), true)?);
+            log.events.push(logged(first, kever.state(), true)?);
         }
+        // Accepted events still in the log, by stream index and sequence
+        // number, and those a rotation superseded.
+        let mut accepted: Vec<(usize, u64)> = vec![(first_index, 0)];
+        let mut superseded: Vec<usize> = Vec::new();
 
         if stop_after.is_some_and(|said| first.serder.said().ok().as_deref() == Some(said)) {
             return Ok(kever.state().clone());
         }
         let mut reached = false;
 
-        for (n, msg) in events.enumerate() {
+        for (n, (index, msg)) in events.enumerate() {
             let ilk = msg
                 .serder
                 .ilk()
@@ -488,15 +524,38 @@ impl Kels {
                     .map_err(|e| DidWebsError::Kel(format!("{prefix} event {}: {e}", n + 1)))?
             };
             self.require_witness_receipts(prefix, msg, &state)?;
+            let before = kever.sn();
             kever.apply_verified_update(state);
+            let sn = kever.sn();
+            if sn <= before {
+                // A superseding rotation: what it superseded leaves the log.
+                let (kept, gone): (Vec<_>, Vec<_>) =
+                    accepted.into_iter().partition(|(_, s)| *s < sn);
+                accepted = kept;
+                superseded.extend(gone.into_iter().map(|(i, _)| i));
+                if let Some(log) = log.as_deref_mut() {
+                    let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut log.events)
+                        .into_iter()
+                        .partition(|e| e.sn < sn);
+                    log.events = kept;
+                    log.superseded.extend(gone);
+                }
+            }
+            accepted.push((index, sn));
             if let Some(log) = log.as_deref_mut() {
-                log.push(logged(msg, kever.state(), ilk != "ixn")?);
+                log.events.push(logged(msg, kever.state(), ilk != "ixn")?);
             }
 
             if stop_after.is_some_and(|said| msg.serder.said().ok().as_deref() == Some(said)) {
                 reached = true;
                 break;
             }
+        }
+
+        if stop_after.is_none() && log.is_none() {
+            self.superseded
+                .borrow_mut()
+                .insert(prefix.to_string(), superseded);
         }
 
         if let Some(said) = stop_after
@@ -645,8 +704,11 @@ impl DelegatorAnchors for Kels {
         let Some(indices) = self.by_prefix.get(delegator) else {
             return Ok(None);
         };
+        // A delegation anchored only in an event the delegator's recovery
+        // superseded was never the delegator's (P7).
+        let superseded = self.superseded_of(delegator);
 
-        for i in indices {
+        for i in indices.iter().filter(|i| !superseded.contains(i)) {
             let msg = &self.messages[*i];
             if msg.serder.sn().ok() != Some(sn) {
                 continue;
