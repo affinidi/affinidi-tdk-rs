@@ -728,6 +728,12 @@ impl DelegatorAnchors for Kels {
 
         Ok(None)
     }
+
+    fn delegator_traits(&self, delegator: &str) -> Result<Option<Vec<String>>, CoreError> {
+        // Only from a KEL this type has verified, like `anchors_at`: a
+        // delegator whose KEL does not verify authorises nothing.
+        Ok(self.key_state(delegator).ok().map(|state| state.config))
+    }
 }
 
 /// The verification keys an establishment event lists in its own `k` field.

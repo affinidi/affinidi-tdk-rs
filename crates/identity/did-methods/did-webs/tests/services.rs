@@ -35,6 +35,10 @@ fn fix_version(sad: &mut SadValue) {
 }
 
 fn inception(controller: &Signer, next: &Signer) -> Serder {
+    inception_with_traits(controller, next, &[])
+}
+
+fn inception_with_traits(controller: &Signer, next: &Signer, traits: &[&str]) -> Serder {
     let next_digest = Diger::from_data("E", next.verfer().qb64().expect("qb64").as_bytes())
         .expect("digest")
         .qb64()
@@ -45,6 +49,15 @@ fn inception(controller: &Signer, next: &Signer) -> Serder {
         "nt": "1", "n": [next_digest],
         "bt": "0", "b": [], "c": [], "a": [],
     });
+    sad.insert(
+        "c",
+        SadValue::Array(
+            traits
+                .iter()
+                .map(|t| SadValue::String((*t).into()))
+                .collect(),
+        ),
+    );
     fix_version(&mut sad);
     said::compute_said(&mut sad, "d", "E", SerializationKind::Json).expect("said");
     Serder::new(SerializationKind::Json, sad).expect("serder")
@@ -820,6 +833,70 @@ fn an_end_role_reply_cannot_make_a_witness_of_an_identifier_the_kel_never_named(
         services.iter().all(|s| s.role != "witness"),
         "got {services:?}"
     );
+}
+
+#[test]
+fn a_delegator_that_does_not_delegate_resolves_no_delegate() {
+    // KERI spec, Configuration traits field: a validator drops any delegated
+    // event whose delegator has `DND`, though the delegator anchors it. The
+    // delegate's KEL does not verify; the delegator's still does.
+    let (del_key, del_next) = (signer(51), signer(52));
+    let delegator_icp = inception_with_traits(&del_key, &del_next, &["DND"]);
+    let delegator = delegator_icp.prefix().expect("prefix");
+
+    let (key, next) = (signer(53), signer(54));
+    let mut dip = sad!({
+        "v": "KERI10JSON000000_", "t": "dip", "d": "", "i": "", "s": "0",
+        "kt": "1", "k": [key.verfer().qb64().expect("qb64")],
+        "nt": "1", "n": [digest_of(&next)],
+        "bt": "0", "b": [], "c": [], "a": [], "di": delegator,
+    });
+    fix_version(&mut dip);
+    said::compute_said(&mut dip, "d", "E", SerializationKind::Json).expect("said");
+    let dip = Serder::new(SerializationKind::Json, dip).expect("serder");
+    let aid = dip.prefix().expect("prefix");
+    let dip_said = dip.said().expect("said");
+
+    // The delegator's interaction anchoring the delegated inception.
+    let mut ixn = sad!({
+        "v": "KERI10JSON000000_", "t": "ixn", "d": "", "i": delegator, "s": "1",
+        "p": delegator_icp.said().expect("said"),
+        "a": [{"i": aid, "s": "0", "d": dip_said}],
+    });
+    fix_version(&mut ixn);
+    said::compute_said(&mut ixn, "d", "E", SerializationKind::Json).expect("said");
+    let ixn = Serder::new(SerializationKind::Json, ixn).expect("serder");
+
+    let mut stream = Vec::new();
+    push_signed(&mut stream, &delegator_icp, &del_key);
+    push_signed(&mut stream, &ixn, &del_key);
+    push_signed(&mut stream, &dip, &key);
+    // The seal source couple: where in the delegator's KEL the anchor is.
+    let sn = affinidi_cesr::Matter::new("0A", {
+        let mut raw = vec![0u8; 16];
+        raw[15] = 1;
+        raw
+    })
+    .expect("number")
+    .qb64()
+    .expect("qb64");
+    stream.extend_from_slice(
+        Counter::new("-G", 1)
+            .expect("counter")
+            .qb64()
+            .expect("qb64")
+            .as_bytes(),
+    );
+    stream.extend_from_slice(sn.as_bytes());
+    stream.extend_from_slice(ixn.said().expect("said").as_bytes());
+
+    let kels = Kels::parse(&stream).expect("parses");
+    kels.key_state(&delegator)
+        .expect("the delegator's own KEL verifies");
+    let err = kels
+        .key_state(&aid)
+        .expect_err("a DND delegator authorises nothing");
+    assert!(err.to_string().contains("DND"), "{err}");
 }
 
 #[test]
