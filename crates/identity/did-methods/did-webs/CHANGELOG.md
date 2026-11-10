@@ -2,6 +2,29 @@
 
 All notable changes to this crate are documented here.
 
+## [0.10.0] - 2026-11-10
+
+### Changed
+
+- **affinidi-keri 0.6** (`affinidi-keri`, `-core`, `-crypto`). This is breaking,
+  because `create_controlled` takes `affinidi_keri::controller::Inception` and
+  `KeySigner`, which are now 0.6's types. 0.6 reads KERI version 2 and is checked
+  against keripy 2.x in both directions.
+- **`create_controlled` writes its key event log in KERI version 1**, whatever
+  version the `Inception` carries. affinidi-keri 0.6's controller defaults to
+  v2, but this crate's designations are still v1 ACDCs in v1 registries, and a
+  v2 log anchoring them is a combination no resolver is tested against yet.
+  Version 2 designations, and a v2 log with them, come next.
+
+### Fixed
+
+- **Rotations now verify in keripy.** The rotations `update` and
+  `complete_rotation` produced carried a `c` field, which a KERI v1 rotation
+  doesn't have and keripy refuses. affinidi-keri 0.6 no longer writes it, and
+  this crate's resolver now refuses it, as keripy does.
+- **Thresholds of 10 or more are hex**, as KERI writes them (via
+  affinidi-keri 0.6).
+
 ## [0.9.3] - 2026-11-09
 
 ### Added

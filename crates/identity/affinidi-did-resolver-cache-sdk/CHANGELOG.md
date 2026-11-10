@@ -1,5 +1,11 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.48) — affinidi-did-webs 0.10
+
+- **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.10, on
+  affinidi-keri 0.6: rotations now verify in keripy, and thresholds of 10 or
+  more are read as hex.
+
 ## Unreleased (0.8.47) — affinidi-did-webs 0.9
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.9, which
