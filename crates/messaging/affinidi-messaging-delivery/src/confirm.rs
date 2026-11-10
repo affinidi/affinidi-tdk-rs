@@ -16,7 +16,7 @@
 //! outbox for drain, and re-sending over an alternate binding on expiry — layer
 //! on top and call [`confirm_delivered`] / drive the sweep.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -266,7 +266,86 @@ pub async fn poll_outbox_drain(
     transport: &dyn MessageTransport,
     store: &dyn OutboxStore,
 ) -> Result<DrainPollReport, OutboxError> {
-    if let Some(report) = poll_outbox_status(transport, store).await? {
+    poll_outbox_drain_inner(transport, store, None).await
+}
+
+/// [`poll_outbox_drain`], asking the mediator about each `Sent` entry only as
+/// often as [`StatusPacer`] says — what [`outbox_drain_loop`] runs.
+pub async fn poll_outbox_drain_paced(
+    transport: &dyn MessageTransport,
+    store: &dyn OutboxStore,
+    pacer: &mut StatusPacer,
+    now_ms: u64,
+) -> Result<DrainPollReport, OutboxError> {
+    poll_outbox_drain_inner(transport, store, Some((pacer, now_ms))).await
+}
+
+/// How often the receipt poll asks about one `Sent` entry.
+///
+/// A message is collected soon after it is sent or not for a long while: a
+/// live recipient takes it in milliseconds, and one that is offline collects
+/// when it comes back, which may be days. Asking about every waiting entry on
+/// every tick costs `ceil(sent / 100)` requests per tick for as long as the
+/// longest window runs — a thirty-day notice to an identity that never returns
+/// is asked about every ten seconds for thirty days. So an entry is asked about
+/// less often the longer it has waited: every tick for its first five minutes,
+/// then every minute to an hour, every ten minutes to a day, and hourly after.
+///
+/// An entry whose window closes within its period is asked about every tick
+/// again, so a collection just before the deadline settles `Delivered` rather
+/// than running out the window `Unconfirmed` — which an escalator would read as
+/// a reason to send it another way.
+///
+/// The pacing is in memory: a restart asks about every entry once and paces
+/// from there. It applies to receipts ([`MessageTransport::outbox_status`]),
+/// which are per entry; the outbox listing fallback is one call however many
+/// entries wait, and is not paced.
+#[derive(Debug, Default)]
+pub struct StatusPacer {
+    last_asked: HashMap<String, u64>,
+}
+
+impl StatusPacer {
+    /// A pacer that has asked about nothing yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The minimum gap between two questions about `entry` at `now_ms`, or zero
+    /// for "every tick".
+    fn period_ms(entry: &OutboxEntry, now_ms: u64) -> u64 {
+        const MIN: u64 = 60 * 1000;
+        let waited = now_ms.saturating_sub(entry.created_at_ms);
+        let period = if waited < 5 * MIN {
+            0
+        } else if waited < 60 * MIN {
+            MIN
+        } else if waited < 24 * 60 * MIN {
+            10 * MIN
+        } else {
+            60 * MIN
+        };
+        if entry.deliver_by_ms.saturating_sub(now_ms) <= period {
+            0
+        } else {
+            period
+        }
+    }
+
+    fn is_due(&self, entry: &OutboxEntry, now_ms: u64) -> bool {
+        match self.last_asked.get(entry.idempotency_key.as_str()) {
+            None => true,
+            Some(&last) => now_ms.saturating_sub(last) >= Self::period_ms(entry, now_ms),
+        }
+    }
+}
+
+async fn poll_outbox_drain_inner(
+    transport: &dyn MessageTransport,
+    store: &dyn OutboxStore,
+    pacer: Option<(&mut StatusPacer, u64)>,
+) -> Result<DrainPollReport, OutboxError> {
+    if let Some(report) = poll_outbox_status(transport, store, pacer).await? {
         return Ok(report);
     }
     let Some(ids) = transport
@@ -318,15 +397,30 @@ pub async fn poll_outbox_drain(
 async fn poll_outbox_status(
     transport: &dyn MessageTransport,
     store: &dyn OutboxStore,
+    mut pacer: Option<(&mut StatusPacer, u64)>,
 ) -> Result<Option<DrainPollReport>, OutboxError> {
-    let entries: Vec<OutboxEntry> = store
+    let mut entries: Vec<OutboxEntry> = store
         .awaiting_confirmation()
         .await?
         .into_iter()
         .filter(|entry| entry.hop_id.is_some())
         .collect();
     if entries.is_empty() {
+        if let Some((pacer, _)) = pacer.as_mut() {
+            pacer.last_asked.clear();
+        }
         return Ok(None);
+    }
+    if let Some((pacer, now_ms)) = pacer.as_mut() {
+        // Forget entries no longer waiting, so the map holds what is in flight.
+        let waiting: HashSet<&str> = entries.iter().map(|e| e.idempotency_key.as_str()).collect();
+        pacer.last_asked.retain(|k, _| waiting.contains(k.as_str()));
+        entries.retain(|e| pacer.is_due(e, *now_ms));
+        if entries.is_empty() {
+            // Entries wait, none is due: nothing to ask, and no reason to fall
+            // back to the listing either.
+            return Ok(Some(DrainPollReport::default()));
+        }
     }
 
     let mut report = DrainPollReport::default();
@@ -346,6 +440,13 @@ async fn poll_outbox_status(
         // Each entry takes the status recorded under its own hop id, and
         // nothing else: an id the answer omits is no evidence, and a status
         // under an id not asked about settles nothing.
+        if let Some((pacer, now_ms)) = pacer.as_mut() {
+            for entry in batch {
+                pacer
+                    .last_asked
+                    .insert(entry.idempotency_key.to_string(), *now_ms);
+            }
+        }
         for entry in batch.iter().cloned() {
             let status = entry
                 .hop_id
@@ -395,9 +496,17 @@ pub async fn outbox_drain_loop(
     interval: Duration,
 ) {
     let mut ticker = tokio::time::interval(interval);
+    let mut pacer = StatusPacer::new();
     loop {
         ticker.tick().await;
-        match poll_outbox_drain(transport.as_ref(), store.as_ref()).await {
+        match poll_outbox_drain_paced(
+            transport.as_ref(),
+            store.as_ref(),
+            &mut pacer,
+            now_unix_ms(),
+        )
+        .await
+        {
             Ok(report) if report.delivered > 0 => {
                 tracing::debug!(
                     delivered = report.delivered,
@@ -598,6 +707,8 @@ mod tests {
         /// The mediator's receipts, when the test gives it any. `None` is a
         /// mediator without them.
         status: Mutex<Option<std::collections::HashMap<String, OutboxStatus>>>,
+        /// The hop ids each `outbox_status` call asked about.
+        asked: Mutex<Vec<Vec<String>>>,
         conn_rx: watch::Receiver<ConnState>,
         _conn_tx: watch::Sender<ConnState>,
     }
@@ -608,6 +719,7 @@ mod tests {
             Self {
                 outbox: Mutex::new(outbox),
                 status: Mutex::new(None),
+                asked: Mutex::new(Vec::new()),
                 conn_rx: rx,
                 _conn_tx: tx,
             }
@@ -661,13 +773,114 @@ mod tests {
         }
         async fn outbox_status(
             &self,
-            _hop_ids: &[String],
+            hop_ids: &[String],
         ) -> Result<
             Option<std::collections::HashMap<String, OutboxStatus>>,
             affinidi_messaging_core::MessagingError,
         > {
+            self.asked.lock().unwrap().push(hop_ids.to_vec());
             Ok(self.status.lock().unwrap().clone())
         }
+    }
+
+    const MIN: u64 = 60 * 1000;
+
+    /// A `Sent` entry created at `created`, its window closing at `deliver_by`.
+    async fn waiting(store: &InMemoryOutboxStore, key: &str, created: u64, deliver_by: u64) {
+        let mut e = OutboxEntry::new(key, "did:example:bob", vec![1], created, deliver_by);
+        e.state = OutboxState::Sent;
+        e.hop_id = Some(format!("hop-{key}"));
+        store.put(e).await.unwrap();
+    }
+
+    fn asked_about(transport: &DrainMockTransport) -> Vec<String> {
+        let asked = std::mem::take(&mut *transport.asked.lock().unwrap());
+        let mut ids: Vec<String> = asked.into_iter().flatten().collect();
+        ids.sort();
+        ids
+    }
+
+    /// A fresh entry is asked about on every tick; one that has waited longer
+    /// is asked about less often, and again once its period has passed.
+    #[tokio::test]
+    async fn the_receipt_poll_asks_about_long_waiting_entries_less_often() {
+        let store = InMemoryOutboxStore::new();
+        let now = 1_000 * 24 * 60 * MIN;
+        waiting(&store, "fresh", now - MIN, now + 30 * 24 * 60 * MIN).await;
+        waiting(
+            &store,
+            "old",
+            now - 2 * 24 * 60 * MIN,
+            now + 28 * 24 * 60 * MIN,
+        )
+        .await;
+        let transport = DrainMockTransport::with_status(Some(vec![]), &[]);
+        let mut pacer = StatusPacer::new();
+
+        poll_outbox_drain_paced(&transport, &store, &mut pacer, now)
+            .await
+            .unwrap();
+        assert_eq!(asked_about(&transport), vec!["hop-fresh", "hop-old"]);
+
+        let tick = now + 10_000;
+        poll_outbox_drain_paced(&transport, &store, &mut pacer, tick)
+            .await
+            .unwrap();
+        assert_eq!(
+            asked_about(&transport),
+            vec!["hop-fresh"],
+            "the old one waits its hour"
+        );
+
+        let hour = now + 60 * MIN;
+        poll_outbox_drain_paced(&transport, &store, &mut pacer, hour)
+            .await
+            .unwrap();
+        assert!(asked_about(&transport).contains(&"hop-old".to_string()));
+    }
+
+    /// An entry whose window is about to close is asked about every tick, so a
+    /// late collection settles `Delivered`, not `Unconfirmed`.
+    #[tokio::test]
+    async fn an_entry_near_its_deadline_is_asked_about_every_tick() {
+        let store = InMemoryOutboxStore::new();
+        let now = 1_000 * 24 * 60 * MIN;
+        waiting(&store, "closing", now - 2 * 24 * 60 * MIN, now + 5 * MIN).await;
+        let transport = DrainMockTransport::with_status(Some(vec![]), &[]);
+        let mut pacer = StatusPacer::new();
+        for t in 0..3 {
+            poll_outbox_drain_paced(&transport, &store, &mut pacer, now + t * 10_000)
+                .await
+                .unwrap();
+            assert_eq!(asked_about(&transport), vec!["hop-closing"], "tick {t}");
+        }
+    }
+
+    /// With entries waiting and none due, nothing is asked — not even the
+    /// outbox listing the unpaced poll falls back to.
+    #[tokio::test]
+    async fn nothing_due_asks_nothing() {
+        let store = InMemoryOutboxStore::new();
+        let now = 1_000 * 24 * 60 * MIN;
+        waiting(
+            &store,
+            "old",
+            now - 2 * 24 * 60 * MIN,
+            now + 28 * 24 * 60 * MIN,
+        )
+        .await;
+        let transport = DrainMockTransport::with_status(None, &[]);
+        *transport.status.lock().unwrap() = Some(Default::default());
+        let mut pacer = StatusPacer::new();
+        poll_outbox_drain_paced(&transport, &store, &mut pacer, now)
+            .await
+            .unwrap();
+        assert_eq!(asked_about(&transport).len(), 1);
+        let r = poll_outbox_drain_paced(&transport, &store, &mut pacer, now + 10_000)
+            .await
+            .unwrap();
+        assert!(asked_about(&transport).is_empty());
+        assert_eq!((r.delivered, r.observed, r.lost), (0, 0, 0));
     }
 
     async fn sent_with_hop(store: &InMemoryOutboxStore, key: &str, hop: &str) {
