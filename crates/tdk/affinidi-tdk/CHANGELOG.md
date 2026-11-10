@@ -1,5 +1,11 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.37.5) — affinidi-did-webs 0.12
+
+- **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.12, on
+  affinidi-keri 0.7: rotations verify as keripy verifies them, and a recovery
+  rotation supersedes interaction events and what they anchored.
+
 ## Unreleased (0.37.4) — affinidi-did-webs 0.11
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.11: did:webs

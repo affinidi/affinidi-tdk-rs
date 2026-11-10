@@ -2,6 +2,29 @@
 
 All notable changes to this crate are documented here.
 
+## [0.12.0] - 2026-11-10
+
+On affinidi-keri 0.7 and affinidi-cesr 0.1.4. Still alpha.
+
+### Added
+
+- **Superseding recovery (P7).** A rotation after the last establishment event
+  may supersede the interaction events there, as keripy accepts it, and takes
+  what they anchored with it: a designation, a revocation or a delegation
+  anchored only in a superseded event is not the identifier's. The resolver's
+  `Kels` records which events a recovery superseded; they leave the issuer log
+  the registry reader takes, and neither `anchors_seal` nor the delegator
+  lookup answers from them.
+
+### Changed
+
+- **Rotations verify as keripy verifies them** (affinidi-keri 0.7): the prior
+  next threshold is met by the committed positions the signatures expose, so a
+  rotation that reorders, partly reveals or adds to its committed keys
+  resolves; before, it failed. Big indexed signatures (`2A…`) parse.
+- Signatures are written as before (`A`, both lists at the same position);
+  affinidi-keri 0.7 renames that `sign_indexed(.., false)`.
+
 ## [0.11.0] - 2026-11-10
 
 did:webs on KERI 2.0. This integration is **alpha**: expect breaking changes as

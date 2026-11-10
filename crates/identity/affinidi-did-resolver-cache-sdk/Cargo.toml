@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.49"
+version = "0.8.50"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -66,7 +66,7 @@ did-scid = { version = "0.4.1", path = "../did-methods/did-scid", optional = tru
   "did-webvh",
 ] }
 did-ebsi = { version = "0.1", path = "../did-methods/did-ebsi", optional = true }
-affinidi-did-webs = { version = "0.11", path = "../did-methods/did-webs", optional = true }
+affinidi-did-webs = { version = "0.12", path = "../did-methods/did-webs", optional = true }
 
 # External Crates
 ahash = "0.8"
