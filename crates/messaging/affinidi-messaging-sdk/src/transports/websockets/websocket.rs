@@ -355,6 +355,7 @@ impl WebSocketTransport {
         // Install the mux receive side before the task can publish to it.
         let mux_sides = if mux {
             let (ready_tx, ready_rx) = watch::channel(None);
+            let (members_tx, members_rx) = watch::channel(Default::default());
             let (events_tx, _) = broadcast::channel(crate::protocols::mux::MUX_EVENT_CAPACITY);
             let (notices_tx, _) = broadcast::channel(crate::protocols::mux::MUX_EVENT_CAPACITY);
             let mut mediator_did = String::new();
@@ -366,15 +367,18 @@ impl WebSocketTransport {
                     .await
                     .replace(crate::protocols::mux::MuxHandles {
                         ready_rx,
+                        members_rx,
                         events_tx: events_tx.clone(),
                         notices_tx: notices_tx.clone(),
                     });
             }
             Some(crate::protocols::mux::MuxSides {
                 ready_tx,
+                members_tx,
                 events_tx,
                 notices_tx,
                 mediator_did,
+                principal_did: profile.inner.did.clone(),
             })
         } else {
             None
@@ -1012,11 +1016,19 @@ impl WebSocketTransport {
 
                 // On a mux connection the mediator's own `mux/event`
                 // documents are control traffic for this transport (the
-                // `ready` nonce) and for `ATMProfile::mux_events`, not
-                // application messages. They are pushed, never stored, so
-                // there is nothing to delete.
+                // `ready` nonce, the member set) and for
+                // `ATMProfile::mux_events`, not application messages. They
+                // are pushed, never stored, so there is nothing to delete.
+                // Only the mediator's count: one from anyone else stays an
+                // ordinary message.
                 if let Some(mux) = &self.mux
-                    && mux.absorb(&message)
+                    && mux
+                        .absorb(
+                            &crate::protocols::mux::proof_resolver(atm),
+                            &message,
+                            &metadata,
+                        )
+                        .await
                 {
                     return;
                 }

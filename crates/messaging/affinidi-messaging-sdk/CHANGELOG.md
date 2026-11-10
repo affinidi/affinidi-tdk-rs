@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.45.5 — mux events checked on DIDComm sockets; member sets
+
+**Security fix (DIDComm mux connections).** A `messaging/mux/event` arriving
+on a `didcomm-mux` connection was acted on whoever sent it: the transport
+did not check that the profile's mediator authcrypted it, nor its `issuer`
+or `recipient`. Any peer able to message the principal could send a
+`ready` carrying a nonce of its choosing, which `mux_ready()` then handed to
+the next `sign_attach`, or a fake `attached` / `detached`. Now:
+
+- An event document not authcrypted by the profile's mediator is not an
+  event. It stays an ordinary message, as it would on any other connection
+  (it was stored, so the application still sees and deletes it).
+- One from the mediator is checked before it is acted on: `issuer` is the
+  mediator, `recipient` is the principal (spec consumer rule 1), it carries
+  what its kind requires, and its Data Integrity `proof`, when present,
+  verifies. One that fails is dropped with a warning; events are never
+  stored, so there is nothing to delete.
+- The same checks now apply on `tsp-mux` sockets, where the TSP envelope
+  already authenticated the sender; an event whose proof fails is ignored.
+- An `attached` entry without `scope` or `deliveryActive` is malformed and
+  ignored, as "Members per kind" requires. The mediator always sends both.
+
+The spec only recommends a proof on events, so one without a proof is
+still accepted on the strength of the connection.
+
+**Member sets** (spec consumer rule 4). New `protocols::mux::MuxMembers`,
+kept from the connection's `ready`, `attached` and `detached` events: each
+`MuxMember` has its scope, whether its live traffic comes over this
+connection (`delivery_active`), its grant id, expiry and last reason. A
+`detached` with reason `superseded` keeps the member, inactive, until
+`reactivated`; any other `detached` removes it. Member events before `ready`
+are ignored, and every new connection starts empty.
+
+- DIDComm: `ATMProfile::mux_members()`, a watch that changes with the set and
+  empties on every disconnect.
+- Raw TSP: `TspMuxWebSocket::members()`, updated as `recv` reads events.
+
+Also new: `protocols::mux::verify_mux_event`, the same checks for an event
+document obtained elsewhere.
+
 ## 0.45.4 — `tsp-mux` client; `connectionFull` events
 
 DID multiplexing on a raw-TSP socket (`messaging/mux/event/0.1`, "Raw-TSP

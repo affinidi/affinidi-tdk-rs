@@ -630,7 +630,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.45.4"
+version = "0.45.5"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",

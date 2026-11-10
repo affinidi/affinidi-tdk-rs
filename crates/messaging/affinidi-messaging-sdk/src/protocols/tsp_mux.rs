@@ -36,9 +36,10 @@ use affinidi_tsp::MetaEnvelope;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use serde_json::Value;
 use tracing::{debug, warn};
-use trust_tasks_rs::TrustTask;
 
-use super::mux::{EVENT_TYPE, MuxEvent, MuxEventKind, MuxReady, event_is_well_formed};
+use trust_tasks_proof::affinidi::ProofPurposeResolver;
+
+use super::mux::{EVENT_TYPE, MuxEvent, MuxEventKind, MuxMembers, MuxReady, check_event};
 use super::tsp::{TspOps, TspWsStream};
 use crate::ATM;
 use crate::errors::ATMError;
@@ -245,6 +246,8 @@ pub(crate) struct Demux {
     pub(crate) principal: String,
     pub(crate) mediator: String,
     pub(crate) opener: Arc<dyn EventOpener>,
+    /// Checks an event's proof, when it carries one.
+    pub(crate) resolver: Arc<dyn ProofPurposeResolver>,
 }
 
 impl Demux {
@@ -264,7 +267,7 @@ impl Demux {
         };
         if meta.receiver == self.principal && meta.sender == self.mediator {
             match self.opener.open(&frame).await {
-                Ok((payload, sender)) => match self.event(&payload, &sender) {
+                Ok((payload, sender)) => match self.event(&payload, &sender).await {
                     EventCheck::Event(e) => return Some(TspMuxFrame::Event(e)),
                     EventCheck::Ignore => return None,
                     EventCheck::NotAnEvent => {}
@@ -284,36 +287,27 @@ impl Demux {
         })
     }
 
-    fn event(&self, payload: &[u8], sender: &str) -> EventCheck {
+    /// An opened frame's payload as an event: checked as
+    /// [`verify_mux_event`](super::mux::verify_mux_event) checks one, after
+    /// the TSP envelope's signature showed the mediator sent it.
+    async fn event(&self, payload: &[u8], sender: &str) -> EventCheck {
         let Ok(doc) = serde_json::from_slice::<Value>(payload) else {
             return EventCheck::NotAnEvent;
         };
         if doc.get("type").and_then(Value::as_str) != Some(EVENT_TYPE) {
             return EventCheck::NotAnEvent;
         }
-        if sender != self.mediator
-            || doc.get("issuer").and_then(Value::as_str) != Some(self.mediator.as_str())
-        {
+        if sender != self.mediator {
             warn!(
                 sender,
-                "ignoring a mux event not issued by this profile's mediator"
+                "ignoring a mux event not sent by this profile's mediator"
             );
             return EventCheck::Ignore;
         }
-        if doc.get("recipient").and_then(Value::as_str) != Some(self.principal.as_str()) {
-            warn!("ignoring a mux event addressed to someone else");
-            return EventCheck::Ignore;
-        }
-        match serde_json::from_value::<TrustTask<MuxEvent>>(doc) {
-            Ok(task) if event_is_well_formed(&task.payload) => {
-                EventCheck::Event(Box::new(task.payload))
-            }
-            Ok(task) => {
-                warn!(event = %task.payload.event, "ignoring a malformed mux event");
-                EventCheck::Ignore
-            }
+        match check_event(&self.resolver, &doc, &self.mediator, &self.principal).await {
+            Ok(event) => EventCheck::Event(Box::new(event)),
             Err(e) => {
-                warn!(error = %e, "ignoring a mux event that does not parse");
+                warn!(error = %e, "ignoring a mux event");
                 EventCheck::Ignore
             }
         }
@@ -414,6 +408,7 @@ pub struct TspMuxWebSocket {
     ws: TspWsStream,
     demux: Demux,
     ready: MuxReady,
+    members: MuxMembers,
     acker: TspMuxAcker,
 }
 
@@ -434,6 +429,17 @@ impl TspMuxWebSocket {
     /// connection alone.
     pub fn ready(&self) -> &MuxReady {
         &self.ready
+    }
+
+    /// This connection's member set, kept from its `attached` and `detached`
+    /// events as [`recv`](Self::recv) reads them: which member DIDs it
+    /// carries, with what scope, and whether each one's live traffic comes
+    /// here now. It starts empty at `ready`; the stored grants admitted on
+    /// connect arrive as the first `attached` event. When
+    /// [`MuxReady::pending_notices`] is above zero, read the principal's
+    /// notices before trusting it (consumer rule 3).
+    pub fn members(&self) -> &MuxMembers {
+        &self.members
     }
 
     /// The principal: the DID this socket is authenticated as.
@@ -458,6 +464,9 @@ impl TspMuxWebSocket {
                 return Ok(None);
             };
             if let Some(frame) = self.demux.classify(frame).await {
+                if let TspMuxFrame::Event(event) = &frame {
+                    self.members.apply(event);
+                }
                 return Ok(Some(frame));
             }
         }
@@ -541,6 +550,7 @@ impl TspOps<'_> {
                 atm: self.atm.clone(),
                 principal,
             }),
+            resolver: super::mux::proof_resolver(self.atm),
         };
         let ready = match await_ready(&mut ws, &demux, MUX_READY_TIMEOUT).await {
             Ok(r) => r,
@@ -553,6 +563,7 @@ impl TspOps<'_> {
             ws,
             demux,
             ready,
+            members: MuxMembers::connected(),
             acker: TspMuxAcker {
                 atm: self.atm.clone(),
                 rest_endpoint,
@@ -618,17 +629,28 @@ mod tests {
         }
     }
 
-    fn demux(k: &Keys) -> Demux {
+    async fn demux(k: &Keys) -> Demux {
+        demux_for(MEDIATOR, k).await
+    }
+
+    async fn demux_for(mediator: &str, k: &Keys) -> Demux {
+        use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+        let client = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
         Demux {
             principal: PRINCIPAL.into(),
-            mediator: MEDIATOR.into(),
+            mediator: mediator.into(),
             opener: Arc::new(TestOpener {
                 principal_decryption: k.principal.decryption_key,
                 known: vec![
-                    (MEDIATOR.into(), k.mediator.verifying_key),
+                    (mediator.into(), k.mediator.verifying_key),
                     ("did:example:sender".into(), k.sender.verifying_key),
                 ],
             }),
+            resolver: Arc::new(trust_tasks_proof::affinidi::CachedDidResolver::new(
+                Arc::new(client),
+            )),
         }
     }
 
@@ -732,7 +754,7 @@ mod tests {
     ) -> Result<MuxReady, ATMError> {
         let mut ws = serve(selected, frames).await;
         check_selection(selected)?;
-        await_ready(&mut ws, &demux(k), Duration::from_millis(500)).await
+        await_ready(&mut ws, &demux(k).await, Duration::from_millis(500)).await
     }
 
     #[tokio::test]
@@ -826,7 +848,7 @@ mod tests {
     #[tokio::test]
     async fn events_and_data_frames_are_demultiplexed() {
         let k = keys();
-        let d = demux(&k);
+        let d = demux(&k).await;
 
         // A mux event: typed, with its reason.
         let detached = seal(
@@ -896,7 +918,7 @@ mod tests {
     #[tokio::test]
     async fn events_not_from_this_mediator_to_this_principal_are_ignored() {
         let k = keys();
-        let d = demux(&k);
+        let d = demux(&k).await;
         // `issuer` is not the mediator.
         let wrong_issuer = seal(
             &k.mediator,
@@ -938,7 +960,7 @@ mod tests {
     #[tokio::test]
     async fn a_refused_event_is_typed() {
         let k = keys();
-        let d = demux(&k);
+        let d = demux(&k).await;
         let bad = seal(&k.sender, &k.work, b"refused");
         let id = frame_id(&bad);
         assert_eq!(id.len(), 64);
@@ -967,6 +989,71 @@ mod tests {
         assert_eq!(r.receiver.as_deref(), Some(WORK));
         assert_eq!(r.reason.as_deref(), Some("not admitted"));
         assert!(MuxReady::from_event(&e).is_none());
+    }
+
+    /// An event's proof, when it has one, must verify (the spec recommends
+    /// one; the TSP envelope already shows the mediator sent it).
+    #[tokio::test]
+    async fn an_event_with_a_proof_that_fails_is_ignored() {
+        use affinidi_secrets_resolver::secrets::Secret;
+        use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
+        let seed = [9u8; 32];
+        let mb = Secret::generate_ed25519(None, Some(&seed))
+            .get_public_keymultibase()
+            .unwrap();
+        let mediator = format!("did:key:{mb}");
+        let secret = Secret::generate_ed25519(Some(&format!("{mediator}#{mb}")), Some(&seed));
+        let mut k = keys();
+        k.mediator = PrivateVid::generate(&mediator);
+        let d = demux_for(&mediator, &k).await;
+
+        let doc: Value =
+            serde_json::from_slice(&event_doc(&mediator, PRINCIPAL, ready_payload())).unwrap();
+        let signed = sign_trust_task(&doc, &secret, SignOptions::new())
+            .await
+            .unwrap();
+        let sealed =
+            |doc: &Value| seal(&k.mediator, &k.principal, &serde_json::to_vec(doc).unwrap());
+
+        assert!(matches!(
+            d.classify(sealed(&signed)).await,
+            Some(TspMuxFrame::Event(e)) if e.event == MuxEventKind::Ready
+        ));
+        let mut forged = signed.clone();
+        forged["payload"]["muxNonce"] = json!("B".repeat(43));
+        assert!(d.classify(sealed(&forged)).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_socket_keeps_its_member_set() {
+        let k = keys();
+        let d = demux(&k).await;
+        let mut members = MuxMembers::connected();
+        let event = |payload: Value| {
+            seal(
+                &k.mediator,
+                &k.principal,
+                &event_doc(MEDIATOR, PRINCIPAL, payload),
+            )
+        };
+        for frame in [
+            event(json!({"event": "attached", "dids": [
+                {"did": WORK, "reason": "connect", "scope": ["receive", "pickup"],
+                 "deliveryActive": true, "grantId": "g1"},
+                {"did": "did:example:home", "reason": "connect", "scope": ["receive"],
+                 "deliveryActive": true}]})),
+            event(json!({"event": "detached", "dids": [
+                {"did": "did:example:home", "reason": "expired"}]})),
+            seal(&k.sender, &k.work, b"data does not change the set"),
+        ] {
+            if let Some(TspMuxFrame::Event(e)) = d.classify(frame).await {
+                members.apply(&e);
+            }
+        }
+        assert_eq!(members.len(), 1);
+        assert!(members.is_reachable(WORK));
+        assert!(!members.is_reachable("did:example:home"));
+        assert_eq!(members.get(WORK).unwrap().grant_id.as_deref(), Some("g1"));
     }
 
     #[test]

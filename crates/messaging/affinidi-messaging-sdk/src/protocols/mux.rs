@@ -26,6 +26,8 @@
 //! call with an explicit scope; there is no implicit membership, renewal or
 //! re-attach.
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use affinidi_did_common::DocumentExt;
@@ -35,7 +37,9 @@ use affinidi_secrets_resolver::secrets::{KeyType, Secret};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tracing::warn;
-use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
+use trust_tasks_proof::affinidi::{
+    CachedDidResolver, ProofPurposeResolver, SignOptions, Verifier, sign_trust_task,
+};
 use trust_tasks_rs::TrustTask;
 use uuid::Uuid;
 
@@ -140,12 +144,226 @@ impl MuxRefused {
 /// Whether `event` carries what the spec requires of its kind ("Members per
 /// kind"); a consumer ignores one that does not. The schema already refuses
 /// unknown members; this checks the per-kind required ones.
-#[cfg(feature = "tsp")]
 pub(crate) fn event_is_well_formed(event: &MuxEvent) -> bool {
     match event.event {
         MuxEventKind::Ready => MuxReady::from_event(event).is_some(),
-        MuxEventKind::Attached | MuxEventKind::Detached => !event.dids.is_empty(),
+        MuxEventKind::Attached => {
+            !event.dids.is_empty()
+                && event
+                    .dids
+                    .iter()
+                    .all(|c| c.scope.is_some() && c.delivery_active.is_some())
+        }
+        MuxEventKind::Detached => !event.dids.is_empty(),
         MuxEventKind::Refused => MuxRefused::from_event(event).is_some(),
+    }
+}
+
+/// Check a `messaging/mux/event` document before acting on it, once its
+/// carrier has shown that `mediator` sent it (authcrypt on DIDComm, the TSP
+/// envelope's signature on TSP):
+///
+/// - its `issuer` is `mediator` and its `recipient` is `principal` (consumer
+///   rule 1);
+/// - it parses, and carries what its kind requires ("Members per kind");
+/// - its Data Integrity `proof`, when it has one, verifies and binds to the
+///   issuer. The spec only recommends a proof on events, so one without is
+///   accepted on the strength of the connection; one with a proof that does
+///   not verify is refused.
+///
+/// Returns the payload, or why the event must be ignored.
+pub async fn verify_mux_event(
+    atm: &ATM,
+    document: &Value,
+    mediator_did: &str,
+    principal_did: &str,
+) -> Result<MuxEvent, ATMError> {
+    check_event(&proof_resolver(atm), document, mediator_did, principal_did).await
+}
+
+/// The resolver proofs on mux documents are checked with: the ATM's own
+/// (cached) DID resolver.
+pub(crate) fn proof_resolver(atm: &ATM) -> Arc<dyn ProofPurposeResolver> {
+    Arc::new(CachedDidResolver::new(Arc::new(
+        atm.inner.tdk_common.did_resolver().clone(),
+    )))
+}
+
+pub(crate) async fn check_event(
+    resolver: &Arc<dyn ProofPurposeResolver>,
+    document: &Value,
+    mediator_did: &str,
+    principal_did: &str,
+) -> Result<MuxEvent, ATMError> {
+    let reject = |why: String| Err(ATMError::MsgReceiveError(why));
+    if document.get("type").and_then(Value::as_str) != Some(EVENT_TYPE) {
+        return reject("not a messaging/mux/event".into());
+    }
+    if document.get("issuer").and_then(Value::as_str) != Some(mediator_did) {
+        return reject(format!(
+            "mux event not issued by the mediator {mediator_did}"
+        ));
+    }
+    if document.get("recipient").and_then(Value::as_str) != Some(principal_did) {
+        return reject("mux event addressed to someone else".into());
+    }
+    let task: TrustTask<MuxEvent> = match serde_json::from_value(document.clone()) {
+        Ok(t) => t,
+        Err(e) => return reject(format!("mux event does not parse: {e}")),
+    };
+    if !event_is_well_formed(&task.payload) {
+        return reject(format!("malformed mux `{}` event", task.payload.event));
+    }
+    if document.get("proof").is_some()
+        && let Err(e) = Verifier::with_resolver(resolver.clone())
+            .verify_raw(document)
+            .await
+    {
+        return reject(format!("mux event proof: {e}"));
+    }
+    Ok(task.payload)
+}
+
+/// One member DID on the current mux connection, as its latest `attached`
+/// event described it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MuxMember {
+    pub did: String,
+    /// The scope in force for the member.
+    pub scope: Vec<MuxCapability>,
+    /// Whether the member's live traffic comes over this connection. `false`
+    /// while the DID's own direct connection (or a newer connection) takes
+    /// it: the member stays in the set, inactive, until an `attached` event
+    /// with reason `reactivated`.
+    pub delivery_active: bool,
+    /// The grant carrying the member; `None` for a session attach.
+    pub grant_id: Option<String>,
+    /// When the membership lapses unless renewed.
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Why the member last changed (`connect`, `grant`, `attach`,
+    /// `reactivated`, or `superseded`).
+    pub reason: MemberChangeReason,
+}
+
+/// The member set of the current mux connection, kept from its `ready`,
+/// `attached` and `detached` events (consumer rule 4). Empty, and not
+/// [`ready`](Self::is_ready), until the connection's `ready` arrives; emptied
+/// again on every new connection. Nothing carries over from an earlier one.
+///
+/// When [`MuxReady::pending_notices`] is above zero, drain
+/// [`mux_notices`](crate::profiles::ATMProfile::mux_notices) before trusting
+/// this set (consumer rule 3).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MuxMembers {
+    ready: bool,
+    members: BTreeMap<String, MuxMember>,
+}
+
+impl MuxMembers {
+    /// A connection whose `ready` has arrived and that has no members yet.
+    pub(crate) fn connected() -> Self {
+        Self {
+            ready: true,
+            members: BTreeMap::new(),
+        }
+    }
+
+    /// Whether this connection's `ready` has arrived. Before it no member is
+    /// reachable through the connection.
+    pub fn is_ready(&self) -> bool {
+        self.ready
+    }
+
+    /// The member `did`, if it is in the set (active or not).
+    pub fn get(&self, did: &str) -> Option<&MuxMember> {
+        self.members.get(did)
+    }
+
+    /// Whether `did`'s live traffic comes over this connection now: it is a
+    /// member and its delivery is active.
+    pub fn is_reachable(&self, did: &str) -> bool {
+        self.get(did).is_some_and(|m| m.delivery_active)
+    }
+
+    /// Every member, in DID order.
+    pub fn iter(&self) -> impl Iterator<Item = &MuxMember> {
+        self.members.values()
+    }
+
+    pub fn len(&self) -> usize {
+        self.members.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.members.is_empty()
+    }
+
+    /// Fold one verified event into the set. Returns whether the set changed.
+    ///
+    /// - `ready` starts a new connection: the set empties.
+    /// - `attached` adds the member, or replaces it with the new scope,
+    ///   expiry and delivery state.
+    /// - `detached` removes it, except `superseded`, which keeps it inactive
+    ///   (producer rule 6). `connectionFull` names a grant that never joined.
+    ///
+    /// A member event before `ready` is ignored: nothing is reachable on a
+    /// connection that has not shown it is a mux connection.
+    pub(crate) fn apply(&mut self, event: &MuxEvent) -> bool {
+        match event.event {
+            MuxEventKind::Ready => {
+                let changed = !self.ready || !self.members.is_empty();
+                *self = Self::connected();
+                changed
+            }
+            MuxEventKind::Attached if self.ready => {
+                for c in &event.dids {
+                    let member = MuxMember {
+                        did: c.did.to_string(),
+                        scope: c
+                            .scope
+                            .as_ref()
+                            .map(|s| s.iter().map(|v| MuxCapability::from(*v)).collect())
+                            .unwrap_or_default(),
+                        delivery_active: c.delivery_active.unwrap_or(false),
+                        grant_id: c.grant_id.as_ref().map(|g| g.to_string()),
+                        expires_at: c.expires_at,
+                        reason: c.reason,
+                    };
+                    self.members.insert(member.did.clone(), member);
+                }
+                true
+            }
+            MuxEventKind::Detached if self.ready => {
+                let mut changed = false;
+                for c in &event.dids {
+                    let did: &str = &c.did;
+                    if c.reason == MemberChangeReason::Superseded {
+                        if let Some(m) = self.members.get_mut(did) {
+                            m.delivery_active = false;
+                            m.reason = c.reason;
+                            changed = true;
+                        }
+                    } else {
+                        changed |= self.members.remove(did).is_some();
+                    }
+                }
+                changed
+            }
+            _ => false,
+        }
+    }
+}
+
+impl From<mux::event::v0_1::MuxScopeValue> for MuxCapability {
+    fn from(v: mux::event::v0_1::MuxScopeValue) -> Self {
+        use mux::event::v0_1::MuxScopeValue as V;
+        match v {
+            V::Receive => Self::Receive,
+            V::Pickup => Self::Pickup,
+            V::Delete => Self::Delete,
+            V::Send => Self::Send,
+        }
     }
 }
 
@@ -171,6 +389,7 @@ pub struct MuxNoticeDelivery {
 #[derive(Debug)]
 pub(crate) struct MuxHandles {
     pub(crate) ready_rx: tokio::sync::watch::Receiver<Option<MuxReady>>,
+    pub(crate) members_rx: tokio::sync::watch::Receiver<MuxMembers>,
     pub(crate) events_tx: tokio::sync::broadcast::Sender<MuxEvent>,
     pub(crate) notices_tx: tokio::sync::broadcast::Sender<MuxNoticeDelivery>,
 }
@@ -179,32 +398,82 @@ pub(crate) struct MuxHandles {
 #[derive(Debug)]
 pub(crate) struct MuxSides {
     pub(crate) ready_tx: tokio::sync::watch::Sender<Option<MuxReady>>,
+    pub(crate) members_tx: tokio::sync::watch::Sender<MuxMembers>,
     pub(crate) events_tx: tokio::sync::broadcast::Sender<MuxEvent>,
     pub(crate) notices_tx: tokio::sync::broadcast::Sender<MuxNoticeDelivery>,
-    /// The profile's mediator: the only issuer a notice is accepted from.
+    /// The profile's mediator: the only sender and issuer an event or a
+    /// notice is accepted from.
     pub(crate) mediator_did: String,
+    /// The profile's DID: the only recipient an event is accepted for.
+    pub(crate) principal_did: String,
 }
 
 impl MuxSides {
-    /// A new socket means a new mux session: forget the old `ready`.
+    /// A new socket means a new mux session: forget the old `ready` and the
+    /// old member set.
     pub(crate) fn reset(&self) {
         let _ = self.ready_tx.send(None);
+        self.members_tx.send_replace(MuxMembers::default());
     }
 
     /// Consume a mux event arriving on the socket. Returns whether the
-    /// message was one (and so must not be handed to the application as an
+    /// message was taken (and so must not be handed to the application as an
     /// ordinary message).
-    pub(crate) fn absorb(&self, message: &Message) -> bool {
-        let Some(task) = decode_mux_event(message) else {
+    ///
+    /// Only the mediator speaks for the connection: an event document that
+    /// was not authcrypted by the profile's mediator is not an event, and
+    /// passes through as the ordinary (stored) message it is. One from the
+    /// mediator that fails [`check_event`] is dropped: events are never
+    /// stored, so there is nothing to delete.
+    pub(crate) async fn absorb(
+        &self,
+        resolver: &Arc<dyn ProofPurposeResolver>,
+        message: &Message,
+        meta: &crate::messages::compat::UnpackMetadata,
+    ) -> bool {
+        if message.typ != ENVELOPE_TYPE
+            || message.body.get("type").and_then(Value::as_str) != Some(EVENT_TYPE)
+        {
             return false;
+        }
+        if !sent_by(meta, &self.mediator_did) {
+            warn!(
+                from = ?meta.encrypted_from_kid,
+                "a mux event not authcrypted by this profile's mediator; passing it on as an ordinary message"
+            );
+            return false;
+        }
+        let event = match check_event(
+            resolver,
+            &message.body,
+            &self.mediator_did,
+            &self.principal_did,
+        )
+        .await
+        {
+            Ok(e) => e,
+            Err(e) => {
+                warn!(error = %e, "ignoring a mux event");
+                return true;
+            }
         };
-        let payload = serde_json::to_value(&task.payload).unwrap_or_default();
-        if let Some(ready) = MuxReady::from_payload(&payload) {
+        if let Some(ready) = MuxReady::from_event(&event) {
             let _ = self.ready_tx.send(Some(ready));
         }
-        let _ = self.events_tx.send(task.payload);
+        self.members_tx.send_if_modified(|m| m.apply(&event));
+        let _ = self.events_tx.send(event);
         true
     }
+}
+
+/// Whether an unpacked message was authcrypted by `did` (its sender key is
+/// one of `did`'s). Anoncrypt and plaintext are nobody's.
+fn sent_by(meta: &crate::messages::compat::UnpackMetadata, did: &str) -> bool {
+    meta.authenticated
+        && meta
+            .encrypted_from_kid
+            .as_deref()
+            .is_some_and(|kid| kid.split('#').next() == Some(did))
 }
 
 impl MuxSides {
@@ -421,18 +690,14 @@ pub async fn verify_mux_notice(
     message: &Message,
     mediator_did: &str,
 ) -> Result<TrustTask<MuxNotice>, ATMError> {
-    use std::sync::Arc;
-    use trust_tasks_proof::affinidi::CachedDidResolver;
-    let resolver = CachedDidResolver::new(Arc::new(atm.inner.tdk_common.did_resolver().clone()));
-    verify_notice_with(Arc::new(resolver), message, mediator_did).await
+    verify_notice_with(proof_resolver(atm), message, mediator_did).await
 }
 
 async fn verify_notice_with(
-    resolver: std::sync::Arc<dyn trust_tasks_proof::affinidi::ProofPurposeResolver>,
+    resolver: Arc<dyn ProofPurposeResolver>,
     message: &Message,
     mediator_did: &str,
 ) -> Result<TrustTask<MuxNotice>, ATMError> {
-    use trust_tasks_proof::affinidi::Verifier;
     let document = decode_mux_notice(message)
         .ok_or_else(|| ATMError::MsgReceiveError("not a messaging/mux/notice".to_string()))?;
     if message.body.get("issuer").and_then(Value::as_str) != Some(mediator_did) {
@@ -496,45 +761,104 @@ mod tests {
         );
     }
 
+    fn event_doc(issuer: &str, recipient: &str, payload: Value) -> Value {
+        json!({
+            "id": "urn:uuid:1", "type": EVENT_TYPE, "issuer": issuer,
+            "recipient": recipient, "issuedAt": "2026-11-09T09:00:01Z",
+            "payload": payload,
+        })
+    }
+
     fn event_message(payload: Value) -> Message {
-        let doc = json!({
-            "id": "urn:uuid:1", "type": EVENT_TYPE, "issuer": "did:example:m",
-            "recipient": "did:example:p", "payload": payload,
-        });
+        envelope(event_doc(MEDIATOR, PRINCIPAL, payload))
+    }
+
+    fn envelope(doc: Value) -> Message {
         Message::build("m1".to_string(), ENVELOPE_TYPE.to_string(), doc).finalize()
     }
 
+    const MEDIATOR: &str = "did:example:m";
+    const PRINCIPAL: &str = "did:example:p";
     const NONCE: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-    #[tokio::test]
-    async fn the_transport_absorbs_events_and_tracks_ready() {
-        let (ready_tx, mut ready_rx) = tokio::sync::watch::channel(None);
-        let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(4);
-        let (notices_tx, _) = tokio::sync::broadcast::channel(4);
-        let sides = MuxSides {
-            ready_tx,
-            events_tx,
-            notices_tx,
-            mediator_did: "did:example:m".to_string(),
-        };
+    /// Unpack metadata for a message authcrypted by `did`.
+    fn authcrypted_by(did: &str) -> crate::messages::compat::UnpackMetadata {
+        crate::messages::compat::UnpackMetadata {
+            encrypted: true,
+            authenticated: true,
+            encrypted_from_kid: Some(format!("{did}#key-1")),
+            ..Default::default()
+        }
+    }
 
-        let ready = event_message(json!({
+    async fn resolver() -> Arc<dyn ProofPurposeResolver> {
+        use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+        let client = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        Arc::new(CachedDidResolver::new(Arc::new(client)))
+    }
+
+    struct Sides {
+        sides: MuxSides,
+        ready: tokio::sync::watch::Receiver<Option<MuxReady>>,
+        members: tokio::sync::watch::Receiver<MuxMembers>,
+        events: tokio::sync::broadcast::Receiver<MuxEvent>,
+    }
+
+    fn sides(mediator: &str) -> Sides {
+        let (ready_tx, ready) = tokio::sync::watch::channel(None);
+        let (members_tx, members) = tokio::sync::watch::channel(MuxMembers::default());
+        let (events_tx, events) = tokio::sync::broadcast::channel(16);
+        let (notices_tx, _) = tokio::sync::broadcast::channel(4);
+        Sides {
+            sides: MuxSides {
+                ready_tx,
+                members_tx,
+                events_tx,
+                notices_tx,
+                mediator_did: mediator.to_string(),
+                principal_did: PRINCIPAL.to_string(),
+            },
+            ready,
+            members,
+            events,
+        }
+    }
+
+    fn ready_payload() -> Value {
+        json!({
             "event": "ready", "sessionId": "sess", "muxNonce": NONCE,
             "maxDidsPerConnection": 10, "maxAttachLifetimeSeconds": 600,
             "pendingNotices": 2,
-        }));
+        })
+    }
+
+    fn attached(did: &str, reason: &str, active: bool) -> Value {
+        json!({ "did": did, "reason": reason, "scope": ["receive", "delete"],
+                "deliveryActive": active, "grantId": format!("g-{}", &did[12..]) })
+    }
+
+    #[tokio::test]
+    async fn the_transport_absorbs_events_and_tracks_ready() {
+        let r = resolver().await;
+        let mut s = sides(MEDIATOR);
+        let from_mediator = authcrypted_by(MEDIATOR);
+
         assert!(
-            sides.absorb(&ready),
+            s.sides
+                .absorb(&r, &event_message(ready_payload()), &from_mediator)
+                .await,
             "a mux event is not an application message"
         );
-        ready_rx.changed().await.unwrap();
-        let got = ready_rx.borrow().clone().expect("ready recorded");
+        let got = s.ready.borrow().clone().expect("ready recorded");
         assert_eq!(got.session_id, "sess");
         assert_eq!(got.mux_nonce, NONCE);
         assert_eq!(got.max_dids_per_connection, Some(10));
         assert_eq!(got.pending_notices, Some(2));
+        assert!(s.members.borrow().is_ready());
         assert_eq!(
-            serde_json::to_value(events_rx.recv().await.unwrap()).unwrap()["event"],
+            serde_json::to_value(s.events.recv().await.unwrap()).unwrap()["event"],
             "ready"
         );
 
@@ -545,11 +869,136 @@ mod tests {
             json!({"content": "hi"}),
         )
         .finalize();
-        assert!(!sides.absorb(&other));
+        assert!(!s.sides.absorb(&r, &other, &from_mediator).await);
 
-        // A new socket forgets the old session's nonce.
-        sides.reset();
-        assert!(ready_rx.borrow().is_none());
+        // A new socket forgets the old session's nonce and members.
+        s.sides.reset();
+        assert!(s.ready.borrow().is_none());
+        assert!(!s.members.borrow().is_ready());
+    }
+
+    /// Consumer rule 1, and the premise of the spec's proof rule: only the
+    /// mediator speaks for the connection. Before this check any peer able
+    /// to message the principal could send it a `ready` (a nonce of its
+    /// choosing for the next attach) or a `detached`.
+    #[tokio::test]
+    async fn only_the_mediator_speaks_for_the_connection() {
+        let r = resolver().await;
+        let mut s = sides(MEDIATOR);
+        let ready = event_message(ready_payload());
+
+        // Authcrypted by a peer: an ordinary message, not an event.
+        assert!(
+            !s.sides
+                .absorb(&r, &ready, &authcrypted_by("did:example:peer"))
+                .await
+        );
+        // Anoncrypt names no sender: the same.
+        let anon = crate::messages::compat::UnpackMetadata {
+            encrypted: true,
+            encrypted_to_kids: vec![format!("{PRINCIPAL}#key-1")],
+            ..Default::default()
+        };
+        assert!(!s.sides.absorb(&r, &ready, &anon).await);
+        assert!(s.ready.borrow().is_none(), "no ready taken from a peer");
+
+        // From the mediator, but addressed to someone else or naming another
+        // issuer: dropped (events are never stored), and not acted on.
+        let from_mediator = authcrypted_by(MEDIATOR);
+        for doc in [
+            event_doc(MEDIATOR, "did:example:other", ready_payload()),
+            event_doc("did:example:other", PRINCIPAL, ready_payload()),
+        ] {
+            assert!(s.sides.absorb(&r, &envelope(doc), &from_mediator).await);
+        }
+        // Malformed for its kind: an `attached` entry without its scope.
+        let bare = event_message(json!({"event": "attached",
+            "dids": [{"did": "did:example:work", "reason": "grant"}]}));
+        assert!(s.sides.absorb(&r, &bare, &from_mediator).await);
+        assert!(s.ready.borrow().is_none());
+        assert!(s.events.try_recv().is_err(), "nothing reached mux_events()");
+    }
+
+    #[tokio::test]
+    async fn an_event_proof_is_checked_when_present() {
+        let r = resolver().await;
+        let (mediator, secret) = mediator_key();
+        let mut s = sides(&mediator);
+        let from_mediator = authcrypted_by(&mediator);
+
+        let signed = sign_trust_task(
+            &event_doc(&mediator, PRINCIPAL, ready_payload()),
+            &secret,
+            SignOptions::new(),
+        )
+        .await
+        .unwrap();
+        let mut forged = signed.clone();
+        forged["payload"]["muxNonce"] = json!("B".repeat(43));
+        assert!(s.sides.absorb(&r, &envelope(forged), &from_mediator).await);
+        assert!(s.ready.borrow().is_none(), "a proof that fails is refused");
+
+        assert!(s.sides.absorb(&r, &envelope(signed), &from_mediator).await);
+        assert_eq!(s.ready.borrow().as_ref().unwrap().mux_nonce, NONCE);
+        assert!(s.events.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_member_set_follows_attached_and_detached() {
+        let r = resolver().await;
+        let s = sides(MEDIATOR);
+        let from_mediator = authcrypted_by(MEDIATOR);
+        let absorb = |payload: Value| {
+            let (sides, r, m) = (&s.sides, &r, &from_mediator);
+            async move { assert!(sides.absorb(r, &event_message(payload), m).await) }
+        };
+        const WORK: &str = "did:example:work";
+        const HOME: &str = "did:example:home";
+
+        // Before `ready` nothing is reachable (DIDComm binding rule 1).
+        absorb(json!({"event": "attached", "dids": [attached(WORK, "connect", true)]})).await;
+        assert!(s.members.borrow().is_empty());
+
+        absorb(ready_payload()).await;
+        absorb(json!({"event": "attached", "dids": [
+            attached(WORK, "connect", true), attached(HOME, "connect", false)]}))
+        .await;
+        {
+            let m = s.members.borrow();
+            assert_eq!(m.len(), 2);
+            assert!(m.is_reachable(WORK));
+            assert!(!m.is_reachable(HOME), "inactive while its own socket is up");
+            let work = m.get(WORK).unwrap();
+            assert_eq!(
+                work.scope,
+                vec![MuxCapability::Receive, MuxCapability::Delete]
+            );
+            assert_eq!(work.grant_id.as_deref(), Some("g-work"));
+            assert_eq!(work.reason, MemberChangeReason::Connect);
+        }
+
+        // Superseded keeps the member, inactive; reactivated restores it.
+        absorb(json!({"event": "detached",
+            "dids": [{"did": WORK, "reason": "superseded"}]}))
+        .await;
+        assert!(!s.members.borrow().is_reachable(WORK));
+        assert!(s.members.borrow().get(WORK).is_some());
+        absorb(json!({"event": "attached", "dids": [attached(WORK, "reactivated", true)]})).await;
+        assert!(s.members.borrow().is_reachable(WORK));
+
+        // Any other detach removes it; connectionFull names one never added.
+        absorb(json!({"event": "detached", "dids": [
+            {"did": WORK, "reason": "revokedByMember", "grantId": "g-work"},
+            {"did": "did:example:full", "reason": "connectionFull"}]}))
+        .await;
+        let m = s.members.borrow().clone();
+        assert!(m.get(WORK).is_none());
+        assert_eq!(m.iter().map(|m| m.did.as_str()).collect::<Vec<_>>(), [HOME]);
+
+        // A new `ready` is a new connection: nothing carries over.
+        absorb(ready_payload()).await;
+        assert!(s.members.borrow().is_empty());
+        assert!(s.members.borrow().is_ready());
     }
 
     /// `connectionFull` (spec dtgwg-trust-tasks-tf#1078): a valid grant the
@@ -557,15 +1006,8 @@ mod tests {
     /// to parse and was dropped, so the principal never learned of it.
     #[tokio::test]
     async fn a_connection_full_detach_parses_and_reaches_mux_events() {
-        let (ready_tx, _ready_rx) = tokio::sync::watch::channel(None);
-        let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(4);
-        let (notices_tx, _) = tokio::sync::broadcast::channel(4);
-        let sides = MuxSides {
-            ready_tx,
-            events_tx,
-            notices_tx,
-            mediator_did: "did:example:m".to_string(),
-        };
+        let r = resolver().await;
+        let mut s = sides(MEDIATOR);
         let detached = event_message(json!({
             "event": "detached",
             "dids": [{
@@ -579,8 +1021,12 @@ mod tests {
             decoded.payload.dids[0].reason,
             mux::event::v0_1::MemberChangeReason::ConnectionFull
         );
-        assert!(sides.absorb(&detached));
-        let ev = events_rx.recv().await.expect("delivered to mux_events()");
+        assert!(
+            s.sides
+                .absorb(&r, &detached, &authcrypted_by(MEDIATOR))
+                .await
+        );
+        let ev = s.events.recv().await.expect("delivered to mux_events()");
         assert_eq!(
             ev.dids[0].reason,
             mux::event::v0_1::MemberChangeReason::ConnectionFull
@@ -636,14 +1082,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_notice_is_accepted_only_from_the_mediator_with_a_valid_proof() {
-        use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-        use std::sync::Arc;
-        use trust_tasks_proof::affinidi::CachedDidResolver;
-        let client = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let resolver: Arc<dyn trust_tasks_proof::affinidi::ProofPurposeResolver> =
-            Arc::new(CachedDidResolver::new(Arc::new(client)));
+        let resolver = resolver().await;
         let (mediator, secret) = mediator_key();
         let msg = signed_notice(&secret, &mediator).await;
 
