@@ -305,7 +305,7 @@ impl WebSocketTransport {
         Self::start_with_options(profile, shared, direct_channel, false, false).await
     }
 
-    /// Start a DID-multiplexing connection (`affinidi-mux`).
+    /// Start a DID-multiplexing connection (`didcomm-mux`).
     pub(crate) async fn start_mux(
         profile: Arc<ATMProfile>,
         shared: Arc<SharedState>,
@@ -1658,9 +1658,12 @@ impl WebSocketTransport {
 
         debug!("Completed websocket connection");
 
-        // A mux connection is only one if the mediator selected the marker.
-        // An older mediator, or one with mux disabled, does not echo it; that
-        // is a refusal, not a cue to carry on as an ordinary socket.
+        // A mux connection is only one if the mediator selected the marker; a
+        // mediator with mux disabled does not, and that is a refusal, not a
+        // cue to carry on as an ordinary socket. Selection is necessary, not
+        // sufficient: a mediator that predates mux may echo any token it is
+        // offered. The `ready` event confirms the connection (`mux_ready()`),
+        // and nothing is reported reachable before it.
         if self.mux.is_some() {
             let selected = response
                 .headers()

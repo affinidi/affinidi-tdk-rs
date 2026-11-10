@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.45.3 — `didcomm-mux` subprotocol
+
+`ATM::profile_enable_mux_websocket` now offers the `didcomm-mux` WebSocket
+subprotocol, the name `messaging/mux/event/0.1` defines for a DIDComm mux
+connection (trustoverip/dtgwg-trust-tasks-tf#1078), in place of the
+provisional `affinidi-mux`. `protocols::mux::MUX_SUBPROTOCOL` changes with
+it. The mediator accepts both names for now, so 0.45.1 and 0.45.2 keep
+working against it; no released mediator served the old name.
+
+A mux connection counts as confirmed only once `mux_ready()` reports its
+`ready` event, as the spec requires: a mediator that predates mux may echo the
+subprotocol back without implementing it.
+
 ## 0.45.2 — DID multiplexing notices
 
 Durable `messaging/mux/notice/0.1` documents (grants suspended, revoked,

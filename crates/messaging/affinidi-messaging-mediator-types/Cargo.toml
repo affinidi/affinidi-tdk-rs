@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-types"
-version = "0.1.0"
+version = "0.1.1"
 description = "Protocol types shared by the Affinidi Messaging Mediator and its clients (ACLs, problem reports, message pickup, accounts)"
 edition.workspace = true
 authors.workspace = true
