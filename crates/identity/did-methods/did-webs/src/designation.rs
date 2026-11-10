@@ -86,6 +86,10 @@ pub(crate) fn issued_designations(
     schemas: &[&str],
     rejected: &mut Option<String>,
 ) -> Result<Vec<(Designation, bool)>, DidWebsError> {
+    // Fails loudly: nothing below means anything without a verified KEL.
+    // `issuer_log` verifies too (to the limit, then in full), but this gate
+    // does not depend on it; `key_state` is cached, so it costs nothing.
+    kels.key_state(aid)?;
     let log = kels.issuer_log(aid)?;
     let mut out = Vec::new();
     for schema in schemas {

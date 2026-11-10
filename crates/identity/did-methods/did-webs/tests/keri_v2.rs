@@ -11,8 +11,9 @@ use std::collections::BTreeMap;
 use affinidi_did_webs::create::{CreateConfig, SelfEndpoint, create, create_controlled};
 use affinidi_did_webs::update::{Change, ControlledUpdate, update_controlled};
 use affinidi_did_webs::{
-    Artifacts, ControlledResult, DesignatedService, DidWebs, DidWebsError, KeyAgreementKey,
-    KeyRoles, VerificationKey, resolve_from_artifacts,
+    Artifacts, ControlledResult, DesignatedService, DidWebs, DidWebsError, Kels, KeyAgreementKey,
+    KeyRoles, VerificationKey, designated_aliases, designated_key_agreement, designated_services,
+    resolve_from_artifacts,
 };
 use affinidi_keri::ProtocolVersion;
 use affinidi_keri::config::InceptionConfig;
@@ -395,4 +396,63 @@ fn a_salted_identifier_can_be_written_in_keri_2() {
         "no 1.x credential"
     );
     resolve(created.did(), created.artifacts()).expect("resolves");
+}
+
+/// `created`'s stream with one signature of the key event at `sn` broken: its
+/// last base64 character changed, which changes the signature's value.
+fn with_a_broken_signature(created: &ControlledResult, sn: u64) -> Vec<u8> {
+    let text = String::from_utf8(created.artifacts().keri_cesr.clone()).unwrap();
+    let all = messages(created.artifacts());
+    let event = all
+        .iter()
+        .find(|m| ["icp", "ixn"].contains(&ilk(m).as_str()) && m.serder.sn().ok() == Some(sn))
+        .expect("the event");
+    let sig = event.controller_sigs()[0].qb64().unwrap();
+    let last = sig.chars().last().unwrap();
+    let broken = format!(
+        "{}{}",
+        &sig[..sig.len() - 1],
+        if last == 'A' { 'B' } else { 'A' }
+    );
+    assert_eq!(text.matches(&sig).count(), 1);
+    text.replace(&sig, &broken).into_bytes()
+}
+
+#[test]
+fn no_designation_is_read_from_a_log_that_does_not_verify() {
+    // Designations mean nothing without a verified KEL. A broken signature on
+    // the event anchoring them, or on any event of the log, fails every
+    // designation reader loudly, rather than yielding what the stream claims.
+    let signer = key(1);
+    let created = created(&signer);
+    let aid = created.state().prefix.clone();
+    for sn in [0, 1, created.state().sn] {
+        let kels = Kels::parse(&with_a_broken_signature(&created, sn)).expect("parses");
+        let kel = |e: DidWebsError| matches!(e, DidWebsError::Kel(_));
+        assert!(
+            designated_aliases(&kels, &aid).is_err_and(kel),
+            "aliases, sn {sn}"
+        );
+        assert!(
+            designated_key_agreement(&kels, &aid).is_err_and(kel),
+            "key agreement, sn {sn}"
+        );
+        assert!(
+            designated_services(&kels, &aid).is_err_and(kel),
+            "services, sn {sn}"
+        );
+    }
+}
+
+#[test]
+fn a_historical_version_is_not_read_from_a_log_that_breaks_later() {
+    // Under versionId the registry reader sees the whole log, so the whole log
+    // must verify, not only the part up to the version asked for.
+    let signer = key(1);
+    let created = created(&signer);
+    let latest = created.state().sn;
+    let tampered = with_a_broken_signature(&created, latest);
+    let then = DidWebs::parse(&format!("{}?versionId=1", created.did())).unwrap();
+    let err = resolve_from_artifacts(&then, &tampered, None).expect_err("a broken log");
+    assert!(matches!(err, DidWebsError::Kel(_)), "{err}");
 }
