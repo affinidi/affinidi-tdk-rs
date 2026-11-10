@@ -32,4 +32,8 @@ pub enum CesrError {
 
     #[error("unknown format")]
     UnknownFormat,
+
+    /// An indexed signature's index or ondex is one its code cannot carry.
+    #[error("invalid index: {0}")]
+    InvalidIndex(String),
 }

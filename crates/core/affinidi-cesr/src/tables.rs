@@ -527,113 +527,64 @@ pub fn counter_sizage(code: &str) -> Option<Sizage> {
     Some(sizage)
 }
 
-/// Indexer code table: maps indexer code string to Sizage.
+/// The hard size of an indexer code from its first character.
 ///
-/// Indexed signatures have both an `index` (key position in current set)
-/// and an optional `ondex` (key position in prior set for rotation).
+/// Indexer codes have their own code table, separate from primitives
+/// (keripy `Indexer.Bards`): a letter is a one-character code, and `0` to `4`
+/// start two-character codes (`0A`, `2A`, `3A`, …). [`hardage`] is the
+/// primitive table's, where `2` and `3` start four-character codes; read with
+/// it, every big indexed signature (`2A…`) is an unknown code.
+pub fn indexer_hardage(first_char: char) -> Option<usize> {
+    match first_char {
+        'A'..='Z' | 'a'..='z' => Some(1),
+        '0'..='4' => Some(2),
+        _ => None,
+    }
+}
+
+/// The other-index size of an indexer code: how many of its soft characters
+/// hold the `ondex` (keripy `Indexer.Sizes`, `os`). The rest hold the `index`.
+/// Zero means the code has no room for an ondex of its own.
+pub fn indexer_other_size(code: &str) -> Option<usize> {
+    Some(match code {
+        "A" | "B" | "C" | "D" | "E" | "F" => 0,
+        "0A" | "0B" => 1,
+        "2A" | "2B" | "2C" | "2D" | "2E" | "2F" => 2,
+        "3A" | "3B" => 3,
+        _ => return None,
+    })
+}
+
+/// Whether an indexer code is current-only: the signing key appears in the
+/// current key list and not, at any position, in the prior next-key list
+/// (keripy `IndexedCurrentSigCodex`). The others (`A`, `C`, `E`, `0A`, `2A`,
+/// `2C`, `2E`, `3A`) appear in both lists.
+pub fn indexer_is_current_only(code: &str) -> bool {
+    matches!(code, "B" | "D" | "F" | "0B" | "2B" | "2D" | "2F" | "3B")
+}
+
+/// Indexer code table: maps indexer code string to Sizage (keripy
+/// `Indexer.Sizes`, b70986f).
+///
+/// An indexed signature carries an `index` (the signing key's position in the
+/// current key list) and, unless it is current-only, an `ondex` (its position
+/// in the prior next-key list). See [`indexer_other_size`] and
+/// [`indexer_is_current_only`].
 pub fn indexer_sizage(code: &str) -> Option<Sizage> {
-    let sizage = match code {
-        // Ed25519 indexed sig, current only
-        "A" => Sizage {
-            hs: 1,
-            ss: 1,
-            fs: 88,
-            ls: 0,
-        },
-        // Ed25519 indexed sig, both current and prior
-        "B" => Sizage {
-            hs: 1,
-            ss: 1,
-            fs: 88,
-            ls: 0,
-        },
-        // ECDSA secp256k1 indexed sig, current only
-        "C" => Sizage {
-            hs: 1,
-            ss: 1,
-            fs: 88,
-            ls: 0,
-        },
-        // ECDSA secp256k1 indexed sig, both
-        "D" => Sizage {
-            hs: 1,
-            ss: 1,
-            fs: 88,
-            ls: 0,
-        },
-        // ECDSA secp256r1 indexed sig, current only
-        "E" => Sizage {
-            hs: 1,
-            ss: 1,
-            fs: 88,
-            ls: 0,
-        },
-        // ECDSA secp256r1 indexed sig, both
-        "F" => Sizage {
-            hs: 1,
-            ss: 1,
-            fs: 88,
-            ls: 0,
-        },
-        // Ed25519 big indexed sig, current only
-        "2A" => Sizage {
-            hs: 2,
-            ss: 4,
-            fs: 92,
-            ls: 0,
-        },
-        // Ed25519 big indexed sig, both
-        "2B" => Sizage {
-            hs: 2,
-            ss: 4,
-            fs: 92,
-            ls: 0,
-        },
-        // ECDSA secp256k1 big indexed sig, current only
-        "2C" => Sizage {
-            hs: 2,
-            ss: 4,
-            fs: 92,
-            ls: 0,
-        },
-        // ECDSA secp256k1 big indexed sig, both
-        "2D" => Sizage {
-            hs: 2,
-            ss: 4,
-            fs: 92,
-            ls: 0,
-        },
-        // ECDSA secp256r1 big indexed sig, current only
-        "2E" => Sizage {
-            hs: 2,
-            ss: 4,
-            fs: 92,
-            ls: 0,
-        },
-        // ECDSA secp256r1 big indexed sig, both
-        "2F" => Sizage {
-            hs: 2,
-            ss: 4,
-            fs: 92,
-            ls: 0,
-        },
-        // Ed448 big indexed sig, current only
-        "3A" => Sizage {
-            hs: 2,
-            ss: 4,
-            fs: 156,
-            ls: 0,
-        },
-        // Ed448 big indexed sig, both
-        "3B" => Sizage {
-            hs: 2,
-            ss: 4,
-            fs: 156,
-            ls: 0,
-        },
+    let (hs, ss, fs) = match code {
+        // Ed25519, ECDSA secp256k1 and secp256r1: in both lists at the same
+        // position (A, C, E), or current-only (B, D, F).
+        "A" | "B" | "C" | "D" | "E" | "F" => (1, 1, 88),
+        // Ed448: both (0A), current-only (0B).
+        "0A" | "0B" => (2, 2, 156),
+        // Big Ed25519, secp256k1, secp256r1: both (2A, 2C, 2E), current-only
+        // (2B, 2D, 2F).
+        "2A" | "2B" | "2C" | "2D" | "2E" | "2F" => (2, 4, 92),
+        // Big Ed448: both (3A), current-only (3B).
+        "3A" | "3B" => (2, 6, 160),
         _ => return None,
     };
-    Some(sizage)
+    Some(Sizage { hs, ss, fs, ls: 0 })
 }
 
 #[cfg(test)]

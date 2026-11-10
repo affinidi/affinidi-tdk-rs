@@ -1,44 +1,68 @@
 //! Indexer: CESR indexed signature codes (index + ondex + raw).
+//!
+//! Follows keripy's `Indexer` (`keri/core/indexing.py`, b70986f): its code
+//! table, its code sizes, and its rules for the `ondex`.
 
 use crate::codec;
 use crate::error::CesrError;
 use crate::matter::count_to_b64;
-use crate::tables::{hardage, indexer_sizage};
+use crate::tables::{indexer_hardage, indexer_is_current_only, indexer_other_size, indexer_sizage};
 
 /// An indexed CESR signature primitive.
 ///
-/// Indexed signatures include:
-/// - A code identifying the signature algorithm
-/// - An index (key position in current signing key set)
-/// - An optional ondex (key position in prior key set, for rotation)
-/// - The raw signature bytes
+/// An indexed signature carries:
+/// - a code naming the signature algorithm, and whether the signing key is in
+///   both key lists or the current one only;
+/// - an `index`: the signing key's position in the current key list;
+/// - an `ondex`: its position in the prior next-key list, for a key in both
+///   lists; `None` for a current-only code;
+/// - the raw signature.
+///
+/// | | both lists | current only |
+/// |---|---|---|
+/// | Ed25519 | `A`, big `2A` | `B`, big `2B` |
+/// | ECDSA secp256k1 | `C`, big `2C` | `D`, big `2D` |
+/// | ECDSA secp256r1 | `E`, big `2E` | `F`, big `2F` |
+/// | Ed448 | `0A`, big `3A` | `0B`, big `3B` |
+///
+/// A small both-lists code (`A`, `C`, `E`) has no room for an ondex of its
+/// own: the key is at the same position in both lists. A key at different
+/// positions needs a big code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Indexer {
-    /// The indexer code (e.g., "A" for Ed25519 current-only)
+    /// The indexer code.
     code: String,
-    /// Index into current signing keys
+    /// The signing key's position in the current key list.
     index: usize,
-    /// Index into prior next keys (only used for "both" codes)
+    /// Its position in the prior next-key list; `None` for a current-only code.
     ondex: Option<usize>,
-    /// Raw signature bytes
+    /// Raw signature bytes.
     raw: Vec<u8>,
 }
 
 impl Indexer {
     /// Create a new Indexer.
     ///
-    /// For "current only" codes (A, C, E), ondex is ignored (same as index).
-    /// For "both" codes (B, D, F), ondex specifies the prior key position.
+    /// For a both-lists code, `ondex` defaults to `index`, and a code with no
+    /// room for an ondex of its own (`A`, `C`, `E`) refuses one that differs.
+    /// A current-only code carries no ondex: one given is dropped, as before
+    /// 0.1.4, so callers built against the older reading keep working.
+    ///
+    /// # Errors
+    /// [`CesrError::UnknownCode`] for an unknown code,
+    /// [`CesrError::InvalidRawSize`] for a signature of the wrong size, and
+    /// [`CesrError::InvalidIndex`] for an index or ondex the code cannot carry.
     pub fn new(
         code: &str,
         index: usize,
         ondex: Option<usize>,
         raw: Vec<u8>,
     ) -> Result<Self, CesrError> {
-        let _sizage =
+        let sizage =
             indexer_sizage(code).ok_or_else(|| CesrError::UnknownCode(code.to_string()))?;
+        let os = indexer_other_size(code).unwrap_or(0);
+        let ms = sizage.ss - os;
 
-        // Validate raw size
         let expected_raw = Self::raw_size_from_code(code)?;
         if raw.len() != expected_raw {
             return Err(CesrError::InvalidRawSize {
@@ -47,66 +71,28 @@ impl Indexer {
             });
         }
 
-        // For "current only" codes, ondex defaults to index
-        let effective_ondex = if Self::is_current_only(code) {
+        if index >= 64usize.pow(ms as u32) {
+            return Err(CesrError::InvalidIndex(format!(
+                "index {index} does not fit code {code}"
+            )));
+        }
+        let ondex = if indexer_is_current_only(code) {
             None
         } else {
-            ondex
+            let o = ondex.unwrap_or(index);
+            if os == 0 && o != index {
+                return Err(CesrError::InvalidIndex(format!(
+                    "code {code} puts the key at the same position in both lists, but \
+                     index {index} and ondex {o} differ: use a big code"
+                )));
+            }
+            if os > 0 && o >= 64usize.pow(os as u32) {
+                return Err(CesrError::InvalidIndex(format!(
+                    "ondex {o} does not fit code {code}"
+                )));
+            }
+            Some(o)
         };
-
-        Ok(Self {
-            code: code.to_string(),
-            index,
-            ondex: effective_ondex,
-            raw,
-        })
-    }
-
-    /// Parse an Indexer from a qb64 string.
-    pub fn from_qb64(qb64: &str) -> Result<Self, CesrError> {
-        if qb64.is_empty() {
-            return Err(CesrError::EmptyInput);
-        }
-        codec::ensure_ascii(qb64)?;
-
-        let first_char = qb64.chars().next().ok_or(CesrError::EmptyInput)?;
-        let hs = hardage(first_char).ok_or(CesrError::UnknownCode(first_char.to_string()))?;
-
-        if qb64.len() < hs {
-            return Err(CesrError::UnexpectedEnd);
-        }
-
-        // For indexer codes, we need to check the indexer_sizage table
-        // Small codes (hs=1): code is 1 char, but we need to check if it's an indexer
-        let code = &qb64[..hs];
-        let sizage =
-            indexer_sizage(code).ok_or_else(|| CesrError::UnknownCode(code.to_string()))?;
-
-        if qb64.len() < sizage.fs {
-            return Err(CesrError::UnexpectedEnd);
-        }
-
-        // Parse index from soft portion
-        let ss = sizage.ss;
-        let idx_str = &qb64[hs..hs + ss];
-        let index = b64_to_count(idx_str)?;
-
-        // For big indexed codes, parse ondex too
-        let ondex = if sizage.hs >= 2 && !Self::is_current_only(code) {
-            // Big codes with "both" variant: ondex is in second half of soft
-            let half = ss / 2;
-            let index_val = b64_to_count(&qb64[hs..hs + half])?;
-            let ondex_val = b64_to_count(&qb64[hs + half..hs + ss])?;
-            // Re-derive index from first half
-            return Self::from_qb64_big(code, &sizage, qb64, index_val, ondex_val);
-        } else if !Self::is_current_only(code) {
-            Some(index) // for small "both" codes, ondex == index
-        } else {
-            None
-        };
-
-        // Extract raw bytes
-        let raw = Self::extract_raw(qb64, &sizage)?;
 
         Ok(Self {
             code: code.to_string(),
@@ -116,41 +102,70 @@ impl Indexer {
         })
     }
 
-    /// Helper for big indexed codes.
-    fn from_qb64_big(
-        code: &str,
-        sizage: &crate::tables::Sizage,
-        qb64: &str,
-        index: usize,
-        ondex: usize,
-    ) -> Result<Self, CesrError> {
-        let raw = Self::extract_raw(qb64, sizage)?;
-        Ok(Self {
-            code: code.to_string(),
-            index,
-            ondex: Some(ondex),
-            raw,
-        })
+    /// Parse an Indexer from a qb64 string.
+    ///
+    /// # Errors
+    /// As [`Indexer::new`], plus [`CesrError::UnexpectedEnd`] for truncated
+    /// input and [`CesrError::InvalidIndex`] for a current-only code whose
+    /// ondex characters are not zero.
+    pub fn from_qb64(qb64: &str) -> Result<Self, CesrError> {
+        if qb64.is_empty() {
+            return Err(CesrError::EmptyInput);
+        }
+        codec::ensure_ascii(qb64)?;
+
+        let first_char = qb64.chars().next().ok_or(CesrError::EmptyInput)?;
+        let hs = indexer_hardage(first_char)
+            .ok_or_else(|| CesrError::UnknownCode(first_char.to_string()))?;
+        if qb64.len() < hs {
+            return Err(CesrError::UnexpectedEnd);
+        }
+        let code = &qb64[..hs];
+        let sizage =
+            indexer_sizage(code).ok_or_else(|| CesrError::UnknownCode(code.to_string()))?;
+        if qb64.len() < sizage.fs {
+            return Err(CesrError::UnexpectedEnd);
+        }
+        let os = indexer_other_size(code).unwrap_or(0);
+        let ms = sizage.ss - os;
+
+        let index = b64_to_count(&qb64[hs..hs + ms])?;
+        let ondex_chars = &qb64[hs + ms..hs + sizage.ss];
+        let ondex = if indexer_is_current_only(code) {
+            // keripy: a current-only code's ondex characters must be zero.
+            if os > 0 && b64_to_count(ondex_chars)? != 0 {
+                return Err(CesrError::InvalidIndex(format!(
+                    "current-only code {code} carries a non-zero ondex"
+                )));
+            }
+            None
+        } else if os > 0 {
+            Some(b64_to_count(ondex_chars)?)
+        } else {
+            Some(index)
+        };
+
+        let raw = Self::extract_raw(qb64, code, &sizage)?;
+        Self::new(code, index, ondex, raw)
     }
 
     /// Encode this Indexer to qb64.
+    ///
+    /// # Errors
+    /// Returns [`CesrError`] if the code is unknown or the material does not
+    /// fit it.
     pub fn qb64(&self) -> Result<String, CesrError> {
         let sizage =
             indexer_sizage(&self.code).ok_or_else(|| CesrError::UnknownCode(self.code.clone()))?;
+        let os = indexer_other_size(&self.code).unwrap_or(0);
+        let ms = sizage.ss - os;
 
-        // Encode index into soft portion
-        let ss = sizage.ss;
-        let index_b64 = if sizage.hs >= 2 && self.ondex.is_some() {
-            // Big code with both: split soft between index and ondex
-            let half = ss / 2;
-            let idx_str = count_to_b64(self.index, half)?;
-            let ondex_str = count_to_b64(self.ondex.unwrap_or(self.index), half)?;
-            format!("{idx_str}{ondex_str}")
-        } else {
-            count_to_b64(self.index, ss)?
-        };
+        let mut soft = count_to_b64(self.index, ms)?;
+        if os > 0 {
+            // A current-only code writes zeros where the ondex would be.
+            soft.push_str(&count_to_b64(self.ondex.unwrap_or(0), os)?);
+        }
 
-        // Encode raw bytes
         let lead = codec::lead_bytes(self.raw.len());
         let mut padded = vec![0u8; lead];
         padded.extend_from_slice(&self.raw);
@@ -165,7 +180,7 @@ impl Indexer {
         }
         let raw_b64 = &encoded[encoded.len() - raw_chars..];
 
-        Ok(format!("{}{}{}", self.code, index_b64, raw_b64))
+        Ok(format!("{}{}{}", self.code, soft, raw_b64))
     }
 
     /// The indexer code.
@@ -173,14 +188,21 @@ impl Indexer {
         &self.code
     }
 
-    /// The index (key position in current signing set).
+    /// The signing key's position in the current key list.
     pub fn index(&self) -> usize {
         self.index
     }
 
-    /// The ondex (key position in prior key set), if applicable.
+    /// The signing key's position in the prior next-key list; `None` for a
+    /// current-only code.
     pub fn ondex(&self) -> Option<usize> {
         self.ondex
+    }
+
+    /// Whether the code is current-only: the key is not in the prior next-key
+    /// list, so the signature counts towards no prior next threshold.
+    pub fn is_current_only(&self) -> bool {
+        indexer_is_current_only(&self.code)
     }
 
     /// The raw signature bytes.
@@ -188,36 +210,33 @@ impl Indexer {
         &self.raw
     }
 
-    /// Whether this code is "current only" (ondex == index).
-    fn is_current_only(code: &str) -> bool {
-        matches!(code, "A" | "C" | "E" | "2A" | "2C" | "2E" | "3A")
-    }
-
-    /// Get the raw signature size for a given indexer code.
+    /// The raw signature size for an indexer code.
     fn raw_size_from_code(code: &str) -> Result<usize, CesrError> {
         match code {
-            "A" | "B" | "C" | "D" | "E" | "F" => Ok(64), // 64-byte signatures
-            "2A" | "2B" | "2C" | "2D" | "2E" | "2F" => Ok(64), // big variants, same sig size
-            "3A" | "3B" => Ok(114),                      // Ed448 signatures
+            "A" | "B" | "C" | "D" | "E" | "F" => Ok(64),
+            "2A" | "2B" | "2C" | "2D" | "2E" | "2F" => Ok(64),
+            "0A" | "0B" | "3A" | "3B" => Ok(114), // Ed448
             _ => Err(CesrError::UnknownCode(code.to_string())),
         }
     }
 
-    /// Extract raw bytes from qb64.
-    fn extract_raw(qb64: &str, sizage: &crate::tables::Sizage) -> Result<Vec<u8>, CesrError> {
-        let full = &qb64[..sizage.fs];
-        let all_bytes = codec::b64_decode(full)?;
-
-        // Use the known raw sizes for each code
-        let raw_size = Self::raw_size_from_code(&qb64[..sizage.hs])?;
-
+    /// Extract the raw signature from qb64: decode with the code and index
+    /// characters zeroed, and keep the trailing raw bytes.
+    fn extract_raw(
+        qb64: &str,
+        code: &str,
+        sizage: &crate::tables::Sizage,
+    ) -> Result<Vec<u8>, CesrError> {
+        let cs = sizage.hs + sizage.ss;
+        let zeroed = format!("{}{}", "A".repeat(cs), &qb64[cs..sizage.fs]);
+        let all_bytes = codec::b64_decode(&zeroed)?;
+        let raw_size = Self::raw_size_from_code(code)?;
         if all_bytes.len() < raw_size {
             return Err(CesrError::InvalidRawSize {
                 expected: raw_size,
                 got: all_bytes.len(),
             });
         }
-
         Ok(all_bytes[all_bytes.len() - raw_size..].to_vec())
     }
 }
@@ -245,10 +264,19 @@ impl std::fmt::Display for Indexer {
 mod tests {
     use super::*;
 
+    /// keripy b70986f, `Siger(raw=bytes(range(64)), code, index, ondex).qb64`.
+    const RAW: [u8; 64] = {
+        let mut r = [0u8; 64];
+        let mut i = 0;
+        while i < 64 {
+            r[i] = i as u8;
+            i += 1;
+        }
+        r
+    };
+
     #[test]
     fn from_qb64_rejects_non_ascii_without_panicking() {
-        // Would previously panic at `&qb64[..hs]` (hardage('0')==2 slices into
-        // the multi-byte U+FFFD).
         assert!(matches!(
             Indexer::from_qb64("0\u{FFFD}"),
             Err(CesrError::InvalidCharacter { .. })
@@ -256,47 +284,77 @@ mod tests {
     }
 
     #[test]
-    fn test_indexer_new_ed25519() {
-        let raw = vec![0xAAu8; 64];
-        let idx = Indexer::new("A", 0, None, raw.clone()).unwrap();
-        assert_eq!(idx.code(), "A");
-        assert_eq!(idx.index(), 0);
-        assert_eq!(idx.ondex(), None); // current-only
-        assert_eq!(idx.raw(), raw.as_slice());
+    fn a_is_both_lists_at_the_same_position() {
+        let idx = Indexer::new("A", 3, None, RAW.to_vec()).unwrap();
+        assert_eq!(idx.ondex(), Some(3));
+        assert!(!idx.is_current_only());
+        let back = Indexer::from_qb64(&idx.qb64().unwrap()).unwrap();
+        assert_eq!((back.index(), back.ondex()), (3, Some(3)));
+        assert_eq!(back.raw(), RAW);
+        // No room for a different ondex.
+        assert!(Indexer::new("A", 1, Some(2), RAW.to_vec()).is_err());
     }
 
     #[test]
-    fn test_indexer_qb64_roundtrip() {
-        let raw = vec![0x42u8; 64];
-        let idx = Indexer::new("A", 0, None, raw.clone()).unwrap();
+    fn b_is_current_only() {
+        let idx = Indexer::new("B", 1, None, RAW.to_vec()).unwrap();
+        assert_eq!(idx.ondex(), None);
+        assert!(idx.is_current_only());
+        let back = Indexer::from_qb64(&idx.qb64().unwrap()).unwrap();
+        assert_eq!((back.code(), back.index(), back.ondex()), ("B", 1, None));
+        // An ondex given for a current-only code is dropped.
+        let given = Indexer::new("B", 1, Some(1), RAW.to_vec()).unwrap();
+        assert_eq!(given.ondex(), None);
+    }
+
+    #[test]
+    fn a_big_both_code_carries_its_own_ondex() {
+        let idx = Indexer::new("2A", 0, Some(1), RAW.to_vec()).unwrap();
         let qb64 = idx.qb64().unwrap();
-
-        assert_eq!(qb64.len(), 88);
-        assert!(qb64.starts_with('A'));
-
-        let idx2 = Indexer::from_qb64(&qb64).unwrap();
-        assert_eq!(idx2.code(), "A");
-        assert_eq!(idx2.index(), 0);
-        assert_eq!(idx2.raw(), raw.as_slice());
+        assert_eq!(qb64.len(), 92);
+        assert!(qb64.starts_with("2AAAAB"), "{qb64}");
+        let back = Indexer::from_qb64(&qb64).unwrap();
+        assert_eq!(
+            (back.code(), back.index(), back.ondex()),
+            ("2A", 0, Some(1))
+        );
+        assert_eq!(back.raw(), RAW);
     }
 
     #[test]
-    fn test_indexer_with_index() {
-        let raw = vec![0x55u8; 64];
-        let idx = Indexer::new("A", 3, None, raw).unwrap();
+    fn a_big_current_only_code_writes_a_zero_ondex_and_refuses_another() {
+        let idx = Indexer::new("2B", 70, None, RAW.to_vec()).unwrap();
         let qb64 = idx.qb64().unwrap();
-
-        let idx2 = Indexer::from_qb64(&qb64).unwrap();
-        assert_eq!(idx2.index(), 3);
+        assert!(qb64.starts_with("2BBGAA"), "{qb64}");
+        let back = Indexer::from_qb64(&qb64).unwrap();
+        assert_eq!((back.index(), back.ondex()), (70, None));
+        let tampered = format!("2BBGAB{}", &qb64[6..]);
+        assert!(Indexer::from_qb64(&tampered).is_err());
     }
 
     #[test]
-    fn test_indexer_both_code() {
-        let raw = vec![0x77u8; 64];
-        let idx = Indexer::new("B", 1, Some(2), raw.clone()).unwrap();
-        assert_eq!(idx.code(), "B");
-        assert_eq!(idx.index(), 1);
-        assert_eq!(idx.ondex(), Some(2));
+    fn matches_keripys_encoding() {
+        // keripy: Siger(raw=bytes(range(64)), code=…, index=…, ondex=…).qb64[:8]
+        for (code, index, ondex, prefix) in [
+            ("A", 0, None, "AAAAAQID"),
+            ("B", 2, None, "BCAAAQID"),
+            ("2A", 0, Some(1), "2AAAABAA"),
+            ("2A", 1, Some(0), "2AABAAAA"),
+        ] {
+            let qb64 = Indexer::new(code, index, ondex, RAW.to_vec())
+                .unwrap()
+                .qb64()
+                .unwrap();
+            assert_eq!(&qb64[..8], prefix, "{code} {index} {ondex:?}");
+        }
+    }
+
+    #[test]
+    fn indexer_codes_have_their_own_code_lengths() {
+        use crate::tables::{hardage, indexer_hardage};
+        assert_eq!(indexer_hardage('2'), Some(2));
+        assert_eq!(indexer_hardage('3'), Some(2));
+        assert_eq!(hardage('2'), Some(4), "the primitive table differs");
     }
 
     #[test]
