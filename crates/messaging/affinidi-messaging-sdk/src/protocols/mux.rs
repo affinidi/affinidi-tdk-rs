@@ -45,7 +45,7 @@ use crate::{ATM, errors::ATMError};
 /// The Trust Tasks DIDComm envelope `type`.
 const ENVELOPE_TYPE: &str = "https://trusttasks.org/binding/didcomm/0.1/envelope";
 /// `messaging/mux/event` Type URI.
-const EVENT_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/event/0.1";
+pub(crate) const EVENT_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/event/0.1";
 /// `messaging/mux/notice` Type URI.
 const NOTICE_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/notice/0.1";
 
@@ -83,9 +83,71 @@ impl MuxReady {
     }
 }
 
+impl MuxReady {
+    /// The `ready` carried by `event`, if it is one with a session id and a
+    /// nonce.
+    pub fn from_event(event: &MuxEvent) -> Option<Self> {
+        Self::from_payload(&serde_json::to_value(event).ok()?)
+    }
+}
+
 /// A `messaging/mux/event` payload (`ready`, `attached`, `detached`,
 /// `refused`), as the generated type.
 pub type MuxEvent = mux::event::v0_1::Payload;
+
+/// The kind of a [`MuxEvent`].
+pub use mux::event::v0_1::PayloadEvent as MuxEventKind;
+
+/// One member's change in an `attached` or `detached` [`MuxEvent`]
+/// (`dids[]`), with its reason (for example `connectionFull`).
+pub use mux::event::v0_1::{MemberChange as MuxMemberChange, MemberChangeReason};
+
+/// A `refused` event: the mediator refused an inbound frame on a raw-TSP
+/// `tsp-mux` socket and said so in-band instead of closing the socket. Only
+/// the refused frame is gone; nothing was stored or delivered for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MuxRefused {
+    /// Lowercase hex SHA-256 of the refused frame's exact bytes. Compare with
+    /// the id `TspMuxWebSocket::send` returned (`tsp` feature).
+    pub frame_id: String,
+    /// The mediator's stable refusal code (as the traffic monitor reports it).
+    pub code: String,
+    /// The frame's sender, when the mediator could read it.
+    pub sender: Option<String>,
+    /// The frame's receiver, when the mediator could read it.
+    pub receiver: Option<String>,
+    /// A short explanation, never message content.
+    pub reason: Option<String>,
+}
+
+impl MuxRefused {
+    /// The refusal `event` reports, if it is a well-formed `refused` event.
+    pub fn from_event(event: &MuxEvent) -> Option<Self> {
+        if event.event != MuxEventKind::Refused {
+            return None;
+        }
+        Some(Self {
+            frame_id: event.frame_id.as_ref()?.to_string(),
+            code: event.code.as_ref()?.to_string(),
+            sender: event.sender.as_ref().map(|d| d.to_string()),
+            receiver: event.receiver.as_ref().map(|d| d.to_string()),
+            reason: event.reason.as_ref().map(|r| r.to_string()),
+        })
+    }
+}
+
+/// Whether `event` carries what the spec requires of its kind ("Members per
+/// kind"); a consumer ignores one that does not. The schema already refuses
+/// unknown members; this checks the per-kind required ones.
+#[cfg(feature = "tsp")]
+pub(crate) fn event_is_well_formed(event: &MuxEvent) -> bool {
+    match event.event {
+        MuxEventKind::Ready => MuxReady::from_event(event).is_some(),
+        MuxEventKind::Attached | MuxEventKind::Detached => !event.dids.is_empty(),
+        MuxEventKind::Refused => MuxRefused::from_event(event).is_some(),
+    }
+}
 
 /// A `messaging/mux/notice` payload (`grantsSuspended`, `grantsRevoked`,
 /// `grantsExpiring`, `grantsPresent`), as the generated type.
@@ -488,6 +550,41 @@ mod tests {
         // A new socket forgets the old session's nonce.
         sides.reset();
         assert!(ready_rx.borrow().is_none());
+    }
+
+    /// `connectionFull` (spec dtgwg-trust-tasks-tf#1078): a valid grant the
+    /// connection had no room for. Before the re-pin the typed event failed
+    /// to parse and was dropped, so the principal never learned of it.
+    #[tokio::test]
+    async fn a_connection_full_detach_parses_and_reaches_mux_events() {
+        let (ready_tx, _ready_rx) = tokio::sync::watch::channel(None);
+        let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(4);
+        let (notices_tx, _) = tokio::sync::broadcast::channel(4);
+        let sides = MuxSides {
+            ready_tx,
+            events_tx,
+            notices_tx,
+            mediator_did: "did:example:m".to_string(),
+        };
+        let detached = event_message(json!({
+            "event": "detached",
+            "dids": [{
+                "did": "did:example:work",
+                "reason": "connectionFull",
+                "grantId": "0b8f6c1e-3a2d-4f5e-9b7c-1d2e3f4a5b6c"
+            }]
+        }));
+        let decoded = decode_mux_event(&detached).expect("a connectionFull detach parses");
+        assert_eq!(
+            decoded.payload.dids[0].reason,
+            mux::event::v0_1::MemberChangeReason::ConnectionFull
+        );
+        assert!(sides.absorb(&detached));
+        let ev = events_rx.recv().await.expect("delivered to mux_events()");
+        assert_eq!(
+            ev.dids[0].reason,
+            mux::event::v0_1::MemberChangeReason::ConnectionFull
+        );
     }
 
     #[test]

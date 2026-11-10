@@ -34,6 +34,8 @@ pub mod trust_tasks;
 pub mod tsp;
 #[cfg(feature = "tsp")]
 pub mod tsp_auth;
+#[cfg(feature = "tsp")]
+pub mod tsp_mux;
 
 // `String` implements `GenericDataStruct` via an impl in
 // `affinidi-messaging-mediator-common::types::messages` — the orphan

@@ -3360,6 +3360,69 @@ impl TspOps<'_> {
         profile: &Arc<ATMProfile>,
         ack: bool,
     ) -> Result<TspWebSocket, ATMError> {
+        // Offer `bearer.<jwt>` (auth) + the raw-TSP mode subprotocol(s).
+        //
+        // `tsp` is offered BEFORE `tsp-ack`, and the order is load-bearing.
+        //
+        // A mediator that predates `tsp-ack` echoes the client's subprotocol
+        // list back unchanged, so it would happily echo `tsp-ack` without
+        // implementing it — and we would believe we had delete-to-ack while it
+        // deleted on send, silently losing the very guarantee we asked for.
+        //
+        // Selection takes the first client-listed protocol the server also
+        // offers. An older mediator offers back our own list and so selects our
+        // first entry, `tsp`; a mediator that supports the mode narrows its
+        // offer to `tsp-ack` and so selects that despite it being second. Only
+        // a mediator that implements delete-to-ack can answer `tsp-ack`, which
+        // is what makes the echoed value trustworthy.
+        let offer: &[&str] = if ack { &["tsp", "tsp-ack"] } else { &["tsp"] };
+        let RawTspSocket { ws, selected, .. } = self.open_raw_socket(profile, offer).await?;
+
+        // The 101 should echo `tsp`, confirming the mode was accepted.
+        // tokio-tungstenite already enforces subprotocol agreement, so a
+        // mismatch here is informational only — warn, don't hard-fail.
+        let acked = match selected.as_deref() {
+            Some("tsp-ack") => true,
+            Some("tsp") => {
+                // A downgrade is silent otherwise, and silently losing the
+                // delivery guarantee you asked for is exactly the failure this
+                // mode exists to prevent — say so loudly.
+                if ack {
+                    tracing::warn!(
+                        "requested `tsp-ack` but the mediator echoed `tsp`: it predates \
+                         delete-to-ack, so delivery on this socket is at-most-once past \
+                         the write and `ack()` will not be honoured"
+                    );
+                }
+                false
+            }
+            other => {
+                tracing::warn!(
+                    "TSP websocket did not echo a known subprotocol (got {other:?}); \
+                     raw-TSP mode may not be active"
+                );
+                false
+            }
+        };
+
+        Ok(TspWebSocket {
+            ws,
+            ack_mode: acked,
+            atm: self.atm.clone(),
+            profile: profile.clone(),
+        })
+    }
+
+    /// Authenticate `profile` and upgrade the mediator's `/ws` endpoint,
+    /// offering `bearer.<jwt>` and then `offer`, in that order. Returns the
+    /// socket, the subprotocol the mediator selected, and the access token the
+    /// socket's session was opened with. Interpreting the selection is the
+    /// caller's job: it is what the order of `offer` makes honest.
+    pub(crate) async fn open_raw_socket(
+        &self,
+        profile: &Arc<ATMProfile>,
+        offer: &[&str],
+    ) -> Result<RawTspSocket, ATMError> {
         use tokio_tungstenite::tungstenite::{ClientRequestBuilder, http::Uri};
 
         let (profile_did, mediator_did) = profile.dids()?;
@@ -3419,30 +3482,11 @@ impl TspOps<'_> {
                 80
             });
 
-        // Offer `bearer.<jwt>` (auth) + the raw-TSP mode subprotocol(s).
-        //
-        // `tsp` is offered BEFORE `tsp-ack`, and the order is load-bearing.
-        //
-        // A mediator that predates `tsp-ack` echoes the client's subprotocol
-        // list back unchanged, so it would happily echo `tsp-ack` without
-        // implementing it — and we would believe we had delete-to-ack while it
-        // deleted on send, silently losing the very guarantee we asked for.
-        //
-        // Selection takes the first client-listed protocol the server also
-        // offers. An older mediator offers back our own list and so selects our
-        // first entry, `tsp`; a mediator that supports the mode narrows its
-        // offer to `tsp-ack` and so selects that despite it being second. Only
-        // a mediator that implements delete-to-ack can answer `tsp-ack`, which
-        // is what makes the echoed value trustworthy.
-        let builder =
+        let mut builder =
             ClientRequestBuilder::new(uri).with_sub_protocol(format!("bearer.{access_token}"));
-        let builder = if ack {
-            builder
-                .with_sub_protocol("tsp")
-                .with_sub_protocol("tsp-ack")
-        } else {
-            builder.with_sub_protocol("tsp")
-        };
+        for p in offer {
+            builder = builder.with_sub_protocol(*p);
+        }
 
         let (ws, response) =
             crate::transports::websockets::proxy::connect_websocket(builder, &host, port)
@@ -3454,43 +3498,16 @@ impl TspOps<'_> {
                     ))
                 })?;
 
-        // The 101 should echo `tsp`, confirming the mode was accepted.
-        // tokio-tungstenite already enforces subprotocol agreement, so a
-        // mismatch here is informational only — warn, don't hard-fail.
-        let echoed = response
+        let selected = response
             .headers()
             .get("sec-websocket-protocol")
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
-        let acked = match echoed.as_deref() {
-            Some("tsp-ack") => true,
-            Some("tsp") => {
-                // A downgrade is silent otherwise, and silently losing the
-                // delivery guarantee you asked for is exactly the failure this
-                // mode exists to prevent — say so loudly.
-                if ack {
-                    tracing::warn!(
-                        "requested `tsp-ack` but the mediator echoed `tsp`: it predates \
-                         delete-to-ack, so delivery on this socket is at-most-once past \
-                         the write and `ack()` will not be honoured"
-                    );
-                }
-                false
-            }
-            other => {
-                tracing::warn!(
-                    "TSP websocket did not echo a known subprotocol (got {other:?}); \
-                     raw-TSP mode may not be active"
-                );
-                false
-            }
-        };
 
-        Ok(TspWebSocket {
+        Ok(RawTspSocket {
             ws,
-            ack_mode: acked,
-            atm: self.atm.clone(),
-            profile: profile.clone(),
+            selected,
+            access_token,
         })
     }
 
@@ -3552,7 +3569,7 @@ impl TspOps<'_> {
     ///
     /// Outside a relationship neither applies and a failure is discarded at
     /// once, or anyone could make this endpoint resolve by sending it noise.
-    async fn unpack_with_fresh_key_state(
+    pub(crate) async fn unpack_with_fresh_key_state(
         &self,
         profile_did: &str,
         sender_vid: &str,
@@ -3675,6 +3692,19 @@ impl TspOps<'_> {
         }
         None
     }
+}
+
+/// The client side of a raw-TSP WebSocket.
+pub(crate) type TspWsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// An upgraded raw-TSP socket, before its subprotocol is interpreted.
+pub(crate) struct RawTspSocket {
+    pub(crate) ws: TspWsStream,
+    /// The subprotocol the mediator selected (`Sec-WebSocket-Protocol`).
+    pub(crate) selected: Option<String>,
+    /// The token this socket's session was authenticated with.
+    pub(crate) access_token: String,
 }
 
 /// An open **raw-TSP WebSocket** to the mediator, obtained from

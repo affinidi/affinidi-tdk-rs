@@ -132,7 +132,7 @@ digest = "sha256:66ead81440e3c8a6f264ba46f3c72de6c2db02d5362b0384ca90fb8014d95d0
 slug = "messaging/mux/event"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/mux/event/0.1"
-digest = "sha256:1c1a56f5688e9b1e92a9b9a6cdd030c13bb9ea263e3d4773dc8bd55afcfe9edd"
+digest = "sha256:7f5411555bd0bfbfdc688a8ce3cb452de82b1e275a8793889062486f72d5c29f"
 
 [[task]]
 slug = "messaging/mux/grant"
@@ -150,7 +150,7 @@ digest = "sha256:8879f4125157a304d5dbde40234164b065f32cee8b33f844b1fc371cc13d08a
 slug = "messaging/mux/notice"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/mux/notice/0.1"
-digest = "sha256:f2bf565f3b062fbdf7ae58adf65f33ee8dbbeb0158cdf6445f8f6ee5b1df9e15"
+digest = "sha256:f092d704f11509345a2ecfd6a4bf348d92fc5931fb1fdf1138464c4ab84bfcbc"
 
 [[task]]
 slug = "messaging/mux/revoke"
