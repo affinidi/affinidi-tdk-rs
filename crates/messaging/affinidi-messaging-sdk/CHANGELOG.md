@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.45.4 — `tsp-mux` client; `connectionFull` events
+
+DID multiplexing on a raw-TSP socket (`messaging/mux/event/0.1`, "Raw-TSP
+sockets"). Mediator side: affinidi-messaging-mediator #80. Nothing changes
+for existing callers; everything here is new API.
+
+- `TspOps::connect_websocket_mux(profile)` → `TspMuxWebSocket`. Offers `tsp`,
+  `tsp-ack`, `tsp-mux` in that order. It succeeds only if the mediator
+  selects `tsp-mux` and its first frame is a valid `ready` event. A selected
+  `tsp` or `tsp-ack` means mux is unavailable, and the call fails; there is
+  no silent fallback to a plain socket.
+- `TspMuxWebSocket::recv` demultiplexes in one place. A mux event from the
+  mediator (opened with the principal's keys; the TSP sender and the
+  document's `issuer` must be the profile's mediator and its `recipient` the
+  principal) comes back as `TspMuxFrame::Event`. Everything else comes back
+  as `TspMuxFrame::Data`, unopened and tagged with its cleartext receiver, so
+  the application opens it with that member's keys. Events that are
+  malformed, or not from this mediator to this principal, are ignored.
+- `tsp-mux` implies delete-to-ack. `TspMuxWebSocket::ack` (and the cloneable
+  `TspMuxAcker`) deletes with the socket's own session token and returns
+  `TspMuxAck`, the mediator's answer per frame. An ack refused for a member
+  without `delete` scope is reported as refused, never as acked.
+- `send` returns the frame's `frameId`, which a `refused` event names.
+  `protocols::mux::MuxRefused::from_event` reads a `refused` event, and
+  `MuxReady::from_event` reads a `ready` one.
+- A dropped socket ends `recv` (`Err` with the mediator's close reason, or
+  `Ok(None)`). Nothing reconnects on its own.
+- Re-pinned `messaging/mux/event` and `messaging/mux/notice` 0.1
+  (dtgwg-trust-tasks-tf#1078). The `DetachReason` `connectionFull` is now
+  understood: a `detached` event carrying it used to fail to parse and was
+  dropped, so the principal never learned that a valid grant was not carried
+  on its connection. It now reaches `mux_events()` (and the `tsp-mux`
+  socket). `MemberChangeReason`, `MuxMemberChange` and `MuxEventKind` are
+  re-exported from `protocols::mux`.
+
 ## 0.45.3 — `didcomm-mux` subprotocol
 
 `ATM::profile_enable_mux_websocket` now offers the `didcomm-mux` WebSocket

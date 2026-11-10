@@ -105,32 +105,47 @@ impl ATM {
                 .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
                 .await?;
 
+            let Some(mediator_url) = profile.get_mediator_rest_endpoint() else {
+                return Err(ATMError::TransportError(
+                    "No mediator URL found".to_string(),
+                ));
+            };
+            self.delete_messages_with_token(&mediator_url, &tokens.access_token, messages)
+                .await
+        }
+        .instrument(_span)
+        .await
+    }
+
+    /// `delete_messages_direct` with a given session token: the deletion is
+    /// authorised against that token's session. A mux socket acks with its own
+    /// session's token, because the mediator authorises a member's deletes
+    /// against the members of that session alone.
+    pub(crate) async fn delete_messages_with_token(
+        &self,
+        mediator_url: &str,
+        access_token: &str,
+        messages: &DeleteMessageRequest,
+    ) -> Result<DeleteMessageResponse, ATMError> {
         if messages.message_ids.len() > MAX_DELETED_MESSAGES {
-            return  Err(ATMError::MsgSendError(format!(
+            return Err(ATMError::MsgSendError(format!(
                 "Operation exceeds the allowed limit. You may delete a maximum of 100 messages per request. Received {} ids.",
                 messages.message_ids.len()
             )));
         }
         let msg = serde_json::to_string(messages).map_err(|e| {
-            ATMError::TransportError(format!(
-                "Could not serialize delete message request: {e:?}"
-            ))
+            ATMError::TransportError(format!("Could not serialize delete message request: {e:?}"))
         })?;
 
-        let Some(mediator_url) = profile.get_mediator_rest_endpoint() else {
-            return Err(ATMError::TransportError(
-                "No mediator URL found".to_string(),
-            ));
-        };
         debug!("Sending delete_messages request: {:?}", msg);
 
         let res = self
             .inner
             .tdk_common
             .client()
-            .delete([&mediator_url, "/delete"].concat())
+            .delete([mediator_url, "/delete"].concat())
             .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", tokens.access_token))
+            .header("Authorization", format!("Bearer {}", access_token))
             .body(msg)
             .timeout(self.inner.config.request_timeout)
             .send()
@@ -142,11 +157,9 @@ impl ATM {
         debug!("API response: status({})", res.status());
         let body = check_response("delete messages", res).await?;
 
-        let body = serde_json::from_str::<SuccessResponse<DeleteMessageResponse>>(&body)
-            .map_err(|e| {
-                ATMError::TransportError(format!(
-                    "Could not parse delete_messages response: {e:?}"
-                ))
+        let body =
+            serde_json::from_str::<SuccessResponse<DeleteMessageResponse>>(&body).map_err(|e| {
+                ATMError::TransportError(format!("Could not parse delete_messages response: {e:?}"))
             })?;
 
         let list = if let Some(list) = body.data {
@@ -167,6 +180,5 @@ impl ATM {
         }
 
         Ok(list)
-    }.instrument(_span).await
     }
 }
