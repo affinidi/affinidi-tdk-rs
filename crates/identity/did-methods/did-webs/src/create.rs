@@ -298,6 +298,12 @@ impl ControlledResult {
 /// event and message that follows it here. No secret enters or leaves this
 /// crate.
 ///
+/// The key event log is written in **KERI version 1**, whatever version the
+/// [`Inception`](affinidi_keri::controller::Inception) carries: its
+/// designations are v1 ACDCs in v1 registries, and a v2 log anchoring them is a
+/// mix no resolver is tested against yet. Version 2 designations, and a v2 log
+/// with them, are the next step.
+///
 /// # Errors
 /// As [`create`], and [`DidWebsError::Create`] if `controlled` is not set or
 /// the signers do not meet the signing threshold.
@@ -308,7 +314,10 @@ pub fn create_controlled(
     let inception = config.controlled.as_ref().ok_or_else(|| {
         DidWebsError::Create("create_controlled needs CreateConfig::controlled".into())
     })?;
-    let mut pending = affinidi_keri::controller::incept(inception)
+    let inception = inception
+        .clone()
+        .with_version(affinidi_keri::ProtocolVersion::V1);
+    let mut pending = affinidi_keri::controller::incept(&inception)
         .map_err(|e| DidWebsError::Create(format!("inception failed: {e}")))?;
     for signer in signers {
         pending

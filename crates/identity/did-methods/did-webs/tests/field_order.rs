@@ -110,10 +110,11 @@ fn every_built_message_is_in_keri_and_acdc_field_order() {
             "icp" => &[
                 "v", "t", "d", "i", "s", "kt", "k", "nt", "n", "bt", "b", "c", "a",
             ],
-            // The KERI specification's rotation carries configuration traits
-            // (`c`) between the backer changes and the anchors.
+            // A version 1 rotation has no configuration traits: keripy's v1
+            // `rot` (serdering.py, Serder.Fields) ends `bt br ba a`, and refuses
+            // a `c`. Only a version 2 rotation carries `c`.
             "rot" => &[
-                "v", "t", "d", "i", "s", "p", "kt", "k", "nt", "n", "bt", "br", "ba", "c", "a",
+                "v", "t", "d", "i", "s", "p", "kt", "k", "nt", "n", "bt", "br", "ba", "a",
             ],
             "ixn" => &["v", "t", "d", "i", "s", "p", "a"],
             "rpy" => &["v", "t", "d", "dt", "r", "a"],

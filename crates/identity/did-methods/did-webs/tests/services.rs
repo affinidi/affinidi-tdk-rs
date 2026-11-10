@@ -423,7 +423,7 @@ fn rotation(prefix: &str, prior: &str, sn: u64, new_key: &Signer, next: &Signer)
         "s": format!("{sn:x}"), "p": prior,
         "kt": "1", "k": [new_key.verfer().qb64().expect("qb64")],
         "nt": "1", "n": [digest_of(next)],
-        "bt": "0", "br": [], "ba": [], "c": [], "a": [],
+        "bt": "0", "br": [], "ba": [], "a": [],
     });
     fix_version(&mut sad);
     said::compute_said(&mut sad, "d", "E", SerializationKind::Json).expect("said");
