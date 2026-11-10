@@ -73,7 +73,7 @@ fn stream(serder: &Serder, controller: &Signer, witness: Option<&Signer>) -> Vec
     let mut out = serder.raw().to_vec();
 
     let sig = controller
-        .sign_indexed(serder.raw(), 0, true)
+        .sign_indexed(serder.raw(), 0, false)
         .expect("sign")
         .qb64()
         .expect("qb64");

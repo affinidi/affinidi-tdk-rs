@@ -9,7 +9,9 @@
 use std::collections::BTreeMap;
 
 use affinidi_did_webs::create::{CreateConfig, SelfEndpoint, create, create_controlled};
-use affinidi_did_webs::update::{Change, ControlledUpdate, update_controlled};
+use affinidi_did_webs::update::{
+    Change, ControlledUpdate, complete_rotation, prepare_rotation, update_controlled,
+};
 use affinidi_did_webs::{
     Artifacts, ControlledResult, DesignatedService, DidWebs, DidWebsError, Kels, KeyAgreementKey,
     KeyRoles, VerificationKey, designated_aliases, designated_key_agreement, designated_services,
@@ -17,7 +19,7 @@ use affinidi_did_webs::{
 };
 use affinidi_keri::ProtocolVersion;
 use affinidi_keri::config::InceptionConfig;
-use affinidi_keri::controller::{ControllerState, Inception, KeySigner, NextKey};
+use affinidi_keri::controller::{ControllerState, Inception, KeySigner, NextKey, Rotation};
 use affinidi_keri_core::parser::{ParsedMessage, parse_all};
 use affinidi_keri_core::registry::Anchor;
 use affinidi_keri_core::registry::write::{
@@ -455,4 +457,59 @@ fn a_historical_version_is_not_read_from_a_log_that_breaks_later() {
     let then = DidWebs::parse(&format!("{}?versionId=1", created.did())).unwrap();
     let err = resolve_from_artifacts(&then, &tampered, None).expect_err("a broken log");
     assert!(matches!(err, DidWebsError::Kel(_)), "{err}");
+}
+
+#[test]
+fn a_recovery_takes_the_designations_it_supersedes_with_it() {
+    // P7. The identifier replaces its key agreement key: an interaction event
+    // revokes the old designation and another issues the new one. Its next key
+    // then rotates from the state before that change, at the sequence number
+    // of the first of those events, superseding both. The stream carries all
+    // of it; the document has the original key agreement key again.
+    let signer = key(1);
+    let created = created(&signer);
+    let original = resolve(created.did(), created.artifacts()).unwrap();
+
+    let (artifacts, state) = created.clone().into_parts();
+    let replaced = update_controlled(
+        ControlledUpdate::new(
+            created.did(),
+            artifacts,
+            state,
+            Change::KeyAgreement(vec![KeyAgreementKey::X25519([8; 32])]),
+        ),
+        &[&signer],
+    )
+    .expect("replace key agreement");
+    let after = resolve(replaced.did(), replaced.artifacts()).unwrap();
+    assert_ne!(after["keyAgreement"], original["keyAgreement"]);
+
+    let next = key(2);
+    let mut pending = prepare_rotation(
+        created.did(),
+        created.artifacts(),
+        created.state(),
+        &[pk(&next)],
+        &Rotation::new(
+            Threshold::Simple(1),
+            vec![NextKey::PublicKey(pk(&key(3)))],
+            Threshold::Simple(1),
+        ),
+    )
+    .expect("prepare the recovery");
+    pending.sign_with(&next as &dyn KeySigner).unwrap();
+    let recovered =
+        complete_rotation(created.did(), replaced.artifacts(), pending).expect("recover");
+    assert_eq!(recovered.state().sn, created.state().sn + 1);
+
+    let doc = resolve(recovered.did(), recovered.artifacts()).expect("resolves");
+    assert_eq!(
+        doc["keyAgreement"], original["keyAgreement"],
+        "the replacement and its revocation of the original were superseded"
+    );
+    assert!(
+        doc["verificationMethod"]
+            .to_string()
+            .contains(&pk(&next)[1..])
+    );
 }
