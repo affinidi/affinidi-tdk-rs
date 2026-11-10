@@ -259,8 +259,25 @@ impl ATMProfile {
             .map(|h| h.ready_rx.clone())
     }
 
+    /// The member set of this profile's current mux connection, kept from its
+    /// `ready`, `attached` and `detached` events: which member DIDs it
+    /// carries, with what scope, and whether each one's live traffic comes
+    /// here now. Emptied on every disconnect. `None` when this profile has no
+    /// mux connection.
+    pub async fn mux_members(&self) -> Option<watch::Receiver<crate::protocols::mux::MuxMembers>> {
+        let mediator = self.inner.mediator.as_ref().as_ref()?;
+        mediator
+            .mux
+            .read()
+            .await
+            .as_ref()
+            .map(|h| h.members_rx.clone())
+    }
+
     /// Every `messaging/mux/event` (`ready`, `attached`, `detached`,
-    /// `refused`) on this profile's mux connection. These are taken out of
+    /// `refused`) on this profile's mux connection, each one checked: sent
+    /// by the profile's mediator, addressed to this profile, well formed,
+    /// and with a valid proof when it carries one. These are taken out of
     /// the ordinary message stream. `None` when there is no mux connection.
     pub async fn mux_events(
         &self,
