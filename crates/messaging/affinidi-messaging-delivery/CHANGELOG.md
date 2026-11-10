@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.21 — the receipt poll asks about long-waiting messages less often
+
+`outbox_drain_loop` asked the mediator for `messaging/message/status` about
+every `Sent` entry on every tick, `ceil(sent / 100)` requests per tick for as
+long as the longest window ran. Entries whose recipient never collects — a
+thirty-day removal notice to an identity that was reset — kept that up for the
+whole window: one VTC with ~180 such entries sent a pair of status requests
+every ten seconds, ~17,000 a day, which made up almost all of its mediator's
+traffic (OpenVTC/verifiable-trust-infrastructure#2550).
+
+The loop now paces each entry by how long it has waited (`StatusPacer`): every
+tick for its first five minutes, then every minute to an hour, every ten minutes
+to a day, and hourly after. An entry whose window closes within its period is
+asked about every tick again, so a collection just before the deadline still
+settles `Delivered` rather than `Unconfirmed`. With entries waiting and none
+due, the loop asks nothing — not the outbox listing either.
+
+**Behaviour change.** A long-waiting message's collection can settle up to its
+period later than before (at most an hour, for one that has waited a day).
+Pacing is in memory, so a restart asks about every entry once.
+`poll_outbox_drain` is unchanged; `poll_outbox_drain_paced` and `StatusPacer`
+are new.
+
 ## 0.1.20 — a slow ack no longer stalls inbound dispatch
 
 **Behaviour change.** `ack_via_source` and the parked-ack retry pass now bound

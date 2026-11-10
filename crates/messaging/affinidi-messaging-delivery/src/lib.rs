@@ -37,9 +37,9 @@ pub mod service;
 
 pub use ack::AckStats;
 pub use confirm::{
-    ConfirmReport, DrainPollReport, Escalation, ExpiryEscalator, confirm_delivered,
+    ConfirmReport, DrainPollReport, Escalation, ExpiryEscalator, StatusPacer, confirm_delivered,
     confirmation_loop, confirmation_loop_with, outbox_drain_loop, poll_outbox_drain,
-    sweep_confirmations, sweep_confirmations_with,
+    poll_outbox_drain_paced, sweep_confirmations, sweep_confirmations_with,
 };
 pub use drain::{DrainReport, drain_loop, drain_loop_via, drain_once, drain_once_via};
 pub use outbox::{InMemoryOutboxStore, Key, OutboxEntry, OutboxError, OutboxState, OutboxStore};
