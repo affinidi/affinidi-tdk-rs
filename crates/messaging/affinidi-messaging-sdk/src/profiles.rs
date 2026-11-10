@@ -621,8 +621,11 @@ impl ATM {
     /// re-sent after a reconnect unless the application does so.
     ///
     /// Fails if the mediator does not offer mux (it must echo the
-    /// `affinidi-mux` subprotocol); there is no silent fallback to an
-    /// ordinary connection. Member DIDs' secrets must be in this ATM's
+    /// `didcomm-mux` subprotocol); there is no silent fallback to an
+    /// ordinary connection. The connection is confirmed as a mux connection
+    /// when [`ATMProfile::mux_ready`] reports its `ready` event: a mediator
+    /// that predates mux may echo the subprotocol without implementing it.
+    /// Member DIDs' secrets must be in this ATM's
     /// secrets resolver for their messages to unpack.
     pub async fn profile_enable_mux_websocket(
         &self,

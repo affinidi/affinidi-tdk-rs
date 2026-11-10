@@ -81,6 +81,19 @@ pub enum AuditAction {
     /// A rootAdmin re-read the mediator's configuration (`config/reload`).
     #[serde(rename = "config_reload")]
     ConfigReload,
+    /// A DID-multiplexing grant was revoked (`messaging/mux/revoke`). The
+    /// actor is the party that revoked it; the target is the other party.
+    #[serde(rename = "mux_grant_revoke")]
+    MuxGrantRevoke,
+    /// A member DID voided every grant of an epoch
+    /// (`messaging/mux/revoke-all`). The target is the member DID.
+    #[serde(rename = "mux_revoke_all")]
+    MuxRevokeAll,
+    /// A DID-multiplexing grant was suspended under the unknown-key rule.
+    /// The actor is the member DID whose unknown key fired it; the target is
+    /// the principal whose grant was suspended.
+    #[serde(rename = "mux_grant_suspend")]
+    MuxGrantSuspend,
 }
 
 /// A single audit-log record: one privileged change, by one actor, at one time.
@@ -114,4 +127,21 @@ pub struct MediatorAuditLogList {
     pub entries: Vec<AuditLogEntry>,
     /// Offset for the next page, or `0` when the listing is exhausted.
     pub cursor: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AuditAction;
+
+    #[test]
+    fn mux_actions_have_stable_wire_names() {
+        for (action, wire) in [
+            (AuditAction::MuxGrantRevoke, "\"mux_grant_revoke\""),
+            (AuditAction::MuxRevokeAll, "\"mux_revoke_all\""),
+            (AuditAction::MuxGrantSuspend, "\"mux_grant_suspend\""),
+        ] {
+            assert_eq!(serde_json::to_string(&action).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<AuditAction>(wire).unwrap(), action);
+        }
+    }
 }

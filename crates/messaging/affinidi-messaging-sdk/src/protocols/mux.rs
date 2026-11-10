@@ -176,8 +176,9 @@ impl MuxSides {
 /// Channel capacity for mux events: they are rare control messages.
 pub(crate) const MUX_EVENT_CAPACITY: usize = 64;
 
-/// The WebSocket subprotocol that asks the mediator for a mux connection.
-pub const MUX_SUBPROTOCOL: &str = "affinidi-mux";
+/// The WebSocket subprotocol that asks the mediator for a mux connection
+/// (`messaging/mux/event/0.1`, "DIDComm sockets").
+pub const MUX_SUBPROTOCOL: &str = "didcomm-mux";
 
 /// What a grant or attach allows the principal to do for the member.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]

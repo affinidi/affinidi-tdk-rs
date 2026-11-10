@@ -1,5 +1,16 @@
 # Affinidi Messaging Mediator Types
 
+## 0.1.1 — audit actions for DID multiplexing
+
+Three new `AuditAction` values, so the mediator can audit what the
+`messaging/mux/*` specs require it to:
+
+- `mux_grant_revoke`: a grant was revoked (`messaging/mux/revoke`).
+- `mux_revoke_all`: a member DID voided an epoch (`messaging/mux/revoke-all`).
+- `mux_grant_suspend`: the unknown-key rule suspended a grant.
+
+`AuditAction` is `#[non_exhaustive]`, so this is additive.
+
 ## 0.1.0 — the mediator protocol types, as a crate of their own
 
 The `types` module of `affinidi-messaging-mediator-common` 0.17.6 (ACLs,
