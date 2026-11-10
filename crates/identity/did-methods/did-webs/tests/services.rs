@@ -82,6 +82,27 @@ fn push_signed(out: &mut Vec<u8>, serder: &Serder, s: &Signer) {
 
 /// Append a reply with a transferable indexed signature group (`-F`), which is
 /// how a transferable identifier signs something outside its own KEL.
+/// The sequence number of the event `said` in the stream so far, as a 1.x
+/// endorsement writes it: a group names its establishment event by both.
+/// Sequence number 0 for an event the stream does not hold.
+fn establishment_sn(stream: &[u8], said: &str) -> String {
+    let sn = affinidi_keri_core::parser::parse_all(stream)
+        .ok()
+        .and_then(|messages| {
+            messages
+                .iter()
+                .find(|m| m.serder.said().ok().as_deref() == Some(said))
+                .and_then(|m| m.serder.sn().ok())
+        })
+        .unwrap_or(0);
+    let mut raw = vec![0u8; 16];
+    raw[8..].copy_from_slice(&sn.to_be_bytes());
+    affinidi_cesr::Matter::new("0A", raw)
+        .expect("number")
+        .qb64()
+        .expect("qb64")
+}
+
 fn push_reply(out: &mut Vec<u8>, serder: &Serder, signer_prefix: &str, said: &str, s: &Signer) {
     out.extend_from_slice(serder.raw());
 
@@ -98,7 +119,10 @@ fn push_reply(out: &mut Vec<u8>, serder: &Serder, signer_prefix: &str, said: &st
             .expect("qb64")
     );
     // prefix + sequence number + establishment SAID, then the signatures.
-    let body = format!("{signer_prefix}0AAAAAAAAAAAAAAAAAAAAAAA{said}{inner}");
+    let body = format!(
+        "{signer_prefix}{}{said}{inner}",
+        establishment_sn(out, said)
+    );
     out.extend_from_slice(
         Counter::new("-F", 1)
             .expect("counter")
@@ -463,7 +487,10 @@ fn push_reply_signed_by(
                 .expect("qb64"),
         );
     }
-    let body = format!("{signer_prefix}0AAAAAAAAAAAAAAAAAAAAAAA{said}{inner}");
+    let body = format!(
+        "{signer_prefix}{}{said}{inner}",
+        establishment_sn(out, said)
+    );
     out.extend_from_slice(
         Counter::new("-F", 1)
             .expect("counter")
@@ -585,6 +612,47 @@ fn a_rotated_out_key_cannot_outrank_the_current_key_with_a_future_dt() {
         1,
         "a reply under the rotated-out key must not supersede one under the current key",
     );
+}
+
+#[test]
+fn a_reply_naming_its_establishment_event_at_the_wrong_sequence_number_is_not_taken() {
+    // A signature group names its establishment event by sequence number and
+    // SAID. keripy looks the event up by the number and compares the SAID, so
+    // a group with the right SAID at the wrong number verifies nowhere else,
+    // and must not here.
+    let (k0, k1, k2) = (signer(31), signer(32), signer(33));
+    let icp = inception(&k0, &k1);
+    let aid = icp.prefix().expect("prefix");
+    let rot = rotation(&aid, &icp.said().expect("said"), 1, &k1, &k2);
+    let rot_said = rot.said().expect("said");
+    let mut stream = Vec::new();
+    push_signed(&mut stream, &icp, &k0);
+    push_signed(&mut stream, &rot, &k1);
+    let dt = "2026-06-01T00:00:00.000000+00:00";
+    for (route, attrs) in [
+        (
+            "/end/role/add",
+            sad!({"cid": aid, "role": "agent", "eid": aid}),
+        ),
+        (
+            "/loc/scheme",
+            sad!({"eid": aid, "scheme": "https", "url": "https://agent.example/"}),
+        ),
+    ] {
+        push_reply(&mut stream, &reply(route, attrs, dt), &aid, &rot_said, &k1);
+    }
+    let right = String::from_utf8(stream).unwrap();
+    let kels = Kels::parse(right.as_bytes()).expect("parses");
+    assert_eq!(service_endpoints(&kels, &aid).expect("verifies").len(), 1);
+
+    // The rotation is at sn 1; name it at sn 0.
+    let wrong = right.replace(
+        &format!("0AAAAAAAAAAAAAAAAAAAAAAB{rot_said}"),
+        &format!("0AAAAAAAAAAAAAAAAAAAAAAA{rot_said}"),
+    );
+    assert_ne!(wrong, right);
+    let kels = Kels::parse(wrong.as_bytes()).expect("parses");
+    assert!(service_endpoints(&kels, &aid).expect("verifies").is_empty());
 }
 
 #[test]

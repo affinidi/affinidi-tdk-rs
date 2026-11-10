@@ -7,6 +7,7 @@
 //! reached through [`KeySigner`]s ([`Held`]), so the code that builds them
 //! takes a [`Controller`] and does not know which.
 
+use affinidi_keri::ProtocolVersion;
 use affinidi_keri::controller::{ControllerState, KeySigner};
 use affinidi_keri::hab::{Hab, SignedEvent};
 use affinidi_keri_core::sad::SadValue;
@@ -31,6 +32,25 @@ pub(crate) trait Controller {
 
     /// Append an interaction event anchoring `anchors`.
     fn interact(&mut self, anchors: &[SadValue]) -> Result<SignedEvent, DidWebsError>;
+
+    /// The KERI version the next event is written in. Designations and
+    /// replies are written in the same version (P2: VTI writes pure v2).
+    fn version(&self) -> ProtocolVersion;
+}
+
+/// An establishment event, which a signature outside the key event log names:
+/// the key state it installed is the one that signed.
+///
+/// Both halves are written into an endorsement, and a verifier such as keripy
+/// looks the event up by its sequence number and then compares the SAID, so
+/// the sequence number must be the establishment event's own, not the log's
+/// latest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Establishment {
+    /// Its sequence number.
+    pub sn: u64,
+    /// Its SAID.
+    pub said: String,
 }
 
 impl Controller for Hab {
@@ -72,6 +92,10 @@ impl Controller for Hab {
     fn interact(&mut self, anchors: &[SadValue]) -> Result<SignedEvent, DidWebsError> {
         self.interact_event(anchors)
             .map_err(|e| DidWebsError::Create(format!("interaction failed: {e}")))
+    }
+
+    fn version(&self) -> ProtocolVersion {
+        Hab::version(self)
     }
 }
 
@@ -192,6 +216,10 @@ impl Controller for Held<'_> {
         })?;
         self.state = state;
         Ok(event)
+    }
+
+    fn version(&self) -> ProtocolVersion {
+        self.state.version
     }
 }
 

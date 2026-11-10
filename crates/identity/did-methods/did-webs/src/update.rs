@@ -12,7 +12,7 @@ use affinidi_keri::config::RotationConfig;
 use affinidi_keri::controller::{ControllerState, KeySigner, PendingEvent, Rotation};
 use affinidi_keri::hab::Hab;
 
-use crate::signing::{Controller, Held};
+use crate::signing::{Controller, Establishment, Held};
 
 use crate::artifacts::Artifacts;
 use crate::create::{ControlledResult, SelfEndpoint, artifacts_for};
@@ -366,9 +366,12 @@ fn apply(
                 kels,
                 hab,
                 did.aid(),
-                crate::aliases::DESIGNATED_ALIASES_SCHEMA,
+                &[
+                    crate::aliases::DESIGNATED_ALIASES_SCHEMA,
+                    crate::aliases::DESIGNATED_ALIASES_SCHEMA_V2,
+                ],
             )?);
-            let establishment = last_establishment_said(kels, did.aid())?;
+            let establishment = last_establishment(kels, did.aid())?;
             let attestation = crate::attestation::issue_designated_aliases(
                 hab,
                 did.aid(),
@@ -383,9 +386,12 @@ fn apply(
                 kels,
                 hab,
                 did.aid(),
-                crate::key_roles::KEY_ROLE_SCHEMA,
+                &[
+                    crate::key_roles::KEY_ROLE_SCHEMA,
+                    crate::key_roles::KEY_ROLE_SCHEMA_V2,
+                ],
             )?);
-            let establishment = last_establishment_said(kels, did.aid())?;
+            let establishment = last_establishment(kels, did.aid())?;
             keri_cesr.extend_from_slice(&crate::attestation::issue_key_roles(
                 hab,
                 did.aid(),
@@ -416,9 +422,12 @@ fn apply(
                 kels,
                 hab,
                 did.aid(),
-                crate::key_roles::KEY_ROLE_SCHEMA,
+                &[
+                    crate::key_roles::KEY_ROLE_SCHEMA,
+                    crate::key_roles::KEY_ROLE_SCHEMA_V2,
+                ],
             )?);
-            let establishment = last_establishment_said(kels, did.aid())?;
+            let establishment = last_establishment(kels, did.aid())?;
             keri_cesr.extend_from_slice(&crate::attestation::issue_key_roles(
                 hab,
                 did.aid(),
@@ -440,10 +449,13 @@ fn apply(
                 kels,
                 hab,
                 did.aid(),
-                crate::key_agreement::KEY_AGREEMENT_SCHEMA,
+                &[
+                    crate::key_agreement::KEY_AGREEMENT_SCHEMA,
+                    crate::key_agreement::KEY_AGREEMENT_SCHEMA_V2,
+                ],
             )?);
             if !keys.is_empty() {
-                let establishment = last_establishment_said(kels, did.aid())?;
+                let establishment = last_establishment(kels, did.aid())?;
                 keri_cesr.extend_from_slice(&crate::attestation::issue_key_agreement(
                     hab,
                     did.aid(),
@@ -457,10 +469,13 @@ fn apply(
                 kels,
                 hab,
                 did.aid(),
-                crate::designated_services::SERVICE_SCHEMA,
+                &[
+                    crate::designated_services::SERVICE_SCHEMA,
+                    crate::designated_services::SERVICE_SCHEMA_V2,
+                ],
             )?);
             if !services.is_empty() {
-                let establishment = last_establishment_said(kels, did.aid())?;
+                let establishment = last_establishment(kels, did.aid())?;
                 keri_cesr.extend_from_slice(&crate::attestation::issue_services(
                     hab,
                     did.aid(),
@@ -473,7 +488,7 @@ fn apply(
             // Replies are not key events, so nothing is appended to the log
             // itself — but they must name the establishment event whose keys
             // sign them, which is not necessarily the latest event.
-            let establishment = last_establishment_said(kels, did.aid())?;
+            let establishment = last_establishment(kels, did.aid())?;
             let replies = crate::endpoints::self_designated_replies(
                 hab,
                 did.aid(),
@@ -486,27 +501,27 @@ fn apply(
     Ok(())
 }
 
-/// Revoke every designation of `schema` in force, anchoring each revocation.
+/// Revoke every designation of `schemas` in force, anchoring each revocation.
 fn revoke_all(
     kels: &Kels,
     hab: &mut dyn Controller,
     aid: &str,
-    schema: &str,
+    schemas: &[&str],
 ) -> Result<Vec<u8>, DidWebsError> {
     let mut rejected = None;
     let mut out = Vec::new();
-    for prior in crate::designation::designations(kels, aid, schema, &mut rejected)? {
-        out.extend_from_slice(&crate::attestation::revoke(hab, &prior)?);
+    for prior in crate::designation::designations(kels, aid, schemas, &mut rejected)? {
+        out.extend_from_slice(&crate::attestation::revoke(hab, kels, &prior)?);
     }
     Ok(out)
 }
 
-/// The SAID of the most recent establishment event in an identifier's log.
+/// The most recent establishment event in an identifier's log.
 ///
-/// Signatures on messages outside the key event log are authorised by a
+/// Signatures on messages outside the key event log are authorised by an
 /// *establishment* event's key state. Naming the latest event instead would be
 /// wrong whenever that event is an interaction.
-fn last_establishment_said(kels: &Kels, aid: &str) -> Result<String, DidWebsError> {
+fn last_establishment(kels: &Kels, aid: &str) -> Result<Establishment, DidWebsError> {
     let mut found = None;
     for ilk in ["icp", "rot", "dip", "drt"] {
         for msg in kels.messages_with_ilk(ilk) {
@@ -526,6 +541,6 @@ fn last_establishment_said(kels: &Kels, aid: &str) -> Result<String, DidWebsErro
     }
 
     found
-        .map(|(_, said)| said)
+        .map(|(sn, said)| Establishment { sn, said })
         .ok_or_else(|| DidWebsError::Kel(format!("{aid} has no establishment event in its log")))
 }

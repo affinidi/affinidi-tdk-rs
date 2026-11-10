@@ -85,6 +85,17 @@ pub const KEY_ROLE_SCHEMA: &str = "EPulJFl5SEb8qb3ca5teXHRGiWmTsTkylGTrS2vB4ZQx"
 /// The key role designation schema document.
 pub const KEY_ROLE_SCHEMA_JSON: &str = include_str!("../schemas/key-role-designation.json");
 
+/// The ACDC 2.x key role designation schema SAID.
+///
+/// Not derived mechanically from the v1 schema: its attribute block adds
+/// `critical` (required, `true`: a resolver that does not implement key roles
+/// must fail rather than serve the key state's keys) and `keyAssurance`
+/// (VTI-KEY-197). See kswg-did-method-webs-specification#221.
+pub const KEY_ROLE_SCHEMA_V2: &str = "EBMCaUhHZqulCtix3fzRRsdW0_gfT3bMLsrp3c3ixpxx";
+
+/// The ACDC 2.x key role designation schema.
+pub const KEY_ROLE_SCHEMA_V2_JSON: &str = include_str!("../schemas/key-role-designation-v2.json");
+
 /// A registered key role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -341,8 +352,31 @@ pub struct DesignatedKeyRoles {
 pub fn designated_key_roles(kels: &Kels, aid: &str) -> Result<DesignatedKeyRoles, DidWebsError> {
     let state = kels.key_state(aid)?;
     let mut out = DesignatedKeyRoles::default();
-    let issued = issued_designations(kels, aid, KEY_ROLE_SCHEMA, &mut out.rejected)?;
+    let issued = issued_designations(
+        kels,
+        aid,
+        &[KEY_ROLE_SCHEMA, KEY_ROLE_SCHEMA_V2],
+        &mut out.rejected,
+    )?;
+    // Counted before the check below: a malformed designation still means the
+    // controller designated key roles, so the key state's keys stay out.
     out.issued = !issued.is_empty();
+    // The 2.x schema requires `critical: true`; a designation without it is
+    // not the credential the schema describes, so it binds nothing.
+    let issued: Vec<_> = issued
+        .into_iter()
+        .filter(|(designation, _)| {
+            let marked = designation.attributes.get("critical") == Some(&SadValue::Bool(true));
+            if designation.version >= 2 && !marked {
+                out.rejected.get_or_insert(format!(
+                    "key role designation {} is not marked critical",
+                    designation.said
+                ));
+                return false;
+            }
+            true
+        })
+        .collect();
 
     // Every revocation ever stated, the earliest time for a key.
     let mut revoked: Vec<(RevokedKey, DateTime<FixedOffset>)> = Vec::new();

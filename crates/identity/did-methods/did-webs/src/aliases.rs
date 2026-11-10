@@ -34,6 +34,15 @@ pub struct DesignatedAliases {
 /// alias designation.
 pub const DESIGNATED_ALIASES_SCHEMA: &str = "EN6Oh5XSD5_q2Hgu-aqpdfbVepdpYpFlgz6zvJL5b_r5";
 
+/// The ACDC 2.x designated-aliases schema SAID: the v1 schema with `ri` as
+/// `rd`, `t` added, and its version `2.0.0`, as proposed in
+/// kswg-did-method-webs-specification#216.
+pub const DESIGNATED_ALIASES_SCHEMA_V2: &str = "EF9Iy-vwD8GRKghnzHHGwAA6sC0VEWNtZ2Sf4tfd4IAA";
+
+/// The ACDC 2.x designated-aliases schema.
+pub const DESIGNATED_ALIASES_SCHEMA_V2_JSON: &str =
+    include_str!("../schemas/designated-aliases-v2.json");
+
 /// Collect the aliases `aid` has designated, verifying the whole chain.
 ///
 /// Returns an empty list when the stream carries no designated-aliases
@@ -48,7 +57,7 @@ pub fn designated_aliases(kels: &Kels, aid: &str) -> Result<DesignatedAliases, D
     for attestation in designations(
         kels,
         aid,
-        DESIGNATED_ALIASES_SCHEMA,
+        &[DESIGNATED_ALIASES_SCHEMA, DESIGNATED_ALIASES_SCHEMA_V2],
         &mut designated.rejected,
     )? {
         let Some(ids) = attestation.attributes.get("ids").and_then(|v| v.as_array()) else {

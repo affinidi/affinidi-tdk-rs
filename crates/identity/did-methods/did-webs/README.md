@@ -70,10 +70,14 @@ let doc = resolve_from_artifacts(&did, keri_cesr, Some(did_json))?;
 - **Designated aliases**, which is where `alsoKnownAs` comes from. A DID
   document does not get to assert its own aliases: an alias counts only if the
   AID issued a credential saying so, and that credential is anchored in the
-  AID's own key event log. The whole chain is checked — registry inception
-  anchored, issuance anchored, attestation signed by the AID's key state, and
-  no revocation anchored. A break anywhere yields no aliases from that
-  attestation rather than a partially-trusted list. The aliases are those of
+  AID's own key event log. The whole chain is checked — for an ACDC 1.x
+  credential, registry inception anchored, issuance anchored, attestation
+  signed by the AID's key state, and no revocation anchored; for 2.x, the
+  registry's latest anchored, non-vacuous update discloses it as issued. A
+  break anywhere yields no aliases from that attestation rather than a
+  partially-trusted list. **Every registry event the KEL anchors must be in
+  the stream**, so a host cannot withhold a revocation; a stream that leaves
+  one out fails resolution. The aliases are those of
   every attestation that verifies, and the `did:web` twin and `did:keri` form
   appear only when designated.
 - **Witness receipts**, when the key event log declares witnesses. An event
@@ -95,6 +99,31 @@ let doc = resolve_from_artifacts(&did, keri_cesr, Some(did_json))?;
   reference implementation publishes no `controller`, `authentication` or
   `assertionMethod`, so a document may omit those — but never add to or change
   anything the stream establishes.
+
+- **Critical designations.** A standing designation marked `"critical": true`
+  whose schema this resolver does not implement fails resolution
+  (`unsupportedDesignation`): it restricts the document, and serving the
+  document without the restriction would be wrong.
+
+## KERI 2.0 (alpha)
+
+Both KERI versions are read, and an identifier is written in the version of
+its own log: its designations and replies follow it. `create_controlled`
+writes 2.0 unless its `Inception` says otherwise. **This integration is alpha:
+expect breaking changes as the did:webs and KERI 2.0 specifications settle.**
+
+| | KERI 1.x | KERI 2.0 |
+|---|---|---|
+| a designation | ACDC 1.x in a `vcp`/`iss`/`rev` registry, signed by the AID | ACDC 2.x (`acm`) in its own `rip`/`bup` registry, issued by an anchored update that discloses it |
+| replacing one | a `rev` | a further `bup` disclosing `revoked` |
+| a reply | `rpy` with a `-F` endorsement | `rpy` naming its sender in `i`, with a `-X` endorsement |
+
+Each designation schema has a 2.x form (designated aliases `EF9Iy-vw…`, key
+agreement `EIW1ONwn…`, service `EJVZ789s…`, key role `EBMCaUhH…`, which is
+critical). `tests/fixtures/ours-v2` holds an identifier's lifecycle on 2.0
+that keripy accepts in full. The positions taken on open questions are in
+`docs/05-design-notes/did-webs-keri-v2.md` in
+OpenVTC/verifiable-trust-infrastructure.
 
 ## Key agreement and services of any type
 

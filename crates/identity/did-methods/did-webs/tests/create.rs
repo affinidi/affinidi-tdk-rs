@@ -641,7 +641,9 @@ fn an_unanchored_attestation_is_not_carried_back() {
     );
 
     // With its only attestation unanchored, nothing designates the DID, so it
-    // does not resolve at all — rather than resolving without the alias.
+    // does not resolve at all — rather than resolving without the alias. The
+    // registry events are in the stream but not in the log, which is itself
+    // a fault: the stream is not the log's.
     let kels = affinidi_did_webs::Kels::parse(stripped.as_bytes()).expect("parses");
     let did = DidWebs::parse(created.did()).expect("parse");
     kels.key_state(did.aid())
@@ -649,7 +651,7 @@ fn an_unanchored_attestation_is_not_carried_back() {
     let err = resolve_from_artifacts(&did, stripped.as_bytes(), None)
         .expect_err("an unanchored attestation designates nothing");
     assert!(
-        matches!(err, affinidi_did_webs::DidWebsError::NotDesignated(_)),
+        matches!(err, affinidi_did_webs::DidWebsError::Registry(_)),
         "{err}"
     );
 }

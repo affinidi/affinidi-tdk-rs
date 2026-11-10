@@ -1,4 +1,5 @@
-//! Issuing a designated-aliases attestation.
+//! Issuing designations: designated aliases, key agreement keys, key roles and
+//! services.
 //!
 //! `alsoKnownAs` is not something a `did:webs` document may assert about
 //! itself. A resolver takes it only from a credential the identifier **issued**,
@@ -16,19 +17,41 @@
 //! Every link is checked on resolution, so every link has to be built. That is
 //! the price of an alias meaning anything: a document that merely claims one is
 //! claiming it about itself.
+//!
+//! That is the KERI 1.x chain. An identifier whose log is written in 2.x
+//! issues 2.x designations instead (P2: VTI writes pure v2), each in a
+//! registry of its own, through `affinidi_keri_core::registry::write`:
+//!
+//! ```text
+//! KEL ixn ──anchors──▶ rip   the registry, and
+//!                 └──▶ bup   an update disclosing `issued` for the ACDC
+//! acm   the designation, unsigned: its issuance is the anchored update
+//! ```
+//!
+//! Revoking one is a further update disclosing `revoked`, continued from the
+//! published stream (`RegistryState::resume`), so nothing but `keri.cesr` has
+//! to be kept.
 
-use crate::signing::Controller;
+use crate::signing::{Controller, Establishment};
+use affinidi_keri::ProtocolVersion;
+use affinidi_keri_core::registry::Anchor;
+use affinidi_keri_core::registry::write::{
+    BlindingUuid, RegistryNonce, RegistryState, TransactionState,
+};
 use affinidi_keri_core::sad;
 use affinidi_keri_core::sad::{SadMap, SadValue};
 use affinidi_keri_core::said;
 use affinidi_keri_core::serder::Serder;
 use affinidi_keri_core::version::SerializationKind;
 
-use crate::aliases::DESIGNATED_ALIASES_SCHEMA;
+use crate::aliases::{
+    DESIGNATED_ALIASES_SCHEMA, DESIGNATED_ALIASES_SCHEMA_V2, DESIGNATED_ALIASES_SCHEMA_V2_JSON,
+};
 use crate::designation::Designation;
 use crate::endpoints::{fix_version, sign_with_group, timestamp};
 use crate::errors::DidWebsError;
 use crate::identifier::DidWebs;
+use crate::kel::Kels;
 
 /// The identifiers every designated-aliases attestation for `did` carries,
 /// followed by `extra`, without repeats.
@@ -49,19 +72,50 @@ pub(crate) fn designation(did: &DidWebs, extra: &[String]) -> Vec<String> {
     ids
 }
 
-/// Revoke a designated-aliases attestation: a `rev` event in its registry,
-/// anchored by an interaction event in the key event log.
+/// Revoke a designation, anchored by an interaction event in the key event
+/// log: a 1.x `rev` in its TEL, or a 2.x update disclosing `revoked`.
 ///
-/// An attestation names *the* designated aliases, and a resolver reads every
-/// unrevoked one, so replacing a designation means withdrawing the old one —
-/// otherwise an alias the controller has since dropped would still be listed.
+/// A resolver reads every unrevoked designation of a schema, so replacing one
+/// means withdrawing the old one — otherwise an alias the controller has since
+/// dropped would still be listed. `kels` is the published stream, from which a
+/// 2.x registry is continued.
 ///
 /// # Errors
-/// Returns [`DidWebsError::Create`] if the event cannot be built or anchored.
+/// Returns [`DidWebsError::Create`] if the event cannot be built or anchored,
+/// and [`DidWebsError::Registry`] if the published registry cannot be
+/// continued.
 pub(crate) fn revoke(
     hab: &mut dyn Controller,
+    kels: &Kels,
     attestation: &Designation,
 ) -> Result<Vec<u8>, DidWebsError> {
+    if attestation.version >= 2 {
+        let log = kels.issuer_log(hab.prefix())?;
+        let state = RegistryState::resume(kels.messages(), &log, &attestation.registry)
+            .map_err(|e| DidWebsError::Registry(e.to_string()))?;
+        let (_, bup) = state
+            .update(
+                &attestation.said,
+                TransactionState::Revoked,
+                &BlindingUuid(random()?),
+                &timestamp(),
+            )
+            .map_err(|e| DidWebsError::Create(format!("revocation: {e}")))?;
+        let anchoring = hab
+            .interact(&[bup.seal()])
+            .map_err(|e| DidWebsError::Create(format!("anchoring the revocation: {e}")))?;
+        let anchor = Anchor {
+            sn: hab.sn(),
+            said: anchoring.said.clone(),
+        };
+        let mut out = anchoring.composed;
+        out.extend_from_slice(
+            &bup.compose(&anchor)
+                .map_err(|e| DidWebsError::Create(format!("revocation: {e}")))?,
+        );
+        return Ok(out);
+    }
+
     let mut rev = sad!({
         "v": "KERI10JSON000000_",
         "t": "rev",
@@ -69,7 +123,7 @@ pub(crate) fn revoke(
         "i": attestation.said,
         "s": "1",
         "ri": attestation.registry,
-        "p": attestation.issuance,
+        "p": attestation.event,
         "dt": timestamp(),
     });
     fix_version(&mut rev)?;
@@ -84,6 +138,14 @@ pub(crate) fn revoke(
 
     let mut out = anchor.composed;
     out.extend_from_slice(rev.raw());
+    Ok(out)
+}
+
+/// Random bytes: a registry nonce or a blinding UUID.
+fn random<const N: usize>() -> Result<[u8; N], DidWebsError> {
+    let mut out = [0u8; N];
+    getrandom::fill(&mut out)
+        .map_err(|e| DidWebsError::Create(format!("no randomness for a registry: {e}")))?;
     Ok(out)
 }
 
@@ -121,7 +183,7 @@ fn rules() -> SadValue {
 pub(crate) fn issue_designated_aliases(
     hab: &mut dyn Controller,
     aid: &str,
-    establishment_said: &str,
+    establishment: &Establishment,
     aliases: &[String],
 ) -> Result<Vec<u8>, DidWebsError> {
     if aliases.is_empty() {
@@ -129,14 +191,7 @@ pub(crate) fn issue_designated_aliases(
             "a designated-aliases attestation with no aliases designates nothing".into(),
         ));
     }
-    issue(
-        hab,
-        aid,
-        establishment_said,
-        DESIGNATED_ALIASES_SCHEMA,
-        sad!({ "ids": aliases }),
-        rules(),
-    )
+    issue(hab, aid, establishment, &ALIASES, sad!({ "ids": aliases }))
 }
 
 /// Issue a key agreement designation for `keys`.
@@ -149,7 +204,7 @@ pub(crate) fn issue_designated_aliases(
 pub(crate) fn issue_key_agreement(
     hab: &mut dyn Controller,
     aid: &str,
-    establishment_said: &str,
+    establishment: &Establishment,
     keys: &[crate::key_agreement::KeyAgreementKey],
 ) -> Result<Vec<u8>, DidWebsError> {
     if keys.is_empty() {
@@ -180,10 +235,9 @@ pub(crate) fn issue_key_agreement(
     issue(
         hab,
         aid,
-        establishment_said,
-        crate::key_agreement::KEY_AGREEMENT_SCHEMA,
+        establishment,
+        &KEY_AGREEMENT,
         sad!({ "keys": encoded }),
-        rules_from_schema(crate::key_agreement::KEY_AGREEMENT_SCHEMA_JSON)?,
     )
 }
 
@@ -202,7 +256,7 @@ pub(crate) fn issue_key_agreement(
 pub(crate) fn issue_key_roles(
     hab: &mut dyn Controller,
     aid: &str,
-    establishment_said: &str,
+    establishment: &Establishment,
     state: &affinidi_keri_core::key_state::KeyState,
     roles: &crate::key_roles::KeyRoles,
     prior_revoked: &[crate::key_roles::RevokedKey],
@@ -265,10 +319,9 @@ pub(crate) fn issue_key_roles(
     issue(
         hab,
         aid,
-        establishment_said,
-        crate::key_roles::KEY_ROLE_SCHEMA,
+        establishment,
+        &KEY_ROLES,
         SadValue::Object(attributes),
-        rules_from_schema(crate::key_roles::KEY_ROLE_SCHEMA_JSON)?,
     )
 }
 
@@ -280,7 +333,7 @@ pub(crate) fn issue_key_roles(
 pub(crate) fn issue_services(
     hab: &mut dyn Controller,
     aid: &str,
-    establishment_said: &str,
+    establishment: &Establishment,
     services: &[crate::designated_services::DesignatedService],
 ) -> Result<Vec<u8>, DidWebsError> {
     if services.is_empty() {
@@ -302,10 +355,9 @@ pub(crate) fn issue_services(
     issue(
         hab,
         aid,
-        establishment_said,
-        crate::designated_services::SERVICE_SCHEMA,
+        establishment,
+        &SERVICES,
         sad!({ "services": entries }),
-        rules_from_schema(crate::designated_services::SERVICE_SCHEMA_JSON)?,
     )
 }
 
@@ -332,21 +384,149 @@ pub(crate) fn rules_from_schema(schema_json: &str) -> Result<SadValue, DidWebsEr
     Ok(SadValue::Object(rules))
 }
 
-/// Issue a designation: a credential of `schema` whose attribute block is
+/// A designation's schemas, one per ACDC version.
+pub(crate) struct Schema {
+    /// The 1.x schema SAID.
+    v1: &'static str,
+    /// The 1.x schema, which fixes the rules text; `None` for the
+    /// designated-aliases schema, which is GLEIF's (see [`rules`]).
+    v1_json: Option<&'static str>,
+    /// The 2.x schema SAID.
+    v2: &'static str,
+    /// The 2.x schema.
+    v2_json: &'static str,
+    /// Whether the 2.x designation restricts the document, and so is marked
+    /// `critical` (P6).
+    critical: bool,
+}
+
+const ALIASES: Schema = Schema {
+    v1: DESIGNATED_ALIASES_SCHEMA,
+    v1_json: None,
+    v2: DESIGNATED_ALIASES_SCHEMA_V2,
+    v2_json: DESIGNATED_ALIASES_SCHEMA_V2_JSON,
+    critical: false,
+};
+
+const KEY_AGREEMENT: Schema = Schema {
+    v1: crate::key_agreement::KEY_AGREEMENT_SCHEMA,
+    v1_json: Some(crate::key_agreement::KEY_AGREEMENT_SCHEMA_JSON),
+    v2: crate::key_agreement::KEY_AGREEMENT_SCHEMA_V2,
+    v2_json: crate::key_agreement::KEY_AGREEMENT_SCHEMA_V2_JSON,
+    critical: false,
+};
+
+const KEY_ROLES: Schema = Schema {
+    v1: crate::key_roles::KEY_ROLE_SCHEMA,
+    v1_json: Some(crate::key_roles::KEY_ROLE_SCHEMA_JSON),
+    v2: crate::key_roles::KEY_ROLE_SCHEMA_V2,
+    v2_json: crate::key_roles::KEY_ROLE_SCHEMA_V2_JSON,
+    critical: true,
+};
+
+const SERVICES: Schema = Schema {
+    v1: crate::designated_services::SERVICE_SCHEMA,
+    v1_json: Some(crate::designated_services::SERVICE_SCHEMA_JSON),
+    v2: crate::designated_services::SERVICE_SCHEMA_V2,
+    v2_json: crate::designated_services::SERVICE_SCHEMA_V2_JSON,
+    critical: false,
+};
+
+/// Issue a designation of `schema` whose attribute block is `attributes` (to
+/// which `d` and `dt` are added, and in 2.x `critical` where the schema
+/// requires it), with the rules block its schema fixes, in the identifier's
+/// version.
+///
+/// # Errors
+/// Returns [`DidWebsError::Create`] if any part of the chain cannot be built,
+/// signed, or anchored.
+fn issue(
+    hab: &mut dyn Controller,
+    aid: &str,
+    establishment: &Establishment,
+    schema: &Schema,
+    attributes: SadValue,
+) -> Result<Vec<u8>, DidWebsError> {
+    match hab.version() {
+        ProtocolVersion::V1 => {
+            let rules = match schema.v1_json {
+                Some(json) => rules_from_schema(json)?,
+                None => rules(),
+            };
+            issue_v1(hab, aid, establishment, schema.v1, attributes, rules)
+        }
+        _ => issue_v2(hab, aid, schema, attributes),
+    }
+}
+
+/// Issue a 2.x designation in a registry of its own: one interaction event
+/// anchors the registry's inception and the update that issues the
+/// credential, and the stream carries the inception, the credential and the
+/// update with its disclosed state.
+fn issue_v2(
+    hab: &mut dyn Controller,
+    aid: &str,
+    schema: &Schema,
+    content: SadValue,
+) -> Result<Vec<u8>, DidWebsError> {
+    let create = |what: &str| {
+        let what = what.to_string();
+        move |e: affinidi_keri_core::error::CoreError| DidWebsError::Create(format!("{what}: {e}"))
+    };
+    let dt = timestamp();
+    let (state, rip) =
+        RegistryState::incept(aid, &RegistryNonce(random()?), &dt).map_err(create("registry"))?;
+
+    let mut attributes = SadMap::new();
+    attributes.insert("d".into(), sad!(""));
+    attributes.insert("dt".into(), sad!(dt.clone()));
+    if schema.critical {
+        attributes.insert("critical".into(), SadValue::Bool(true));
+    }
+    if let SadValue::Object(content) = content {
+        attributes.extend(content);
+    }
+    let credential = state
+        .designation_with_rules(
+            schema.v2,
+            &SadValue::Object(attributes),
+            &rules_from_schema(schema.v2_json)?,
+        )
+        .map_err(create("designation"))?;
+    let (_, bup) = state
+        .update(
+            &credential.said,
+            TransactionState::Issued,
+            &BlindingUuid(random()?),
+            &dt,
+        )
+        .map_err(create("issuance"))?;
+
+    let anchoring = hab
+        .interact(&[rip.seal(), bup.seal()])
+        .map_err(|e| DidWebsError::Create(format!("anchoring the designation: {e}")))?;
+    let anchor = Anchor {
+        sn: hab.sn(),
+        said: anchoring.said.clone(),
+    };
+    let mut out = anchoring.composed;
+    out.extend_from_slice(&rip.compose(&anchor).map_err(create("registry"))?);
+    out.extend_from_slice(&credential.compose().map_err(create("designation"))?);
+    out.extend_from_slice(&bup.compose(&anchor).map_err(create("issuance"))?);
+    Ok(out)
+}
+
+/// Issue a 1.x designation: a credential of `schema` whose attribute block is
 /// `attributes` (to which `d` and `dt` are added), with `rules` as its rules
 /// block.
 ///
 /// Appends two interaction events to the identifier's key event log — the
 /// anchors — and returns the CESR bytes for those plus the registry, the
 /// issuance and the signed credential.
-///
-/// # Errors
-/// Returns [`DidWebsError::Create`] if any part of the chain cannot be built,
-/// signed, or anchored.
-pub(crate) fn issue(
+fn issue_v1(
     hab: &mut dyn Controller,
     aid: &str,
-    establishment_said: &str,
+    establishment: &Establishment,
     schema: &str,
     attributes: SadValue,
     rules: SadValue,
@@ -414,7 +594,7 @@ pub(crate) fn issue(
     out.extend_from_slice(&anchor_issuance.composed);
     out.extend_from_slice(vcp.raw());
     out.extend_from_slice(iss.raw());
-    out.extend_from_slice(&sign_with_group(hab, establishment_said, &acdc)?);
+    out.extend_from_slice(&sign_with_group(hab, establishment, &acdc)?);
 
     Ok(out)
 }

@@ -1,0 +1,162 @@
+{
+    "$id": "EF9Iy-vwD8GRKghnzHHGwAA6sC0VEWNtZ2Sf4tfd4IAA",
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Designated Aliases Public Attestation",
+    "description": "A public attestation listing the designated aliases of an AID controller.",
+    "type": "object",
+    "credentialType": "DesignatedAliasesPublicAttestation",
+    "version": "2.0.0",
+    "properties": {
+        "v": {
+            "description": "Version",
+            "type": "string"
+        },
+        "t": {
+            "description": "Message type",
+            "type": "string",
+            "const": "acm"
+        },
+        "d": {
+            "description": "Attestation SAID",
+            "type": "string"
+        },
+        "i": {
+            "description": "Controller AID",
+            "type": "string"
+        },
+        "rd": {
+            "description": "Attestation status registry",
+            "type": "string"
+        },
+        "s": {
+            "description": "schema section",
+            "oneOf": [
+                {
+                    "description": "schema section SAID",
+                    "type": "string"
+                },
+                {
+                    "description": "schema detail",
+                    "type": "object"
+                }
+            ]
+        },
+        "a": {
+            "oneOf": [
+                {
+                    "description": "Attributes block SAID",
+                    "type": "string"
+                },
+                {
+                    "$id": "EBMVc1eOhOaA7MdwAlAX3KcvJRTpFrc7_xcB_XveYAEE",
+                    "description": "Attributes block",
+                    "type": "object",
+                    "properties": {
+                        "d": {
+                            "description": "Attributes block SAID",
+                            "type": "string"
+                        },
+                        "dt": {
+                            "description": "Designation date time",
+                            "type": "string",
+                            "format": "date-time"
+                        },
+                        "ids": {
+                            "description": "List of namespaced/controlled AID aliases designated by the AID controller",
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "d",
+                        "dt",
+                        "ids"
+                    ]
+                }
+            ]
+        },
+        "r": {
+            "oneOf": [
+                {
+                    "description": "Rules block SAID",
+                    "type": "string"
+                },
+                {
+                    "$id": "EHbxC6vD0mU49geUxIfcQtTxP2tAqay7QCz3CVzfSdHz",
+                    "description": "Rules block",
+                    "type": "object",
+                    "properties": {
+                        "d": {
+                            "description": "Rules block SAID",
+                            "type": "string"
+                        },
+                        "aliasDesignation": {
+                            "description": "Alias designation",
+                            "type": "object",
+                            "properties": {
+                                "l": {
+                                    "type": "string",
+                                    "const": "The issuer of this ACDC designates the identifiers in the ids field as the only allowed namespaced aliases of the issuer's AID."
+                                }
+                            }
+                        },
+                        "usageDisclaimer": {
+                            "description": "Usage Disclaimer",
+                            "type": "object",
+                            "properties": {
+                                "l": {
+                                    "description": "Limitation of designation scope",
+                                    "type": "string",
+                                    "const": "This attestation only asserts designated aliases of the controller of the AID, that the AID controlled namespaced alias has been designated by the controller. It does not assert that the controller of this AID has control over the infrastructure or anything else related to the namespace other than the included AID."
+                                }
+                            }
+                        },
+                        "issuanceDisclaimer": {
+                            "description": "Issuance Disclaimer",
+                            "type": "object",
+                            "properties": {
+                                "l": {
+                                    "description": "Accuracy of information",
+                                    "type": "string",
+                                    "const": "All information in a valid and non-revoked alias designation assertion is accurate as of the date specified."
+                                }
+                            }
+                        },
+                        "termsOfUse": {
+                            "description": "Terms of use",
+                            "type": "object",
+                            "properties": {
+                                "l": {
+                                    "type": "string",
+                                    "const": "Designated aliases of the AID must only be used in a manner consistent with the expressed intent of the AID controller."
+                                }
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "d",
+                        "aliasDesignation",
+                        "usageDisclaimer",
+                        "issuanceDisclaimer",
+                        "termsOfUse"
+                    ]
+                }
+            ]
+        }
+    },
+    "additionalProperties": false,
+    "required": [
+        "v",
+        "t",
+        "d",
+        "i",
+        "rd",
+        "s",
+        "a",
+        "r"
+    ]
+}

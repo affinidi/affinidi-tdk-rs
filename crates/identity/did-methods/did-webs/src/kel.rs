@@ -35,8 +35,13 @@ const MAX_DELEGATION_DEPTH: usize = 8;
 pub struct Kels {
     /// Every message in the stream, in the order it arrived.
     messages: Vec<ParsedMessage>,
-    /// Indices into `messages`, grouped by prefix.
+    /// Indices into `messages`, grouped by prefix, as far as a read may see
+    /// (see [`Kels::as_of`]).
     by_prefix: HashMap<String, Vec<usize>>,
+    /// Indices into `messages`, grouped by prefix: the whole stream.
+    full_by_prefix: HashMap<String, Vec<usize>>,
+    /// The sequence number a read is limited to, per prefix.
+    limits: HashMap<String, u64>,
     /// Key states already verified, keyed by prefix.
     verified: RefCell<HashMap<String, KeyState>>,
     /// Prefixes currently being verified, to catch a delegation cycle.
@@ -73,7 +78,9 @@ impl Kels {
 
         Ok(Self {
             messages,
+            full_by_prefix: by_prefix.clone(),
             by_prefix,
+            limits: HashMap::new(),
             verified: RefCell::new(HashMap::new()),
             in_progress: RefCell::new(Vec::new()),
         })
@@ -137,6 +144,7 @@ impl Kels {
                     .is_some_and(|event_sn| event_sn <= sn)
             });
         }
+        self.limits.insert(prefix.to_string(), sn);
         self.verified.borrow_mut().clear();
         Ok(self)
     }
@@ -356,6 +364,18 @@ impl Kels {
             )));
         }
         let state = self.key_state_at(signer, &group.said)?;
+        // The group names its establishment event twice, by sequence number and
+        // SAID. keripy looks it up by the number and compares the SAID, so both
+        // must agree here too, or a reply verifies here and nowhere else.
+        let sn = affinidi_keri_core::parser::number_value(&group.sn)
+            .map_err(|e| DidWebsError::Kel(format!("signature group from {signer}: {e}")))?;
+        if sn != state.sn {
+            return Err(DidWebsError::Kel(format!(
+                "signature group from {signer} names establishment event {} at sn {sn}, but it \
+                 is at sn {}",
+                group.said, state.sn
+            )));
+        }
 
         let mut verified: Vec<usize> = Vec::new();
         for sig in &group.sigs {
@@ -390,12 +410,48 @@ impl Kels {
         self.replay(prefix, None)
     }
 
+    /// `aid`'s verified KEL as the credential registry reader takes it: every
+    /// event of the whole stream, each with its seals and the key state an
+    /// establishment event installs, limited to what this read may see.
+    ///
+    /// The log is the whole stream's, not the part [`Kels::as_of`] leaves, so
+    /// that a registry event anchored after the limit reads as not having
+    /// happened yet rather than as never anchored.
+    ///
+    /// # Errors
+    /// Returns [`DidWebsError::Kel`] if `aid`'s key event log does not verify,
+    /// to the limit or in full.
+    pub(crate) fn issuer_log(
+        &self,
+        aid: &str,
+    ) -> Result<affinidi_keri_core::registry::IssuerLog, DidWebsError> {
+        self.key_state(aid)?;
+        let indices = self.full_by_prefix.get(aid).ok_or_else(|| {
+            DidWebsError::Kel(format!("keri.cesr carries no key events for {aid}"))
+        })?;
+        let mut events = Vec::new();
+        self.replay_over(aid, indices, None, Some(&mut events))?;
+        Ok(affinidi_keri_core::registry::IssuerLog::new(aid, events)
+            .as_of(self.limits.get(aid).copied()))
+    }
+
     /// Replay a KEL, optionally stopping once a given event has been applied.
     fn replay(&self, prefix: &str, stop_after: Option<&str>) -> Result<KeyState, DidWebsError> {
         let indices = self.by_prefix.get(prefix).ok_or_else(|| {
             DidWebsError::Kel(format!("keri.cesr carries no key events for {prefix}"))
         })?;
+        self.replay_over(prefix, indices, stop_after, None)
+    }
 
+    /// Replay the events at `indices`, optionally stopping once a given event
+    /// has been applied, and optionally recording each accepted event.
+    fn replay_over(
+        &self,
+        prefix: &str,
+        indices: &[usize],
+        stop_after: Option<&str>,
+        mut log: Option<&mut Vec<affinidi_keri_core::registry::LoggedEvent>>,
+    ) -> Result<KeyState, DidWebsError> {
         let mut events = indices.iter().map(|i| &self.messages[*i]);
         let first = events.next().ok_or_else(|| {
             DidWebsError::Kel(format!("keri.cesr carries no events for {prefix}"))
@@ -403,6 +459,9 @@ impl Kels {
 
         let mut kever = self.incept(prefix, first)?;
         self.require_witness_receipts(prefix, first, kever.state())?;
+        if let Some(log) = log.as_deref_mut() {
+            log.push(logged(first, kever.state(), true)?);
+        }
 
         if stop_after.is_some_and(|said| first.serder.said().ok().as_deref() == Some(said)) {
             return Ok(kever.state().clone());
@@ -430,6 +489,9 @@ impl Kels {
             };
             self.require_witness_receipts(prefix, msg, &state)?;
             kever.apply_verified_update(state);
+            if let Some(log) = log.as_deref_mut() {
+                log.push(logged(msg, kever.state(), ilk != "ixn")?);
+            }
 
             if stop_after.is_some_and(|said| msg.serder.said().ok().as_deref() == Some(said)) {
                 reached = true;
@@ -625,4 +687,29 @@ fn verfers_from_event(
                 .map_err(|e| DidWebsError::Kel(format!("key {key:?} is not usable: {e}")))
         })
         .collect()
+}
+
+/// One accepted key event as the registry reader takes it.
+fn logged(
+    msg: &ParsedMessage,
+    state: &KeyState,
+    establishment: bool,
+) -> Result<affinidi_keri_core::registry::LoggedEvent, DidWebsError> {
+    let said = msg
+        .serder
+        .said()
+        .map_err(|e| DidWebsError::Kel(format!("key event has no SAID: {e}")))?;
+    let seals = msg
+        .serder
+        .sad()
+        .get("a")
+        .and_then(|a| a.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(affinidi_keri_core::registry::LoggedEvent::new(
+        state.sn,
+        said,
+        seals,
+        establishment.then(|| state.clone()),
+    ))
 }

@@ -44,6 +44,19 @@ pub enum DidWebsError {
     #[error("{0} is not designated by its AID")]
     NotDesignated(String),
 
+    /// A designation's registry is broken, or the stream leaves out a
+    /// registry event the identifier's key event log anchors — which would let
+    /// a host withhold a revocation.
+    #[error("designation registry: {0}")]
+    Registry(String),
+
+    /// The identifier stands behind a critical designation this
+    /// implementation does not implement. A critical designation restricts the
+    /// document, so serving it without the restriction would be wrong
+    /// (`unsupportedDesignation`).
+    #[error("unsupportedDesignation: schema {0} is critical and not implemented")]
+    UnsupportedDesignation(String),
+
     /// A key is not one this implementation can publish for its purpose.
     #[error("invalid key: {0}")]
     InvalidKey(String),
