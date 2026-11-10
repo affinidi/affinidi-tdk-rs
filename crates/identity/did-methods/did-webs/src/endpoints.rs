@@ -14,8 +14,8 @@
 //! signed by *their* key, which this crate does not hold, so those must arrive
 //! pre-signed.
 
-use crate::signing::Controller;
-use affinidi_cesr::Counter;
+use crate::signing::{Controller, Establishment};
+use affinidi_keri::ProtocolVersion;
 use affinidi_keri_core::sad;
 use affinidi_keri_core::sad::SadValue;
 use affinidi_keri_core::said;
@@ -33,7 +33,7 @@ use crate::errors::DidWebsError;
 pub(crate) fn self_designated_replies(
     hab: &dyn Controller,
     aid: &str,
-    establishment_said: &str,
+    establishment: &Establishment,
     services: &[SelfEndpoint],
 ) -> Result<Vec<u8>, DidWebsError> {
     let mut out = Vec::new();
@@ -48,95 +48,109 @@ pub(crate) fn self_designated_replies(
         }
 
         let authorise = reply(
+            hab,
             "/end/role/add",
             sad!({ "cid": aid, "role": service.role, "eid": aid }),
         )?;
-        out.extend_from_slice(&sign_with_group(hab, establishment_said, &authorise)?);
+        out.extend_from_slice(&sign_with_group(hab, establishment, &authorise)?);
 
         for (scheme, url) in &service.urls {
             let location = reply(
+                hab,
                 "/loc/scheme",
                 sad!({ "eid": aid, "scheme": scheme, "url": url }),
             )?;
-            out.extend_from_slice(&sign_with_group(hab, establishment_said, &location)?);
+            out.extend_from_slice(&sign_with_group(hab, establishment, &location)?);
         }
     }
 
     Ok(out)
 }
 
-/// A `rpy` message with its SAID computed.
-fn reply(route: &str, attrs: SadValue) -> Result<Serder, DidWebsError> {
-    let mut sad = sad!({
-        "v": "KERI10JSON000000_",
-        "t": "rpy",
-        "d": "",
-        "dt": timestamp(),
-        "r": route,
-        "a": attrs,
-    });
+/// A `rpy` message with its SAID computed, in the identifier's version. A 2.x
+/// reply names its sender in `i`, which 1.x has no field for.
+fn reply(hab: &dyn Controller, route: &str, attrs: SadValue) -> Result<Serder, DidWebsError> {
+    let version = hab.version();
+    let mut sad = match version {
+        ProtocolVersion::V1 => sad!({
+            "v": "",
+            "t": "rpy",
+            "d": "",
+            "dt": timestamp(),
+            "r": route,
+            "a": attrs,
+        }),
+        _ => sad!({
+            "v": "",
+            "t": "rpy",
+            "d": "",
+            "i": hab.prefix(),
+            "dt": timestamp(),
+            "r": route,
+            "a": attrs,
+        }),
+    };
 
-    fix_version(&mut sad)?;
+    fix_version_as(&mut sad, version)?;
     said::compute_said(&mut sad, "d", "E", SerializationKind::Json)
         .map_err(|e| DidWebsError::Create(format!("could not compute reply SAID: {e}")))?;
     Serder::new(SerializationKind::Json, sad)
         .map_err(|e| DidWebsError::Create(format!("could not serialize reply: {e}")))
 }
 
-/// Attach a transferable indexed signature group, which is how a transferable
-/// identifier signs something that is not part of its own key event log.
-/// Attach a transferable indexed signature group — how a transferable
-/// identifier signs anything that is not part of its own key event log.
+/// Endorse `serder` by the identifier: one transferable indexed signature
+/// group, naming the establishment event whose key state signs, in the
+/// counter table of `serder`'s own version.
 pub(crate) fn sign_with_group(
     hab: &dyn Controller,
-    establishment_said: &str,
+    establishment: &Establishment,
     serder: &Serder,
 ) -> Result<Vec<u8>, DidWebsError> {
     // Enough current keys to meet the signing threshold, each at its own
     // index: a resolver holds the group to that threshold.
-    let signatures = hab.sign_current(serder.raw())?;
+    let signatures = hab
+        .sign_current(serder.raw())?
+        .iter()
+        .map(|s| affinidi_keri_crypto::Siger::from_qb64(s))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| DidWebsError::Create(format!("signature: {e}")))?;
     if signatures.is_empty() {
         return Err(DidWebsError::Create("identifier has no signing key".into()));
     }
-    let count = signatures.len();
-    let signatures = signatures.concat();
-
-    let inner = Counter::new("-A", count)
-        .and_then(|c| c.qb64())
-        .map_err(|e| DidWebsError::Create(format!("counter: {e}")))?;
-    let outer = Counter::new("-F", 1)
-        .and_then(|c| c.qb64())
-        .map_err(|e| DidWebsError::Create(format!("counter: {e}")))?;
-
-    // prefix + sequence number + establishment SAID, then the signatures.
-    let mut out = serder.raw().to_vec();
-    out.extend_from_slice(outer.as_bytes());
-    out.extend_from_slice(hab.prefix().as_bytes());
-    out.extend_from_slice(sequence_number_qb64(hab.sn()).as_bytes());
-    // The group names the establishment event whose key state authorises the
-    // signature — not simply the latest event, which may be an interaction.
-    out.extend_from_slice(establishment_said.as_bytes());
-    out.extend_from_slice(inner.as_bytes());
-    out.extend_from_slice(signatures.as_bytes());
-    Ok(out)
+    affinidi_keri_core::composer::compose_endorsed(
+        serder,
+        hab.prefix(),
+        establishment.sn,
+        &establishment.said,
+        &signatures,
+    )
+    .map_err(|e| DidWebsError::Create(format!("endorsement: {e}")))
 }
 
-/// A CESR number primitive: `0A` plus 16 base64 characters.
-fn sequence_number_qb64(sn: u64) -> String {
-    let mut raw = [0u8; 16];
-    raw[8..].copy_from_slice(&sn.to_be_bytes());
-    let matter = affinidi_cesr::Matter::new("0A", raw.to_vec()).expect("0A takes 16 raw bytes");
-    matter.qb64().expect("0A always encodes")
-}
-
-/// Fix the `v` size before computing the SAID, so the SAID covers the bytes the
-/// message is actually serialized as.
+/// Size a KERI 1.x event's version string to its serialized length.
 pub(crate) fn fix_version(sad: &mut SadValue) -> Result<(), DidWebsError> {
+    fix_version_as(sad, ProtocolVersion::V1)
+}
+
+/// Size an event's version string, in `version`, to its serialized length.
+pub(crate) fn fix_version_as(
+    sad: &mut SadValue,
+    version: ProtocolVersion,
+) -> Result<(), DidWebsError> {
+    use affinidi_keri_core::version::Version;
+    let at = |size: usize| {
+        match version {
+            ProtocolVersion::V1 => Version::default_v1(SerializationKind::Json, size),
+            _ => Version::default_v2(SerializationKind::Json, size),
+        }
+        .to_version_string()
+    };
     let placeholder = "#".repeat(44);
     let original = sad["d"].clone();
     sad["d"] = sad!(placeholder);
+    sad["v"] = sad!(at(0));
     let len = serde_json::to_vec(sad)?.len();
-    sad["v"] = sad!(format!("KERI10JSON{len:06x}_"));
+    sad["v"] = sad!(at(len));
     sad["d"] = original;
     Ok(())
 }

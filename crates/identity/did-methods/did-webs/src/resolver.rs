@@ -177,6 +177,18 @@ pub fn resolve_with_metadata(
 }
 
 /// Derive what `keri_cesr` implies for `did`.
+/// Every designation schema this resolver reads, both versions of each.
+const IMPLEMENTED: &[&str] = &[
+    crate::aliases::DESIGNATED_ALIASES_SCHEMA,
+    crate::aliases::DESIGNATED_ALIASES_SCHEMA_V2,
+    crate::key_agreement::KEY_AGREEMENT_SCHEMA,
+    crate::key_agreement::KEY_AGREEMENT_SCHEMA_V2,
+    crate::designated_services::SERVICE_SCHEMA,
+    crate::designated_services::SERVICE_SCHEMA_V2,
+    crate::key_roles::KEY_ROLE_SCHEMA,
+    crate::key_roles::KEY_ROLE_SCHEMA_V2,
+];
+
 pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebsError> {
     let aid = did.aid();
 
@@ -205,6 +217,13 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
     };
     let kels = versioned.as_ref().unwrap_or(&full);
     let state = kels.key_state(aid)?;
+
+    // A critical designation restricts the document (P6). One this resolver
+    // does not implement fails resolution: serving the unrestricted document
+    // would be serving what the controller withdrew.
+    if let Some(schema) = crate::designation::unsupported_critical(kels, aid, IMPLEMENTED)? {
+        return Err(DidWebsError::UnsupportedDesignation(schema));
+    }
 
     // § Read step 4. A stream that does not designate this DID has not
     // published it here, however well its KEL verifies.

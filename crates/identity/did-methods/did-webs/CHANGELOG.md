@@ -2,6 +2,56 @@
 
 All notable changes to this crate are documented here.
 
+## [0.11.0] - 2026-11-10
+
+did:webs on KERI 2.0. This integration is **alpha**: expect breaking changes as
+the did:webs and KERI 2.0 specifications settle. The positions taken are in
+`docs/05-design-notes/did-webs-keri-v2.md` (OpenVTC/verifiable-trust-infrastructure).
+
+### Changed
+
+- **An identifier is written in the KERI version of its log, and so are its
+  designations and replies.** `create_controlled` no longer forces KERI 1: an
+  `Inception` is 2.0 unless it says otherwise, and the log, designations and
+  endpoint replies follow it. A salted identifier (`create`) follows its
+  `InceptionConfig`'s version (1.0 by default, as `affinidi-keri`'s `Hab`).
+- **2.x designations** are ACDC 2.x credentials (`acm`) in `rip`/`bup`
+  registries, one registry per designation, each update salted with a fresh
+  random UUID and published with its disclosed state. Every designation has a
+  v2 schema: designated aliases `EF9Iy-vw…`, key agreement `EIW1ONwn…`, service
+  `EJVZ789s…`, key role `EBMCaUhH…` (which adds `critical` and
+  `keyAssurance`). Replacing one revokes it with a further update in its own
+  registry, continued from the published stream.
+- **2.0 replies** name their sender in `i`, and are endorsed with a `-X` group
+  whose sequence number is a 2.x `Number`.
+- **Designations are read by `affinidi-keri-core`'s registry reader**, for both
+  versions. **Every registry event the identifier's KEL anchors must be in
+  `keri.cesr`**, and every registry event in it must be anchored; otherwise
+  resolution fails (`DidWebsError::Registry`). Before, an unanchored event was
+  skipped, and a stream that left out an anchored revocation read as issued.
+- **Under `versionId`**, a designation anchored after the version asked for has
+  not happened yet. Before, it was treated as rejected, which also withheld the
+  key agreement key the key state converts to.
+- Requires affinidi-keri 0.6.2.
+
+### Added
+
+- **Critical designations** (`unsupportedDesignation`): a standing designation
+  marked `"critical": true` whose schema this resolver does not implement fails
+  resolution (`DidWebsError::UnsupportedDesignation`). A 2.x key role
+  designation must be marked critical, and is written so.
+- `tests/fixtures/ours-v2`: an identifier's whole lifecycle on KERI 2.0, which
+  keripy 2.1.0-dev1 accepts in full (`verify_ours.py`): KEL, endpoint replies,
+  and every designation's SAIDs, framing, BLIDs and status.
+
+### Fixed
+
+- **Endorsements name their establishment event's own sequence number.** Replies
+  and 1.x credentials were endorsed with the log's latest sequence number beside
+  the establishment event's SAID. keripy looks the event up by the number, so
+  once an identifier had an interaction event, keripy refused its replies. The
+  resolver now refuses such a group too, as keripy does.
+
 ## [0.10.0] - 2026-11-10
 
 ### Changed

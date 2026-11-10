@@ -467,8 +467,10 @@ fn an_attestation_without_its_issuance_designates_nothing() {
 fn an_unanchored_revocation_is_not_the_aids_act() {
     // A revocation, like an issuance, is the AID's only once its KEL anchors
     // it. Anyone able to append to the served stream could otherwise withdraw
-    // the designation that makes the DID resolvable. (An anchored revocation
-    // is exercised through `update`, in tests/create.rs.)
+    // the designation that makes the DID resolvable. A registry event the KEL
+    // does not anchor fails the read: it neither withdraws the designation
+    // nor passes unnoticed. (An anchored revocation is exercised through
+    // `update`, in tests/create.rs.)
     let mut stream = KERI_CESR.to_vec();
     stream.extend_from_slice(&keri_event(serde_json::json!({
         "v": "KERI10JSON000000_",
@@ -481,8 +483,14 @@ fn an_unanchored_revocation_is_not_the_aids_act() {
     })));
 
     let kels = Kels::parse(&stream).expect("parses");
-    let found = designated_aliases(&kels, AID).expect("KEL verifies");
-    assert_eq!(found.aliases.len(), 5, "got {:?}", found.aliases);
+    let err = designated_aliases(&kels, AID).expect_err("an unanchored revocation");
+    assert!(
+        matches!(err, affinidi_did_webs::DidWebsError::Registry(_)),
+        "{err}"
+    );
+    // Without it, the designation stands.
+    let kels = Kels::parse(KERI_CESR).expect("parses");
+    assert_eq!(designated_aliases(&kels, AID).unwrap().aliases.len(), 5);
 }
 
 #[test]

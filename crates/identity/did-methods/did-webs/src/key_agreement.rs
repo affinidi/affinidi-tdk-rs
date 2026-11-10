@@ -52,6 +52,14 @@ use crate::kel::Kels;
 /// test recomputes its SAID.
 pub const KEY_AGREEMENT_SCHEMA: &str = "EJZrf6N4vbhA1hQIujWiIiQmNi455EGS3iXdhxLSwvAi";
 
+/// The ACDC 2.x key agreement designation schema SAID, derived from the v1
+/// schema as kswg-did-method-webs-specification#216 derives the aliases one.
+pub const KEY_AGREEMENT_SCHEMA_V2: &str = "EIW1ONwnh_dkiDZ3_xmUsBxh7X5u7luVOuCoRdCl3jPZ";
+
+/// The ACDC 2.x key agreement designation schema.
+pub const KEY_AGREEMENT_SCHEMA_V2_JSON: &str =
+    include_str!("../schemas/key-agreement-designation-v2.json");
+
 /// The key agreement designation schema document.
 pub const KEY_AGREEMENT_SCHEMA_JSON: &str =
     include_str!("../schemas/key-agreement-designation.json");
@@ -172,7 +180,12 @@ pub struct DesignatedKeys {
 /// verify.
 pub fn designated_key_agreement(kels: &Kels, aid: &str) -> Result<DesignatedKeys, DidWebsError> {
     let mut out = DesignatedKeys::default();
-    let issued = issued_designations(kels, aid, KEY_AGREEMENT_SCHEMA, &mut out.rejected)?;
+    let issued = issued_designations(
+        kels,
+        aid,
+        &[KEY_AGREEMENT_SCHEMA, KEY_AGREEMENT_SCHEMA_V2],
+        &mut out.rejected,
+    )?;
     out.issued = !issued.is_empty();
     let standing = issued
         .into_iter()

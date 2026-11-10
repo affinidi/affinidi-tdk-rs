@@ -1,5 +1,13 @@
 # did:scid
 
+## Unreleased (0.4.5) — affinidi-did-webs 0.11
+
+- **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.11: did:webs
+  on KERI 2.0 (alpha). Designations are read for both ACDC versions, a stream
+  that leaves out an anchored registry event fails resolution, and a critical
+  designation the resolver does not implement fails with
+  `unsupportedDesignation`.
+
 ## Unreleased (0.4.4) — affinidi-did-webs 0.10
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.10, on

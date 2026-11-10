@@ -298,11 +298,10 @@ impl ControlledResult {
 /// event and message that follows it here. No secret enters or leaves this
 /// crate.
 ///
-/// The key event log is written in **KERI version 1**, whatever version the
-/// [`Inception`](affinidi_keri::controller::Inception) carries: its
-/// designations are v1 ACDCs in v1 registries, and a v2 log anchoring them is a
-/// mix no resolver is tested against yet. Version 2 designations, and a v2 log
-/// with them, are the next step.
+/// The key event log is written in the version the
+/// [`Inception`](affinidi_keri::controller::Inception) carries — KERI 2.0
+/// unless it says otherwise — and its designations and replies in the same
+/// version: 2.x ACDCs in `rip`/`bup` registries on a 2.0 log.
 ///
 /// # Errors
 /// As [`create`], and [`DidWebsError::Create`] if `controlled` is not set or
@@ -314,10 +313,7 @@ pub fn create_controlled(
     let inception = config.controlled.as_ref().ok_or_else(|| {
         DidWebsError::Create("create_controlled needs CreateConfig::controlled".into())
     })?;
-    let inception = inception
-        .clone()
-        .with_version(affinidi_keri::ProtocolVersion::V1);
-    let mut pending = affinidi_keri::controller::incept(&inception)
+    let mut pending = affinidi_keri::controller::incept(inception)
         .map_err(|e| DidWebsError::Create(format!("inception failed: {e}")))?;
     for signer in signers {
         pending
@@ -350,7 +346,11 @@ fn build(
     let did = DidWebs::parse(&format!("did:webs:{}:{aid}", config.host))
         .map_err(|e| DidWebsError::Create(format!("{} is not a usable host: {e}", config.host)))?;
 
-    let establishment_said = inception.said.clone();
+    // Everything this signs is signed under the inception's key state.
+    let establishment = crate::signing::Establishment {
+        sn: 0,
+        said: inception.said.clone(),
+    };
     let mut keri_cesr = inception.composed;
     let hab = &mut *hab;
 
@@ -363,7 +363,7 @@ fn build(
     }
     let aliases = crate::attestation::designation(&did, &extra);
     let attestation =
-        crate::attestation::issue_designated_aliases(hab, &aid, &establishment_said, &aliases)?;
+        crate::attestation::issue_designated_aliases(hab, &aid, &establishment, &aliases)?;
     keri_cesr.extend_from_slice(&attestation);
 
     // Key roles: the role keys replace the key state's in the document, and
@@ -380,7 +380,7 @@ fn build(
         keri_cesr.extend_from_slice(&crate::attestation::issue_key_roles(
             hab,
             &aid,
-            &establishment_said,
+            &establishment,
             &state,
             roles,
             &[],
@@ -393,7 +393,7 @@ fn build(
         keri_cesr.extend_from_slice(&crate::attestation::issue_key_agreement(
             hab,
             &aid,
-            &establishment_said,
+            &establishment,
             &config.key_agreement,
         )?);
     }
@@ -401,7 +401,7 @@ fn build(
         keri_cesr.extend_from_slice(&crate::attestation::issue_services(
             hab,
             &aid,
-            &establishment_said,
+            &establishment,
             &config.designated_services,
         )?);
     }
@@ -410,12 +410,8 @@ fn build(
     // document, so that a resolver can verify them instead of taking the
     // document's word for it.
     if !config.services.is_empty() {
-        let replies = crate::endpoints::self_designated_replies(
-            hab,
-            &aid,
-            &establishment_said,
-            &config.services,
-        )?;
+        let replies =
+            crate::endpoints::self_designated_replies(hab, &aid, &establishment, &config.services)?;
         keri_cesr.extend_from_slice(&replies);
     }
 

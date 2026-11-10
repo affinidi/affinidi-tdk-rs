@@ -32,6 +32,13 @@ pub const SERVICE_SCHEMA: &str = "ELj0Sdf2Boi7BMiIFAEJ9_MSFJU8t-LavLN-gMb8oXM8";
 /// The service designation schema document.
 pub const SERVICE_SCHEMA_JSON: &str = include_str!("../schemas/service-designation.json");
 
+/// The ACDC 2.x service designation schema SAID, derived from the v1 schema
+/// as kswg-did-method-webs-specification#216 derives the aliases one.
+pub const SERVICE_SCHEMA_V2: &str = "EJVZ789syil6R--yix7j8X4g_mHZCDIaSWM15MgkFQgG";
+
+/// The ACDC 2.x service designation schema.
+pub const SERVICE_SCHEMA_V2_JSON: &str = include_str!("../schemas/service-designation-v2.json");
+
 /// A service to designate: one DID document service entry.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -127,7 +134,12 @@ pub struct DesignatedServices {
 /// verify.
 pub fn designated_services(kels: &Kels, aid: &str) -> Result<DesignatedServices, DidWebsError> {
     let mut out = DesignatedServices::default();
-    for designation in designations(kels, aid, SERVICE_SCHEMA, &mut out.rejected)? {
+    for designation in designations(
+        kels,
+        aid,
+        &[SERVICE_SCHEMA, SERVICE_SCHEMA_V2],
+        &mut out.rejected,
+    )? {
         match read_services(&designation.attributes) {
             Ok(services) => {
                 for service in services {

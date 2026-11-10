@@ -338,9 +338,13 @@ fn a_historical_version_has_what_was_designated_then() {
     let then = DidWebs::parse(&format!("{}?versionId=2", did.did())).expect("parse");
     let doc =
         resolve_from_artifacts(&then, &updated.artifacts().keri_cesr, None).expect("resolves");
-    assert!(
-        doc.key_agreement.is_empty(),
-        "nothing was designated at sn 2"
+    // Nothing was designated at sn 2: the designation anchored later had not
+    // happened yet, so the identifier has the key its key state converts to,
+    // not the one it designated afterwards.
+    assert_eq!(key_agreement_refs(&doc).len(), 1, "{:?}", doc.key_agreement);
+    assert_ne!(
+        doc.key_agreement, latest.document.key_agreement,
+        "the designation anchored after sn 2 is not in force at sn 2"
     );
 }
 

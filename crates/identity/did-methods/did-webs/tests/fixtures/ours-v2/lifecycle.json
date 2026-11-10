@@ -1,0 +1,162 @@
+{
+  "credentials": [
+    {
+      "acm": {
+        "raw": "{\"v\":\"ACDCCAACAAJSONAAVc.\",\"t\":\"acm\",\"d\":\"EKEadchkvEBmuPUuK1iy_EUIAIbViUP_fjNNjYXKT0oV\",\"i\":\"EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz\",\"rd\":\"ENhIzOtp_X61EIXKdiv3hAhafLQN4tQt-WspwkAb3wxe\",\"s\":\"EF9Iy-vwD8GRKghnzHHGwAA6sC0VEWNtZ2Sf4tfd4IAA\",\"a\":{\"d\":\"EFB43xwpTpqfvVAkGepBgL5McqH6QdnxS5RbBwNiRuUF\",\"dt\":\"2026-11-10T07:46:58.751848+00:00\",\"ids\":[\"did:webs:example.com:EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz\",\"did:web:example.com:EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz\",\"did:keri:EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz\"]},\"r\":{\"d\":\"EEVTx0jLLZDQq8a5bXrXgVP0JDP7j8iDym9Avfo8luLw\",\"aliasDesignation\":{\"l\":\"The issuer of this ACDC designates the identifiers in the ids field as the only allowed namespaced aliases of the issuer's AID.\"},\"usageDisclaimer\":{\"l\":\"This attestation only asserts designated aliases of the controller of the AID, that the AID controlled namespaced alias has been designated by the controller. It does not assert that the controller of this AID has control over the infrastructure or anything else related to the namespace other than the included AID.\"},\"issuanceDisclaimer\":{\"l\":\"All information in a valid and non-revoked alias designation assertion is accurate as of the date specified.\"},\"termsOfUse\":{\"l\":\"Designated aliases of the AID must only be used in a manner consistent with the expressed intent of the AID controller.\"}}}"
+      },
+      "credential": "EKEadchkvEBmuPUuK1iy_EUIAIbViUP_fjNNjYXKT0oV",
+      "expect": "issued",
+      "registry": "ENhIzOtp_X61EIXKdiv3hAhafLQN4tQt-WspwkAb3wxe",
+      "rip": {
+        "anchor": {
+          "said": "ENNpLZOZi_J34OxMS10CCRxRI2O0OaGmKEYgJo7P7mu4",
+          "sn": 1
+        },
+        "raw": "{\"v\":\"ACDCCAACAAJSONAADa.\",\"t\":\"rip\",\"d\":\"ENhIzOtp_X61EIXKdiv3hAhafLQN4tQt-WspwkAb3wxe\",\"u\":\"0ABRHUFBV0sRvd-UGEBYpboE\",\"i\":\"EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz\",\"n\":\"0\",\"dt\":\"2026-11-10T07:46:58.751848+00:00\"}"
+      },
+      "schema": "EF9Iy-vwD8GRKghnzHHGwAA6sC0VEWNtZ2Sf4tfd4IAA",
+      "updates": [
+        {
+          "anchor": {
+            "said": "ENNpLZOZi_J34OxMS10CCRxRI2O0OaGmKEYgJo7P7mu4",
+            "sn": 1
+          },
+          "disclosure": {
+            "acdc": "EKEadchkvEBmuPUuK1iy_EUIAIbViUP_fjNNjYXKT0oV",
+            "blid": "EOirb9xArQHj5AGulxhdD9R6j0E3cWcCfyltxf0i8nyp",
+            "state": "issued",
+            "uuid": "aD6C-2DHkNVEVbOOaWHEBkyUmc3cg8urwjYSxufyMKjG"
+          },
+          "raw": "{\"v\":\"ACDCCAACAAJSONAAEi.\",\"t\":\"bup\",\"d\":\"EK40p9nPNyP4oyUuwd5WtvbNtXQXWMMt-WKYydGEHRcV\",\"rd\":\"ENhIzOtp_X61EIXKdiv3hAhafLQN4tQt-WspwkAb3wxe\",\"n\":\"1\",\"p\":\"ENhIzOtp_X61EIXKdiv3hAhafLQN4tQt-WspwkAb3wxe\",\"dt\":\"2026-11-10T07:46:58.751848+00:00\",\"b\":\"EOirb9xArQHj5AGulxhdD9R6j0E3cWcCfyltxf0i8nyp\"}"
+        }
+      ]
+    },
+    {
+      "acm": {
+        "raw": "{\"v\":\"ACDCCAACAAJSONAAR1.\",\"t\":\"acm\",\"d\":\"EBn8TGEsC_MqEBTPc68W0UQnE8FfuJPE14Jt2GxOue7q\",\"i\":\"EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz\",\"rd\":\"ELt-oMSxoRCdRLfE1WzDibQtTDxD44Bg1FMHCkqo66Is\",\"s\":\"EIW1ONwnh_dkiDZ3_xmUsBxh7X5u7luVOuCoRdCl3jPZ\",\"a\":{\"d\":\"EDIEq3Lbu4qBVjC7jH3x8nj-FjAA1JH59dHnnO63qTRi\",\"dt\":\"2026-11-10T07:46:58.752955+00:00\",\"keys\":[\"CAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH\"]},\"r\":{\"d\":\"ELh99mMMR2fmXCUPnSr5NmbUaDpqh2Dfct2QSrRZ3fIq\",\"keyDesignation\":{\"l\":\"The issuer of this ACDC designates the keys in the keys field as the only key agreement keys of the issuer's AID.\"},\"usageDisclaimer\":{\"l\":\"This attestation designates keys for establishing encrypted communication with the controller of the AID. It does not authorize any designated key to sign on behalf of the AID, and no key of the AID's key state is designated by it.\"},\"issuanceDisclaimer\":{\"l\":\"All information in a valid and non-revoked key agreement key designation is accurate as of the date specified.\"},\"termsOfUse\":{\"l\":\"Designated key agreement keys of the AID must only be used in a manner consistent with the expressed intent of the AID controller.\"}}}"
+      },
+      "credential": "EBn8TGEsC_MqEBTPc68W0UQnE8FfuJPE14Jt2GxOue7q",
+      "expect": "revoked",
+      "registry": "ELt-oMSxoRCdRLfE1WzDibQtTDxD44Bg1FMHCkqo66Is",
+      "rip": {
+        "anchor": {
+          "said": "EHia4xwIP3IDUSY0ZBqeMZN3J0GvCbZ64ELhviT0D2DK",
+          "sn": 2
+        },
+        "raw": "{\"v\":\"ACDCCAACAAJSONAADa.\",\"t\":\"rip\",\"d\":\"ELt-oMSxoRCdRLfE1WzDibQtTDxD44Bg1FMHCkqo66Is\",\"u\":\"0ABoBfEEKj5skWhfIF7WIac1\",\"i\":\"EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz\",\"n\":\"0\",\"dt\":\"2026-11-10T07:46:58.752955+00:00\"}"
+      },
+      "schema": "EIW1ONwnh_dkiDZ3_xmUsBxh7X5u7luVOuCoRdCl3jPZ",
+      "updates": [
+        {
+          "anchor": {
+            "said": "EHia4xwIP3IDUSY0ZBqeMZN3J0GvCbZ64ELhviT0D2DK",
+            "sn": 2
+          },
+          "disclosure": {
+            "acdc": "EBn8TGEsC_MqEBTPc68W0UQnE8FfuJPE14Jt2GxOue7q",
+            "blid": "EAWdTQWTgOXCN-wG87XB03uklhxR9HiZWUinn1gdKT_v",
+            "state": "issued",
+            "uuid": "aAo9yllzUC4Q5xX8o0O2HEpICQDFUS84lArZNuty-7VA"
+          },
+          "raw": "{\"v\":\"ACDCCAACAAJSONAAEi.\",\"t\":\"bup\",\"d\":\"EBUCgKFV9stdUbBPzG-QvF-CIRtnlQsD9qfzoBiQa1QR\",\"rd\":\"ELt-oMSxoRCdRLfE1WzDibQtTDxD44Bg1FMHCkqo66Is\",\"n\":\"1\",\"p\":\"ELt-oMSxoRCdRLfE1WzDibQtTDxD44Bg1FMHCkqo66Is\",\"dt\":\"2026-11-10T07:46:58.752955+00:00\",\"b\":\"EAWdTQWTgOXCN-wG87XB03uklhxR9HiZWUinn1gdKT_v\"}"
+        },
+        {
+          "anchor": {
+            "said": "EPjVkmq-rQUqXeBKQOv0dZuNQWg7hx3aoXaw1p3r_XFa",
+            "sn": 4
+          },
+          "disclosure": {
+            "acdc": "EBn8TGEsC_MqEBTPc68W0UQnE8FfuJPE14Jt2GxOue7q",
+            "blid": "EDNUmAMi-InMUqK0a0aPrhUy4Xk55Yqy1Q-wFjY6XOKQ",
+            "state": "revoked",
+            "uuid": "aB3Hcr0HGKWc5_cTMcD8EZ4d-bC6QfgNvzlCi_UUoI1f"
+          },
+          "raw": "{\"v\":\"ACDCCAACAAJSONAAEi.\",\"t\":\"bup\",\"d\":\"EG4Leqj6GtAWXR_RizIQulXDjKLpYTa6e1NdAJaj5Ioj\",\"rd\":\"ELt-oMSxoRCdRLfE1WzDibQtTDxD44Bg1FMHCkqo66Is\",\"n\":\"2\",\"p\":\"EBUCgKFV9stdUbBPzG-QvF-CIRtnlQsD9qfzoBiQa1QR\",\"dt\":\"2026-11-10T07:46:58.767672+00:00\",\"b\":\"EDNUmAMi-InMUqK0a0aPrhUy4Xk55Yqy1Q-wFjY6XOKQ\"}"
+        }
+      ]
+    },
+    {
+      "acm": {
+        "raw": "{\"v\":\"ACDCCAACAAJSONAAR1.\",\"t\":\"acm\",\"d\":\"EKp9ikPAHdmppm2Z_dadYQAkqEFGQNykWBaDtIDYbwbb\",\"i\":\"EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz\",\"rd\":\"EKcL9jOR3GBP7nCsUxMIVQT9MVLP1xBczdguwVDicVSX\",\"s\":\"EIW1ONwnh_dkiDZ3_xmUsBxh7X5u7luVOuCoRdCl3jPZ\",\"a\":{\"d\":\"EE57lwnKYUvuwk4tu96kI877C-as8h-oc6FfkI_1Eaku\",\"dt\":\"2026-11-10T07:46:58.768283+00:00\",\"keys\":[\"CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\"]},\"r\":{\"d\":\"ELh99mMMR2fmXCUPnSr5NmbUaDpqh2Dfct2QSrRZ3fIq\",\"keyDesignation\":{\"l\":\"The issuer of this ACDC designates the keys in the keys field as the only key agreement keys of the issuer's AID.\"},\"usageDisclaimer\":{\"l\":\"This attestation designates keys for establishing encrypted communication with the controller of the AID. It does not authorize any designated key to sign on behalf of the AID, and no key of the AID's key state is designated by it.\"},\"issuanceDisclaimer\":{\"l\":\"All information in a valid and non-revoked key agreement key designation is accurate as of the date specified.\"},\"termsOfUse\":{\"l\":\"Designated key agreement keys of the AID must only be used in a manner consistent with the expressed intent of the AID controller.\"}}}"
+      },
+      "credential": "EKp9ikPAHdmppm2Z_dadYQAkqEFGQNykWBaDtIDYbwbb",
+      "expect": "issued",
+      "registry": "EKcL9jOR3GBP7nCsUxMIVQT9MVLP1xBczdguwVDicVSX",
+      "rip": {
+        "anchor": {
+          "said": "EJzXetEbAORUYF2x7PCFSzPwKM3evTY95tkWfgqdtYZp",
+          "sn": 5
+        },
+        "raw": "{\"v\":\"ACDCCAACAAJSONAADa.\",\"t\":\"rip\",\"d\":\"EKcL9jOR3GBP7nCsUxMIVQT9MVLP1xBczdguwVDicVSX\",\"u\":\"0ACWQ9XsyT66s6Gc9dYdmr_f\",\"i\":\"EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz\",\"n\":\"0\",\"dt\":\"2026-11-10T07:46:58.768283+00:00\"}"
+      },
+      "schema": "EIW1ONwnh_dkiDZ3_xmUsBxh7X5u7luVOuCoRdCl3jPZ",
+      "updates": [
+        {
+          "anchor": {
+            "said": "EJzXetEbAORUYF2x7PCFSzPwKM3evTY95tkWfgqdtYZp",
+            "sn": 5
+          },
+          "disclosure": {
+            "acdc": "EKp9ikPAHdmppm2Z_dadYQAkqEFGQNykWBaDtIDYbwbb",
+            "blid": "EOn4YmKMss-ixrKe9VV8w87vKuMVR0cfyZdt5ZZIOjD6",
+            "state": "issued",
+            "uuid": "aDAIPifUdnNpZQbblD16qj29_mxGaYZ1qxfqzchPTDt1"
+          },
+          "raw": "{\"v\":\"ACDCCAACAAJSONAAEi.\",\"t\":\"bup\",\"d\":\"EEOniLu2L_MzkdifOvjyveaOte9eS37U9bxccX2UULjy\",\"rd\":\"EKcL9jOR3GBP7nCsUxMIVQT9MVLP1xBczdguwVDicVSX\",\"n\":\"1\",\"p\":\"EKcL9jOR3GBP7nCsUxMIVQT9MVLP1xBczdguwVDicVSX\",\"dt\":\"2026-11-10T07:46:58.768283+00:00\",\"b\":\"EOn4YmKMss-ixrKe9VV8w87vKuMVR0cfyZdt5ZZIOjD6\"}"
+        }
+      ]
+    },
+    {
+      "acm": {
+        "raw": "{\"v\":\"ACDCCAACAAJSONAATT.\",\"t\":\"acm\",\"d\":\"EEKwgyME0jn-gSWUSDy71DlvxNIMqN5qjVvalBe2APzY\",\"i\":\"EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz\",\"rd\":\"EKeYgS8ft86HzO5wpewF_fUj43sgTTxzBeFhnDZNcFcq\",\"s\":\"EJVZ789syil6R--yix7j8X4g_mHZCDIaSWM15MgkFQgG\",\"a\":{\"d\":\"EOjCAe3voYYGmXj8UEoMt0NAdqs2ZbVYK3jrF7QG16Ih\",\"dt\":\"2026-11-10T07:46:58.753878+00:00\",\"services\":[{\"id\":\"#didcomm\",\"type\":\"DIDCommMessaging\",\"serviceEndpoint\":{\"accept\":[\"didcomm/v2\"],\"uri\":\"did:webvh:QmMediator:mediator.example\"}}]},\"r\":{\"d\":\"EOLjyzVbhjNJSdAXADZkGoDGW8S5PRD6XFfVIw77JqTg\",\"serviceDesignation\":{\"l\":\"The issuer of this ACDC designates the services in the services field as the only service endpoints of the issuer's AID beyond those its KERI endpoint role authorizations establish.\"},\"usageDisclaimer\":{\"l\":\"This attestation asserts where the controller of the AID may be reached. It does not assert that the controller of the AID operates the infrastructure behind any designated endpoint.\"},\"issuanceDisclaimer\":{\"l\":\"All information in a valid and non-revoked service designation is accurate as of the date specified.\"},\"termsOfUse\":{\"l\":\"Designated services of the AID must only be used in a manner consistent with the expressed intent of the AID controller.\"}}}"
+      },
+      "credential": "EEKwgyME0jn-gSWUSDy71DlvxNIMqN5qjVvalBe2APzY",
+      "expect": "issued",
+      "registry": "EKeYgS8ft86HzO5wpewF_fUj43sgTTxzBeFhnDZNcFcq",
+      "rip": {
+        "anchor": {
+          "said": "EHm8gEHuNieTzrJRwGPS_XWig7ysPrTbYjUSZWDhOOrv",
+          "sn": 3
+        },
+        "raw": "{\"v\":\"ACDCCAACAAJSONAADa.\",\"t\":\"rip\",\"d\":\"EKeYgS8ft86HzO5wpewF_fUj43sgTTxzBeFhnDZNcFcq\",\"u\":\"0AB3LARb0GTxp-0PRd-PCRNQ\",\"i\":\"EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz\",\"n\":\"0\",\"dt\":\"2026-11-10T07:46:58.753878+00:00\"}"
+      },
+      "schema": "EJVZ789syil6R--yix7j8X4g_mHZCDIaSWM15MgkFQgG",
+      "updates": [
+        {
+          "anchor": {
+            "said": "EHm8gEHuNieTzrJRwGPS_XWig7ysPrTbYjUSZWDhOOrv",
+            "sn": 3
+          },
+          "disclosure": {
+            "acdc": "EEKwgyME0jn-gSWUSDy71DlvxNIMqN5qjVvalBe2APzY",
+            "blid": "EL3vLU5vIycxLJfr1a1xTreQCAZv0joUblIpV8baKSM8",
+            "state": "issued",
+            "uuid": "aI7aVeXrton3y_jBbXVfz1cNjxnYtcf1hqPCjjiRbExV"
+          },
+          "raw": "{\"v\":\"ACDCCAACAAJSONAAEi.\",\"t\":\"bup\",\"d\":\"EKhbhIY1zBRt_RUDQTw2BRg2NbM9K_H6bEGZgFkeiYNv\",\"rd\":\"EKeYgS8ft86HzO5wpewF_fUj43sgTTxzBeFhnDZNcFcq\",\"n\":\"1\",\"p\":\"EKeYgS8ft86HzO5wpewF_fUj43sgTTxzBeFhnDZNcFcq\",\"dt\":\"2026-11-10T07:46:58.753878+00:00\",\"b\":\"EL3vLU5vIycxLJfr1a1xTreQCAZv0joUblIpV8baKSM8\"}"
+        }
+      ]
+    }
+  ],
+  "did": "did:webs:example.com:EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz",
+  "ends": [
+    [
+      "EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz",
+      "controller",
+      "EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz"
+    ]
+  ],
+  "kel": {
+    "prefix": "EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz",
+    "said": "EC67MQ97QJQE9MII-RgU8WtS5hdT7J2HJ6XtpZ9jsF5b",
+    "sn": 6
+  },
+  "locs": [
+    [
+      "EFpuZYefwd6kWAWLNO_3n4Qtkk85MKBXbHvd16Ga_Pxz",
+      "https",
+      "https://example.com/v2/"
+    ]
+  ],
+  "note": "created (aliases, key agreement, a service, a controller endpoint), key agreement replaced, rotated, a new endpoint endorsed under the rotation"
+}
