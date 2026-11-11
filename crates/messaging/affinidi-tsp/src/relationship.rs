@@ -15,10 +15,17 @@
 //! Bidirectional
 //! ```
 //!
-//! Re-establishment (`tsp-relationship-recovery.md`, D2): a peer that lost its
-//! half re-sends an RFI over a relationship the other side still holds. That
-//! side takes `Bidirectional ──[receive RFI]──► InviteReceived` and re-accepts,
-//! repairing the peer's half. A re-sent RFI while `InviteReceived` is idempotent.
+//! Re-establishment: a peer that lost its half sends a new RFI over a
+//! relationship the other side still holds. That side takes
+//! `Bidirectional ──[receive RFI]──► InviteReceived` and re-accepts, repairing
+//! the peer's half. A re-sent RFI while `InviteReceived` is idempotent.
+//!
+//! The FSM sees events, not messages, so it cannot tell a new invite from a
+//! copy of one already handled. [`TspAgent`](crate::TspAgent) does: it applies
+//! `ReceiveInvite` only for an invite whose thread digest it has not already
+//! acted on for that pair. A caller driving the FSM directly must make the same
+//! check, or a repeated copy of an old invite takes an established relationship
+//! back to `InviteReceived`.
 
 use serde::{Deserialize, Serialize};
 
@@ -125,11 +132,10 @@ impl RelationshipState {
             (RelationshipState::Bidirectional, RelationshipEvent::ReceiveCancel) => {
                 Ok(RelationshipState::None)
             }
-            // Re-establishment (design note `tsp-relationship-recovery.md`, D2).
-            // We hold the relationship as complete, but the peer has sent a fresh
-            // RFI — the only reason it would is that it lost its half (restart
-            // with an ephemeral store, cache eviction, redeploy) and is rebuilding
-            // the exchange. There is no separate "re-establish" control message in
+            // Re-establishment. We hold the relationship as complete, but the
+            // peer has sent a fresh RFI — the only reason it would is that it
+            // lost its half (restart with an ephemeral store, cache eviction,
+            // redeploy) and is rebuilding the exchange. There is no separate "re-establish" control message in
             // TSP; a re-invite over a live relationship *is* the signal.
             //
             // We drop back to `InviteReceived` and re-accept: our accept (an RFA)
@@ -139,10 +145,13 @@ impl RelationshipState {
             // gate anyway, and `admits_application_message()` stays true, so a
             // payload the peer bundles with its invite (§3.6) is still accepted.
             //
-            // The invite is authenticated (it passed unpack + signature verify),
-            // so only the real peer can trigger this. Rate-limiting inbound
-            // invites so a flood cannot repeatedly reset a live relationship is a
-            // layer up (design note D7), not the FSM's job.
+            // That the invite verified shows the peer wrote it, not that it is
+            // new: a copy of an invite the peer sent earlier verifies just as
+            // well. This transition is for a *fresh* invite only — one whose
+            // thread digest has not been acted on for this pair — and telling
+            // the two apart is the caller's job, since the FSM never sees the
+            // message (`TspAgent::handle_control` does it). Rate-limiting fresh
+            // invites is likewise a layer up, not the FSM's job.
             (RelationshipState::Bidirectional, RelationshipEvent::ReceiveInvite) => {
                 Ok(RelationshipState::InviteReceived)
             }

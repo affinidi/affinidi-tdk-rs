@@ -13,6 +13,34 @@ and a field that runs past it is a `TspError::InvalidMessage`. This applies
 to every layout, so `unpack` and `forward_routed` return an error for such a
 frame rather than panicking or reading past it. Frames this crate builds
 always declare their full length and are unaffected. No API change.
+## Unreleased (0.3.1) — a repeated invite does not reopen a relationship
+
+`TspAgent::receive` applied every verified invite to the relationship FSM. A
+signed invite verifies for as long as the sender's key does, so a second copy
+of one already handled — re-delivered by a relay, or re-sent by anyone holding
+the bytes — took an established relationship back to `InviteReceived` through
+the re-establishment edge. `send` then refused until the application accepted
+again; followed by a copy of a cancellation it could end the relationship.
+
+The agent now remembers the thread digests of the invites it has acted on for
+each VID pair (the most recent 64, kept across a cancellation) and refuses an
+invite whose digest it has already seen, with `TspError::Discarded` and no
+state change. Every invite carries a fresh nonce, so re-establishment — a peer
+that lost its half sending a new invite — is unaffected. A copy of the invite
+still awaiting our decision (`InviteReceived`) remains the no-op it was.
+
+The FSM's `Bidirectional` + `ReceiveInvite` edge is unchanged and now
+documents that it is for a fresh invite only; a caller driving
+`RelationshipState::transition` directly must make the same check. The crate
+docs and README now say that TSP gives application messages no identifier to
+check, so `receive` returns a repeated message each time and a consumer that
+must act once deduplicates it.
+
+**Behaviour change (R3.6).** A peer that re-sends the identical bytes of an
+invite we already accepted — rather than a new invite — no longer gets the
+relationship reopened; it is refused. A peer still waiting on a lost accept
+recovers by sending a new invite. The history is in memory, like the rest of
+`TspStore`. No wire format changes.
 
 ## Unreleased (0.3.0) — TSP 1.0 (`YTSP-BAA`)
 

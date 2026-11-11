@@ -27,6 +27,14 @@
 //! // Send a message (after establishing a relationship)
 //! // let packed = agent.send("did:example:alice", "did:example:bob", b"Hello!")?;
 //! ```
+//!
+//! ## Repeated messages
+//!
+//! [`TspAgent::receive`] refuses a copy of an invite it has already acted on
+//! for that VID pair, so a repeated invite cannot reopen an established
+//! relationship. An application message carries no identifier or sequence
+//! number to check, so `receive` returns the same payload each time it is
+//! handed the same message: a consumer that must act once deduplicates it.
 
 #[cfg(feature = "messaging-core")]
 pub mod adapter;
@@ -263,6 +271,12 @@ impl TspAgent {
     ///
     /// Returns the decrypted payload along with sender/receiver metadata.
     /// For control messages, also updates the relationship state.
+    ///
+    /// An invite whose thread digest has already been acted on for this pair
+    /// is refused with [`TspError::Discarded`] (or, re-sent while it is still
+    /// the invite awaiting our decision, accepted as a no-op). An application
+    /// message is returned each time it is received; deduplicating it is the
+    /// caller's job.
     pub fn receive(&self, our_vid: &str, wire: &[u8]) -> Result<ReceivedMessage, TspError> {
         // Parse envelope to get sender VID (before full unpack)
         let (envelope, _) = message::envelope::Envelope::decode(wire)?;
@@ -587,6 +601,27 @@ impl TspAgent {
 
         match control.control_type {
             ControlType::RelationshipFormingInvite => {
+                // A copy of an invite already acted on. Every invite carries a
+                // fresh nonce, so a peer re-forming the relationship sends one
+                // with a new digest; a digest seen before is the same message
+                // again and is no reason to reopen the relationship. Re-sent
+                // while we are still deciding on it, it is the no-op it always
+                // was; in any other state it is refused and changes nothing.
+                if self
+                    .store
+                    .has_seen_invite(our_vid, their_vid, &thread_digest)
+                {
+                    if state == RelationshipState::InviteReceived
+                        && self.store.thread_digest(our_vid, their_vid) == Some(thread_digest)
+                    {
+                        return Ok(ControlOutcome::None);
+                    }
+                    return Err(TspError::Discarded(format!(
+                        "invite from {their_vid} was already received; a repeated copy does \
+                         not reopen the relationship"
+                    )));
+                }
+
                 // §7.2.3, the invite race. Both endpoints may invite each other
                 // for the same VID pair at once. Both keep the invite whose
                 // digest is lexicographically lower and discard the other, so
@@ -608,6 +643,8 @@ impl TspAgent {
                         );
                         self.store
                             .set_thread_digest(our_vid, their_vid, thread_digest);
+                        self.store
+                            .record_seen_invite(our_vid, their_vid, thread_digest);
                         return Ok(ControlOutcome::None);
                     }
                 }
@@ -621,6 +658,8 @@ impl TspAgent {
                 // a cancellation names the relationship by it.
                 self.store
                     .set_thread_digest(our_vid, their_vid, thread_digest);
+                self.store
+                    .record_seen_invite(our_vid, their_vid, thread_digest);
             }
             ControlType::RelationshipFormingAccept => {
                 // The accept's first digest is the invite it answers.
@@ -1082,6 +1121,95 @@ mod tests {
                 Some(b_invite.thread_digest)
             );
         }
+    }
+
+    /// Alice invites Bob and Bob accepts; returns the invite's wire bytes.
+    fn establish_returning_invite(alice: &TspAgent, bob: &TspAgent) -> Vec<u8> {
+        let invite = alice
+            .send_relationship_invite("did:example:alice", "did:example:bob")
+            .unwrap();
+        bob.receive("did:example:bob", &invite.bytes).unwrap();
+        let accept = bob
+            .send_relationship_accept("did:example:bob", "did:example:alice")
+            .unwrap();
+        alice.receive("did:example:alice", &accept.bytes).unwrap();
+        invite.bytes
+    }
+
+    #[test]
+    fn a_repeated_invite_does_not_reopen_an_established_relationship() {
+        let (alice, bob) = two_strangers();
+        let invite = establish_returning_invite(&alice, &bob);
+
+        let again = bob.receive("did:example:bob", &invite);
+        assert!(matches!(again, Err(TspError::Discarded(_))), "{again:?}");
+        assert_eq!(
+            bob.relationship_state("did:example:bob", "did:example:alice"),
+            RelationshipState::Bidirectional
+        );
+        assert!(
+            bob.send("did:example:bob", "did:example:alice", b"still live")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_repeated_invite_while_deciding_is_still_a_no_op() {
+        let (alice, bob) = two_strangers();
+        let invite = alice
+            .send_relationship_invite("did:example:alice", "did:example:bob")
+            .unwrap();
+        bob.receive("did:example:bob", &invite.bytes).unwrap();
+
+        let again = bob.receive("did:example:bob", &invite.bytes).unwrap();
+        assert_eq!(again.message_type, MessageType::Control);
+        assert_eq!(
+            bob.relationship_state("did:example:bob", "did:example:alice"),
+            RelationshipState::InviteReceived
+        );
+        assert!(
+            bob.send_relationship_accept("did:example:bob", "did:example:alice")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn an_invite_from_before_a_re_establishment_does_not_reopen_the_relationship() {
+        let (alice, bob) = two_strangers();
+        let first_invite = establish_returning_invite(&alice, &bob);
+
+        // Alice loses her half and re-forms the relationship with a new invite.
+        alice.store.set_relationship_state(
+            "did:example:alice",
+            "did:example:bob",
+            RelationshipState::None,
+        );
+        alice
+            .store
+            .clear_thread_digest("did:example:alice", "did:example:bob");
+        establish_returning_invite(&alice, &bob);
+
+        let stale = bob.receive("did:example:bob", &first_invite);
+        assert!(matches!(stale, Err(TspError::Discarded(_))), "{stale:?}");
+        assert_eq!(
+            bob.relationship_state("did:example:bob", "did:example:alice"),
+            RelationshipState::Bidirectional
+        );
+    }
+
+    #[test]
+    fn an_invite_from_a_cancelled_relationship_is_not_acted_on_again() {
+        let (alice, bob) = two_strangers();
+        let invite = establish_returning_invite(&alice, &bob);
+        bob.send_relationship_cancel("did:example:bob", "did:example:alice")
+            .unwrap();
+
+        let stale = bob.receive("did:example:bob", &invite);
+        assert!(matches!(stale, Err(TspError::Discarded(_))), "{stale:?}");
+        assert_eq!(
+            bob.relationship_state("did:example:bob", "did:example:alice"),
+            RelationshipState::None
+        );
     }
 
     /// Drive Alice and Bob to a live `Bidirectional` relationship in both
