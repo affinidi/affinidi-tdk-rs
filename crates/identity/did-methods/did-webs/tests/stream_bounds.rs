@@ -201,7 +201,6 @@ fn each_establishment_event_answers_with_the_key_state_it_installed() {
             .expect("an establishment event");
         assert_eq!(state.sn, *sn);
         assert_eq!(&state.keys, keys);
-        assert!(state.backers.is_empty() && state.next_keys.is_empty());
     }
     assert_eq!(
         kels.key_state_at(&aid, &establishment[2].0)

@@ -2,39 +2,6 @@
 
 All notable changes to this crate are documented here.
 
-## [0.13.2] - Unreleased
-
-### Changed (behaviour, R3.6)
-
-- **The host label must decode to a host.** `DidWebs::parse` percent-decodes
-  the host label in full and refuses it unless it is a host (a hostname, or
-  an IP literal, which this resolver also accepts: IPv4, or IPv6 in
-  brackets) and an optional numeric port: a host
-  label that decodes to user information (`@`), a path (`/`, `\`), a query
-  (`?`), a fragment (`#`), a further `%`, whitespace or a control character
-  is refused, as is a malformed escape or one that is not UTF-8. Before, the
-  label was put into the artifact URL as written (only `%3A` decoded), so a
-  label such as `a.example@b.example` was fetched from `b.example`.
-- **Path labels must decode to one path segment.** A path label that is `.`
-  or `..`, or that decodes to `/`, `\`, `?`, `#`, `@`, `%` or a control
-  character, is refused. Path labels are still written into the URL as they
-  appear in the DID.
-- **Artifact size is enforced while reading.** `MAX_ARTIFACT_BYTES` was
-  checked against `Content-Length` and then only after the whole body had
-  been read, so a body without a `Content-Length` was read in full (until the
-  request timeout) before being refused. The body is now counted chunk by
-  chunk and reading stops as soon as it passes the cap. No API change.
-
-### Fixed
-
-- `DidWebs::is_loopback` recognises a bracketed IPv6 loopback host with a
-  port (`[::1]:7676`); it split on the first `:` and never matched one. It
-  now compares the host as the URL parser normalises it, so `LOCALHOST`,
-  `0x7f.1` and `[0:0:0:0:0:0:0:1]` are recognised as well.
-- `DidWebs::host()` returns the host label percent-decoded in full, not only
-  its `%3A` port separator.
-- Comparing DIDs with non-ASCII characters no longer garbles them while
-  normalising percent-encoding case.
 ## [0.13.3] - 2026-11-12
 
 ### Changed
@@ -70,9 +37,10 @@ All notable changes to this crate are documented here.
   receipts and SAIDs are indexed when the stream is parsed; an endpoint's
   location replies are read once per resolution, however many roles name it;
   and a `versionId` resolution narrows the stream already parsed instead of
-  parsing it again. `Kels::key_state_at` returns the state with `backers` and
-  `next_keys` left empty, and the registry reader's log keeps the same, so
-  what is recorded per event does not grow with the witness list. Some work
+  parsing it again. `Kels::key_state_at` returns the full key state as
+  before; the recorded states share one witness list between consecutive
+  establishment events that leave it unchanged, so a rotation that does not
+  touch its witnesses costs a pointer, not a copy. Some work
   still grows with the product of two counts the bounds below limit:
   receipts against witness lists, and, in `affinidi-keri-core`'s registry
   reader, seals against messages.
@@ -101,10 +69,42 @@ resolved `Ok` through a document-only entry point now fails with
 `DidWebsError::Deactivated` (the enum is `#[non_exhaustive]`), at every
 version; `resolve_with_metadata` reports `deactivated` at every version and
 returns the deactivating version without keys; `update` publishes that
-version's `did.json` without keys. `Kels::key_state_at` leaves `backers` and
-`next_keys` empty. A stream past the bounds above fails with
+version's `did.json` without keys. A stream past the bounds above fails with
 `DidWebsError::Stream`.
 
+## [0.13.2] - Unreleased
+
+### Changed (behaviour, R3.6)
+
+- **The host label must decode to a host.** `DidWebs::parse` percent-decodes
+  the host label in full and refuses it unless it is a host (a hostname, or
+  an IP literal, which this resolver also accepts: IPv4, or IPv6 in
+  brackets) and an optional numeric port: a host
+  label that decodes to user information (`@`), a path (`/`, `\`), a query
+  (`?`), a fragment (`#`), a further `%`, whitespace or a control character
+  is refused, as is a malformed escape or one that is not UTF-8. Before, the
+  label was put into the artifact URL as written (only `%3A` decoded), so a
+  label such as `a.example@b.example` was fetched from `b.example`.
+- **Path labels must decode to one path segment.** A path label that is `.`
+  or `..`, or that decodes to `/`, `\`, `?`, `#`, `@`, `%` or a control
+  character, is refused. Path labels are still written into the URL as they
+  appear in the DID.
+- **Artifact size is enforced while reading.** `MAX_ARTIFACT_BYTES` was
+  checked against `Content-Length` and then only after the whole body had
+  been read, so a body without a `Content-Length` was read in full (until the
+  request timeout) before being refused. The body is now counted chunk by
+  chunk and reading stops as soon as it passes the cap. No API change.
+
+### Fixed
+
+- `DidWebs::is_loopback` recognises a bracketed IPv6 loopback host with a
+  port (`[::1]:7676`); it split on the first `:` and never matched one. It
+  now compares the host as the URL parser normalises it, so `LOCALHOST`,
+  `0x7f.1` and `[0:0:0:0:0:0:0:1]` are recognised as well.
+- `DidWebs::host()` returns the host label percent-decoded in full, not only
+  its `%3A` port separator.
+- Comparing DIDs with non-ASCII characters no longer garbles them while
+  normalising percent-encoding case.
 ## [0.13.1] - 2026-11-11
 
 ### Changed

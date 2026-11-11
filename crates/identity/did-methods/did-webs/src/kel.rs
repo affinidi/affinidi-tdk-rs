@@ -90,7 +90,7 @@ pub struct Kels {
     superseded: RefCell<HashMap<String, Vec<usize>>>,
     /// The key state each establishment event installed, by SAID, per
     /// prefix, as the last verification of that prefix found them.
-    establishment: RefCell<HashMap<String, HashMap<String, KeyState>>>,
+    establishment: RefCell<HashMap<String, HashMap<String, Established>>>,
     /// Each prefix's log over the whole stream, as the registry reader takes
     /// it, once a replay has recorded it.
     full_logs: RefCell<HashMap<String, Arc<Recorded>>>,
@@ -106,20 +106,56 @@ struct Recorded {
     events: Vec<affinidi_keri_core::registry::LoggedEvent>,
     /// The events a rotation superseded.
     superseded: Vec<affinidi_keri_core::registry::LoggedEvent>,
-    /// The key state each establishment event installed, by its SAID, as
-    /// [`signing_state`] keeps it.
-    establishment: HashMap<String, KeyState>,
+    /// The key state each establishment event installed, by its SAID.
+    establishment: HashMap<String, Established>,
+    /// The witness list the last recorded establishment event installed,
+    /// shared with the next one that leaves it unchanged.
+    last_backers: Option<Arc<Vec<String>>>,
+}
+
+/// The key state an establishment event installed, as recorded: its witness
+/// list is held apart and shared between consecutive establishment events
+/// that leave it unchanged, so a rotation that does not touch its witnesses
+/// records a pointer rather than a copy of them.
+struct Established {
+    /// The key state, `backers` held in `backers` instead.
+    state: KeyState,
+    backers: Arc<Vec<String>>,
+}
+
+impl Established {
+    /// The key state as it was installed.
+    fn key_state(&self) -> KeyState {
+        let mut state = self.state.clone();
+        state.backers = self.backers.as_ref().clone();
+        state
+    }
 }
 
 impl Recorded {
     /// Record the key state an establishment event installed. A SAID seen
     /// again keeps the state it first installed.
     fn establish(&mut self, msg: &ParsedMessage, state: &KeyState) {
-        if let Ok(said) = msg.serder.said() {
-            self.establishment
-                .entry(said)
-                .or_insert_with(|| signing_state(state));
+        let Ok(said) = msg.serder.said() else {
+            return;
+        };
+        if self.establishment.contains_key(&said) {
+            return;
         }
+        let backers = match &self.last_backers {
+            Some(last) if last.as_slice() == state.backers.as_slice() => Arc::clone(last),
+            _ => Arc::new(state.backers.clone()),
+        };
+        self.last_backers = Some(Arc::clone(&backers));
+        let mut kept = state.clone();
+        kept.backers = Vec::new();
+        self.establishment.insert(
+            said,
+            Established {
+                state: kept,
+                backers,
+            },
+        );
     }
 }
 
@@ -522,10 +558,6 @@ impl Kels {
     /// signed are no longer the current ones, so the signature stops verifying
     /// and whatever it authorised quietly disappears from the document.
     ///
-    /// The state returned carries the keys, thresholds and identifiers a
-    /// signature is checked against; its `backers` and `next_keys` are left
-    /// empty (use [`Kels::key_state`] for the current ones).
-    ///
     /// # Errors
     /// Returns [`DidWebsError::Kel`] if the log does not verify, or contains no
     /// establishment event with that SAID.
@@ -540,7 +572,7 @@ impl Kels {
             .get(aid)
             .and_then(|states| states.get(said))
         {
-            return Ok(state.clone());
+            return Ok(state.key_state());
         }
 
         // A signature group names the establishment event whose keys signed.
@@ -1005,17 +1037,42 @@ fn logged(
         state.sn,
         said,
         seals,
-        establishment.then(|| signing_state(state)),
+        establishment.then(|| registry_state(state)),
     ))
 }
 
-/// What is kept of the key state an establishment event installed: what a
-/// signature made under it is checked against (`prefix`, `sn`, `said`,
-/// `keys`, `threshold` and the rest), without its backers or next-key
-/// digests, which grow with the log and no such check reads.
-fn signing_state(state: &KeyState) -> KeyState {
+/// The key state the registry reader keeps for an establishment event. It
+/// checks a credential's signatures against `sn`, `keys` and `threshold`
+/// and reads no witness list, so the list, which every establishment event
+/// would otherwise copy, is left out. This state is never returned from a
+/// public function.
+fn registry_state(state: &KeyState) -> KeyState {
     let mut kept = state.clone();
     kept.backers = Vec::new();
-    kept.next_keys = Vec::new();
     kept
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn establishment_events_that_keep_their_witnesses_share_the_list() {
+        let stream: &[u8] = include_bytes!("../tests/fixtures/deactivated/keri.cesr");
+        let did = include_str!("../tests/fixtures/deactivated/did.txt").trim();
+        let aid = crate::DidWebs::parse(did).expect("parse").aid().to_string();
+        let kels = Kels::parse(stream).expect("parses");
+        kels.key_state(&aid).expect("verifies");
+
+        let recorded = kels.establishment.borrow();
+        let states: Vec<&Established> = recorded.get(&aid).expect("recorded").values().collect();
+        assert_eq!(states.len(), 3, "an inception and two rotations");
+        assert!(
+            states
+                .windows(2)
+                .all(|pair| Arc::ptr_eq(&pair[0].backers, &pair[1].backers)),
+            "one witness list, shared"
+        );
+        assert!(states.iter().all(|e| e.state.backers.is_empty()));
+    }
 }
