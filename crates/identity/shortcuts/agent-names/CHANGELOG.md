@@ -4,6 +4,52 @@ All notable changes to `agent-names` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-11-11
+
+### Changed
+
+- `HttpRedirectResolver` builds its client through `affinidi-net-guard`, as
+  `affinidi-did-web` and `affinidi-did-webs` do. What a name's host resolves
+  to is now checked by the client's DNS resolver on the connection that is
+  actually made, instead of by a separate lookup before the request, so the
+  address that was checked is the address used. Proxies (including
+  `HTTPS_PROXY` / `ALL_PROXY` from the environment) are turned off, because a
+  proxy resolves the name itself.
+- URLs are vetted with `EgressPolicy::public_internet()`, which refuses more
+  than the previous classifier did: `0.0.0.0/8`, deprecated site-local
+  `fec0::/10`, IPv6 documentation ranges, and the IPv4-compatible, NAT64 and
+  6to4 spellings of non-public IPv4 addresses. Special-use names
+  (`localhost`, `*.local`, `*.internal`, `*.home.arpa`, single-label names)
+  are refused with the new `AgentNameError::BlockedHost`.
+- `HttpRedirectResolver::new()` sets a 5s connect timeout alongside the 20s
+  request timeout, and panics if the HTTP client cannot be built (as
+  `reqwest::Client::new` does) instead of falling back to a default client
+  that follows redirects and has no timeout.
+
+### Added
+
+- `HttpRedirectResolver::with_client_builder(builder)`: a caller-configured
+  `reqwest::ClientBuilder`, with the redirect, proxy and DNS settings applied
+  after the caller's own, and the default timeouts (any timeout set on the
+  builder is replaced).
+- `HttpRedirectResolver::with_client_builder_and_timeouts(builder, timeout,
+  connect_timeout)`: the same, with the caller's timeouts.
+- `DEFAULT_CONNECT_TIMEOUT`.
+- `AgentNameError::BlockedHost` (the enum is `#[non_exhaustive]`).
+
+### Deprecated
+
+- `HttpRedirectResolver::with_client`: a built client cannot be given the
+  connect-time address check. Use `with_client_builder`.
+
+### Behaviour change (R3.6)
+
+Under the default settings a name now fails to resolve when its host is only
+reachable through a proxy, or is a special-use name. `allow_private_addresses(true)`
+on a resolver from `new()` still turns all address checks off (it now rebuilds
+the client without the DNS check); on one from `with_client_builder` the DNS
+check stays and only private IP literals are admitted.
+
 ## [0.1.3] - 2026-07-23
 
 ### Added

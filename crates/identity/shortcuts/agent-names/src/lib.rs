@@ -90,6 +90,7 @@ pub use cache_server::CacheServerResolver;
 pub use error::AgentNameError;
 pub use name::{AGENT_NAME_MARKER, AgentName};
 pub use resolver::{
-    AgentNameResolver, DEFAULT_MAX_HOPS, DEFAULT_TIMEOUT, HttpRedirectResolver, NameResolution,
+    AgentNameResolver, DEFAULT_CONNECT_TIMEOUT, DEFAULT_MAX_HOPS, DEFAULT_TIMEOUT,
+    HttpRedirectResolver, NameResolution,
 };
 pub use verify::{also_known_as_contains, extract_agent_names, verify_also_known_as};

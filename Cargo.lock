@@ -1027,9 +1027,10 @@ dependencies = [
 
 [[package]]
 name = "agent-names"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "affinidi-did-common",
+ "affinidi-net-guard",
  "reqwest",
  "serde_json",
  "thiserror 2.0.21",
