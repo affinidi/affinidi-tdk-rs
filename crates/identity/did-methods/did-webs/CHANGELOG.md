@@ -2,6 +2,15 @@
 
 All notable changes to this crate are documented here.
 
+## [0.13.1] - 2026-11-11
+
+### Changed
+
+- **`create` no longer compiles LMDB.** It takes `affinidi-keri` 0.8.1 without
+  its `store` feature: a `did:webs` controller keeps its key event log in
+  `keri.cesr` and never used the LMDB store (`heed`), which every build with
+  `create` compiled in, a VTA's among them.
+
 ## [0.13.0] - 2026-11-11
 
 On affinidi-keri 0.8. Still alpha.
