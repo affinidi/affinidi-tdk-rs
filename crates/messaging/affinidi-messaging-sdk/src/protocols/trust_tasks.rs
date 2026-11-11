@@ -45,6 +45,8 @@ use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
 use trust_tasks_rs::TrustTask;
 use uuid::Uuid;
 
+#[cfg(feature = "tsp")]
+use crate::protocols::trust_task_versions::StatusGate;
 use crate::protocols::trust_task_versions::{
     Current, MediatorSpeaks, is_unsupported_type, speaks_from_version,
 };
@@ -820,10 +822,70 @@ impl TrustTasksOps<'_> {
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
 
-        let response: TrustTask<message::status::v0_2::Response> = self
+        #[cfg(feature = "tsp")]
+        let track_timeout = match self.status_gate_over_tsp(profile).await? {
+            None => false,
+            Some(StatusGate::Ask { track_timeout }) => track_timeout,
+            Some(StatusGate::Unserved) => {
+                return Err(ATMError::ProblemReport(
+                    "e.p.protocol.trust_task.unsupported".into(),
+                    "this mediator does not answer messaging/message/status over TSP".into(),
+                    "NONE".into(),
+                ));
+            }
+        };
+
+        let response: Result<TrustTask<message::status::v0_2::Response>, ATMError> = self
             .exchange_current(profile, task, Current::MessageStatus)
-            .await?;
-        Ok(response.payload)
+            .await;
+        #[cfg(feature = "tsp")]
+        if track_timeout
+            && let Err(ATMError::MsgReceiveError(text)) = &response
+            && text.starts_with(crate::protocols::trust_task_versions::TSP_NO_REPLY)
+        {
+            self.atm
+                .inner
+                .status_over_tsp
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unanswered_until
+                .insert(
+                    mediator_did.to_string(),
+                    std::time::Instant::now()
+                        + crate::protocols::trust_task_versions::STATUS_UNANSWERED_FOR,
+                );
+        }
+        Ok(response?.payload)
+    }
+
+    /// Whether to send the status task to the profile's mediator over TSP;
+    /// `None` when it does not go over TSP.
+    #[cfg(feature = "tsp")]
+    async fn status_gate_over_tsp(
+        &self,
+        profile: &Arc<ATMProfile>,
+    ) -> Result<Option<StatusGate>, ATMError> {
+        use crate::protocols::tsp::SendProtocol;
+        let (_, mediator_did) = profile.dids()?;
+        if self
+            .atm
+            .tsp()
+            .select_protocol(profile, mediator_did)
+            .await?
+            != SendProtocol::Tsp
+        {
+            return Ok(None);
+        }
+        // Reads the mediator's version from `/readyz` the first time.
+        self.mediator_speaks(profile).await?;
+        Ok(Some(
+            self.atm
+                .inner
+                .status_over_tsp
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .gate(mediator_did, std::time::Instant::now()),
+        ))
     }
 
     /// Send a `messaging/queue/status` Trust Task and return one account's two
@@ -978,6 +1040,18 @@ impl TrustTasksOps<'_> {
                 == SendProtocol::Tsp
             {
                 let version = self.probe_mediator_version(profile).await;
+                self.atm
+                    .inner
+                    .status_over_tsp
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .versions
+                    .insert(
+                        mediator_did.to_string(),
+                        version
+                            .as_deref()
+                            .and_then(crate::protocols::trust_task_versions::parse_version),
+                    );
                 let speaks = speaks_from_version(version.as_deref());
                 self.remember_speaks(mediator_did, speaks);
                 return Ok(speaks);
@@ -1226,7 +1300,8 @@ impl TrustTasksOps<'_> {
 
             if SystemTime::now() >= deadline {
                 return Err(ATMError::MsgReceiveError(format!(
-                    "no response from mediator for the Trust Task over TSP within {}s",
+                    "{} within {}s",
+                    crate::protocols::trust_task_versions::TSP_NO_REPLY,
                     TSP_REPLY_TIMEOUT.as_secs()
                 )));
             }

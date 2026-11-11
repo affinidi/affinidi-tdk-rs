@@ -297,6 +297,18 @@ impl MessageTransport for DidCommTransport {
     }
 }
 
+/// The mediator does not serve the Trust Task asked of it: it refused the type
+/// (`protocol.trust_task.unsupported`), or it predates Trust Tasks and refused
+/// the message as not implemented (`me.not_implemented`).
+fn is_unsupported_task(err: &ATMError) -> bool {
+    matches!(
+        err,
+        ATMError::ProblemReport(code, ..)
+            if crate::protocols::trust_task_versions::is_unsupported_type(code)
+                || code.ends_with("me.not_implemented")
+    )
+}
+
 /// Carry an ATM failure across the [`MessageTransport`] boundary.
 ///
 /// An HTTP status — the mediator's `429` on the send, or on the authentication
@@ -304,15 +316,6 @@ impl MessageTransport for DidCommTransport {
 /// refusing service and `Retry-After` survive through `MessagingService` rather
 /// than being flattened into text. `what` is prefixed onto its context.
 /// Everything else stays [`MessagingError::Transport`], as before.
-/// The mediator refused a Trust Task type it does not serve.
-fn is_unsupported_task(err: &ATMError) -> bool {
-    matches!(
-        err,
-        ATMError::ProblemReport(code, ..)
-            if crate::protocols::trust_task_versions::is_unsupported_type(code)
-    )
-}
-
 fn transport_error(what: &str, err: ATMError) -> MessagingError {
     match err.http_status() {
         Some(status) => {
@@ -765,6 +768,11 @@ mod tests {
     fn only_an_unserved_status_task_falls_back_to_the_outbox_listing() {
         assert!(is_unsupported_task(&ATMError::ProblemReport(
             "e.p.protocol.trust_task.unsupported".into(),
+            String::new(),
+            String::new(),
+        )));
+        assert!(is_unsupported_task(&ATMError::ProblemReport(
+            "e.p.me.not_implemented".into(),
             String::new(),
             String::new(),
         )));

@@ -13,8 +13,9 @@ impl ATM {
     /// - messages : List of message IDs to retrieve
     ///
     /// Each request is bounded by the configured request timeout
-    /// (`ATMConfig::with_request_timeout`, default 15s); an unreachable
-    /// mediator returns `ATMError::TransportError` rather than hanging.
+    /// (`ATMConfig::with_request_timeout`, default 15s) plus 200 ms per
+    /// requested message; an unreachable mediator returns
+    /// `ATMError::TransportError` rather than hanging.
     pub async fn get_messages(
         &self,
         profile: &Arc<ATMProfile>,
@@ -44,7 +45,11 @@ impl ATM {
             debug!("Sending get_messages request: {:?}", body);
 
             let res = self
-                .rest_request(reqwest::Method::POST, [&mediator_url, "/outbound"].concat())
+                .rest_request_for_messages(
+                    reqwest::Method::POST,
+                    [&mediator_url, "/outbound"].concat(),
+                    messages.message_ids.len(),
+                )
                 .header("Content-Type", "application/json")
                 .header("Authorization", format!("Bearer {}", tokens.access_token))
                 .body(body)

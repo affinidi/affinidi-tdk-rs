@@ -60,6 +60,67 @@ pub(crate) fn is_unsupported_type(code: &str) -> bool {
     code.ends_with("protocol.trust_task.unsupported")
 }
 
+/// The first mediator release that answers `messaging/message/status` over
+/// TSP. Older ones that serve Trust Tasks over TSP file the type as mail and
+/// never answer it.
+#[cfg(feature = "tsp")]
+pub(crate) const FIRST_MEDIATOR_ANSWERING_STATUS_OVER_TSP: (u64, u64, u64) = (0, 30, 2);
+
+/// How long a mediator of unknown version that did not answer the status task
+/// over TSP is taken not to serve it before being asked again.
+#[cfg(feature = "tsp")]
+pub(crate) const STATUS_UNANSWERED_FOR: std::time::Duration =
+    std::time::Duration::from_secs(60 * 60);
+
+/// The text of the error a Trust Task over TSP ends with when the mediator
+/// sends no reply in time.
+#[cfg(feature = "tsp")]
+pub(crate) const TSP_NO_REPLY: &str = "no response from mediator for the Trust Task over TSP";
+
+/// What is known, per mediator DID, about whether it answers
+/// `messaging/message/status` over TSP.
+#[cfg(feature = "tsp")]
+#[derive(Debug, Default)]
+pub(crate) struct StatusOverTsp {
+    /// The version `/readyz` reported, when it was read (`None` inside: it
+    /// did not say).
+    pub(crate) versions: std::collections::HashMap<String, Option<(u64, u64, u64)>>,
+    /// For a mediator of unknown version: until when it is taken not to
+    /// answer, after it once let the task time out.
+    pub(crate) unanswered_until: std::collections::HashMap<String, std::time::Instant>,
+}
+
+/// Whether to send `messaging/message/status` over TSP to a mediator.
+#[cfg(feature = "tsp")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusGate {
+    /// It does not answer: refuse locally, as the mediator would if it could.
+    Unserved,
+    /// Ask. `track_timeout`: its version is unknown, so a reply timeout is
+    /// remembered for [`STATUS_UNANSWERED_FOR`].
+    Ask { track_timeout: bool },
+}
+
+#[cfg(feature = "tsp")]
+impl StatusOverTsp {
+    pub(crate) fn gate(&self, mediator_did: &str, now: std::time::Instant) -> StatusGate {
+        match self.versions.get(mediator_did).copied().flatten() {
+            Some(version) if version < FIRST_MEDIATOR_ANSWERING_STATUS_OVER_TSP => {
+                StatusGate::Unserved
+            }
+            Some(_) => StatusGate::Ask {
+                track_timeout: false,
+            },
+            None => match self.unanswered_until.get(mediator_did) {
+                Some(&until) if now < until => StatusGate::Unserved,
+                _ => StatusGate::Ask {
+                    track_timeout: true,
+                },
+            },
+        }
+    }
+}
+
 /// `major.minor.patch` of a mediator version string, ignoring any pre-release
 /// or build suffix.
 pub(crate) fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
@@ -172,6 +233,40 @@ fn activity_instants_to_rfc3339(account: &mut Map<String, Value>) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "tsp")]
+    #[test]
+    fn the_status_task_over_tsp_is_gated_by_version_or_a_remembered_timeout() {
+        use super::{StatusGate, StatusOverTsp};
+        let now = std::time::Instant::now();
+        let mut known = StatusOverTsp::default();
+        known.versions.insert("old".into(), Some((0, 30, 1)));
+        known.versions.insert("new".into(), Some((0, 30, 2)));
+        known.versions.insert("silent".into(), None);
+        assert_eq!(known.gate("old", now), StatusGate::Unserved);
+        assert_eq!(
+            known.gate("new", now),
+            StatusGate::Ask {
+                track_timeout: false
+            }
+        );
+        assert_eq!(
+            known.gate("silent", now),
+            StatusGate::Ask {
+                track_timeout: true
+            }
+        );
+        known
+            .unanswered_until
+            .insert("silent".into(), now + super::STATUS_UNANSWERED_FOR);
+        assert_eq!(known.gate("silent", now), StatusGate::Unserved);
+        assert_eq!(
+            known.gate("silent", now + super::STATUS_UNANSWERED_FOR),
+            StatusGate::Ask {
+                track_timeout: true
+            }
+        );
+    }
+
     use super::*;
     use crate::tasks::audit;
     use crate::tasks::messaging::{message, ping};

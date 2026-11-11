@@ -219,7 +219,12 @@ async fn check_response_within(
         None => response.text().await.map_err(|e| {
             ATMError::TransportError(format!("{context}: couldn't read response body: {e:?}"))
         })?,
-        Some(max_bytes) => read_body_capped(context, &mut response, max_bytes).await?,
+        Some(max_bytes) => match read_body_capped(context, &mut response, max_bytes).await {
+            Ok(body) => body,
+            // An error status is reported as itself, whatever its body.
+            Err(e) if !status.is_success() => format!("({e})"),
+            Err(e) => return Err(e),
+        },
     };
     if status.is_success() {
         return Ok(body);
@@ -460,6 +465,22 @@ mod tests {
         assert_eq!(status.retry_after_secs, Some(7));
         assert_eq!(status.url.as_deref(), Some(url.as_str()));
         assert_eq!(status.body, "slow");
+    }
+
+    /// An error status with a body over the cap is reported as that status,
+    /// not as an oversized body.
+    #[tokio::test]
+    async fn an_oversized_error_response_keeps_its_status() {
+        let url = serve_once(
+            "HTTP/1.1 404 Not Found\r\ncontent-length: 64\r\nconnection: close\r\n\r\n\
+             0123456789012345678901234567890123456789012345678901234567890123",
+        )
+        .await;
+        let response = reqwest::Client::new().post(&url).send().await.unwrap();
+        let err = check_response_capped("retrieve OOB invitation", response, 8)
+            .await
+            .unwrap_err();
+        assert_eq!(err.http_status().map(|s| s.status), Some(404), "{err:?}");
     }
 
     #[tokio::test]

@@ -78,7 +78,11 @@ impl ATM {
                 ));
             };
             let res = self
-                .rest_request(reqwest::Method::POST, [&mediator_url, "/fetch"].concat())
+                .rest_request_for_messages(
+                    reqwest::Method::POST,
+                    [&mediator_url, "/fetch"].concat(),
+                    options.limit,
+                )
                 .header("Content-Type", "application/json")
                 .header("Authorization", format!("Bearer {}", tokens.access_token))
                 .body(body)

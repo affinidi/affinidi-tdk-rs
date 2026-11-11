@@ -272,6 +272,9 @@ pub(crate) struct SharedState {
     /// when each VID was last heard from, and when it was last resolved.
     #[cfg(feature = "tsp")]
     pub(crate) tsp_key_state: affinidi_tsp::keystate::KeyStateTracker,
+    /// Per mediator: whether it answers `messaging/message/status` over TSP.
+    #[cfg(feature = "tsp")]
+    pub(crate) status_over_tsp: std::sync::Mutex<protocols::trust_task_versions::StatusOverTsp>,
 }
 
 /// Affinidi Trusted Messaging SDK
@@ -285,6 +288,10 @@ pub(crate) struct SharedState {
 /// let config = ATMConfigBuilder::default().build()?;
 /// let atm = ATM::new(config, tdk_shared_state).await?;
 /// ```
+/// How much longer a REST call that returns messages may take, per message it
+/// can return, on top of the configured request timeout.
+pub(crate) const REST_TIMEOUT_PER_MESSAGE: Duration = Duration::from_millis(200);
+
 impl ATM {
     /// A request on the shared HTTP client, bounded by the configured
     /// [`request_timeout`](ATMConfig::get_request_timeout).
@@ -303,6 +310,21 @@ impl ATM {
             .client()
             .request(method, url)
             .timeout(self.inner.config.request_timeout)
+    }
+
+    /// [`rest_request`](Self::rest_request) for a call whose response carries
+    /// up to `messages` messages (`/fetch`, `/outbound`): the timeout grows by
+    /// [`REST_TIMEOUT_PER_MESSAGE`] for each, so a large batch from a slow
+    /// mediator is not cut off by a budget sized for a small one.
+    pub(crate) fn rest_request_for_messages(
+        &self,
+        method: reqwest::Method,
+        url: impl reqwest::IntoUrl,
+        messages: usize,
+    ) -> reqwest::RequestBuilder {
+        let extra = REST_TIMEOUT_PER_MESSAGE.saturating_mul(messages.min(u32::MAX as usize) as u32);
+        self.rest_request(method, url)
+            .timeout(self.inner.config.request_timeout.saturating_add(extra))
     }
 
     /// Creates a new instance of the SDK with a given configuration
@@ -328,6 +350,8 @@ impl ATM {
             mediator_speaks: std::sync::Mutex::new(std::collections::HashMap::new()),
             #[cfg(feature = "tsp")]
             tsp_key_state: affinidi_tsp::keystate::KeyStateTracker::new(),
+            #[cfg(feature = "tsp")]
+            status_over_tsp: std::sync::Mutex::new(Default::default()),
         };
 
         let atm = ATM {
