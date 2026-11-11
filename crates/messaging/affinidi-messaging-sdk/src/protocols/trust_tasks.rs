@@ -1377,6 +1377,109 @@ use crate::tasks::messaging::mux as mux_tasks;
 
 /// Build a `messaging/mux/*` task from a JSON payload, letting the generated
 /// type check its shape before anything is sent.
+/// What [`TrustTasksOps::mux_connections`] lists. Every member is optional;
+/// the default lists every live mux connection, 50 per page, with up to
+/// 1000 member entries per page.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MuxConnectionsQuery {
+    /// Only connections authenticated as this DID.
+    pub principal: Option<String>,
+    /// Only connections carrying this member DID; each then lists that
+    /// member alone.
+    pub member: Option<String>,
+    /// The page's budget of member entries, summed over its connections
+    /// (0–1000). `Some(0)` lists connections without their members.
+    pub member_limit: Option<u64>,
+    /// The most connections per page (1–100).
+    pub limit: Option<u64>,
+    /// The previous page's `next_cursor`.
+    pub cursor: Option<String>,
+}
+
+impl MuxConnectionsQuery {
+    /// Every live mux connection.
+    pub fn all() -> Self {
+        Self::default()
+    }
+
+    /// Only `principal`'s connections.
+    pub fn principal(mut self, did: impl Into<String>) -> Self {
+        self.principal = Some(did.into());
+        self
+    }
+
+    /// Only connections carrying `member`.
+    pub fn member(mut self, did: impl Into<String>) -> Self {
+        self.member = Some(did.into());
+        self
+    }
+
+    /// The page's member budget.
+    pub fn member_limit(mut self, n: u64) -> Self {
+        self.member_limit = Some(n);
+        self
+    }
+
+    /// The most connections per page.
+    pub fn limit(mut self, n: u64) -> Self {
+        self.limit = Some(n);
+        self
+    }
+
+    /// Continue from a previous page's `next_cursor`.
+    pub fn cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.cursor = Some(cursor.into());
+        self
+    }
+
+    /// The `messaging/mux/connections` payload: only the members set.
+    fn payload(&self) -> Value {
+        let mut payload = json!({});
+        if let Some(p) = &self.principal {
+            payload["principal"] = json!(p);
+        }
+        if let Some(m) = &self.member {
+            payload["member"] = json!(m);
+        }
+        if let Some(n) = self.member_limit {
+            payload["memberLimit"] = json!(n);
+        }
+        if let Some(l) = self.limit {
+            payload["limit"] = json!(l);
+        }
+        if let Some(c) = &self.cursor {
+            payload["cursor"] = json!(c);
+        }
+        payload
+    }
+}
+
+#[cfg(test)]
+mod mux_connections_tests {
+    use super::*;
+
+    #[test]
+    fn a_query_sets_only_what_it_names() {
+        assert_eq!(MuxConnectionsQuery::all().payload(), json!({}));
+        let q = MuxConnectionsQuery::all()
+            .principal("did:example:phone")
+            .member("did:example:work")
+            .member_limit(0)
+            .limit(10)
+            .cursor("c1");
+        let payload = q.payload();
+        assert_eq!(
+            payload,
+            json!({ "principal": "did:example:phone", "member": "did:example:work",
+                    "memberLimit": 0, "limit": 10, "cursor": "c1" })
+        );
+        // It is a valid request payload for the generated type.
+        serde_json::from_value::<mux_tasks::connections::v0_1::Payload>(payload)
+            .expect("the payload matches the spec");
+    }
+}
+
 fn mux_task<P>(profile: &Arc<ATMProfile>, payload: Value) -> Result<TrustTask<P>, ATMError>
 where
     P: trust_tasks_rs::Payload + DeserializeOwned,
@@ -1473,6 +1576,28 @@ impl TrustTasksOps<'_> {
         }
         let task = mux_task::<mux_tasks::list::v0_1::Payload>(profile, payload)?;
         let r: TrustTask<mux_tasks::list::v0_1::Response> = self.exchange(profile, task).await?;
+        Ok(r.payload)
+    }
+
+    /// `messaging/mux/connections`: an administrator's view of the
+    /// mediator's live mux connections, one page at a time. Each connection
+    /// lists its principal, wire (`didcomm`/`tsp`), opening time, exact
+    /// member count and, within the page's member budget, its members with
+    /// source, scope, expiry and whether their live delivery is active there.
+    /// `coverage` says whether the answer covers every instance of the
+    /// mediator or only the one that answered: show that to the operator.
+    ///
+    /// Administrator accounts only; anyone else is refused. Pass the previous
+    /// page's `next_cursor` in `query.cursor`, with the same filters, to
+    /// continue.
+    pub async fn mux_connections(
+        &self,
+        profile: &Arc<ATMProfile>,
+        query: &MuxConnectionsQuery,
+    ) -> Result<mux_tasks::connections::v0_1::Response, ATMError> {
+        let task = mux_task::<mux_tasks::connections::v0_1::Payload>(profile, query.payload())?;
+        let r: TrustTask<mux_tasks::connections::v0_1::Response> =
+            self.exchange(profile, task).await?;
         Ok(r.payload)
     }
 
