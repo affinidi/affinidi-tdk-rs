@@ -140,14 +140,10 @@ impl ATM {
         debug!("Sending delete_messages request: {:?}", msg);
 
         let res = self
-            .inner
-            .tdk_common
-            .client()
-            .delete([mediator_url, "/delete"].concat())
+            .rest_request(reqwest::Method::DELETE, [mediator_url, "/delete"].concat())
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", access_token))
             .body(msg)
-            .timeout(self.inner.config.request_timeout)
             .send()
             .await
             .map_err(|e| {

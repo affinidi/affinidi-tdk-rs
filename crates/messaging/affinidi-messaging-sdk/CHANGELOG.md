@@ -69,6 +69,38 @@ Behaviour change (R3.6), limited to repeated ids: a redelivered message
 still held in the cache is ignored, and the first copy and its metadata are
 kept. A message the application has already taken is not in the cache, so
 a later re-push of it is delivered again, as before. No API change.
+## 0.45.9 — REST responses parsed without panicking; every REST call bounded
+
+- `fetch_messages`, `oob_discovery().create_invite` and
+  `oob_discovery().delete_invite` returned a panic, not an error, when a
+  success status came with a body that was not the expected JSON (a proxy's
+  page, a different mediator version). They now return
+  `ATMError::TransportError` naming the call, as `get_messages`,
+  `list_messages` and `delete_messages_direct` already did.
+- Every REST call the SDK makes is now bounded by `ATMConfig`'s
+  `request_timeout` (default 15s). It applied only to get, list and delete
+  before; the REST send (`POST /inbound`), `fetch_messages`, the OOB
+  invitation calls and `well_known_did` had no timeout, so an unreachable
+  mediator held them until the operating system gave up on the connection.
+- `oob_discovery().retrieve_invite(url)` reads at most 64 KiB of the
+  response and refuses a larger one. Its URL usually comes from outside the
+  application (a QR code, a link).
+- `DidCommTransport::outbox_status` answers `Ok(None)` (use the outbox
+  listing) only when the mediator does not serve `messaging/message/status`.
+  Any other failure of the status call (a timeout, a rate limit, an
+  unreachable mediator) is now returned as an error, so the delivery layer
+  reports it and asks again on its next poll.
+- The fetch error now says `fetch_messages` instead of `list_messages`.
+
+**Behaviour change (R3.6):** a REST call to a mediator that takes longer than
+`request_timeout` to answer now fails with `TransportError`; raise it with
+`ATMConfigBuilder::with_request_timeout` for a slow mediator. A failed
+message-status call is now an `Err` from `outbox_status` rather than
+`Ok(None)`. A mediator older than `messaging/message/status` reached over TSP
+does not answer the task at all, so for it each status poll now ends in an
+error after the TSP reply timeout instead of falling back to the listing.
+No public signatures change.
+
 ## 0.45.6 — `messaging/mux/connections`
 
 - `TrustTasksOps::mux_connections(profile, &MuxConnectionsQuery)`: an

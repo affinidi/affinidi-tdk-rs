@@ -140,6 +140,38 @@ impl ATMError {
     }
 }
 
+/// Read `response`'s body chunk by chunk, refusing it once it passes
+/// `max_bytes`, whether or not it declared its length.
+async fn read_body_capped(
+    context: &str,
+    response: &mut reqwest::Response,
+    max_bytes: usize,
+) -> Result<String, ATMError> {
+    let too_large = || {
+        ATMError::TransportError(format!(
+            "{context}: response body is larger than {max_bytes} bytes"
+        ))
+    };
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| {
+        ATMError::TransportError(format!("{context}: couldn't read response body: {e:?}"))
+    })? {
+        if body.len() + chunk.len() > max_bytes {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|e| {
+        ATMError::TransportError(format!("{context}: response body is not UTF-8: {e}"))
+    })
+}
+
 /// An HTTP request the SDK made was answered with a non-success status.
 ///
 /// Defined in `affinidi-messaging-core` so that `affinidi-did-authentication`
@@ -153,6 +185,25 @@ pub(crate) async fn check_response(
     context: &str,
     response: reqwest::Response,
 ) -> Result<String, ATMError> {
+    check_response_within(context, response, None).await
+}
+
+/// [`check_response`] reading at most `max_bytes` of the body, for a response
+/// from an endpoint the SDK does not otherwise know (a URL handed to it), so
+/// an oversized body is refused rather than read into memory whole.
+pub(crate) async fn check_response_capped(
+    context: &str,
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<String, ATMError> {
+    check_response_within(context, response, Some(max_bytes)).await
+}
+
+async fn check_response_within(
+    context: &str,
+    mut response: reqwest::Response,
+    max_bytes: Option<usize>,
+) -> Result<String, ATMError> {
     let status = response.status();
     let url = response.url().to_string();
     let header = |name: &str| {
@@ -164,9 +215,12 @@ pub(crate) async fn check_response(
     };
     let source = header(HttpStatusError::RATE_LIMIT_SOURCE_HEADER);
     let retry_after = header(reqwest::header::RETRY_AFTER.as_str());
-    let body = response.text().await.map_err(|e| {
-        ATMError::TransportError(format!("{context}: couldn't read response body: {e:?}"))
-    })?;
+    let body = match max_bytes {
+        None => response.text().await.map_err(|e| {
+            ATMError::TransportError(format!("{context}: couldn't read response body: {e:?}"))
+        })?,
+        Some(max_bytes) => read_body_capped(context, &mut response, max_bytes).await?,
+    };
     if status.is_success() {
         return Ok(body);
     }

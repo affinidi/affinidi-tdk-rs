@@ -42,18 +42,12 @@ impl ATM {
             };
 
             let res = self
-                .inner
-                .tdk_common
-                .client()
-                .get(format!(
-                    "{}/list/{}/{}",
-                    mediator_url,
-                    digest(profile_did),
-                    folder,
-                ))
+                .rest_request(
+                    reqwest::Method::GET,
+                    format!("{}/list/{}/{}", mediator_url, digest(profile_did), folder,),
+                )
                 .header("Content-Type", "application/json")
                 .header("Authorization", format!("Bearer {}", tokens.access_token))
-                .timeout(self.inner.config.request_timeout)
                 .send()
                 .await
                 .map_err(|e| {

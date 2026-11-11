@@ -44,14 +44,10 @@ impl ATM {
             debug!("Sending get_messages request: {:?}", body);
 
             let res = self
-                .inner
-                .tdk_common
-                .client()
-                .post([&mediator_url, "/outbound"].concat())
+                .rest_request(reqwest::Method::POST, [&mediator_url, "/outbound"].concat())
                 .header("Content-Type", "application/json")
                 .header("Authorization", format!("Bearer {}", tokens.access_token))
                 .body(body)
-                .timeout(self.inner.config.request_timeout)
                 .send()
                 .await
                 .map_err(|e| {

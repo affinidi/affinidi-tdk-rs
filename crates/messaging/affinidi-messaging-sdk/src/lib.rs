@@ -286,6 +286,25 @@ pub(crate) struct SharedState {
 /// let atm = ATM::new(config, tdk_shared_state).await?;
 /// ```
 impl ATM {
+    /// A request on the shared HTTP client, bounded by the configured
+    /// [`request_timeout`](ATMConfig::get_request_timeout).
+    ///
+    /// The shared client has no overall timeout of its own, so every REST call
+    /// the SDK makes is built here: an unreachable or stalled endpoint becomes
+    /// a `TransportError` after the timeout instead of holding the caller until
+    /// the operating system gives up on the connection.
+    pub(crate) fn rest_request(
+        &self,
+        method: reqwest::Method,
+        url: impl reqwest::IntoUrl,
+    ) -> reqwest::RequestBuilder {
+        self.inner
+            .tdk_common
+            .client()
+            .request(method, url)
+            .timeout(self.inner.config.request_timeout)
+    }
+
     /// Creates a new instance of the SDK with a given configuration
     /// You need to add at least the DID Method for the SDK DID to work
     pub async fn new(config: ATMConfig, tdk_common: Arc<TDKSharedState>) -> Result<ATM, ATMError> {
