@@ -154,25 +154,25 @@ impl State {
         self.secrets.append(secrets);
     }
 
-    pub fn save_to_file(&self, file_path: &str) -> Result<(), std::io::Error> {
-        // State serializes `secrets` (private keys); restrict to owner-only on
-        // Unix so other local users can't read them. `File::create` would use
-        // the process umask (typically 0644).
-        #[cfg(unix)]
-        let file = {
-            use std::os::unix::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(file_path)?
-        };
-        #[cfg(not(unix))]
-        let file = std::fs::File::create(file_path)?;
-
-        serde_json::to_writer_pretty(file, self)?;
+    /// Writes the state to `file_path` if what would be written differs from
+    /// `last_saved`, and records what was written. Keys and chats created
+    /// since the last write are then on disk without waiting for exit.
+    pub fn save_if_changed(
+        &self,
+        file_path: &str,
+        last_saved: &mut Option<Vec<u8>>,
+    ) -> Result<(), std::io::Error> {
+        let contents = serde_json::to_vec_pretty(self)?;
+        if last_saved.as_deref() == Some(contents.as_slice()) {
+            return Ok(());
+        }
+        write_private(file_path, &contents)?;
+        *last_saved = Some(contents);
         Ok(())
+    }
+
+    pub fn save_to_file(&self, file_path: &str) -> Result<(), std::io::Error> {
+        write_private(file_path, &serde_json::to_vec_pretty(self)?)
     }
 
     pub fn read_from_file(file_path: &str) -> Result<Self, std::io::Error> {
@@ -227,5 +227,65 @@ impl State {
             self.chat_list.active_chat = None;
         }
         info!("Chat removed: {}", chat.name);
+    }
+}
+
+/// Writes `contents` to `file_path`, owner-only on Unix: the state holds
+/// private keys, and `File::create` would use the process umask (typically
+/// 0644).
+fn write_private(file_path: &str, contents: &[u8]) -> Result<(), std::io::Error> {
+    use std::io::Write;
+
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(file_path)?
+    };
+    #[cfg(not(unix))]
+    let mut file = std::fs::File::create(file_path)?;
+
+    file.write_all(contents)?;
+    file.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_if_changed_writes_new_state_and_skips_unchanged_state() {
+        let path =
+            std::env::temp_dir().join(format!("text-client-state-{}.json", uuid::Uuid::new_v4()));
+        let path = path.to_str().unwrap();
+        let mut last_saved = None;
+        let mut state = State::default();
+
+        state.save_if_changed(path, &mut last_saved).unwrap();
+        assert!(last_saved.is_some());
+
+        std::fs::remove_file(path).unwrap();
+        state.save_if_changed(path, &mut last_saved).unwrap();
+        assert!(
+            std::fs::metadata(path).is_err(),
+            "unchanged state is not written again"
+        );
+
+        state.settings.our_name = Some("Alice".into());
+        state.save_if_changed(path, &mut last_saved).unwrap();
+        let saved = State::read_from_file(path).unwrap();
+        assert_eq!(saved.settings.our_name.as_deref(), Some("Alice"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        std::fs::remove_file(path).unwrap();
     }
 }

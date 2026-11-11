@@ -10,7 +10,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Layer, filter, fmt};
 use tui_logger::TuiTracingSubscriberLayer;
 
-use crate::ui_management::ui_manager::UiManager;
+use crate::ui_management::ui_manager::{UiManager, install_panic_hook};
 
 mod state_store;
 mod termination;
@@ -33,6 +33,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     tui_logger::init_logger(LevelFilter::Info).unwrap();
+    install_panic_hook();
 
     // Setup the initial state
 

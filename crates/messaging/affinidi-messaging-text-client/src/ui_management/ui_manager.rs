@@ -2,6 +2,7 @@ use anyhow::Context;
 use crossterm::event::EventStream;
 use ratatui::{
     crossterm::{
+        cursor::Show,
         event::{DisableMouseCapture, Event},
         execute,
         terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -103,6 +104,22 @@ fn setup_terminal() -> anyhow::Result<Terminal<CrosstermBackend<Stdout>>> {
     execute!(stdout, EnterAlternateScreen, DisableMouseCapture)?;
 
     Ok(Terminal::new(CrosstermBackend::new(stdout))?)
+}
+
+/// Puts the terminal back to normal before the default panic message is
+/// printed, so a panic does not leave it in raw mode on the alternate screen.
+pub fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            Show
+        );
+        previous(info);
+    }));
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> anyhow::Result<()> {

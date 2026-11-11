@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased (0.12.8) — inbound messages handled without panicking
+
+- Inbound messages with missing or unreadable fields are logged and skipped
+  instead of panicking: a `chat-message` with no `text`, a `chat-effect` with
+  no `effect`, a vCard attachment that is not base64 or not JSON (the chat is
+  named `UNKNOWN …`, as an unparsable vCard already was), a connection setup
+  with no `from`, `to`, `thid` or `pthid`, and failures creating, adding,
+  packing or forwarding during the connection setup.
+- **Behaviour:** a `chat-message` or `chat-effect` is shown only when it was
+  authenticated (authcrypt sender, else verified signer) as the chat's
+  remote DID; anything else is logged and dropped.
+- The terminal is restored (raw mode off, alternate screen left, cursor
+  shown) before a panic message is printed.
+- The state file is written whenever the state changes, not only on exit,
+  so keys and chats created during a session are on disk if the client stops
+  unexpectedly.
 ## Unreleased (0.12.7) — dependency currency
 
 No behaviour change: `ratatui-image` 10 → 11.
