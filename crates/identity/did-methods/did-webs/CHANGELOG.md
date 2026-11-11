@@ -43,42 +43,67 @@ All notable changes to this crate are documented here.
   rotation committed to no next keys (§ Deactivate), but every entry point that
   returns a document alone — `WebsResolver::resolve`, `resolve` and
   `resolve_from_artifacts` — returned the final key state's keys as current
-  ones and dropped the metadata that said otherwise. They now fail with the new
-  `DidWebsError::Deactivated`. `resolve_with_metadata` (both forms) still
-  resolves, with `deactivated: true` in the metadata, and its document now
-  keeps only `id` and `alsoKnownAs`: no verification method, verification
-  relationship, key role or service. The published `did.json` is still checked
-  against the full derivation, so artifacts published before are unaffected. A
-  `versionId` before the deactivating rotation resolves the document as it
-  stood, keys included. `Resolution::into_document` returns the document, or
-  `Deactivated`.
-- **Verification work grows linearly with the stream.** The key state at every
-  establishment event is recorded while the log is verified, so a reply's
-  signature group is checked against that record instead of a replay of the
-  log from inception; each identifier's log over the whole stream, which the
-  designation readers share, is replayed at most once; witness receipts and
-  SAIDs are indexed when the stream is parsed; an endpoint's location replies
-  are read once per resolution, however many roles name it; and a `versionId`
-  resolution narrows the stream already parsed instead of parsing it again.
+  ones and dropped the metadata that said otherwise.
+  - Deactivation is read from the whole stream: it is a property of the DID,
+    not of a version. The document-only entry points fail with the new
+    `DidWebsError::Deactivated` for a deactivated DID, with or without a
+    `versionId`. `Resolution::into_document` does the same.
+  - `resolve_with_metadata` (both forms) still resolves and reports
+    `deactivated: true` for every version. The deactivating version's
+    document keeps only `@context`, `id` and `alsoKnownAs`: no verification
+    method, verification relationship, key role or service. An earlier
+    `versionId` returns that version's document, keys included, for a caller
+    checking a signature made while they were current.
+  - `update` publishes the deactivating version's `did.json` without keys
+    too, so a `did:web` reader of the twin does not take them for current
+    ones. For that version a published `did.json` may be either that form or
+    the full derivation published before, so existing artifacts still
+    resolve.
+  - `Kels::key_state`, `designated_key_agreement` and `designated_key_roles`
+    say nothing of a deactivation; their documentation now says to check
+    `Kels::is_deactivated`.
+- **Less verification work per stream.** The key state at every establishment
+  event is recorded while the log is verified, so a reply's signature group
+  is checked against that record instead of a replay of the log from
+  inception; each identifier's log over the whole stream, which the
+  designation readers share, is replayed and built once and shared; witness
+  receipts and SAIDs are indexed when the stream is parsed; an endpoint's
+  location replies are read once per resolution, however many roles name it;
+  and a `versionId` resolution narrows the stream already parsed instead of
+  parsing it again. `Kels::key_state_at` returns the state with `backers` and
+  `next_keys` left empty, and the registry reader's log keeps the same, so
+  what is recorded per event does not grow with the witness list. Some work
+  still grows with the product of two counts the bounds below limit:
+  receipts against witness lists, and, in `affinidi-keri-core`'s registry
+  reader, seals against messages.
 - **Bounds on a stream.** `Kels::parse` refuses a stream of more than
-  `kel::MAX_STREAM_MESSAGES` (10,000) messages or `kel::MAX_STREAM_SIGNATURES`
-  (16,384) signatures, counting controller and witness signatures, receipt
-  couples and signature groups. Resolution fails when credentials marked
-  `critical` name more than 16 schemas this resolver does not implement; only
-  credentials marked `critical` have their issuance checked for that rule.
+  `kel::MAX_STREAM_MESSAGES` (10,000) messages, `kel::MAX_STREAM_SIGNATURES`
+  (16,384) signatures (controller and witness signatures, receipt couples and
+  signature groups), `kel::MAX_STREAM_BACKERS` (1,024) witness entries (`b`
+  and `ba` of key events) or `kel::MAX_STREAM_SEALS` (16,384) seals (`a` of
+  key events). They are checked once the stream is parsed, before anything is
+  verified; `WebsResolver` caps the stream's size while reading it. Resolution
+  fails when credentials marked `critical`, in registries whose inception the
+  identifier's verified log anchors, name more than 16 schemas this resolver
+  does not implement; credentials outside such a registry cannot stand and are
+  not counted.
 - **`WebsResolver` verifies off the async executor.** The fetched stream is
   verified on tokio's blocking thread pool, with no more verifications running
-  at once across the process than there are CPUs available. `tokio` (already
-  in the dependency tree through `reqwest`) becomes a direct dependency with
-  the `rt` and `sync` features.
+  at once across the process than there are CPUs available. A verification
+  holds its place until it ends, even when its caller stops waiting. `tokio`
+  (already in the dependency tree through `reqwest`) becomes a direct
+  dependency with the `rt` and `sync` features.
 
 ### Compatibility
 
 Behaviour change, no signature change (R3.6): a deactivated identifier that
 resolved `Ok` through a document-only entry point now fails with
-`DidWebsError::Deactivated` (the enum is `#[non_exhaustive]`), and
-`resolve_with_metadata` returns it without keys. A stream past the bounds above
-fails with `DidWebsError::Stream`.
+`DidWebsError::Deactivated` (the enum is `#[non_exhaustive]`), at every
+version; `resolve_with_metadata` reports `deactivated` at every version and
+returns the deactivating version without keys; `update` publishes that
+version's `did.json` without keys. `Kels::key_state_at` leaves `backers` and
+`next_keys` empty. A stream past the bounds above fails with
+`DidWebsError::Stream`.
 
 ## [0.13.1] - 2026-11-11
 

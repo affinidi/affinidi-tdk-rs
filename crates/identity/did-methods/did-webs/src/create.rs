@@ -427,7 +427,15 @@ fn build(
 /// is the side that decides.
 pub(crate) fn artifacts_for(did: &DidWebs, keri_cesr: &[u8]) -> Result<Artifacts, DidWebsError> {
     let derived = crate::resolver::derive(did, keri_cesr)?;
-    let did_json = serde_json::to_vec(&to_did_web(&derived.document, did))?;
+    // A deactivated identifier's keys are retired: its document is published
+    // without them, so a `did:web` reader of the twin does not take them for
+    // current ones either.
+    let document = if derived.retired {
+        crate::resolver::deactivated_document(&derived.document)
+    } else {
+        derived.document
+    };
+    let did_json = serde_json::to_vec(&to_did_web(&document, did))?;
 
     Ok(Artifacts {
         keri_cesr: keri_cesr.to_vec(),

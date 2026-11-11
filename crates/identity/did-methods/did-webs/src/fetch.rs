@@ -352,28 +352,90 @@ fn concurrent_verifications() -> usize {
 static VERIFICATIONS: LazyLock<Semaphore> =
     LazyLock::new(|| Semaphore::new(concurrent_verifications()));
 
-/// Verify fetched artifacts on the blocking thread pool, once a permit is
-/// free, so that a large stream occupies a blocking thread rather than an
-/// executor thread, and only so many run at once.
+/// Verify fetched artifacts on the blocking thread pool, under
+/// [`run_bounded`].
 async fn verify_off_executor(
     did: DidWebs,
     keri_cesr: Vec<u8>,
     did_json: Vec<u8>,
 ) -> Result<Resolution, DidWebsError> {
+    run_bounded(move || resolve_with_metadata(&did, &keri_cesr, Some(&did_json))).await?
+}
+
+/// Run `work` on the blocking thread pool once a permit is free, so that a
+/// large stream occupies a blocking thread rather than an executor thread,
+/// and only so many run at once.
+///
+/// The permit moves into the blocking task and is released when `work`
+/// ends, not when the caller stops waiting: a caller that times out or is
+/// dropped leaves `work` running, and it still counts against the bound.
+async fn run_bounded<T, F>(work: F) -> Result<T, DidWebsError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
     let permit = VERIFICATIONS
         .acquire()
         .await
         .map_err(|e| DidWebsError::Stream(format!("verification unavailable: {e}")))?;
     let verification = tokio::task::spawn_blocking(move || {
-        resolve_with_metadata(&did, &keri_cesr, Some(&did_json))
+        let _permit = permit;
+        work()
     })
     .await;
-    drop(permit);
     match verification {
-        Ok(result) => result,
+        Ok(result) => Ok(result),
         Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
         Err(e) => Err(DidWebsError::Stream(format!(
             "verification did not complete: {e}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Wait on the blocking pool, so the executor keeps running.
+    async fn blocking_sleep(millis: u64) {
+        tokio::task::spawn_blocking(move || {
+            std::thread::sleep(std::time::Duration::from_millis(millis))
+        })
+        .await
+        .expect("sleeps");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_caller_keeps_the_permit_until_the_work_ends() {
+        let total = concurrent_verifications();
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+
+        let caller = tokio::spawn(run_bounded(move || {
+            started_tx.send(()).expect("signals");
+            release_rx.recv().ok();
+        }));
+        tokio::task::spawn_blocking(move || started_rx.recv())
+            .await
+            .expect("joins")
+            .expect("the work started");
+
+        caller.abort();
+        assert!(caller.await.is_err(), "the caller was dropped");
+        blocking_sleep(20).await;
+        assert_eq!(
+            VERIFICATIONS.available_permits(),
+            total - 1,
+            "the running work still holds its permit"
+        );
+
+        release_tx.send(()).expect("releases");
+        for _ in 0..500 {
+            if VERIFICATIONS.available_permits() == total {
+                return;
+            }
+            blocking_sleep(10).await;
+        }
+        panic!("the permit was not returned when the work ended");
     }
 }

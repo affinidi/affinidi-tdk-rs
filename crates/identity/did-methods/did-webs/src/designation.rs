@@ -136,7 +136,9 @@ const MAX_UNIMPLEMENTED_CRITICAL_SCHEMAS: usize = 16;
 /// publishes the key-state derivation would otherwise pass every comparison.
 ///
 /// Only a designation that verifies and stands counts, so a credential a host
-/// adds to the stream cannot make a DID unresolvable.
+/// adds to the stream cannot make a DID unresolvable. A credential can only
+/// stand in a registry whose inception `aid`'s verified log anchors, so only
+/// those count toward [`MAX_UNIMPLEMENTED_CRITICAL_SCHEMAS`].
 ///
 /// # Errors
 /// As [`designations`].
@@ -145,6 +147,7 @@ pub(crate) fn unsupported_critical(
     aid: &str,
     implemented: &[&str],
 ) -> Result<Option<String>, DidWebsError> {
+    let anchored = kels.anchored_digests(aid)?;
     let mut schemas: Vec<String> = Vec::new();
     for msg in kels.messages() {
         let is_acdc = msg
@@ -172,7 +175,15 @@ pub(crate) fn unsupported_critical(
             .get("a")
             .and_then(|a| a.get("critical"))
             .is_some_and(|c| *c == SadValue::Bool(true));
-        if marked_critical && !implemented.contains(&schema.as_str()) && !schemas.contains(&schema)
+        // `ri` names a 1.x credential's registry, `rd` a 2.x one's.
+        let registry_anchored = ["ri", "rd"]
+            .iter()
+            .filter_map(|field| sad.get(field).and_then(|v| v.as_str()))
+            .any(|registry| anchored.contains(registry));
+        if marked_critical
+            && registry_anchored
+            && !implemented.contains(&schema.as_str())
+            && !schemas.contains(&schema)
         {
             if schemas.len() == MAX_UNIMPLEMENTED_CRITICAL_SCHEMAS {
                 return Err(DidWebsError::Stream(format!(

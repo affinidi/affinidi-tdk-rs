@@ -46,6 +46,20 @@ pub const MAX_STREAM_MESSAGES: usize = 10_000;
 /// caps the signature checks one resolution performs.
 pub const MAX_STREAM_SIGNATURES: usize = 16_384;
 
+/// The most witness entries the key events of a `keri.cesr` stream may name,
+/// counting every `b` (witnesses) and `ba` (witnesses added) entry.
+///
+/// Each witnessed event's receipts are checked against its witness list, so
+/// the work grows with both.
+pub const MAX_STREAM_BACKERS: usize = 1_024;
+
+/// The most seals the key events of a `keri.cesr` stream may anchor,
+/// counting every entry of their `a` lists.
+///
+/// The registry reader looks for a credential's registry events among these
+/// seals, once per designation it reads.
+pub const MAX_STREAM_SEALS: usize = 16_384;
+
 /// `rct` messages, keyed by the (`i`, `s`, `d`) of the event they receipt.
 type ReceiptIndex = HashMap<(String, String, String), Vec<usize>>;
 
@@ -79,18 +93,21 @@ pub struct Kels {
     establishment: RefCell<HashMap<String, HashMap<String, KeyState>>>,
     /// Each prefix's log over the whole stream, as the registry reader takes
     /// it, once a replay has recorded it.
-    full_logs: RefCell<HashMap<String, Recorded>>,
+    full_logs: RefCell<HashMap<String, Arc<Recorded>>>,
+    /// The issuer log each prefix's registry reads take, once built.
+    issuer_logs: RefCell<HashMap<String, Arc<affinidi_keri_core::registry::IssuerLog>>>,
 }
 
 /// What a replay records: the log for the registry reader, and the key
 /// state at each establishment event.
-#[derive(Default, Clone)]
+#[derive(Default)]
 struct Recorded {
     /// The log's events, superseded ones removed.
     events: Vec<affinidi_keri_core::registry::LoggedEvent>,
     /// The events a rotation superseded.
     superseded: Vec<affinidi_keri_core::registry::LoggedEvent>,
-    /// The key state each establishment event installed, by its SAID.
+    /// The key state each establishment event installed, by its SAID, as
+    /// [`signing_state`] keeps it.
     establishment: HashMap<String, KeyState>,
 }
 
@@ -101,7 +118,7 @@ impl Recorded {
         if let Ok(said) = msg.serder.said() {
             self.establishment
                 .entry(said)
-                .or_insert_with(|| state.clone());
+                .or_insert_with(|| signing_state(state));
         }
     }
 }
@@ -115,8 +132,14 @@ impl Kels {
     ///
     /// # Errors
     /// Returns [`DidWebsError::Stream`] if the stream cannot be parsed, or
-    /// carries more than [`MAX_STREAM_MESSAGES`] messages or
-    /// [`MAX_STREAM_SIGNATURES`] signatures.
+    /// carries more than [`MAX_STREAM_MESSAGES`] messages,
+    /// [`MAX_STREAM_SIGNATURES`] signatures, [`MAX_STREAM_BACKERS`] witness
+    /// entries or [`MAX_STREAM_SEALS`] seals.
+    ///
+    /// The bounds are checked once the stream is parsed, before anything in
+    /// it is verified; what parsing allocates is bounded by the stream's
+    /// length, which [`crate::WebsResolver`] caps at
+    /// [`crate::fetch::MAX_ARTIFACT_BYTES`].
     pub fn parse(stream: &[u8]) -> Result<Self, DidWebsError> {
         let messages = parser::parse_all(stream)
             .map_err(|e| DidWebsError::Stream(format!("could not parse keri.cesr: {e}")))?;
@@ -137,6 +160,40 @@ impl Kels {
             return Err(DidWebsError::Stream(format!(
                 "keri.cesr carries {signatures} signatures, more than the \
                  {MAX_STREAM_SIGNATURES} this resolver checks"
+            )));
+        }
+
+        let mut backers = 0usize;
+        let mut seals = 0usize;
+        for msg in &messages {
+            if !matches!(
+                msg.serder.ilk().ok().as_deref(),
+                Some("icp" | "rot" | "ixn" | "dip" | "drt")
+            ) {
+                continue;
+            }
+            let entries = |field: &str| {
+                msg.serder
+                    .sad()
+                    .get(field)
+                    .and_then(|v| v.as_array())
+                    .map_or(0, Vec::len)
+            };
+            backers = backers
+                .saturating_add(entries("b"))
+                .saturating_add(entries("ba"));
+            seals = seals.saturating_add(entries("a"));
+        }
+        if backers > MAX_STREAM_BACKERS {
+            return Err(DidWebsError::Stream(format!(
+                "keri.cesr's key events name {backers} witnesses, more than the \
+                 {MAX_STREAM_BACKERS} this resolver reads"
+            )));
+        }
+        if seals > MAX_STREAM_SEALS {
+            return Err(DidWebsError::Stream(format!(
+                "keri.cesr's key events anchor {seals} seals, more than the \
+                 {MAX_STREAM_SEALS} this resolver reads"
             )));
         }
 
@@ -182,6 +239,7 @@ impl Kels {
             superseded: RefCell::new(HashMap::new()),
             establishment: RefCell::new(HashMap::new()),
             full_logs: RefCell::new(HashMap::new()),
+            issuer_logs: RefCell::new(HashMap::new()),
         })
     }
 
@@ -210,6 +268,7 @@ impl Kels {
             superseded: RefCell::new(HashMap::new()),
             establishment: RefCell::new(HashMap::new()),
             full_logs: RefCell::new(full_logs),
+            issuer_logs: RefCell::new(HashMap::new()),
         }
     }
 
@@ -279,6 +338,7 @@ impl Kels {
         // limit; another identifier's could rest on `prefix`'s narrowed log
         // through a delegation, so it is recorded again if it is needed.
         self.full_logs.borrow_mut().retain(|p, _| p == prefix);
+        self.issuer_logs.borrow_mut().clear();
         Ok(self)
     }
 
@@ -314,6 +374,10 @@ impl Kels {
     }
 
     /// Verify `prefix`'s key event log and return the resulting key state.
+    ///
+    /// The state is the log's last, whether or not the identifier is
+    /// deactivated: its keys are the last ones even when a rotation retired
+    /// them. Check [`Kels::is_deactivated`] before treating them as current.
     ///
     /// # Errors
     /// Returns [`DidWebsError::Kel`] if the stream has no KEL for `prefix`, an
@@ -399,6 +463,27 @@ impl Kels {
         Ok(false)
     }
 
+    /// The digests (`d`) of every seal `aid`'s verified key events anchor,
+    /// as far as this read may see, superseded events included.
+    ///
+    /// # Errors
+    /// Returns [`DidWebsError::Kel`] if `aid`'s key event log does not verify.
+    pub(crate) fn anchored_digests(
+        &self,
+        aid: &str,
+    ) -> Result<std::collections::HashSet<String>, DidWebsError> {
+        self.key_state(aid)?;
+        Ok(self
+            .by_prefix
+            .get(aid)
+            .into_iter()
+            .flatten()
+            .filter_map(|i| self.messages[*i].serder.sad().get("a")?.as_array())
+            .flatten()
+            .filter_map(|seal| seal.get("d")?.as_str().map(str::to_owned))
+            .collect())
+    }
+
     /// The first message in the stream whose `d` field is `said`.
     ///
     /// Transaction events and credentials are addressed by SAID rather than by
@@ -436,6 +521,10 @@ impl Kels {
     /// silently invalidate everything the identifier ever signed: the keys that
     /// signed are no longer the current ones, so the signature stops verifying
     /// and whatever it authorised quietly disappears from the document.
+    ///
+    /// The state returned carries the keys, thresholds and identifiers a
+    /// signature is checked against; its `backers` and `next_keys` are left
+    /// empty (use [`Kels::key_state`] for the current ones).
     ///
     /// # Errors
     /// Returns [`DidWebsError::Kel`] if the log does not verify, or contains no
@@ -576,7 +665,7 @@ impl Kels {
         if self.full_by_prefix.get(prefix) == Some(indices) {
             self.full_logs
                 .borrow_mut()
-                .insert(prefix.to_string(), recorded);
+                .insert(prefix.to_string(), Arc::new(recorded));
         }
         Ok(state)
     }
@@ -596,8 +685,11 @@ impl Kels {
     pub(crate) fn issuer_log(
         &self,
         aid: &str,
-    ) -> Result<affinidi_keri_core::registry::IssuerLog, DidWebsError> {
+    ) -> Result<Arc<affinidi_keri_core::registry::IssuerLog>, DidWebsError> {
         self.key_state(aid)?;
+        if let Some(log) = self.issuer_logs.borrow().get(aid) {
+            return Ok(Arc::clone(log));
+        }
         let cached = self.full_logs.borrow().get(aid).cloned();
         let recorded = match cached {
             Some(recorded) => recorded,
@@ -607,17 +699,22 @@ impl Kels {
                 })?;
                 let mut recorded = Recorded::default();
                 self.replay_over(aid, indices, &mut recorded)?;
+                let recorded = Arc::new(recorded);
                 self.full_logs
                     .borrow_mut()
-                    .insert(aid.to_string(), recorded.clone());
+                    .insert(aid.to_string(), Arc::clone(&recorded));
                 recorded
             }
         };
-        Ok(
-            affinidi_keri_core::registry::IssuerLog::new(aid, recorded.events)
-                .with_superseded(recorded.superseded)
+        let log = Arc::new(
+            affinidi_keri_core::registry::IssuerLog::new(aid, recorded.events.clone())
+                .with_superseded(recorded.superseded.clone())
                 .as_of(self.limits.get(aid).copied()),
-        )
+        );
+        self.issuer_logs
+            .borrow_mut()
+            .insert(aid.to_string(), Arc::clone(&log));
+        Ok(log)
     }
 
     /// Replay the events at `indices`, recording each accepted event and the
@@ -908,6 +1005,17 @@ fn logged(
         state.sn,
         said,
         seals,
-        establishment.then(|| state.clone()),
+        establishment.then(|| signing_state(state)),
     ))
+}
+
+/// What is kept of the key state an establishment event installed: what a
+/// signature made under it is checked against (`prefix`, `sn`, `said`,
+/// `keys`, `threshold` and the rest), without its backers or next-key
+/// digests, which grow with the log and no such check reads.
+fn signing_state(state: &KeyState) -> KeyState {
+    let mut kept = state.clone();
+    kept.backers = Vec::new();
+    kept.next_keys = Vec::new();
+    kept
 }

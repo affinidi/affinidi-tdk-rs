@@ -125,6 +125,12 @@ pub(crate) struct Derived {
     /// the AID has never designated key agreement or key roles
     /// (`crate::key_agreement`, *Identifiers that designate none*).
     pub converted_key_agreement: Vec<String>,
+    /// Whether the version resolved is itself deactivated: its last
+    /// establishment event committed to no next keys. Its document is then
+    /// published and returned without keys ([`deactivated_document`]), while
+    /// `document` keeps the full derivation for the comparison with a
+    /// `did.json` published before this rule.
+    pub retired: bool,
 }
 
 /// Resolve a `did:webs` identifier from artifacts already fetched.
@@ -135,15 +141,17 @@ pub(crate) struct Derived {
 /// either fails it); `None` is accepted here for verifying a stream offline,
 /// and [`crate::WebsResolver`] never passes it.
 ///
-/// A deactivated identifier does not resolve to a document here: this returns
-/// the document alone, so its retired keys would be indistinguishable from
-/// current ones. [`resolve_with_metadata`] reports the deactivation.
+/// A deactivated identifier does not resolve to a document here, with or
+/// without a `versionId`: this returns the document alone, so its keys would
+/// be indistinguishable from current ones. Deactivation is a property of the
+/// DID, not of a version. [`resolve_with_metadata`] reports it.
 ///
 /// # Errors
 /// Returns [`DidWebsError`] if the stream cannot be read, the key event log
 /// does not verify, the DID is not designated by its AID, or `did.json`
 /// disagrees with the verified state; [`DidWebsError::Deactivated`] if the
-/// identifier is deactivated as of the version resolved.
+/// whole stream shows the identifier deactivated, whatever version is asked
+/// for.
 pub fn resolve_from_artifacts(
     did: &DidWebs,
     keri_cesr: &[u8],
@@ -155,12 +163,19 @@ pub fn resolve_from_artifacts(
 /// Resolve a `did:webs` identifier from artifacts already fetched, with its DID
 /// document metadata. See [`resolve_from_artifacts`].
 ///
-/// A deactivated identifier resolves with `deactivated` set in the metadata
-/// and a document that carries no verification method, verification
-/// relationship or service: its last key state committed to no next keys,
-/// and its keys are retired with it. The published `did.json` is still
-/// checked against the full derivation. A DID URL whose `versionId` names an
-/// event before the deactivation resolves the document as it stood then.
+/// For a deactivated identifier, `deactivated` is set in the metadata
+/// whatever version is resolved: it is a property of the DID, read from the
+/// whole stream. The document of the deactivating version (the latest)
+/// carries no verification method, verification relationship, key role or
+/// service; its last key state committed to no next keys, and its keys are
+/// retired with it. A DID URL whose `versionId` names an event before the
+/// deactivation resolves the document as it stood then, keys included, for a
+/// caller checking a signature made while they were current; the metadata
+/// still says `deactivated`.
+///
+/// For the deactivating version, a published `did.json` may be either the
+/// document without keys (what [`crate::update()`] publishes) or the full
+/// derivation (what it published before).
 ///
 /// # Errors
 /// As [`resolve_from_artifacts`], except that a deactivated identifier is not
@@ -176,10 +191,18 @@ pub fn resolve_with_metadata(
     if let Some(published) = did_json {
         let published: Value = serde_json::from_slice(published)?;
         let published = from_did_web(&published, did, derived.twin_designated)?;
-        // The converted keys are not part of the derivation the specification
-        // defines, so a document published without them — the reference
-        // implementation's — agrees. One published with them agrees too.
-        if let Err(e) = check_published(&derived, &published) {
+        if derived.retired {
+            let without_keys = Derived {
+                document: deactivated_document(&derived.document),
+                ..derived.clone()
+            };
+            check_published(&without_keys, &published)
+                .or_else(|_| check_published(&derived, &published))?;
+        } else if let Err(e) = check_published(&derived, &published) {
+            // The converted keys are not part of the derivation the
+            // specification defines, so a document published without them —
+            // the reference implementation's — agrees. One published with
+            // them agrees too.
             if derived.converted_key_agreement.is_empty() {
                 return Err(e);
             }
@@ -196,7 +219,7 @@ pub fn resolve_with_metadata(
         carry_delegator_service(&derived, &published, &mut document);
     }
     let document = with_key_agreement(document, did, &derived.converted_key_agreement)?;
-    let document = if derived.metadata.deactivated {
+    let document = if derived.retired {
         deactivated_document(&document)
     } else {
         document
@@ -211,7 +234,7 @@ pub fn resolve_with_metadata(
 /// What a deactivated identifier's document keeps: its subject and aliases.
 /// Every verification method, verification relationship, key role and
 /// service goes with the keys.
-fn deactivated_document(document: &Value) -> Value {
+pub(crate) fn deactivated_document(document: &Value) -> Value {
     let mut out = Map::new();
     if let Some(derived) = document.as_object() {
         for member in ["@context", "id", "alsoKnownAs"] {
@@ -353,7 +376,7 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
                     .filter(|sn| *sn > version)
                     .min(),
                 equivalent_id,
-                deactivated: kels.is_deactivated(aid),
+                deactivated: full.is_deactivated(aid),
             },
             twin_designated,
             delegation_seal: state
@@ -361,6 +384,7 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
                 .as_ref()
                 .and_then(|_| full.inception_said(aid)),
             converted_key_agreement: Vec::new(),
+            retired: kels.is_deactivated(aid),
         });
     }
 
@@ -371,9 +395,9 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
     // An AID that designates nothing gets the keys KERI practice converts
     // from its key state. One that ever designated keys chose separate ones,
     // and a deactivated one is addressed by no one.
-    let deactivated = kels.is_deactivated(aid);
+    let retired = kels.is_deactivated(aid);
     let converted_key_agreement =
-        if designated_ka.issued || designated_ka.rejected.is_some() || deactivated {
+        if designated_ka.issued || designated_ka.rejected.is_some() || retired {
             Vec::new()
         } else {
             converted_key_agreement(&state.keys)
@@ -404,7 +428,7 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
                 .filter(|sn| *sn > version)
                 .min(),
             equivalent_id,
-            deactivated,
+            deactivated: full.is_deactivated(aid),
         },
         twin_designated,
         delegation_seal: state
@@ -412,6 +436,7 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
             .as_ref()
             .and_then(|_| full.inception_said(aid)),
         converted_key_agreement,
+        retired,
     })
 }
 

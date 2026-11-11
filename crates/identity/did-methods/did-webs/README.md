@@ -31,12 +31,17 @@ publisher of the DID.
 `?versionId=<sn>` resolves the document as of that key event.
 
 A deactivated identifier (its last rotation committed to no next keys) does
-not resolve to its keys: `resolve` and `resolve_from_artifacts` fail with
-`DidWebsError::Deactivated`, and `resolve_with_metadata` returns
-`deactivated: true` with a document that keeps only `id` and `alsoKnownAs`.
+not resolve to its keys. Deactivation belongs to the DID, so it is read from
+the whole stream: `resolve` and `resolve_from_artifacts` fail with
+`DidWebsError::Deactivated` at every version, and `resolve_with_metadata`
+reports `deactivated: true` at every version. The deactivating version's
+document keeps only `id` and `alsoKnownAs`, and `update` publishes it so; an
+earlier `?versionId=` returns that version's keys for checking signatures
+made while they were current.
 
-A `keri.cesr` stream is refused past `kel::MAX_STREAM_MESSAGES` messages or
-`kel::MAX_STREAM_SIGNATURES` signatures, and `WebsResolver` verifies it on
+A `keri.cesr` stream is refused past `kel::MAX_STREAM_MESSAGES` messages,
+`kel::MAX_STREAM_SIGNATURES` signatures, `kel::MAX_STREAM_BACKERS` witness
+entries or `kel::MAX_STREAM_SEALS` seals, and `WebsResolver` verifies it on
 tokio's blocking thread pool, no more at once than there are CPUs.
 
 ```rust,no_run

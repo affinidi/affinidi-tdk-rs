@@ -175,6 +175,11 @@ pub struct DesignatedKeys {
 /// A designation naming a key that is not a usable key agreement key yields
 /// nothing: it is not the credential the schema describes.
 ///
+/// It reads the designations whatever the identifier's state, and says
+/// nothing of a deactivation: check [`Kels::is_deactivated`] before using
+/// the keys of a deactivated identifier, or resolve with
+/// [`crate::resolve_with_metadata`], which reports it.
+///
 /// # Errors
 /// Returns [`DidWebsError::Kel`] only if `aid`'s own key event log does not
 /// verify.

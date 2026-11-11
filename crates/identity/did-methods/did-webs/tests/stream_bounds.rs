@@ -1,12 +1,15 @@
 //! How much a `keri.cesr` stream may ask a resolver to do.
 //!
-//! A stream past `MAX_STREAM_MESSAGES` messages or `MAX_STREAM_SIGNATURES`
-//! signatures is refused before anything in it is verified. Within those,
+//! A stream past `MAX_STREAM_MESSAGES` messages, `MAX_STREAM_SIGNATURES`
+//! signatures, `MAX_STREAM_BACKERS` witness entries or `MAX_STREAM_SEALS`
+//! seals is refused before anything in it is verified. Within those,
 //! the key state at each establishment event is recorded once, while the log
 //! is verified, and every signature group naming one is checked against that
 //! record rather than a replay of the log.
 
-use affinidi_did_webs::kel::{MAX_STREAM_MESSAGES, MAX_STREAM_SIGNATURES};
+use affinidi_did_webs::kel::{
+    MAX_STREAM_BACKERS, MAX_STREAM_MESSAGES, MAX_STREAM_SEALS, MAX_STREAM_SIGNATURES,
+};
 use affinidi_did_webs::{DidWebsError, Kels};
 
 const KERI_CESR: &[u8] = include_bytes!("fixtures/ENro7uf0.keri.cesr");
@@ -24,8 +27,58 @@ fn inception() -> (String, String) {
     (body.to_string(), signature.to_string())
 }
 
+/// The fixture's inception body with `field`'s empty list replaced by
+/// `entries`, and its version string's size corrected. Its SAID no longer
+/// matches, which parsing does not check.
+fn inception_with(field: &str, entries: &[String]) -> String {
+    let (body, signature) = inception();
+    let empty = format!("\"{field}\":[]");
+    assert!(body.contains(&empty), "{body}");
+    let body = body.replace(&empty, &format!("\"{field}\":[{}]", entries.join(",")));
+    let size_at = body.find("JSON").expect("a version string") + 4;
+    let body = format!(
+        "{}{:06x}{}",
+        &body[..size_at],
+        body.len(),
+        &body[size_at + 6..]
+    );
+    format!("{body}-AAB{signature}")
+}
+
 #[test]
-fn the_fixture_is_within_both_bounds() {
+fn a_stream_naming_too_many_witnesses_is_refused() {
+    let witness = format!("\"B{}\"", "A".repeat(43));
+    let within = inception_with("b", &vec![witness.clone(); MAX_STREAM_BACKERS]);
+    Kels::parse(within.as_bytes()).expect("the bound itself parses");
+
+    let past = inception_with("b", &vec![witness; MAX_STREAM_BACKERS + 1]);
+    let Err(err) = Kels::parse(past.as_bytes()) else {
+        panic!("a stream past the witness bound must be refused");
+    };
+    assert!(
+        matches!(err, DidWebsError::Stream(ref m) if m.contains("witnesses")),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn a_stream_anchoring_too_many_seals_is_refused() {
+    let seal = format!("{{\"s\":\"0\",\"d\":\"E{}\"}}", "A".repeat(43));
+    let within = inception_with("a", &vec![seal.clone(); MAX_STREAM_SEALS]);
+    Kels::parse(within.as_bytes()).expect("the bound itself parses");
+
+    let past = inception_with("a", &vec![seal; MAX_STREAM_SEALS + 1]);
+    let Err(err) = Kels::parse(past.as_bytes()) else {
+        panic!("a stream past the seal bound must be refused");
+    };
+    assert!(
+        matches!(err, DidWebsError::Stream(ref m) if m.contains("seals")),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn the_fixture_is_within_the_bounds() {
     let kels = Kels::parse(KERI_CESR).expect("parses");
     assert!(kels.messages().len() < MAX_STREAM_MESSAGES);
     kels.key_state(AID).expect("verifies");
@@ -109,42 +162,17 @@ fn kels_can_move_between_threads() {
     is_send::<Kels>();
 }
 
-#[cfg(feature = "create")]
 #[test]
 fn each_establishment_event_answers_with_the_key_state_it_installed() {
-    use affinidi_did_webs::create::{CreateConfig, create};
-    use affinidi_did_webs::update::{Change, UpdateConfig, update};
-    use affinidi_keri::config::{InceptionConfig, RotationConfig};
-
-    let salt = [5u8; 16];
-    let created = create(
-        CreateConfig::builder("example.com")
-            .inception(InceptionConfig::builder().salt(salt.to_vec()).build())
-            .build(),
-    )
-    .expect("create");
-    let mut artifacts = created.artifacts().clone();
-    let mut custody = created.custody().clone();
-    for _ in 0..3 {
-        let rotated = update(
-            UpdateConfig {
-                did: created.did().to_string(),
-                prior: artifacts,
-                custody,
-                change: Change::Rotate(RotationConfig::default()),
-            },
-            &salt,
-        )
-        .expect("rotate");
-        custody = rotated.custody().clone();
-        artifacts = rotated.into_artifacts();
-    }
-
-    let aid = affinidi_did_webs::DidWebs::parse(created.did())
+    // An identifier created by this crate, rotated twice (see
+    // `tests/deactivated.rs`).
+    let stream: &[u8] = include_bytes!("fixtures/deactivated/keri.cesr");
+    let did = include_str!("fixtures/deactivated/did.txt").trim();
+    let aid = affinidi_did_webs::DidWebs::parse(did)
         .expect("parse")
         .aid()
         .to_string();
-    let kels = Kels::parse(&artifacts.keri_cesr).expect("parses");
+    let kels = Kels::parse(stream).expect("parses");
     let current = kels.key_state(&aid).expect("verifies");
     let establishment: Vec<(String, u64, Vec<String>)> = kels
         .messages()
@@ -165,7 +193,7 @@ fn each_establishment_event_answers_with_the_key_state_it_installed() {
             (m.serder.said().expect("a SAID"), sn, keys)
         })
         .collect();
-    assert_eq!(establishment.len(), 4);
+    assert_eq!(establishment.len(), 3);
 
     for (said, sn, keys) in &establishment {
         let state = kels
@@ -173,9 +201,10 @@ fn each_establishment_event_answers_with_the_key_state_it_installed() {
             .expect("an establishment event");
         assert_eq!(state.sn, *sn);
         assert_eq!(&state.keys, keys);
+        assert!(state.backers.is_empty() && state.next_keys.is_empty());
     }
     assert_eq!(
-        kels.key_state_at(&aid, &establishment[3].0)
+        kels.key_state_at(&aid, &establishment[2].0)
             .expect("the last")
             .keys,
         current.keys
