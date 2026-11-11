@@ -256,10 +256,31 @@ fn derive_cheqd_url(src: &str, scid: &str) -> Result<ScidMethod, DIDSCIDError> {
 #[cfg(feature = "did-webs")]
 async fn resolve_webs(webs_did: &str) -> Result<Document, DIDSCIDError> {
     debug!("Resolving Webs DID: {webs_did}");
-    affinidi_did_webs::resolve(webs_did).await.map_err(|e| {
-        error!("did:webs resolution error: {e:?}");
-        DIDSCIDError::WebsError(e.to_string())
-    })
+    let resolution = affinidi_did_webs::WebsResolver::new()
+        .resolve_with_metadata(webs_did)
+        .await
+        .map_err(|e| {
+            error!("did:webs resolution error: {e:?}");
+            DIDSCIDError::WebsError(e.to_string())
+        })?;
+    webs_document(webs_did, resolution)
+}
+
+/// The document of a resolved `did:webs` DID, unless it is deactivated.
+///
+/// Like `resolve_webvh_native`: this returns a bare `Document`, so a
+/// deactivation reported only in the metadata would leave the retired keys
+/// usable. It is refused here whichever `affinidi-did-webs` 0.13 release
+/// resolved it.
+#[cfg(feature = "did-webs")]
+fn webs_document(
+    webs_did: &str,
+    resolution: affinidi_did_webs::Resolution,
+) -> Result<Document, DIDSCIDError> {
+    if resolution.metadata.deactivated {
+        return Err(DIDSCIDError::Deactivated(webs_did.to_string()));
+    }
+    Ok(resolution.document)
 }
 
 /// `did-webs` is optional so that `did-scid` does not pull the KERI stack into
@@ -858,5 +879,56 @@ mod tests {
             }
             Err(_) => panic!("Couldn't resolve SCID WebVH DID")
         }
+    }
+}
+
+#[cfg(all(test, feature = "did-webs"))]
+mod webs_tests {
+    use crate::{errors::DIDSCIDError, webs_document};
+    use affinidi_did_webs::create::{CreateConfig, create};
+    use affinidi_did_webs::update::{Change, UpdateConfig, update};
+    use affinidi_did_webs::{DidWebs, resolve_with_metadata};
+    use affinidi_keri::config::{InceptionConfig, RotationConfig};
+
+    const SALT: &[u8] = &[3u8; 16];
+
+    #[test]
+    fn a_deactivated_webs_did_is_refused_and_an_active_one_returned() {
+        let created = create(
+            CreateConfig::builder("example.com")
+                .inception(InceptionConfig::builder().salt(SALT.to_vec()).build())
+                .build(),
+        )
+        .expect("create");
+        let did = DidWebs::parse(created.did()).expect("parse");
+
+        let active =
+            resolve_with_metadata(&did, &created.artifacts().keri_cesr, None).expect("resolves");
+        let document = webs_document(created.did(), active).expect("an active DID");
+        assert!(!document.verification_method.is_empty());
+
+        let deactivated = update(
+            UpdateConfig {
+                did: created.did().to_string(),
+                prior: created.artifacts().clone(),
+                custody: created.custody().clone(),
+                change: Change::Rotate(RotationConfig {
+                    next_count: 0,
+                    next_threshold: 0,
+                    ..RotationConfig::default()
+                }),
+            },
+            SALT,
+        )
+        .expect("rotate to no next keys");
+        let resolution = resolve_with_metadata(&did, &deactivated.artifacts().keri_cesr, None)
+            .expect("resolves with its metadata");
+        assert!(resolution.metadata.deactivated);
+
+        let err = webs_document(created.did(), resolution).expect_err("deactivated");
+        assert!(
+            matches!(&err, DIDSCIDError::Deactivated(d) if d == created.did()),
+            "{err:?}"
+        );
     }
 }

@@ -1,5 +1,16 @@
 # did:scid
 
+## Unreleased (0.4.8) — a deactivated did:scid:ke does not resolve
+
+- **Behaviour:** `resolve` and `resolve_with_options` refuse a `did:scid:ke`
+  whose did:webs identifier is deactivated (its last rotation committed to no
+  next keys), with the new `DIDSCIDError::Deactivated`. Before, it resolved
+  `Ok` with the identifier's last keys, while `did:scid:vh` already refused a
+  deactivated did:webvh. The did:webs DID is now resolved with its metadata and
+  the deactivation checked here, whichever `affinidi-did-webs` 0.13 release is
+  in the build. Compatibility (R3.6): a lookup that returned a document now
+  returns an error; `DIDSCIDError` is `#[non_exhaustive]`.
+
 ## Unreleased (0.4.7) — affinidi-did-webs 0.13
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.13, on

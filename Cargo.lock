@@ -2618,10 +2618,11 @@ dependencies = [
 
 [[package]]
 name = "did-scid"
-version = "0.4.7"
+version = "0.4.8"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-webs",
+ "affinidi-keri",
  "didwebvh-rs",
  "regex",
  "serde_json",
