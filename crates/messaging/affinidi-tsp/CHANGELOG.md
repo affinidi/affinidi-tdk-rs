@@ -1,5 +1,19 @@
 # Affinidi TSP Changelog
 
+## 0.3.1 — payload frames are read within their `-Z` count
+
+`unpack` panicked on a routed or nested payload whose `-Z` count was shorter
+than the fields it framed (for example `-ZAA` followed by a full `XHOP`
+layout): the inner message was sliced from past the end of the frame. The
+other layouts read their fields from bytes beyond the declared frame instead
+of stopping at its end.
+
+The payload frame is now decoded from the extent its `-Z` count declares,
+and a field that runs past it is a `TspError::InvalidMessage`. This applies
+to every layout, so `unpack` and `forward_routed` return an error for such a
+frame rather than panicking or reading past it. Frames this crate builds
+always declare their full length and are unaffected. No API change.
+
 ## Unreleased (0.3.0) — TSP 1.0 (`YTSP-BAA`)
 
 **Breaking on the wire.** Follows the released specification,

@@ -816,6 +816,10 @@ fn decode_payload_frame(
         .ok_or_else(|| {
             TspError::InvalidMessage("-Z frame declares more content than the payload".into())
         })?;
+    // Every field lies inside the extent the `-Z` count declares, so decode
+    // from that extent alone: a field that runs past it is truncated, not read
+    // from bytes beyond the frame.
+    let frame = &frame[..frame_end];
 
     let type_code: [u8; 3] = frame
         .get(pos..pos + 3)
@@ -857,7 +861,7 @@ fn decode_payload_frame(
             hops: Vec::new(),
             body,
             control: None,
-            thread_digest: sha256(&frame[..frame_end]),
+            thread_digest: sha256(frame),
         })
     } else if type_code == payload_marker::GENERIC_CONTROL {
         let _pad = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
@@ -868,7 +872,7 @@ fn decode_payload_frame(
             hops: Vec::new(),
             body,
             control: None,
-            thread_digest: sha256(&frame[..frame_end]),
+            thread_digest: sha256(frame),
         })
     } else if type_code == payload_marker::PADDING_ONLY {
         let _nonce = wire::decode_fixed_data::<NONCE_LEN>(wire::TSP_NONCE, frame, &mut pos)
@@ -880,14 +884,17 @@ fn decode_payload_frame(
             hops: Vec::new(),
             body: Vec::new(),
             control: None,
-            thread_digest: sha256(&frame[..frame_end]),
+            thread_digest: sha256(frame),
         })
     } else if type_code == payload_marker::HOP {
         let hops = hops_to_strings(wire::decode_hops(frame, &mut pos)?)?;
         let _pad = wire::decode_variable_data(wire::TSP_PLAINTEXT, frame, &mut pos)
             .ok_or_else(|| TspError::InvalidMessage("missing padding field".into()))?;
         // The inner message runs to the end of the frame.
-        let body = frame[pos..frame_end].to_vec();
+        let body = frame
+            .get(pos..)
+            .ok_or_else(|| TspError::InvalidMessage("truncated payload frame".into()))?
+            .to_vec();
         let kind = if hops.is_empty() {
             MessageType::Nested
         } else {
@@ -898,7 +905,7 @@ fn decode_payload_frame(
             hops,
             body,
             control: None,
-            thread_digest: sha256(&frame[..frame_end]),
+            thread_digest: sha256(frame),
         })
     } else if type_code == payload_marker::INVITE
         || type_code == payload_marker::ACCEPT
@@ -2451,6 +2458,134 @@ mod tests {
 
         let err = unpack(&bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap_err();
         assert!(matches!(err, TspError::Verification(_)), "got {err:?}");
+    }
+
+    /// Re-encode a payload frame's `-Z` count as `quadlets`, keeping its fields.
+    fn with_payload_count(frame: &[u8], quadlets: u32) -> Vec<u8> {
+        let mut pos = 0;
+        wire::decode_count(wire::TSP_PAYLOAD, frame, &mut pos).expect("a -Z payload frame");
+        let mut out = Vec::new();
+        wire::encode_count(wire::TSP_PAYLOAD, quadlets, &mut out);
+        out.extend_from_slice(&frame[pos..]);
+        out
+    }
+
+    fn declared_quadlets(frame: &[u8]) -> u32 {
+        let mut pos = 0;
+        wire::decode_count(wire::TSP_PAYLOAD, frame, &mut pos).expect("a -Z payload frame")
+    }
+
+    /// A `-Z` count shorter than the fields it frames is an error for every
+    /// payload layout, whatever the shortfall. A routed or nested payload's
+    /// inner message runs to the end of the frame, so there the fields are the
+    /// ones before it.
+    #[test]
+    fn a_payload_count_shorter_than_its_fields_is_rejected() {
+        let envelope = Envelope::new(MessageType::Direct, "did:web:alice", "did:web:bob");
+        let fields = envelope.encode_fields().unwrap();
+        let inner = pack(
+            b"inner",
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:bob",
+            &gen_keys().sender_sign_sk,
+            &gen_keys().receiver_enc_pk,
+        )
+        .unwrap()
+        .bytes;
+        let hops = vec!["did:web:hop".to_string()];
+        let cases: Vec<(MessageType, Vec<u8>, &[String])> = vec![
+            (MessageType::Direct, b"body".to_vec(), &[]),
+            (MessageType::GenericControl, b"ctl".to_vec(), &[]),
+            (MessageType::PaddingOnly, Vec::new(), &[]),
+            (MessageType::Routed, inner.clone(), &hops),
+            (MessageType::Nested, inner, &[]),
+            (MessageType::Control, ControlMessage::invite().encode(), &[]),
+            (
+                MessageType::Control,
+                ControlMessage::accept([0x7A; DIGEST_LEN]).encode(),
+                &[],
+            ),
+        ];
+
+        for (kind, body, hops) in cases {
+            let (frame, _) = encode_payload_frame(
+                PkaeScheme::HpkeBase,
+                &body,
+                kind,
+                hops,
+                "did:web:alice",
+                &fields,
+                None,
+                &Padding::None,
+            )
+            .unwrap();
+            decode_payload_frame(PkaeScheme::HpkeBase, &frame, &fields, "did:web:alice", true)
+                .unwrap_or_else(|err| panic!("{kind:?} frame must decode as built: {err:?}"));
+
+            let carried = if matches!(kind, MessageType::Routed | MessageType::Nested) {
+                body.len() as u32 / 3
+            } else {
+                0
+            };
+            for quadlets in 0..declared_quadlets(&frame) - carried {
+                let short = with_payload_count(&frame, quadlets);
+                let result = decode_payload_frame(
+                    PkaeScheme::HpkeBase,
+                    &short,
+                    &fields,
+                    "did:web:alice",
+                    true,
+                );
+                assert!(
+                    result.is_err(),
+                    "{kind:?} frame with -Z count {quadlets} must be rejected"
+                );
+            }
+        }
+    }
+
+    /// The same short count, signed and sealed, is refused by `unpack` with an
+    /// error.
+    #[test]
+    fn a_routed_payload_with_a_short_count_is_refused_on_unpack() {
+        let keys = gen_keys();
+        let envelope = Envelope::new(MessageType::Routed, "did:web:alice", "did:web:bob");
+        let fields = envelope.encode_fields().unwrap();
+        let inner = pack(
+            b"inner",
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:carol",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap()
+        .bytes;
+        let (frame, _) = encode_payload_frame(
+            PkaeScheme::HpkeBase,
+            &inner,
+            MessageType::Routed,
+            &["did:web:carol".to_string()],
+            "did:web:alice",
+            &fields,
+            None,
+            &Padding::None,
+        )
+        .unwrap();
+        let frame = with_payload_count(&frame, 0);
+
+        let sealed = hpke::seal(&frame, &fields, &keys.receiver_enc_pk, wire::TSP_INFO).unwrap();
+        let mut ciphertext = sealed.enc.to_vec();
+        ciphertext.extend_from_slice(&sealed.ciphertext);
+        let mut field = Vec::new();
+        wire::encode_variable_data(wire::TSP_HPKE_BASE_CIPHERTEXT, &ciphertext, &mut field);
+        let mut bytes = envelope::finalize_frame(&fields, &field).unwrap();
+        let sig = signing::sign(&bytes, &keys.sender_sign_sk).unwrap();
+        encode_signature_frame(&sig, &mut bytes);
+
+        let err = unpack(&bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap_err();
+        assert!(matches!(err, TspError::InvalidMessage(_)), "got {err:?}");
     }
 
     /// The AAD names both VIDs, so a ciphertext sealed for one envelope will not
