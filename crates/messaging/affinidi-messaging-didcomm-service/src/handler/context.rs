@@ -20,6 +20,35 @@ pub struct HandlerContext {
     pub parent_thread_id: Option<String>,
 }
 
+#[cfg(test)]
+pub(crate) async fn test_context() -> HandlerContext {
+    use affinidi_messaging_sdk::config::ATMConfig;
+    use affinidi_tdk_common::TDKSharedState;
+    use affinidi_tdk_common::config::TDKConfig;
+
+    let tdk = TDKSharedState::new(TDKConfig::headless().expect("headless TDK config"))
+        .await
+        .expect("TDK shared state");
+    let atm = ATM::new(
+        ATMConfig::builder().build().expect("ATM config"),
+        std::sync::Arc::new(tdk),
+    )
+    .await
+    .expect("ATM");
+    let profile = ATMProfile::new(&atm, None, "did:example:service".into(), None)
+        .await
+        .expect("profile");
+    HandlerContext {
+        listener_id: "test".into(),
+        atm,
+        profile: Arc::new(profile),
+        sender_did: Some("did:example:peer".into()),
+        message_id: "msg-1".into(),
+        thread_id: "msg-1".into(),
+        parent_thread_id: None,
+    }
+}
+
 /// The DID that authenticated a message: its verified JWS signer, else its
 /// authcrypt sender. `None` when the message is not authenticated, or when the
 /// signer and the authcrypt sender are different DIDs.

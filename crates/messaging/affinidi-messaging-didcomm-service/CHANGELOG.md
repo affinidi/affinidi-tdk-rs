@@ -6,6 +6,22 @@ The debug line for an inbound TSP control message that was not recorded now
 also names a copy of an invite already acted on, which
 `affinidi-messaging-sdk` 0.45.8 refuses. Log text only.
 
+## Unreleased (0.30.2) — no reply to problem reports; error text kept local
+
+Follows 0.30.1 (#1083); merge that first.
+
+- **Behaviour (R3.6):** with no matching route and no fallback, `Router`
+  no longer answers a problem report (any `report-problem` version) or a
+  message pickup `status`; it logs the type at debug and sends nothing.
+  Other unmatched types still get `e.p.msg.bad-request`, now with the fixed
+  comment `UNSUPPORTED_TYPE_COMMENT` instead of one that repeats the type.
+- **Behaviour (R3.6):** the listener never sends a problem report in reply
+  to a problem report, whatever the handler returned, so two services cannot
+  keep a pair of reports going.
+- **Behaviour (R3.6):** `DefaultErrorHandler` sends `e.p.msg.internal-error`
+  with the fixed comment `INTERNAL_ERROR_COMMENT`; the error text is only in
+  the warning it logs. Problem report codes are unchanged; a peer that read
+  the comment gets the fixed text.
 ## Unreleased (0.30.0) — SDK 0.45
 
 Moves to `affinidi-messaging-sdk` 0.45 (`trust-tasks-rs` 0.37). The SDK is a public dependency here, so this crate moves a minor. No source change.

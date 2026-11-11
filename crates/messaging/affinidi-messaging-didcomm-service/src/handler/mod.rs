@@ -3,6 +3,8 @@ pub mod extractor;
 mod message_pickup;
 mod trust_ping;
 
+#[cfg(test)]
+pub(crate) use context::test_context;
 pub use context::{HandlerContext, authenticated_sender_did};
 pub use extractor::{Extension, Extensions, FromMessageParts, MessageParts};
 pub use message_pickup::MESSAGE_PICKUP_STATUS_TYPE;
@@ -138,7 +140,9 @@ impl TspHandler for IgnoreTspHandler {
 /// Return `Some(response)` to send a reply (e.g., a problem report) back to the
 /// sender. Return `None` to silently drop the error.
 ///
-/// The default implementation logs the error and returns a problem report.
+/// The default implementation logs the error and returns a problem report
+/// with the `e.p.msg.internal-error` code and a fixed comment; the error text
+/// stays in the log.
 #[async_trait]
 pub trait ErrorHandler: Send + Sync + 'static {
     async fn on_error(
@@ -147,6 +151,9 @@ pub trait ErrorHandler: Send + Sync + 'static {
         error: &DIDCommServiceError,
     ) -> Option<DIDCommResponse>;
 }
+
+/// Comment [`DefaultErrorHandler`] puts in its problem report.
+pub const INTERNAL_ERROR_COMMENT: &str = "Internal error";
 
 pub struct DefaultErrorHandler;
 
@@ -167,7 +174,7 @@ impl ErrorHandler for DefaultErrorHandler {
         );
 
         Some(DIDCommResponse::problem_report(
-            crate::problem_report::ProblemReport::internal_error(error.to_string()),
+            crate::problem_report::ProblemReport::internal_error(INTERNAL_ERROR_COMMENT),
         ))
     }
 }

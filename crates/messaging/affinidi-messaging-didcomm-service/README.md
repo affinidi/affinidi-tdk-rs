@@ -23,7 +23,7 @@ affinidi-messaging-didcomm-service = "0.3"
 - **Offline message sync** -- periodic polling for queued messages missed during downtime
 - **Graceful shutdown** -- in-flight message handlers are tracked via `JoinSet` and drained on shutdown; panicked tasks are detected and logged
 - **Built-in handlers** -- `trust_ping_handler` for trust-ping protocol, `ignore_handler` for silently dropping messages (e.g. `MESSAGE_PICKUP_STATUS_TYPE`)
-- **Fallback and error handling** -- `.fallback()` for unmatched message types, `.on_error()` with `ErrorHandler` trait for centralized error logging
+- **Fallback and error handling** -- `.fallback()` for unmatched message types, `.on_error()` with `ErrorHandler` trait for centralized error logging. Without a fallback, an unmatched type gets a `bad-request` problem report, except a problem report or a pickup `status`, which get no reply; the default error handler logs the error and sends an `internal-error` report with a fixed comment
 - **Outbound messaging** -- send proactive (unsolicited) DIDComm messages through an existing listener's mediator connection via `DIDCommService::send_message()`, avoiding duplicate websocket sessions. `send_message_with_retry()` adds built-in retry with exponential backoff
 - **Connection readiness** -- `wait_connected(listener_id, timeout)` blocks until a listener's mediator connection is live, eliminating races between startup and first send
 - **Lifecycle events** -- `subscribe()` returns a broadcast receiver of `ListenerEvent`s (`Connected`, `Disconnected`, `Restarting`) for application-level reactions to connection state changes

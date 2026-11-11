@@ -10,9 +10,7 @@ use tokio::sync::oneshot;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-#[cfg(feature = "tsp")]
-use tracing::debug;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::ListenerConfig;
 use crate::error::{DIDCommServiceError, StartupError};
@@ -723,7 +721,15 @@ impl Listener {
         };
 
         let profile_alias = ctx.profile.inner.alias.clone();
+        let inbound_type = message.typ.clone();
         match handler.handle(ctx.clone(), message, meta).await {
+            Ok(Some(response)) if !reply_allowed(&inbound_type, &response) => {
+                debug!(
+                    profile = %profile_alias,
+                    message_type = %inbound_type,
+                    "Problem report not answered with a problem report"
+                );
+            }
             Ok(Some(response)) => {
                 if let Err(e) = Self::send_response(&ctx, response).await {
                     warn!(profile = %profile_alias, error = %e, "Failed to send response");
@@ -754,6 +760,13 @@ impl Listener {
         let message = response.into_message(ctx)?;
         transport::send_response(ctx, message).await
     }
+}
+
+/// A problem report is never answered with another one, so two services that
+/// each report the other's reports cannot keep a pair of them going.
+fn reply_allowed(inbound_type: &str, response: &DIDCommResponse) -> bool {
+    !(transport::is_problem_report_type(inbound_type)
+        && transport::is_problem_report_type(&response.type_))
 }
 
 /// How long a TSP frame waits for the previous frame from the same sender to
@@ -976,5 +989,26 @@ mod tests {
         let long = "x".repeat(SenderOrder::MAX_SENDER_LEN + 1);
         assert!(order.enqueue(&long).is_none());
         assert_eq!(order.len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod reply_tests {
+    use super::*;
+    use crate::problem_report::{ProblemReport, ServiceProblemReport};
+    use crate::transport::PROBLEM_REPORT_TYPE;
+
+    #[test]
+    fn a_problem_report_is_not_answered_with_a_problem_report() {
+        let report = DIDCommResponse::problem_report(ProblemReport::internal_error("x"));
+        assert!(!reply_allowed(PROBLEM_REPORT_TYPE, &report));
+    }
+
+    #[test]
+    fn other_replies_are_sent() {
+        let report = DIDCommResponse::problem_report(ProblemReport::internal_error("x"));
+        let ack = DIDCommResponse::new("https://example.com/ack", serde_json::json!({}));
+        assert!(reply_allowed("https://example.com/request", &report));
+        assert!(reply_allowed(PROBLEM_REPORT_TYPE, &ack));
     }
 }
