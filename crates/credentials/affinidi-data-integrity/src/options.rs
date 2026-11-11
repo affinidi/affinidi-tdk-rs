@@ -19,6 +19,7 @@
 
 use chrono::{DateTime, Utc};
 
+use crate::StringOrList;
 use crate::crypto_suites::CryptoSuite;
 
 /// Options for signing a Data Integrity proof.
@@ -48,6 +49,25 @@ pub struct SignOptions {
 
     /// Value of `proofPurpose`. Defaults to `"assertionMethod"`.
     pub proof_purpose: Option<String>,
+
+    /// Proof `expires`. If `None`, the proof does not expire.
+    pub expires: Option<DateTime<Utc>>,
+
+    /// Proof `domain`. If `None`, no domain is set.
+    pub domain: Option<StringOrList>,
+
+    /// Proof `challenge`. If `None`, no challenge is set.
+    pub challenge: Option<String>,
+
+    /// Proof `nonce`. If `None`, no nonce is set.
+    pub nonce: Option<String>,
+
+    /// Proof `id`. If `None`, the proof has no `id`.
+    pub id: Option<String>,
+
+    /// Proof `previousProof`. If `None`, the proof does not chain from
+    /// another.
+    pub previous_proof: Option<StringOrList>,
 }
 
 impl SignOptions {
@@ -88,6 +108,54 @@ impl SignOptions {
         self.proof_purpose = Some(purpose.into());
         self
     }
+
+    /// Sets `expires`, after which verifiers refuse the proof. Serialised
+    /// like `created`: seconds precision, `Z`-suffix, so any sub-second
+    /// part is dropped.
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_expires(mut self, expires: DateTime<Utc>) -> Self {
+        self.expires = Some(expires);
+        self
+    }
+
+    /// Sets `domain`: one string, or a list of strings.
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_domain(mut self, domain: impl Into<StringOrList>) -> Self {
+        self.domain = Some(domain.into());
+        self
+    }
+
+    /// Sets `challenge`, normally a value the verifier issued.
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_challenge(mut self, challenge: impl Into<String>) -> Self {
+        self.challenge = Some(challenge.into());
+        self
+    }
+
+    /// Sets `nonce`.
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_nonce(mut self, nonce: impl Into<String>) -> Self {
+        self.nonce = Some(nonce.into());
+        self
+    }
+
+    /// Sets the proof's `id`. [`DataIntegrityProof::sign_multi`] gives every
+    /// proof the same options, so sign individually to give each proof its
+    /// own `id`.
+    ///
+    /// [`DataIntegrityProof::sign_multi`]: crate::DataIntegrityProof::sign_multi
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// Sets `previousProof`: the `id` of one proof, or a list of them.
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_previous_proof(mut self, previous_proof: impl Into<StringOrList>) -> Self {
+        self.previous_proof = Some(previous_proof.into());
+        self
+    }
 }
 
 /// Default tolerance applied to a proof's `created` timestamp when it
@@ -101,17 +169,21 @@ impl SignOptions {
 /// `iat`/`nbf` (and `jsonwebtoken`'s own default), so a signer skewed
 /// further than this generally fails bearer-token validation anyway.
 ///
-/// This governs only how far *ahead* `created` may be. It is not a
-/// freshness window: this library does not reject old proofs, so replay
-/// protection must come from the surrounding protocol.
+/// The same allowance applies after a proof's `expires`: a proof is refused
+/// once the verification time is more than this far past it.
+///
+/// It is not a freshness window: this library does not reject old proofs
+/// that carry no `expires`, so replay protection must come from the
+/// surrounding protocol (or from `expires`, `challenge` and `domain`).
 pub const DEFAULT_CLOCK_SKEW: chrono::TimeDelta = chrono::TimeDelta::seconds(60);
 
 /// Options for verifying a Data Integrity proof.
 ///
-/// Currently carries the document's externally-supplied `@context` (for
-/// comparison with the proof's declared context), an optional allowlist
-/// of acceptable cryptosuites, and the tolerance applied to a future
-/// `created` timestamp. More fields will be added as the library grows —
+/// Carries the document's externally-supplied `@context` (for comparison
+/// with the proof's declared context), an optional allowlist of acceptable
+/// cryptosuites, the clock-skew tolerance applied to `created` and
+/// `expires`, the time to verify at, and an optional expected `domain` and
+/// `challenge`. More fields will be added as the library grows —
 /// `#[non_exhaustive]` ensures future additions do not break callers.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -127,10 +199,25 @@ pub struct VerifyOptions {
     pub allowed_suites: Vec<CryptoSuite>,
 
     /// How far into the verifier's future a proof's `created` may sit
-    /// before it is rejected as non-conformant. Defaults to
-    /// [`DEFAULT_CLOCK_SKEW`]; set to zero for strict rejection of any
-    /// future timestamp. Negative values are treated as zero.
+    /// before it is rejected as non-conformant, and how far past a proof's
+    /// `expires` the verifier may be before the proof is refused as
+    /// expired. Defaults to [`DEFAULT_CLOCK_SKEW`]; set to zero for strict
+    /// comparison. Negative values are treated as zero.
     pub clock_skew: chrono::TimeDelta,
+
+    /// The time `created` and `expires` are compared against. `None` (the
+    /// default) means the current time. Set it to verify as of a fixed
+    /// instant, for tests or for checking a proof at the time it was
+    /// received.
+    pub verification_time: Option<DateTime<Utc>>,
+
+    /// When `Some`, the proof's `domain` must be, or must include, this
+    /// value. A proof with no `domain` is then refused.
+    pub expected_domain: Option<String>,
+
+    /// When `Some`, the proof's `challenge` must equal this value. A proof
+    /// with no `challenge` is then refused.
+    pub expected_challenge: Option<String>,
 }
 
 impl Default for VerifyOptions {
@@ -142,6 +229,9 @@ impl Default for VerifyOptions {
             expected_context: None,
             allowed_suites: Vec::new(),
             clock_skew: DEFAULT_CLOCK_SKEW,
+            verification_time: None,
+            expected_domain: None,
+            expected_challenge: None,
         }
     }
 }
@@ -175,6 +265,27 @@ impl VerifyOptions {
     #[must_use = "chained builder call returns self; assign or chain further"]
     pub fn with_clock_skew(mut self, skew: chrono::TimeDelta) -> Self {
         self.clock_skew = skew;
+        self
+    }
+
+    /// Verifies as of `time` instead of the current time.
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_verification_time(mut self, time: DateTime<Utc>) -> Self {
+        self.verification_time = Some(time);
+        self
+    }
+
+    /// Requires the proof's `domain` to be, or to include, `domain`.
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_expected_domain(mut self, domain: impl Into<String>) -> Self {
+        self.expected_domain = Some(domain.into());
+        self
+    }
+
+    /// Requires the proof's `challenge` to equal `challenge`.
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_expected_challenge(mut self, challenge: impl Into<String>) -> Self {
+        self.expected_challenge = Some(challenge.into());
         self
     }
 }

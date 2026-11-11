@@ -101,6 +101,39 @@ proof.verify(&doc, &DidKeyResolver, VerifyOptions::new()).await?;
 # Ok(()) }
 ```
 
+### Expiry, domain and challenge
+
+The optional proof members of VC Data Integrity 1.0 §2.1 (`expires`,
+`domain`, `challenge`, `nonce`, `id`, `previousProof`) can be set when
+signing, are kept when a proof is parsed, and are covered by the signature.
+Verification refuses a proof whose `expires` has passed with
+`DataIntegrityError::ProofExpired` (with the same clock-skew allowance as
+`created`) and a malformed `expires` with `MalformedProof`. `domain` and
+`challenge` are compared only when the verifier asks for them.
+
+```rust,ignore
+let proof = DataIntegrityProof::sign(
+    &doc,
+    &secret,
+    SignOptions::new()
+        .with_expires(Utc::now() + TimeDelta::minutes(5))
+        .with_domain("https://verifier.example")
+        .with_challenge(challenge),
+)
+.await?;
+
+proof.verify_with_public_key(
+    &doc,
+    secret.get_public_bytes(),
+    VerifyOptions::new()
+        .with_expected_domain("https://verifier.example")
+        .with_expected_challenge(challenge),
+)?;
+```
+
+`VerifyOptions::with_verification_time` verifies as of a fixed instant
+instead of the current time.
+
 ### Remote signer (KMS / HSM)
 
 Implement the `Signer` trait — exactly the same trait that local keys use. See `examples/remote_signer_ed25519.rs` and `examples/remote_signer_ml_dsa.rs` for full worked examples with a mock signing service. For protocols that hash out-of-band, `prepare_sign_input()` returns the exact bytes the remote side must sign.

@@ -1,5 +1,50 @@
 # Affinidi Data Integrity Changelog
 
+## 0.8.3 — `expires`, `domain`, `challenge`, `id` and `previousProof` proof members
+
+**Behaviour change (R3.6).** `DataIntegrityProof` had no field for the
+optional proof members VC Data Integrity 1.0 §2.1 defines besides `nonce`,
+so serde dropped them on parse. Every cryptosuite hashes the proof
+configuration, so a proof whose producer signed any of them failed with
+`InvalidSignature`, and a verifier could not enforce `expires`. They are now
+modelled the same way `nonce` was (#802).
+
+- New `DataIntegrityProof` fields `id`, `expires`, `domain`, `challenge`,
+  `previous_proof`, omitted from JSON when `None`. `domain` and
+  `previousProof` may be a string or a list of strings (new type
+  `StringOrList`) and serialize in the shape they were given. They are
+  kept through parse, JCS and RDFC canonicalization, and verify, for every
+  suite.
+- Verification refuses a proof whose `expires` has passed with the new
+  error `DataIntegrityError::ProofExpired`, allowing the same clock skew as
+  `created` (`VerifyOptions::clock_skew`, 60s by default). `expires` must be
+  an `xsd:dateTimeStamp` (`YYYY-MM-DDThh:mm:ss[.f]` then `Z` or `±hh:mm`);
+  month, day-of-month, hour (0-23), minute and second (0-59) and offset (at
+  most 14:00) are range-checked, and anything else is refused with
+  `MalformedProof`. This applies to `verify`, `verify_with_public_key`,
+  `verify_multi`, `verify_conformance`, and the `bbs-2023`
+  `verify_derived_proof` / `verify_pseudonym_derived_proof`.
+- `VerifyOptions::with_verification_time` checks `created` and `expires`
+  against a fixed instant instead of the current time.
+- `VerifyOptions::with_expected_domain` / `with_expected_challenge`: when
+  set, the proof's `domain` must be or include the value, and its
+  `challenge` must equal it. Off by default.
+- `SignOptions::with_expires`, `with_domain`, `with_challenge`,
+  `with_nonce`, `with_id`, `with_previous_proof` set the members on signed
+  proofs. Proofs signed without them are byte-for-byte unchanged.
+
+All of the touched public types were already `#[non_exhaustive]`, so the new
+fields and error variant are additive. What changes for callers:
+
+- A proof whose `expires` has passed, or is malformed, no longer verifies.
+  Such proofs could only verify before if `expires` was added after signing.
+- A proof that carries `id`, `domain`, `challenge` or `previousProof` now
+  verifies if it is otherwise valid, where it was refused as
+  `InvalidSignature`. `domain` and `challenge` are not checked unless the
+  verifier asks for them.
+- A proof whose `domain` or `previousProof` is neither a string nor a list
+  of strings no longer parses.
+
 ## 0.8.2 — RDFC suites expand JSON-LD in safe mode
 
 **Behaviour change (R3.6).** The RDFC cryptosuites (`eddsa-rdfc-2022`,

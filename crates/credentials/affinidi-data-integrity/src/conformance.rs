@@ -30,13 +30,17 @@ use crate::{DataIntegrityError, DataIntegrityProof};
 ///    the future than [`DEFAULT_CLOCK_SKEW`] (the signer's clock is not
 ///    the verifier's; see [`verify_conformance_with_skew`] to choose the
 ///    allowance).
+/// 7. `expires`, if present, is a well-formed `xsd:dateTimeStamp` and has
+///    not passed by more than the same allowance.
 ///
 /// Returns `Ok(())` if all structural checks pass. The cryptographic
 /// signature is **not** verified here — use
 /// [`DataIntegrityProof::verify_with_public_key`] or
 /// [`DataIntegrityProof::verify`] for that.
 ///
-/// Returns [`DataIntegrityError::Conformance`] on the first failure.
+/// Returns [`DataIntegrityError::Conformance`] on the first failure, except
+/// for `expires`, which fails with [`DataIntegrityError::MalformedProof`] or
+/// [`DataIntegrityError::ProofExpired`] as in verification.
 pub fn verify_conformance(
     proof: &DataIntegrityProof,
     expected: CryptoSuite,
@@ -106,6 +110,14 @@ pub fn verify_conformance_with_skew(
                 skew.num_seconds()
             )));
         }
+    }
+
+    if let Some(expires) = &proof.expires {
+        crate::check_expires(
+            expires,
+            chrono::Utc::now(),
+            clock_skew.max(chrono::TimeDelta::zero()),
+        )?;
     }
 
     Ok(())

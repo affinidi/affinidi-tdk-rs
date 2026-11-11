@@ -359,6 +359,7 @@ pub fn verify_derived_proof(
         .as_object_mut()
         .ok_or_else(|| malformed("proof must be an object"))?;
     cfg.remove("proofValue");
+    check_proof_expiry(cfg)?;
     if let Some(ctx) = reveal_document.get("@context") {
         cfg.insert("@context".to_string(), ctx.clone());
     }
@@ -1107,6 +1108,7 @@ pub fn verify_pseudonym_derived_proof(
         .as_object_mut()
         .ok_or_else(|| malformed("proof must be an object"))?;
     cfg.remove("proofValue");
+    check_proof_expiry(cfg)?;
     if let Some(ctx) = reveal_document.get("@context") {
         cfg.insert("@context".to_string(), ctx.clone());
     }
@@ -1175,6 +1177,21 @@ pub fn verify_pseudonym_derived_proof(
             reason: crate::error::SignatureFailure::Invalid,
         }
     })
+}
+
+/// Refuses a derived proof whose `expires` is not a string, is not a
+/// well-formed `xsd:dateTimeStamp`, or has passed by more than
+/// [`DEFAULT_CLOCK_SKEW`](crate::DEFAULT_CLOCK_SKEW).
+fn check_proof_expiry(proof: &Map<String, Value>) -> Result<(), DataIntegrityError> {
+    match proof.get("expires") {
+        None => Ok(()),
+        Some(Value::String(expires)) => {
+            crate::check_expires(expires, chrono::Utc::now(), crate::DEFAULT_CLOCK_SKEW)
+        }
+        Some(_) => Err(DataIntegrityError::MalformedProof(
+            "expires must be a string".to_string(),
+        )),
+    }
 }
 
 /// `proofHash = SHA-256(RDFC-1.0(proofConfig))`.
@@ -2072,6 +2089,100 @@ mod tests {
         let mut bad = reveal.clone();
         bad["credentialSubject"]["sailNumber"] = Value::String("Mallory".into());
         assert!(!matches!(verify_derived_proof(&bad, &pk), Ok(true)));
+    }
+
+    /// Base document whose proof configuration carries `expires`, signed the
+    /// way [`sign_base_document`] signs, which has no `expires` parameter.
+    fn sign_base_document_expiring(expires: &str) -> (Value, bbs::PublicKey) {
+        let (sk, pk) = bbs_keys();
+        let doc = json("windDoc.json");
+        let proof_config = serde_json::json!({
+            "type": "DataIntegrityProof",
+            "cryptosuite": "bbs-2023",
+            "created": "2024-01-01T00:00:00Z",
+            "expires": expires,
+            "verificationMethod": "did:key:zHolder#bbs",
+            "proofPurpose": "assertionMethod",
+            "@context": doc["@context"].clone(),
+        });
+        let mandatory = ["/issuer"];
+        let proof_value =
+            create_base_proof_value(&doc, &proof_config, &mandatory, &sk, &pk, &[0x42u8; 32])
+                .unwrap();
+        let mut proof = proof_config;
+        let fields = proof.as_object_mut().unwrap();
+        fields.remove("@context");
+        fields.insert("proofValue".to_string(), Value::String(proof_value));
+        let mut base = doc;
+        base["proof"] = proof;
+        (base, pk)
+    }
+
+    #[test]
+    fn derived_proof_with_expires_verifies_until_it_passes() {
+        let (base, pk) = sign_base_document_expiring("2999-01-01T00:00:00Z");
+        let reveal =
+            create_derived_proof(&base, &["/credentialSubject/sailNumber"], b"ph", &pk).unwrap();
+        assert_eq!(reveal["proof"]["expires"], "2999-01-01T00:00:00Z");
+        assert!(verify_derived_proof(&reveal, &pk).unwrap());
+
+        // `expires` is in the hashed proof configuration.
+        let mut later = reveal.clone();
+        later["proof"]["expires"] = Value::String("2999-06-01T00:00:00Z".into());
+        assert!(!matches!(verify_derived_proof(&later, &pk), Ok(true)));
+
+        let (base, pk) = sign_base_document_expiring("2001-01-01T00:00:00+02:00");
+        let reveal =
+            create_derived_proof(&base, &["/credentialSubject/sailNumber"], b"ph", &pk).unwrap();
+        assert!(matches!(
+            verify_derived_proof(&reveal, &pk),
+            Err(DataIntegrityError::ProofExpired { .. })
+        ));
+
+        let mut malformed = reveal.clone();
+        malformed["proof"]["expires"] = Value::String("2999-02-30T00:00:00Z".into());
+        assert!(matches!(
+            verify_derived_proof(&malformed, &pk),
+            Err(DataIntegrityError::MalformedProof(_))
+        ));
+        malformed["proof"]["expires"] = serde_json::json!(4102444800u64);
+        assert!(matches!(
+            verify_derived_proof(&malformed, &pk),
+            Err(DataIntegrityError::MalformedProof(_))
+        ));
+    }
+
+    /// The expiry check runs on the proof configuration before any BBS work,
+    /// so a pseudonym presentation carrying a passed `expires` is refused as
+    /// expired rather than as an invalid signature.
+    #[test]
+    fn pseudonym_derived_proof_with_passed_expires_is_refused() {
+        let pk = pseudonym_pk();
+        let prover_nym = hex_decode(
+            json("pseudonym/proverNym.json")["proverNymHex"]
+                .as_str()
+                .unwrap(),
+        );
+        let secret_prover_blind = hex_decode(
+            json("pseudonym/commitmentInfo.json")["secretProverBlind"]
+                .as_str()
+                .unwrap(),
+        );
+        let mut reveal = create_pseudonym_derived_proof(
+            &json("pseudonym/addSignedSDBase.json"),
+            &[],
+            b"test-ph",
+            &pk,
+            &prover_nym,
+            &secret_prover_blind,
+            VERIFIER_ID,
+        )
+        .unwrap();
+        reveal["proof"]["expires"] = Value::String("2001-01-01T00:00:00Z".into());
+        assert!(matches!(
+            verify_pseudonym_derived_proof(&reveal, &pk, VERIFIER_ID),
+            Err(DataIntegrityError::ProofExpired { .. })
+        ));
     }
 
     // --- issue #381 soundness regression tests --------------------------------

@@ -83,6 +83,13 @@ pub enum DataIntegrityError {
     #[error("spec conformance check failed: {0}")]
     Conformance(String),
 
+    /// The proof's `expires` time has passed. The verification time is
+    /// allowed the same clock-skew tolerance as `created`
+    /// ([`crate::VerifyOptions::clock_skew`]). A malformed `expires` is
+    /// reported as [`Self::MalformedProof`] instead.
+    #[error("proof expired at {expires}")]
+    ProofExpired { expires: String },
+
     /// A signer (local or remote) returned an error while producing a
     /// signature.
     #[error("signing failed")]
