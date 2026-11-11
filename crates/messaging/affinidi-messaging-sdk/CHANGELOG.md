@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.45.11 — the WebSocket refresh deadline handles any token lifetime
+
+- The proactive token refresh computed `ttl * 4 / 5` in `u64` from the access
+  token's remaining lifetime, which comes from the authentication service. A
+  lifetime above `u64::MAX / 4` overflowed: a panic with overflow checks, a
+  wrong (early) deadline without. The deadline is now `ttl / 5 * 4 + ttl % 5 *
+  4 / 5`, exact for every value, and the lifetime is capped at 30 days, so
+  the socket is refreshed at least every 24 days and the deadline always fits
+  the timer (`Instant + Duration` panicked on overflow too).
+- No API change. Only a token living longer than 30 days is refreshed
+  earlier than before.
+
 ## 0.45.10 — tsp-mux: Trust Tasks, acks and notices on the socket
 
 The `tsp-mux` client (`TspOps::connect_websocket_mux`) now does everything a
@@ -45,7 +57,6 @@ Against a mediator without it, acks fail rather than going over REST.
 Notices that used to arrive as `TspMuxFrame::Data` now arrive as
 `TspMuxFrame::Notice`; the enum is `#[non_exhaustive]`, so matches keep
 compiling.
-
 ## 0.45.9 — REST responses parsed without panicking; every REST call bounded
 
 - `fetch_messages`, `oob_discovery().create_invite` and
@@ -86,7 +97,6 @@ fails with `TransportError`; raise it with
 batches. A failed message-status call is now an `Err` from `outbox_status`
 rather than `Ok(None)`, except where the mediator does not serve the task.
 No public signatures change.
-
 ## 0.45.8 — a repeated TSP invite does not reopen a relationship
 
 `TspOps::record_incoming_control` applied every verified invite to the

@@ -1747,13 +1747,19 @@ fn delay_after_disconnect(current: u8, connected_for: Option<Duration>) -> u8 {
     }
 }
 
+/// The longest remaining token lifetime the proactive refresh plans for. The
+/// lifetime comes from the authentication service; a longer one is treated as
+/// this, so the socket is refreshed at least every ~24 days and the deadline
+/// always fits the timer.
+const MAX_REFRESH_TTL_SECS: u64 = 30 * 24 * 60 * 60;
+
 /// How long after connecting to proactively refresh the access token and
-/// reconnect: 80% of the token's remaining lifetime, leaving the final ~20%
-/// as budget to refresh + reconnect before the mediator force-closes the
-/// socket at expiry.
+/// reconnect: 80% of the token's remaining lifetime (capped at
+/// [`MAX_REFRESH_TTL_SECS`]), leaving the final ~20% as budget to refresh +
+/// reconnect before the mediator force-closes the socket at expiry.
 fn refresh_after_secs(ttl_secs: u64) -> u64 {
-    // `*4` first for accuracy on short TTLs; token lifetimes can't overflow u64.
-    (ttl_secs * 4) / 5
+    let ttl_secs = ttl_secs.min(MAX_REFRESH_TTL_SECS);
+    ttl_secs / 5 * 4 + ttl_secs % 5 * 4 / 5
 }
 
 /// Should this inbound frame be delivered **packed** rather than DIDComm-
@@ -1890,6 +1896,34 @@ mod tests {
         // Degenerate inputs don't panic.
         assert_eq!(refresh_after_secs(0), 0);
         assert_eq!(refresh_after_secs(1), 0);
+    }
+
+    #[test]
+    fn refresh_after_is_80_percent_for_every_remainder() {
+        for ttl in 0..=100u64 {
+            assert_eq!(refresh_after_secs(ttl), ttl * 4 / 5, "ttl {ttl}");
+        }
+        let at_cap = MAX_REFRESH_TTL_SECS;
+        assert_eq!(refresh_after_secs(at_cap), at_cap * 4 / 5);
+    }
+
+    /// A lifetime from the server beyond the cap, up to `u64::MAX`, neither
+    /// overflows nor schedules a deadline the timer cannot hold.
+    #[test]
+    fn a_huge_ttl_is_capped() {
+        let capped = MAX_REFRESH_TTL_SECS * 4 / 5;
+        for ttl in [
+            MAX_REFRESH_TTL_SECS + 1,
+            u64::MAX / 4,
+            u64::MAX / 4 + 1,
+            u64::MAX - 1,
+            u64::MAX,
+        ] {
+            assert_eq!(refresh_after_secs(ttl), capped, "ttl {ttl}");
+        }
+        let deadline = tokio::time::Instant::now()
+            .checked_add(Duration::from_secs(refresh_after_secs(u64::MAX)));
+        assert!(deadline.is_some());
     }
 
     #[test]
