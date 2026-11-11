@@ -1,5 +1,5 @@
 use affinidi_data_integrity::{
-    DataIntegrityProof, SignOptions, VerifyOptions, crypto_suites::CryptoSuite,
+    DataIntegrityError, DataIntegrityProof, SignOptions, VerifyOptions, crypto_suites::CryptoSuite,
 };
 use affinidi_secrets_resolver::secrets::Secret;
 use chrono::DateTime;
@@ -202,4 +202,108 @@ async fn rdfc_proof_cannot_verify_as_jcs() {
         result.is_err(),
         "RDFC-signed document should not verify through JCS path"
     );
+}
+
+fn reference_secret() -> Secret {
+    let pub_key = "z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2";
+    let pri_key = "z3u2en7t5LR2WtQH5PfFqMqwVHBeXouLzo6haApm8XHqvjxq";
+    Secret::from_multibase(pri_key, Some(&format!("did:key:{pub_key}#{pub_key}")))
+        .expect("Couldn't create Secret")
+}
+
+fn context_of(doc: &serde_json::Value) -> Vec<String> {
+    doc["@context"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e.as_str().unwrap().to_string())
+        .collect()
+}
+
+async fn sign_rdfc(
+    doc: &serde_json::Value,
+    secret: &Secret,
+) -> Result<DataIntegrityProof, DataIntegrityError> {
+    DataIntegrityProof::sign(
+        doc,
+        secret,
+        SignOptions::new()
+            .with_cryptosuite(CryptoSuite::EddsaRdfc2022)
+            .with_context(context_of(doc))
+            .with_created("2023-02-24T23:36:38Z".parse::<DateTime<_>>().unwrap()),
+    )
+    .await
+}
+
+fn membership_credential() -> serde_json::Value {
+    json!({
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "issuer": "did:example:issuer",
+        "validFrom": "2023-01-01T00:00:00Z",
+        "credentialSubject": { "id": "did:example:abcdefgh" }
+    })
+}
+
+/// VC Data Integrity 1.0 §2.4.3: a property the active `@context` does not
+/// define must raise an error rather than be left out of the canonical
+/// dataset. Adding one to a signed document must not leave it verifying.
+#[tokio::test]
+async fn rdfc_verify_rejects_undefined_term_added_after_signing() {
+    let secret = reference_secret();
+    let doc = membership_credential();
+    let proof = sign_rdfc(&doc, &secret).await.expect("sign");
+    proof
+        .verify_with_public_key(&doc, secret.get_public_bytes(), VerifyOptions::new())
+        .expect("unchanged document verifies");
+
+    let mut extended = doc.clone();
+    extended["credentialSubject"]["memberLevel"] = json!("gold");
+    let result =
+        proof.verify_with_public_key(&extended, secret.get_public_bytes(), VerifyOptions::new());
+    assert!(
+        matches!(result, Err(DataIntegrityError::Canonicalization(_))),
+        "an undefined term must fail canonicalization, got {result:?}"
+    );
+}
+
+/// Signing applies the same rule, so a signed document always verifies.
+#[tokio::test]
+async fn rdfc_sign_rejects_undefined_term() {
+    let mut doc = membership_credential();
+    doc["credentialSubject"]["memberLevel"] = json!("gold");
+    let result = sign_rdfc(&doc, &reference_secret()).await;
+    assert!(
+        matches!(result, Err(DataIntegrityError::Canonicalization(_))),
+        "an undefined term must fail canonicalization, got {result:?}"
+    );
+}
+
+/// The proof configuration is expanded in safe mode too: under the VC 1.1
+/// context alone, the Data Integrity proof terms (`created`, `cryptosuite`)
+/// are undefined. Adding the Data Integrity context defines them.
+#[tokio::test]
+async fn rdfc_proof_config_terms_must_be_defined() {
+    let secret = reference_secret();
+    let mut doc = json!({
+        "@context": ["https://www.w3.org/2018/credentials/v1"],
+        "type": ["VerifiableCredential"],
+        "issuer": "did:example:issuer",
+        "issuanceDate": "2023-01-01T00:00:00Z",
+        "credentialSubject": { "id": "did:example:abcdefgh" }
+    });
+    let result = sign_rdfc(&doc, &secret).await;
+    assert!(
+        matches!(result, Err(DataIntegrityError::Canonicalization(_))),
+        "undefined proof configuration terms must fail canonicalization, got {result:?}"
+    );
+
+    doc["@context"] = json!([
+        "https://www.w3.org/2018/credentials/v1",
+        "https://w3id.org/security/data-integrity/v2"
+    ]);
+    let proof = sign_rdfc(&doc, &secret).await.expect("sign");
+    proof
+        .verify_with_public_key(&doc, secret.get_public_bytes(), VerifyOptions::new())
+        .expect("verify");
 }

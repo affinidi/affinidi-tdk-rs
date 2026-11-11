@@ -1,5 +1,40 @@
 # Affinidi Data Integrity Changelog
 
+## 0.8.2 — RDFC suites expand JSON-LD in safe mode
+
+**Behaviour change (R3.6).** The RDFC cryptosuites (`eddsa-rdfc-2022`,
+`mldsa44-rdfc-2024`, `slhdsa128-rdfc-2024`) now expand both the document and
+the proof configuration in JSON-LD safe mode, in `DataIntegrityProof::sign`,
+`verify`, `verify_with_public_key`, `verify_multi` and `prepare_sign_input`.
+A property or `@type` that the active `@context` does not define now fails
+with `DataIntegrityError::Canonicalization` instead of being left out of the
+canonical dataset.
+
+VC Data Integrity 1.0 §2.4.3 (Securing Data Losslessly) requires this:
+implementations that use JSON-LD processing "MUST throw an error ... when data
+is dropped by a JSON-LD processor, such as when an undefined term is detected
+in an input document". Before this release such a term was dropped from the
+hashed dataset but stayed in the JSON, so a signed document could carry it,
+with any value, and still verify. `bbs-2023` has expanded documents in safe
+mode since 0.7.5 (#381); this brings the generic RDFC path in line. JCS suites
+are unaffected: they hash the whole JSON.
+
+What now fails, on sign and on verify:
+
+- A document with a property its `@context` does not define, for example
+  `credentialSubject.memberLevel` under `https://www.w3.org/ns/credentials/v2`
+  alone. Define the term in a context (or an `@vocab`) the document lists.
+- A proof configuration whose terms the context does not define. Under
+  `https://www.w3.org/2018/credentials/v1` alone, `created`, `cryptosuite` and
+  `DataIntegrityProof` are undefined; add
+  `https://w3id.org/security/data-integrity/v2` to the document's `@context`.
+- An RDFC document with no `@context` at all.
+
+Proofs over such documents that verified with 0.8.1 or earlier are now
+rejected; the dropped content was never covered by their signature. Documents
+whose terms are all defined hash to the same bytes as before, so their
+existing proofs still verify (the W3C vc-di-eddsa B.1 vector is unchanged).
+
 ## 0.8.1 — `RequireThreshold` counts distinct signers (security)
 
 **Security fix; behaviour change.** `verify_multi` with
