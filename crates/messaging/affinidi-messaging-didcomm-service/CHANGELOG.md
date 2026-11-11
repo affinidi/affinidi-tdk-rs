@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.30.1 — log names a repeated TSP invite
+
+The debug line for an inbound TSP control message that was not recorded now
+also names a copy of an invite already acted on, which
+`affinidi-messaging-sdk` 0.45.8 refuses. Log text only.
+
 ## Unreleased (0.30.0) — SDK 0.45
 
 Moves to `affinidi-messaging-sdk` 0.45 (`trust-tasks-rs` 0.37). The SDK is a public dependency here, so this crate moves a minor. No source change.

@@ -534,8 +534,8 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
                         sender = %sender,
                         frame = %ack,
                         "inbound TSP control message not recorded — a protocol rule refused it \
-                         (a cancellation for a relationship we do not hold, or the losing side \
-                         of the §7.2.3 invite race)",
+                         (a cancellation for a relationship we do not hold, the losing side of \
+                         the §7.2.3 invite race, or a copy of an invite already acted on)",
                     );
                     release_frame(atm, profile, &ack).await;
                     return None;

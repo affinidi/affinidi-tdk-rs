@@ -601,13 +601,16 @@ impl Listener {
                     }
                     Err(e) => {
                         // Discarded by a protocol rule — a cancellation for a
-                        // relationship we do not hold, or the losing side of an
-                        // invite race. Not an error to answer.
+                        // relationship we do not hold, the losing side of an
+                        // invite race, or a copy of an invite already acted
+                        // on. Not an error to answer.
                         debug!(
                             profile = %profile.inner.alias,
                             sender = %sender,
                             error = %e,
-                            "Inbound TSP control message not recorded"
+                            "Inbound TSP control message not recorded (a cancellation for a relationship \
+                             we do not hold, the losing side of an invite race, or a copy of an \
+                             invite already acted on)"
                         );
                     }
                 }

@@ -244,11 +244,15 @@ fn remember_invite(seen: &mut InviteHistory, digest: [u8; 32]) {
 ///
 /// Two sources answer it. The invite the relationship currently records
 /// ([`ThreadDigests::invite`]) needs nothing from the store beyond what it
-/// already keeps; it counts once the relationship is `Bidirectional`. While
-/// still `InviteReceived`, a copy of the invite being decided on is the no-op
-/// it always was, so it is not reported here. Earlier invites — from before a
+/// already keeps; it counts once the relationship is `Bidirectional`. (A copy
+/// of the invite still being decided on, in `InviteReceived`, is handled by
+/// the caller before this is asked.) Earlier invites — from before a
 /// re-formation or a cancellation, or the losing side of a §7.2.3 race — come
 /// from the store's history ([`RelationshipStore::has_seen_invite`]).
+///
+/// A store that cannot answer is logged and the invite treated as new: the
+/// worst that does is ask the application about an invite again, where
+/// refusing would drop a genuine one.
 async fn is_repeated_invite(
     store: &Arc<dyn RelationshipStore>,
     our_vid: &str,
@@ -256,11 +260,42 @@ async fn is_repeated_invite(
     prior: RelationshipState,
     digests: &ThreadDigests,
     digest: &[u8; 32],
-) -> Result<bool, ATMError> {
+) -> bool {
     if digests.invite.as_ref() == Some(digest) {
-        return Ok(prior == RelationshipState::Bidirectional);
+        return prior == RelationshipState::Bidirectional;
     }
-    store.has_seen_invite(our_vid, their_vid, digest).await
+    match store.has_seen_invite(our_vid, their_vid, digest).await {
+        Ok(seen) => seen,
+        Err(e) => {
+            tracing::warn!(
+                peer = %their_vid,
+                error = %e,
+                "could not read the history of TSP invites already received; treating this \
+                 invite as new",
+            );
+            false
+        }
+    }
+}
+
+/// Add an invite to the store's history, logging rather than returning a
+/// failure. By the time this runs the invite has been acted on (or refused),
+/// so failing the receive over it would only lose the message; the cost of
+/// the missing entry is that a later copy of this invite is not refused.
+async fn record_seen_invite_logged(
+    store: &Arc<dyn RelationshipStore>,
+    our_vid: &str,
+    their_vid: &str,
+    digest: [u8; 32],
+) {
+    if let Err(e) = store.record_seen_invite(our_vid, their_vid, digest).await {
+        tracing::warn!(
+            peer = %their_vid,
+            error = %e,
+            "could not record a received TSP invite in the store's history; a later copy of it \
+             will not be recognised",
+        );
+    }
 }
 
 /// The default implementation is [`InMemoryRelationshipStore`]; supply a
@@ -2799,24 +2834,44 @@ impl TspOps<'_> {
 
         let mut digests = store.thread_digests(our_did, peer_did).await?;
 
-        // A copy of an invite already acted on for this pair. It verifies as
-        // well as the first time, but a peer re-forming the relationship sends
-        // a new invite with a new nonce and so a new digest; the same digest
-        // again is the same message again and is no reason to reopen the
-        // relationship. Refused, and nothing changes.
         if control.control_type == ControlType::RelationshipFormingInvite
-            && let Some(digest) = control.digest.as_ref()
-            && is_repeated_invite(store, our_did, peer_did, prior, &digests, digest).await?
+            && let Some(digest) = control.digest
         {
-            tracing::debug!(
-                peer = %peer_did,
-                state = ?prior,
-                "repeated TSP invite for an invite already acted on; discarded",
-            );
-            return Err(ATMError::MsgReceiveError(format!(
-                "TSP invite from {peer_did} discarded: it was already received, and a repeated \
-                 copy does not reopen the relationship"
-            )));
+            // A copy of the invite we are still deciding on. Nothing to apply:
+            // report the state we read and leave the state machine alone. Not
+            // driving `ReceiveInvite` matters — an accept of this invite may
+            // land between our read and a transition, and the transition would
+            // then read `Bidirectional` and reopen what the accept just
+            // formed. Re-recording the reply path and the history completes a
+            // first copy that was interrupted part way.
+            if prior == RelationshipState::InviteReceived && digests.invite == Some(digest) {
+                store
+                    .set_reply_path(our_did, peer_did, control.route.clone())
+                    .await?;
+                record_seen_invite_logged(store, our_did, peer_did, digest).await;
+                return Ok(IncomingControl {
+                    state: prior,
+                    reply_expected: false,
+                    reply_path: control.route.clone(),
+                });
+            }
+
+            // A copy of an invite already acted on for this pair. It verifies
+            // as well as the first time, but a peer re-forming the relationship
+            // sends a new invite with a new nonce and so a new digest; the
+            // same digest again is the same message again and is no reason to
+            // reopen the relationship. Refused, and nothing changes.
+            if is_repeated_invite(store, our_did, peer_did, prior, &digests, &digest).await {
+                tracing::debug!(
+                    peer = %peer_did,
+                    state = ?prior,
+                    "repeated TSP invite for an invite already acted on; discarded",
+                );
+                return Err(ATMError::MsgReceiveError(format!(
+                    "TSP invite from {peer_did} discarded: it was already received, and a \
+                     repeated copy does not reopen the relationship"
+                )));
+            }
         }
 
         // Rev 3 §7.2.3, the invite race. Both endpoints may invite each other
@@ -2831,7 +2886,7 @@ impl TspOps<'_> {
             if ours.as_slice() < theirs.as_slice() {
                 // The losing invite is settled too: a copy of it arriving once
                 // the race is over must not reopen the relationship ours forms.
-                store.record_seen_invite(our_did, peer_did, theirs).await?;
+                record_seen_invite_logged(store, our_did, peer_did, theirs).await;
                 return Err(ATMError::MsgReceiveError(format!(
                     "TSP invite from {peer_did} discarded: our own invite has the lower digest"
                 )));
@@ -2853,7 +2908,7 @@ impl TspOps<'_> {
             store
                 .set_reply_path(our_did, peer_did, control.route.clone())
                 .await?;
-            store.record_seen_invite(our_did, peer_did, theirs).await?;
+            record_seen_invite_logged(store, our_did, peer_did, theirs).await;
             return Ok(IncomingControl {
                 state: RelationshipState::InviteReceived,
                 reply_expected: false,
@@ -2922,7 +2977,7 @@ impl TspOps<'_> {
                 // before this, a redelivered copy finds the invite as the one
                 // being decided on and is recorded again, not refused.
                 if let Some(digest) = control.digest {
-                    store.record_seen_invite(our_did, peer_did, digest).await?;
+                    record_seen_invite_logged(store, our_did, peer_did, digest).await;
                 }
             }
             ControlType::RelationshipFormingAccept => {
@@ -5910,6 +5965,133 @@ mod repeated_invite_tests {
             bob.receive(&invite([1; 32])).await.unwrap(),
             RelationshipState::InviteReceived
         );
+    }
+
+    /// Lets a test act between `record_incoming_control` reading the state
+    /// and its next store call: when armed, the next `thread_digests` read
+    /// first sets the pair `Bidirectional`, as a local accept landing there
+    /// would.
+    #[derive(Default)]
+    struct AcceptLandsMidway {
+        inner: InMemoryRelationshipStore,
+        armed: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl RelationshipStore for AcceptLandsMidway {
+        async fn get(&self, our: &str, their: &str) -> Result<RelationshipState, ATMError> {
+            self.inner.get(our, their).await
+        }
+        async fn set(
+            &self,
+            our: &str,
+            their: &str,
+            state: RelationshipState,
+        ) -> Result<(), ATMError> {
+            self.inner.set(our, their, state).await
+        }
+        async fn thread_digests(&self, our: &str, their: &str) -> Result<ThreadDigests, ATMError> {
+            if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                self.inner
+                    .set(our, their, RelationshipState::Bidirectional)
+                    .await?;
+            }
+            self.inner.thread_digests(our, their).await
+        }
+        async fn set_thread_digests(
+            &self,
+            our: &str,
+            their: &str,
+            digests: ThreadDigests,
+        ) -> Result<(), ATMError> {
+            self.inner.set_thread_digests(our, their, digests).await
+        }
+        async fn has_seen_invite(
+            &self,
+            our: &str,
+            their: &str,
+            digest: &[u8; 32],
+        ) -> Result<bool, ATMError> {
+            self.inner.has_seen_invite(our, their, digest).await
+        }
+        async fn record_seen_invite(
+            &self,
+            our: &str,
+            their: &str,
+            digest: [u8; 32],
+        ) -> Result<(), ATMError> {
+            self.inner.record_seen_invite(our, their, digest).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_copy_of_the_invite_being_decided_on_does_not_undo_an_accept_landing_midway() {
+        let store = Arc::new(AcceptLandsMidway::default());
+        let bob = Endpoint::with_store(store.clone()).await;
+        bob.receive(&invite([1; 32])).await.unwrap();
+
+        store.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            bob.receive(&invite([1; 32])).await.unwrap(),
+            RelationshipState::InviteReceived
+        );
+        assert_eq!(bob.state().await, RelationshipState::Bidirectional);
+    }
+
+    /// Keeps state and digests but fails every call on the invite history.
+    #[derive(Default)]
+    struct HistoryUnavailable(InMemoryRelationshipStore);
+
+    #[async_trait::async_trait]
+    impl RelationshipStore for HistoryUnavailable {
+        async fn get(&self, our: &str, their: &str) -> Result<RelationshipState, ATMError> {
+            self.0.get(our, their).await
+        }
+        async fn set(
+            &self,
+            our: &str,
+            their: &str,
+            state: RelationshipState,
+        ) -> Result<(), ATMError> {
+            self.0.set(our, their, state).await
+        }
+        async fn thread_digests(&self, our: &str, their: &str) -> Result<ThreadDigests, ATMError> {
+            self.0.thread_digests(our, their).await
+        }
+        async fn set_thread_digests(
+            &self,
+            our: &str,
+            their: &str,
+            digests: ThreadDigests,
+        ) -> Result<(), ATMError> {
+            self.0.set_thread_digests(our, their, digests).await
+        }
+        async fn has_seen_invite(&self, _: &str, _: &str, _: &[u8; 32]) -> Result<bool, ATMError> {
+            Err(ATMError::SDKError("history unavailable".to_string()))
+        }
+        async fn record_seen_invite(&self, _: &str, _: &str, _: [u8; 32]) -> Result<(), ATMError> {
+            Err(ATMError::SDKError("history unavailable".to_string()))
+        }
+    }
+
+    /// A store that cannot read or write the history does not cost an invite:
+    /// it is recorded and treated as new.
+    #[tokio::test]
+    async fn an_unavailable_history_does_not_lose_an_invite() {
+        let bob = Endpoint::with_store(Arc::new(HistoryUnavailable::default())).await;
+        assert_eq!(
+            bob.receive(&invite([1; 32])).await.unwrap(),
+            RelationshipState::InviteReceived
+        );
+        bob.accept().await;
+        assert_eq!(
+            bob.receive(&invite([2; 32])).await.unwrap(),
+            RelationshipState::InviteReceived
+        );
+        // The current invite is still recognised without the history.
+        bob.accept().await;
+        let again = bob.receive(&invite([2; 32])).await;
+        assert!(is_discarded(&again), "{again:?}");
     }
 
     #[derive(Clone, Default)]
