@@ -7,8 +7,9 @@ All notable changes to this crate are documented here.
 ### Changed (behaviour, R3.6)
 
 - **The host label must decode to a host.** `DidWebs::parse` percent-decodes
-  the host label in full and refuses it unless it is a hostname, an IPv4
-  address or a bracketed IPv6 address, with an optional numeric port: a host
+  the host label in full and refuses it unless it is a host (a hostname, or
+  an IP literal, which this resolver also accepts: IPv4, or IPv6 in
+  brackets) and an optional numeric port: a host
   label that decodes to user information (`@`), a path (`/`, `\`), a query
   (`?`), a fragment (`#`), a further `%`, whitespace or a control character
   is refused, as is a malformed escape or one that is not UTF-8. Before, the
@@ -27,7 +28,11 @@ All notable changes to this crate are documented here.
 ### Fixed
 
 - `DidWebs::is_loopback` recognises a bracketed IPv6 loopback host with a
-  port (`[::1]:7676`); it split on the first `:` and never matched one.
+  port (`[::1]:7676`); it split on the first `:` and never matched one. It
+  now compares the host as the URL parser normalises it, so `LOCALHOST`,
+  `0x7f.1` and `[0:0:0:0:0:0:0:1]` are recognised as well.
+- `DidWebs::host()` returns the host label percent-decoded in full, not only
+  its `%3A` port separator.
 - Comparing DIDs with non-ASCII characters no longer garbles them while
   normalising percent-encoding case.
 

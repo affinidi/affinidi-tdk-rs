@@ -27,7 +27,8 @@ pub struct DidWebs {
     did: String,
     /// The `versionId` DID parameter, when the DID URL carried one.
     version_id: Option<u64>,
-    /// Host, with the port decoded if one was present (`example.com:3000`).
+    /// The host label, percent-decoded in full, with the port if one was
+    /// present (`example.com:3000`).
     host: String,
     /// Path segments between the host and the AID.
     path: Vec<String>,
@@ -117,7 +118,8 @@ impl DidWebs {
         &self.aid
     }
 
-    /// The host, with any `%3A`-encoded port decoded.
+    /// The host label, percent-decoded in full (including a `%3A`-encoded
+    /// port separator).
     pub fn host(&self) -> &str {
         &self.host
     }
@@ -143,8 +145,13 @@ impl DidWebs {
     /// its own examples over plain HTTP. Resolvers therefore permit `http` for
     /// loopback, the same accommodation `did:web` implementations make.
     pub fn is_loopback(&self) -> bool {
-        let (host, _) = split_host_port(&self.host);
-        host == "localhost" || host == "127.0.0.1" || host == "[::1]"
+        // Compare the host as the URL parser normalises it, which is the host
+        // a request goes to: `LOCALHOST`, `0x7f.1` and `[0:0:0:0:0:0:0:1]`
+        // are loopback too.
+        reqwest::Url::parse(&format!("http://{}/", self.host))
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .is_some_and(|host| host == "localhost" || host == "127.0.0.1" || host == "[::1]")
     }
 
     /// The URL an artifact is published at, over an explicit scheme.
@@ -280,9 +287,9 @@ fn split_host_port(authority: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// The decoded host label must be a host and an optional numeric port, as
-/// the did:web specification describes, and nothing that a URL would read as
-/// user information, a path, a query or a fragment.
+/// The decoded host label must be a host (a hostname, or an IP literal, which
+/// this resolver also accepts) and an optional numeric port, and nothing that
+/// a URL would read as user information, a path, a query or a fragment.
 fn validate_host(authority: &str, did: &str) -> Result<(), DidWebsError> {
     let invalid = |why: &str| {
         DidWebsError::InvalidDid(format!(
@@ -553,6 +560,19 @@ mod tests {
         }
         let d = DidWebs::parse(&format!("did:webs:example.com:a-b_c.d~e:{AID}")).expect("valid");
         assert_eq!(d.path(), ["a-b_c.d~e"]);
+    }
+
+    #[test]
+    fn loopback_hosts_are_recognised_in_their_normalised_form() {
+        for host in [
+            "LOCALHOST",
+            "0x7f.1",
+            "127%E3%80%820%E3%80%820%E3%80%821",
+            "%5B0%3A0%3A0%3A0%3A0%3A0%3A0%3A1%5D%3A7676",
+        ] {
+            let d = DidWebs::parse(&format!("did:webs:{host}:{AID}")).expect(host);
+            assert!(d.is_loopback(), "{host} should be loopback");
+        }
     }
 
     #[test]
