@@ -123,6 +123,12 @@ type_uri = "https://trusttasks.org/spec/messaging/mux/attach/0.1"
 digest = "sha256:9d9abcd52ca4860082a02e201098a99f372022a3407e288265243060261d824a"
 
 [[task]]
+slug = "messaging/mux/connections"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/connections/0.1"
+digest = "sha256:247a4e9e2bdf09af3f30f1fe5c08e31cc86e253d4261edab1cf78e643a55a0e3"
+
+[[task]]
 slug = "messaging/mux/detach"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/mux/detach/0.1"

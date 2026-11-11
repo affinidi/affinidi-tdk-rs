@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.45.6 — `messaging/mux/connections`
+
+- `TrustTasksOps::mux_connections(profile, &MuxConnectionsQuery)`: an
+  administrator's view of a mediator's live mux connections
+  (`messaging/mux/connections/0.1`, dtgwg-trust-tasks-tf#1083). Each
+  connection carries its principal, wire, opening time, exact member count
+  and, within the page's member budget, its members with source, scope,
+  expiry and `deliveryActive`. `coverage` says whether the answer covers
+  every instance of the mediator or only the one that answered.
+- `MuxConnectionsQuery` narrows it: `principal`, `member`, `member_limit`
+  (0 lists connections without members), `limit` and `cursor`.
+- New API only; nothing changes for existing callers.
+
 ## 0.45.5 — mux events checked on DIDComm sockets; member sets
 
 **Security fix (DIDComm mux connections).** A `messaging/mux/event` arriving
