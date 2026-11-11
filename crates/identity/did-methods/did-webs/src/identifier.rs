@@ -71,17 +71,21 @@ impl DidWebs {
         validate_aid(&aid, did)?;
 
         // `%3A` is how did:web encodes the port separator. It is written
-        // lowercase in the wild as often as uppercase.
-        let host_label = labels[0];
-        let host = decode_port_separator(host_label);
-        if host.is_empty() || host.starts_with(':') {
-            return Err(DidWebsError::InvalidDid(format!("{did:?} has no host")));
-        }
+        // lowercase in the wild as often as uppercase. The host label is
+        // decoded in full, and must then still be a host and an optional
+        // port and nothing else, so it names the host the URL is fetched from.
+        let host = percent_decode(labels[0], did)?;
+        validate_host(&host, did)?;
 
-        let path = labels[1..labels.len() - 1]
+        // Path segments stay as written in the URL, but each must decode to a
+        // single path segment.
+        let path: Vec<String> = labels[1..labels.len() - 1]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
+        for segment in &path {
+            validate_path_segment(&percent_decode(segment, did)?, did)?;
+        }
 
         Ok(Self {
             did: format!("did:webs:{rest}"),
@@ -139,8 +143,8 @@ impl DidWebs {
     /// its own examples over plain HTTP. Resolvers therefore permit `http` for
     /// loopback, the same accommodation `did:web` implementations make.
     pub fn is_loopback(&self) -> bool {
-        let host = self.host.split(':').next().unwrap_or(&self.host);
-        host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+        let (host, _) = split_host_port(&self.host);
+        host == "localhost" || host == "127.0.0.1" || host == "[::1]"
     }
 
     /// The URL an artifact is published at, over an explicit scheme.
@@ -225,25 +229,118 @@ fn validate_aid(aid: &str, did: &str) -> Result<(), DidWebsError> {
     Ok(())
 }
 
-/// `%3A` (either case) back to `:`.
-fn decode_port_separator(host: &str) -> String {
-    let mut out = String::with_capacity(host.len());
-    let bytes = host.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%'
-            && i + 2 < bytes.len()
-            && bytes[i + 1] == b'3'
-            && bytes[i + 2] | 0x20 == b'a'
-        {
-            out.push(':');
-            i += 3;
+/// Percent-decode a label, refusing a malformed escape or a result that is
+/// not UTF-8.
+fn percent_decode(label: &str, did: &str) -> Result<String, DidWebsError> {
+    let bytes = label.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let escape = bytes
+                .get(index + 1..index + 3)
+                .and_then(|hex| std::str::from_utf8(hex).ok())
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                .ok_or_else(|| {
+                    DidWebsError::InvalidDid(format!(
+                        "{did:?} has a malformed percent-encoding in {label:?}"
+                    ))
+                })?;
+            out.push(escape);
+            index += 3;
         } else {
-            out.push(bytes[i] as char);
-            i += 1;
+            out.push(bytes[index]);
+            index += 1;
         }
     }
-    out
+    String::from_utf8(out).map_err(|_| {
+        DidWebsError::InvalidDid(format!("{did:?} has a label that is not UTF-8: {label:?}"))
+    })
+}
+
+/// Split `host[:port]` (the host possibly a bracketed IPv6 literal) into the
+/// host and the port.
+fn split_host_port(authority: &str) -> (&str, Option<&str>) {
+    if authority.starts_with('[') {
+        return match authority.find(']') {
+            Some(end) => {
+                let (host, rest) = authority.split_at(end + 1);
+                match rest.strip_prefix(':') {
+                    Some(port) => (host, Some(port)),
+                    None if rest.is_empty() => (host, None),
+                    None => (authority, None),
+                }
+            }
+            None => (authority, None),
+        };
+    }
+    match authority.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    }
+}
+
+/// The decoded host label must be a host and an optional numeric port, as
+/// the did:web specification describes, and nothing that a URL would read as
+/// user information, a path, a query or a fragment.
+fn validate_host(authority: &str, did: &str) -> Result<(), DidWebsError> {
+    let invalid = |why: &str| {
+        DidWebsError::InvalidDid(format!(
+            "{did:?} does not name a host ({why}): {authority:?}"
+        ))
+    };
+    let (host, port) = split_host_port(authority);
+    if host.is_empty() {
+        return Err(invalid("empty host"));
+    }
+    if let Some(port) = port
+        && (port.is_empty()
+            || !port.bytes().all(|b| b.is_ascii_digit())
+            || port.parse::<u16>().is_err())
+    {
+        return Err(invalid("the port is not a port number"));
+    }
+    if let Some(literal) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        if literal.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err(invalid("not an IPv6 address"));
+        }
+    } else if host.chars().any(|c| {
+        c.is_control()
+            || c.is_whitespace()
+            || matches!(c, '/' | '\\' | '?' | '#' | '@' | '%' | ':' | '[' | ']')
+    }) {
+        return Err(invalid("a character a host cannot contain"));
+    }
+
+    let url = reqwest::Url::parse(&format!("https://{authority}/"))
+        .map_err(|e| invalid(&e.to_string()))?;
+    if url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid("not a host and port"));
+    }
+    Ok(())
+}
+
+/// A decoded path label must be one path segment: not `.` or `..`, and
+/// without a separator, a query or fragment delimiter, `@`, `%` or a
+/// control character.
+fn validate_path_segment(segment: &str, did: &str) -> Result<(), DidWebsError> {
+    if segment == "."
+        || segment == ".."
+        || segment
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '/' | '\\' | '?' | '#' | '@' | '%'))
+    {
+        return Err(DidWebsError::InvalidDid(format!(
+            "{did:?} has a path label that is not a single path segment: {segment:?}"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -395,6 +492,77 @@ mod tests {
     #[test]
     fn rejects_empty_labels() {
         assert!(DidWebs::parse(&format!("did:webs:example.com::{AID}")).is_err());
+    }
+
+    #[test]
+    fn a_host_label_must_decode_to_a_host() {
+        for host in [
+            "trusted.example%40other.example",
+            "trusted.example@other.example",
+            "other.example%2Fx.trusted.example",
+            "other.example/x",
+            "example.com%3Fq",
+            "example.com%23f",
+            "example.com%5Cx",
+            "example.com%25",
+            "example.com%3A",
+            "example.com%3Ahttp",
+            "example.com%3A99999",
+            "example.com%3A80%3A80",
+            "exa%20mple.com",
+            "exa%0Ample.com",
+            "%5B%3A%3A1",
+            "%5Bnot-ipv6%5D",
+            "%5B%3A%3A1%5Dx",
+            "%3A443",
+            "example.com%zz",
+            "example.com%",
+            "example.com%FF",
+        ] {
+            assert!(
+                DidWebs::parse(&format!("did:webs:{host}:{AID}")).is_err(),
+                "{host} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn hosts_ports_and_ip_literals_are_accepted() {
+        for (label, host) in [
+            ("example.com", "example.com"),
+            ("example.com%3A8443", "example.com:8443"),
+            ("192.0.2.1%3A8080", "192.0.2.1:8080"),
+            ("%5B2001%3Adb8%3A%3A1%5D", "[2001:db8::1]"),
+            ("%5B2001%3Adb8%3A%3A1%5D%3A8443", "[2001:db8::1]:8443"),
+        ] {
+            let d = DidWebs::parse(&format!("did:webs:{label}:{AID}")).expect(label);
+            assert_eq!(d.host(), host);
+        }
+    }
+
+    #[test]
+    fn a_path_label_must_decode_to_one_segment() {
+        for segment in [
+            "a%2Fb", "a/b", "a%3Fb", "a%23", "a%40b", "a@b", "a%5Cb", "a%25b", "..", "%2E%2E", ".",
+            "a%00", "a%zz",
+        ] {
+            assert!(
+                DidWebs::parse(&format!("did:webs:example.com:{segment}:{AID}")).is_err(),
+                "{segment} must be refused"
+            );
+        }
+        let d = DidWebs::parse(&format!("did:webs:example.com:a-b_c.d~e:{AID}")).expect("valid");
+        assert_eq!(d.path(), ["a-b_c.d~e"]);
+    }
+
+    #[test]
+    fn an_ipv6_loopback_host_is_recognised() {
+        let d = DidWebs::parse(&format!("did:webs:%5B%3A%3A1%5D%3A7676:{AID}")).expect("valid");
+        assert!(d.is_loopback());
+        assert_eq!(
+            d.artifact_url_with_scheme("http", DID_JSON),
+            format!("http://[::1]:7676/{AID}/did.json"),
+        );
     }
 
     #[test]
