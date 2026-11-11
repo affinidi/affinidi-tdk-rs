@@ -2,7 +2,7 @@
 //! their state on a truthful hop-accept (`Sent`) or rescheduling with backoff on
 //! failure.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -182,6 +182,15 @@ async fn drain_filtered(
     // that is refusing precisely because it is already holding too much. One
     // refusal is enough to know the answer for the rest.
     let mut blocked: HashMap<String, (u64, Blocked)> = HashMap::new();
+    // Destinations whose head entry timed out again and whose next entry was
+    // let through once this pass, so a stalled head cannot starve the rest.
+    let mut second_chance: HashSet<String> = HashSet::new();
+    // `now_ms` is when the pass started. A send can take up to SEND_TIMEOUT,
+    // so retry times are measured from when each attempt ended, not from the
+    // start of the pass, or they would already be in the past.
+    let pass_started = tokio::time::Instant::now();
+    let attempt_ended_ms =
+        || now_ms.saturating_add(pass_started.elapsed().as_millis().min(u64::MAX as u128) as u64);
 
     for mut entry in due {
         if !claims(entry.via.as_deref()) {
@@ -246,7 +255,7 @@ async fn drain_filtered(
                     .retry_after()
                     .map(|d| d.as_millis().min(u64::MAX as u128) as u64)
                     .unwrap_or(QUEUE_FULL_FALLBACK_MS);
-                let until = now_ms.saturating_add(wait_ms);
+                let until = attempt_ended_ms().saturating_add(wait_ms);
 
                 // `attempts` is deliberately NOT incremented. It drives
                 // exponential backoff, and backing off exponentially here
@@ -288,7 +297,13 @@ async fn drain_filtered(
                     report.failed += 1;
                 } else {
                     entry.attempts += 1;
-                    entry.next_attempt_at_ms = now_ms.saturating_add(backoff_ms(entry.attempts));
+                    let mut wait_ms = backoff_ms(entry.attempts);
+                    if timed_out {
+                        // A destination that just took the whole timeout is
+                        // not asked again sooner than that.
+                        wait_ms = wait_ms.max(SEND_TIMEOUT.as_millis() as u64);
+                    }
+                    entry.next_attempt_at_ms = attempt_ended_ms().saturating_add(wait_ms);
                     if entry.attempts == 1 {
                         tracing::warn!(
                             idempotency_key = %failure.idempotency_key,
@@ -306,10 +321,20 @@ async fn drain_filtered(
                         );
                     }
                     if timed_out {
-                        blocked.insert(
-                            entry.dest_did.clone(),
-                            (entry.next_attempt_at_ms, Blocked::TimedOut),
-                        );
+                        // An entry that timed out before as well may be what is
+                        // stuck; let the destination's next entry try once.
+                        let repeat = entry.attempts > 1;
+                        if repeat && second_chance.insert(entry.dest_did.clone()) {
+                            tracing::debug!(
+                                dest = %entry.dest_did,
+                                "head entry timed out again; trying the next entry once"
+                            );
+                        } else {
+                            blocked.insert(
+                                entry.dest_did.clone(),
+                                (entry.next_attempt_at_ms, Blocked::TimedOut),
+                            );
+                        }
                     }
                     store.put(entry).await?;
                     report.retried += 1;
@@ -977,5 +1002,70 @@ mod tests {
         assert_eq!(report.errors.len(), 1);
         assert!(!report.errors[0].permanent);
         assert!(report.errors[0].error.contains("mock send failed"));
+    }
+
+    /// A timed-out send is not retried before the clock has moved past the
+    /// attempt: its retry time counts from when the attempt ended, not from
+    /// when the pass began. A drain run on the wall clock right after the
+    /// stalled pass must not dial the stalled destination again.
+    #[tokio::test(start_paused = true)]
+    async fn a_timed_out_send_is_not_retried_by_the_next_pass() {
+        let store = InMemoryOutboxStore::new();
+        store
+            .put(queued_to("slow-1", "did:example:slow", 1_000))
+            .await
+            .unwrap();
+        store
+            .put(queued_to("slow-2", "did:example:slow", 1_001))
+            .await
+            .unwrap();
+        let transport = ScriptedTransport::new("did:example:slow", "none");
+        let clock_start = tokio::time::Instant::now();
+        let wall_ms = |base: u64| base + clock_start.elapsed().as_millis() as u64;
+
+        drain_once(&store, &transport, wall_ms(2_000))
+            .await
+            .unwrap();
+        assert_eq!(transport.dests.lock().unwrap().len(), 1);
+
+        // The next tick, on the clock as it now reads.
+        tokio::time::advance(Duration::from_secs(10)).await;
+        let report = drain_once(&store, &transport, wall_ms(2_000))
+            .await
+            .unwrap();
+        assert_eq!(report, DrainReport::default(), "nothing is due yet");
+        assert_eq!(transport.dests.lock().unwrap().len(), 1);
+
+        let first = store.get("slow-1").await.unwrap().unwrap();
+        assert!(first.next_attempt_at_ms >= 2_000 + 2 * SEND_TIMEOUT.as_millis() as u64);
+    }
+
+    /// When the same head entry times out a second time, the destination's
+    /// next entry is tried once in that pass instead of waiting behind it.
+    #[tokio::test(start_paused = true)]
+    async fn a_head_entry_that_keeps_timing_out_does_not_starve_the_next() {
+        let store = InMemoryOutboxStore::new();
+        let mut head = queued_to("head", "did:example:slow", 1_000);
+        head.attempts = 1;
+        store.put(head).await.unwrap();
+        store
+            .put(queued_to("next", "did:example:slow", 1_001))
+            .await
+            .unwrap();
+        store
+            .put(queued_to("third", "did:example:slow", 1_002))
+            .await
+            .unwrap();
+        let transport = ScriptedTransport::new("did:example:slow", "none");
+
+        let report = drain_once(&store, &transport, 2_000).await.unwrap();
+        assert_eq!(
+            transport.dests.lock().unwrap().len(),
+            2,
+            "head, then next once"
+        );
+        assert_eq!((report.retried, report.deferred), (2, 1), "{report:?}");
+        assert_eq!(store.get("next").await.unwrap().unwrap().attempts, 1);
+        assert_eq!(store.get("third").await.unwrap().unwrap().attempts, 0);
     }
 }

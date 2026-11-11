@@ -22,6 +22,9 @@ rust-version.workspace = true
 # version turns it into an unmet requirement the guard recognises as waiting on
 # a sibling this release publishes, which is what it is.
 affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.11" }
+# Matching an evidence sender against an entry's recipient by DID
+# (`scid::same_reference`); the identifier helpers need no curve features.
+affinidi-did-common = { path = "../../identity/affinidi-did-common", version = "0.4.5", default-features = false }
 async-trait = "0.1"
 thiserror = "2"
 tracing = "0.1"

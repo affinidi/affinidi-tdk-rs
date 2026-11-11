@@ -467,11 +467,19 @@ async fn poll_outbox_status(
             .iter()
             .filter_map(|entry| entry.hop_id.clone())
             .collect();
-        let Some(statuses) = transport
-            .outbox_status(&hop_ids)
-            .await
-            .map_err(|e| OutboxError::Backend(format!("outbox status failed: {e}")))?
-        else {
+        let answer = match transport.outbox_status(&hop_ids).await {
+            Ok(answer) => answer,
+            Err(e) if index == 0 => {
+                return Err(OutboxError::Backend(format!("outbox status failed: {e}")));
+            }
+            Err(e) => {
+                // Earlier batches were answered and settled; keep their
+                // report. The rest are asked about on the next poll.
+                tracing::warn!(error = %e, "outbox status failed partway; retrying the rest next tick");
+                return Ok(Some(report));
+            }
+        };
+        let Some(statuses) = answer else {
             if index == 0 {
                 // No signal: use the outbox listing instead.
                 return Ok(None);
@@ -808,8 +816,10 @@ mod tests {
         /// The hop ids each `outbox_status` call asked about.
         asked: Mutex<Vec<Vec<String>>>,
         /// How many more `outbox_status` calls get an answer before it
-        /// answers `None`; `None` for every call.
+        /// answers `None` (or fails, with `status_then_fails`); `None` for
+        /// every call.
         status_answers: Mutex<Option<usize>>,
+        status_then_fails: std::sync::atomic::AtomicBool,
         conn_rx: watch::Receiver<ConnState>,
         _conn_tx: watch::Sender<ConnState>,
     }
@@ -822,6 +832,7 @@ mod tests {
                 status: Mutex::new(None),
                 asked: Mutex::new(Vec::new()),
                 status_answers: Mutex::new(None),
+                status_then_fails: std::sync::atomic::AtomicBool::new(false),
                 conn_rx: rx,
                 _conn_tx: tx,
             }
@@ -883,6 +894,14 @@ mod tests {
             self.asked.lock().unwrap().push(hop_ids.to_vec());
             if let Some(remaining) = self.status_answers.lock().unwrap().as_mut() {
                 if *remaining == 0 {
+                    if self
+                        .status_then_fails
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        return Err(affinidi_messaging_core::MessagingError::Transport(
+                            "status timed out".into(),
+                        ));
+                    }
                     return Ok(None);
                 }
                 *remaining -= 1;
@@ -1061,6 +1080,32 @@ mod tests {
             1,
             "the unanswered batch waits for the next poll"
         );
+    }
+
+    /// The same when a later batch fails outright: the settled batches are
+    /// reported, not discarded with an error.
+    #[tokio::test]
+    async fn a_status_call_failing_partway_keeps_the_settled_batches() {
+        let store = InMemoryOutboxStore::new();
+        for n in 0..(STATUS_BATCH + 1) {
+            sent_with_hop(&store, &format!("k{n:03}"), &format!("h{n:03}")).await;
+        }
+        let collected: Vec<(String, OutboxStatus)> = (0..(STATUS_BATCH + 1))
+            .map(|n| (format!("h{n:03}"), OutboxStatus::Collected))
+            .collect();
+        let borrowed: Vec<(&str, OutboxStatus)> = collected
+            .iter()
+            .map(|(id, state)| (id.as_str(), *state))
+            .collect();
+        let transport = DrainMockTransport::with_status(Some(vec![]), &borrowed);
+        *transport.status_answers.lock().unwrap() = Some(1);
+        transport
+            .status_then_fails
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let r = poll_outbox_drain(&transport, &store).await.unwrap();
+        assert_eq!(r.delivered, STATUS_BATCH, "{r:?}");
+        assert_eq!(store.awaiting_confirmation().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
