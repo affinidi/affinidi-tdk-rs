@@ -4,14 +4,14 @@
 //! network_cache: Helps with managing requests/responses that are in transit (out of order responses etc.).
 //!
 
-use affinidi_did_common::Document;
+use affinidi_did_common::{DID, Document};
 use network::WSCommands;
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::oneshot};
 use tracing::{Instrument, Level, debug, span, warn};
 
-use crate::{DIDCacheClient, errors::DIDCacheError};
+use crate::{DIDCacheClient, MethodName, errors::DIDCacheError};
 #[cfg(feature = "network")]
 pub(crate) mod handshake;
 pub mod network;
@@ -203,7 +203,7 @@ impl DIDCacheClient {
     pub(crate) async fn network_resolve_agent_name(
         &self,
         canonical_name: &str,
-    ) -> Result<(String, Document), DIDCacheError> {
+    ) -> Result<(String, Option<Document>), DIDCacheError> {
         let _span = span!(Level::DEBUG, "network_resolve_agent_name");
         async move {
             let name_hash = DIDCacheClient::hash_did(canonical_name);
@@ -253,7 +253,7 @@ impl DIDCacheClient {
                             // The server reports the DID it resolved the name to;
                             // `response.did` is that DID, not the name we sent.
                             let did = response.did.clone();
-                            let document = Self::verify_network_response(
+                            let document = self.verify_network_response(
                                 &did,
                                 response.document,
                                 response.did_log,
@@ -279,20 +279,17 @@ impl DIDCacheClient {
         .await
     }
 
-    /// Resolve a DID via the network
-    /// Returns the resolved DID Document, or an error
+    /// Resolve a DID via the network.
     ///
-    /// For did:webvh DIDs, if the server includes the raw DID log in the response,
-    /// the client will independently verify the log's cryptographic chain before
-    /// accepting the document. This prevents a compromised cache server from
-    /// returning tampered DID documents.
-    ///
-    /// Send the request, and wait for the response
+    /// Returns the server's document once it has been checked as
+    /// [`Self::verify_network_response`] describes, or `None` when the answer
+    /// carries nothing this client can check it against and the DID must be
+    /// resolved locally instead.
     pub(crate) async fn network_resolve(
         &self,
         did: &str,
         did_hash: [u64; 2],
-    ) -> Result<Document, DIDCacheError> {
+    ) -> Result<Option<Document>, DIDCacheError> {
         let _span = span!(Level::DEBUG, "network_resolve");
         async move {
             debug!("resolving did ({}) via network hash ({:#?})", did, did_hash);
@@ -340,7 +337,7 @@ impl DIDCacheClient {
                             Ok(WSCommands::ResponseReceived(response)) => {
                                 debug!("Received response from network task ({:#?})", did_hash);
                                 let response = *response;
-                                Self::verify_network_response(
+                                self.verify_network_response(
                                     did,
                                     response.document,
                                     response.did_log,
@@ -368,79 +365,123 @@ impl DIDCacheClient {
         .await
     }
 
-    /// Verify a DID document received from the network cache server.
+    /// Check a DID document received from the cache server against the DID it
+    /// was resolved for, the way local resolution would check it.
     ///
-    /// For did:webvh DIDs with a provided raw log, this independently verifies
-    /// the cryptographic chain and compares the resulting document against the
-    /// one returned by the server. If they don't match, the document is rejected.
-    ///
-    /// For other DID methods or when no log is provided, the document is accepted as-is.
-    async fn verify_network_response(
+    /// - A method this client resolves itself in network mode (see
+    ///   [`DIDCacheClient::resolves_locally_in_network_mode`]) is never taken
+    ///   from the server: `None`, resolve it locally.
+    /// - did:webvh: the server's raw log is verified here (including
+    ///   deactivation) and the server's document must equal the one the log
+    ///   produces. An answer without the log, or a client built without the
+    ///   `did-webvh` feature, gives `None`: the DID is resolved locally.
+    /// - Any other method: the document's `id` must be the requested DID
+    ///   (without its path, query or fragment), as did:web resolution requires.
+    ///   The server's answer is otherwise taken as is: those methods carry
+    ///   nothing a client could verify it against.
+    pub(crate) async fn verify_network_response(
+        &self,
         did: &str,
         doc: Document,
         did_log: Option<String>,
         did_witness_log: Option<String>,
-    ) -> Result<Document, DIDCacheError> {
-        // Only verify did:webvh DIDs that include a log
-        #[cfg(feature = "did-webvh")]
-        if did.starts_with("did:webvh:") {
-            if let Some(ref log_data) = did_log {
-                use didwebvh_rs::log_entry::LogEntryMethods;
+    ) -> Result<Option<Document>, DIDCacheError> {
+        let parsed: DID = did.parse().map_err(|e| {
+            DIDCacheError::DIDError(format!(
+                "The cache server answered for an invalid DID ({did}): {e}"
+            ))
+        })?;
 
-                debug!("Verifying did:webvh log for DID: {}", did);
-
-                let mut state = didwebvh_rs::DIDWebVHState::default();
-                let result = state
-                    .resolve_log(did, log_data, did_witness_log.as_deref())
-                    .await
-                    .map_err(|e| {
-                        DIDCacheError::DIDError(format!(
-                            "WebVH log verification failed for DID {did}: {e}"
-                        ))
-                    })?;
-
-                // A cache server that predates the deactivation check still
-                // serves the retired document; the log it sent says otherwise.
-                if result.1.deactivated {
-                    return Err(DIDCacheError::DIDError(
-                        crate::resolver::network_resolvers::webvh_deactivated(did).to_string(),
-                    ));
-                }
-
-                let verified_doc_value = result.0.get_did_document().map_err(|e| {
-                    DIDCacheError::DIDError(format!(
-                        "Failed to extract document from verified WebVH log: {e}"
-                    ))
-                })?;
-
-                let verified_doc: Document =
-                    serde_json::from_value(verified_doc_value).map_err(|e| {
-                        DIDCacheError::DIDError(format!(
-                            "Failed to deserialize verified WebVH document: {e}"
-                        ))
-                    })?;
-
-                // Compare the server-provided document with the locally verified one
-                if doc != verified_doc {
-                    return Err(DIDCacheError::DIDError(format!(
-                        "WebVH document verification failed: server document does not match \
-                         locally verified document for DID {did}. \
-                         The cache server may have tampered with the DID document."
-                    )));
-                }
-
-                debug!("WebVH log verification passed for DID: {}", did);
-                return Ok(doc);
-            } else {
-                warn!(
-                    "No DID log provided by cache server for did:webvh DID: {}. \
-                     Document accepted without cryptographic verification.",
-                    did
-                );
-            }
+        if self.resolves_locally_in_network_mode(&parsed) {
+            debug!("{did} is resolved locally; the cache server's document is not used");
+            return Ok(None);
         }
 
+        if MethodName::from(&parsed.method()) == MethodName::Webvh {
+            #[cfg(feature = "did-webvh")]
+            if let Some(log_data) = did_log {
+                return Self::verify_webvh_log(did, doc, &log_data, did_witness_log.as_deref())
+                    .await
+                    .map(Some);
+            }
+            #[cfg(not(feature = "did-webvh"))]
+            let _ = (did_log, did_witness_log);
+
+            warn!(
+                "The cache server sent no verifiable log for {did}; resolving it locally instead"
+            );
+            return Ok(None);
+        }
+
+        check_document_id(&parsed, &doc)?;
+        Ok(Some(doc))
+    }
+
+    /// Verify a did:webvh log and compare the server's document with the one
+    /// the log produces.
+    #[cfg(feature = "did-webvh")]
+    async fn verify_webvh_log(
+        did: &str,
+        doc: Document,
+        log_data: &str,
+        did_witness_log: Option<&str>,
+    ) -> Result<Document, DIDCacheError> {
+        use didwebvh_rs::log_entry::LogEntryMethods;
+
+        debug!("Verifying did:webvh log for DID: {}", did);
+
+        let mut state = didwebvh_rs::DIDWebVHState::default();
+        let result = state
+            .resolve_log(did, log_data, did_witness_log)
+            .await
+            .map_err(|e| {
+                DIDCacheError::DIDError(format!("WebVH log verification failed for DID {did}: {e}"))
+            })?;
+
+        // A cache server that predates the deactivation check still
+        // serves the retired document; the log it sent says otherwise.
+        if result.1.deactivated {
+            return Err(DIDCacheError::DIDError(
+                crate::resolver::network_resolvers::webvh_deactivated(did).to_string(),
+            ));
+        }
+
+        let verified_doc_value = result.0.get_did_document().map_err(|e| {
+            DIDCacheError::DIDError(format!(
+                "Failed to extract document from verified WebVH log: {e}"
+            ))
+        })?;
+
+        let verified_doc: Document = serde_json::from_value(verified_doc_value).map_err(|e| {
+            DIDCacheError::DIDError(format!(
+                "Failed to deserialize verified WebVH document: {e}"
+            ))
+        })?;
+
+        if doc != verified_doc {
+            return Err(DIDCacheError::DIDError(format!(
+                "WebVH document verification failed: the cache server's document does not \
+                 match the document its log produces for DID {did}"
+            )));
+        }
+
+        debug!("WebVH log verification passed for DID: {}", did);
         Ok(doc)
+    }
+}
+
+/// The document's `id` must be the DID that was resolved, without the DID
+/// URL's path, query or fragment.
+fn check_document_id(did: &DID, doc: &Document) -> Result<(), DIDCacheError> {
+    let method = did.method();
+    let expected = format!("did:{}:{}", method.name(), did.method_specific_id());
+    if doc.id.as_str() == expected {
+        Ok(())
+    } else {
+        Err(DIDCacheError::DIDError(format!(
+            "The cache server's document for {expected} has id {}",
+            doc.id.as_str()
+        )))
     }
 }
 
@@ -596,5 +637,339 @@ mod agent_name_wire_tests {
             Some("https://example.com/@alice")
         );
         assert_eq!(back.did, "did:example:123", "did carries the RESOLVED did");
+    }
+}
+
+/// Network mode checks what the cache server answers against the DID asked
+/// for. Each test runs a loopback stand-in for the cache server that answers
+/// with whatever the test hands it.
+#[cfg(test)]
+mod network_answer_tests {
+    use super::*;
+    use crate::{config::DIDCacheConfigBuilder, network_resolvers::HostPolicy};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+        net::TcpListener,
+        task::JoinHandle,
+    };
+    use web_socket::{DataType, Event, WebSocket};
+
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+    const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";
+
+    type Answer = Arc<dyn Fn(&WSRequest) -> WSResponseType + Send + Sync>;
+
+    /// A loopback cache server answering every request with `answer`.
+    struct StandInServer {
+        address: String,
+        requests: Arc<AtomicUsize>,
+        accept_task: JoinHandle<()>,
+    }
+
+    impl Drop for StandInServer {
+        fn drop(&mut self) {
+            self.accept_task.abort();
+        }
+    }
+
+    impl StandInServer {
+        async fn start(answer: Answer) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let requests = Arc::new(AtomicUsize::new(0));
+            let counter = requests.clone();
+            let accept_task = tokio::spawn(async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    tokio::spawn(Self::serve(stream, answer.clone(), counter.clone()));
+                }
+            });
+            Self {
+                address: format!("ws://127.0.0.1:{port}/did/v1/ws"),
+                requests,
+                accept_task,
+            }
+        }
+
+        async fn serve(stream: tokio::net::TcpStream, answer: Answer, requests: Arc<AtomicUsize>) {
+            let mut stream = BufReader::new(stream);
+            let mut sec_key = None;
+            loop {
+                let mut line = String::new();
+                if stream.read_line(&mut line).await.unwrap_or(0) == 0 {
+                    return;
+                }
+                let line = line.trim_end();
+                if line.is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("sec-websocket-key")
+                {
+                    sec_key = Some(value.trim().to_string());
+                }
+            }
+            let Some(sec_key) = sec_key else { return };
+            let upgrade = format!(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+                 Sec-WebSocket-Accept: {}\r\n\r\n",
+                handshake::accept_key_from(sec_key)
+            );
+            if stream.write_all(upgrade.as_bytes()).await.is_err() {
+                return;
+            }
+
+            let mut socket = WebSocket::server(stream);
+            while let Ok(event) = socket.recv().await {
+                match event {
+                    Event::Data {
+                        ty: DataType::Complete(_),
+                        data,
+                    } => {
+                        let Ok(request) = serde_json::from_slice::<WSRequest>(&data) else {
+                            continue;
+                        };
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        let reply = serde_json::to_string(&answer(&request)).unwrap();
+                        if socket.send(reply.as_str()).await.is_err() {
+                            return;
+                        }
+                    }
+                    Event::Ping(data) => {
+                        let _ = socket.send_pong(data).await;
+                    }
+                    Event::Close { .. } => return,
+                    _ => {}
+                }
+            }
+        }
+
+        fn requests(&self) -> usize {
+            self.requests.load(Ordering::SeqCst)
+        }
+    }
+
+    fn answer_with(document: Document, did_log: Option<String>) -> Answer {
+        Arc::new(move |request: &WSRequest| {
+            WSResponseType::Response(Box::new(
+                WSResponse::new(
+                    request.did.clone(),
+                    DIDCacheClient::hash_did(&request.did),
+                    document.clone(),
+                )
+                .with_logs(did_log.clone(), None),
+            ))
+        })
+    }
+
+    async fn network_client(server: &StandInServer) -> DIDCacheClient {
+        DIDCacheClient::new(
+            DIDCacheConfigBuilder::default()
+                .with_network_mode(&server.address)
+                .with_host_policy(HostPolicy::AllowPrivate)
+                .build(),
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn resolve(
+        client: &DIDCacheClient,
+        did: &str,
+    ) -> Result<crate::ResolveResponse, DIDCacheError> {
+        tokio::time::timeout(DEADLINE, client.resolve(did))
+            .await
+            .expect("resolution finishes within the deadline")
+    }
+
+    #[tokio::test]
+    async fn a_did_web_answer_for_another_did_is_refused() {
+        let did = "did:web:example.com";
+        let server = StandInServer::start(answer_with(Document::new(DID_KEY).unwrap(), None)).await;
+        let client = network_client(&server).await;
+
+        let error = resolve(&client, did).await.expect_err("the id must match");
+        assert!(error.to_string().contains(DID_KEY), "{error}");
+        assert_eq!(server.requests(), 1);
+        assert!(
+            client
+                .get_cache()
+                .get(&DIDCacheClient::hash_did(did))
+                .await
+                .is_none(),
+            "a refused answer is not cached"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_did_web_answer_for_the_requested_did_is_accepted() {
+        let did = "did:web:example.com";
+        let server = StandInServer::start(answer_with(Document::new(did).unwrap(), None)).await;
+        let client = network_client(&server).await;
+
+        let response = resolve(&client, did).await.unwrap();
+        assert_eq!(response.doc.id.as_str(), did);
+        assert!(!response.cache_hit);
+        assert_eq!(server.requests(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_did_url_is_checked_against_its_did() {
+        let did = "did:web:example.com";
+        let server = StandInServer::start(answer_with(Document::new(did).unwrap(), None)).await;
+        let client = network_client(&server).await;
+
+        let response = resolve(&client, &format!("{did}?service=files#key-1"))
+            .await
+            .unwrap();
+        assert_eq!(response.doc.id.as_str(), did);
+    }
+
+    #[tokio::test]
+    async fn did_key_is_derived_locally_without_asking_the_server() {
+        let other = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        let server = StandInServer::start(answer_with(Document::new(other).unwrap(), None)).await;
+        let client = network_client(&server).await;
+
+        let response = resolve(&client, DID_KEY).await.unwrap();
+        assert_eq!(response.doc.id.as_str(), DID_KEY);
+        assert!(!response.doc.verification_method.is_empty());
+        assert_eq!(server.requests(), 0, "did:key is never asked of the server");
+    }
+
+    #[cfg(feature = "did-scid")]
+    #[tokio::test]
+    async fn did_scid_is_not_taken_from_the_server() {
+        let did = "did:scid:vh:1:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai";
+        let server = StandInServer::start(answer_with(Document::new(did).unwrap(), None)).await;
+        let client = network_client(&server).await;
+
+        // No source is known for this bare did:scid, so local resolution fails;
+        // the server's unverifiable answer must not stand in for it.
+        assert!(resolve(&client, did).await.is_err());
+        assert_eq!(server.requests(), 0);
+    }
+
+    #[cfg(feature = "did-webvh")]
+    mod webvh {
+        use super::*;
+        use affinidi_secrets_resolver::secrets::Secret;
+        use didwebvh_rs::{
+            DIDWebVHState, Multibase, log_entry::LogEntryMethods, parameters::Parameters,
+        };
+        use serde_json::json;
+
+        /// A loopback HTTP listener serving `body` as `did.jsonl`.
+        struct LogHost {
+            accept_task: JoinHandle<()>,
+        }
+
+        impl Drop for LogHost {
+            fn drop(&mut self) {
+                self.accept_task.abort();
+            }
+        }
+
+        fn serve_log(listener: TcpListener, body: String) -> LogHost {
+            let accept_task = tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let body = body.clone();
+                    tokio::spawn(async move {
+                        let mut request = [0u8; 4096];
+                        let _ = stream.read(&mut request).await;
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: text/jsonl\r\ncontent-length: {}\r\n\
+                             connection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                    });
+                }
+            });
+            LogHost { accept_task }
+        }
+
+        /// A signed did:webvh log hosted on loopback: (host, DID, log, document).
+        async fn hosted_log() -> (LogHost, String, String, Document) {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+
+            let mut key = Secret::generate_ed25519(None, None);
+            let pk = key.get_public_keymultibase().unwrap();
+            key.id = format!("did:key:{pk}#{pk}");
+            let template = format!("did:webvh:{{SCID}}:localhost%3A{port}");
+            let doc = json!({
+                "id": template,
+                "@context": ["https://www.w3.org/ns/did/v1"],
+                "verificationMethod": [{
+                    "id": format!("{template}#key-0"),
+                    "type": "Multikey",
+                    "publicKeyMultibase": pk,
+                    "controller": template
+                }],
+                "authentication": [format!("{template}#key-0")],
+            });
+            let params = Parameters {
+                update_keys: Some(Arc::new(vec![Multibase::new(pk)])),
+                portable: Some(false),
+                ..Default::default()
+            };
+            let mut state = DIDWebVHState::default();
+            state
+                .create_log_entry(None, &doc, &params, &key)
+                .await
+                .unwrap();
+            let entry = &state.log_entries().last().unwrap().log_entry;
+            let document: Document =
+                serde_json::from_value(entry.get_did_document().unwrap()).unwrap();
+            let log = state
+                .log_entries()
+                .iter()
+                .map(|entry| serde_json::to_string(&entry.log_entry).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let did = document.id.to_string();
+            (serve_log(listener, log.clone()), did, log, document)
+        }
+
+        #[tokio::test]
+        async fn an_answer_without_its_log_is_resolved_locally() {
+            let (_host, did, _log, document) = hosted_log().await;
+            let keyless = Document::new(&did).unwrap();
+            let server = StandInServer::start(answer_with(keyless, None)).await;
+            let client = network_client(&server).await;
+
+            let response = resolve(&client, &did).await.unwrap();
+            assert_eq!(server.requests(), 1);
+            assert_eq!(
+                response.doc, document,
+                "the document comes from the log, not from the server's answer"
+            );
+        }
+
+        #[tokio::test]
+        async fn an_answer_whose_document_differs_from_its_log_is_refused() {
+            let (_host, did, log, _document) = hosted_log().await;
+            let keyless = Document::new(&did).unwrap();
+            let server = StandInServer::start(answer_with(keyless, Some(log))).await;
+            let client = network_client(&server).await;
+
+            let error = resolve(&client, &did).await.expect_err("documents differ");
+            assert!(error.to_string().contains("does not match"), "{error}");
+        }
+
+        #[tokio::test]
+        async fn an_answer_matching_its_log_is_accepted() {
+            let (_host, did, log, document) = hosted_log().await;
+            let server = StandInServer::start(answer_with(document.clone(), Some(log))).await;
+            let client = network_client(&server).await;
+
+            let response = resolve(&client, &did).await.unwrap();
+            assert_eq!(response.doc, document);
+            assert_eq!(server.requests(), 1);
+        }
     }
 }

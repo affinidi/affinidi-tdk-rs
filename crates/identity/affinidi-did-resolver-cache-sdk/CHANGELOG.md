@@ -1,5 +1,44 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.52) — network mode checks the cache server's answer as local resolution would
+
+### Changed
+
+- **BEHAVIOUR (R3.6):** in network mode, the cache server's answer is checked
+  against the DID that was asked for, the way local resolution checks it:
+  - **did:key, did:peer, did:jwk, did:ethr, did:pkh, did:scid and did:webs are
+    resolved locally** whenever this client has the resolver for them, and are
+    not sent to the server. key/peer/jwk/ethr/pkh are derived from the DID
+    itself; did:scid and did:webs are verified against a log (and, for
+    did:scid, against the latest version already verified) that the server
+    does not send. Previously only did:key and did:peer fell back to local
+    resolution, and only when the server failed. A service with a cache server
+    and no outbound access now fetches did:scid and did:webs itself; a bare
+    did:scid with no source known to this client now fails with "no source is
+    known" rather than taking the server's answer.
+  - **did:webvh without its log is resolved locally.** The server's log was
+    already verified when sent; an answer without it was accepted with only a
+    warning. Now the DID is resolved locally (under the client's host policy),
+    so the document always comes from a verified log. A client built without
+    `did-webvh` reports the method as unsupported instead.
+  - **Every other method (did:web, did:ebsi, custom methods):** the document's
+    `id` must equal the requested DID (without its path, query or fragment),
+    as did:web resolution already requires locally. A mismatch is a
+    `DIDCacheError::DIDError` and nothing is cached.
+  - The agent-name path over the WebSocket applies the same checks to the
+    document it receives for the name's DID.
+- A document whose `id` names an immutable method (did:key, …) is no longer
+  cached for a mutable DID: the cache reads its expiry from the `id`, so such
+  an entry would never have expired.
+- Rustdoc and the README describe what network mode verifies. They said the
+  client never trusts the server; for did:web and other methods with nothing
+  to verify, it trusts the server's document once its `id` matches, so the
+  README now recommends `wss://` for anything but a local server.
+
+No public API change. Patch bump per
+[ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) point 3; the
+behaviour change is called out here (R3.6).
+
 ## Unreleased (0.8.51) — affinidi-did-webs 0.13
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.13, on

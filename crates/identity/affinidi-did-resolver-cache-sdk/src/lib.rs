@@ -301,8 +301,6 @@ impl Expiry<[u64; 2], Document> for DIDExpiry {
         value: &Document,
         _created_at: std::time::Instant,
     ) -> Option<Duration> {
-        let did_str = value.id.as_str();
-
         // Extract the method name from "did:<method>:..."
         // A method this enum does not model is treated as mutable. Its
         // resolver may fetch from external infrastructure that changes, and
@@ -310,12 +308,11 @@ impl Expiry<[u64; 2], Document> for DIDExpiry {
         // pick up a key rotation. `try_from` returns `Err` rather than `OTHER`
         // for an unknown method, so without this an unmodelled method — every
         // custom-registered resolver, and did:webs — got no expiry at all.
-        let is_mutable = did_str
-            .split(':')
-            .nth(1)
-            .is_none_or(|m| DIDMethod::try_from(m).map_or(true, |m| m.is_mutable()));
-
-        if is_mutable {
+        //
+        // The expiry is read from the document's `id`. `DIDCacheClient` does
+        // not cache a document whose `id` would give a mutable DID no expiry
+        // (see `cacheable`).
+        if is_mutable_did(value.id.as_str()) {
             Some(self.mutable_ttl)
         } else {
             None // no expiry — evicted only by capacity
@@ -404,11 +401,52 @@ impl Clone for DIDCacheClient {
     }
 }
 
-/// Deterministic DID methods the client can resolve locally with no network
-/// access — the fallback set used when the cache server is unreachable.
+/// Methods network mode resolves with this client's own resolver whenever one
+/// is registered, rather than asking the cache server.
+///
+/// - key, peer, jwk, ethr, pkh: the document is derived from the DID itself,
+///   exactly and offline, so a server answer could only be worse.
+/// - scid, webs: local resolution verifies a log (and, for did:scid, refuses a
+///   copy older than one already verified) that the cache server does not send,
+///   so its answer cannot be checked the same way.
+///
+/// did:webvh is not listed: the server sends its log, which is verified (see
+/// `verify_network_response`), and an answer without the log is resolved
+/// locally.
 #[cfg(feature = "network")]
-fn is_locally_resolvable(method: &DIDMethod) -> bool {
-    matches!(method, DIDMethod::KEY | DIDMethod::PEER)
+fn resolved_locally_in_network_mode(method: &MethodName) -> bool {
+    match method {
+        MethodName::Key
+        | MethodName::Peer
+        | MethodName::Jwk
+        | MethodName::Ethr
+        | MethodName::Pkh
+        | MethodName::Scid => true,
+        MethodName::Other(name) => name == "webs",
+        _ => false,
+    }
+}
+
+/// Whether a document for `did` gets the mutable-method TTL. A method this
+/// crate does not model counts as mutable (see `DIDExpiry`).
+fn is_mutable_did(did: &str) -> bool {
+    did.split(':')
+        .nth(1)
+        .is_none_or(|m| DIDMethod::try_from(m).map_or(true, |m| m.is_mutable()))
+}
+
+/// A document is cached unless its `id` names an immutable method while the
+/// DID resolved is mutable: `DIDExpiry` reads the expiry from the `id`, so that
+/// document would outlive the cache TTL its DID is meant to have.
+pub(crate) fn cacheable(did: &str, doc: &Document) -> bool {
+    let cacheable = !is_mutable_did(did) || is_mutable_did(doc.id.as_str());
+    if !cacheable {
+        debug!(
+            "not caching the document for {did}: its id ({}) would give it no expiry",
+            doc.id.as_str()
+        );
+    }
+    cacheable
 }
 
 impl DIDCacheClient {
@@ -661,8 +699,10 @@ impl DIDCacheClient {
                     let result = self.resolve_once(did, parsed_did, method, hash).await;
                     match &result {
                         Ok(doc) => {
-                            debug!("DID cached: {}", did);
-                            self.cache.insert(hash, doc.clone()).await;
+                            if cacheable(did, doc) {
+                                debug!("DID cached: {}", did);
+                                self.cache.insert(hash, doc.clone()).await;
+                            }
                             drop(leadership);
                         }
                         Err(error) => leadership.fail(error),
@@ -681,10 +721,13 @@ impl DIDCacheClient {
         }
     }
 
-    /// Perform a single (un-deduplicated) resolution. In network mode, a
-    /// network failure falls back to local resolution for deterministic methods
-    /// (did:key / did:peer) so a down cache server doesn't break resolutions the
-    /// client can compute itself.
+    /// Perform a single (un-deduplicated) resolution.
+    ///
+    /// In network mode, a method in [`Self::resolves_locally_in_network_mode`]
+    /// is resolved locally without asking the cache server; any other DID is
+    /// asked of the server, whose answer is checked by
+    /// `verify_network_response`. An answer with nothing to check it against
+    /// (a did:webvh document without its log) is resolved locally instead.
     async fn resolve_once(
         &self,
         did: &str,
@@ -696,17 +739,12 @@ impl DIDCacheClient {
 
         #[cfg(feature = "network")]
         {
-            if self.config.service_address.is_some() {
-                match self.network_resolve(did, hash).await {
-                    Ok(doc) => Ok(doc),
-                    Err(e) if is_locally_resolvable(method) => {
-                        warn!(
-                            "Network resolution failed for {did} ({e}); falling back to local \
-                             resolution"
-                        );
-                        self.local_resolve(parsed_did).await
-                    }
-                    Err(e) => Err(e),
+            if self.config.service_address.is_some()
+                && !self.resolves_locally_in_network_mode(parsed_did)
+            {
+                match self.network_resolve(did, hash).await? {
+                    Some(doc) => Ok(doc),
+                    None => self.local_resolve(parsed_did).await,
                 }
             } else {
                 self.local_resolve(parsed_did).await
@@ -717,6 +755,16 @@ impl DIDCacheClient {
         {
             self.local_resolve(parsed_did).await
         }
+    }
+
+    /// Whether network mode resolves `did` with this client's own resolver
+    /// instead of asking the cache server: its method is one whose server
+    /// answer cannot be checked as local resolution checks it, and a resolver
+    /// is registered for it here.
+    #[cfg(feature = "network")]
+    pub(crate) fn resolves_locally_in_network_mode(&self, did: &DID) -> bool {
+        let method = MethodName::from(&did.method());
+        resolved_locally_in_network_mode(&method) && self.resolvers.contains_key(&method)
     }
 
     /// If you want to interact directly with the DID Document cache
@@ -1096,6 +1144,20 @@ mod tests {
             None,
             "did:key is derived from the DID itself and never changes",
         );
+    }
+
+    /// `DIDExpiry` reads the expiry from the document's `id`, so a mutable DID
+    /// whose document names an immutable one would never expire. Such a
+    /// document is not cached.
+    #[test]
+    fn a_mutable_did_with_an_immutable_document_id_is_not_cached() {
+        let key_doc = Document::new(DID_KEY).expect("valid did");
+        assert!(!cacheable("did:web:example.com", &key_doc));
+        assert!(cacheable(DID_KEY, &key_doc));
+
+        let web_doc = Document::new("did:web:example.com").expect("valid did");
+        assert!(cacheable("did:web:example.com", &web_doc));
+        assert!(cacheable(DID_KEY, &web_doc));
     }
     use super::*;
 

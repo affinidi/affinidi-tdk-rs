@@ -117,21 +117,34 @@ impl DIDCacheClient {
         let name_hash = Self::hash_did(name.as_str());
 
         // One-round-trip path: the cache server resolves name -> DID -> document
-        // in a single exchange, so there is no separate DID resolution to do.
-        // Verification still happens here, against a document this client
-        // received directly — the server is a cache, never a trust anchor.
+        // in a single exchange. The document is checked against the DID as any
+        // network answer is (`verify_network_response`); one the client cannot
+        // check that way is resolved locally instead. The name is then verified
+        // here against that document.
         #[cfg(all(feature = "agent-names", feature = "network"))]
         if self.config.agent_names_over_websocket && self.network_task_tx.is_some() {
-            let (did, doc) = self.network_resolve_agent_name(name.as_str()).await?;
+            let (did, server_doc) = self.network_resolve_agent_name(name.as_str()).await?;
+
+            let (doc, did_hash) = match server_doc {
+                Some(doc) => {
+                    let did_hash = Self::cache_key(&did);
+                    // Populate the shared document cache so a later lookup by DID hits.
+                    if crate::cacheable(&did, &doc) {
+                        self.cache.insert(did_hash, doc.clone()).await;
+                    }
+                    (doc, did_hash)
+                }
+                None => {
+                    let response = self.resolve_document(&did).await?;
+                    (response.doc, response.did_hash)
+                }
+            };
 
             if let Err(e) = verify_also_known_as(&doc, name) {
                 warn!("agent name verification failed: {e}");
                 return Err(DIDCacheError::from(e));
             }
 
-            let did_hash = Self::hash_did(&did);
-            // Populate the shared document cache so a later lookup by DID hits.
-            self.cache.insert(did_hash, doc.clone()).await;
             self.agent_name_cache.insert(name_hash, did.clone()).await;
 
             let method: crate::DIDMethod = did

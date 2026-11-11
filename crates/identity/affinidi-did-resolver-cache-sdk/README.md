@@ -114,6 +114,20 @@ let resolver = DIDCacheClient::new(config).await?;
 
 Network mode still caches locally to reduce remote calls.
 
+What the server answers is checked against the DID asked for, as local
+resolution would check it:
+
+- did:key, did:peer, did:jwk, did:ethr, did:pkh, did:scid and did:webs are
+  resolved by this client whenever it has the resolver for them; the server is
+  not asked. (did:scid and did:webs are verified against a log the server does
+  not send.)
+- did:webvh: the server sends the DID log, which is verified here, and its
+  document must be the one the log produces. An answer without the log is
+  resolved locally instead.
+- Any other method: the document's `id` must be the DID requested. Beyond that
+  the server's answer is used as is — for did:web there is nothing else a
+  client could check — so connect with `wss://` to anything but a local server.
+
 ### Custom Resolvers
 
 Each DID method is resolved through a chain of pluggable resolvers. You can
