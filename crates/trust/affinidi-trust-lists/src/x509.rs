@@ -14,10 +14,17 @@
  * ```
  *
  * [`validate_chain_at`] builds the path from the leaf to the first certificate
- * that is an active trust anchor in the registry. When no certificate in the
+ * that is a usable trust anchor in the registry. When no certificate in the
  * chain is an anchor (an mdoc `x5chain` usually carries only the document
- * signer), an active anchor certificate from the registry whose subject is the
+ * signer), a usable anchor certificate from the registry whose subject is the
  * last certificate's issuer and whose key verifies its signature ends the path.
+ *
+ * A usable anchor is a registry entry whose service type is one of the
+ * caller's `anchor_types`, whose status at the validation time is active
+ * (from its status history, see
+ * [`ServiceInformation::status_at`](crate::ServiceInformation::status_at)),
+ * and whose trust list has not passed its `NextUpdate` at that time
+ * ([`TrustAnchorEntry::usable_at`]).
  *
  * For every link in that path:
  * 1. The child's issuer name equals the parent's subject name (DER comparison)
@@ -33,14 +40,20 @@
  *
  * Not checked: revocation (CRL / OCSP), certificate policies, and extended key
  * usage. Callers that need those must check them on [`ChainValidationResult::chain`].
+ *
+ * Supported signature algorithms are those of `x509-parser`'s verifier: RSA
+ * PKCS#1 v1.5 and PSS with SHA-2, ECDSA on P-256 and P-384, and Ed25519.
+ * Certificates signed on other curves (P-521, brainpool) do not validate.
  */
 
 use chrono::{DateTime, Utc};
-use x509_parser::oid_registry::{OID_PKCS1_SHA1WITHRSA, OID_SHA1_WITH_RSA};
+use x509_parser::oid_registry::{OID_PKCS1_SHA1WITHRSA, OID_SHA1_WITH_RSA, OID_SIG_DSA_WITH_SHA1};
 use x509_parser::prelude::*;
 
 use crate::error::{Result, TrustListError};
 use crate::registry::{LookupResult, TrustAnchorEntry, TrustListRegistry};
+use crate::service_type::ServiceType;
+use crate::types::ServiceDigitalIdentity;
 
 /// Parsed X.509 certificate information.
 ///
@@ -150,20 +163,25 @@ impl ChainValidationResult {
 pub fn validate_chain(
     chain_der: &[Vec<u8>],
     registry: &TrustListRegistry,
+    anchor_types: &[ServiceType],
 ) -> Result<ChainValidationResult> {
-    validate_chain_at(chain_der, registry, Utc::now())
+    validate_chain_at(chain_der, registry, anchor_types, Utc::now())
 }
 
 /// Validate a certificate chain against the trust list registry at `now`.
 ///
 /// The chain is ordered leaf-first: `[leaf, intermediate..., root]`. The
-/// checks performed are listed in the [module documentation](self).
+/// checks performed are listed in the [module documentation](self). Only
+/// registry entries whose service type is in `anchor_types` can anchor the
+/// chain (e.g. the types under which the relevant issuers' CAs are listed);
+/// an empty slice accepts none.
 ///
 /// Returns `Ok` with `valid: false` and the reasons in `errors` for a chain
 /// that does not validate; `Err` is not used for validation failures.
 pub fn validate_chain_at(
     chain_der: &[Vec<u8>],
     registry: &TrustListRegistry,
+    anchor_types: &[ServiceType],
     now: DateTime<Utc>,
 ) -> Result<ChainValidationResult> {
     if chain_der.is_empty() {
@@ -195,16 +213,18 @@ pub fn validate_chain_at(
 
     let mut errors = Vec::new();
 
+    let accept = |entry: &TrustAnchorEntry| anchor_types.contains(&entry.service.service_type);
     let mut anchor_in_chain = None;
     for (position, der) in chain_der.iter().enumerate() {
-        match registry.lookup_by_certificate(der) {
+        let identity = ServiceDigitalIdentity::X509Certificate(der.clone());
+        match registry.lookup_matching(&identity, now, accept) {
             LookupResult::Trusted(entry) => {
                 anchor_in_chain = Some((position, entry));
                 break;
             }
             LookupResult::Inactive { reason, .. } => {
                 errors.push(format!(
-                    "certificate {position} is a trust list entry that is not active ({reason})"
+                    "certificate {position} is a trust list entry that cannot anchor this chain ({reason})"
                 ));
             }
             LookupResult::NotFound => {}
@@ -215,7 +235,7 @@ pub fn validate_chain_at(
         Some((position, entry)) => (position + 1, Some(entry), None),
         None => {
             let last = &certs[certs.len() - 1];
-            match find_issuing_anchor(last, registry) {
+            match find_issuing_anchor(last, registry, &accept, now) {
                 Some((entry, anchor_der)) => (certs.len(), Some(entry), Some(anchor_der)),
                 None => (certs.len(), None, None),
             }
@@ -262,7 +282,7 @@ pub fn validate_chain_at(
     }
 
     if trust_anchor.is_none() {
-        errors.push("no active trust anchor in the registry issues this chain".into());
+        errors.push("no usable trust anchor in the registry issues this chain".into());
     }
 
     Ok(ChainValidationResult {
@@ -278,8 +298,9 @@ pub fn validate_chain_at(
 pub fn validate_x5chain(
     x5chain: &[Vec<u8>],
     registry: &TrustListRegistry,
+    anchor_types: &[ServiceType],
 ) -> Result<ChainValidationResult> {
-    validate_chain_at(x5chain, registry, Utc::now())
+    validate_chain_at(x5chain, registry, anchor_types, Utc::now())
 }
 
 /// Validate an x5chain from a COSE_Sign1 header against the trust list registry.
@@ -288,14 +309,15 @@ pub fn validate_x5chain(
 /// header (label 33), ordered leaf-first. It may carry only the document
 /// signer certificate; the issuing anchor (e.g. an IACA) is then taken from
 /// the registry. A `valid` result establishes that the leaf certificate chains
-/// to an active anchor; verifying the COSE signature with the leaf's key is
-/// the caller's step.
+/// to a usable anchor of one of `anchor_types`; verifying the COSE signature
+/// with the leaf's key is the caller's step.
 pub fn validate_x5chain_at(
     x5chain: &[Vec<u8>],
     registry: &TrustListRegistry,
+    anchor_types: &[ServiceType],
     now: DateTime<Utc>,
 ) -> Result<ChainValidationResult> {
-    validate_chain_at(x5chain, registry, now)
+    validate_chain_at(x5chain, registry, anchor_types, now)
 }
 
 /// Extract the leaf certificate's public key bytes from a DER certificate.
@@ -311,6 +333,8 @@ pub fn is_self_signed(der: &[u8]) -> Result<bool> {
     let info = parse_certificate(der)?;
     Ok(info.subject == info.issuer)
 }
+
+const ECDSA_WITH_SHA1: &str = "1.2.840.10045.4.1";
 
 fn decode(der: &[u8]) -> Result<X509Certificate<'_>> {
     let (rest, cert) = X509Certificate::from_der(der)
@@ -364,7 +388,11 @@ fn check_link(
     }
 
     let algorithm = &child.signature_algorithm.algorithm;
-    if *algorithm == OID_PKCS1_SHA1WITHRSA || *algorithm == OID_SHA1_WITH_RSA {
+    if *algorithm == OID_PKCS1_SHA1WITHRSA
+        || *algorithm == OID_SHA1_WITH_RSA
+        || *algorithm == OID_SIG_DSA_WITH_SHA1
+        || algorithm.to_id_string() == ECDSA_WITH_SHA1
+    {
         return Err("SHA-1 signature algorithm is not accepted".into());
     }
 
@@ -393,14 +421,17 @@ fn unenforced_critical_extension(cert: &X509Certificate) -> Option<String> {
         })
 }
 
-/// An active anchor certificate in the registry that issued `cert`: its
+/// A usable anchor certificate in the registry that issued `cert`: its
 /// subject equals `cert`'s issuer and its key verifies `cert`'s signature.
 fn find_issuing_anchor(
     cert: &X509Certificate,
     registry: &TrustListRegistry,
+    accept: &dyn Fn(&TrustAnchorEntry) -> bool,
+    now: DateTime<Utc>,
 ) -> Option<(TrustAnchorEntry, Vec<u8>)> {
     registry
-        .active_certificate_anchors()
+        .certificate_anchors()
+        .filter(|(entry, _)| accept(entry) && entry.usable_at(now).is_ok())
         .find(|(_, anchor_der)| {
             decode(anchor_der).is_ok_and(|anchor| {
                 anchor.subject().as_raw() == cert.issuer().as_raw()
@@ -415,9 +446,11 @@ mod tests {
     use super::*;
     use crate::{ServiceStatus, ServiceType};
     use rcgen::{
-        BasicConstraints, CertificateParams, CertifiedIssuer, DnType, IsCa, KeyPair,
-        KeyUsagePurpose,
+        BasicConstraints, CertificateParams, CertifiedIssuer, CustomExtension, DnType, IsCa,
+        KeyPair, KeyUsagePurpose,
     };
+
+    const ANCHOR_TYPES: &[ServiceType] = &[ServiceType::CaQc];
 
     fn fixture_cert() -> Vec<u8> {
         include_bytes!("../tests/fixtures/test_cert.der").to_vec()
@@ -469,7 +502,7 @@ mod tests {
     #[test]
     fn validate_empty_chain() {
         let registry = TrustListRegistry::new();
-        let result = validate_chain(&[], &registry).unwrap();
+        let result = validate_chain(&[], &registry, ANCHOR_TYPES).unwrap();
         assert!(!result.valid);
         assert!(result.errors[0].contains("empty"));
     }
@@ -477,7 +510,7 @@ mod tests {
     #[test]
     fn validate_chain_not_in_registry() {
         let registry = TrustListRegistry::new();
-        let result = validate_chain(&[fixture_cert()], &registry).unwrap();
+        let result = validate_chain(&[fixture_cert()], &registry, ANCHOR_TYPES).unwrap();
         assert!(!result.valid);
         assert!(result.errors.iter().any(|e| e.contains("trust anchor")));
     }
@@ -486,7 +519,7 @@ mod tests {
     fn validate_chain_found_in_registry() {
         let cert = fixture_cert();
         let registry = registry_with(&cert);
-        let result = validate_chain(&[cert], &registry).unwrap();
+        let result = validate_chain(&[cert], &registry, ANCHOR_TYPES).unwrap();
         assert!(result.trust_anchor.is_some());
     }
 
@@ -505,7 +538,11 @@ mod tests {
     #[test]
     fn validate_x5chain_empty_is_invalid() {
         let registry = TrustListRegistry::new();
-        assert!(!validate_x5chain(&[], &registry).unwrap().valid);
+        assert!(
+            !validate_x5chain(&[], &registry, ANCHOR_TYPES)
+                .unwrap()
+                .valid
+        );
     }
 
     #[test]
@@ -514,7 +551,7 @@ mod tests {
         let leaf = leaf_signed_by("Document Signer", &iaca);
         let registry = registry_with(iaca.der());
 
-        let result = validate_chain(&[leaf, iaca.der().to_vec()], &registry).unwrap();
+        let result = validate_chain(&[leaf, iaca.der().to_vec()], &registry, ANCHOR_TYPES).unwrap();
         assert!(result.valid, "{:?}", result.errors);
         assert!(result.trust_anchor.is_some());
     }
@@ -525,7 +562,7 @@ mod tests {
         let leaf = leaf_signed_by("Document Signer", &iaca);
         let registry = registry_with(iaca.der());
 
-        let result = validate_x5chain(&[leaf], &registry).unwrap();
+        let result = validate_x5chain(&[leaf], &registry, ANCHOR_TYPES).unwrap();
         assert!(result.valid, "{:?}", result.errors);
         assert_eq!(result.chain.len(), 1);
     }
@@ -537,8 +574,12 @@ mod tests {
         let leaf = leaf_signed_by("Document Signer", &lookalike);
         let registry = registry_with(listed.der());
 
-        let with_anchor =
-            validate_chain(&[leaf.clone(), listed.der().to_vec()], &registry).unwrap();
+        let with_anchor = validate_chain(
+            &[leaf.clone(), listed.der().to_vec()],
+            &registry,
+            ANCHOR_TYPES,
+        )
+        .unwrap();
         assert!(!with_anchor.valid);
         assert!(
             with_anchor
@@ -549,7 +590,7 @@ mod tests {
             with_anchor.errors
         );
 
-        let leaf_only = validate_x5chain(&[leaf], &registry).unwrap();
+        let leaf_only = validate_x5chain(&[leaf], &registry, ANCHOR_TYPES).unwrap();
         assert!(!leaf_only.valid);
         assert!(leaf_only.trust_anchor.is_none());
     }
@@ -566,7 +607,12 @@ mod tests {
         let leaf = leaf_signed_by("Document Signer", &intermediate);
         let registry = registry_with(iaca.der());
 
-        let result = validate_chain(&[leaf, intermediate.der().to_vec()], &registry).unwrap();
+        let result = validate_chain(
+            &[leaf, intermediate.der().to_vec()],
+            &registry,
+            ANCHOR_TYPES,
+        )
+        .unwrap();
         assert!(result.valid, "{:?}", result.errors);
     }
 
@@ -582,7 +628,8 @@ mod tests {
         let leaf = leaf_signed_by("Document Signer", &not_ca);
         let registry = registry_with(iaca.der());
 
-        let result = validate_chain(&[leaf, not_ca.der().to_vec()], &registry).unwrap();
+        let result =
+            validate_chain(&[leaf, not_ca.der().to_vec()], &registry, ANCHOR_TYPES).unwrap();
         assert!(!result.valid);
         assert!(result.errors.iter().any(|e| e.contains("not a CA")));
     }
@@ -603,7 +650,12 @@ mod tests {
         let leaf = leaf_signed_by("Document Signer", &intermediate);
         let registry = registry_with(iaca.der());
 
-        let result = validate_chain(&[leaf, intermediate.der().to_vec()], &registry).unwrap();
+        let result = validate_chain(
+            &[leaf, intermediate.der().to_vec()],
+            &registry,
+            ANCHOR_TYPES,
+        )
+        .unwrap();
         assert!(!result.valid);
         assert!(
             result
@@ -622,7 +674,7 @@ mod tests {
         let registry = registry_with(iaca.der());
 
         let far_future = Utc::now() + chrono::Duration::days(365 * 5000);
-        let result = validate_chain_at(&[leaf], &registry, far_future).unwrap();
+        let result = validate_chain_at(&[leaf], &registry, ANCHOR_TYPES, far_future).unwrap();
         assert!(!result.valid);
         assert!(result.errors.iter().any(|e| e.contains("validity period")));
     }
@@ -640,8 +692,229 @@ mod tests {
             iaca.der(),
         );
 
-        let result = validate_chain(&[leaf, iaca.der().to_vec()], &registry).unwrap();
+        let result = validate_chain(&[leaf, iaca.der().to_vec()], &registry, ANCHOR_TYPES).unwrap();
         assert!(!result.valid);
         assert!(result.trust_anchor.is_none());
+    }
+
+    #[test]
+    fn anchor_of_another_service_type_is_not_used() {
+        let iaca = root("Test IACA");
+        let leaf = leaf_signed_by("Document Signer", &iaca);
+        let registry = registry_with(iaca.der());
+
+        let other_type = validate_chain(
+            &[leaf.clone(), iaca.der().to_vec()],
+            &registry,
+            &[ServiceType::Pid],
+        )
+        .unwrap();
+        assert!(!other_type.valid);
+        assert!(other_type.trust_anchor.is_none());
+
+        let leaf_only =
+            validate_x5chain(std::slice::from_ref(&leaf), &registry, &[ServiceType::Pid]).unwrap();
+        assert!(!leaf_only.valid);
+
+        assert!(!validate_x5chain(&[leaf], &registry, &[]).unwrap().valid);
+    }
+
+    #[test]
+    fn issuer_key_usage_without_cert_signing_is_rejected() {
+        let mut params = ca_params("Test IACA", BasicConstraints::Unconstrained);
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        let iaca = CertifiedIssuer::self_signed(params, KeyPair::generate().unwrap()).unwrap();
+        let leaf = leaf_signed_by("Document Signer", &iaca);
+        let registry = registry_with(iaca.der());
+
+        let result = validate_chain(&[leaf, iaca.der().to_vec()], &registry, ANCHOR_TYPES).unwrap();
+        assert!(!result.valid);
+        assert!(
+            result.errors.iter().any(|e| e.contains("keyUsage")),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn unrecognised_critical_extension_is_rejected() {
+        let iaca = root("Test IACA");
+        let mut params = leaf_params("Document Signer");
+        let mut extension =
+            CustomExtension::from_oid_content(&[1, 3, 6, 1, 4, 1, 99999, 1], vec![0x05, 0x00]);
+        extension.set_criticality(true);
+        params.custom_extensions = vec![extension];
+        let leaf = params
+            .signed_by(&KeyPair::generate().unwrap(), &iaca)
+            .unwrap()
+            .der()
+            .to_vec();
+        let registry = registry_with(iaca.der());
+
+        let result = validate_x5chain(&[leaf], &registry, ANCHOR_TYPES).unwrap();
+        assert!(!result.valid);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.contains("unrecognised critical extension")),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    fn der_header(tag: u8, length: usize) -> Vec<u8> {
+        let mut header = vec![tag];
+        if length < 0x80 {
+            header.push(length as u8);
+        } else {
+            let bytes: Vec<u8> = length
+                .to_be_bytes()
+                .into_iter()
+                .skip_while(|byte| *byte == 0)
+                .collect();
+            header.push(0x80 | bytes.len() as u8);
+            header.extend(bytes);
+        }
+        header
+    }
+
+    /// Splits one DER TLV off the front of `input`: (tag, content, rest).
+    fn der_split(input: &[u8]) -> (u8, &[u8], &[u8]) {
+        let tag = input[0];
+        let (length, header_len) = if input[1] < 0x80 {
+            (input[1] as usize, 2)
+        } else {
+            let count = (input[1] & 0x7f) as usize;
+            let length = input[2..2 + count]
+                .iter()
+                .fold(0usize, |acc, byte| (acc << 8) | *byte as usize);
+            (length, 2 + count)
+        };
+        (
+            tag,
+            &input[header_len..header_len + length],
+            &input[header_len + length..],
+        )
+    }
+
+    fn replace_bytes(haystack: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut rest = haystack;
+        while !rest.is_empty() {
+            if rest.starts_with(from) {
+                out.extend_from_slice(to);
+                rest = &rest[from.len()..];
+            } else {
+                out.push(rest[0]);
+                rest = &rest[1..];
+            }
+        }
+        out
+    }
+
+    /// Relabels an ECDSA-SHA256 certificate's signature algorithm as
+    /// ECDSA-SHA1, re-encoding the enclosing lengths.
+    fn relabel_as_sha1(cert: &[u8]) -> Vec<u8> {
+        const ECDSA_SHA256: &[u8] = &[
+            0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02,
+        ];
+        const ECDSA_SHA1: &[u8] = &[
+            0x30, 0x09, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x01,
+        ];
+        let (_, body, _) = der_split(cert);
+        let (tbs_tag, tbs, after_tbs) = der_split(body);
+        let tbs = replace_bytes(tbs, ECDSA_SHA256, ECDSA_SHA1);
+        let after_tbs = replace_bytes(after_tbs, ECDSA_SHA256, ECDSA_SHA1);
+        let mut new_body = der_header(tbs_tag, tbs.len());
+        new_body.extend(tbs);
+        new_body.extend(after_tbs);
+        let mut out = der_header(0x30, new_body.len());
+        out.extend(new_body);
+        out
+    }
+
+    #[test]
+    fn sha1_signature_algorithm_is_rejected() {
+        let iaca = root("Test IACA");
+        let leaf = relabel_as_sha1(&leaf_signed_by("Document Signer", &iaca));
+        assert_eq!(
+            decode(&leaf)
+                .unwrap()
+                .signature_algorithm
+                .algorithm
+                .to_id_string(),
+            ECDSA_WITH_SHA1
+        );
+        let registry = registry_with(iaca.der());
+
+        let result = validate_chain(&[leaf, iaca.der().to_vec()], &registry, ANCHOR_TYPES).unwrap();
+        assert!(!result.valid);
+        assert!(
+            result.errors.iter().any(|e| e.contains("SHA-1")),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn anchor_from_a_list_past_next_update_is_not_used() {
+        use crate::types::*;
+
+        let iaca = root("Test IACA");
+        let leaf = leaf_signed_by("Document Signer", &iaca);
+        let issued = Utc::now() - chrono::Duration::days(1);
+        let next_update = Utc::now() + chrono::Duration::days(30);
+        let tl = TrustServiceStatusList {
+            scheme_information: SchemeInformation {
+                tsl_version: 5,
+                tsl_sequence_number: 1,
+                tsl_type: TslType::EuGeneric,
+                scheme_operator_name: "Authority".into(),
+                scheme_territory: "DE".into(),
+                list_issue_date_time: issued,
+                next_update: Some(next_update),
+                pointers_to_other_tsl: Vec::new(),
+            },
+            trust_service_providers: vec![TrustServiceProvider {
+                name: "IACA operator".into(),
+                trade_name: None,
+                territory: "DE".into(),
+                information_uris: Vec::new(),
+                services: vec![ServiceInformation {
+                    service_type: ServiceType::CaQc,
+                    service_name: "IACA".into(),
+                    digital_identities: vec![ServiceDigitalIdentity::X509Certificate(
+                        iaca.der().to_vec(),
+                    )],
+                    service_status: ServiceStatus::Granted,
+                    status_starting_time: issued,
+                    history: Vec::new(),
+                }],
+            }],
+        };
+        let mut registry = TrustListRegistry::new();
+        registry.load_trust_list(&tl, Utc::now()).unwrap();
+
+        let current = validate_x5chain_at(
+            std::slice::from_ref(&leaf),
+            &registry,
+            ANCHOR_TYPES,
+            Utc::now(),
+        )
+        .unwrap();
+        assert!(current.valid, "{:?}", current.errors);
+
+        let later = next_update + chrono::Duration::days(1);
+        assert!(
+            !validate_x5chain_at(std::slice::from_ref(&leaf), &registry, ANCHOR_TYPES, later)
+                .unwrap()
+                .valid
+        );
+        assert!(
+            !validate_chain_at(&[leaf, iaca.der().to_vec()], &registry, ANCHOR_TYPES, later)
+                .unwrap()
+                .valid
+        );
     }
 }

@@ -2,7 +2,8 @@
 
 ## Unreleased (0.2.0) — chain signatures verified; list dates and identities parsed
 
-Breaking (R3.6). No in-workspace caller outside `affinidi-tdk`'s re-export.
+Breaking (R3.6). No in-workspace caller outside `affinidi-tdk`'s re-export
+(`affinidi-tdk` 0.38.0).
 
 - **Chain validation verifies signatures.** `validate_chain` / `validate_x5chain`
   used to set `valid: true` from name matching, validity periods and anchor
@@ -13,9 +14,27 @@ Breaking (R3.6). No in-workspace caller outside `affinidi-tdk`'s re-export.
   extensions they do not enforce. Chains that previously reported valid
   without a verifiable signature now report `valid: false`.
 - An x5chain carrying only the leaf (the usual mdoc case) now validates
-  against an active anchor certificate in the registry that issued it.
-- New `validate_chain_at` / `validate_x5chain_at` take the validation time.
-  `ChainValidationResult` is `#[non_exhaustive]`.
+  against an anchor certificate in the registry that issued it.
+- **Anchor service types:** `validate_chain` / `validate_x5chain` (and the new
+  `_at` variants, which take the validation time) take `anchor_types`; only
+  registry entries of those service types can anchor a chain, and an empty
+  slice accepts none. `ChainValidationResult` is `#[non_exhaustive]`.
+- **Anchors at the validation time:** an anchor must be active at the
+  validation time according to its status history (new
+  `ServiceInformation::status_at`), and its trust list must not be past
+  `NextUpdate` (new `TrustAnchorEntry::list_next_update` /
+  `TrustAnchorEntry::usable_at`). `lookup_by_*` apply the same rule at the
+  system clock's time, and `lookup_by_identity_at` at a given time. The
+  `find_*` / `*_providers` listings still use the current status and do not
+  check freshness.
+- Signature algorithms are those of `x509-parser`'s verifier: RSA, ECDSA on
+  P-256 / P-384, and Ed25519. P-521 and brainpool certificates do not validate.
+- **Fingerprints are separated by identity kind:** `ServiceDigitalIdentity::fingerprint`
+  hashes the kind ahead of the value, so a subject name is no longer found by
+  `lookup_by_did` with the same string, nor an SKI by `lookup_by_public_key`.
+  Fingerprints computed by 0.1 differ.
+- `active_certificate_anchors` is `certificate_anchors` and yields every
+  certificate identity; filtering is the caller's.
 - **XML parsing:** `parse_trust_list_xml` returns `UnverifiedTrustList`; the
   list's XAdES signature is **not** verified by this crate, and the caller
   releases the list with `assume_authenticated()` after authenticating it.

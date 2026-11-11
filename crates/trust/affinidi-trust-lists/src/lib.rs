@@ -30,10 +30,15 @@
  *
  * - **XML Parsing**: ETSI TS 119 612 XML parsing — TSPs, services, all digital
  *   identities, service history, issue date and next update
- * - **Trust Registry**: O(1) lookup by certificate, SKI, public key, or DID;
- *   refuses lists that are stale or closed
- * - **X.509 Validation**: Certificate path validation to an active trust anchor,
- *   with each certificate signature verified (no revocation checking)
+ * - **Trust Registry**: O(1) lookup by certificate, SKI, public key, or DID.
+ *   Loading refuses a list that is stale or closed, and an entry stops being
+ *   trusted once its list passes `NextUpdate`. Lookups and chain validation
+ *   at a given time use the service status in force at that time; the
+ *   `find_*` / `*_providers` listings use the current status and do not
+ *   check list freshness
+ * - **X.509 Validation**: Certificate path validation to a trust anchor of
+ *   the caller's chosen service types, with each certificate signature
+ *   verified (no revocation checking)
  * - **COSE x5chain**: Integration point for mdoc issuerAuth certificate chains
  *
  * # Not provided: trust list signature verification
@@ -65,7 +70,7 @@
  * assert!(result.is_trusted());
  *
  * // Validate an x5chain from COSE_Sign1 (mdoc issuerAuth)
- * let chain_result = validate_x5chain(&[/* DER certs */], &registry).unwrap();
+ * let chain_result = validate_x5chain(&[/* DER certs */], &registry, &[ServiceType::Pid]).unwrap();
  * assert!(!chain_result.valid);
  * ```
  */

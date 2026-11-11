@@ -653,7 +653,10 @@ mod tests {
 
         assert_eq!(registry.entry_count(), 1);
         // Lookup by the decoded cert bytes
-        let result = registry.lookup_by_certificate(b"test-cert");
+        let result = registry.lookup_by_identity_at(
+            &ServiceDigitalIdentity::X509Certificate(b"test-cert".to_vec()),
+            now,
+        );
         assert!(result.is_trusted());
     }
 
@@ -744,11 +747,37 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         registry.load_trust_list(&tl, now).unwrap();
-        assert!(registry.lookup_by_certificate(&[1, 2, 3]).is_trusted());
-        assert!(registry.lookup_by_certificate(&[4, 5, 6]).is_trusted());
-        assert!(registry.lookup_by_ski(&[7, 8, 9]).is_trusted());
-        assert!(!registry.lookup_by_certificate(&[10, 11, 12]).is_trusted());
-        assert!(!registry.lookup_by_certificate(&[13, 14, 15]).is_trusted());
+        assert!(
+            registry
+                .lookup_by_identity_at(&ServiceDigitalIdentity::X509Certificate(vec![1, 2, 3]), now)
+                .is_trusted()
+        );
+        assert!(
+            registry
+                .lookup_by_identity_at(&ServiceDigitalIdentity::X509Certificate(vec![4, 5, 6]), now)
+                .is_trusted()
+        );
+        assert!(
+            registry
+                .lookup_by_identity_at(&ServiceDigitalIdentity::X509Ski(vec![7, 8, 9]), now)
+                .is_trusted()
+        );
+        assert!(
+            !registry
+                .lookup_by_identity_at(
+                    &ServiceDigitalIdentity::X509Certificate(vec![10, 11, 12]),
+                    now
+                )
+                .is_trusted()
+        );
+        assert!(
+            !registry
+                .lookup_by_identity_at(
+                    &ServiceDigitalIdentity::X509Certificate(vec![13, 14, 15]),
+                    now
+                )
+                .is_trusted()
+        );
     }
 
     #[test]

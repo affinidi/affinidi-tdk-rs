@@ -20,15 +20,19 @@ affinidi-trust-lists = "0.2"
 - **Trust List parsing**: Parse XML Trusted Lists (ETSI TS 119 612), including
   `ListIssueDateTime` / `NextUpdate`, every digital identity of a service, and
   service history
-- **Trust List Registry**: In-memory indexed store for fast lookups; refuses a
-  list that is stale or closed
-- **X.509 path validation**: Verifies each certificate signature up to an
-  active trust anchor, with CA, key-usage, path-length and validity checks
-  (no revocation checking)
+- **Trust List Registry**: In-memory indexed store for fast lookups. Loading
+  refuses a stale or closed list, and loaded entries stop being trusted once
+  their list passes `NextUpdate`. Lookups and chain validation at a given time
+  use the service status in force at that time; the `find_*` / `*_providers`
+  listings use the current status and do not check list freshness
+- **X.509 path validation**: Verifies each certificate signature up to a trust
+  anchor of the service types you accept, with CA, key-usage, path-length and
+  validity checks (no revocation checking; ECDSA on P-256 / P-384, RSA and
+  Ed25519 only, so P-521 and brainpool certificates do not validate)
 - **Issuer lookup**: Match credential issuers by X.509 certificate, Subject Key Identifier, or public key
 - **Service types**: All 34+ ETSI service types including eIDAS 2.0 (PID, QEAA, Wallet Provider, etc.)
 - **Service status**: Granted, Withdrawn, Supervision states
-- **LoTL resolution**: Follow List of Trusted Lists pointers to national TLs
+- **LoTL pointers**: Parse List of Trusted Lists pointers to national TLs (fetching them is up to you)
 - **Service history**: Track status transitions over time
 
 ## Trust list signatures are not verified
@@ -75,9 +79,9 @@ if let LookupResult::Trusted(entry) = registry.lookup_by_certificate(issuer_cert
 }
 
 // Validate an mdoc x5chain (leaf first) to an active anchor
-let result = validate_x5chain_at(&x5chain, &registry, chrono::Utc::now())?;
+let result = validate_x5chain_at(&x5chain, &registry, &[ServiceType::Pid], chrono::Utc::now())?;
 if result.valid {
-    // the leaf chains to `result.trust_anchor`; now verify the COSE signature
+    // the leaf chains to a usable `result.trust_anchor`; now verify the COSE signature
     // with the leaf's key
 }
 ```
