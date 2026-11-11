@@ -454,13 +454,13 @@ impl DID {
                     let (curve, d, x, y) = match &jwk.params {
                         Params::OKP(params) => (
                             params.curve.clone(),
-                            params.d.clone().unwrap_or_default(),
+                            params.d.clone(),
                             params.x.clone(),
                             None,
                         ),
                         Params::EC(params) => (
                             params.curve.clone(),
-                            params.d.clone().unwrap_or_default(),
+                            params.d.clone(),
                             params.x.clone(),
                             Some(params.y.clone()),
                         ),
@@ -472,6 +472,13 @@ impl DID {
                             ));
                         }
                     };
+                    // A generated key always carries its private key; a
+                    // record of one without it would hold no usable key.
+                    let d = d.ok_or_else(|| {
+                        DIDError::InvalidMethodSpecificId(
+                            "generated did:peer key has no private key".to_string(),
+                        )
+                    })?;
 
                     created_keys.push(PeerCreatedKey {
                         key_multibase: multibase.clone(),
@@ -611,6 +618,23 @@ impl TryFrom<&str> for DID {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "ed25519", feature = "p256"))]
+    #[test]
+    fn generated_peer_keys_carry_their_private_key_and_do_not_print_it() {
+        use crate::{PeerCreateKey, PeerKeyPurpose, PeerKeyType};
+
+        let keys = vec![
+            PeerCreateKey::new(PeerKeyPurpose::Verification, PeerKeyType::Ed25519),
+            PeerCreateKey::new(PeerKeyPurpose::Encryption, PeerKeyType::P256),
+        ];
+        let (_, created) = DID::generate_peer(&keys, None).expect("generates");
+        assert_eq!(created.len(), 2);
+        for key in &created {
+            assert!(!key.d.is_empty(), "{key:?}");
+            assert!(!format!("{key:?}").contains(&key.d));
+        }
+    }
 
     #[test]
     fn parse_basic_did() {

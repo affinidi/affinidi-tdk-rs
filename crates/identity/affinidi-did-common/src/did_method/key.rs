@@ -45,7 +45,9 @@ pub enum KeyMaterialType {
 }
 
 /// Serialization format for key material
-#[derive(Debug, Clone, Deserialize, Serialize, Zeroize)]
+///
+/// `Debug` shows which format it is, never the private key.
+#[derive(Clone, Deserialize, Serialize, Zeroize)]
 pub enum KeyMaterialFormat {
     #[serde(rename = "privateKeyJwk", rename_all = "camelCase")]
     JWK(JWK),
@@ -55,6 +57,25 @@ pub enum KeyMaterialFormat {
 
     #[serde(rename_all = "camelCase")]
     Base58 { private_key_base58: String },
+}
+
+/// What `Debug` prints in place of private key material.
+const REDACTED: &str = "<redacted>";
+
+impl std::fmt::Debug for KeyMaterialFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::JWK(jwk) => f.debug_tuple("JWK").field(jwk).finish(),
+            Self::Multibase { .. } => f
+                .debug_struct("Multibase")
+                .field("private_key_multibase", &REDACTED)
+                .finish(),
+            Self::Base58 { .. } => f
+                .debug_struct("Base58")
+                .field("private_key_base58", &REDACTED)
+                .finish(),
+        }
+    }
 }
 
 /// Shadow struct for deserialization
@@ -71,8 +92,9 @@ struct KeyMaterialShadow {
 ///
 /// Contains both public and private key bytes along with metadata.
 /// This type securely manages cryptographic key material and supports
-/// various serialization formats (JWK, multibase).
-#[derive(Debug, Clone, Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
+/// various serialization formats (JWK, multibase). `Debug` never prints the
+/// private key.
+#[derive(Clone, Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
 #[serde(try_from = "KeyMaterialShadow")]
 pub struct KeyMaterial {
     /// Key ID (typically a DID URL like `did:key:z6Mk...#z6Mk...`)
@@ -97,6 +119,19 @@ pub struct KeyMaterial {
     /// Cryptographic algorithm
     #[serde(skip)]
     pub(crate) key_type: KeyType,
+}
+
+impl std::fmt::Debug for KeyMaterial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyMaterial")
+            .field("id", &self.id)
+            .field("type_", &self.type_)
+            .field("format", &self.format)
+            .field("private_bytes", &REDACTED)
+            .field("public_bytes", &self.public_bytes)
+            .field("key_type", &self.key_type)
+            .finish()
+    }
 }
 
 impl TryFrom<KeyMaterialShadow> for KeyMaterial {
@@ -399,6 +434,69 @@ impl KeyMaterial {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn debug_does_not_print_the_private_key() {
+        let jwk = json!({
+            "crv": "Ed25519",
+            "d": "ymjvUTVuUPzGF5ui12LfreO8bjZ_LbnOrh0sk0xCxMM",
+            "kty": "OKP",
+            "x": "d17TbZmkoYHZUQpzJTcuOtq0tjWYm8CKvKGYHDW6ZaE"
+        });
+        let key = KeyMaterial::from_jwk_value("test", &jwk).expect("parses");
+        let printed = format!("{key:?}");
+        assert!(
+            !printed.contains(&format!("{:?}", key.private_bytes)),
+            "{printed}"
+        );
+        assert!(
+            !printed.contains("ymjvUTVuUPzGF5ui12LfreO8bjZ_LbnOrh0sk0xCxMM"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("private_bytes: \"<redacted>\""),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(&format!("{:?}", key.public_bytes)),
+            "{printed}"
+        );
+        let pretty = format!("{key:#?}");
+        assert!(
+            !pretty.contains("ymjvUTVuUPzGF5ui12LfreO8bjZ_LbnOrh0sk0xCxMM"),
+            "{pretty}"
+        );
+    }
+
+    #[cfg(feature = "ed25519")]
+    #[test]
+    fn debug_of_a_generated_key_does_not_print_the_private_key() {
+        let key = KeyMaterial::generate_ed25519(Some(&[7u8; 32]));
+        let printed = format!("{key:?}");
+        assert!(
+            !printed.contains(&format!("{:?}", key.private_bytes())),
+            "{printed}"
+        );
+        let multibase = key.private_multibase().expect("multibase");
+        assert!(!printed.contains(&multibase), "{printed}");
+    }
+
+    #[test]
+    fn debug_of_a_multibase_or_base58_format_does_not_print_the_key() {
+        let multibase = KeyMaterialFormat::Multibase {
+            private_key_multibase: "z3u2secretmultibase".into(),
+        };
+        let base58 = KeyMaterialFormat::Base58 {
+            private_key_base58: "secretbase58".into(),
+        };
+        let printed = format!("{multibase:?} {base58:?}");
+        assert!(!printed.contains("secret"), "{printed}");
+        assert_eq!(
+            printed,
+            "Multibase { private_key_multibase: \"<redacted>\" } \
+             Base58 { private_key_base58: \"<redacted>\" }"
+        );
+    }
 
     #[test]
     fn test_from_jwk_ed25519() {
