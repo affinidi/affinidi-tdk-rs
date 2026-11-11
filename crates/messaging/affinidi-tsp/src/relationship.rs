@@ -135,8 +135,9 @@ impl RelationshipState {
             // Re-establishment. We hold the relationship as complete, but the
             // peer has sent a fresh RFI — the only reason it would is that it
             // lost its half (restart with an ephemeral store, cache eviction,
-            // redeploy) and is rebuilding the exchange. There is no separate "re-establish" control message in
-            // TSP; a re-invite over a live relationship *is* the signal.
+            // redeploy) and is rebuilding the exchange. There is no separate
+            // "re-establish" control message in TSP; a re-invite over a live
+            // relationship *is* the signal.
             //
             // We drop back to `InviteReceived` and re-accept: our accept (an RFA)
             // is what repairs the peer's lost inbound half, so there is no shorter

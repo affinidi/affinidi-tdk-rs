@@ -12,10 +12,13 @@ use crate::vid::{PrivateVid, ResolvedVid};
 
 /// How many received invites are remembered per VID pair.
 ///
-/// Every entry is a genuine invite from the peer — one that verified — so the
-/// history grows only as fast as the peer re-forms the relationship. The bound
-/// keeps a long-lived pair from growing it without limit; the oldest is
-/// forgotten first.
+/// The bound is per pair, not overall. Every entry is a genuine invite from
+/// the peer — one that verified — so one pair's history grows only as fast as
+/// that peer re-forms the relationship, and the bound keeps a long-lived pair
+/// from growing it without limit; the oldest is forgotten first. The map of
+/// pairs itself is not bounded: it gains an entry for every distinct peer that
+/// sends a verified invite and keeps it for the life of the store, as the
+/// relationship and digest maps do.
 const SEEN_INVITES_PER_PAIR: usize = 64;
 
 /// Build a compact relationship key from two VID strings.
@@ -55,7 +58,8 @@ pub struct TspStore {
     /// The other half's thread id — see [`TspStore::set_reply_thread_digest`].
     reply_thread_digests: RwLock<HashMap<String, [u8; 32]>>,
     /// Thread digests of the invites already acted on for each VID pair, oldest
-    /// first, at most [`SEEN_INVITES_PER_PAIR`]. Kept across a cancellation: an
+    /// first, at most [`SEEN_INVITES_PER_PAIR`] per pair (the map grows with
+    /// the number of distinct peers). Kept across a cancellation: an
     /// invite from an earlier relationship is no fresher than one from the
     /// current relationship. Key format: "{our_vid}\0{their_vid}".
     seen_invites: RwLock<HashMap<String, VecDeque<[u8; 32]>>>,

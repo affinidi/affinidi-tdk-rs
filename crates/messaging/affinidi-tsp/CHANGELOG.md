@@ -1,19 +1,6 @@
 # Affinidi TSP Changelog
 
-## 0.3.1 — payload frames are read within their `-Z` count
-
-`unpack` panicked on a routed or nested payload whose `-Z` count was shorter
-than the fields it framed (for example `-ZAA` followed by a full `XHOP`
-layout): the inner message was sliced from past the end of the frame. The
-other layouts read their fields from bytes beyond the declared frame instead
-of stopping at its end.
-
-The payload frame is now decoded from the extent its `-Z` count declares,
-and a field that runs past it is a `TspError::InvalidMessage`. This applies
-to every layout, so `unpack` and `forward_routed` return an error for such a
-frame rather than panicking or reading past it. Frames this crate builds
-always declare their full length and are unaffected. No API change.
-## Unreleased (0.3.1) — a repeated invite does not reopen a relationship
+## 0.3.2 — a repeated invite does not reopen a relationship
 
 `TspAgent::receive` applied every verified invite to the relationship FSM. A
 signed invite verifies for as long as the sender's key does, so a second copy
@@ -23,11 +10,15 @@ the re-establishment edge. `send` then refused until the application accepted
 again; followed by a copy of a cancellation it could end the relationship.
 
 The agent now remembers the thread digests of the invites it has acted on for
-each VID pair (the most recent 64, kept across a cancellation) and refuses an
-invite whose digest it has already seen, with `TspError::Discarded` and no
-state change. Every invite carries a fresh nonce, so re-establishment — a peer
-that lost its half sending a new invite — is unaffected. A copy of the invite
-still awaiting our decision (`InviteReceived`) remains the no-op it was.
+each VID pair (the most recent 64 per pair, kept across a cancellation; the
+set of pairs grows with the number of distinct peers that send a verified
+invite) and refuses an invite whose digest it has already seen, with
+`TspError::Discarded` and no state change. The losing invite of a
+simultaneous-invite race (§7.2.3) is recorded as well, so a late copy of it is
+refused once the race is settled. Every invite carries a fresh nonce, so
+re-establishment — a peer that lost its half sending a new invite — is
+unaffected. A copy of the invite still awaiting our decision
+(`InviteReceived`) remains the no-op it was.
 
 The FSM's `Bidirectional` + `ReceiveInvite` edge is unchanged and now
 documents that it is for a fresh invite only; a caller driving
@@ -41,6 +32,20 @@ invite we already accepted — rather than a new invite — no longer gets the
 relationship reopened; it is refused. A peer still waiting on a lost accept
 recovers by sending a new invite. The history is in memory, like the rest of
 `TspStore`. No wire format changes.
+
+## 0.3.1 — payload frames are read within their `-Z` count
+
+`unpack` panicked on a routed or nested payload whose `-Z` count was shorter
+than the fields it framed (for example `-ZAA` followed by a full `XHOP`
+layout): the inner message was sliced from past the end of the frame. The
+other layouts read their fields from bytes beyond the declared frame instead
+of stopping at its end.
+
+The payload frame is now decoded from the extent its `-Z` count declares,
+and a field that runs past it is a `TspError::InvalidMessage`. This applies
+to every layout, so `unpack` and `forward_routed` return an error for such a
+frame rather than panicking or reading past it. Frames this crate builds
+always declare their full length and are unaffected. No API change.
 
 ## Unreleased (0.3.0) — TSP 1.0 (`YTSP-BAA`)
 

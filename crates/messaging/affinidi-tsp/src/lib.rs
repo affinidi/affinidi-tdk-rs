@@ -631,8 +631,14 @@ impl TspAgent {
                     let ours = self.store.thread_digest(our_vid, their_vid);
                     if let Some(ours) = ours {
                         if ours.as_slice() < thread_digest.as_slice() {
+                            // The losing invite is settled too: a later copy of
+                            // it, arriving once the race is over, must not
+                            // reopen the relationship ours formed.
+                            self.store
+                                .record_seen_invite(our_vid, their_vid, thread_digest);
                             return Err(TspError::Discarded(format!(
-                                "invite race with {their_vid}: ours has the lower digest, keeping it"
+                                "invite race with {their_vid}: ours has the lower digest, \
+                                 keeping it"
                             )));
                         }
                         // Theirs wins: adopt it, replacing the invite we sent.
@@ -1150,6 +1156,58 @@ mod tests {
         assert!(
             bob.send("did:example:bob", "did:example:alice", b"still live")
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_losing_invite_of_a_race_does_not_reopen_the_relationship_later() {
+        let (alice, bob) = two_strangers();
+        let a_invite = alice
+            .send_relationship_invite("did:example:alice", "did:example:bob")
+            .unwrap();
+        let b_invite = bob
+            .send_relationship_invite("did:example:bob", "did:example:alice")
+            .unwrap();
+        let (winner, loser, winner_vid, loser_vid, losing_invite, winning_invite) =
+            if a_invite.thread_digest.as_slice() < b_invite.thread_digest.as_slice() {
+                (
+                    &alice,
+                    &bob,
+                    "did:example:alice",
+                    "did:example:bob",
+                    b_invite,
+                    a_invite,
+                )
+            } else {
+                (
+                    &bob,
+                    &alice,
+                    "did:example:bob",
+                    "did:example:alice",
+                    a_invite,
+                    b_invite,
+                )
+            };
+
+        assert!(matches!(
+            winner.receive(winner_vid, &losing_invite.bytes),
+            Err(TspError::Discarded(_))
+        ));
+        loser.receive(loser_vid, &winning_invite.bytes).unwrap();
+        let accept = loser
+            .send_relationship_accept(loser_vid, winner_vid)
+            .unwrap();
+        winner.receive(winner_vid, &accept.bytes).unwrap();
+        assert_eq!(
+            winner.relationship_state(winner_vid, loser_vid),
+            RelationshipState::Bidirectional
+        );
+
+        let late = winner.receive(winner_vid, &losing_invite.bytes);
+        assert!(matches!(late, Err(TspError::Discarded(_))), "{late:?}");
+        assert_eq!(
+            winner.relationship_state(winner_vid, loser_vid),
+            RelationshipState::Bidirectional
         );
     }
 
