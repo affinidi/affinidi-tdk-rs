@@ -29,6 +29,37 @@ Behaviour change (R3.6), limited to repeated ids: a redelivered message
 still held in the cache is ignored, and the first copy and its metadata are
 kept. A message the application has already taken is not in the cache, so
 a later re-push of it is delivered again, as before. No API change.
+## 0.45.8 — a repeated TSP invite does not reopen a relationship
+
+`TspOps::record_incoming_control` applied every verified invite to the
+relationship state machine. A signed invite verifies for as long as the
+sender's key does, so a second copy of one already handled — re-delivered by
+a relay, or re-sent by anyone holding the bytes — took an established
+relationship back to `InviteReceived` through the re-establishment edge,
+until the application accepted again.
+
+- An invite whose digest is the one the established relationship records is
+  now refused with `ATMError::MsgReceiveError` and changes nothing. This
+  needs nothing new from the store.
+- `RelationshipStore` gains `has_seen_invite` / `record_seen_invite`, a
+  history of the invites acted on for each pair (`SEEN_INVITES_PER_PAIR`, the
+  most recent 64; kept across a cancellation or `reset_relationship`). An
+  invite found there — one from before the peer re-formed the relationship,
+  or the losing invite of a §7.2.3 race — is refused the same way.
+  `InMemoryRelationshipStore` and `PersistentRelationshipStore` (a new facet;
+  `forget` removes it) implement both.
+- Both are default methods, so an external `RelationshipStore` keeps
+  compiling. One that does not override them keeps no history: it still
+  refuses a copy of the current invite, but treats a copy of an earlier one
+  as new.
+- A copy of the invite still awaiting our decision (`InviteReceived`) remains
+  the no-op it was, and a new invite (new nonce, new digest) still re-forms a
+  relationship as before.
+
+**Behaviour change.** A peer that re-sends the identical bytes of an invite we
+already accepted, rather than a new invite, no longer gets the relationship
+reopened. The SDK's own re-establishing paths always send a new invite. No
+wire format changes. Complements the same change in `affinidi-tsp`.
 
 ## 0.45.6 — `messaging/mux/connections`
 
