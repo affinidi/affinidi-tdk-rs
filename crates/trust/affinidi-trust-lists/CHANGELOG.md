@@ -1,5 +1,40 @@
 # Affinidi Trust Lists Changelog
 
+## Unreleased (0.2.0) — chain signatures verified; list dates and identities parsed
+
+Breaking (R3.6). No in-workspace caller outside `affinidi-tdk`'s re-export.
+
+- **Chain validation verifies signatures.** `validate_chain` / `validate_x5chain`
+  used to set `valid: true` from name matching, validity periods and anchor
+  membership alone. They now verify each certificate's signature under its
+  issuer's key, require `basicConstraints.cA` (and `keyCertSign` when
+  `keyUsage` is present) on every issuer, honour `pathLenConstraint`, refuse
+  SHA-1 signatures, and refuse critical name-constraint, policy or unrecognised
+  extensions they do not enforce. Chains that previously reported valid
+  without a verifiable signature now report `valid: false`.
+- An x5chain carrying only the leaf (the usual mdoc case) now validates
+  against an active anchor certificate in the registry that issued it.
+- New `validate_chain_at` / `validate_x5chain_at` take the validation time.
+  `ChainValidationResult` is `#[non_exhaustive]`.
+- **XML parsing:** `parse_trust_list_xml` returns `UnverifiedTrustList`; the
+  list's XAdES signature is **not** verified by this crate, and the caller
+  releases the list with `assume_authenticated()` after authenticating it.
+  `ListIssueDateTime` (required) and `NextUpdate` are parsed instead of
+  defaulting to now / none. An unparseable date or undecodable certificate or
+  SKI is an error instead of being replaced or skipped. `ServiceHistory` is
+  parsed into `ServiceInformation::history` and no longer leaks its name or
+  certificate into the next service; the `Signature` element's certificates
+  are ignored.
+- `ServiceInformation::digital_identity` is now `digital_identities: Vec<_>`;
+  every `X509Certificate`, `X509SKI` and `X509SubjectName` of a service is kept
+  and indexed. A service with no identity is no longer indexed under an empty
+  public key.
+- `TrustListRegistry::load_trust_list(&tl, now)` returns `Result` and refuses a
+  list that is not current (`TrustServiceStatusList::is_current_at`), including
+  a closed list. New `TrustListError::NotCurrent`.
+- `x509-parser` now uses its `verify-aws` feature (`aws-lc-rs`, already in the
+  workspace lockfile). `rcgen` (already in the workspace) is a dev-dependency.
+
 ## Unreleased (0.1.6) — `sha2` 0.11
 
 No behaviour change; the crate's only use is `Sha256::digest`, which is

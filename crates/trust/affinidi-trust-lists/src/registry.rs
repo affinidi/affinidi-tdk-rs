@@ -7,8 +7,9 @@
 
 use std::collections::HashMap;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
+use crate::error::{Result, TrustListError};
 use crate::service_status::ServiceStatus;
 use crate::service_type::ServiceType;
 use crate::types::{ServiceDigitalIdentity, ServiceInformation, TrustServiceStatusList};
@@ -70,8 +71,30 @@ impl TrustListRegistry {
 
     /// Load a Trust Service Status List into the registry.
     ///
-    /// Indexes all services by their digital identity fingerprint.
-    pub fn load_trust_list(&mut self, tl: &TrustServiceStatusList) {
+    /// Indexes every service under each of its digital identities. Refuses a
+    /// list that is not current at `now` (see
+    /// [`TrustServiceStatusList::is_current_at`]), so a stale or closed list
+    /// cannot supply anchors.
+    ///
+    /// This does not authenticate the list: its XAdES signature is not
+    /// verified by this crate. Load only lists whose bytes the caller has
+    /// authenticated (see [`crate::xml::UnverifiedTrustList`]).
+    pub fn load_trust_list(
+        &mut self,
+        tl: &TrustServiceStatusList,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        if !tl.is_current_at(now) {
+            let info = &tl.scheme_information;
+            return Err(TrustListError::NotCurrent(format!(
+                "trust list for {} issued {} with next update {} is not current at {now}",
+                info.scheme_territory,
+                info.list_issue_date_time,
+                info.next_update
+                    .map_or_else(|| "none (closed list)".to_string(), |next| next.to_string()),
+            )));
+        }
+
         let territory = tl.scheme_information.scheme_territory.clone();
         if !self.territories.contains(&territory) {
             self.territories.push(territory.clone());
@@ -79,17 +102,24 @@ impl TrustListRegistry {
 
         for provider in &tl.trust_service_providers {
             for service in &provider.services {
-                let fingerprint = service.digital_identity.fingerprint();
+                if service.digital_identities.is_empty() {
+                    continue;
+                }
                 let entry = TrustAnchorEntry {
                     provider_name: provider.name.clone(),
                     territory: provider.territory.clone(),
                     service: service.clone(),
                 };
-
-                self.index.entry(fingerprint).or_default().push(entry);
+                for identity in &service.digital_identities {
+                    self.index
+                        .entry(identity.fingerprint())
+                        .or_default()
+                        .push(entry.clone());
+                }
                 self.entry_count += 1;
             }
         }
+        Ok(())
     }
 
     /// Add a single provider with one service directly.
@@ -109,7 +139,7 @@ impl TrustListRegistry {
         let service = ServiceInformation {
             service_type,
             service_name: provider_name.to_string(),
-            digital_identity: identity,
+            digital_identities: vec![identity],
             service_status: status,
             status_starting_time: Utc::now(),
             history: Vec::new(),
@@ -179,6 +209,26 @@ impl TrustListRegistry {
                 }
             }
         }
+    }
+
+    /// Every X.509 certificate identity of an active service, with its entry.
+    pub fn active_certificate_anchors(&self) -> impl Iterator<Item = (&TrustAnchorEntry, &[u8])> {
+        self.index
+            .values()
+            .flatten()
+            .filter(|entry| entry.service.service_status.is_active())
+            .flat_map(|entry| {
+                entry
+                    .service
+                    .digital_identities
+                    .iter()
+                    .filter_map(move |identity| match identity {
+                        ServiceDigitalIdentity::X509Certificate(der) => {
+                            Some((entry, der.as_slice()))
+                        }
+                        _ => None,
+                    })
+            })
     }
 
     /// Find all services of a given type across all trust lists.
@@ -396,7 +446,7 @@ mod tests {
         let service = ServiceInformation {
             service_type: ServiceType::QEaa,
             service_name: "EBSI QEAA".into(),
-            digital_identity: did_identity,
+            digital_identities: vec![did_identity],
             service_status: ServiceStatus::Granted,
             status_starting_time: Utc::now(),
             history: Vec::new(),
@@ -454,8 +504,8 @@ mod tests {
                 tsl_type: TslType::EuGeneric,
                 scheme_operator_name: "Test Authority".into(),
                 scheme_territory: "DE".into(),
-                list_issue_date_time: Utc::now(),
-                next_update: None,
+                list_issue_date_time: Utc::now() - chrono::Duration::days(1),
+                next_update: Some(Utc::now() + chrono::Duration::days(30)),
                 pointers_to_other_tsl: Vec::new(),
             },
             trust_service_providers: vec![TrustServiceProvider {
@@ -466,7 +516,10 @@ mod tests {
                 services: vec![ServiceInformation {
                     service_type: ServiceType::Pid,
                     service_name: "PID Issuance".into(),
-                    digital_identity: ServiceDigitalIdentity::X509Certificate(sample_cert(10)),
+                    digital_identities: vec![
+                        ServiceDigitalIdentity::X509Certificate(sample_cert(10)),
+                        ServiceDigitalIdentity::X509Certificate(sample_cert(11)),
+                    ],
                     service_status: ServiceStatus::Granted,
                     status_starting_time: Utc::now(),
                     history: Vec::new(),
@@ -475,13 +528,35 @@ mod tests {
         };
 
         let mut registry = TrustListRegistry::new();
-        registry.load_trust_list(&tl);
+        registry.load_trust_list(&tl, Utc::now()).unwrap();
 
         assert_eq!(registry.entry_count(), 1);
         assert!(
             registry
                 .lookup_by_certificate(&sample_cert(10))
                 .is_trusted()
+        );
+        assert!(
+            registry
+                .lookup_by_certificate(&sample_cert(11))
+                .is_trusted(),
+            "every identity of a service is indexed"
+        );
+
+        let mut stale = tl.clone();
+        stale.scheme_information.next_update = Some(Utc::now() - chrono::Duration::hours(1));
+        assert!(
+            TrustListRegistry::new()
+                .load_trust_list(&stale, Utc::now())
+                .is_err()
+        );
+
+        let mut closed = tl;
+        closed.scheme_information.next_update = None;
+        assert!(
+            TrustListRegistry::new()
+                .load_trust_list(&closed, Utc::now())
+                .is_err()
         );
     }
 }

@@ -22,6 +22,16 @@ pub struct TrustServiceStatusList {
     pub trust_service_providers: Vec<TrustServiceProvider>,
 }
 
+impl TrustServiceStatusList {
+    /// Whether the list is current at `now`: issued no later than `now` and
+    /// with a `NextUpdate` that has not passed. A list without `NextUpdate`
+    /// is a closed list (ETSI TS 119 612 clause 5.3.15) and is never current.
+    pub fn is_current_at(&self, now: DateTime<Utc>) -> bool {
+        let info = &self.scheme_information;
+        info.list_issue_date_time <= now && info.next_update.is_some_and(|next| now <= next)
+    }
+}
+
 /// The type of trust list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TslType {
@@ -59,9 +69,10 @@ pub struct SchemeInformation {
     pub scheme_operator_name: String,
     /// Territory/country code (e.g., "EU", "DE", "AT").
     pub scheme_territory: String,
-    /// When this version was issued.
+    /// When this version was issued (`ListIssueDateTime`).
     pub list_issue_date_time: DateTime<Utc>,
-    /// When the next update is expected.
+    /// When the next update is due (`NextUpdate`); the list is stale after
+    /// it. `None` for a closed list, whose `NextUpdate` is empty.
     pub next_update: Option<DateTime<Utc>>,
     /// Pointers to other trust lists (used by LoTL to point to national TLs).
     pub pointers_to_other_tsl: Vec<OtherTslPointer>,
@@ -105,8 +116,10 @@ pub struct ServiceInformation {
     pub service_type: ServiceType,
     /// Human-readable service name.
     pub service_name: String,
-    /// The digital identity of the service (certificate, key, or DID).
-    pub digital_identity: ServiceDigitalIdentity,
+    /// The digital identities of the service (certificates, SKIs, subject
+    /// names, keys, or DIDs). A service may list several, e.g. a renewed
+    /// certificate beside the one it replaces; each is indexed.
+    pub digital_identities: Vec<ServiceDigitalIdentity>,
     /// Current status of the service.
     pub service_status: ServiceStatus,
     /// When the current status took effect.
@@ -147,7 +160,7 @@ impl ServiceDigitalIdentity {
     }
 }
 
-/// A historical status transition for a service.
+/// A historical status transition for a service (`ServiceHistoryInstance`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceHistoryEntry {
     /// The service type at this point in history.

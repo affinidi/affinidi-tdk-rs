@@ -1,5 +1,12 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.39.0) — affinidi-trust-lists 0.2
+
+- **Changed:** the `trust` feature moves to `affinidi-trust-lists` 0.2: chain
+  validation verifies certificate signatures, and parsed XML lists must be
+  released with `assume_authenticated()` and are refused when stale. See that
+  crate's CHANGELOG for the API changes.
+
 ## Unreleased (0.38.0) — affinidi-mdoc 0.5
 
 - **Changed:** the `mdoc` feature moves to `affinidi-mdoc` 0.5: item digests

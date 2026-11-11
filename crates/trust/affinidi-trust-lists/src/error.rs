@@ -40,6 +40,10 @@ pub enum TrustListError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    /// The trust list is outside its issue / next-update window, or closed.
+    #[error("Trust list not current: {0}")]
+    NotCurrent(String),
+
     /// Base64 decoding error.
     #[error("Base64 error: {0}")]
     Base64(String),

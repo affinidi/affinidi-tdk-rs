@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.38.0"
+version = "0.39.0"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -103,7 +103,7 @@ affinidi-did-webs = { version = "0.13", path = "../../identity/did-methods/did-w
 did-scid = { version = "0.4", path = "../../identity/did-methods/did-scid", optional = true }
 
 # Trust + TSP
-affinidi-trust-lists = { version = "0.1", path = "../../trust/affinidi-trust-lists", optional = true }
+affinidi-trust-lists = { version = "0.2", path = "../../trust/affinidi-trust-lists", optional = true }
 affinidi-tsp = { version = "0.3", path = "../../messaging/affinidi-tsp", optional = true }
 
 # External Crates

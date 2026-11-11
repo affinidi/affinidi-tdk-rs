@@ -12,18 +12,32 @@ for eIDAS 2.0 trust infrastructure.
 
 ```toml
 [dependencies]
-affinidi-trust-lists = "0.1"
+affinidi-trust-lists = "0.2"
 ```
 
 ## Features
 
-- **Trust List parsing**: Parse XML Trusted Lists (ETSI TS 119 612)
-- **Trust List Registry**: In-memory indexed store for fast lookups
+- **Trust List parsing**: Parse XML Trusted Lists (ETSI TS 119 612), including
+  `ListIssueDateTime` / `NextUpdate`, every digital identity of a service, and
+  service history
+- **Trust List Registry**: In-memory indexed store for fast lookups; refuses a
+  list that is stale or closed
+- **X.509 path validation**: Verifies each certificate signature up to an
+  active trust anchor, with CA, key-usage, path-length and validity checks
+  (no revocation checking)
 - **Issuer lookup**: Match credential issuers by X.509 certificate, Subject Key Identifier, or public key
 - **Service types**: All 34+ ETSI service types including eIDAS 2.0 (PID, QEAA, Wallet Provider, etc.)
 - **Service status**: Granted, Withdrawn, Supervision states
 - **LoTL resolution**: Follow List of Trusted Lists pointers to national TLs
 - **Service history**: Track status transitions over time
+
+## Trust list signatures are not verified
+
+This crate does **not** verify the XAdES signature of an XML trusted list.
+`parse_trust_list_xml` returns an `UnverifiedTrustList`; authenticate the
+list's bytes yourself (for example, verify the XAdES signature against the
+signing certificates the LoTL publishes for that territory) and only then call
+`assume_authenticated()` and load it into a registry.
 
 ## eIDAS 2.0 Entity Types
 
@@ -39,7 +53,9 @@ Supports all 7 entity types required by the Architecture Reference Framework:
 ## Quick Start
 
 ```rust,ignore
-use affinidi_trust_lists::{TrustListRegistry, ServiceType, ServiceStatus};
+use affinidi_trust_lists::{
+    LookupResult, ServiceStatus, ServiceType, TrustListRegistry, validate_x5chain_at,
+};
 
 // Create a registry and add trust anchors
 let mut registry = TrustListRegistry::new();
@@ -54,8 +70,15 @@ registry.add_provider(
 );
 
 // Look up an issuer by certificate
-if let Some(entry) = registry.lookup_by_certificate(issuer_cert) {
-    assert_eq!(entry.status, ServiceStatus::Granted);
+if let LookupResult::Trusted(entry) = registry.lookup_by_certificate(issuer_cert) {
+    println!("trusted: {}", entry.provider_name);
+}
+
+// Validate an mdoc x5chain (leaf first) to an active anchor
+let result = validate_x5chain_at(&x5chain, &registry, chrono::Utc::now())?;
+if result.valid {
+    // the leaf chains to `result.trust_anchor`; now verify the COSE signature
+    // with the leaf's key
 }
 ```
 
