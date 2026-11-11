@@ -14,7 +14,7 @@
 use ahash::AHashMap;
 use errors::SecretsResolverError;
 use secrets::Secret;
-use std::{cell::RefCell, time::Duration};
+use std::{cell::RefCell, future::Future, time::Duration};
 use task::{SecretTaskCommand, SecretsTask};
 use tokio::{
     sync::{mpsc, oneshot},
@@ -142,8 +142,8 @@ impl SecretsResolver for SimpleSecretsResolver {
 // *****************************************************************************************************
 // *****************************************************************************************************
 
-/// How long a [`ThreadedSecretsResolver`] waits for the secrets task to
-/// accept a command, and again for its answer.
+/// The most a [`ThreadedSecretsResolver`] operation waits for the secrets
+/// task, from queueing the command to the task's answer.
 pub const SECRETS_TASK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Multithreaded Affinidi Secrets Resolver
@@ -187,11 +187,14 @@ impl ThreadedSecretsResolver {
         for secret in secrets {
             debug!("Adding secret ({})", secret.id);
         }
-        self.send(SecretTaskCommand::AddSecrets {
-            secrets: secrets.to_vec(),
+        bounded(async {
+            self.send(SecretTaskCommand::AddSecrets {
+                secrets: secrets.to_vec(),
+            })
+            .await?;
+            self.applied().await
         })
-        .await?;
-        self.applied().await
+        .await
     }
 
     /// Get a secret by its ID. `Ok(None)` means the task does not hold it.
@@ -201,10 +204,10 @@ impl ThreadedSecretsResolver {
     /// [`SecretsResolverError::SecretsTaskClosed`] or
     /// [`SecretsResolverError::SecretsTaskTimeout`].
     pub async fn try_get_secret(&self, secret_id: &str) -> errors::Result<Option<Secret>> {
-        self.request(|tx| SecretTaskCommand::GetSecret {
+        bounded(self.request(|tx| SecretTaskCommand::GetSecret {
             key_id: secret_id.to_string(),
             tx,
-        })
+        }))
         .await
     }
 
@@ -215,10 +218,10 @@ impl ThreadedSecretsResolver {
     /// [`SecretsResolverError::SecretsTaskClosed`] or
     /// [`SecretsResolverError::SecretsTaskTimeout`].
     pub async fn try_find_secrets(&self, secret_ids: &[String]) -> errors::Result<Vec<String>> {
-        self.request(|tx| SecretTaskCommand::FindSecrets {
+        bounded(self.request(|tx| SecretTaskCommand::FindSecrets {
             keys: secret_ids.to_vec(),
             tx,
-        })
+        }))
         .await
     }
 
@@ -230,11 +233,14 @@ impl ThreadedSecretsResolver {
     /// [`SecretsResolverError::SecretsTaskTimeout`]; the secret may still be
     /// held.
     pub async fn try_remove_secret(&self, secret_id: &str) -> errors::Result<()> {
-        self.send(SecretTaskCommand::RemoveSecret {
-            key_id: secret_id.to_string(),
+        bounded(async {
+            self.send(SecretTaskCommand::RemoveSecret {
+                key_id: secret_id.to_string(),
+            })
+            .await?;
+            self.applied().await
         })
-        .await?;
-        self.applied().await
+        .await
     }
 
     /// The number of secrets the task holds.
@@ -244,19 +250,15 @@ impl ThreadedSecretsResolver {
     /// [`SecretsResolverError::SecretsTaskClosed`] or
     /// [`SecretsResolverError::SecretsTaskTimeout`].
     pub async fn try_len(&self) -> errors::Result<usize> {
-        self.request(|tx| SecretTaskCommand::SecretsStored { tx })
-            .await
+        bounded(self.request(|tx| SecretTaskCommand::SecretsStored { tx })).await
     }
 
-    /// Wait for room on the channel, up to [`SECRETS_TASK_TIMEOUT`].
+    /// Wait for room on the channel. Callers bound the wait with [`bounded`].
     async fn send(&self, command: SecretTaskCommand) -> errors::Result<()> {
-        match tokio::time::timeout(SECRETS_TASK_TIMEOUT, self.tx.send(command)).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(_)) => Err(SecretsResolverError::SecretsTaskClosed),
-            Err(_) => Err(SecretsResolverError::SecretsTaskTimeout(
-                SECRETS_TASK_TIMEOUT,
-            )),
-        }
+        self.tx
+            .send(command)
+            .await
+            .map_err(|_| SecretsResolverError::SecretsTaskClosed)
     }
 
     async fn request<T>(
@@ -265,20 +267,27 @@ impl ThreadedSecretsResolver {
     ) -> errors::Result<T> {
         let (tx, rx) = oneshot::channel();
         self.send(command(tx)).await?;
-        match tokio::time::timeout(SECRETS_TASK_TIMEOUT, rx).await {
-            Ok(Ok(answer)) => Ok(answer),
-            Ok(Err(_)) => Err(SecretsResolverError::SecretsTaskClosed),
-            Err(_) => Err(SecretsResolverError::SecretsTaskTimeout(
-                SECRETS_TASK_TIMEOUT,
-            )),
-        }
+        rx.await
+            .map_err(|_| SecretsResolverError::SecretsTaskClosed)
     }
 
     /// The task handles commands in order, so once it answers a later one,
     /// every command sent before it has been applied.
     async fn applied(&self) -> errors::Result<()> {
-        self.try_len().await.map(|_| ())
+        self.request(|tx| SecretTaskCommand::SecretsStored { tx })
+            .await
+            .map(|_| ())
     }
+}
+
+/// Run one whole operation against the secrets task within
+/// [`SECRETS_TASK_TIMEOUT`].
+async fn bounded<T>(operation: impl Future<Output = errors::Result<T>>) -> errors::Result<T> {
+    tokio::time::timeout(SECRETS_TASK_TIMEOUT, operation)
+        .await
+        .unwrap_or(Err(SecretsResolverError::SecretsTaskTimeout(
+            SECRETS_TASK_TIMEOUT,
+        )))
 }
 
 fn log_task_error(operation: &str, err: &SecretsResolverError) {
@@ -445,6 +454,28 @@ mod tests {
             resolver.try_len().await,
             Err(SecretsResolverError::SecretsTaskClosed)
         ));
+    }
+
+    /// A receiver that takes commands but never answers: the whole insert,
+    /// queueing plus confirmation, is bounded by one `SECRETS_TASK_TIMEOUT`.
+    #[tokio::test(start_paused = true)]
+    async fn an_insert_is_bounded_by_one_timeout_overall() {
+        let (tx, mut rx) = mpsc::channel(32);
+        let (resolver, _) = ThreadedSecretsResolver::new(Some(tx)).await;
+        let held = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Some(command) = rx.recv().await {
+                held.push(command);
+            }
+        });
+        let started = tokio::time::Instant::now();
+        assert!(matches!(
+            resolver.try_insert_vec(&secrets(1)).await,
+            Err(SecretsResolverError::SecretsTaskTimeout(_))
+        ));
+        assert_eq!(started.elapsed(), SECRETS_TASK_TIMEOUT);
+        drop(resolver);
+        held.await.unwrap();
     }
 
     /// A full channel whose reader never drains it times out with an error
