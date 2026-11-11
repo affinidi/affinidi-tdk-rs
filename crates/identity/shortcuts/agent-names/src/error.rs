@@ -56,6 +56,11 @@ pub enum AgentNameError {
     )]
     BlockedAddress { name: String, address: String },
 
+    /// The name's host is a special-use name (`localhost`, `*.local`,
+    /// `*.internal`, a single label, ...) rather than a public web host.
+    #[error("Agent name '{name}' is on the special-use host '{host}'; refusing to fetch it")]
+    BlockedHost { name: String, host: String },
+
     /// A cache server rejected or could not answer the lookup.
     #[error("Cache server returned HTTP {status} resolving '{name}': {message}")]
     CacheServer {

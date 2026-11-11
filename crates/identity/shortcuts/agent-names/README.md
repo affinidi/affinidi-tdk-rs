@@ -109,22 +109,29 @@ All of that guesswork is confined to this one type. Parsing, canonicalisation an
 verification do not depend on how the DID was obtained, so pinning the contract
 down later should not disturb them.
 
-## Security
+## Outbound requests
 
 - Redirects are **not** followed automatically; each hop is inspected explicitly,
-  which is what makes the hop cap and the per-hop HTTPS check enforceable. This
-  mirrors `affinidi-did-web`'s SSRF hardening.
+  which is what makes the hop cap and the per-hop HTTPS check enforceable.
 - Plain HTTP is refused unless `allow_insecure_http(true)` is set. That switch is
   for local development and tests only.
-- Names resolving to **non-public addresses** (loopback, private, link-local
-  including `169.254.169.254`, and their IPv6/IPv4-mapped forms) are refused
-  unless `allow_private_addresses(true)`. Checked on every hop, since a public
-  host can redirect inward. This matters most server-side, where the name is
-  attacker-supplied and the request originates inside your network.
+- Unless `allow_private_addresses(true)` is set, every hop is held to
+  `affinidi-net-guard`'s public-internet policy, as `affinidi-did-web` is:
+  - the URL is vetted first: IP literals that are not globally routable
+    (loopback, private, link-local including `169.254.169.254`, CGNAT,
+    `0.0.0.0/8`, documentation, and their IPv4-mapped, IPv4-compatible, NAT64
+    and 6to4 forms) and special-use names (`localhost`, `*.local`,
+    `*.internal`, single-label names) are refused;
+  - the client's DNS resolver refuses a name if any address it resolves to is
+    not globally routable, and connects only to the addresses it checked, so
+    the checked answer is the one used.
 
-  It is **not** complete SSRF protection: the check and the request resolve DNS
-  separately, so DNS rebinding can still reach an internal address. It raises
-  the cost; it does not close the hole.
+  Proxies are turned off, since a proxy would resolve the name itself. This
+  matters most server-side, where the name is caller-supplied and the request
+  originates inside your network.
+- `with_client_builder(builder)` takes a caller's `reqwest::ClientBuilder` and
+  applies the settings above after the caller's own. `with_client` is
+  deprecated: a built client cannot be given the DNS check.
 
 ## DID → name
 

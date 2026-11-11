@@ -1,13 +1,8 @@
 //! Backends that turn an agent name into a DID.
 
-use std::{
-    future::Future,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    pin::Pin,
-    time::Duration,
-};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use tokio::net::lookup_host;
+use affinidi_net_guard::{EgressError, EgressPolicy, GuardedResolver};
 use tracing::debug;
 use url::Url;
 
@@ -15,6 +10,9 @@ use crate::{error::AgentNameError, name::AgentName};
 
 /// Default request timeout.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Default connect timeout.
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Default cap on redirect hops followed while chasing a name.
 pub const DEFAULT_MAX_HOPS: u8 = 5;
@@ -64,43 +62,97 @@ pub trait AgentNameResolver: Send + Sync {
 /// - up to [`DEFAULT_MAX_HOPS`] hops are followed, so an apex-to-`www`
 ///   redirect on the way to the DID does not break resolution.
 ///
-/// # Safety
+/// # Outbound requests
 ///
 /// Redirects are **not** followed automatically by `reqwest`; each hop is
-/// inspected explicitly. This mirrors `affinidi-did-web`'s SSRF hardening and
-/// is what makes the hop cap and the HTTPS requirement enforceable.
+/// inspected explicitly, which is what makes the hop cap and the HTTPS
+/// requirement enforceable.
+///
+/// Unless [`allow_private_addresses`](Self::allow_private_addresses) is set,
+/// every hop is held to `affinidi_net_guard::EgressPolicy::public_internet()`
+/// in two places, as `affinidi-did-web` does:
+///
+/// - the URL is vetted before the request: IP literals and special-use names
+///   (`localhost`, `*.local`, `*.internal`, single-label names, ...);
+/// - the client's DNS resolver is `affinidi_net_guard::GuardedResolver`, which
+///   refuses the name if any address it resolves to is not globally routable
+///   and hands the connection only the addresses it checked. There is no
+///   second lookup, so the answer that was checked is the one connected to.
+///
+/// Proxies are turned off, since a proxy resolves the name itself and the
+/// resolver would never see the address.
 #[derive(Debug, Clone)]
 pub struct HttpRedirectResolver {
     client: reqwest::Client,
+    client_origin: ClientOrigin,
     max_hops: u8,
     allow_insecure_http: bool,
     allow_private_addresses: bool,
 }
 
+/// Who built the client, which decides whether
+/// [`HttpRedirectResolver::allow_private_addresses`] can rebuild it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientOrigin {
+    Default,
+    CallerBuilder,
+    CallerClient,
+}
+
 impl HttpRedirectResolver {
-    /// A resolver with redirects disabled, a 20s timeout, and HTTPS required.
+    /// A resolver with redirects disabled, a 20s timeout, HTTPS required, and
+    /// public addresses only.
+    ///
+    /// # Panics
+    ///
+    /// If the HTTP client cannot be built (the TLS backend fails to
+    /// initialise), as `reqwest::Client::new` does.
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(DEFAULT_TIMEOUT)
-            .build()
-            .unwrap_or_default();
-        Self {
-            client,
-            max_hops: DEFAULT_MAX_HOPS,
-            allow_insecure_http: false,
-            allow_private_addresses: false,
-        }
+        Self::from_client(default_client(true), ClientOrigin::Default)
+    }
+
+    /// A resolver over a client the caller configures (headers, TLS,
+    /// connection pool, timeouts).
+    ///
+    /// The guard settings are applied after the caller's, so nothing set on
+    /// `builder` can undo them: redirects are never followed, every proxy
+    /// (including one named by `HTTPS_PROXY`) is turned off, and the guarded
+    /// DNS resolver is installed. [`DEFAULT_TIMEOUT`] and
+    /// [`DEFAULT_CONNECT_TIMEOUT`] apply unless the caller sets their own.
+    ///
+    /// The guarded resolver stays installed even if
+    /// [`allow_private_addresses`](Self::allow_private_addresses) is set later,
+    /// since `builder` cannot be rebuilt: with this constructor that switch
+    /// admits private IP literals only.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentNameError::Http`] if `reqwest` cannot build the client.
+    pub fn with_client_builder(builder: reqwest::ClientBuilder) -> Result<Self, AgentNameError> {
+        let client = guard(default_settings(builder), true, None).build()?;
+        Ok(Self::from_client(client, ClientOrigin::CallerBuilder))
     }
 
     /// Use a caller-supplied client.
     ///
     /// The client **must** have redirects disabled
     /// (`reqwest::redirect::Policy::none()`); otherwise the hop cap and the
-    /// per-hop HTTPS check are bypassed.
+    /// per-hop HTTPS check do not hold. A built client cannot be inspected or
+    /// changed, so only the URL of each hop is vetted: a name that resolves to
+    /// a private address, or a proxy, is stopped only if the caller built the
+    /// client to stop it.
+    #[deprecated(
+        since = "0.1.4",
+        note = "a built client may not carry the connect-time address check; use `with_client_builder`, which applies it"
+    )]
     pub fn with_client(client: reqwest::Client) -> Self {
+        Self::from_client(client, ClientOrigin::CallerClient)
+    }
+
+    fn from_client(client: reqwest::Client, client_origin: ClientOrigin) -> Self {
         Self {
             client,
+            client_origin,
             max_hops: DEFAULT_MAX_HOPS,
             allow_insecure_http: false,
             allow_private_addresses: false,
@@ -116,9 +168,9 @@ impl HttpRedirectResolver {
     /// Permit plain-HTTP agent names.
     ///
     /// Off by default and intended for local development and tests. A plain
-    /// HTTP redirect can be rewritten in transit, which lets an attacker point
-    /// the name at a DID of their choosing — `alsoKnownAs` verification will
-    /// usually catch that, but do not rely on it in production.
+    /// HTTP redirect can be rewritten in transit, which lets a third party
+    /// point the name at a DID of their choosing — `alsoKnownAs` verification
+    /// will usually catch that, but do not rely on it in production.
     pub fn allow_insecure_http(mut self, allow: bool) -> Self {
         self.allow_insecure_http = allow;
         self
@@ -129,74 +181,65 @@ impl HttpRedirectResolver {
     ///
     /// Off by default. Agent names are public-web identifiers, so a name
     /// pointing at `127.0.0.1`, `10.0.0.0/8` or the cloud metadata address
-    /// `169.254.169.254` is almost always an SSRF attempt rather than a real
-    /// name. That matters most when this resolver runs **server-side** (the DID
-    /// cache server), where the attacker supplies the name and the server makes
-    /// the request from inside your network.
+    /// `169.254.169.254` is almost never a real name. That matters most when
+    /// this resolver runs **server-side** (the DID cache server), where the
+    /// caller supplies the name and the server makes the request from inside
+    /// your network.
+    ///
+    /// On a resolver from [`new`](Self::new) this rebuilds the client without
+    /// the guarded DNS resolver. On one from
+    /// [`with_client_builder`](Self::with_client_builder) the client keeps it,
+    /// so only private IP literals are admitted.
     ///
     /// Turn it on only for local development and tests.
     pub fn allow_private_addresses(mut self, allow: bool) -> Self {
+        if self.client_origin == ClientOrigin::Default && allow != self.allow_private_addresses {
+            self.client = default_client(!allow);
+        }
         self.allow_private_addresses = allow;
         self
     }
 
-    /// Reject a URL whose host is, or resolves to, a non-public address.
-    ///
-    /// # Limitation
-    ///
-    /// This checks the addresses a host resolves to *now*; the subsequent
-    /// request performs its own resolution. A hostile DNS server can therefore
-    /// answer differently for the two lookups (**DNS rebinding**) and reach an
-    /// internal address anyway. Closing that hole requires pinning the checked
-    /// IP into the connection itself, which `reqwest` does not expose. Treat
-    /// this as raising the cost of SSRF, not as eliminating it, and do not rely
-    /// on it as the only control on an untrusted network boundary.
-    async fn check_address(&self, url: &Url, name: &AgentName) -> Result<(), AgentNameError> {
+    /// Vet a hop's URL under the public-internet policy: IP literals,
+    /// special-use names and userinfo. What a name resolves to is checked by
+    /// the client's DNS resolver when it connects.
+    fn check_url(&self, url: &Url, name: &AgentName) -> Result<(), AgentNameError> {
         if self.allow_private_addresses {
             return Ok(());
         }
-        let host = url.host_str().ok_or_else(|| AgentNameError::InvalidName {
-            input: url.to_string(),
-            reason: "no host".to_string(),
-        })?;
-        let port = url.port_or_known_default().unwrap_or(443);
-
-        // An IP literal needs no DNS lookup.
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            return if is_public(&ip) {
-                Ok(())
-            } else {
-                Err(AgentNameError::BlockedAddress {
-                    name: name.as_str().to_string(),
-                    address: ip.to_string(),
-                })
-            };
+        // The scheme is this resolver's decision (`allow_insecure_http`), so
+        // vet the address under the https rules either way.
+        let mut vetted = url.clone();
+        if vetted.scheme() == "http" {
+            let port = vetted.port_or_known_default();
+            vetted
+                .set_scheme("https")
+                .and_then(|()| vetted.set_port(port))
+                .map_err(|()| AgentNameError::InvalidName {
+                    input: url.to_string(),
+                    reason: "cannot vet the URL".to_string(),
+                })?;
         }
+        EgressPolicy::public_internet()
+            .vet_url(&vetted)
+            .map(|_| ())
+            .map_err(|e| egress_error(e, url, name))
+    }
 
-        let addrs = lookup_host((host, port))
-            .await
-            .map_err(|e| AgentNameError::InvalidName {
-                input: host.to_string(),
-                reason: format!("DNS lookup failed: {e}"),
-            })?;
-
-        let mut saw_any = false;
-        for addr in addrs {
-            saw_any = true;
-            if !is_public(&addr.ip()) {
-                return Err(AgentNameError::BlockedAddress {
+    async fn fetch(
+        &self,
+        url: &Url,
+        name: &AgentName,
+    ) -> Result<reqwest::Response, AgentNameError> {
+        self.client.get(url.clone()).send().await.map_err(|e| {
+            match affinidi_net_guard::blocked_in_chain(&e) {
+                Some(EgressError::BlockedAddress { addr, .. }) => AgentNameError::BlockedAddress {
                     name: name.as_str().to_string(),
-                    address: addr.ip().to_string(),
-                });
+                    address: addr.to_string(),
+                },
+                _ => AgentNameError::Http(e),
             }
-        }
-        if !saw_any {
-            return Err(AgentNameError::InvalidName {
-                input: host.to_string(),
-                reason: "host resolved to no addresses".to_string(),
-            });
-        }
-        Ok(())
+        })
     }
 
     async fn resolve_inner(&self, name: &AgentName) -> Result<String, AgentNameError> {
@@ -208,9 +251,9 @@ impl HttpRedirectResolver {
 
         for hop in 0..self.max_hops {
             // Re-checked on *every* hop: a public host can redirect inward.
-            self.check_address(&url, name).await?;
+            self.check_url(&url, name)?;
             debug!(hop, %url, "resolving agent name");
-            let response = self.client.get(url.clone()).send().await?;
+            let response = self.fetch(&url, name).await?;
             let status = response.status();
 
             if !status.is_redirection() {
@@ -304,49 +347,65 @@ fn extract_did(target: &str) -> Option<String> {
     None
 }
 
-/// Is this address on the public internet?
+/// Map a URL refusal onto this crate's errors.
+fn egress_error(err: EgressError, url: &Url, name: &AgentName) -> AgentNameError {
+    match err {
+        EgressError::BlockedAddress { addr, .. } => AgentNameError::BlockedAddress {
+            name: name.as_str().to_string(),
+            address: addr.to_string(),
+        },
+        EgressError::BlockedName(host) => AgentNameError::BlockedHost {
+            name: name.as_str().to_string(),
+            host,
+        },
+        other => AgentNameError::InvalidName {
+            input: url.to_string(),
+            reason: other.to_string(),
+        },
+    }
+}
+
+/// The defaults a client starts from. Applied first, so a caller's builder
+/// may override them.
+fn default_settings(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    builder
+        .timeout(DEFAULT_TIMEOUT)
+        .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+}
+
+/// The guard settings. Applied last, so nothing set before can undo them.
 ///
-/// Conservative: anything loopback, private, link-local, unspecified,
-/// multicast, broadcast or otherwise special-purpose is treated as non-public.
-/// `Ipv4Addr::is_global` is still unstable, so the ranges are spelled out.
-fn is_public(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => is_public_v4(v4),
-        IpAddr::V6(v6) => is_public_v6(v6),
+/// `inner` replaces the system resolver underneath the guard; tests use it to
+/// answer a public-looking name with a private address.
+fn guard(
+    builder: reqwest::ClientBuilder,
+    public_only: bool,
+    inner: Option<Arc<dyn reqwest::dns::Resolve>>,
+) -> reqwest::ClientBuilder {
+    let builder = builder
+        .redirect(reqwest::redirect::Policy::none())
+        .referer(false);
+    if !public_only {
+        return match inner {
+            Some(inner) => builder.dns_resolver(inner),
+            None => builder,
+        };
     }
+    let mut resolver = GuardedResolver::new(EgressPolicy::public_internet());
+    if let Some(inner) = inner {
+        resolver = resolver.with_inner(inner);
+    }
+    builder.dns_resolver(Arc::new(resolver)).no_proxy()
 }
 
-fn is_public_v4(ip: &Ipv4Addr) -> bool {
-    let [a, b, ..] = ip.octets();
-    !(ip.is_loopback()
-        || ip.is_private()
-        || ip.is_link_local()
-        || ip.is_unspecified()
-        || ip.is_multicast()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        // 100.64.0.0/10 carrier-grade NAT
-        || (a == 100 && (64..128).contains(&b))
-        // 192.0.0.0/24 IETF protocol assignments
-        || (a == 192 && b == 0 && ip.octets()[2] == 0)
-        // 198.18.0.0/15 benchmarking
-        || (a == 198 && (18..20).contains(&b))
-        // 240.0.0.0/4 reserved
-        || a >= 240)
-}
-
-fn is_public_v6(ip: &Ipv6Addr) -> bool {
-    if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
-        return false;
-    }
-    // An IPv4-mapped address must be judged by its IPv4 rules, or
-    // ::ffff:127.0.0.1 would sail through.
-    if let Some(v4) = ip.to_ipv4_mapped() {
-        return is_public_v4(&v4);
-    }
-    let seg = ip.segments()[0];
-    // fc00::/7 unique-local, fe80::/10 link-local
-    !((seg & 0xfe00) == 0xfc00 || (seg & 0xffc0) == 0xfe80)
+fn default_client(public_only: bool) -> reqwest::Client {
+    guard(
+        default_settings(reqwest::Client::builder()),
+        public_only,
+        None,
+    )
+    .build()
+    .expect("reqwest client with default config")
 }
 
 fn is_did(s: &str) -> bool {
@@ -457,55 +516,144 @@ mod tests {
         assert!(percent_decode("truncated%4").is_err());
     }
 
-    // --- is_public ---
+    // --- per-hop URL vetting ---
 
-    fn ip(s: &str) -> IpAddr {
-        s.parse().unwrap()
+    fn alice() -> AgentName {
+        AgentName::parse("https://example.com/@alice").unwrap()
+    }
+
+    fn check(url: &str) -> Result<(), AgentNameError> {
+        HttpRedirectResolver::new().check_url(&Url::parse(url).unwrap(), &alice())
     }
 
     #[test]
-    fn blocks_loopback_and_private_v4() {
-        for a in [
+    fn refuses_non_public_literals() {
+        for host in [
             "127.0.0.1",
             "10.1.2.3",
             "172.16.0.1",
             "192.168.1.1",
             "0.0.0.0",
-            "169.254.169.254", // cloud metadata — the classic SSRF target
+            "0.1.2.3",         // 0.0.0.0/8
+            "169.254.169.254", // cloud metadata
             "100.64.0.1",      // carrier-grade NAT
             "198.18.0.1",      // benchmarking
             "255.255.255.255",
             "240.0.0.1",
+            "[::1]",
+            "[::]",
+            "[fc00::1]",
+            "[fd00::1]",
+            "[fe80::1]",
+            "[fec0::1]", // deprecated site-local
+            "[ff02::1]",
+            "[2001:db8::1]",      // documentation
+            "[::ffff:127.0.0.1]", // IPv4-mapped
+            "[::127.0.0.1]",      // IPv4-compatible
+            "[64:ff9b::7f00:1]",  // NAT64 of 127.0.0.1
+            "[2002:7f00:1::]",    // 6to4 of 127.0.0.1
+            "[::ffff:10.0.0.1]",
         ] {
-            assert!(!is_public(&ip(a)), "{a} must be blocked");
+            let err = check(&format!("https://{host}/@alice")).unwrap_err();
+            assert!(
+                matches!(err, AgentNameError::BlockedAddress { .. }),
+                "{host}: got {err:?}"
+            );
         }
     }
 
     #[test]
-    fn allows_public_v4() {
-        for a in ["1.1.1.1", "8.8.8.8", "93.184.216.34", "172.32.0.1"] {
-            assert!(is_public(&ip(a)), "{a} should be allowed");
+    fn refuses_special_use_names() {
+        for host in ["localhost", "router.local", "metadata.internal", "intranet"] {
+            let err = check(&format!("https://{host}/@alice")).unwrap_err();
+            assert!(
+                matches!(err, AgentNameError::BlockedHost { .. }),
+                "{host}: got {err:?}"
+            );
         }
     }
 
     #[test]
-    fn blocks_loopback_and_local_v6() {
-        for a in ["::1", "::", "fc00::1", "fd00::1", "fe80::1", "ff02::1"] {
-            assert!(!is_public(&ip(a)), "{a} must be blocked");
+    fn admits_public_hosts_on_https_and_http() {
+        for url in [
+            "https://1.1.1.1/@alice",
+            "https://[2606:4700:4700::1111]/@alice",
+            "https://[::ffff:8.8.8.8]/@alice",
+            "https://example.com/@alice",
+            "http://example.com/@alice",
+            "http://example.com:8080/@alice",
+        ] {
+            check(url).unwrap_or_else(|e| panic!("{url}: {e:?}"));
         }
     }
 
-    /// ::ffff:127.0.0.1 must be judged by IPv4 rules, or it bypasses the check.
     #[test]
-    fn blocks_ipv4_mapped_loopback() {
-        assert!(!is_public(&ip("::ffff:127.0.0.1")));
-        assert!(!is_public(&ip("::ffff:10.0.0.1")));
-        assert!(is_public(&ip("::ffff:8.8.8.8")));
+    fn allow_private_addresses_skips_url_vetting() {
+        HttpRedirectResolver::new()
+            .allow_private_addresses(true)
+            .check_url(&Url::parse("http://127.0.0.1/@alice").unwrap(), &alice())
+            .unwrap();
     }
 
-    #[test]
-    fn allows_public_v6() {
-        assert!(is_public(&ip("2606:4700:4700::1111")));
+    // --- connect-time address check ---
+
+    /// Answers every name with 127.0.0.1, as a name whose DNS points inward
+    /// would.
+    struct LoopbackDns;
+
+    impl reqwest::dns::Resolve for LoopbackDns {
+        fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+            Box::pin(async {
+                let addrs: reqwest::dns::Addrs = Box::new(std::iter::once(
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                ));
+                Ok(addrs)
+            })
+        }
+    }
+
+    async fn resolve_via_loopback_dns(public_only: bool) -> Result<String, AgentNameError> {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path("/@alice"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(302)
+                    .insert_header("location", "did:web:example.com"),
+            )
+            .mount(&server)
+            .await;
+        let port = server.address().port();
+        let client = guard(
+            default_settings(reqwest::Client::builder()),
+            public_only,
+            Some(Arc::new(LoopbackDns)),
+        )
+        .build()
+        .unwrap();
+        let resolver = HttpRedirectResolver::from_client(client, ClientOrigin::CallerBuilder)
+            .allow_insecure_http(true);
+        let name = AgentName::parse(&format!("http://names.example.com:{port}/@alice")).unwrap();
+        resolver.resolve_inner(&name).await
+    }
+
+    /// A public-looking name whose DNS answers with a loopback address passes
+    /// the URL check, so the client's resolver must refuse it when connecting.
+    #[tokio::test]
+    async fn refuses_a_name_that_resolves_to_loopback_when_connecting() {
+        let err = resolve_via_loopback_dns(true).await.unwrap_err();
+        assert!(
+            matches!(&err, AgentNameError::BlockedAddress { address, .. } if address == "127.0.0.1"),
+            "got {err:?}"
+        );
+    }
+
+    /// Control for the test above: the same name and DNS reach the local
+    /// server once the guard is off, so the refusal comes from the guard.
+    #[tokio::test]
+    async fn the_same_name_resolves_without_the_guard() {
+        assert_eq!(
+            resolve_via_loopback_dns(false).await.unwrap(),
+            "did:web:example.com"
+        );
     }
 
     #[test]

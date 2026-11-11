@@ -1,5 +1,15 @@
 # Affinidi DID Resolver Cache Server
 
+## Unreleased (0.9.17) — agent names checked at connect time
+
+Requires `agent-names` 0.1.4. The `resolve-name` endpoint's resolver now
+checks what a name's host resolves to on the connection it actually makes,
+rather than in a separate lookup beforehand, and no longer goes through an
+HTTP(S) proxy named by the environment. Behaviour change (R3.6): with
+`enable_agent_names` on, a name whose host is reachable only through a proxy,
+or is a special-use name (`*.local`, `*.internal`, a single label), no longer
+resolves.
+
 ## Unreleased (0.9.16) — did:webs
 
 Resolves `did:webs`: the SDK's `did-webs` feature is on, and the SDK floor is

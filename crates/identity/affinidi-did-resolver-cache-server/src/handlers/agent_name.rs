@@ -22,16 +22,16 @@
 //!
 //! - It is **off by default** (`enable_agent_names` in the config).
 //! - The resolver refuses non-public addresses (loopback, private, link-local,
-//!   cloud metadata) on every redirect hop.
+//!   cloud metadata) on every redirect hop, both in the URL and in what the
+//!   host resolves to when the connection is made, and uses no proxy.
 //! - At most `agent_name_concurrency` lookups fetch upstream at once, so the
 //!   endpoint cannot be used to fan out arbitrary traffic at third parties (or
 //!   to scan them) faster than that. Requests over the ceiling are shed with
 //!   503 rather than queued: a saturated server must not accumulate an
 //!   unbounded backlog of pending outbound fetches.
 //!
-//! Neither is complete — see `agent_names::HttpRedirectResolver::allow_private_addresses`
-//! on the residual DNS-rebinding exposure. Enable this only if you accept that
-//! your cache server will fetch caller-chosen URLs.
+//! Enable this only if you accept that your cache server will fetch
+//! caller-chosen public URLs.
 
 use agent_names::{AgentName, AgentNameResolver};
 use axum::{
