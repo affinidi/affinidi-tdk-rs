@@ -194,6 +194,9 @@ pub fn point_to_bytes(p: &G1Projective) -> [u8; 48] {
 /// `is_torsion_free` check), NOT `from_compressed_unchecked` — skipping the
 /// subgroup check would open small-subgroup / cofactor attacks on every
 /// attacker-supplied proof point (Abar/Bbar/D, pseudonym).
+///
+/// The identity point is accepted here; use [`nonidentity_point_from_bytes`]
+/// where the identity is invalid.
 pub fn point_from_bytes(bytes: &[u8; 48]) -> Option<G1Projective> {
     let affine = G1Affine::from_compressed(bytes);
     if affine.is_some().into() {
@@ -201,6 +204,16 @@ pub fn point_from_bytes(bytes: &[u8; 48]) -> Option<G1Projective> {
     } else {
         None
     }
+}
+
+/// Deserialize a G1 point from compressed bytes, rejecting the identity point.
+///
+/// `octets_to_proof` in draft-irtf-cfrg-bbs-signatures-10 §4.2.4.5 (step 7)
+/// returns INVALID when any of the proof points `Abar`, `Bbar`, `D` is
+/// `Identity_G1`, in addition to the subgroup check [`point_from_bytes`]
+/// performs. Use this for every point read from a proof.
+pub fn nonidentity_point_from_bytes(bytes: &[u8; 48]) -> Option<G1Projective> {
+    point_from_bytes(bytes).filter(|point| !bool::from(point.is_identity()))
 }
 
 #[cfg(test)]
@@ -316,5 +329,15 @@ mod tests {
         assert_eq!(q1_hex, expected_q1, "Q1 generator mismatch");
         assert_eq!(h0_hex, expected_h0, "H0 generator mismatch");
         assert_eq!(h1_hex, expected_h1, "H1 generator mismatch");
+    }
+
+    #[test]
+    fn nonidentity_point_from_bytes_rejects_identity() {
+        let identity = point_to_bytes(&G1Projective::identity());
+        assert!(point_from_bytes(&identity).is_some());
+        assert!(nonidentity_point_from_bytes(&identity).is_none());
+
+        let generator = point_to_bytes(&G1Projective::generator());
+        assert!(nonidentity_point_from_bytes(&generator).is_some());
     }
 }
