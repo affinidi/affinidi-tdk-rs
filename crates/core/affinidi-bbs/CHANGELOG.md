@@ -1,6 +1,6 @@
 # Affinidi BBS
 
-## 0.4.1 — proof verification rejects identity points
+## 0.4.1 — proof verification rejects identity points and zero scalars
 
 Proof verification now rejects a proof whose `Abar`, `Bbar` or `D` is the G1
 identity point, returning `BbsError::InvalidProof`. draft-irtf-cfrg-bbs-signatures-10
@@ -16,9 +16,14 @@ blind/nym proof verifiers, and the `bbs-2023` derived-proof verifiers in
   identity check, for points read from a proof. `point_from_bytes` is
   unchanged.
 
+Proof verification also rejects a proof containing a zero scalar (`e^`, `r1^`,
+`r3^`, any `m^_j`, or the challenge) with `BbsError::InvalidProof`, per
+§4.2.4.5 step 14 ("if s_j = 0 or if s_j >= r, return INVALID"). Only the
+challenge was checked for zero before.
+
 Only proofs that are INVALID under the draft are affected; proofs from a
-conforming prover never contain an identity point, so no compatible caller
-sees a change.
+conforming prover never contain an identity point, and contain a zero scalar
+only with negligible probability, so no compatible caller sees a change.
 
 ## Unreleased (0.4.0) — `bls12_381_plus` 0.9, `rand` 0.10
 

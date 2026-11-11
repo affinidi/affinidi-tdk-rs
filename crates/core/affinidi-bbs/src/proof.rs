@@ -505,7 +505,8 @@ pub(crate) fn proof_verify_core(
 
     // 1. Deserialize proof components. Per draft-irtf-cfrg-bbs-signatures-10
     // §4.2.4.5 (octets_to_proof), each of Abar, Bbar and D must be a valid G1
-    // subgroup point other than Identity_G1; the identity is rejected here.
+    // subgroup point other than Identity_G1 (step 7), and every scalar (e^,
+    // r1^, r3^, each m^_j, and the challenge) must be in 1..r-1 (step 14).
     let mut offset = 0;
 
     let mut abar_bytes = [0u8; 48];
@@ -536,9 +537,6 @@ pub(crate) fn proof_verify_core(
     }
 
     let challenge = read_scalar(proof_bytes, &mut offset)?;
-    if bool::from(challenge.is_zero()) {
-        return Err(BbsError::InvalidProof("zero challenge".into()));
-    }
 
     // 5. Determine undisclosed indexes
     let undisclosed_indexes: Vec<usize> =
@@ -708,7 +706,10 @@ fn random_nonzero_scalar(rng: &mut impl RngExt) -> Scalar {
     }
 }
 
-/// Read a 32-byte scalar from a buffer at the given offset.
+/// Read a 32-byte proof scalar from a buffer at the given offset.
+///
+/// draft-irtf-cfrg-bbs-signatures-10 §4.2.4.5 (octets_to_proof), step 14:
+/// "if s_j = 0 or if s_j >= r, return INVALID".
 fn read_scalar(buf: &[u8], offset: &mut usize) -> Result<Scalar> {
     if *offset + 32 > buf.len() {
         return Err(BbsError::InvalidProof("proof too short for scalar".into()));
@@ -718,11 +719,14 @@ fn read_scalar(buf: &[u8], offset: &mut usize) -> Result<Scalar> {
     *offset += 32;
 
     let s = Scalar::from_be_bytes(&bytes);
-    if s.is_some().into() {
-        Ok(s.unwrap())
-    } else {
-        Err(BbsError::Deserialization("invalid scalar in proof".into()))
+    if !bool::from(s.is_some()) {
+        return Err(BbsError::Deserialization("invalid scalar in proof".into()));
     }
+    let s = s.unwrap();
+    if bool::from(s.is_zero()) {
+        return Err(BbsError::InvalidProof("zero scalar in proof".into()));
+    }
+    Ok(s)
 }
 
 #[cfg(test)]
@@ -1193,6 +1197,41 @@ mod tests {
             assert!(
                 matches!(result, Err(BbsError::InvalidProof(_))),
                 "identity {name} must be rejected as InvalidProof, got {result:?}"
+            );
+        }
+    }
+
+    /// draft-irtf-cfrg-bbs-signatures-10 §4.2.4.5 step 14: every proof scalar
+    /// (e^, r1^, r3^, each m^_j, challenge) must be nonzero. Each position is
+    /// zeroed in turn in an otherwise valid proof.
+    #[test]
+    fn proof_with_zero_scalar_rejected() {
+        let (sk, pk) = test_keypair();
+        let cs = Ciphersuite::Bls12381Sha256;
+        let messages: Vec<&[u8]> = vec![b"m0", b"m1", b"m2"];
+        let sig = crate::signature::core_sign(&sk, &pk, b"hdr", &messages, cs).unwrap();
+        let proof = core_proof_gen(&pk, &sig, b"hdr", b"ph", &messages, &[1], cs).unwrap();
+        assert!(core_proof_verify(&pk, &proof, b"hdr", b"ph", &[b"m1"], &[1], cs).unwrap());
+
+        // 3 points, then e^, r1^, r3^, two m^ (messages 0 and 2), challenge.
+        let scalar_count = (proof.to_bytes().len() - 3 * 48) / 32;
+        assert_eq!(scalar_count, 6);
+        for position in 0..scalar_count {
+            let start = 3 * 48 + position * 32;
+            let mut bytes = proof.to_bytes().to_vec();
+            bytes[start..start + 32].fill(0);
+            let result = core_proof_verify(
+                &pk,
+                &Proof::from_bytes(&bytes),
+                b"hdr",
+                b"ph",
+                &[b"m1"],
+                &[1],
+                cs,
+            );
+            assert!(
+                matches!(result, Err(BbsError::InvalidProof(_))),
+                "zero scalar at position {position} must be rejected as InvalidProof, got {result:?}"
             );
         }
     }
