@@ -118,15 +118,12 @@ impl TokensType {
 /// before 1970 is an error rather than a wrapped (far-future) value.
 fn unix_secs_from_rfc3339(field: &str, value: &str) -> Result<u64> {
     let timestamp = DateTime::parse_from_rfc3339(value)
-        .map_err(|err| {
-            DIDAuthError::Authentication(format!("Invalid {field} timestamp ({value}): {err}"))
+        .map_err(|_| {
+            DIDAuthError::Authentication(format!("{field} is not a valid RFC 3339 timestamp"))
         })?
         .timestamp();
-    u64::try_from(timestamp).map_err(|_| {
-        DIDAuthError::Authentication(format!(
-            "Invalid {field} timestamp ({value}): before the Unix epoch"
-        ))
-    })
+    u64::try_from(timestamp)
+        .map_err(|_| DIDAuthError::Authentication(format!("{field} is before the Unix epoch")))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1176,6 +1173,7 @@ mod tests {
         assert!(unix_secs_from_rfc3339("access_expires_at", "1969-12-31T23:59:59Z").is_err());
         let err = unix_secs_from_rfc3339("refresh_expires_at", "not a date").unwrap_err();
         assert!(err.to_string().contains("refresh_expires_at"), "{err}");
+        assert!(!err.to_string().contains("not a date"), "{err}");
     }
 
     /// A forced refresh of a still-valid token actually refreshes.

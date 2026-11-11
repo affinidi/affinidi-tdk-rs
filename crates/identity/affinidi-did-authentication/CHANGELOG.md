@@ -13,8 +13,9 @@
   deltas are computed in `i128`, so they cannot overflow either.
 - MeetingPlace expiry timestamps before 1970 are an
   `DIDAuthError::Authentication` error instead of wrapping to a far-future
-  `u64`. The `refresh_expires_at` parse error now quotes the
-  `refresh_expires_at` value (it quoted `access_expires_at`).
+  `u64`. The parse errors for both expiries name the field and no longer
+  include the received value (the `refresh_expires_at` one quoted the
+  `access_expires_at` value).
 - A system clock before 1970 reads as `0` instead of panicking.
 
 ### Changed
