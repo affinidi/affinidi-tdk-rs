@@ -130,7 +130,9 @@ down later should not disturb them.
   matters most server-side, where the name is caller-supplied and the request
   originates inside your network.
 - `with_client_builder(builder)` takes a caller's `reqwest::ClientBuilder` and
-  applies the settings above after the caller's own. `with_client` is
+  applies the settings above after the caller's own, with the default timeouts;
+  `with_client_builder_and_timeouts(builder, timeout, connect_timeout)` takes
+  the timeouts as arguments. `with_client` is
   deprecated: a built client cannot be given the DNS check.
 
 ## DID → name

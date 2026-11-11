@@ -112,13 +112,16 @@ impl HttpRedirectResolver {
     }
 
     /// A resolver over a client the caller configures (headers, TLS,
-    /// connection pool, timeouts).
+    /// connection pool), with [`DEFAULT_TIMEOUT`] and
+    /// [`DEFAULT_CONNECT_TIMEOUT`].
     ///
     /// The guard settings are applied after the caller's, so nothing set on
     /// `builder` can undo them: redirects are never followed, every proxy
     /// (including one named by `HTTPS_PROXY`) is turned off, and the guarded
-    /// DNS resolver is installed. [`DEFAULT_TIMEOUT`] and
-    /// [`DEFAULT_CONNECT_TIMEOUT`] apply unless the caller sets their own.
+    /// DNS resolver is installed. The timeouts are applied after the caller's
+    /// too, so any timeout set on `builder` is replaced; use
+    /// [`with_client_builder_and_timeouts`](Self::with_client_builder_and_timeouts)
+    /// to choose them.
     ///
     /// The guarded resolver stays installed even if
     /// [`allow_private_addresses`](Self::allow_private_addresses) is set later,
@@ -129,7 +132,32 @@ impl HttpRedirectResolver {
     ///
     /// [`AgentNameError::Http`] if `reqwest` cannot build the client.
     pub fn with_client_builder(builder: reqwest::ClientBuilder) -> Result<Self, AgentNameError> {
-        let client = guard(default_settings(builder), true, None).build()?;
+        Self::with_client_builder_and_timeouts(builder, DEFAULT_TIMEOUT, DEFAULT_CONNECT_TIMEOUT)
+    }
+
+    /// As [`with_client_builder`](Self::with_client_builder), with the
+    /// whole-request `timeout` and the `connect_timeout` given here. They
+    /// replace any timeout set on `builder`.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentNameError::Http`] if `reqwest` cannot build the client.
+    pub fn with_client_builder_and_timeouts(
+        builder: reqwest::ClientBuilder,
+        timeout: Duration,
+        connect_timeout: Duration,
+    ) -> Result<Self, AgentNameError> {
+        Self::from_builder(builder, timeout, connect_timeout, None)
+    }
+
+    fn from_builder(
+        builder: reqwest::ClientBuilder,
+        timeout: Duration,
+        connect_timeout: Duration,
+        inner: Option<Arc<dyn reqwest::dns::Resolve>>,
+    ) -> Result<Self, AgentNameError> {
+        let builder = builder.timeout(timeout).connect_timeout(connect_timeout);
+        let client = guard(builder, true, inner).build()?;
         Ok(Self::from_client(client, ClientOrigin::CallerBuilder))
     }
 
@@ -365,8 +393,7 @@ fn egress_error(err: EgressError, url: &Url, name: &AgentName) -> AgentNameError
     }
 }
 
-/// The defaults a client starts from. Applied first, so a caller's builder
-/// may override them.
+/// The timeouts of a client this crate builds from scratch.
 fn default_settings(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
     builder
         .timeout(DEFAULT_TIMEOUT)
@@ -652,6 +679,82 @@ mod tests {
     async fn the_same_name_resolves_without_the_guard() {
         assert_eq!(
             resolve_via_loopback_dns(false).await.unwrap(),
+            "did:web:example.com"
+        );
+    }
+
+    /// A resolver from `with_client_builder` carries the same connect-time
+    /// check as one from `new()`.
+    #[tokio::test]
+    async fn with_client_builder_refuses_a_name_that_resolves_to_loopback() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path("/@alice"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(302)
+                    .insert_header("location", "did:web:example.com"),
+            )
+            .mount(&server)
+            .await;
+        let port = server.address().port();
+        let resolver = HttpRedirectResolver::from_builder(
+            reqwest::Client::builder(),
+            DEFAULT_TIMEOUT,
+            DEFAULT_CONNECT_TIMEOUT,
+            Some(Arc::new(LoopbackDns)),
+        )
+        .unwrap()
+        .allow_insecure_http(true);
+        let name = AgentName::parse(&format!("http://names.example.com:{port}/@alice")).unwrap();
+        let err = resolver.resolve_inner(&name).await.unwrap_err();
+        assert!(
+            matches!(&err, AgentNameError::BlockedAddress { address, .. } if address == "127.0.0.1"),
+            "got {err:?}"
+        );
+    }
+
+    async fn resolve_slow_name(resolver: HttpRedirectResolver) -> Result<String, AgentNameError> {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path("/@alice"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(302)
+                    .insert_header("location", "did:web:example.com")
+                    .set_delay(Duration::from_millis(500)),
+            )
+            .mount(&server)
+            .await;
+        let name = AgentName::parse(&format!("{}/@alice", server.uri())).unwrap();
+        resolver
+            .allow_insecure_http(true)
+            .allow_private_addresses(true)
+            .resolve_inner(&name)
+            .await
+    }
+
+    #[tokio::test]
+    async fn with_client_builder_and_timeouts_applies_the_given_timeout() {
+        let resolver = HttpRedirectResolver::with_client_builder_and_timeouts(
+            reqwest::Client::builder(),
+            Duration::from_millis(50),
+            DEFAULT_CONNECT_TIMEOUT,
+        )
+        .unwrap();
+        let err = resolve_slow_name(resolver).await.unwrap_err();
+        assert!(
+            matches!(&err, AgentNameError::Http(e) if e.is_timeout()),
+            "got {err:?}"
+        );
+    }
+
+    /// The documented behaviour: `with_client_builder` replaces a timeout set
+    /// on the caller's builder with the finite defaults.
+    #[tokio::test]
+    async fn with_client_builder_replaces_the_builders_timeout_with_the_default() {
+        let resolver = HttpRedirectResolver::with_client_builder(
+            reqwest::Client::builder().timeout(Duration::from_millis(50)),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_slow_name(resolver).await.unwrap(),
             "did:web:example.com"
         );
     }

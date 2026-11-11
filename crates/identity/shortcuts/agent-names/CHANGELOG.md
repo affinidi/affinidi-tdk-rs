@@ -30,7 +30,10 @@ All notable changes to `agent-names` are documented here. The format follows
 
 - `HttpRedirectResolver::with_client_builder(builder)`: a caller-configured
   `reqwest::ClientBuilder`, with the redirect, proxy and DNS settings applied
-  after the caller's own.
+  after the caller's own, and the default timeouts (any timeout set on the
+  builder is replaced).
+- `HttpRedirectResolver::with_client_builder_and_timeouts(builder, timeout,
+  connect_timeout)`: the same, with the caller's timeouts.
 - `DEFAULT_CONNECT_TIMEOUT`.
 - `AgentNameError::BlockedHost` (the enum is `#[non_exhaustive]`).
 
