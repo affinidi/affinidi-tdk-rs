@@ -198,7 +198,8 @@ impl DeviceSigned {
     /// # Arguments
     ///
     /// * `device_auth` — The DeviceAuthentication structure
-    /// * `mac_key` — 32-byte HMAC-SHA-256 key (derived from ECDH)
+    /// * `mac_key` — 32-byte HMAC-SHA-256 key (derived from ECDH); a reader
+    ///   derives the same key with [`derive_emac_key`]
     pub fn mac(device_auth: &DeviceAuthentication, mac_key: &[u8; 32]) -> Result<Self> {
         let auth_bytes = device_auth.to_device_authentication_bytes()?;
         let namespaces_bytes = encode_namespaces_bytes(&device_auth.device_namespaces)?;
@@ -363,6 +364,82 @@ fn encode_namespaces_bytes(namespaces: &DeviceNameSpaces) -> Result<Vec<u8>> {
     ciborium::into_writer(&ns_cbor, &mut bytes)
         .map_err(|e| MdocError::DeviceAuth(format!("DeviceNameSpaces encoding: {e}")))?;
     Ok(bytes)
+}
+
+/// Derive the `EMacKey` a reader uses to check a `deviceMac`, per
+/// ISO/IEC 18013-5 §9.1.3.5:
+///
+/// ```text
+/// Zab     = ECDH(EReaderKey.priv, SDeviceKey.pub)
+/// EMacKey = HKDF-SHA-256(IKM = Zab, salt = SHA-256(SessionTranscriptBytes),
+///                        info = "EMacKey", L = 32)
+/// ```
+///
+/// `device_key` must be the device key from the **verified MSO**
+/// (`deviceKeyInfo.deviceKey`), not the ephemeral key from device engagement:
+/// that is what ties the MAC to the issuer-signed credential.
+/// `reader_ephemeral_private_key` is the reader's ephemeral private scalar
+/// (big-endian) for this session. P-256 (feature `es256`) and P-384
+/// (`es384`) are supported; any other curve is an error.
+pub fn derive_emac_key(
+    device_key: &crate::cose_key::CoseKey,
+    reader_ephemeral_private_key: &[u8],
+    session_transcript: &SessionTranscript,
+) -> Result<[u8; 32]> {
+    let shared_secret = ecdh_shared_secret(device_key, reader_ephemeral_private_key)?;
+    let transcript_bytes = session_transcript.to_cbor_bytes()?;
+    let tagged = ciborium::Value::Tag(24, Box::new(ciborium::Value::Bytes(transcript_bytes)));
+    let mut session_transcript_bytes = Vec::new();
+    ciborium::into_writer(&tagged, &mut session_transcript_bytes)
+        .map_err(|e| MdocError::DeviceAuth(format!("SessionTranscriptBytes encoding: {e}")))?;
+    let salt = {
+        use sha2::Digest;
+        Sha256::digest(&session_transcript_bytes)
+    };
+    let mut key = [0u8; 32];
+    hkdf::Hkdf::<Sha256>::new(Some(&salt), &shared_secret)
+        .expand(b"EMacKey", &mut key)
+        .map_err(|e| MdocError::DeviceAuth(format!("EMacKey derivation: {e}")))?;
+    Ok(key)
+}
+
+#[allow(unused_variables)]
+fn ecdh_shared_secret(
+    device_key: &crate::cose_key::CoseKey,
+    reader_ephemeral_private_key: &[u8],
+) -> Result<Vec<u8>> {
+    device_key.validate()?;
+    match device_key.crv {
+        #[cfg(feature = "es256")]
+        crate::cose_key::Curve::P256 => {
+            let secret = p256::SecretKey::from_slice(reader_ephemeral_private_key)
+                .map_err(|_| MdocError::DeviceAuth("invalid P-256 reader key".into()))?;
+            let public = p256::PublicKey::from_sec1_bytes(&uncompressed_point(device_key))
+                .map_err(|_| MdocError::DeviceAuth("invalid P-256 device key".into()))?;
+            let shared = p256::ecdh::diffie_hellman(secret.to_nonzero_scalar(), public.as_affine());
+            Ok(shared.raw_secret_bytes().to_vec())
+        }
+        #[cfg(feature = "es384")]
+        crate::cose_key::Curve::P384 => {
+            let secret = p384::SecretKey::from_slice(reader_ephemeral_private_key)
+                .map_err(|_| MdocError::DeviceAuth("invalid P-384 reader key".into()))?;
+            let public = p384::PublicKey::from_sec1_bytes(&uncompressed_point(device_key))
+                .map_err(|_| MdocError::DeviceAuth("invalid P-384 device key".into()))?;
+            let shared = p384::ecdh::diffie_hellman(secret.to_nonzero_scalar(), public.as_affine());
+            Ok(shared.raw_secret_bytes().to_vec())
+        }
+        other => Err(MdocError::DeviceAuth(format!(
+            "no EMacKey derivation for {other:?} in this build"
+        ))),
+    }
+}
+
+#[cfg(any(feature = "es256", feature = "es384"))]
+fn uncompressed_point(key: &crate::cose_key::CoseKey) -> Vec<u8> {
+    let mut point = vec![0x04];
+    point.extend_from_slice(&key.x);
+    point.extend_from_slice(key.y.as_deref().unwrap_or_default());
+    point
 }
 
 /// Decode `DeviceNameSpaces` bytes, refusing anything that is not a map of

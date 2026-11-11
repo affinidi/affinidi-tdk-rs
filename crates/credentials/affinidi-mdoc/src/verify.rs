@@ -28,7 +28,7 @@ use coset::iana::Algorithm;
 
 use crate::cose::{CoseVerifier, checked_algorithm, verify_issuer_auth, x5chain};
 use crate::cose_key::CoseKey;
-use crate::device_auth::{DeviceAuth, DeviceAuthentication, DeviceNameSpaces};
+use crate::device_auth::{DeviceAuth, DeviceAuthentication, DeviceNameSpaces, derive_emac_key};
 use crate::error::{MdocError, Result};
 use crate::issuer_signed::{DeviceResponse, verify_disclosed_digests};
 use crate::mso::MobileSecurityObject;
@@ -65,13 +65,16 @@ pub enum IssuerKey<'a> {
 pub enum DeviceBinding<'a> {
     /// Require `deviceSigned` and verify it against the device key in the
     /// verified MSO over this session transcript. A `deviceSignature` is
-    /// verified with that key; a `deviceMac` needs `mac_key`, the
-    /// EMacKey the reader derived for this session, and fails without it.
+    /// verified with that key. For a `deviceMac`, the EMacKey is derived here
+    /// from that key and `reader_ephemeral_key`
+    /// ([`crate::device_auth::derive_emac_key`]); without
+    /// `reader_ephemeral_key` a `deviceMac` fails.
     Required {
         /// The transcript of this session.
         session_transcript: &'a SessionTranscript,
-        /// The session's EMacKey, for `deviceMac` responses.
-        mac_key: Option<&'a [u8; 32]>,
+        /// The reader's ephemeral private key for this session (big-endian
+        /// scalar), needed only for `deviceMac` responses.
+        reader_ephemeral_key: Option<&'a [u8]>,
     },
     /// Do not check holder binding. The result reports
     /// `device_authenticated: false`. Only for issuer-data checks where the
@@ -234,9 +237,14 @@ impl DeviceResponse {
             DeviceBinding::NotChecked => (BTreeMap::new(), false),
             DeviceBinding::Required {
                 session_transcript,
-                mac_key,
+                reader_ephemeral_key,
             } => (
-                self.verify_device_binding(&mso, session_transcript, *mac_key, options)?,
+                self.verify_device_binding(
+                    &mso,
+                    session_transcript,
+                    *reader_ephemeral_key,
+                    options,
+                )?,
                 true,
             ),
         };
@@ -256,7 +264,7 @@ impl DeviceResponse {
         &self,
         mso: &MobileSecurityObject,
         session_transcript: &SessionTranscript,
-        mac_key: Option<&[u8; 32]>,
+        reader_ephemeral_key: Option<&[u8]>,
         options: &VerifyOptions<'_>,
     ) -> Result<DeviceNameSpaces> {
         let device_signed = self.device_signed.as_ref().ok_or_else(|| {
@@ -269,10 +277,10 @@ impl DeviceResponse {
             device_namespaces.clone(),
         );
 
+        let device_key = CoseKey::from_cbor_value(&mso.device_key_info.device_key)
+            .map_err(|e| MdocError::DeviceAuth(format!("deviceKey: {e}")))?;
         let verified = match &device_signed.device_auth {
             DeviceAuth::Signature(sign1) => {
-                let device_key = CoseKey::from_cbor_value(&mso.device_key_info.device_key)
-                    .map_err(|e| MdocError::DeviceAuth(format!("deviceKey: {e}")))?;
                 let device_verifier = device_key
                     .to_verifier()
                     .map_err(|e| MdocError::DeviceAuth(format!("deviceKey: {e}")))?;
@@ -285,10 +293,13 @@ impl DeviceResponse {
                 device_signed.verify(&device_auth, device_verifier.as_ref())?
             }
             DeviceAuth::Mac(_) => {
-                let mac_key = mac_key.ok_or_else(|| {
-                    MdocError::DeviceAuth("deviceMac present but no session MAC key given".into())
+                let reader_key = reader_ephemeral_key.ok_or_else(|| {
+                    MdocError::DeviceAuth(
+                        "deviceMac present but no reader ephemeral key given".into(),
+                    )
                 })?;
-                device_signed.verify_mac(&device_auth, mac_key)?
+                let mac_key = derive_emac_key(&device_key, reader_key, session_transcript)?;
+                device_signed.verify_mac(&device_auth, &mac_key)?
             }
         };
         if !verified {
@@ -408,7 +419,7 @@ mod tests {
             now(),
             DeviceBinding::Required {
                 session_transcript: &transcript,
-                mac_key: None,
+                reader_ephemeral_key: None,
             },
         );
 
@@ -439,7 +450,7 @@ mod tests {
             now(),
             DeviceBinding::Required {
                 session_transcript: &transcript,
-                mac_key: None,
+                reader_ephemeral_key: None,
             },
         );
         assert!(matches!(
@@ -460,7 +471,7 @@ mod tests {
             now(),
             DeviceBinding::Required {
                 session_transcript: &transcript,
-                mac_key: None,
+                reader_ephemeral_key: None,
             },
         );
         assert!(matches!(
@@ -495,7 +506,7 @@ mod tests {
             now(),
             DeviceBinding::Required {
                 session_transcript: &other,
-                mac_key: None,
+                reader_ephemeral_key: None,
             },
         );
         assert!(response.verify(&options).is_err());
@@ -652,6 +663,114 @@ mod tests {
             DeviceBinding::NotChecked,
         );
         assert!(response.verify(&options).is_err());
+    }
+
+    fn p256_cose_key(private: &[u8; 32]) -> CoseKey {
+        let point = Es256CoseSigner::from_bytes(private)
+            .unwrap()
+            .public_key_bytes();
+        CoseKey::new_p256(point[1..33].to_vec(), point[33..65].to_vec()).unwrap()
+    }
+
+    const DEVICE_PRIVATE: [u8; 32] = [3; 32];
+    const READER_PRIVATE: [u8; 32] = [5; 32];
+
+    /// A response whose `deviceMac` is keyed, device side, from
+    /// ECDH(`mac_device_private`, reader public key), for an MSO that names
+    /// `DEVICE_PRIVATE`'s public key.
+    fn mac_response(mac_device_private: &[u8; 32]) -> (DeviceResponse, Es256CoseVerifier) {
+        let issuer = Es256CoseSigner::generate();
+        let mdoc = MdocBuilder::new(DOC_TYPE)
+            .validity(validity())
+            .device_key(p256_cose_key(&DEVICE_PRIVATE).to_cbor_value())
+            .add_attribute(NS, "age_over_18", Value::Bool(true))
+            .build(&issuer)
+            .unwrap();
+        let device_mac_key = crate::device_auth::derive_emac_key(
+            &p256_cose_key(&READER_PRIVATE),
+            mac_device_private,
+            &transcript(),
+        )
+        .unwrap();
+        let mut response = DeviceResponse::create(&mdoc, &requested()).unwrap();
+        response.device_signed = Some(
+            crate::device_auth::DeviceSigned::mac(
+                &DeviceAuthentication::new(transcript(), DOC_TYPE, BTreeMap::new()),
+                &device_mac_key,
+            )
+            .unwrap(),
+        );
+        let response = DeviceResponse::from_cbor_bytes(&response.to_cbor_bytes().unwrap()).unwrap();
+        let verifier = Es256CoseVerifier::from_bytes(&issuer.public_key_bytes()).unwrap();
+        (response, verifier)
+    }
+
+    fn mac_options<'a>(
+        verifier: &'a Es256CoseVerifier,
+        transcript: &'a SessionTranscript,
+        reader_ephemeral_key: Option<&'a [u8]>,
+    ) -> VerifyOptions<'a> {
+        VerifyOptions::new(
+            IssuerKey::Trusted(verifier),
+            DOC_TYPE,
+            now(),
+            DeviceBinding::Required {
+                session_transcript: transcript,
+                reader_ephemeral_key,
+            },
+        )
+    }
+
+    #[test]
+    fn a_device_mac_from_the_mso_device_key_verifies() {
+        let (response, verifier) = mac_response(&DEVICE_PRIVATE);
+        let transcript = transcript();
+        let verified = response
+            .verify(&mac_options(&verifier, &transcript, Some(&READER_PRIVATE)))
+            .expect("deviceMac verifies");
+        assert!(verified.device_authenticated);
+    }
+
+    #[test]
+    fn a_device_mac_from_another_device_key_is_rejected() {
+        let (response, verifier) = mac_response(&[9; 32]);
+        let transcript = transcript();
+        assert!(matches!(
+            response.verify(&mac_options(&verifier, &transcript, Some(&READER_PRIVATE))),
+            Err(MdocError::DeviceAuth(_))
+        ));
+    }
+
+    #[test]
+    fn a_device_mac_needs_the_reader_ephemeral_key() {
+        let (response, verifier) = mac_response(&DEVICE_PRIVATE);
+        let transcript = transcript();
+        assert!(matches!(
+            response.verify(&mac_options(&verifier, &transcript, None)),
+            Err(MdocError::DeviceAuth(_))
+        ));
+        assert!(matches!(
+            response.verify(&mac_options(&verifier, &transcript, Some(&[6; 32]))),
+            Err(MdocError::DeviceAuth(_))
+        ));
+    }
+
+    #[test]
+    fn a_non_ok_status_is_rejected() {
+        let fixture = fixture();
+        let mut response = presented(&fixture);
+        response.status = 10;
+        let verifier = issuer_verifier(&fixture);
+        let options = VerifyOptions::new(
+            IssuerKey::Trusted(&verifier),
+            DOC_TYPE,
+            now(),
+            DeviceBinding::NotChecked,
+        );
+        assert!(matches!(
+            response.verify(&options),
+            Err(MdocError::InvalidMso(_))
+        ));
     }
 
     /// Signs with ES256 but labels the signature with another algorithm.

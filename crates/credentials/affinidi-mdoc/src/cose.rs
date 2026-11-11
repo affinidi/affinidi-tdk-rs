@@ -94,19 +94,26 @@ pub(crate) fn checked_algorithm(
 ///
 /// Read from the unprotected header, where ISO 18013-5 places it, or from the
 /// protected header. Returns an empty vector when neither carries one, and an
-/// error when the value is neither a bstr nor a non-empty array of bstr.
+/// error when both do or when the value is neither a bstr nor a non-empty
+/// array of bstr.
 ///
 /// The chain is **unverified** data from the credential: the caller has to
 /// validate it against its trust anchors before using the leaf key.
 pub fn x5chain(sign1: &CoseSign1) -> Result<Vec<Vec<u8>>> {
     let label = coset::Label::Int(X5CHAIN_LABEL);
-    let value = sign1
+    let mut values = sign1
         .unprotected
         .rest
         .iter()
         .chain(sign1.protected.header.rest.iter())
-        .find(|(key, _)| *key == label)
+        .filter(|(key, _)| *key == label)
         .map(|(_, value)| value);
+    let value = values.next();
+    if values.next().is_some() {
+        return Err(MdocError::Cose(
+            "x5chain appears more than once across the COSE headers".into(),
+        ));
+    }
     match value {
         None => Ok(Vec::new()),
         Some(coset::cbor::Value::Bytes(cert)) => Ok(vec![cert.clone()]),
@@ -388,6 +395,16 @@ mod tests {
             coset::cbor::Value::Bytes(b"leaf".to_vec()),
         ));
         assert_eq!(x5chain(&sign1).unwrap(), vec![b"leaf".to_vec()]);
+
+        sign1.protected.header.rest.push((
+            coset::Label::Int(X5CHAIN_LABEL),
+            coset::cbor::Value::Bytes(b"other".to_vec()),
+        ));
+        assert!(
+            x5chain(&sign1).is_err(),
+            "x5chain in both headers is refused"
+        );
+        sign1.protected.header.rest.clear();
 
         sign1.unprotected.rest[0].1 = coset::cbor::Value::Text("leaf".into());
         assert!(x5chain(&sign1).is_err());

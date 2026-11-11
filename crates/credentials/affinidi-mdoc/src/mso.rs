@@ -99,7 +99,8 @@ impl ValidityInfo {
     ///
     /// Returns [`MdocError::Expired`] if `now` is outside the window, or
     /// [`MdocError::InvalidMso`] if `signed`, `validFrom` or `validUntil` does
-    /// not parse as RFC 3339 or `signed` lies in the future.
+    /// not parse as RFC 3339, `signed` lies in the future, or `validFrom` is earlier
+    /// than `signed`.
     pub fn check(&self, now: time::OffsetDateTime) -> Result<()> {
         self.check_with_leeway(now, time::Duration::ZERO)
     }
@@ -107,8 +108,9 @@ impl ValidityInfo {
     /// [`ValidityInfo::check`] with a clock-skew allowance: `now` may be up to
     /// `leeway` before `validFrom` or after `validUntil`.
     ///
-    /// `signed` must also parse as RFC 3339 and must not lie more than
-    /// `leeway` in the future. A negative `leeway` is treated as zero.
+    /// `signed` must also parse as RFC 3339, must not lie more than `leeway`
+    /// in the future, and must not be later than `validFrom` (ISO 18013-5
+    /// §9.1.2.4). A negative `leeway` is treated as zero.
     pub fn check_with_leeway(
         &self,
         now: time::OffsetDateTime,
@@ -124,22 +126,33 @@ impl ValidityInfo {
         let valid_until = time::OffsetDateTime::parse(&self.valid_until, &Rfc3339)
             .map_err(|e| MdocError::InvalidMso(format!("validUntil not RFC 3339: {e}")))?;
 
-        if now + leeway < valid_from {
+        // Out-of-range arithmetic means the window edge is beyond any
+        // representable date, so the comparison against it cannot fail.
+        let latest = now.checked_add(leeway);
+        let earliest = now.checked_sub(leeway);
+
+        if latest.is_some_and(|latest| latest < valid_from) {
             return Err(MdocError::Expired(format!(
                 "not yet valid (validFrom = {})",
                 self.valid_from
             )));
         }
-        if now - leeway > valid_until {
+        if earliest.is_some_and(|earliest| earliest > valid_until) {
             return Err(MdocError::Expired(format!(
                 "expired (validUntil = {})",
                 self.valid_until
             )));
         }
-        if signed > now + leeway {
+        if latest.is_some_and(|latest| signed > latest) {
             return Err(MdocError::InvalidMso(format!(
                 "signed lies in the future (signed = {})",
                 self.signed
+            )));
+        }
+        if valid_from < signed {
+            return Err(MdocError::InvalidMso(format!(
+                "validFrom {} is earlier than signed {}",
+                self.valid_from, self.signed
             )));
         }
         Ok(())
@@ -543,7 +556,7 @@ mod tests {
     fn a_signed_date_in_the_future_is_rejected_beyond_leeway() {
         let validity = ValidityInfo {
             signed: "2024-06-01T00:10:00Z".into(),
-            valid_from: "2024-01-01T00:00:00Z".into(),
+            valid_from: "2024-06-01T00:10:00Z".into(),
             valid_until: "2025-01-01T00:00:00Z".into(),
         };
         let now = time::OffsetDateTime::parse(
@@ -551,10 +564,41 @@ mod tests {
             &time::format_description::well_known::Rfc3339,
         )
         .unwrap();
-        assert!(matches!(validity.check(now), Err(MdocError::InvalidMso(_))));
+        assert!(validity.check(now).is_err());
         validity
             .check_with_leeway(now, time::Duration::minutes(15))
             .expect("within leeway");
+    }
+
+    #[test]
+    fn valid_from_earlier_than_signed_is_rejected() {
+        let validity = ValidityInfo {
+            signed: "2024-06-01T00:00:00Z".into(),
+            valid_from: "2024-01-01T00:00:00Z".into(),
+            valid_until: "2025-01-01T00:00:00Z".into(),
+        };
+        let now = time::OffsetDateTime::parse(
+            "2024-07-01T00:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        assert!(matches!(validity.check(now), Err(MdocError::InvalidMso(_))));
+    }
+
+    #[test]
+    fn an_extreme_leeway_does_not_overflow() {
+        let validity = test_validity();
+        let now = time::OffsetDateTime::parse(
+            "2024-06-01T00:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        validity
+            .check_with_leeway(now, time::Duration::MAX)
+            .expect("an unbounded leeway accepts any time");
+        validity
+            .check_with_leeway(time::OffsetDateTime::now_utc(), time::Duration::ZERO)
+            .expect_err("the fixture window is in the past");
     }
 
     #[test]

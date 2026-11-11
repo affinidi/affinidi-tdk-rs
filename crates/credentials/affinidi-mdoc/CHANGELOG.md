@@ -19,11 +19,17 @@ responses that 0.4 accepted are now rejected.
   must validate the chain; signature; the MSO is taken from the verified
   payload, not the `mso` field; document docType = MSO docType = expected
   docType; `validityInfo` against a caller-supplied `now` and leeway; digests;
-  and, unless `DeviceBinding::NotChecked` is passed, the device signature
-  against a verifier built from `deviceKeyInfo.deviceKey` (or `deviceMac` with
-  the caller's session MAC key). New module `verify`.
+  and, unless `DeviceBinding::NotChecked` is passed, holder binding against
+  `deviceKeyInfo.deviceKey`: a `deviceSignature` with a verifier built from
+  that key, a `deviceMac` with an EMacKey derived inside `verify` from that
+  key and the reader's ephemeral private key. New module `verify`.
+- **New — `device_auth::derive_emac_key`** (ISO 18013-5 §9.1.3.5: ECDH with
+  the MSO device key, HKDF-SHA-256 with salt SHA-256(SessionTranscriptBytes)
+  and info `"EMacKey"`), for P-256 and P-384. Enables the `ecdh` feature of
+  the existing `p256` / `p384` dependencies; no new crates.
 - **New — `cose::x5chain`, `IssuerSigned::x5chain`, `DeviceResponse::x5chain`**
-  return the (unverified) chain from label 33.
+  return the (unverified) chain from label 33; a chain present in both the
+  protected and unprotected headers is an error.
 - **New — `CoseKey::to_verifier`** builds an ES256 / ES384 / EdDSA verifier
   from a COSE_Key, honouring its `alg` and `key_ops`.
 - **New — `CoseVerifier::algorithm()`** (defaulted to `None`); the built-in
@@ -35,8 +41,9 @@ responses that 0.4 accepted are now rejected.
   from `CoseVerifier::algorithm()` when the verifier names one.
 - **Breaking — `DeviceResponse::from_cbor_bytes`** rejects a document whose
   own `docType` is missing or differs from the MSO `docType` (it was ignored).
-- **Breaking — `ValidityInfo::check`** also requires `signed` to parse and not
-  lie in the future.
+- **Breaking — `ValidityInfo::check`** also requires `signed` to parse, not lie
+  in the future, and not be later than `validFrom`. `check_with_leeway` uses
+  checked arithmetic, so an extreme leeway cannot overflow.
 - **Breaking — device-signed namespaces.** `DeviceSigned::verify` and
   `verify_mac` sign over the received `nameSpaces` bytes and require them to
   decode to the namespaces in the `DeviceAuthentication` passed in; malformed
