@@ -757,6 +757,18 @@ pub async fn handle_message(
                     }
                 };
 
+            let sender = authenticated_sender_did(meta);
+            if sender.is_none()
+                || (sender != chat.remote_did.as_deref()
+                    && sender != state.settings.mediator_did.as_deref())
+            {
+                warn!(
+                    "Problem report for ({}) not sent by its peer or the mediator",
+                    &chat.name
+                );
+                break 'label_break;
+            }
+
             let Some(mut_chat) = state.chat_list.chats.get_mut(&chat.name) else {
                 warn!("Couldn't get mutable chat({})", &chat.name);
                 break 'label_break;
@@ -920,6 +932,46 @@ mod tests {
         setup.from = None;
         handle_message(&atm, &mut state, &setup, &sent_by(PEER_DID)).await;
         assert!(state.chat_list.chats.contains_key(CHAT));
+    }
+
+    const PROBLEM_REPORT: &str = "https://didcomm.org/report-problem/2.0/problem-report";
+    const MEDIATOR_DID: &str = "did:example:mediator";
+
+    fn problem_report() -> Message {
+        message(
+            PROBLEM_REPORT,
+            json!({"code": "e.p.msg.bad-request", "comment": "nope"}),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_problem_report_from_the_peer_or_the_mediator_is_shown() {
+        let (atm, mut state) = atm_with_chat().await;
+        state.settings.mediator_did = Some(MEDIATOR_DID.into());
+        handle_message(&atm, &mut state, &problem_report(), &sent_by(PEER_DID)).await;
+        handle_message(&atm, &mut state, &problem_report(), &sent_by(MEDIATOR_DID)).await;
+        assert_eq!(messages_in(&state), 2);
+    }
+
+    #[tokio::test]
+    async fn a_problem_report_from_anyone_else_is_dropped() {
+        let (atm, mut state) = atm_with_chat().await;
+        state.settings.mediator_did = Some(MEDIATOR_DID.into());
+        handle_message(
+            &atm,
+            &mut state,
+            &problem_report(),
+            &sent_by("did:example:other"),
+        )
+        .await;
+        handle_message(
+            &atm,
+            &mut state,
+            &problem_report(),
+            &UnpackMetadata::default(),
+        )
+        .await;
+        assert_eq!(messages_in(&state), 0);
     }
 
     #[test]

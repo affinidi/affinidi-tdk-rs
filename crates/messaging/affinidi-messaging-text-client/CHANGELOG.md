@@ -11,11 +11,19 @@
 - **Behaviour:** a `chat-message` or `chat-effect` is shown only when it was
   authenticated (authcrypt sender, else verified signer) as the chat's
   remote DID; anything else is logged and dropped.
+- **Behaviour:** a problem report is shown in a chat only when it was
+  authenticated as the chat's remote DID or the configured mediator DID.
 - The terminal is restored (raw mode off, alternate screen left, cursor
-  shown) before a panic message is printed.
+  shown) before a panic message is printed, and the client then exits.
 - The state file is written whenever the state changes, not only on exit,
   so keys and chats created during a session are on disk if the client stops
-  unexpectedly.
+  unexpectedly. Each write goes to a new owner-only file in the same
+  directory, is synced, and is renamed over `config.json`, so an interrupted
+  write leaves the previous file whole; an existing file with wider
+  permissions is replaced by a `0600` one.
+- **Behaviour:** a `config.json` that exists but cannot be read or parsed is
+  no longer replaced by an empty state; the client reports it and exits
+  without writing. Only a missing file starts from the default state.
 ## Unreleased (0.12.7) — dependency currency
 
 No behaviour change: `ratatui-image` 10 → 11.

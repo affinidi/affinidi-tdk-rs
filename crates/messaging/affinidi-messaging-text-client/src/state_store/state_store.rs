@@ -19,7 +19,7 @@ use tokio::sync::{
     broadcast,
     mpsc::{self, UnboundedReceiver, UnboundedSender},
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 const STATE_FILE: &str = "config.json";
 
@@ -60,7 +60,19 @@ impl StateStore {
         };
 
         // Load any profiles from existing chats.
-        let mut state = State::read_from_file(STATE_FILE).unwrap_or_default();
+        let mut state = match State::load(STATE_FILE) {
+            Ok(state) => state,
+            Err(e) => {
+                error!(
+                    "Cannot read {}: {}. Fix or move the file aside; it is not overwritten",
+                    STATE_FILE, e
+                );
+                eprintln!(
+                    "Cannot read {STATE_FILE}: {e}. Fix or move the file aside; it is not overwritten"
+                );
+                return Ok(Interrupted::SystemError);
+            }
+        };
         state.initialization = true;
 
         tdk.secrets_resolver().insert_vec(&state.secrets).await;

@@ -175,6 +175,16 @@ impl State {
         write_private(file_path, &serde_json::to_vec_pretty(self)?)
     }
 
+    /// Reads the state from `file_path`, or the default state if there is no
+    /// such file. Any other failure, such as a file that does not parse, is an
+    /// error, so the caller does not go on to overwrite the file.
+    pub fn load(file_path: &str) -> Result<Self, std::io::Error> {
+        match Self::read_from_file(file_path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            result => result,
+        }
+    }
+
     pub fn read_from_file(file_path: &str) -> Result<Self, std::io::Error> {
         let file = std::fs::File::open(file_path)?;
         let state: Self = serde_json::from_reader(file)?;
@@ -230,27 +240,54 @@ impl State {
     }
 }
 
-/// Writes `contents` to `file_path`, owner-only on Unix: the state holds
-/// private keys, and `File::create` would use the process umask (typically
-/// 0644).
+/// Replaces `file_path` with `contents`, owner-only on Unix: the state holds
+/// private keys. The contents go to a new file in the same directory, are
+/// synced, and are renamed over `file_path`, so an interrupted write leaves
+/// the previous file intact.
 fn write_private(file_path: &str, contents: &[u8]) -> Result<(), std::io::Error> {
     use std::io::Write;
+    use std::path::Path;
+
+    let path = Path::new(file_path);
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no file name"))?;
+    let temp_path = path.with_file_name(format!(
+        ".{}.{}.tmp",
+        file_name.to_string_lossy(),
+        uuid::Uuid::new_v4()
+    ));
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    let written = options.open(&temp_path).and_then(|mut file| {
+        file.write_all(contents)?;
+        file.sync_all()
+    });
+    let renamed = written.and_then(|()| std::fs::rename(&temp_path, path));
+    if let Err(e) = renamed {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(e);
+    }
 
     #[cfg(unix)]
-    let mut file = {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(file_path)?
-    };
-    #[cfg(not(unix))]
-    let mut file = std::fs::File::create(file_path)?;
-
-    file.write_all(contents)?;
-    file.flush()
+    if let Some(directory) = path.parent() {
+        let directory = if directory.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            directory
+        };
+        if let Ok(directory) = std::fs::File::open(directory) {
+            let _ = directory.sync_all();
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -287,5 +324,63 @@ mod tests {
             assert_eq!(mode & 0o777, 0o600);
         }
         std::fs::remove_file(path).unwrap();
+    }
+
+    fn temp_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("text-client-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_missing_state_file_loads_the_default_state() {
+        let dir = temp_dir();
+        let path = dir.join("config.json");
+        let state = State::load(path.to_str().unwrap()).unwrap();
+        assert!(state.secrets.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_torn_state_file_is_an_error_and_is_left_alone() {
+        let dir = temp_dir();
+        let path = dir.join("config.json");
+        let torn = br#"{"settings":{},"chat_list":{"#;
+        std::fs::write(&path, torn).unwrap();
+
+        assert!(State::load(path.to_str().unwrap()).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), torn);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn saving_replaces_the_file_whole_and_owner_only() {
+        let dir = temp_dir();
+        let path = dir.join("config.json");
+        std::fs::write(&path, b"previous").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let mut state = State::default();
+        state.settings.our_name = Some("Alice".into());
+        state.save_to_file(path.to_str().unwrap()).unwrap();
+
+        let saved = State::load(path.to_str().unwrap()).unwrap();
+        assert_eq!(saved.settings.our_name.as_deref(), Some("Alice"));
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no temporary file is left behind"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

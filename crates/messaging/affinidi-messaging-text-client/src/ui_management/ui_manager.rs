@@ -107,7 +107,10 @@ fn setup_terminal() -> anyhow::Result<Terminal<CrosstermBackend<Stdout>>> {
 }
 
 /// Puts the terminal back to normal before the default panic message is
-/// printed, so a panic does not leave it in raw mode on the alternate screen.
+/// printed, so a panic does not leave it in raw mode on the alternate screen,
+/// then exits: a panic in a spawned task would otherwise leave the UI running
+/// on a terminal that is no longer set up for it. The state file is written
+/// as the state changes, so nothing saved is lost.
 pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -119,6 +122,7 @@ pub fn install_panic_hook() {
             Show
         );
         previous(info);
+        std::process::exit(101);
     }));
 }
 

@@ -23,7 +23,9 @@ cargo run -p affinidi-messaging-text-client
 
 The client persists its DID, mediator connections, and chat history to a
 JSON state file (`config.json`), written whenever the state changes and again
-on exit. **The file contains the
+on exit. Each write replaces the file atomically (temporary file, sync,
+rename). If the file exists but cannot be parsed, the client exits without
+touching it; fix it or move it aside. **The file contains the
 client's DID private keys** (the `secrets` array). As of 0.12.2 it is
 created with mode `0600` on Unix so only the owner can read it. On other
 platforms the file is created with the platform default — restrict it
