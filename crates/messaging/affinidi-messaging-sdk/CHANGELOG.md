@@ -25,8 +25,10 @@ derives its count from what it holds:
   `live_stream_get(thid)`. Before, they shared one lookup slot, and taking
   either one hid the other.
 
-Behaviour change (R3.6), limited to repeated ids: a redelivered message is
-handed to the application once, not twice. No API change.
+Behaviour change (R3.6), limited to repeated ids: a redelivered message
+still held in the cache is ignored, and the first copy and its metadata are
+kept. A message the application has already taken is not in the cache, so
+a later re-push of it is delivered again, as before. No API change.
 
 ## 0.45.6 — `messaging/mux/connections`
 
