@@ -333,6 +333,9 @@ pub fn parse_jws_with_limits(jws_str: &str, limits: &JwsLimits) -> Result<Parsed
         )));
     }
 
+    let payload = Base64UrlUnpadded::decode_vec(&jws.payload)
+        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid payload base64: {e}")))?;
+
     let mut signatures = Vec::with_capacity(jws.signatures.len());
     for sig_entry in &jws.signatures {
         let header_bytes = Base64UrlUnpadded::decode_vec(&sig_entry.protected)
@@ -382,9 +385,6 @@ pub fn parse_jws_with_limits(jws_str: &str, limits: &JwsLimits) -> Result<Parsed
             signature,
         });
     }
-
-    let payload = Base64UrlUnpadded::decode_vec(&jws.payload)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid payload base64: {e}")))?;
 
     Ok(ParsedJws {
         payload,
@@ -1063,6 +1063,15 @@ mod tests {
         let many = jws_with_signatures(DEFAULT_MAX_JWS_SIGNATURES + 4, b"{}");
         let limits = JwsLimits::new(DEFAULT_MAX_JWS_SIGNATURES + 4);
         assert!(parse_jws_with_limits(&many, &limits).is_ok());
+    }
+
+    #[test]
+    fn parse_jws_refuses_a_bad_payload_before_reading_signatures() {
+        let mut jws: serde_json::Value =
+            serde_json::from_str(&jws_with_signatures(2, b"{}")).unwrap();
+        jws["payload"] = "not base64!".into();
+        let error = parse_jws(&jws.to_string()).err().unwrap();
+        assert!(error.to_string().contains("payload"), "{error}");
     }
 
     #[test]

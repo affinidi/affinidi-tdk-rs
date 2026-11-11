@@ -13,6 +13,8 @@
 - New `parse_jws_with_limits` and `JwsLimits` (`#[non_exhaustive]`) let a
   caller set the signature count and an optional cap on the encoded payload
   length; both are checked before the per-signature loop.
+- The payload is decoded before the signature entries, so a JWS whose
+  payload is not base64url is refused before any signing input is built.
 ## Unreleased (0.15.11) — did:scid sender binding
 
 - **Behaviour (`messaging-core` adapter):** the plaintext `from` is checked
