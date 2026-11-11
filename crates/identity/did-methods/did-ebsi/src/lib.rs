@@ -76,6 +76,10 @@ pub const EBSI_PILOT_API: &str = "https://api-pilot.ebsi.eu/did-registry/v5/iden
 pub const EBSI_CONFORMANCE_API: &str =
     "https://api-conformance.ebsi.eu/did-registry/v5/identifiers";
 
+/// Largest DID document response this resolver will read. A registry DID
+/// document is a few KB.
+pub const MAX_DOCUMENT_BYTES: usize = 1 << 20;
+
 /// EBSI DID version byte.
 pub const EBSI_VERSION_BYTE: u8 = 0x01;
 
@@ -168,7 +172,7 @@ pub async fn resolve_ebsi_did(
         .build()
         .map_err(|e| EbsiError::Http(format!("building HTTP client: {e}")))?;
 
-    let response = client
+    let mut response = client
         .get(&url)
         .send()
         .await
@@ -182,12 +186,31 @@ pub async fn resolve_ebsi_did(
         )));
     }
 
-    let body = response
-        .text()
+    // Refuse a body that declares itself too large before reading it, then
+    // count the body as it arrives: a response without a Content-Length, or
+    // with one smaller than its body, stops being read at the limit.
+    if let Some(length) = response.content_length()
+        && length > MAX_DOCUMENT_BYTES as u64
+    {
+        return Err(EbsiError::Http(format!(
+            "{url} declares {length} bytes, over the {MAX_DOCUMENT_BYTES}-byte limit"
+        )));
+    }
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|e| EbsiError::Http(format!("reading response body: {e}")))?;
+        .map_err(|e| EbsiError::Http(format!("reading response body: {e}")))?
+    {
+        if body.len() + chunk.len() > MAX_DOCUMENT_BYTES {
+            return Err(EbsiError::Http(format!(
+                "{url} sent more than the {MAX_DOCUMENT_BYTES}-byte limit"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
 
-    let document: affinidi_did_common::Document = serde_json::from_str(&body)
+    let document: affinidi_did_common::Document = serde_json::from_slice(&body)
         .map_err(|e| EbsiError::ParseError(format!("parsing DID document: {e}")))?;
     verify_document_id(did, &document)?;
 
@@ -299,5 +322,81 @@ mod tests {
 
         assert_eq!(decoded.len(), 17); // 1 version + 16 random
         assert_eq!(decoded[0], 0x01); // Version byte
+    }
+
+    /// A local server that answers every request with `head`, then
+    /// `body_chunk` repeated `repeat` times as chunked transfer encoding
+    /// (forever when `repeat` is `None`), then the terminating chunk.
+    async fn serve(head: &'static str, body_chunk: Vec<u8>, repeat: Option<usize>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let body_chunk = body_chunk.clone();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buffer = [0u8; 1024];
+                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        match socket.read(&mut buffer).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&buffer[..read]),
+                        }
+                    }
+                    if socket.write_all(head.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let mut chunk = format!("{:x}\r\n", body_chunk.len()).into_bytes();
+                    chunk.extend_from_slice(&body_chunk);
+                    chunk.extend_from_slice(b"\r\n");
+                    let mut sent = 0;
+                    while repeat.is_none_or(|limit| sent < limit) {
+                        if socket.write_all(&chunk).await.is_err() {
+                            return;
+                        }
+                        sent += 1;
+                    }
+                    let _ = socket.write_all(b"0\r\n\r\n").await;
+                });
+            }
+        });
+        format!("http://{address}")
+    }
+
+    const CHUNKED: &str = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+    const DID: &str = "did:ebsi:zfEmvX5twhXjQJiCWsukvQA";
+
+    #[tokio::test]
+    async fn a_chunked_document_within_the_limit_resolves() {
+        let document = format!(r#"{{"id":"{DID}"}}"#).into_bytes();
+        let api_base = serve(CHUNKED, document, Some(1)).await;
+        let resolved = resolve_ebsi_did(DID, &api_base).await.unwrap();
+        assert_eq!(resolved.id.as_str(), DID);
+    }
+
+    #[tokio::test]
+    async fn a_body_without_a_content_length_stops_at_the_limit() {
+        let api_base = serve(CHUNKED, vec![b' '; 64 * 1024], None).await;
+        let err = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            resolve_ebsi_did(DID, &api_base),
+        )
+        .await
+        .expect("reading must stop at the limit, not run until the request timeout")
+        .unwrap_err();
+        assert!(err.to_string().contains("limit"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_declared_length_over_the_limit_is_refused_before_reading() {
+        let api_base = serve(
+            "HTTP/1.1 200 OK\r\nContent-Length: 1073741824\r\n\r\n",
+            Vec::new(),
+            Some(0),
+        )
+        .await;
+        let err = resolve_ebsi_did(DID, &api_base).await.unwrap_err();
+        assert!(err.to_string().contains("declares"), "{err}");
     }
 }
