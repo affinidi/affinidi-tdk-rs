@@ -122,6 +122,11 @@ pub(crate) fn issued_designations(
     Ok(out)
 }
 
+/// The most schemas [`unsupported_critical`] checks for a standing critical
+/// designation. Each is a pass over the stream, and a credential that
+/// declares itself critical under a schema no resolver implements is rare.
+const MAX_UNIMPLEMENTED_CRITICAL_SCHEMAS: usize = 16;
+
 /// The schema of the first standing designation `aid` issued that is marked
 /// `critical` and whose schema is not in `implemented`, if any.
 ///
@@ -161,7 +166,20 @@ pub(crate) fn unsupported_critical(
             },
             None => continue,
         };
-        if !implemented.contains(&schema.as_str()) && !schemas.contains(&schema) {
+        // Only a credential marked critical can stand as a critical
+        // designation, so no other needs its issuance checked here.
+        let marked_critical = sad
+            .get("a")
+            .and_then(|a| a.get("critical"))
+            .is_some_and(|c| *c == SadValue::Bool(true));
+        if marked_critical && !implemented.contains(&schema.as_str()) && !schemas.contains(&schema)
+        {
+            if schemas.len() == MAX_UNIMPLEMENTED_CRITICAL_SCHEMAS {
+                return Err(DidWebsError::Stream(format!(
+                    "keri.cesr carries credentials marked critical under more than \
+                     {MAX_UNIMPLEMENTED_CRITICAL_SCHEMAS} schemas this resolver does not implement"
+                )));
+            }
             schemas.push(schema);
         }
     }

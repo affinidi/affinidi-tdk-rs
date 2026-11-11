@@ -513,3 +513,43 @@ fn a_recovery_takes_the_designations_it_supersedes_with_it() {
             .contains(&pk(&next)[1..])
     );
 }
+
+/// `created`'s artifacts with a credential marked critical under each of
+/// `count` schemas this resolver does not implement appended, none of them
+/// issued in a registry.
+fn with_unissued_critical_credentials(created: &ControlledResult, count: usize) -> Artifacts {
+    let aid = created.state().prefix.clone();
+    let dt = "2026-01-01T00:00:00.000000+00:00";
+    let (state, _) = RegistryState::incept(&aid, &RegistryNonce([9; 16]), dt).unwrap();
+    let mut keri_cesr = created.artifacts().keri_cesr.clone();
+    for n in 0..count {
+        let schema = format!("{}{n:02}", &FOREIGN[..FOREIGN.len() - 2]);
+        let credential = state
+            .designation(
+                &schema,
+                &SadValue::from_json_value(&json!({ "dt": dt, "critical": true })),
+            )
+            .unwrap();
+        keri_cesr.extend(credential.compose().unwrap());
+    }
+    Artifacts {
+        keri_cesr,
+        did_json: created.artifacts().did_json.clone(),
+    }
+}
+
+#[test]
+fn critical_credentials_under_too_many_unknown_schemas_fail_resolution() {
+    let signer = key(1);
+    let created = created(&signer);
+
+    let few = with_unissued_critical_credentials(&created, 16);
+    resolve(created.did(), &few).expect("credentials that were never issued restrict nothing");
+
+    let many = with_unissued_critical_credentials(&created, 17);
+    let err = resolve(created.did(), &many).expect_err("past the schema bound");
+    assert!(
+        matches!(&err, DidWebsError::Stream(m) if m.contains("critical")),
+        "{err}"
+    );
+}

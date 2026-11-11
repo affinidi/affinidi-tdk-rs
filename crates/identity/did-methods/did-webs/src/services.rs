@@ -27,7 +27,7 @@
 //! to retire — sign a reply dated far in the future and win every comparison
 //! after it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use affinidi_keri_core::parser::{Attachment, ParsedMessage};
 use affinidi_keri_crypto::Verfer;
@@ -149,6 +149,9 @@ pub(crate) fn role_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoi
         }
     }
 
+    let replies = LocationReplies::of(kels);
+    // An endpoint may hold several roles; its locations are verified once.
+    let mut located: HashMap<String, BTreeMap<String, String>> = HashMap::new();
     let mut endpoints = Vec::new();
     for ((role, eid), record) in roles {
         // A witness is designated by the key state, not by a reply: an
@@ -157,7 +160,10 @@ pub(crate) fn role_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoi
         if !record.added || role == "witness" {
             continue;
         }
-        let urls = location_schemes(kels, &eid);
+        let urls = located
+            .entry(eid.clone())
+            .or_insert_with(|| replies.schemes(kels, &eid))
+            .clone();
         if urls.is_empty() {
             // Authorised, but it never said where it is. Publishing a service
             // with no endpoint would be worse than publishing none.
@@ -171,10 +177,11 @@ pub(crate) fn role_endpoints(kels: &Kels, aid: &str) -> Result<Vec<ServiceEndpoi
 
 /// The witnesses in `backers` that have published a location for themselves.
 pub(crate) fn witness_endpoints(kels: &Kels, backers: &[String]) -> Vec<ServiceEndpoint> {
+    let replies = LocationReplies::of(kels);
     backers
         .iter()
         .filter_map(|witness| {
-            let urls = location_schemes(kels, witness);
+            let urls = replies.schemes(kels, witness);
             (!urls.is_empty()).then(|| ServiceEndpoint {
                 eid: witness.clone(),
                 role: "witness".to_string(),
@@ -209,7 +216,7 @@ pub fn delegator_service(kels: &Kels, aid: &str) -> Result<Option<Value>, DidWeb
         return Ok(None);
     };
 
-    let locations = location_schemes(kels, delegator);
+    let locations = LocationReplies::of(kels).schemes(kels, delegator);
     let Some(url) = ["https", "http"]
         .iter()
         .find_map(|scheme| locations.get(*scheme))
@@ -224,45 +231,59 @@ pub fn delegator_service(kels: &Kels, aid: &str) -> Result<Option<Value>, DidWeb
     })))
 }
 
-/// The verified location schemes `eid` has published for itself.
-fn location_schemes(kels: &Kels, eid: &str) -> BTreeMap<String, String> {
-    let mut latest: BTreeMap<String, (Seniority, String)> = BTreeMap::new();
+/// The stream's `/loc/scheme` replies, by the endpoint each is about, read
+/// once so that each endpoint's lookup sees only its own.
+struct LocationReplies<'a> {
+    by_eid: HashMap<&'a str, Vec<(&'a ParsedMessage, &'a str, &'a str)>>,
+}
 
-    for rpy in kels.messages_with_ilk("rpy") {
-        let sad = rpy.serder.sad();
-        if sad.get("r").and_then(|v| v.as_str()) != Some("/loc/scheme") {
-            continue;
-        }
-
-        let attrs = sad.get("a");
-        let (Some(subject), Some(scheme), Some(url)) = (
-            attrs.and_then(|a| a.get("eid")).and_then(|v| v.as_str()),
-            attrs.and_then(|a| a.get("scheme")).and_then(|v| v.as_str()),
-            attrs.and_then(|a| a.get("url")).and_then(|v| v.as_str()),
-        ) else {
-            continue;
-        };
-
-        if subject != eid {
-            continue;
-        }
-        // The endpoint has to say this about *itself*. A third party asserting
-        // where someone else can be reached is a redirection, not a location.
-        let Some(seniority) = reply_seniority(kels, rpy, eid) else {
-            continue;
-        };
-        match latest.get(scheme) {
-            Some((existing, _)) if *existing >= seniority => {}
-            _ => {
-                latest.insert(scheme.to_string(), (seniority, url.to_string()));
+impl<'a> LocationReplies<'a> {
+    fn of(kels: &'a Kels) -> Self {
+        let mut by_eid: HashMap<&'a str, Vec<(&'a ParsedMessage, &'a str, &'a str)>> =
+            HashMap::new();
+        for rpy in kels.messages_with_ilk("rpy") {
+            let sad = rpy.serder.sad();
+            if sad.get("r").and_then(|v| v.as_str()) != Some("/loc/scheme") {
+                continue;
             }
+
+            let attrs = sad.get("a");
+            let (Some(subject), Some(scheme), Some(url)) = (
+                attrs.and_then(|a| a.get("eid")).and_then(|v| v.as_str()),
+                attrs.and_then(|a| a.get("scheme")).and_then(|v| v.as_str()),
+                attrs.and_then(|a| a.get("url")).and_then(|v| v.as_str()),
+            ) else {
+                continue;
+            };
+            by_eid.entry(subject).or_default().push((rpy, scheme, url));
         }
+        Self { by_eid }
     }
 
-    latest
-        .into_iter()
-        .map(|(scheme, (_, url))| (scheme, url))
-        .collect()
+    /// The verified location schemes `eid` has published for itself.
+    fn schemes(&self, kels: &Kels, eid: &str) -> BTreeMap<String, String> {
+        let mut latest: BTreeMap<String, (Seniority, String)> = BTreeMap::new();
+
+        for (rpy, scheme, url) in self.by_eid.get(eid).into_iter().flatten() {
+            // The endpoint has to say this about *itself*. A third party
+            // asserting where someone else can be reached is a redirection,
+            // not a location.
+            let Some(seniority) = reply_seniority(kels, rpy, eid) else {
+                continue;
+            };
+            match latest.get(*scheme) {
+                Some((existing, _)) if *existing >= seniority => {}
+                _ => {
+                    latest.insert(scheme.to_string(), (seniority, url.to_string()));
+                }
+            }
+        }
+
+        latest
+            .into_iter()
+            .map(|(scheme, (_, url))| (scheme, url))
+            .collect()
+    }
 }
 
 /// Verify that `msg` is signed by `signer`, and say where it stands in BADA

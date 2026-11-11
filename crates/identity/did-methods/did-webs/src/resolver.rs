@@ -77,6 +77,20 @@ pub struct DocumentMetadata {
     pub deactivated: bool,
 }
 
+impl Resolution {
+    /// The document, unless the identifier is deactivated.
+    ///
+    /// # Errors
+    /// Returns [`DidWebsError::Deactivated`] if the metadata says the
+    /// identifier is deactivated.
+    pub fn into_document(self) -> Result<Document, DidWebsError> {
+        if self.metadata.deactivated {
+            return Err(DidWebsError::Deactivated(self.document.id.to_string()));
+        }
+        Ok(self.document)
+    }
+}
+
 impl DocumentMetadata {
     /// The metadata as a DID Resolution `didDocumentMetadata` object.
     pub fn to_json(&self) -> Value {
@@ -121,23 +135,36 @@ pub(crate) struct Derived {
 /// either fails it); `None` is accepted here for verifying a stream offline,
 /// and [`crate::WebsResolver`] never passes it.
 ///
+/// A deactivated identifier does not resolve to a document here: this returns
+/// the document alone, so its retired keys would be indistinguishable from
+/// current ones. [`resolve_with_metadata`] reports the deactivation.
+///
 /// # Errors
 /// Returns [`DidWebsError`] if the stream cannot be read, the key event log
 /// does not verify, the DID is not designated by its AID, or `did.json`
-/// disagrees with the verified state.
+/// disagrees with the verified state; [`DidWebsError::Deactivated`] if the
+/// identifier is deactivated as of the version resolved.
 pub fn resolve_from_artifacts(
     did: &DidWebs,
     keri_cesr: &[u8],
     did_json: Option<&[u8]>,
 ) -> Result<Document, DidWebsError> {
-    resolve_with_metadata(did, keri_cesr, did_json).map(|r| r.document)
+    resolve_with_metadata(did, keri_cesr, did_json)?.into_document()
 }
 
 /// Resolve a `did:webs` identifier from artifacts already fetched, with its DID
 /// document metadata. See [`resolve_from_artifacts`].
 ///
+/// A deactivated identifier resolves with `deactivated` set in the metadata
+/// and a document that carries no verification method, verification
+/// relationship or service: its last key state committed to no next keys,
+/// and its keys are retired with it. The published `did.json` is still
+/// checked against the full derivation. A DID URL whose `versionId` names an
+/// event before the deactivation resolves the document as it stood then.
+///
 /// # Errors
-/// As [`resolve_from_artifacts`].
+/// As [`resolve_from_artifacts`], except that a deactivated identifier is not
+/// an error.
 pub fn resolve_with_metadata(
     did: &DidWebs,
     keri_cesr: &[u8],
@@ -169,11 +196,31 @@ pub fn resolve_with_metadata(
         carry_delegator_service(&derived, &published, &mut document);
     }
     let document = with_key_agreement(document, did, &derived.converted_key_agreement)?;
+    let document = if derived.metadata.deactivated {
+        deactivated_document(&document)
+    } else {
+        document
+    };
 
     Ok(Resolution {
         document: into_document(&document, did)?,
         metadata: derived.metadata,
     })
+}
+
+/// What a deactivated identifier's document keeps: its subject and aliases.
+/// Every verification method, verification relationship, key role and
+/// service goes with the keys.
+fn deactivated_document(document: &Value) -> Value {
+    let mut out = Map::new();
+    if let Some(derived) = document.as_object() {
+        for member in ["@context", "id", "alsoKnownAs"] {
+            if let Some(value) = derived.get(member) {
+                out.insert(member.to_string(), value.clone());
+            }
+        }
+    }
+    Value::Object(out)
 }
 
 /// Derive what `keri_cesr` implies for `did`.
@@ -212,7 +259,7 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
     let version = did.version_id().unwrap_or(latest);
     let versioned = match did.version_id() {
         // `as_of` refuses a sequence number the log does not reach.
-        Some(v) if v != latest => Some(Kels::parse(keri_cesr)?.as_of(aid, v)?),
+        Some(v) if v != latest => Some(full.view().as_of(aid, v)?),
         _ => None,
     };
     let kels = versioned.as_ref().unwrap_or(&full);

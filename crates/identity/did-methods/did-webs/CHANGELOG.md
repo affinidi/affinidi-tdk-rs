@@ -35,6 +35,50 @@ All notable changes to this crate are documented here.
   its `%3A` port separator.
 - Comparing DIDs with non-ASCII characters no longer garbles them while
   normalising percent-encoding case.
+## [0.13.3] - 2026-11-12
+
+### Changed
+
+- **A deactivated identifier no longer resolves to its last keys.** Its last
+  rotation committed to no next keys (§ Deactivate), but every entry point that
+  returns a document alone — `WebsResolver::resolve`, `resolve` and
+  `resolve_from_artifacts` — returned the final key state's keys as current
+  ones and dropped the metadata that said otherwise. They now fail with the new
+  `DidWebsError::Deactivated`. `resolve_with_metadata` (both forms) still
+  resolves, with `deactivated: true` in the metadata, and its document now
+  keeps only `id` and `alsoKnownAs`: no verification method, verification
+  relationship, key role or service. The published `did.json` is still checked
+  against the full derivation, so artifacts published before are unaffected. A
+  `versionId` before the deactivating rotation resolves the document as it
+  stood, keys included. `Resolution::into_document` returns the document, or
+  `Deactivated`.
+- **Verification work grows linearly with the stream.** The key state at every
+  establishment event is recorded while the log is verified, so a reply's
+  signature group is checked against that record instead of a replay of the
+  log from inception; each identifier's log over the whole stream, which the
+  designation readers share, is replayed at most once; witness receipts and
+  SAIDs are indexed when the stream is parsed; an endpoint's location replies
+  are read once per resolution, however many roles name it; and a `versionId`
+  resolution narrows the stream already parsed instead of parsing it again.
+- **Bounds on a stream.** `Kels::parse` refuses a stream of more than
+  `kel::MAX_STREAM_MESSAGES` (10,000) messages or `kel::MAX_STREAM_SIGNATURES`
+  (16,384) signatures, counting controller and witness signatures, receipt
+  couples and signature groups. Resolution fails when credentials marked
+  `critical` name more than 16 schemas this resolver does not implement; only
+  credentials marked `critical` have their issuance checked for that rule.
+- **`WebsResolver` verifies off the async executor.** The fetched stream is
+  verified on tokio's blocking thread pool, with no more verifications running
+  at once across the process than there are CPUs available. `tokio` (already
+  in the dependency tree through `reqwest`) becomes a direct dependency with
+  the `rt` and `sync` features.
+
+### Compatibility
+
+Behaviour change, no signature change (R3.6): a deactivated identifier that
+resolved `Ok` through a document-only entry point now fails with
+`DidWebsError::Deactivated` (the enum is `#[non_exhaustive]`), and
+`resolve_with_metadata` returns it without keys. A stream past the bounds above
+fails with `DidWebsError::Stream`.
 
 ## [0.13.1] - 2026-11-11
 
