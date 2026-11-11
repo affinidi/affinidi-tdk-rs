@@ -23,21 +23,27 @@
 //! ([`Inbound::thread_id`]) — the layer's correlation anchor. For our own
 //! services (both run the layer) the sending layer stamps `thid == idempotency
 //! key` on a `Guaranteed` send, so the echo lines up; a spurious receipt for an
-//! unknown key is a harmless no-op ([`confirm_delivered`] returns `false`).
+//! unknown key is a harmless no-op ([`confirm_delivered_by`] returns `false`).
 //! Stamping the thread id automatically at pack time lands with the Phase-3
 //! packing integration; until then a caller that sets its own correlation id
 //! gets the same behaviour.
 //!
+//! A receipt confirms an entry only when it comes from that entry's recipient:
+//! the sending layer checks the sender the transport authenticated against the
+//! entry's `dest_did`, so a receipt from any other party, or from an
+//! unauthenticated one, settles nothing. Likewise the receiving layer emits a
+//! receipt only to an authenticated sender.
+//!
 //! ## Packing lives outside this crate
 //!
 //! Emitting a receipt requires DID-encrypting it to the recipient — a crypto
-//! concern this crate (which depends only on the transport contract) does not
+//! concern this crate (which has no DIDComm or TSP stack of its own) does not
 //! own, exactly as durable storage is abstracted behind [`OutboxStore`]. A
 //! service wires in a [`ReceiptPacker`] (the SDK packs via the mediator's
 //! `pack_encrypted`); the consume half needs no packer and is always active.
 //!
 //! [`Inbound::thread_id`]: affinidi_messaging_core::Inbound::thread_id
-//! [`confirm_delivered`]: crate::confirm::confirm_delivered
+//! [`confirm_delivered_by`]: crate::confirm::confirm_delivered_by
 //! [`OutboxStore`]: crate::outbox::OutboxStore
 
 use serde::{Deserialize, Serialize};

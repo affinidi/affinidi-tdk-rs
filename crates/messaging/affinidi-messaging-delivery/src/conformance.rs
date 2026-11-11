@@ -18,8 +18,8 @@
 //!   `Unconfirmed` at window expiry, never a false `Delivered`;
 //! - **outbox-drain** — a hop-id that drains from the sender's outbox settles
 //!   `Delivered`;
-//! - **layer receipt** — an inbound receipt settles the matching entry
-//!   `Delivered`.
+//! - **layer receipt** — an inbound receipt from the entry's recipient settles
+//!   it `Delivered`; the same receipt from another sender settles nothing.
 //!
 //! Gated behind the `conformance` feature (and `test`) so it is not compiled
 //! into a normal build; the assertions `panic!` on failure by design.
@@ -292,8 +292,10 @@ pub async fn assert_outbox_drain(wire: &dyn ConformanceWire) {
     );
 }
 
-/// **Layer receipt:** an inbound receipt confirming a `Sent` entry's key settles
-/// it `Delivered` — end-to-end evidence with no application reply.
+/// **Layer receipt:** an inbound receipt confirming a `Sent` entry's key, from
+/// the peer the entry was sent to, settles it `Delivered` — end-to-end evidence
+/// with no application reply. The same receipt from any other sender leaves the
+/// entry `Sent`.
 pub async fn assert_layer_receipt(wire: &dyn ConformanceWire) {
     let (transport, ctrl) = wire.fresh().await;
     let outbox = Arc::new(InMemoryOutboxStore::new());
@@ -316,7 +318,20 @@ pub async fn assert_layer_receipt(wire: &dyn ConformanceWire) {
         OutboxState::Sent
     );
 
-    // A layer receipt for "k" arrives → the dispatcher confirms it.
+    // A receipt for "k" from a peer "k" was not sent to confirms nothing.
+    let mut stray = inbound("stray-receipt", None);
+    stray.message.sender = Some("did:example:someone-else".to_string());
+    stray.message.payload = Receipt::new("k").encode();
+    ctrl.deliver(stray).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        svc.delivery_state("k").await.unwrap(),
+        Some(OutboxState::Sent),
+        "layer receipt: a receipt from a sender other than the recipient settles nothing"
+    );
+
+    // A layer receipt for "k" from its recipient arrives → the dispatcher
+    // confirms it.
     let mut receipt = inbound("receipt", None);
     receipt.message.payload = Receipt::new("k").encode();
     ctrl.deliver(receipt).await;
@@ -336,12 +351,13 @@ pub async fn assert_layer_receipt(wire: &dyn ConformanceWire) {
     );
 }
 
-/// A minimal inbound message for the demux/receipt cases.
+/// A minimal inbound message for the demux/receipt cases, authenticated as
+/// from `did:x` — the peer the suite's requests and sends address.
 fn inbound(id: &str, thid: Option<&str>) -> Inbound {
     Inbound::new(
         ReceivedMessage {
             id: id.to_string(),
-            sender: Some("did:example:alice".to_string()),
+            sender: Some("did:x".to_string()),
             recipient: "did:example:bob".to_string(),
             payload: b"{}".to_vec(),
             protocol: Protocol::DIDComm,

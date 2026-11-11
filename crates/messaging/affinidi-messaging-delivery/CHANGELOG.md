@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.1.22 — delivery evidence and replies count only from the addressed peer
+
+A layer receipt or an in-thread reply settled an outbox entry `Delivered` by
+idempotency key alone. Neither the sender of the evidence nor whether the
+transport had authenticated it was looked at, so a message from any party that
+carried an entry's key — as a receipt `confirms`, or as its thread id — settled
+that entry, and the sweep stopped watching a message its recipient may never
+have had. The dispatcher now settles an entry only on evidence whose
+authenticated sender (`ReceivedMessage::sender` with `verified` set) is the
+entry's `dest_did`, compared by DID with a `did:scid` `src` locator ignored.
+Evidence from anyone else is consumed (receipts) or routed (replies) as before
+but settles nothing.
+
+The same applies to `request` and `request_via`: a waiter now takes only a
+reply whose authenticated sender is the `to` the request was sent to. A message
+in the thread from any other sender, or with no authenticated sender, goes to
+`subscribe` and the waiter stays in place for the real reply.
+
+A layer receipt is emitted only to an authenticated sender; a sender a message
+merely names (a plaintext DIDComm `from`) no longer gets one.
+
+`confirm_delivered_by(store, key, peer)` is new; `confirm_delivered` and
+`MessagingService::confirm` are unchanged, for evidence the caller has already
+tied to the recipient. The conformance suite's layer-receipt check now also
+asserts that a receipt from another sender settles nothing.
+
+**Behaviour change (R3.6).** A peer that answers from a DID other than the one
+it was addressed by — a different identifier for the same party, or a relay
+answering on its behalf — no longer settles the entry or completes the
+request: the entry settles `Unconfirmed` at its deadline and the request times
+out, with the reply delivered to `subscribe`. Consumers in this stack address
+peers by the DID those peers answer from, so no change is expected for them.
+No wire format changes.
+
 ## 0.1.21 — the receipt poll asks about long-waiting messages less often
 
 `outbox_drain_loop` asked the mediator for `messaging/message/status` about

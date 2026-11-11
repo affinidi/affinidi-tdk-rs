@@ -21,7 +21,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::ack::{AckQueue, AckStats};
-use crate::confirm::confirm_delivered;
+use crate::confirm::confirm_delivered_by;
 use crate::outbox::{Key, OutboxEntry, OutboxState, OutboxStore};
 use crate::receipt::{self, Receipt, ReceiptPacker};
 
@@ -80,7 +80,14 @@ pub enum MessagingStatus {
 /// of the transport installed by [`MessagingService::new`].
 pub type TransportId = String;
 
-type WaiterMap = Arc<Mutex<HashMap<String, oneshot::Sender<ReceivedMessage>>>>;
+/// A `request` waiting for its reply: the peer the request was sent to, and
+/// where that peer's reply goes.
+struct Waiter {
+    peer: String,
+    reply: oneshot::Sender<ReceivedMessage>,
+}
+
+type WaiterMap = Arc<Mutex<HashMap<String, Waiter>>>;
 
 /// Buffered unsolicited inbound messages per subscriber before a slow consumer
 /// starts lagging.
@@ -533,6 +540,11 @@ impl MessagingService {
     /// Concurrent `request`s are safe: each registers a waiter keyed by its own
     /// thread id, and the dispatcher fans replies to the right one; no shared-
     /// session serialization.
+    ///
+    /// The reply must come from `to`, as the transport authenticated it. A
+    /// message in the same thread from any other sender, or from no
+    /// authenticated sender, is not this request's reply: it is routed to
+    /// [`subscribe`](Self::subscribe) and the request keeps waiting.
     pub async fn request(
         &self,
         to: &str,
@@ -590,11 +602,13 @@ impl MessagingService {
     ) -> Result<ReceivedMessage, MessagingError> {
         let (tx, rx) = oneshot::channel();
         // Register the waiter BEFORE sending so a fast reply can't race ahead.
-        self.inner
-            .waiters
-            .lock()
-            .expect("waiters mutex")
-            .insert(correlation_thid.to_string(), tx);
+        self.inner.waiters.lock().expect("waiters mutex").insert(
+            correlation_thid.to_string(),
+            Waiter {
+                peer: to.to_string(),
+                reply: tx,
+            },
+        );
 
         if let Err(e) = transport.send(to, packed).await {
             self.remove_waiter(correlation_thid);
@@ -808,12 +822,26 @@ async fn run_dispatcher(
         // 1. A layer receipt is consumed by the layer, not the application: it
         //    confirms the matching outbox entry Sent → Delivered. A receipt for
         //    an unknown/terminal key is a harmless no-op (spurious/duplicate).
+        //
+        //    Evidence counts only from the entry's own recipient, as the
+        //    transport authenticated it: a receipt from anyone else, or from no
+        //    authenticated sender, confirms nothing.
+        let sender = proven_sender(&item.message).map(str::to_string);
         if let Some(key) = receipt::receipt_of(&item.message) {
-            match confirm_delivered(inner.outbox.as_ref(), &key).await {
+            let confirmed = match sender.as_deref() {
+                Some(peer) => confirm_delivered_by(inner.outbox.as_ref(), &key, peer).await,
+                None => Ok(false),
+            };
+            match confirmed {
                 Ok(true) => {
                     tracing::debug!(idempotency_key = %key, "layer receipt confirmed delivery")
                 }
-                Ok(false) => {}
+                Ok(false) => tracing::debug!(
+                    idempotency_key = %key,
+                    sender = ?sender,
+                    "layer receipt confirmed nothing: no Sent entry for this key addressed to \
+                     its sender"
+                ),
                 Err(e) => tracing::warn!(error = %e, "failed to apply layer receipt"),
             }
             ack_via_source(&inner, &src_id, ack).await;
@@ -827,28 +855,33 @@ async fn run_dispatcher(
         //    with no application ack of our own. Idempotent: a no-op when no
         //    `Sent` entry matches, and harmless if a layer receipt already
         //    confirmed the same entry. The reply is still ordinary application
-        //    traffic — it is also routed below.
-        let confirmed_our_send = match item.thread_id.as_deref() {
-            Some(thid) => match confirm_delivered(inner.outbox.as_ref(), thid).await {
-                Ok(confirmed) => {
-                    if confirmed {
-                        tracing::debug!(idempotency_key = %thid, "protocol reply confirmed delivery");
+        //    traffic — it is also routed below. As with a receipt, only a reply
+        //    from the entry's recipient counts.
+        let confirmed_our_send = match (item.thread_id.as_deref(), sender.as_deref()) {
+            (Some(thid), Some(peer)) => {
+                match confirm_delivered_by(inner.outbox.as_ref(), thid, peer).await {
+                    Ok(confirmed) => {
+                        if confirmed {
+                            tracing::debug!(idempotency_key = %thid, "protocol reply confirmed delivery");
+                        }
+                        confirmed
                     }
-                    confirmed
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to apply protocol-reply evidence");
+                        false
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to apply protocol-reply evidence");
-                    false
-                }
-            },
-            None => false,
+            }
+            _ => false,
         };
 
-        // 3. Route application traffic.
+        // 3. Route application traffic. A waiter takes only a reply from the
+        //    peer its request went to; anything else in the thread is left to
+        //    `subscribe` and the waiter stays in place for the real reply.
         let waiter = item
             .thread_id
-            .clone()
-            .and_then(|thid| inner.waiters.lock().expect("waiters mutex").remove(&thid));
+            .as_deref()
+            .and_then(|thid| take_waiter(&inner, thid, sender.as_deref()));
 
         let handed_off = match waiter {
             // A reply for an in-flight request → its waiter. A reply is its own
@@ -899,6 +932,34 @@ async fn run_dispatcher(
     }
 }
 
+/// The sender of `message` if the transport authenticated it, else `None`.
+fn proven_sender(message: &ReceivedMessage) -> Option<&str> {
+    if message.verified {
+        message.sender.as_deref()
+    } else {
+        None
+    }
+}
+
+/// Remove and return the waiter for `thid` if `sender` is the peer its request
+/// went to. Any other sender — or none — leaves the waiter registered.
+fn take_waiter(
+    inner: &ServiceInner,
+    thid: &str,
+    sender: Option<&str>,
+) -> Option<oneshot::Sender<ReceivedMessage>> {
+    let sender = sender?;
+    let mut waiters = inner.waiters.lock().expect("waiters mutex");
+    let from_peer = waiters
+        .get(thid)
+        .is_some_and(|waiter| affinidi_did_common::scid::same_reference(sender, &waiter.peer));
+    if from_peer {
+        waiters.remove(thid).map(|waiter| waiter.reply)
+    } else {
+        None
+    }
+}
+
 /// Offer an unsolicited inbound to `subscribe()` consumers, emitting a delivery
 /// receipt first when this layer runs one.
 ///
@@ -912,10 +973,16 @@ async fn run_dispatcher(
 /// message that just confirmed one of our sends is a reply, not a fresh
 /// Guaranteed push, so it needs no receipt from us (its thread id is the original
 /// thread, not the reply's own key — a receipt would be a no-op on the peer).
+///
+/// A receipt goes only to a sender the transport authenticated: a sender a
+/// message merely names is not someone this service should pack for and send to.
 fn deliver_unsolicited(inner: &Arc<ServiceInner>, confirmed_our_send: bool, item: Inbound) -> bool {
     if !confirmed_our_send
         && let Some(packer) = inner.receipt_packer.as_ref()
-        && let (Some(to), Some(confirms)) = (item.message.sender.clone(), item.thread_id.clone())
+        && let (Some(to), Some(confirms)) = (
+            proven_sender(&item.message).map(str::to_string),
+            item.thread_id.clone(),
+        )
     {
         spawn_receipt(inner, packer.clone(), to, confirms);
     }
@@ -1335,11 +1402,14 @@ mod tests {
         assert!(h.transport.acked.lock().unwrap().is_empty());
     }
 
+    /// The peer every test inbound comes from, authenticated.
+    const ALICE: &str = "did:example:alice";
+
     fn inbound(id: &str, thid: Option<&str>, ack: &str) -> Inbound {
         Inbound::new(
             ReceivedMessage {
                 id: id.to_string(),
-                sender: Some("did:example:alice".to_string()),
+                sender: Some(ALICE.to_string()),
                 recipient: "did:example:bob".to_string(),
                 payload: b"{}".to_vec(),
                 protocol: Protocol::DIDComm,
@@ -1401,7 +1471,7 @@ mod tests {
         let svc2 = svc.clone();
         let req = tokio::spawn(async move {
             svc2.request(
-                "did:example:bob",
+                "did:example:alice",
                 b"req".to_vec(),
                 "thread-1",
                 Duration::from_secs(5),
@@ -1432,11 +1502,11 @@ mod tests {
 
         let (s1, s2) = (svc.clone(), svc.clone());
         let r1 = tokio::spawn(async move {
-            s1.request("did:x", b"a".to_vec(), "t1", Duration::from_secs(5))
+            s1.request(ALICE, b"a".to_vec(), "t1", Duration::from_secs(5))
                 .await
         });
         let r2 = tokio::spawn(async move {
-            s2.request("did:x", b"b".to_vec(), "t2", Duration::from_secs(5))
+            s2.request(ALICE, b"b".to_vec(), "t2", Duration::from_secs(5))
                 .await
         });
 
@@ -1541,11 +1611,13 @@ mod tests {
         // Register a waiter for the thread, then drop its receiver — exactly what
         // a timed-out `request` leaves behind.
         let (tx, rx) = oneshot::channel();
-        svc.inner
-            .waiters
-            .lock()
-            .expect("waiters mutex")
-            .insert("thread-late".to_string(), tx);
+        svc.inner.waiters.lock().expect("waiters mutex").insert(
+            "thread-late".to_string(),
+            Waiter {
+                peer: ALICE.to_string(),
+                reply: tx,
+            },
+        );
         drop(rx);
 
         h.inbound_tx
@@ -1608,7 +1680,7 @@ mod tests {
     }
 
     async fn sent_entry(outbox: &InMemoryOutboxStore, key: &str) {
-        let mut e = OutboxEntry::new(key, "did:example:bob", vec![1], 1_000, 61_000);
+        let mut e = OutboxEntry::new(key, ALICE, vec![1], 1_000, 61_000);
         e.state = OutboxState::Sent;
         outbox.put(e).await.unwrap();
     }
@@ -1708,7 +1780,7 @@ mod tests {
 
         let svc2 = svc.clone();
         let req = tokio::spawn(async move {
-            svc2.request("did:x", b"req".to_vec(), "thread-1", Duration::from_secs(5))
+            svc2.request(ALICE, b"req".to_vec(), "thread-1", Duration::from_secs(5))
                 .await
         });
 
@@ -1842,6 +1914,129 @@ mod tests {
         assert_eq!(svc.delivery_state("unknown").await.unwrap(), None);
     }
 
+    // ── Evidence and replies come from the addressed peer ────────────────
+
+    const CAROL: &str = "did:example:carol";
+
+    async fn settles_delivered(outbox: &InMemoryOutboxStore, key: &str) -> bool {
+        outbox.get(key).await.unwrap().unwrap().state == OutboxState::Delivered
+    }
+
+    #[tokio::test]
+    async fn a_receipt_from_a_sender_other_than_the_recipient_confirms_nothing() {
+        let h = mock();
+        let outbox = Arc::new(InMemoryOutboxStore::new());
+        sent_entry(&outbox, "k").await;
+        let svc = MessagingService::new(h.transport.clone(), outbox.clone());
+        let _sub = svc.subscribe();
+
+        let mut receipt = inbound_receipt("k", "q-receipt");
+        receipt.message.sender = Some(CAROL.to_string());
+        h.inbound_tx.send(receipt).unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!settles_delivered(&outbox, "k").await);
+        assert_eq!(h.transport.acked.lock().unwrap().as_slice(), &["q-receipt"]);
+    }
+
+    #[tokio::test]
+    async fn a_receipt_without_an_authenticated_sender_confirms_nothing() {
+        let h = mock();
+        let outbox = Arc::new(InMemoryOutboxStore::new());
+        sent_entry(&outbox, "k").await;
+        let svc = MessagingService::new(h.transport.clone(), outbox.clone());
+        let _sub = svc.subscribe();
+
+        let mut receipt = inbound_receipt("k", "q-receipt");
+        receipt.message.verified = false;
+        h.inbound_tx.send(receipt).unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!settles_delivered(&outbox, "k").await);
+    }
+
+    #[tokio::test]
+    async fn a_reply_in_thread_from_a_sender_other_than_the_recipient_confirms_nothing() {
+        let h = mock();
+        let outbox = Arc::new(InMemoryOutboxStore::new());
+        sent_entry(&outbox, "thid-x").await;
+        let svc = MessagingService::new(h.transport.clone(), outbox.clone());
+        let mut sub = svc.subscribe();
+
+        let mut reply = inbound("other-reply", Some("thid-x"), "q-other");
+        reply.message.sender = Some(CAROL.to_string());
+        h.inbound_tx.send(reply).unwrap();
+
+        let got = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("the message still reaches subscribers")
+            .expect("stream item");
+        assert_eq!(got.message.id, "other-reply");
+        assert!(!settles_delivered(&outbox, "thid-x").await);
+    }
+
+    #[tokio::test]
+    async fn a_request_takes_only_the_reply_from_the_peer_it_addressed() {
+        let h = mock();
+        let svc = Arc::new(MessagingService::new(
+            h.transport.clone(),
+            Arc::new(InMemoryOutboxStore::new()),
+        ));
+        let mut sub = svc.subscribe();
+
+        let svc2 = svc.clone();
+        let req = tokio::spawn(async move {
+            svc2.request(ALICE, b"req".to_vec(), "thread-1", Duration::from_secs(5))
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut from_carol = inbound("from-carol", Some("thread-1"), "q-carol");
+        from_carol.message.sender = Some(CAROL.to_string());
+        h.inbound_tx.send(from_carol).unwrap();
+        let mut unauthenticated = inbound("unauthenticated", Some("thread-1"), "q-anon");
+        unauthenticated.message.verified = false;
+        h.inbound_tx.send(unauthenticated).unwrap();
+
+        for expected in ["from-carol", "unauthenticated"] {
+            let got = tokio::time::timeout(Duration::from_secs(2), sub.next())
+                .await
+                .expect("a message in the thread from another sender goes to subscribers")
+                .expect("stream item");
+            assert_eq!(got.message.id, expected);
+        }
+
+        h.inbound_tx
+            .send(inbound("from-alice", Some("thread-1"), "q-alice"))
+            .unwrap();
+        assert_eq!(req.await.unwrap().unwrap().id, "from-alice");
+    }
+
+    #[tokio::test]
+    async fn no_receipt_is_emitted_to_an_unauthenticated_sender() {
+        let h = mock();
+        let packer = MockPacker::new();
+        let svc = MessagingService::with_receipts(
+            h.transport.clone(),
+            Arc::new(InMemoryOutboxStore::new()),
+            packer.clone(),
+        );
+        let mut sub = svc.subscribe();
+
+        let mut push = inbound("push-1", Some("corr-key"), "q-push");
+        push.message.verified = false;
+        h.inbound_tx.send(push).unwrap();
+
+        let got = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("subscribe yields the push")
+            .expect("stream item");
+        assert_eq!(got.message.id, "push-1");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(packer.packed_for.lock().unwrap().is_empty());
+        assert!(h.transport.sent.lock().unwrap().is_empty());
+    }
+
     // ── Multi-transport (mediator lifecycle) ─────────────────────────────
 
     #[tokio::test]
@@ -1954,7 +2149,7 @@ mod tests {
         let req = tokio::spawn(async move {
             svc2.request_via(
                 "candidate",
-                "did:example:bob",
+                ALICE,
                 b"ping".to_vec(),
                 "ping-thread",
                 Duration::from_secs(5),
