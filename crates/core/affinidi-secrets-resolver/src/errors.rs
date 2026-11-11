@@ -35,6 +35,16 @@ pub enum SecretsResolverError {
 
     #[error("Unsupported Key Type: {0}")]
     UnsupportedKeyType(String),
+
+    /// The secrets task behind a `ThreadedSecretsResolver` has stopped, so the
+    /// command was not carried out.
+    #[error("The secrets task has stopped")]
+    SecretsTaskClosed,
+
+    /// The secrets task did not accept or answer a command in time. The
+    /// command may still be carried out later.
+    #[error("The secrets task did not respond within {0:?}")]
+    SecretsTaskTimeout(std::time::Duration),
 }
 
 pub type Result<T> = std::result::Result<T, SecretsResolverError>;
