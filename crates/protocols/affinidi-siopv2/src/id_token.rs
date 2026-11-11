@@ -17,6 +17,7 @@ use affinidi_oid4vc_core::jwt::{
     Audience, JwtSigner, JwtVerifier, decode_compact_jws_unverified,
     decode_compact_jws_verified_with_algs, encode_compact_jws,
 };
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -115,6 +116,10 @@ pub trait DidKeyResolver {
 ///      rejected.
 /// 3. The verified claims pass [`SelfIssuedIdToken::validate_claims`],
 ///    which includes `sub` matching the thumbprint of `sub_jwk`.
+///
+/// Not checked: `nbf`, a maximum token lifetime (`exp - iat`), and the
+/// header `typ`. Callers that need them must check them on the returned
+/// claims and header.
 pub fn verify_id_token(
     jwt: &str,
     expected: &IdTokenExpectations<'_>,
@@ -177,9 +182,23 @@ fn verifier_for_jwk(jwk: &Value, alg: &str) -> Result<Box<dyn JwtVerifier>> {
     let crv = jwk.get("crv").and_then(Value::as_str);
     let unusable = |reason: String| SiopError::InvalidIdToken(format!("sub_jwk: {reason}"));
     match (alg, kty, crv) {
-        ("ES256", Some("EC"), Some("P-256")) => Ok(Box::new(
-            Es256Verifier::from_jwk(jwk).map_err(|e| unusable(e.to_string()))?,
-        )),
+        ("ES256", Some("EC"), Some("P-256")) => {
+            for coordinate in ["x", "y"] {
+                let length = jwk
+                    .get(coordinate)
+                    .and_then(Value::as_str)
+                    .and_then(|encoded| URL_SAFE_NO_PAD.decode(encoded).ok())
+                    .map(|bytes| bytes.len());
+                if length != Some(32) {
+                    return Err(unusable(format!(
+                        "P-256 coordinate {coordinate} must be 32 bytes"
+                    )));
+                }
+            }
+            Ok(Box::new(
+                Es256Verifier::from_jwk(jwk).map_err(|e| unusable(e.to_string()))?,
+            ))
+        }
         ("EdDSA", Some("OKP"), Some("Ed25519")) => Ok(Box::new(
             EdDsaVerifier::from_jwk(jwk).map_err(|e| unusable(e.to_string()))?,
         )),
@@ -235,6 +254,8 @@ impl SelfIssuedIdToken {
     ///    `expected.leeway_seconds`)
     /// 5. `sub_jwk` is absent for a DID subject; otherwise present, and `sub`
     ///    is its JWK Thumbprint
+    ///
+    /// Not checked: `nbf` and a maximum token lifetime (`exp - iat`).
     pub fn validate_claims(&self, expected: &IdTokenExpectations<'_>) -> Result<()> {
         if self.iss != self.sub {
             return Err(SiopError::IssSubMismatch);
@@ -369,7 +390,6 @@ mod tests {
     use super::*;
     use affinidi_oid4vc_core::eddsa::EdDsaSigner;
     use affinidi_oid4vc_core::es256::Es256Signer;
-    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     use serde_json::json;
 
     const ALGS: &[&str] = &["ES256", "EdDSA"];
@@ -600,5 +620,69 @@ mod tests {
     #[test]
     fn build_without_subject_fails() {
         assert!(IdTokenBuilder::new("rp", "n").build().is_err());
+    }
+
+    fn sign_claims(claims: &Value, header: &Value, signer: &dyn JwtSigner) -> String {
+        encode_compact_jws(header, claims, signer).unwrap()
+    }
+
+    #[test]
+    fn signed_token_whose_sub_is_not_the_sub_jwk_thumbprint_is_rejected() {
+        let signer = Es256Signer::generate();
+        let mut claims = serde_json::to_value(
+            IdTokenBuilder::new("rp", "n")
+                .with_jwk_thumbprint(signer.public_key_jwk())
+                .unwrap()
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+        let other_thumbprint = affinidi_oid4vc_core::compute_jwk_thumbprint(&test_jwk()).unwrap();
+        claims["sub"] = json!(other_thumbprint);
+        claims["iss"] = json!(other_thumbprint);
+        let jwt = sign_claims(&claims, &json!({ "alg": "ES256" }), &signer);
+        assert!(matches!(
+            verify_id_token(&jwt, &expect("rp", "n"), None),
+            Err(SiopError::ThumbprintMismatch)
+        ));
+    }
+
+    #[test]
+    fn kid_naming_another_did_is_rejected() {
+        let signer = EdDsaSigner::generate();
+        let claims = serde_json::to_value(did_token("rp", "n")).unwrap();
+        let header = json!({ "alg": "EdDSA", "kid": "did:key:zOther#key-1" });
+        let jwt = sign_claims(&claims, &header, &signer);
+        let resolver = FixedKey(signer.public_key_jwk());
+        assert!(matches!(
+            verify_id_token(&jwt, &expect("rp", "n"), Some(&resolver)),
+            Err(SiopError::InvalidIdToken(_))
+        ));
+    }
+
+    #[test]
+    fn es256_sub_jwk_coordinates_must_be_32_bytes() {
+        let signer = Es256Signer::generate();
+        let jwk = signer.public_key_jwk();
+        let x = URL_SAFE_NO_PAD.decode(jwk["x"].as_str().unwrap()).unwrap();
+        let y = URL_SAFE_NO_PAD.decode(jwk["y"].as_str().unwrap()).unwrap();
+        let mut long_x = x.clone();
+        long_x.push(y[0]);
+        let shifted = json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": URL_SAFE_NO_PAD.encode(&long_x),
+            "y": URL_SAFE_NO_PAD.encode(&y[1..]),
+        });
+        assert_ne!(
+            affinidi_oid4vc_core::compute_jwk_thumbprint(&shifted),
+            affinidi_oid4vc_core::compute_jwk_thumbprint(&jwk)
+        );
+
+        let jwt = signed_thumbprint_token(&signer, shifted);
+        assert!(matches!(
+            verify_id_token(&jwt, &expect("rp", "n"), None),
+            Err(SiopError::InvalidIdToken(_))
+        ));
     }
 }

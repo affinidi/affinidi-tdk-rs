@@ -10,7 +10,9 @@ Breaking (R3.6). No in-workspace caller outside `affinidi-tdk`'s re-export.
   enforces an algorithm allowlist, verifies the signature (with `sub_jwk` for a
   JWK Thumbprint subject, `ES256` / `EdDSA` only; with the caller-resolved key
   named by the header `kid` for a DID subject), then checks the claims.
-  A DID subject without a resolver is rejected.
+  A DID subject without a resolver is rejected. An ES256 `sub_jwk` must have
+  32-byte `x` and `y`, so one key has one thumbprint. `nbf`, a maximum token
+  lifetime and the header `typ` are not checked.
 - **Renamed:** `SelfIssuedIdToken::validate(client_id, nonce)` is now
   `validate_claims(&IdTokenExpectations)`. It checks claims only and is
   documented as such; it takes the time and leeway from the expectations

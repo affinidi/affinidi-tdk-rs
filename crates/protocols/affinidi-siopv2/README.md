@@ -25,6 +25,7 @@ Enables decentralized authentication where the End-User IS the OpenID Provider.
 
 `SelfIssuedIdToken::validate_claims` checks claims only and verifies no
 signature; do not use it on its own for a token received from a wallet.
+Neither function checks `nbf`, a maximum token lifetime, or the header `typ`.
 
 ## Example
 
