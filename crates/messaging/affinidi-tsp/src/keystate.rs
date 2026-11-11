@@ -28,6 +28,12 @@
 //! is resolved. Rotations are infrequent, so a limit that permits one
 //! resolution per interval constrains an adversary without materially delaying
 //! recovery.
+//!
+//! The rate limit bounds resolutions; it does not excuse a refresh that is
+//! still owed. Key state counts as confirmed only after a refresh succeeds, so
+//! a failed refresh after a silence leaves the peer's messages discarded until
+//! one does, and consecutive failures lengthen the interval between attempts
+//! up to a fixed bound.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -117,12 +123,25 @@ impl Default for KeyStatePolicy {
     }
 }
 
-/// Per-peer freshness bookkeeping: when we last heard from a VID, and when we
-/// last resolved it.
+/// How many times the interval between resolutions doubles after consecutive
+/// failed refreshes: after the fourth failure in a row a peer's VID is retried
+/// at most once per eight rate-limit intervals.
+const MAX_BACKOFF_DOUBLINGS: u32 = 3;
+
+/// The outcome of the resolutions of one VID so far.
+#[derive(Debug, Clone, Copy)]
+struct ResolutionRecord {
+    last_attempt_ms: u64,
+    in_flight: bool,
+    consecutive_failures: u32,
+}
+
+/// Per-peer freshness bookkeeping: when we last heard from a VID, when we last
+/// tried to resolve it, and whether that worked.
 #[derive(Debug, Default)]
 pub struct KeyStateTracker {
     last_seen_ms: Mutex<std::collections::HashMap<String, u64>>,
-    last_resolved_ms: Mutex<std::collections::HashMap<String, u64>>,
+    resolutions: Mutex<std::collections::HashMap<String, ResolutionRecord>>,
 }
 
 impl KeyStateTracker {
@@ -138,12 +157,67 @@ impl KeyStateTracker {
             .insert(vid.to_string(), now_ms);
     }
 
-    /// Record that `vid` was resolved.
+    /// Record that a resolution of `vid` was started. This is what the rate
+    /// limit counts. Until [`record_refresh_succeeded`] follows, the key state
+    /// for `vid` is not confirmed.
+    ///
+    /// [`record_refresh_succeeded`]: Self::record_refresh_succeeded
     pub fn record_resolved(&self, vid: &str, now_ms: u64) {
-        self.last_resolved_ms
+        let mut resolutions = self.resolutions.lock().unwrap();
+        let record = resolutions
+            .entry(vid.to_string())
+            .or_insert(ResolutionRecord {
+                last_attempt_ms: now_ms,
+                in_flight: true,
+                consecutive_failures: 0,
+            });
+        record.last_attempt_ms = now_ms;
+        record.in_flight = true;
+    }
+
+    /// Record that the resolution of `vid` started last returned fresh key
+    /// state.
+    pub fn record_refresh_succeeded(&self, vid: &str) {
+        if let Some(record) = self.resolutions.lock().unwrap().get_mut(vid) {
+            record.in_flight = false;
+            record.consecutive_failures = 0;
+        }
+    }
+
+    /// Record that the resolution of `vid` started last failed, and return how
+    /// many have failed in a row. Each failure in a row doubles the interval
+    /// before the next attempt, up to eight times the rate limit.
+    pub fn record_refresh_failed(&self, vid: &str) -> u32 {
+        match self.resolutions.lock().unwrap().get_mut(vid) {
+            Some(record) => {
+                record.in_flight = false;
+                record.consecutive_failures = record.consecutive_failures.saturating_add(1);
+                record.consecutive_failures
+            }
+            None => 0,
+        }
+    }
+
+    /// Did the last resolution of `vid` finish and return fresh key state?
+    ///
+    /// False when `vid` was never resolved, when a resolution is still in
+    /// progress, and when the last one failed.
+    pub fn refresh_confirmed(&self, vid: &str) -> bool {
+        self.resolutions
             .lock()
             .unwrap()
-            .insert(vid.to_string(), now_ms);
+            .get(vid)
+            .is_some_and(|record| !record.in_flight && record.consecutive_failures == 0)
+    }
+
+    /// How many resolutions of `vid` have failed in a row (zero after a
+    /// success, or when it was never resolved).
+    pub fn consecutive_refresh_failures(&self, vid: &str) -> u32 {
+        self.resolutions
+            .lock()
+            .unwrap()
+            .get(vid)
+            .map_or(0, |record| record.consecutive_failures)
     }
 
     /// Has `vid` been silent for longer than `threshold`?
@@ -158,18 +232,33 @@ impl KeyStateTracker {
         }
     }
 
-    /// May `vid` be resolved now, or is it inside its rate limit?
-    pub fn may_resolve(&self, vid: &str, limit: Duration, now_ms: u64) -> bool {
-        match self.last_resolved_ms.lock().unwrap().get(vid) {
-            Some(last) => now_ms.saturating_sub(*last) >= limit.as_millis() as u64,
-            None => true,
+    /// The earliest time `vid` may be resolved again: one `limit` after the
+    /// last attempt, doubled for each failure in a row after the first, up to
+    /// eight `limit`s. Zero when it was never resolved.
+    pub fn next_resolution_at_ms(&self, vid: &str, limit: Duration) -> u64 {
+        match self.resolutions.lock().unwrap().get(vid) {
+            Some(record) => {
+                let doublings = record
+                    .consecutive_failures
+                    .saturating_sub(1)
+                    .min(MAX_BACKOFF_DOUBLINGS);
+                let interval = (limit.as_millis() as u64).saturating_mul(1 << doublings);
+                record.last_attempt_ms.saturating_add(interval)
+            }
+            None => 0,
         }
+    }
+
+    /// May `vid` be resolved now, or is it inside its rate limit (or the
+    /// longer interval that follows failed refreshes)?
+    pub fn may_resolve(&self, vid: &str, limit: Duration, now_ms: u64) -> bool {
+        now_ms >= self.next_resolution_at_ms(vid, limit)
     }
 
     /// Forget everything about `vid`.
     pub fn forget(&self, vid: &str) {
         self.last_seen_ms.lock().unwrap().remove(vid);
-        self.last_resolved_ms.lock().unwrap().remove(vid);
+        self.resolutions.lock().unwrap().remove(vid);
     }
 }
 
@@ -205,6 +294,52 @@ mod tests {
 
         // The limit is per peer, so another VID is unaffected.
         assert!(t.may_resolve("did:example:bob", limit, 30_000));
+    }
+
+    #[test]
+    fn a_refresh_is_confirmed_only_once_it_has_succeeded() {
+        let t = KeyStateTracker::new();
+        let vid = "did:example:alice";
+        assert!(!t.refresh_confirmed(vid));
+
+        t.record_resolved(vid, 0);
+        assert!(!t.refresh_confirmed(vid), "in progress is not confirmed");
+
+        assert_eq!(t.record_refresh_failed(vid), 1);
+        assert!(!t.refresh_confirmed(vid));
+        assert_eq!(t.consecutive_refresh_failures(vid), 1);
+
+        t.record_resolved(vid, 60_000);
+        t.record_refresh_succeeded(vid);
+        assert!(t.refresh_confirmed(vid));
+        assert_eq!(t.consecutive_refresh_failures(vid), 0);
+    }
+
+    #[test]
+    fn failed_refreshes_back_off_up_to_a_bound() {
+        let t = KeyStateTracker::new();
+        let vid = "did:example:alice";
+        let limit = Duration::from_secs(60);
+
+        let mut now = 0;
+        for (failures, interval) in [
+            (1, 60_000),
+            (2, 120_000),
+            (3, 240_000),
+            (4, 480_000),
+            (5, 480_000),
+        ] {
+            t.record_resolved(vid, now);
+            assert_eq!(t.record_refresh_failed(vid), failures);
+            assert_eq!(t.next_resolution_at_ms(vid, limit), now + interval);
+            assert!(!t.may_resolve(vid, limit, now + interval - 1));
+            assert!(t.may_resolve(vid, limit, now + interval));
+            now += interval;
+        }
+
+        t.record_resolved(vid, now);
+        t.record_refresh_succeeded(vid);
+        assert_eq!(t.next_resolution_at_ms(vid, limit), now + 60_000);
     }
 
     #[test]

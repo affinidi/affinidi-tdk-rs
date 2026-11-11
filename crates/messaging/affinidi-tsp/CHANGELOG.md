@@ -46,6 +46,48 @@ and a field that runs past it is a `TspError::InvalidMessage`. This applies
 to every layout, so `unpack` and `forward_routed` return an error for such a
 frame rather than panicking or reading past it. Frames this crate builds
 always declare their full length and are unaffected. No API change.
+## 0.3.3 — one encoding per signed message; key state confirmed before use after a silence
+
+**Signature attachment.** The `-C` attachment group and the `-K` indexed
+signature group must now hold exactly one signature: the `-K` group ends where
+the signature ends and the `-C` group ends where the `-K` group ends. Neither
+count is covered by the signature, and the decoder used to verify the first
+signature and skip whatever else the counts declared, so the same signed
+message could be re-encoded with extra bytes in the attachment, still verify,
+and carry a different wire digest (`MetaEnvelope::sha256`). Such a message is
+now a `TspError::InvalidMessage`. Applies to the Ed25519 and the ML-DSA-65
+(`pq`) attachment alike. Ed25519 signatures are now checked with
+`verify_strict`, as `tsp_sdk` does, which also refuses small-order public keys
+and `R` components.
+
+**Key-state freshness (§7.4.2).** After a silence longer than the
+re-verification threshold, `TspAgent::receive` refreshes the sender's key state
+before acting on the message. If that refresh failed, a second message inside
+the resolution rate limit used to be verified against the key state held from
+before the silence. The key state now counts as confirmed only once a refresh
+has succeeded: until then, messages that need the refresh are discarded with
+`TspError::Discarded`, whose text says how many refreshes have failed in a row
+and when the next is allowed. The rate limit still bounds how often a peer is
+resolved. After consecutive failures the interval doubles, up to eight times
+`resolution_rate_limit`, and a success resets it. A message inside the rate
+limit after a refresh that succeeded is verified against the fresh key state,
+as before.
+
+New: `TspAgent::key_state_refresh_failures`, and on `KeyStateTracker`
+`record_refresh_succeeded`, `record_refresh_failed`, `refresh_confirmed`,
+`consecutive_refresh_failures` and `next_resolution_at_ms`. `record_resolved`
+and `may_resolve` keep their signatures; `may_resolve` also applies the longer
+interval after failed refreshes recorded with `record_refresh_failed`. The
+agent now drops a peer's key-state bookkeeping when the last relationship any
+local VID holds with it is cancelled.
+
+**Behaviour change (R3.6).** A message whose signature attachment declares more
+than one signature, or extra bytes after it, is refused. `tsp_sdk` 0.16.0 and
+this crate always write exactly one signature, so messages from either are
+unaffected; `tsp_sdk` itself still reads a group with further signatures. A
+peer whose key-state refresh fails after a silence has its messages discarded
+until a refresh succeeds, where before the second and later messages inside the
+rate limit were accepted. No wire format changes for conforming encoders.
 
 ## Unreleased (0.3.0) — TSP 1.0 (`YTSP-BAA`)
 

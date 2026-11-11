@@ -389,6 +389,13 @@ after a long silence prompts a refresh before it is acted on. Resolution of any
 one peer is rate limited, because either occasion can be provoked by a message
 that has not been authenticated.
 
+The rate limit bounds how often a peer is resolved; it does not stand in for a
+refresh that failed. In `TspAgent`, if the refresh after a silence fails, that
+message and every later one that needs the refresh are discarded until a refresh
+succeeds. Consecutive failures double the wait before the next attempt, up to
+eight times `resolution_rate_limit`, and `TspAgent::key_state_refresh_failures`
+reports how many have failed in a row.
+
 ```rust,ignore
 let config = ATMConfig::builder()
     .with_tsp_key_state_policy(KeyStatePolicy {
