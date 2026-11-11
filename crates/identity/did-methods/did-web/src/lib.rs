@@ -532,10 +532,9 @@ pub fn build_url(domain: &str, path_segments: &[String]) -> Result<String, DidWe
     Ok(url)
 }
 
-/// The decoded domain must be a host and an optional numeric port, as the
-/// did:web specification describes: a hostname, an IPv4 address or a
-/// bracketed IPv6 address, and nothing a URL would read as user information,
-/// a path, a query or a fragment.
+/// The decoded domain must be a host (a hostname, or an IP literal, which this
+/// resolver also accepts) and an optional numeric port, and nothing a URL
+/// would read as user information, a path, a query or a fragment.
 fn validate_host(authority: &str) -> Result<(), DidWebError> {
     let invalid =
         |why: &str| DidWebError::InvalidDid(format!("domain {authority:?} is not a host ({why})"));

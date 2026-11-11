@@ -6,9 +6,9 @@ Behaviour change (R3.6): some DIDs that resolved before are refused with
 `DidWebError::InvalidDid`. No signature change.
 
 - **The domain must decode to a host.** `build_url` (and so resolution)
-  refuses a percent-decoded domain unless it is a hostname, an IPv4 address
-  or a bracketed IPv6 address with an optional numeric port, as the did:web
-  specification describes. A domain that decodes to user information (`@`),
+  refuses a percent-decoded domain unless it is a host (a hostname, or an IP
+  literal, which this resolver also accepts: IPv4, or IPv6 in brackets) and
+  an optional numeric port. A domain that decodes to user information (`@`),
   a path (`/`, `\`), a query (`?`), a fragment (`#`), a further `%`,
   whitespace or a control character is refused. Before, the decoded domain
   went into the URL as it was, so `did:web:a.example%40b.example` was fetched
