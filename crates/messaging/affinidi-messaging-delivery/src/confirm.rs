@@ -115,6 +115,35 @@ pub async fn confirm_delivered(
     Ok(false)
 }
 
+/// Record delivery evidence for `idempotency_key` that came **from `peer`**:
+/// transition its outbox entry `Sent → Delivered` only if `peer` is the entry's
+/// recipient.
+///
+/// A layer receipt or an in-thread reply is evidence that *the recipient* has
+/// the message; the same bytes from anyone else say nothing about it. `peer`
+/// must be the sender the transport authenticated (`ReceivedMessage::sender`
+/// with `verified` set), and it is compared with [`OutboxEntry::dest_did`] by
+/// DID, ignoring a `did:scid` `src` locator. Evidence from any other peer
+/// leaves the entry as it is and returns `Ok(false)`, as for an unknown key.
+///
+/// [`confirm_delivered`] remains for evidence the caller has already tied to
+/// the recipient itself.
+pub async fn confirm_delivered_by(
+    store: &dyn OutboxStore,
+    idempotency_key: &str,
+    peer: &str,
+) -> Result<bool, OutboxError> {
+    if let Some(mut entry) = store.get(idempotency_key).await?
+        && entry.state == OutboxState::Sent
+        && affinidi_did_common::scid::same_reference(peer, &entry.dest_did)
+    {
+        entry.state = OutboxState::Delivered;
+        store.put(entry).await?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// One confirmation sweep at logical time `now_ms`: any `Sent` entry whose
 /// delivery window has passed without evidence settles `Unconfirmed`.
 ///
@@ -554,6 +583,52 @@ mod tests {
         assert!(!confirm_delivered(&store, "k1").await.unwrap());
         // Unknown key → no-op, not an error.
         assert!(!confirm_delivered(&store, "nope").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn evidence_from_the_recipient_confirms_and_from_anyone_else_does_not() {
+        let store = InMemoryOutboxStore::new();
+        sent_entry(&store, "k1", 1_000).await;
+
+        assert!(
+            !confirm_delivered_by(&store, "k1", "did:example:carol")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store.get("k1").await.unwrap().unwrap().state,
+            OutboxState::Sent
+        );
+
+        assert!(
+            confirm_delivered_by(&store, "k1", "did:example:bob")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store.get("k1").await.unwrap().unwrap().state,
+            OutboxState::Delivered
+        );
+    }
+
+    #[tokio::test]
+    async fn the_recipient_is_matched_by_did_ignoring_a_scid_source() {
+        let store = InMemoryOutboxStore::new();
+        let mut entry = OutboxEntry::new(
+            "k1",
+            "did:scid:vh:1:Qm?src=example.com/bob",
+            vec![1],
+            1_000,
+            61_000,
+        );
+        entry.state = OutboxState::Sent;
+        store.put(entry).await.unwrap();
+
+        assert!(
+            confirm_delivered_by(&store, "k1", "did:scid:vh:1:Qm")
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
