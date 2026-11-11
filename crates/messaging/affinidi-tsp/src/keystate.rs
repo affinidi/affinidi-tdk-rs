@@ -132,8 +132,35 @@ const MAX_BACKOFF_DOUBLINGS: u32 = 3;
 #[derive(Debug, Clone, Copy)]
 struct ResolutionRecord {
     last_attempt_ms: u64,
+    /// Bumped by every attempt, so an outcome is recorded only against the
+    /// attempt that produced it.
+    attempt: u64,
     in_flight: bool,
     consecutive_failures: u32,
+}
+
+/// Where the refreshes of one VID's key state stand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshStatus {
+    /// No refresh has been attempted (or the record was forgotten).
+    NeverAttempted,
+    /// The latest refresh has started and not yet finished.
+    InFlight,
+    /// The latest refresh returned fresh key state.
+    Succeeded,
+    /// The latest refresh failed; `consecutive` have failed in a row.
+    Failed { consecutive: u32 },
+}
+
+/// One refresh started by [`KeyStateTracker::try_begin_refresh`]. Its outcome
+/// is recorded with [`KeyStateTracker::record_refresh_succeeded`] or
+/// [`KeyStateTracker::record_refresh_failed`], and is ignored if a newer
+/// refresh has started since.
+#[derive(Debug)]
+#[must_use = "record the outcome of the refresh with this token"]
+pub struct RefreshToken {
+    vid: String,
+    attempt: u64,
 }
 
 /// Per-peer freshness bookkeeping: when we last heard from a VID, when we last
@@ -157,61 +184,111 @@ impl KeyStateTracker {
             .insert(vid.to_string(), now_ms);
     }
 
-    /// Record that a resolution of `vid` was started. This is what the rate
-    /// limit counts. Until [`record_refresh_succeeded`] follows, the key state
-    /// for `vid` is not confirmed.
+    /// Record that a resolution of `vid` was started, for the rate limit.
     ///
-    /// [`record_refresh_succeeded`]: Self::record_refresh_succeeded
+    /// A caller that also records the outcome uses
+    /// [`try_begin_refresh`](Self::try_begin_refresh) instead, which checks the
+    /// limit and stamps the attempt in one step.
     pub fn record_resolved(&self, vid: &str, now_ms: u64) {
         let mut resolutions = self.resolutions.lock().unwrap();
+        Self::begin(&mut resolutions, vid, now_ms);
+    }
+
+    fn begin(
+        resolutions: &mut std::collections::HashMap<String, ResolutionRecord>,
+        vid: &str,
+        now_ms: u64,
+    ) -> u64 {
         let record = resolutions
             .entry(vid.to_string())
             .or_insert(ResolutionRecord {
                 last_attempt_ms: now_ms,
+                attempt: 0,
                 in_flight: true,
                 consecutive_failures: 0,
             });
         record.last_attempt_ms = now_ms;
+        record.attempt = record.attempt.wrapping_add(1);
         record.in_flight = true;
+        record.attempt
     }
 
-    /// Record that the resolution of `vid` started last returned fresh key
-    /// state.
-    pub fn record_refresh_succeeded(&self, vid: &str) {
-        if let Some(record) = self.resolutions.lock().unwrap().get_mut(vid) {
+    /// Start a refresh of `vid` if its rate limit (and any backoff after
+    /// failed refreshes) allows one now. The check and the stamp happen under
+    /// one lock, so two concurrent callers cannot both start one.
+    pub fn try_begin_refresh(
+        &self,
+        vid: &str,
+        limit: Duration,
+        now_ms: u64,
+    ) -> Option<RefreshToken> {
+        let mut resolutions = self.resolutions.lock().unwrap();
+        if let Some(record) = resolutions.get(vid)
+            && now_ms < Self::next_attempt_ms(record, limit)
+        {
+            return None;
+        }
+        let attempt = Self::begin(&mut resolutions, vid, now_ms);
+        Some(RefreshToken {
+            vid: vid.to_string(),
+            attempt,
+        })
+    }
+
+    /// Record that the refresh `token` started returned fresh key state.
+    /// Ignored if a newer refresh of the same VID has started since.
+    pub fn record_refresh_succeeded(&self, token: &RefreshToken) {
+        if let Some(record) = self.resolutions.lock().unwrap().get_mut(&token.vid)
+            && record.attempt == token.attempt
+        {
             record.in_flight = false;
             record.consecutive_failures = 0;
         }
     }
 
-    /// Record that the resolution of `vid` started last failed, and return how
-    /// many have failed in a row. Each failure in a row doubles the interval
-    /// before the next attempt, up to eight times the rate limit.
-    pub fn record_refresh_failed(&self, vid: &str) -> u32 {
-        match self.resolutions.lock().unwrap().get_mut(vid) {
-            Some(record) => {
+    /// Record that the refresh `token` started failed, and return how many
+    /// have failed in a row. Ignored (returning the current count) if a newer
+    /// refresh of the same VID has started since. Each failure in a row
+    /// doubles the interval before the next attempt, up to eight times the
+    /// rate limit.
+    pub fn record_refresh_failed(&self, token: &RefreshToken) -> u32 {
+        match self.resolutions.lock().unwrap().get_mut(&token.vid) {
+            Some(record) if record.attempt == token.attempt => {
                 record.in_flight = false;
                 record.consecutive_failures = record.consecutive_failures.saturating_add(1);
                 record.consecutive_failures
             }
+            Some(record) => record.consecutive_failures,
             None => 0,
         }
     }
 
-    /// Did the last resolution of `vid` finish and return fresh key state?
-    ///
-    /// False when `vid` was never resolved, when a resolution is still in
-    /// progress, and when the last one failed.
-    pub fn refresh_confirmed(&self, vid: &str) -> bool {
-        self.resolutions
-            .lock()
-            .unwrap()
-            .get(vid)
-            .is_some_and(|record| !record.in_flight && record.consecutive_failures == 0)
+    /// Record that the key state of `vid` was confirmed after its latest
+    /// refresh failed, by a resolution that finished outside this tracker (a
+    /// resolver whose refresh evicts and leaves the re-resolution to an async
+    /// caller). Has no effect unless the latest refresh failed.
+    pub fn record_confirmed_after_failed_refresh(&self, vid: &str) {
+        if let Some(record) = self.resolutions.lock().unwrap().get_mut(vid)
+            && !record.in_flight
+        {
+            record.consecutive_failures = 0;
+        }
     }
 
-    /// How many resolutions of `vid` have failed in a row (zero after a
-    /// success, or when it was never resolved).
+    /// Where the refreshes of `vid` stand.
+    pub fn refresh_status(&self, vid: &str) -> RefreshStatus {
+        match self.resolutions.lock().unwrap().get(vid) {
+            None => RefreshStatus::NeverAttempted,
+            Some(record) if record.in_flight => RefreshStatus::InFlight,
+            Some(record) if record.consecutive_failures == 0 => RefreshStatus::Succeeded,
+            Some(record) => RefreshStatus::Failed {
+                consecutive: record.consecutive_failures,
+            },
+        }
+    }
+
+    /// How many refreshes of `vid` have failed in a row (zero after a
+    /// success, or when none was attempted).
     pub fn consecutive_refresh_failures(&self, vid: &str) -> u32 {
         self.resolutions
             .lock()
@@ -236,17 +313,20 @@ impl KeyStateTracker {
     /// last attempt, doubled for each failure in a row after the first, up to
     /// eight `limit`s. Zero when it was never resolved.
     pub fn next_resolution_at_ms(&self, vid: &str, limit: Duration) -> u64 {
-        match self.resolutions.lock().unwrap().get(vid) {
-            Some(record) => {
-                let doublings = record
-                    .consecutive_failures
-                    .saturating_sub(1)
-                    .min(MAX_BACKOFF_DOUBLINGS);
-                let interval = (limit.as_millis() as u64).saturating_mul(1 << doublings);
-                record.last_attempt_ms.saturating_add(interval)
-            }
-            None => 0,
-        }
+        self.resolutions
+            .lock()
+            .unwrap()
+            .get(vid)
+            .map_or(0, |record| Self::next_attempt_ms(record, limit))
+    }
+
+    fn next_attempt_ms(record: &ResolutionRecord, limit: Duration) -> u64 {
+        let doublings = record
+            .consecutive_failures
+            .saturating_sub(1)
+            .min(MAX_BACKOFF_DOUBLINGS);
+        let interval = (limit.as_millis() as u64).saturating_mul(1 << doublings);
+        record.last_attempt_ms.saturating_add(interval)
     }
 
     /// May `vid` be resolved now, or is it inside its rate limit (or the
@@ -297,22 +377,69 @@ mod tests {
     }
 
     #[test]
-    fn a_refresh_is_confirmed_only_once_it_has_succeeded() {
+    fn refresh_status_follows_the_latest_attempt() {
         let t = KeyStateTracker::new();
         let vid = "did:example:alice";
-        assert!(!t.refresh_confirmed(vid));
+        let limit = Duration::from_secs(60);
+        assert_eq!(t.refresh_status(vid), RefreshStatus::NeverAttempted);
 
-        t.record_resolved(vid, 0);
-        assert!(!t.refresh_confirmed(vid), "in progress is not confirmed");
+        let first = t.try_begin_refresh(vid, limit, 0).unwrap();
+        assert_eq!(t.refresh_status(vid), RefreshStatus::InFlight);
+        assert!(
+            t.try_begin_refresh(vid, limit, 1).is_none(),
+            "a second caller cannot start one inside the limit"
+        );
 
-        assert_eq!(t.record_refresh_failed(vid), 1);
-        assert!(!t.refresh_confirmed(vid));
-        assert_eq!(t.consecutive_refresh_failures(vid), 1);
+        assert_eq!(t.record_refresh_failed(&first), 1);
+        assert_eq!(
+            t.refresh_status(vid),
+            RefreshStatus::Failed { consecutive: 1 }
+        );
 
-        t.record_resolved(vid, 60_000);
-        t.record_refresh_succeeded(vid);
-        assert!(t.refresh_confirmed(vid));
+        let second = t.try_begin_refresh(vid, limit, 60_000).unwrap();
+        t.record_refresh_succeeded(&second);
+        assert_eq!(t.refresh_status(vid), RefreshStatus::Succeeded);
         assert_eq!(t.consecutive_refresh_failures(vid), 0);
+    }
+
+    #[test]
+    fn an_older_refresh_cannot_overwrite_a_newer_outcome() {
+        let t = KeyStateTracker::new();
+        let vid = "did:example:alice";
+        let limit = Duration::from_secs(60);
+
+        let slow = t.try_begin_refresh(vid, limit, 0).unwrap();
+        let newer = t.try_begin_refresh(vid, limit, 60_000).unwrap();
+        t.record_refresh_failed(&newer);
+        t.record_refresh_succeeded(&slow);
+        assert_eq!(
+            t.refresh_status(vid),
+            RefreshStatus::Failed { consecutive: 1 }
+        );
+
+        let newest = t.try_begin_refresh(vid, limit, 120_000).unwrap();
+        t.record_refresh_succeeded(&newest);
+        assert_eq!(t.record_refresh_failed(&newer), 0);
+        assert_eq!(t.refresh_status(vid), RefreshStatus::Succeeded);
+    }
+
+    #[test]
+    fn a_failed_refresh_can_be_confirmed_from_outside() {
+        let t = KeyStateTracker::new();
+        let vid = "did:example:alice";
+        let limit = Duration::from_secs(60);
+
+        let token = t.try_begin_refresh(vid, limit, 0).unwrap();
+        t.record_confirmed_after_failed_refresh(vid);
+        assert_eq!(
+            t.refresh_status(vid),
+            RefreshStatus::InFlight,
+            "not while in flight"
+        );
+
+        t.record_refresh_failed(&token);
+        t.record_confirmed_after_failed_refresh(vid);
+        assert_eq!(t.refresh_status(vid), RefreshStatus::Succeeded);
     }
 
     #[test]
@@ -329,16 +456,19 @@ mod tests {
             (4, 480_000),
             (5, 480_000),
         ] {
-            t.record_resolved(vid, now);
-            assert_eq!(t.record_refresh_failed(vid), failures);
+            let token = t.try_begin_refresh(vid, limit, now).unwrap();
+            assert_eq!(t.record_refresh_failed(&token), failures);
             assert_eq!(t.next_resolution_at_ms(vid, limit), now + interval);
-            assert!(!t.may_resolve(vid, limit, now + interval - 1));
+            assert!(
+                t.try_begin_refresh(vid, limit, now + interval - 1)
+                    .is_none()
+            );
             assert!(t.may_resolve(vid, limit, now + interval));
             now += interval;
         }
 
-        t.record_resolved(vid, now);
-        t.record_refresh_succeeded(vid);
+        let token = t.try_begin_refresh(vid, limit, now).unwrap();
+        t.record_refresh_succeeded(&token);
         assert_eq!(t.next_resolution_at_ms(vid, limit), now + 60_000);
     }
 

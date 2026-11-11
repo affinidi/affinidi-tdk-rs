@@ -1,5 +1,75 @@
 # Affinidi TSP Changelog
 
+## 0.3.3 — one encoding per signed message; key state confirmed before use after a silence
+
+**Signature attachment.** The `-C` attachment group and the `-K` indexed
+signature group must now hold exactly one signature: the `-K` group ends where
+the signature ends and the `-C` group ends where the `-K` group ends. Neither
+count is covered by the signature, and the decoder used to verify the first
+signature and skip whatever else the counts declared, so the same signed
+message could be re-encoded with extra bytes in the attachment, still verify,
+and carry a different wire digest (`MetaEnvelope::sha256`). Such a message is
+now a `TspError::InvalidMessage`. Applies to the Ed25519 and the ML-DSA-65
+(`pq`) attachment alike. Ed25519 signatures are now checked with
+`verify_strict`, as `tsp_sdk` does, which also refuses small-order public keys
+and `R` components.
+
+**Key-state freshness (§7.4.2).** After a silence longer than the
+re-verification threshold, `TspAgent::receive` refreshes the sender's key state
+before acting on the message. If that refresh failed, a second message inside
+the resolution rate limit used to be verified against the key state held from
+before the silence. The key state now counts as confirmed only once a refresh
+has succeeded, or, after one failed, once the resolver reports that it has
+re-resolved the VID from its provenance chain (new
+`VidResolver::completed_refresh`, default `None`). Until then, messages that
+need the refresh are discarded with `TspError::Discarded`, whose text says
+whether a refresh is in progress or the last one failed (with the count and
+when the next is allowed). The rate limit still bounds how often a peer is
+resolved. After consecutive failures the interval doubles, up to eight times
+`resolution_rate_limit`, and a success resets it. A message inside the rate
+limit after a refresh that succeeded is verified against the fresh key state,
+as before.
+
+`DidVidResolver` implements `completed_refresh`: its `refresh` still evicts and
+fails by design, and once the application calls `resolve_did` (which after an
+eviction also drops the `DIDCacheClient`'s cached document) the re-resolved
+value confirms the key state. `DelegatingVidResolver` passes it through and
+replaces any locally registered copy with it.
+
+Checking the rate limit and stamping the attempt is now one step under one
+lock, and an attempt's outcome is recorded against that attempt only, so two
+concurrent messages cannot both start a refresh and a slow older refresh cannot
+overwrite a newer one's result. A message arriving while another thread's
+refresh is in flight is discarded, not held (the agent is synchronous and has
+no queue).
+
+The agent records when it last heard from a sender only inside a relationship
+(including one a control message has just formed), so the tracker grows with
+relationships rather than with every sender whose message verifies, and it
+drops a peer's entry when the last relationship any local VID holds with it is
+cancelled.
+
+New: `TspAgent::key_state_refresh_failures`; `VidResolver::completed_refresh`;
+on `KeyStateTracker`, `try_begin_refresh` (returning a `RefreshToken`),
+`record_refresh_succeeded`, `record_refresh_failed`,
+`record_confirmed_after_failed_refresh`, `refresh_status` (`RefreshStatus`),
+`consecutive_refresh_failures` and `next_resolution_at_ms`. `record_resolved`
+and `may_resolve` keep their signatures; `may_resolve` also applies the longer
+interval after failed refreshes.
+
+**Behaviour change (R3.6).** A message whose signature attachment declares more
+than one signature, or extra bytes after it, is refused. `tsp_sdk` 0.16.0 and
+this crate always write exactly one signature, so messages from either are
+unaffected; `tsp_sdk` itself still reads a group with further signatures. A
+peer whose key-state refresh fails after a silence has its messages discarded
+until a refresh succeeds or the resolver re-resolves the VID, where before the
+second and later messages inside the rate limit were accepted. With a
+`DidVidResolver` this means the application must call `resolve_did` after the
+refresh error, as its documentation already asks; until it does, the peer's
+messages after a silence are discarded. A custom resolver whose `refresh`
+cannot succeed synchronously should implement `completed_refresh`, or its
+peers stay unconfirmed after a silence. No wire format changes for conforming encoders.
+
 ## 0.3.2 — a repeated invite does not reopen a relationship
 
 `TspAgent::receive` applied every verified invite to the relationship FSM. A
@@ -46,49 +116,19 @@ and a field that runs past it is a `TspError::InvalidMessage`. This applies
 to every layout, so `unpack` and `forward_routed` return an error for such a
 frame rather than panicking or reading past it. Frames this crate builds
 always declare their full length and are unaffected. No API change.
-## 0.3.3 — one encoding per signed message; key state confirmed before use after a silence
+## 0.3.1 — payload frames are read within their `-Z` count
 
-**Signature attachment.** The `-C` attachment group and the `-K` indexed
-signature group must now hold exactly one signature: the `-K` group ends where
-the signature ends and the `-C` group ends where the `-K` group ends. Neither
-count is covered by the signature, and the decoder used to verify the first
-signature and skip whatever else the counts declared, so the same signed
-message could be re-encoded with extra bytes in the attachment, still verify,
-and carry a different wire digest (`MetaEnvelope::sha256`). Such a message is
-now a `TspError::InvalidMessage`. Applies to the Ed25519 and the ML-DSA-65
-(`pq`) attachment alike. Ed25519 signatures are now checked with
-`verify_strict`, as `tsp_sdk` does, which also refuses small-order public keys
-and `R` components.
+`unpack` panicked on a routed or nested payload whose `-Z` count was shorter
+than the fields it framed (for example `-ZAA` followed by a full `XHOP`
+layout): the inner message was sliced from past the end of the frame. The
+other layouts read their fields from bytes beyond the declared frame instead
+of stopping at its end.
 
-**Key-state freshness (§7.4.2).** After a silence longer than the
-re-verification threshold, `TspAgent::receive` refreshes the sender's key state
-before acting on the message. If that refresh failed, a second message inside
-the resolution rate limit used to be verified against the key state held from
-before the silence. The key state now counts as confirmed only once a refresh
-has succeeded: until then, messages that need the refresh are discarded with
-`TspError::Discarded`, whose text says how many refreshes have failed in a row
-and when the next is allowed. The rate limit still bounds how often a peer is
-resolved. After consecutive failures the interval doubles, up to eight times
-`resolution_rate_limit`, and a success resets it. A message inside the rate
-limit after a refresh that succeeded is verified against the fresh key state,
-as before.
-
-New: `TspAgent::key_state_refresh_failures`, and on `KeyStateTracker`
-`record_refresh_succeeded`, `record_refresh_failed`, `refresh_confirmed`,
-`consecutive_refresh_failures` and `next_resolution_at_ms`. `record_resolved`
-and `may_resolve` keep their signatures; `may_resolve` also applies the longer
-interval after failed refreshes recorded with `record_refresh_failed`. The
-agent now drops a peer's key-state bookkeeping when the last relationship any
-local VID holds with it is cancelled.
-
-**Behaviour change (R3.6).** A message whose signature attachment declares more
-than one signature, or extra bytes after it, is refused. `tsp_sdk` 0.16.0 and
-this crate always write exactly one signature, so messages from either are
-unaffected; `tsp_sdk` itself still reads a group with further signatures. A
-peer whose key-state refresh fails after a silence has its messages discarded
-until a refresh succeeds, where before the second and later messages inside the
-rate limit were accepted. No wire format changes for conforming encoders.
-
+The payload frame is now decoded from the extent its `-Z` count declares,
+and a field that runs past it is a `TspError::InvalidMessage`. This applies
+to every layout, so `unpack` and `forward_routed` return an error for such a
+frame rather than panicking or reading past it. Frames this crate builds
+always declare their full length and are unaffected. No API change.
 ## Unreleased (0.3.0) — TSP 1.0 (`YTSP-BAA`)
 
 **Breaking on the wire.** Follows the released specification,

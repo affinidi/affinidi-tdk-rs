@@ -33,6 +33,21 @@ pub trait VidResolver: Send + Sync {
     fn refresh(&self, vid: &str) -> Result<ResolvedVid, TspError> {
         self.resolve(vid)
     }
+
+    /// The key state of `vid` as re-resolved from its provenance chain after
+    /// the last [`VidResolver::refresh`] of it failed, if that has happened.
+    ///
+    /// For a resolver whose `refresh` cannot finish synchronously and instead
+    /// evicts its cache and fails, leaving the re-resolution to an async
+    /// caller (as [`DidVidResolver`](crate::DidVidResolver) does). Once that
+    /// caller has re-resolved the VID, this returns the new value, and the
+    /// agent treats the key state as confirmed. `None` otherwise, which is the
+    /// default: a resolver that does not track this is confirmed only by a
+    /// `refresh` that succeeds.
+    fn completed_refresh(&self, vid: &str) -> Option<ResolvedVid> {
+        let _ = vid;
+        None
+    }
 }
 
 impl<T: VidResolver + ?Sized> VidResolver for std::sync::Arc<T> {
@@ -42,6 +57,10 @@ impl<T: VidResolver + ?Sized> VidResolver for std::sync::Arc<T> {
 
     fn refresh(&self, vid: &str) -> Result<ResolvedVid, TspError> {
         (**self).refresh(vid)
+    }
+
+    fn completed_refresh(&self, vid: &str) -> Option<ResolvedVid> {
+        (**self).completed_refresh(vid)
     }
 }
 
@@ -156,6 +175,19 @@ impl VidResolver for DelegatingVidResolver {
         // non-DID — has no provenance chain to return to. Its current value is
         // the only value there is.
         self.memory.resolve(vid)
+    }
+
+    fn completed_refresh(&self, vid: &str) -> Option<ResolvedVid> {
+        // As for `refresh`: the delegate's answer replaces what memory held,
+        // so `resolve` serves the re-resolved value rather than the old one.
+        if is_did(vid)
+            && let Some(did_resolver) = &self.did_resolver
+        {
+            let resolved = did_resolver.completed_refresh(vid)?;
+            self.memory.insert(resolved.clone());
+            return Some(resolved);
+        }
+        None
     }
 }
 

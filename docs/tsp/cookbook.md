@@ -392,7 +392,9 @@ that has not been authenticated.
 The rate limit bounds how often a peer is resolved; it does not stand in for a
 refresh that failed. In `TspAgent`, if the refresh after a silence fails, that
 message and every later one that needs the refresh are discarded until a refresh
-succeeds. Consecutive failures double the wait before the next attempt, up to
+succeeds, or until the resolver re-resolves the VID (with `DidVidResolver`, call
+`resolve_did` when the refresh reports the eviction; `VidResolver::completed_refresh`
+is how the agent sees it). Consecutive failures double the wait before the next attempt, up to
 eight times `resolution_rate_limit`, and `TspAgent::key_state_refresh_failures`
 reports how many have failed in a row.
 
