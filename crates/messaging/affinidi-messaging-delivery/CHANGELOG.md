@@ -33,6 +33,61 @@ request: the entry settles `Unconfirmed` at its deadline and the request times
 out, with the reply delivered to `subscribe`. Consumers in this stack address
 peers by the DID those peers answer from, so no change is expected for them.
 No wire format changes.
+## 0.1.23 — a listing drain is not a delivery; bounded inbound queue and drain sends
+
+**The outbox listing no longer settles `Delivered`.** Without the mediator's
+receipts, `poll_outbox_drain` settled a `Sent` entry `Delivered` when its hop
+id, once seen in the sender's outbox listing, was no longer there. The
+mediator removes a message from that listing when the recipient collects it
+and also when it expires, so an expiry was recorded as a delivery. The same
+fallback also ran whenever the status call failed for any reason. Now:
+
+- An entry that leaves the listing after being observed stays `Sent` and is
+  counted in the new `DrainPollReport::drained`. It settles by its window
+  (`Unconfirmed`, or whatever an `ExpiryEscalator` decides). `Delivered` comes
+  only from a layer receipt, an in-thread reply, or the mediator's
+  `Collected` status.
+- If the status call answers the first batch and then gives no signal, the
+  batches already settled are kept and reported, and the rest wait for the
+  next poll. Before, the whole pass fell back to the listing and the settled
+  batches went unreported.
+- The conformance suite's outbox-drain check now expects `Sent`, then
+  `Unconfirmed` at the window.
+
+**Inbound queue and drain bounds.**
+
+- The queue between the transports and the dispatcher holds at most 1024
+  messages. When it is full, each transport's forwarder waits for room before
+  reading the next message, so the rest stay unacknowledged at the transport's
+  source. Nothing is dropped. The first wait of each stall is logged at
+  `warn`. Before, the queue grew without limit while the dispatcher was slow.
+- A `request` / `request_via` whose caller stops awaiting it (a `select!`, an
+  outer timeout, an aborted task) now removes its waiter. Before, the waiter
+  stayed registered for the life of the service.
+- Each drain send is bounded by `SEND_TIMEOUT` (30 s). A send that runs out of
+  time is a failed attempt, retried with backoff (the receiver dedups on the
+  idempotency key if it did arrive), and the destination's other entries are
+  deferred to that retry (`DrainReport::deferred`) instead of each costing
+  another timeout. Other destinations are still sent in the same pass.
+- Send failures are no longer discarded. An entry's first failure is logged at
+  `warn` with its cause, later ones at `debug`, and every failure in a pass is
+  listed in `DrainReport::errors` (`SendFailure`: key, recipient, error,
+  whether it is permanent). An entry `Failed` because its window closed while
+  still queued is logged at `warn` with its attempt count.
+- A send refused as too large (HTTP 413) settles `Failed` at once; resending
+  the same bytes cannot succeed. Other failures are retried as before.
+- The drain, confirmation and outbox-drain loops delay a missed tick instead
+  of firing the missed ticks back to back.
+- `receipt_key` reads an inbound payload in one pass, keeping only the
+  fields a receipt can use, instead of parsing it up to three times.
+
+**Behaviour change (R3.6).** On a mediator without `messaging/message/status`,
+or when the status call fails, messages that were recorded `Delivered` from
+the listing now settle `Unconfirmed` at their window; an `ExpiryEscalator`
+sees them. A drain send that takes longer than 30 s is retried. A 413 fails
+the entry at once instead of after its window. `DrainReport` and
+`DrainPollReport` gain fields (both are `#[non_exhaustive]`); `SendFailure`
+and `SEND_TIMEOUT` are new in `drain`. No signatures change.
 
 ## 0.1.21 — the receipt poll asks about long-waiting messages less often
 

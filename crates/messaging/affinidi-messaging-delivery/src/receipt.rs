@@ -96,25 +96,131 @@ pub fn receipt_key(payload: &[u8]) -> Option<Key> {
     // Two wire shapes a transport can surface as `payload`:
     // (1) the Receipt JSON **directly** — a transport whose payload is the
     //     message body (e.g. TSP surfaces the unpacked payload).
-    if let Some(key) = parse_receipt(payload) {
-        return Some(key);
-    }
     // (2) a **full DIDComm plaintext message** whose `body` is the Receipt — the
     //     DIDComm transport sets `ReceivedMessage.payload = message.to_json()`,
     //     so the receipt lives under `body`, not at the top level. Without this
     //     a layer receipt over DIDComm is never recognised (the whole message
     //     JSON is not a `Receipt`).
-    let message: serde_json::Value = serde_json::from_slice(payload).ok()?;
-    let body = message.get("body")?;
-    parse_receipt(&serde_json::to_vec(body).ok()?)
+    //
+    // Both are read in one pass: every inbound message comes through here on
+    // the dispatcher, so it is parsed once and only these fields are kept.
+    let shape: ReceiptShape = serde_json::from_slice(payload).ok()?;
+    marked_key(shape.kind, shape.confirms).or_else(|| {
+        shape
+            .body
+            .and_then(|body| marked_key(body.kind, body.confirms))
+    })
 }
 
-/// Parse `bytes` as a [`Receipt`], returning its confirmed key iff the body
-/// carries the [`RECEIPT_TYPE`] marker (so application JSON that merely happens
-/// to be an object is not mistaken for a receipt).
-fn parse_receipt(bytes: &[u8]) -> Option<Key> {
-    let receipt: Receipt = serde_json::from_slice(bytes).ok()?;
-    (receipt.kind == RECEIPT_TYPE).then_some(receipt.confirms)
+/// The fields of an inbound payload that can carry a receipt, at the top level
+/// and under `body`. Every other field is skipped without being kept.
+#[derive(Deserialize)]
+struct ReceiptShape {
+    #[serde(rename = "type", default, deserialize_with = "string_or_none")]
+    kind: Option<String>,
+    #[serde(default, deserialize_with = "string_or_none")]
+    confirms: Option<Key>,
+    #[serde(default, deserialize_with = "object_or_none")]
+    body: Option<ReceiptFields>,
+}
+
+#[derive(Deserialize)]
+struct ReceiptFields {
+    #[serde(rename = "type", default, deserialize_with = "string_or_none")]
+    kind: Option<String>,
+    #[serde(default, deserialize_with = "string_or_none")]
+    confirms: Option<Key>,
+}
+
+/// The confirmed key iff `kind` is the [`RECEIPT_TYPE`] marker, so application
+/// JSON that merely happens to be an object is not mistaken for a receipt.
+fn marked_key(kind: Option<String>, confirms: Option<Key>) -> Option<Key> {
+    (kind.as_deref() == Some(RECEIPT_TYPE)).then_some(confirms)?
+}
+
+/// A string, or `None` for a value of any other type, so a field of another
+/// type in application traffic does not stop the payload being read.
+fn string_or_none<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    deserializer.deserialize_any(LenientVisitor::<StringField>::default())
+}
+
+/// An object read for receipt fields, or `None` for a value of any other type.
+fn object_or_none<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ReceiptFields>, D::Error> {
+    deserializer.deserialize_any(LenientVisitor::<ObjectField>::default())
+}
+
+/// What a [`LenientVisitor`] keeps; every other JSON value becomes `None`.
+trait Lenient {
+    type Value;
+    fn string(_value: &str) -> Option<Self::Value> {
+        None
+    }
+    fn map<'de, A: serde::de::MapAccess<'de>>(map: A) -> Result<Option<Self::Value>, A::Error>;
+}
+
+#[derive(Default)]
+struct StringField;
+impl Lenient for StringField {
+    type Value = String;
+    fn string(value: &str) -> Option<String> {
+        Some(value.to_string())
+    }
+    fn map<'de, A: serde::de::MapAccess<'de>>(mut map: A) -> Result<Option<String>, A::Error> {
+        while map
+            .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+            .is_some()
+        {}
+        Ok(None)
+    }
+}
+
+#[derive(Default)]
+struct ObjectField;
+impl Lenient for ObjectField {
+    type Value = ReceiptFields;
+    fn map<'de, A: serde::de::MapAccess<'de>>(map: A) -> Result<Option<ReceiptFields>, A::Error> {
+        ReceiptFields::deserialize(serde::de::value::MapAccessDeserializer::new(map)).map(Some)
+    }
+}
+
+#[derive(Default)]
+struct LenientVisitor<L>(std::marker::PhantomData<L>);
+
+impl<'de, L: Lenient> serde::de::Visitor<'de> for LenientVisitor<L> {
+    type Value = Option<L::Value>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("any JSON value")
+    }
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(L::string(value))
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+        L::map(map)
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+    fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+    fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+    fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+    fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
 }
 
 /// The idempotency key a received message is a receipt for, if it is one.
@@ -218,6 +324,37 @@ mod tests {
         );
         // Empty body.
         assert_eq!(receipt_key(b""), None);
+    }
+
+    /// Fields of other types, or a `body` that is not an object, are read past
+    /// rather than stopping the receipt check.
+    #[test]
+    fn unexpected_field_types_do_not_hide_or_fake_a_receipt() {
+        let key = "did:example:bob:1:2";
+        let in_body = serde_json::json!({
+            "type": 7,
+            "confirms": ["not", "a", "key"],
+            "attachments": [{ "data": { "json": { "type": RECEIPT_TYPE } } }],
+            "body": { "type": RECEIPT_TYPE, "confirms": key, "extra": [1, 2, 3] },
+        });
+        assert_eq!(
+            receipt_key(&serde_json::to_vec(&in_body).unwrap()).as_deref(),
+            Some(key)
+        );
+        for body in [
+            serde_json::json!("text"),
+            serde_json::json!([RECEIPT_TYPE, key]),
+            serde_json::json!(null),
+            serde_json::json!({ "type": RECEIPT_TYPE, "confirms": 42 }),
+            serde_json::json!({ "type": RECEIPT_TYPE }),
+        ] {
+            let message = serde_json::json!({ "id": "m", "body": body });
+            assert_eq!(
+                receipt_key(&serde_json::to_vec(&message).unwrap()),
+                None,
+                "{message}"
+            );
+        }
     }
 
     #[test]

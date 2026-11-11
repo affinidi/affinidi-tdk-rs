@@ -103,6 +103,16 @@ type WaiterMap = Arc<Mutex<HashMap<String, Waiter>>>;
 /// happens rather than skipping the gap in silence.
 const SUBSCRIBE_BUFFER: usize = 256;
 
+/// Inbound messages queued between the transports and the dispatcher.
+///
+/// The dispatcher handles one message at a time (a store read, then an ack of
+/// up to [`ACK_TIMEOUT`]), so a transport can deliver faster than it drains.
+/// When this fills, each transport's forwarder waits for room before it reads
+/// the next message from its transport, and the transport holds the rest
+/// unacknowledged at its source, where they are redelivered rather than lost.
+/// Nothing is dropped; the forwarder logs the stall once per episode.
+const INBOUND_BUFFER: usize = 1024;
+
 static KEY_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// One installed transport plus the forwarder task pumping its `inbound()` into
@@ -127,7 +137,7 @@ struct ServiceInner {
     receipt_packer: Option<Arc<dyn ReceiptPacker>>,
     /// Every transport's forwarder sends `(source id, inbound)` here; the single
     /// dispatcher drains it.
-    inbound_tx: mpsc::UnboundedSender<(TransportId, Inbound)>,
+    inbound_tx: mpsc::Sender<(TransportId, Inbound)>,
     /// A permanently-`Disconnected` signal handed out by the primary handle when
     /// there is no primary, so `connection_state()` always returns a live watch.
     fallback_conn: watch::Sender<ConnState>,
@@ -155,16 +165,11 @@ impl ServiceInner {
         transport: Arc<dyn MessageTransport>,
         make_primary: bool,
     ) {
-        let inbound_tx = self.inbound_tx.clone();
-        let mut stream = transport.inbound();
-        let fwd_id = id.clone();
-        let forwarder = tokio::spawn(async move {
-            while let Some(item) = stream.next().await {
-                if inbound_tx.send((fwd_id.clone(), item)).is_err() {
-                    break;
-                }
-            }
-        });
+        let forwarder = tokio::spawn(forward_inbound(
+            id.clone(),
+            transport.inbound(),
+            self.inbound_tx.clone(),
+        ));
 
         let slot = TransportSlot {
             transport,
@@ -351,7 +356,7 @@ impl MessagingService {
     ) -> Self {
         let waiters: WaiterMap = Arc::new(Mutex::new(HashMap::new()));
         let (subscribers, _) = broadcast::channel(SUBSCRIBE_BUFFER);
-        let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
+        let (inbound_tx, inbound_rx) = mpsc::channel(INBOUND_BUFFER);
         let (fallback_conn, _) = watch::channel(ConnState::Disconnected);
 
         let inner = Arc::new(ServiceInner {
@@ -601,6 +606,11 @@ impl MessagingService {
         timeout: Duration,
     ) -> Result<ReceivedMessage, MessagingError> {
         let (tx, rx) = oneshot::channel();
+        let _waiter = WaiterGuard {
+            waiters: self.inner.waiters.clone(),
+            thid: correlation_thid.to_string(),
+        };
+
         // Register the waiter BEFORE sending so a fast reply can't race ahead.
         self.inner.waiters.lock().expect("waiters mutex").insert(
             correlation_thid.to_string(),
@@ -739,6 +749,59 @@ impl MessagingService {
     }
 }
 
+/// Pump one transport's inbound stream into the dispatcher's queue until the
+/// stream ends or the service is gone.
+///
+/// When the queue is full this waits for room before reading the next message
+/// from the transport, so the transport keeps the rest unacknowledged at its
+/// source. Nothing read is dropped. The first wait of each stall is logged.
+async fn forward_inbound(
+    id: TransportId,
+    mut stream: BoxStream<'static, Inbound>,
+    inbound_tx: mpsc::Sender<(TransportId, Inbound)>,
+) {
+    let mut stalled = false;
+    while let Some(item) = stream.next().await {
+        let item = match inbound_tx.try_send((id.clone(), item)) {
+            Ok(()) => {
+                stalled = false;
+                continue;
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => break,
+            Err(mpsc::error::TrySendError::Full(item)) => item,
+        };
+        if !stalled {
+            stalled = true;
+            tracing::warn!(
+                transport = %id,
+                capacity = inbound_tx.max_capacity(),
+                "inbound queue full; waiting for the dispatcher before reading more from this \
+                 transport"
+            );
+        }
+        if inbound_tx.send(item).await.is_err() {
+            break;
+        }
+    }
+}
+
+/// Removes a `request`'s waiter when the request ends, however it ends. A
+/// caller that stops awaiting the request (a `select!`, an outer timeout, an
+/// aborted task) drops the future without reaching its own cleanup, and the
+/// waiter would otherwise stay registered for the life of the service.
+struct WaiterGuard {
+    waiters: WaiterMap,
+    thid: String,
+}
+
+impl Drop for WaiterGuard {
+    fn drop(&mut self) {
+        if let Ok(mut waiters) = self.waiters.lock() {
+            waiters.remove(&self.thid);
+        }
+    }
+}
+
 /// The outbound handle returned by [`MessagingService::primary_handle`]: a
 /// `MessageTransport` that delegates every call to whatever the **current**
 /// primary is, resolving it fresh each time. The outbox drain holds one of these
@@ -808,10 +871,7 @@ impl MessageTransport for PrimaryTransport {
 ///    for unsolicited traffic when a packer is configured;
 ///
 /// then acks it once after handoff **over the transport it arrived on**.
-async fn run_dispatcher(
-    inner: Arc<ServiceInner>,
-    mut rx: mpsc::UnboundedReceiver<(TransportId, Inbound)>,
-) {
+async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(TransportId, Inbound)>) {
     while let Some((src_id, item)) = rx.recv().await {
         let ack = item.ack.clone();
         // Kept for the no-consumer diagnostic below: `item` is moved into the
@@ -1150,7 +1210,7 @@ mod tests {
     use affinidi_messaging_core::{
         InboundAck, Protocol, ReceivedMessage, SendReceipt, TransportKind,
     };
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
     use tokio::sync::mpsc;
 
     /// A controllable transport: records sends + acks, feeds `inbound()` from an
@@ -1458,6 +1518,62 @@ mod tests {
         let entry = outbox.get("k-1").await.unwrap().unwrap();
         assert_eq!(entry.state, OutboxState::Queued);
         assert_eq!(entry.dest_did, "did:example:bob");
+    }
+
+    /// A request whose caller stops waiting (here an outer timeout drops the
+    /// future mid-wait) leaves no waiter behind.
+    #[tokio::test]
+    async fn an_abandoned_request_leaves_no_waiter() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let abandoned = tokio::time::timeout(
+            Duration::from_millis(50),
+            svc.request(
+                "did:x",
+                b"q".to_vec(),
+                "thid-abandoned",
+                Duration::from_secs(60),
+            ),
+        )
+        .await;
+        assert!(abandoned.is_err(), "the outer timeout fired first");
+        assert!(
+            svc.inner.waiters.lock().unwrap().is_empty(),
+            "the dropped request's waiter was removed"
+        );
+    }
+
+    /// With the dispatcher's queue full, the forwarder stops reading from the
+    /// transport instead of queueing without limit, and nothing it read is
+    /// lost: once there is room every message arrives, in order.
+    #[tokio::test]
+    async fn a_full_inbound_queue_holds_the_transport_back_and_drops_nothing() {
+        const CAPACITY: usize = 4;
+        const TOTAL: usize = 10;
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let counter = pulled.clone();
+        let source = stream::iter(0..TOTAL).map(move |n| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            inbound(&format!("m-{n}"), None, &format!("q-{n}"))
+        });
+        let (tx, mut rx) = mpsc::channel(CAPACITY);
+        let forwarder = tokio::spawn(forward_inbound("t".to_string(), Box::pin(source), tx));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            pulled.load(Ordering::SeqCst),
+            CAPACITY + 1,
+            "the queue's worth, plus the one waiting for room"
+        );
+
+        let mut ids = Vec::new();
+        while let Some((source_id, item)) = rx.recv().await {
+            assert_eq!(source_id, "t");
+            ids.push(item.message.id);
+        }
+        forwarder.await.unwrap();
+        let expected: Vec<String> = (0..TOTAL).map(|n| format!("m-{n}")).collect();
+        assert_eq!(ids, expected);
     }
 
     #[tokio::test]

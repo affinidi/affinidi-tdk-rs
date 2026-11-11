@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use affinidi_messaging_core::MessageTransport;
+use affinidi_messaging_core::{MessageTransport, MessagingError};
 
 use crate::outbox::{OutboxError, OutboxState, OutboxStore};
 
@@ -22,6 +22,15 @@ const BACKOFF_CAP_MS: u64 = 60_000;
 /// that does not produce the same pacing rather than two different behaviours
 /// a operator would have to know about.
 const QUEUE_FULL_FALLBACK_MS: u64 = 30_000;
+
+/// How long one `transport.send` may take before the drain gives up on it.
+///
+/// The drain sends one entry at a time, so without a bound a single stalled
+/// destination holds back every other destination for as long as its send
+/// hangs. A send that runs out of time is a failed attempt like any other: it
+/// is retried with backoff, and the receiver dedups on the idempotency key if
+/// the stalled attempt did arrive.
+pub const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Exponential backoff for the `attempts`-th failed send: 1s, 2s, 4s, … capped
 /// at 60s. `attempts == 0` is `0` (a fresh entry attempts immediately).
@@ -56,6 +65,50 @@ pub struct DrainReport {
     /// drains. A climbing `backpressured` beside a flat `retried` means a peer
     /// has stopped collecting, not that the network is unhealthy.
     pub backpressured: usize,
+    /// Entries not attempted because an earlier send to the same destination
+    /// ran out of [`SEND_TIMEOUT`] in this pass (stay `Queued`, retried with
+    /// that entry). One stalled destination costs a pass one timeout, not one
+    /// per queued message.
+    pub deferred: usize,
+    /// Every send that failed in this pass and why, in the order attempted.
+    /// The same failures are logged; this is for a caller that keeps its own
+    /// status or metrics.
+    pub errors: Vec<SendFailure>,
+}
+
+/// One failed send in a [`DrainReport`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SendFailure {
+    /// The entry's idempotency key.
+    pub idempotency_key: String,
+    /// The entry's recipient.
+    pub dest_did: String,
+    /// What the transport said.
+    pub error: String,
+    /// Whether no retry can succeed, so the entry was settled `Failed` now
+    /// rather than retried until its window closes.
+    pub permanent: bool,
+}
+
+/// A send failure no retry of the same bytes can fix. Only a payload the
+/// endpoint refuses as too large (HTTP 413) qualifies: authentication,
+/// missing endpoints and unsupported transports can all change before the
+/// window closes (a refreshed token, an updated DID document, a promoted
+/// transport), so those are retried.
+fn is_permanent(error: &MessagingError) -> bool {
+    error
+        .http_status()
+        .is_some_and(|status| status.status == 413)
+}
+
+/// Why a destination is skipped for the rest of a pass.
+#[derive(Clone, Copy)]
+enum Blocked {
+    /// The mediator refused its queue as full.
+    QueueFull,
+    /// A send to it ran out of [`SEND_TIMEOUT`].
+    TimedOut,
 }
 
 /// One drain pass at logical time `now_ms`: attempt every due **unbound** entry
@@ -67,8 +120,12 @@ pub struct DrainReport {
 /// - **`Ok(hop-accept)`** → `Sent`; the entry is **not** re-sent (the mediator
 ///   owns redelivery — re-sending would double-send). End-to-end confirmation
 ///   (`Sent → Delivered`) is a separate step.
-/// - **`Err`** (transport down / send failed): stay `Queued`, bump `attempts`,
-///   schedule `next_attempt_at_ms` with [`backoff_ms`].
+/// - **`Err`** (transport down / send failed, or no answer within
+///   [`SEND_TIMEOUT`]): stay `Queued`, bump `attempts`, schedule
+///   `next_attempt_at_ms` with [`backoff_ms`]. The first failure of an entry
+///   is logged at `warn`, and every failure is listed in
+///   [`DrainReport::errors`]. A payload refused as too large (HTTP 413) is
+///   settled `Failed` at once instead, since resending it cannot succeed.
 ///
 /// Entries with [`OutboxEntry::via`](crate::OutboxEntry::via) set are **skipped**:
 /// they are pinned to a named transport and belong to
@@ -124,13 +181,19 @@ async fn drain_filtered(
     // fifty refusals and fifty store writes on every tick, against a mediator
     // that is refusing precisely because it is already holding too much. One
     // refusal is enough to know the answer for the rest.
-    let mut blocked: HashMap<String, u64> = HashMap::new();
+    let mut blocked: HashMap<String, (u64, Blocked)> = HashMap::new();
 
     for mut entry in due {
         if !claims(entry.via.as_deref()) {
             continue;
         }
         if now_ms >= entry.deliver_by_ms {
+            tracing::warn!(
+                idempotency_key = %entry.idempotency_key,
+                dest = %entry.dest_did,
+                attempts = entry.attempts,
+                "delivery window closed before any send was accepted; the entry is Failed"
+            );
             entry.state = OutboxState::Failed;
             store.put(entry).await?;
             report.failed += 1;
@@ -142,14 +205,33 @@ async fn drain_filtered(
         // entry whose window has closed is `Failed` whatever the destination's
         // queue is doing, and reporting it as merely deferred would hide a
         // delivery that is never going to happen.
-        if let Some(&until) = blocked.get(&entry.dest_did) {
+        if let Some(&(until, why)) = blocked.get(&entry.dest_did) {
             entry.next_attempt_at_ms = until;
             store.put(entry).await?;
-            report.backpressured += 1;
+            match why {
+                Blocked::QueueFull => report.backpressured += 1,
+                Blocked::TimedOut => report.deferred += 1,
+            }
             continue;
         }
 
-        match transport.send(&entry.dest_did, entry.packed.clone()).await {
+        let mut timed_out = false;
+        let sent = match tokio::time::timeout(
+            SEND_TIMEOUT,
+            transport.send(&entry.dest_did, entry.packed.clone()),
+        )
+        .await
+        {
+            Ok(sent) => sent,
+            Err(_elapsed) => {
+                timed_out = true;
+                Err(MessagingError::Transport(format!(
+                    "send did not complete within {SEND_TIMEOUT:?}"
+                )))
+            }
+        };
+
+        match sent {
             Ok(receipt) => {
                 entry.state = OutboxState::Sent;
                 // Record the hop-id so the confirmation watcher can watch this
@@ -185,13 +267,54 @@ async fn drain_filtered(
                     "destination queue full at the mediator — deferring this destination \
                      for the rest of this pass"
                 );
-                blocked.insert(dest, until);
+                blocked.insert(dest, (until, Blocked::QueueFull));
             }
-            Err(_e) => {
-                entry.attempts += 1;
-                entry.next_attempt_at_ms = now_ms.saturating_add(backoff_ms(entry.attempts));
-                store.put(entry).await?;
-                report.retried += 1;
+            Err(e) => {
+                let failure = SendFailure {
+                    idempotency_key: entry.idempotency_key.clone(),
+                    dest_did: entry.dest_did.clone(),
+                    error: e.to_string(),
+                    permanent: is_permanent(&e),
+                };
+                if failure.permanent {
+                    tracing::warn!(
+                        idempotency_key = %failure.idempotency_key,
+                        dest = %failure.dest_did,
+                        error = %failure.error,
+                        "send refused in a way no retry can fix; the entry is Failed"
+                    );
+                    entry.state = OutboxState::Failed;
+                    store.put(entry).await?;
+                    report.failed += 1;
+                } else {
+                    entry.attempts += 1;
+                    entry.next_attempt_at_ms = now_ms.saturating_add(backoff_ms(entry.attempts));
+                    if entry.attempts == 1 {
+                        tracing::warn!(
+                            idempotency_key = %failure.idempotency_key,
+                            dest = %failure.dest_did,
+                            error = %failure.error,
+                            "send failed; retrying with backoff until the delivery window closes"
+                        );
+                    } else {
+                        tracing::debug!(
+                            idempotency_key = %failure.idempotency_key,
+                            dest = %failure.dest_did,
+                            attempts = entry.attempts,
+                            error = %failure.error,
+                            "send failed again"
+                        );
+                    }
+                    if timed_out {
+                        blocked.insert(
+                            entry.dest_did.clone(),
+                            (entry.next_attempt_at_ms, Blocked::TimedOut),
+                        );
+                    }
+                    store.put(entry).await?;
+                    report.retried += 1;
+                }
+                report.errors.push(failure);
             }
         }
     }
@@ -208,6 +331,7 @@ pub async fn drain_loop(
     interval: Duration,
 ) {
     let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
         match drain_once(store.as_ref(), transport.as_ref(), now_unix_ms()).await {
@@ -216,6 +340,8 @@ pub async fn drain_loop(
                     sent = report.sent,
                     retried = report.retried,
                     failed = report.failed,
+                    backpressured = report.backpressured,
+                    deferred = report.deferred,
                     "outbox drain pass",
                 );
             }
@@ -239,6 +365,7 @@ pub async fn drain_loop_via(
     interval: Duration,
 ) {
     let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
         match drain_once_via(
@@ -255,6 +382,8 @@ pub async fn drain_loop_via(
                     sent = report.sent,
                     retried = report.retried,
                     failed = report.failed,
+                    backpressured = report.backpressured,
+                    deferred = report.deferred,
                     "outbox drain pass",
                 );
             }
@@ -710,5 +839,143 @@ mod tests {
             store.get("late").await.unwrap().unwrap().state,
             OutboxState::Failed
         );
+    }
+
+    /// A transport whose `send` hangs for one destination, answers 413 for
+    /// another, and accepts the rest.
+    struct ScriptedTransport {
+        hangs: &'static str,
+        too_large: &'static str,
+        dests: Mutex<Vec<String>>,
+        _conn_tx: watch::Sender<ConnState>,
+        conn_rx: watch::Receiver<ConnState>,
+    }
+
+    impl ScriptedTransport {
+        fn new(hangs: &'static str, too_large: &'static str) -> Self {
+            let (tx, rx) = watch::channel(ConnState::Connected);
+            Self {
+                hangs,
+                too_large,
+                dests: Mutex::new(Vec::new()),
+                _conn_tx: tx,
+                conn_rx: rx,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MessageTransport for ScriptedTransport {
+        fn kind(&self) -> TransportKind {
+            TransportKind::Didcomm
+        }
+        async fn send(&self, dest: &str, _packed: Vec<u8>) -> Result<SendReceipt, MessagingError> {
+            self.dests.lock().unwrap().push(dest.to_string());
+            if dest == self.hangs {
+                std::future::pending::<()>().await;
+            }
+            if dest == self.too_large {
+                return Err(affinidi_messaging_core::HttpStatusError::from_parts(
+                    "send", 413, None, None, "",
+                )
+                .into());
+            }
+            Ok(SendReceipt {
+                via: TransportKind::Didcomm,
+                hop_id: None,
+            })
+        }
+        fn connection_state(&self) -> watch::Receiver<ConnState> {
+            self.conn_rx.clone()
+        }
+        fn inbound(&self) -> BoxStream<'static, Inbound> {
+            Box::pin(stream::empty())
+        }
+        async fn ack(&self, _ack: InboundAck) -> Result<(), MessagingError> {
+            Ok(())
+        }
+    }
+
+    /// A send that never completes is given up after `SEND_TIMEOUT` and
+    /// retried later; the destination's other entries wait for that retry
+    /// instead of each costing another timeout, and other destinations are
+    /// still sent in the same pass.
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_destination_costs_one_timeout_and_holds_back_no_one_else() {
+        let store = InMemoryOutboxStore::new();
+        store
+            .put(queued_to("slow-1", "did:example:slow", 1_000))
+            .await
+            .unwrap();
+        store
+            .put(queued_to("slow-2", "did:example:slow", 1_001))
+            .await
+            .unwrap();
+        store
+            .put(queued_to("fine", "did:example:fine", 1_002))
+            .await
+            .unwrap();
+        let transport = ScriptedTransport::new("did:example:slow", "none");
+
+        let started = tokio::time::Instant::now();
+        let report = drain_once(&store, &transport, 2_000).await.unwrap();
+        assert!(started.elapsed() < SEND_TIMEOUT * 2, "one timeout, not two");
+        assert_eq!(
+            (report.sent, report.retried, report.deferred),
+            (1, 1, 1),
+            "{report:?}"
+        );
+        assert_eq!(
+            transport.dests.lock().unwrap().as_slice(),
+            &["did:example:slow", "did:example:fine"]
+        );
+
+        let first = store.get("slow-1").await.unwrap().unwrap();
+        assert_eq!((first.state, first.attempts), (OutboxState::Queued, 1));
+        let second = store.get("slow-2").await.unwrap().unwrap();
+        assert_eq!((second.state, second.attempts), (OutboxState::Queued, 0));
+        assert_eq!(second.next_attempt_at_ms, first.next_attempt_at_ms);
+        assert_eq!(
+            store.get("fine").await.unwrap().unwrap().state,
+            OutboxState::Sent
+        );
+
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].idempotency_key, "slow-1");
+        assert!(!report.errors[0].permanent);
+        assert!(report.errors[0].error.contains("did not complete"));
+    }
+
+    /// Every failed send is reported with its cause, and one no retry can fix
+    /// settles `Failed` at once instead of retrying until the window closes.
+    #[tokio::test]
+    async fn send_failures_are_reported_and_a_payload_too_large_fails_at_once() {
+        let store = InMemoryOutboxStore::new();
+        store
+            .put(queued_to("big", "did:example:big", 1_000))
+            .await
+            .unwrap();
+        store.put(queued("flaky", 1_001)).await.unwrap();
+        let transport = ScriptedTransport::new("none", "did:example:big");
+        let report = drain_once(&store, &transport, 2_000).await.unwrap();
+        assert_eq!((report.failed, report.sent), (1, 1), "{report:?}");
+        assert_eq!(
+            store.get("big").await.unwrap().unwrap().state,
+            OutboxState::Failed
+        );
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].idempotency_key, "big");
+        assert_eq!(report.errors[0].dest_did, "did:example:big");
+        assert!(report.errors[0].permanent);
+
+        let store = InMemoryOutboxStore::new();
+        store.put(queued("flaky", 1_000)).await.unwrap();
+        let report = drain_once(&store, &MockTransport::new(true), 1_000)
+            .await
+            .unwrap();
+        assert_eq!(report.retried, 1);
+        assert_eq!(report.errors.len(), 1);
+        assert!(!report.errors[0].permanent);
+        assert!(report.errors[0].error.contains("mock send failed"));
     }
 }
