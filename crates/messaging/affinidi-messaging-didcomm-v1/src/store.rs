@@ -119,9 +119,14 @@ impl DIDCommV1Store {
     }
 
     /// Drop a verkey binding, but only if it still points at the DID being
-    /// removed — a later `add_*` may have rebound the key to someone else.
+    /// removed — a later `add_*` may have rebound the key to someone else —
+    /// and no local or resolved identity for that DID still holds the key.
     fn unbind(&mut self, verkey: &Verkey, did: &Did) {
-        if self.by_verkey.get(verkey) == Some(did) {
+        let still_held = |identity_verkey: Option<&Verkey>| identity_verkey == Some(verkey);
+        if self.by_verkey.get(verkey) == Some(did)
+            && !still_held(self.local.get(did.as_str()).map(|i| &i.verkey))
+            && !still_held(self.resolved.get(did.as_str()).map(|i| &i.verkey))
+        {
             self.by_verkey.remove(verkey);
         }
     }
@@ -268,6 +273,32 @@ mod tests {
             store.did_for_verkey(&alice.verkey).unwrap().as_str(),
             "did:example:alice"
         );
+    }
+
+    /// A resolved identity re-added with a new verkey keeps the binding of a
+    /// verkey the local identity for the same DID still holds.
+    #[test]
+    fn re_adding_a_resolved_did_keeps_the_local_identitys_binding() {
+        let mut store = DIDCommV1Store::new();
+        let alice = PrivateIdentity::generate("did:example:alice").unwrap();
+        let rotated = PrivateIdentity::generate("did:example:alice").unwrap();
+        let local_verkey = alice.verkey;
+
+        store.add_resolved(alice.to_resolved());
+        store.add_local(alice);
+        store.add_resolved(rotated.to_resolved());
+
+        assert_eq!(
+            store.did_for_verkey(&local_verkey).unwrap().as_str(),
+            "did:example:alice"
+        );
+        assert_eq!(
+            store.did_for_verkey(&rotated.verkey).unwrap().as_str(),
+            "did:example:alice"
+        );
+
+        store.remove_local("did:example:alice").unwrap();
+        assert_eq!(store.did_for_verkey(&local_verkey), None);
     }
 
     /// A DID re-added with a new verkey does not take back a verkey it once

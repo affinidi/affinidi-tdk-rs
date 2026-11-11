@@ -11,7 +11,8 @@
   DID, so an authcrypt message from it still unpacked as
   `UnpackResult::Authcrypt` from that DID, and a later `remove_resolved` left
   it bound for good. It now unpacks as `AuthcryptUnknownSender`. A verkey the
-  DID held that has since been bound to another DID keeps that binding.
+  DID held that has since been bound to another DID keeps that binding, and
+  so does a verkey the DID's other identity (local or resolved) still holds.
 - Adding a verkey that is already bound to a different DID still binds it to
   the newly added DID (unchanged, now documented). No signature change.
 
