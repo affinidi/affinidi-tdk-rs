@@ -1,5 +1,23 @@
 # Affinidi DID Web
 
+## 0.1.8 — the decoded domain must be a host, each path segment one segment
+
+Behaviour change (R3.6): some DIDs that resolved before are refused with
+`DidWebError::InvalidDid`. No signature change.
+
+- **The domain must decode to a host.** `build_url` (and so resolution)
+  refuses a percent-decoded domain unless it is a hostname, an IPv4 address
+  or a bracketed IPv6 address with an optional numeric port, as the did:web
+  specification describes. A domain that decodes to user information (`@`),
+  a path (`/`, `\`), a query (`?`), a fragment (`#`), a further `%`,
+  whitespace or a control character is refused. Before, the decoded domain
+  went into the URL as it was, so `did:web:a.example%40b.example` was fetched
+  from `b.example`.
+- **Each path segment must decode to one segment.** A segment that decodes
+  to `?`, `#`, `@`, `%` or a control character is refused, as `.`, `..`, `/`
+  and `\` already were, so the fixed `/did.json` suffix cannot be pushed into
+  a query or fragment.
+
 ## 0.1.7 — the guard holds behind a proxy and for a caller's client
 
 - **No proxy under `HostPolicy::PublicOnly`.** The default client honoured
