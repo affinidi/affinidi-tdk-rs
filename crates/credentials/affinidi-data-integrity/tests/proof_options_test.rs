@@ -46,6 +46,16 @@ fn cases() -> Vec<(Secret, CryptoSuite)> {
         (p256, CryptoSuite::EcdsaJcs2019),
         (ml_dsa.clone(), CryptoSuite::MlDsa44Jcs2024),
         (ml_dsa, CryptoSuite::MlDsa44Rdfc2024),
+        #[cfg(feature = "slh-dsa")]
+        (
+            Secret::generate_slh_dsa_sha2_128s(Some(VERIFICATION_METHOD)),
+            CryptoSuite::SlhDsa128Jcs2024,
+        ),
+        #[cfg(feature = "slh-dsa")]
+        (
+            Secret::generate_slh_dsa_sha2_128s(Some(VERIFICATION_METHOD)),
+            CryptoSuite::SlhDsa128Rdfc2024,
+        ),
     ]
 }
 
@@ -120,36 +130,44 @@ async fn a_proof_with_expires_verifies_before_it_and_is_refused_after() {
         proof
             .verify_with_public_key(&document(), public_key, at(created()))
             .unwrap_or_else(|error| panic!("{suite}: at creation: {error}"));
+        let one_second = TimeDelta::seconds(1);
         proof
-            .verify_with_public_key(&document(), public_key, at(expires()))
-            .unwrap_or_else(|error| panic!("{suite}: at expiry: {error}"));
-        proof
-            .verify_with_public_key(
-                &document(),
-                public_key,
-                at(expires() + TimeDelta::seconds(60)),
-            )
-            .unwrap_or_else(|error| panic!("{suite}: within the clock skew: {error}"));
+            .verify_with_public_key(&document(), public_key, at(expires() - one_second))
+            .unwrap_or_else(|error| panic!("{suite}: just before expiry: {error}"));
 
-        let after = proof.verify_with_public_key(
+        // Inclusive bound, no skew by default: expired at the instant itself.
+        for time in [expires(), expires() + one_second] {
+            let result = proof.verify_with_public_key(&document(), public_key, at(time));
+            assert!(
+                matches!(result, Err(DataIntegrityError::ProofExpired { ref expires })
+                    if expires == "2026-03-01T13:00:00Z"),
+                "{suite}: at {time} must be ProofExpired, got {result:?}"
+            );
+        }
+
+        // The `created` skew does not stretch `expires`.
+        let result = proof.verify_with_public_key(
             &document(),
             public_key,
-            at(expires() + TimeDelta::seconds(61)),
+            at(expires()).with_clock_skew(TimeDelta::hours(1)),
         );
         assert!(
-            matches!(after, Err(DataIntegrityError::ProofExpired { ref expires })
-                if expires == "2026-03-01T13:00:00Z"),
-            "{suite}: past the skew must be ProofExpired, got {after:?}"
+            matches!(result, Err(DataIntegrityError::ProofExpired { .. })),
+            "{suite}: got {result:?}"
         );
 
-        let strict = proof.verify_with_public_key(
+        let tolerant = || at(expires()).with_expiry_clock_skew(TimeDelta::seconds(60));
+        proof
+            .verify_with_public_key(&document(), public_key, tolerant())
+            .unwrap_or_else(|error| panic!("{suite}: within the expiry skew: {error}"));
+        let result = proof.verify_with_public_key(
             &document(),
             public_key,
-            at(expires() + TimeDelta::seconds(1)).with_clock_skew(TimeDelta::zero()),
+            tolerant().with_verification_time(expires() + TimeDelta::seconds(60)),
         );
         assert!(
-            matches!(strict, Err(DataIntegrityError::ProofExpired { .. })),
-            "{suite}: with no skew, one second past expiry is expired, got {strict:?}"
+            matches!(result, Err(DataIntegrityError::ProofExpired { .. })),
+            "{suite}: at the end of the expiry skew must be ProofExpired, got {result:?}"
         );
     }
 }
@@ -294,13 +312,13 @@ async fn an_expires_with_an_offset_is_compared_in_utc() {
 
     let public_key = secret.get_public_bytes();
     proof
-        .verify_with_public_key(&document(), public_key, at(expires()))
-        .expect("13:00 UTC is the expiry instant");
-    let result = proof.verify_with_public_key(
-        &document(),
-        public_key,
-        at(expires() + TimeDelta::seconds(61)),
-    );
+        .verify_with_public_key(
+            &document(),
+            public_key,
+            at(expires() - TimeDelta::seconds(1)),
+        )
+        .expect("one second before 13:00 UTC verifies");
+    let result = proof.verify_with_public_key(&document(), public_key, at(expires()));
     assert!(
         matches!(result, Err(DataIntegrityError::ProofExpired { .. })),
         "got {result:?}"
@@ -359,6 +377,127 @@ async fn expected_domain_and_challenge_are_checked_when_set() {
         assert!(
             matches!(result, Err(DataIntegrityError::Conformance(_))),
             "a proof without the member must be refused when one is expected, got {result:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_relative_id_or_previous_proof_is_refused() {
+    let secret = Secret::generate_ed25519(Some(VERIFICATION_METHOD), Some(&[7u8; 32]));
+    let relative = [
+        "#proof-1",
+        "proof-0",
+        "",
+        "1urn:x",
+        "urn:has space",
+        "//host/path",
+    ];
+
+    for value in relative {
+        for options in [
+            SignOptions::new().with_id(value),
+            SignOptions::new().with_previous_proof(value),
+            SignOptions::new().with_previous_proof(vec![
+                "urn:uuid:0e5c1d2b-3a4f-4b6e-9d7c-8a1b2c3d4e5f".to_string(),
+                value.to_string(),
+            ]),
+        ] {
+            let result = DataIntegrityProof::sign(&document(), &secret, options).await;
+            assert!(
+                matches!(result, Err(DataIntegrityError::MalformedProof(_))),
+                "signing with {value:?} must be refused, got {result:?}"
+            );
+        }
+    }
+
+    for suite in [CryptoSuite::EddsaJcs2022, CryptoSuite::EddsaRdfc2022] {
+        let signed = DataIntegrityProof::sign(
+            &document(),
+            &secret,
+            SignOptions::new()
+                .with_cryptosuite(suite)
+                .with_created(created()),
+        )
+        .await
+        .unwrap();
+        for value in relative {
+            let mut with_id = signed.clone();
+            with_id.id = Some(value.to_string());
+            let mut with_previous = signed.clone();
+            with_previous.previous_proof = Some(StringOrList::from(value));
+            for proof in [with_id, with_previous] {
+                let result = proof.verify_with_public_key(
+                    &document(),
+                    secret.get_public_bytes(),
+                    at(created()),
+                );
+                assert!(
+                    matches!(result, Err(DataIntegrityError::MalformedProof(_))),
+                    "{suite}: {value:?} must be refused, got {result:?}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn expires_before_created_is_refused() {
+    let secret = Secret::generate_ed25519(Some(VERIFICATION_METHOD), Some(&[7u8; 32]));
+    let result = DataIntegrityProof::sign(
+        &document(),
+        &secret,
+        SignOptions::new()
+            .with_created(created())
+            .with_expires(created() - TimeDelta::seconds(1)),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(DataIntegrityError::MalformedProof(_))),
+        "got {result:?}"
+    );
+
+    let mut proof = DataIntegrityProof::sign(
+        &document(),
+        &secret,
+        SignOptions::new()
+            .with_created(created())
+            .with_expires(expires()),
+    )
+    .await
+    .unwrap();
+    proof.expires = Some("2026-03-01T11:59:59Z".to_string());
+    let result =
+        proof.verify_with_public_key(&document(), secret.get_public_bytes(), at(created()));
+    assert!(
+        matches!(result, Err(DataIntegrityError::MalformedProof(_))),
+        "got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_created_is_refused() {
+    let secret = Secret::generate_ed25519(Some(VERIFICATION_METHOD), Some(&[7u8; 32]));
+    let signed = DataIntegrityProof::sign(&document(), &secret, SignOptions::new())
+        .await
+        .unwrap();
+    for malformed in [
+        "2026-03-01T12:00:00",
+        "2026-03-01 12:00:00Z",
+        "2026-03-01t12:00:00z",
+        "2026-02-30T12:00:00Z",
+        "2026-03-01T12:00:60Z",
+        "2026-03-01T12:00:00+15:00",
+    ] {
+        let mut proof = signed.clone();
+        proof.created = Some(malformed.to_string());
+        let result = proof.verify_with_public_key(
+            &document(),
+            secret.get_public_bytes(),
+            VerifyOptions::new(),
+        );
+        assert!(
+            matches!(result, Err(DataIntegrityError::MalformedProof(_))),
+            "{malformed:?} must be refused as malformed, got {result:?}"
         );
     }
 }

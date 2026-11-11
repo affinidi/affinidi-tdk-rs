@@ -26,12 +26,18 @@ use crate::{DataIntegrityError, DataIntegrityProof};
 /// 3. `proofPurpose` is present and non-empty.
 /// 4. `verificationMethod` is present and non-empty.
 /// 5. `proofValue` is present and multibase-decodable.
-/// 6. `created`, if present, parses as RFC 3339 and is no further into
+/// 6. `created`, if present, is a well-formed `xsd:dateTimeStamp` and is no further into
 ///    the future than [`DEFAULT_CLOCK_SKEW`] (the signer's clock is not
 ///    the verifier's; see [`verify_conformance_with_skew`] to choose the
 ///    allowance).
-/// 7. `expires`, if present, is a well-formed `xsd:dateTimeStamp` and has
-///    not passed by more than the same allowance.
+/// 7. `expires`, if present, is a well-formed `xsd:dateTimeStamp`, is not
+///    earlier than `created`, and has not been reached (no skew).
+/// 8. `id` and `previousProof`, if present, are absolute IRIs.
+///
+/// Times are checked against the current time; there is no way to inject
+/// one here (use [`DataIntegrityProof::verify_with_public_key`] with
+/// [`crate::VerifyOptions::with_verification_time`] for that). `domain` and
+/// `challenge` are not checked.
 ///
 /// Returns `Ok(())` if all structural checks pass. The cryptographic
 /// signature is **not** verified here — use
@@ -39,8 +45,9 @@ use crate::{DataIntegrityError, DataIntegrityProof};
 /// [`DataIntegrityProof::verify`] for that.
 ///
 /// Returns [`DataIntegrityError::Conformance`] on the first failure, except
-/// for `expires`, which fails with [`DataIntegrityError::MalformedProof`] or
-/// [`DataIntegrityError::ProofExpired`] as in verification.
+/// that malformed timestamps or IRIs and `expires` before `created` fail
+/// with [`DataIntegrityError::MalformedProof`] and a reached `expires` with
+/// [`DataIntegrityError::ProofExpired`], as in verification.
 pub fn verify_conformance(
     proof: &DataIntegrityProof,
     expected: CryptoSuite,
@@ -93,32 +100,16 @@ pub fn verify_conformance_with_skew(
         DataIntegrityError::Conformance(format!("proofValue is not valid multibase: {e}"))
     })?;
 
-    if let Some(created) = &proof.created {
-        use chrono::{DateTime, TimeDelta, Utc};
-        let parsed: DateTime<Utc> = created.parse().map_err(|e| {
-            DataIntegrityError::Conformance(format!(
-                "created does not parse as RFC 3339 ({e}): {created}"
-            ))
-        })?;
-        let skew = clock_skew.max(TimeDelta::zero());
-        let horizon = Utc::now()
-            .checked_add_signed(skew)
-            .unwrap_or(DateTime::<Utc>::MAX_UTC);
-        if parsed > horizon {
-            return Err(DataIntegrityError::Conformance(format!(
-                "created timestamp is in the future (beyond the {}s clock-skew allowance)",
-                skew.num_seconds()
-            )));
-        }
-    }
-
-    if let Some(expires) = &proof.expires {
-        crate::check_expires(
-            expires,
-            chrono::Utc::now(),
-            clock_skew.max(chrono::TimeDelta::zero()),
-        )?;
-    }
+    crate::check_proof_ids(proof)?;
+    crate::check_proof_times(
+        proof.created.as_deref(),
+        proof.expires.as_deref(),
+        &crate::ProofClock {
+            now: chrono::Utc::now(),
+            created_skew: clock_skew,
+            expiry_skew: chrono::TimeDelta::zero(),
+        },
+    )?;
 
     Ok(())
 }

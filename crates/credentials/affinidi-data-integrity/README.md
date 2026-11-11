@@ -106,10 +106,13 @@ proof.verify(&doc, &DidKeyResolver, VerifyOptions::new()).await?;
 The optional proof members of VC Data Integrity 1.0 §2.1 (`expires`,
 `domain`, `challenge`, `nonce`, `id`, `previousProof`) can be set when
 signing, are kept when a proof is parsed, and are covered by the signature.
-Verification refuses a proof whose `expires` has passed with
-`DataIntegrityError::ProofExpired` (with the same clock-skew allowance as
-`created`) and a malformed `expires` with `MalformedProof`. `domain` and
-`challenge` are compared only when the verifier asks for them.
+Verification refuses a proof from its `expires` instant on with
+`DataIntegrityError::ProofExpired` (no tolerance by default; see
+`VerifyOptions::with_expiry_clock_skew`), and a malformed `created` or
+`expires`, an `expires` before `created`, or a relative `id` /
+`previousProof` with `MalformedProof`. `domain` and `challenge` are compared
+only when the verifier asks for them. `previousProof` is signed but the
+named proofs are not looked up or verified.
 
 ```rust,ignore
 let proof = DataIntegrityProof::sign(

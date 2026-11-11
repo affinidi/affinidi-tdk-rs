@@ -109,9 +109,11 @@ impl SignOptions {
         self
     }
 
-    /// Sets `expires`, after which verifiers refuse the proof. Serialised
-    /// like `created`: seconds precision, `Z`-suffix, so any sub-second
-    /// part is dropped.
+    /// Sets `expires`, from which instant on verifiers refuse the proof.
+    /// Serialised like `created`: seconds precision, `Z`-suffix, so any
+    /// sub-second part is dropped. Signing fails with
+    /// [`crate::DataIntegrityError::MalformedProof`] if it is earlier than
+    /// `created`.
     #[must_use = "chained builder call returns self; assign or chain further"]
     pub fn with_expires(mut self, expires: DateTime<Utc>) -> Self {
         self.expires = Some(expires);
@@ -139,7 +141,8 @@ impl SignOptions {
         self
     }
 
-    /// Sets the proof's `id`. [`DataIntegrityProof::sign_multi`] gives every
+    /// Sets the proof's `id`, which must be an absolute IRI (signing fails
+    /// with [`crate::DataIntegrityError::MalformedProof`] otherwise). [`DataIntegrityProof::sign_multi`] gives every
     /// proof the same options, so sign individually to give each proof its
     /// own `id`.
     ///
@@ -150,7 +153,9 @@ impl SignOptions {
         self
     }
 
-    /// Sets `previousProof`: the `id` of one proof, or a list of them.
+    /// Sets `previousProof`: the `id` of one proof, or a list of them, each
+    /// an absolute IRI. The value is signed, but this library does not
+    /// check that the named proofs exist or verify.
     #[must_use = "chained builder call returns self; assign or chain further"]
     pub fn with_previous_proof(mut self, previous_proof: impl Into<StringOrList>) -> Self {
         self.previous_proof = Some(previous_proof.into());
@@ -169,8 +174,8 @@ impl SignOptions {
 /// `iat`/`nbf` (and `jsonwebtoken`'s own default), so a signer skewed
 /// further than this generally fails bearer-token validation anyway.
 ///
-/// The same allowance applies after a proof's `expires`: a proof is refused
-/// once the verification time is more than this far past it.
+/// It does not apply to `expires`: a proof is expired from its `expires`
+/// instant on unless [`VerifyOptions::expiry_clock_skew`] says otherwise.
 ///
 /// It is not a freshness window: this library does not reject old proofs
 /// that carry no `expires`, so replay protection must come from the
@@ -181,9 +186,16 @@ pub const DEFAULT_CLOCK_SKEW: chrono::TimeDelta = chrono::TimeDelta::seconds(60)
 ///
 /// Carries the document's externally-supplied `@context` (for comparison
 /// with the proof's declared context), an optional allowlist of acceptable
-/// cryptosuites, the clock-skew tolerance applied to `created` and
+/// cryptosuites, the clock-skew tolerances applied to `created` and
 /// `expires`, the time to verify at, and an optional expected `domain` and
-/// `challenge`. More fields will be added as the library grows —
+/// `challenge`.
+///
+/// These options are honoured by [`crate::DataIntegrityProof::verify`],
+/// [`crate::DataIntegrityProof::verify_with_public_key`] and
+/// [`crate::verify_multi`]. [`crate::verify_conformance`] and the
+/// `bbs-2023` verifiers do not take a `VerifyOptions`: they check `created`
+/// and `expires` against the current time with the default skews, and do
+/// not check `domain` or `challenge`. More fields will be added as the library grows —
 /// `#[non_exhaustive]` ensures future additions do not break callers.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -199,11 +211,18 @@ pub struct VerifyOptions {
     pub allowed_suites: Vec<CryptoSuite>,
 
     /// How far into the verifier's future a proof's `created` may sit
-    /// before it is rejected as non-conformant, and how far past a proof's
-    /// `expires` the verifier may be before the proof is refused as
-    /// expired. Defaults to [`DEFAULT_CLOCK_SKEW`]; set to zero for strict
-    /// comparison. Negative values are treated as zero.
+    /// before it is rejected as non-conformant. Defaults to
+    /// [`DEFAULT_CLOCK_SKEW`]; set to zero for strict rejection of any
+    /// future timestamp. Negative values are treated as zero. Does not
+    /// apply to `expires`; see [`Self::expiry_clock_skew`].
     pub clock_skew: chrono::TimeDelta,
+
+    /// How long after a proof's `expires` it is still accepted. Defaults to
+    /// zero: the proof is expired from the `expires` instant on (the bound
+    /// is inclusive, `now >= expires`). Raise it only to tolerate a
+    /// verifier clock known to run ahead. Negative values are treated as
+    /// zero.
+    pub expiry_clock_skew: chrono::TimeDelta,
 
     /// The time `created` and `expires` are compared against. `None` (the
     /// default) means the current time. Set it to verify as of a fixed
@@ -229,6 +248,7 @@ impl Default for VerifyOptions {
             expected_context: None,
             allowed_suites: Vec::new(),
             clock_skew: DEFAULT_CLOCK_SKEW,
+            expiry_clock_skew: chrono::TimeDelta::zero(),
             verification_time: None,
             expected_domain: None,
             expected_challenge: None,
@@ -265,6 +285,14 @@ impl VerifyOptions {
     #[must_use = "chained builder call returns self; assign or chain further"]
     pub fn with_clock_skew(mut self, skew: chrono::TimeDelta) -> Self {
         self.clock_skew = skew;
+        self
+    }
+
+    /// Sets how long after `expires` a proof is still accepted. The
+    /// default is zero.
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_expiry_clock_skew(mut self, skew: chrono::TimeDelta) -> Self {
+        self.expiry_clock_skew = skew;
         self
     }
 
