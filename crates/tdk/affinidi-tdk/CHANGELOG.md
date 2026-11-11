@@ -6,6 +6,12 @@
   validation verifies certificate signatures, and parsed XML lists must be
   released with `assume_authenticated()` and are refused when stale. See that
   crate's CHANGELOG for the API changes.
+## Unreleased (0.40.0) — affinidi-siopv2 0.2
+
+- **Changed:** the `siopv2` feature moves to `affinidi-siopv2` 0.2: ID Tokens
+  are signed with `SelfIssuedIdToken::sign` and checked with
+  `verify_id_token`; the claims-only check is renamed `validate_claims`. See
+  that crate's CHANGELOG.
 
 ## Unreleased (0.38.0) — affinidi-mdoc 0.5
 

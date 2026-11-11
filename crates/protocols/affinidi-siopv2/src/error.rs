@@ -44,6 +44,11 @@ pub enum SiopError {
     #[error("Audience mismatch: expected {expected}, got {actual}")]
     AudienceMismatch { expected: String, actual: String },
 
+    /// The ID Token's signature is missing, uses a disallowed algorithm, or
+    /// does not verify.
+    #[error("ID Token signature invalid: {0}")]
+    SignatureInvalid(String),
+
     /// The JWK Thumbprint does not match the sub claim.
     #[error("JWK Thumbprint mismatch")]
     ThumbprintMismatch,

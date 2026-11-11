@@ -112,9 +112,18 @@ impl AuthorizationRequest {
                 "response_type must be id_token for SIOPv2".into(),
             ));
         }
-        if !self.scope.contains("openid") {
+        if !self
+            .scope
+            .split_ascii_whitespace()
+            .any(|scope| scope == "openid")
+        {
             return Err(crate::error::SiopError::InvalidRequest(
                 "scope must include openid".into(),
+            ));
+        }
+        if url::Url::parse(&self.redirect_uri).is_err() {
+            return Err(crate::error::SiopError::InvalidRequest(
+                "redirect_uri must be an absolute URI".into(),
             ));
         }
         if self.nonce.is_empty() {
@@ -182,6 +191,21 @@ mod tests {
     #[test]
     fn validate_empty_nonce_fails() {
         let req = AuthorizationRequest::new("rp", "redirect", "");
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn scope_must_contain_the_openid_token() {
+        let mut req = AuthorizationRequest::new("rp", "https://rp.example.com/cb", "nonce");
+        req.scope = "notopenid".into();
+        assert!(req.validate().is_err());
+        req.scope = "profile openid".into();
+        assert!(req.validate().is_ok());
+    }
+
+    #[test]
+    fn redirect_uri_must_be_absolute() {
+        let req = AuthorizationRequest::new("rp", "callback", "nonce");
         assert!(req.validate().is_err());
     }
 

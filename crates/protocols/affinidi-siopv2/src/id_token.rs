@@ -11,13 +11,24 @@
  *   `sub_jwk` MUST NOT be present
  */
 
+use affinidi_oid4vc_core::eddsa::EdDsaVerifier;
+use affinidi_oid4vc_core::es256::Es256Verifier;
+use affinidi_oid4vc_core::jwt::{
+    Audience, JwtSigner, JwtVerifier, decode_compact_jws_unverified,
+    decode_compact_jws_verified_with_algs, encode_compact_jws,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::error::{Result, SiopError};
 
-/// A Self-Issued ID Token per SIOPv2.
+/// A Self-Issued ID Token's claims per SIOPv2.
+///
+/// This is the payload only. [`sign`](Self::sign) produces the compact JWS a
+/// wallet sends; a relying party checks a received token with
+/// [`verify_id_token`], which verifies the signature before it checks the
+/// claims.
 ///
 /// The `iss` and `sub` claims MUST be identical, signaling self-issuance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,8 +37,9 @@ pub struct SelfIssuedIdToken {
     pub iss: String,
     /// Subject — JWK Thumbprint URI or DID.
     pub sub: String,
-    /// Audience — MUST contain the RP's `client_id`.
-    pub aud: String,
+    /// Audience — MUST contain the RP's `client_id`. A single string or an
+    /// array (RFC 7519 §4.1.3).
+    pub aud: Audience,
     /// Expiration time (Unix timestamp).
     pub exp: i64,
     /// Issued-at time (Unix timestamp).
@@ -51,6 +63,132 @@ pub struct SelfIssuedIdToken {
     pub additional_claims: serde_json::Map<String, Value>,
 }
 
+/// What a relying party expects of a received ID Token.
+#[derive(Debug, Clone)]
+pub struct IdTokenExpectations<'a> {
+    /// The JWS algorithms accepted (e.g. the `id_token_signing_alg_values_supported`
+    /// the RP advertised). Only `ES256` and `EdDSA` can be verified against a
+    /// `sub_jwk`; an empty list rejects every token.
+    pub allowed_algs: &'a [&'a str],
+    /// The RP's `client_id`; `aud` must contain it.
+    pub client_id: &'a str,
+    /// The nonce the RP sent in the authorization request.
+    pub nonce: &'a str,
+    /// The current time (Unix seconds).
+    pub now: i64,
+    /// Clock skew tolerated on `exp` and `iat`, in seconds.
+    pub leeway_seconds: i64,
+}
+
+impl<'a> IdTokenExpectations<'a> {
+    /// Expectations at the system clock's current time with 60 seconds of leeway.
+    pub fn new(allowed_algs: &'a [&'a str], client_id: &'a str, nonce: &'a str) -> Self {
+        Self {
+            allowed_algs,
+            client_id,
+            nonce,
+            now: Utc::now().timestamp(),
+            leeway_seconds: 60,
+        }
+    }
+}
+
+/// Resolves the verification key for a DID subject's ID Token.
+///
+/// `kid` is the JWS header `kid`, already checked to be a DID URL under the
+/// token's `sub`. An implementation resolves the DID, finds that verification
+/// method, checks it is authorised for `authentication`, and returns a
+/// verifier for its key that matches `alg`.
+pub trait DidKeyResolver {
+    /// A verifier for the key `kid` names, for algorithm `alg`.
+    fn resolve(&self, kid: &str, alg: &str) -> Result<Box<dyn JwtVerifier>>;
+}
+
+/// Verify a received Self-Issued ID Token (compact JWS) and return its claims.
+///
+/// 1. The header `alg` must be in `expected.allowed_algs` (and is never `none`).
+/// 2. The signature is verified:
+///    - JWK Thumbprint subject: with the key in `sub_jwk` (`ES256` for an EC
+///      P-256 key, `EdDSA` for an Ed25519 key);
+///    - DID subject: the header `kid` must be a DID URL under `sub`, and the
+///      key comes from `did_resolver`. Without a resolver a DID subject is
+///      rejected.
+/// 3. The verified claims pass [`SelfIssuedIdToken::validate_claims`],
+///    which includes `sub` matching the thumbprint of `sub_jwk`.
+pub fn verify_id_token(
+    jwt: &str,
+    expected: &IdTokenExpectations<'_>,
+    did_resolver: Option<&dyn DidKeyResolver>,
+) -> Result<SelfIssuedIdToken> {
+    let (header, unverified_payload) = decode_compact_jws_unverified(jwt)
+        .map_err(|e| SiopError::InvalidIdToken(format!("malformed JWS: {e}")))?;
+    let alg = header
+        .get("alg")
+        .and_then(Value::as_str)
+        .ok_or_else(|| SiopError::InvalidIdToken("missing alg in JWS header".into()))?;
+    if !expected.allowed_algs.contains(&alg) {
+        return Err(SiopError::InvalidIdToken(format!(
+            "JWS alg \"{alg}\" is not in the allowed set {:?}",
+            expected.allowed_algs
+        )));
+    }
+    let sub = unverified_payload
+        .get("sub")
+        .and_then(Value::as_str)
+        .ok_or_else(|| SiopError::InvalidIdToken("missing sub".into()))?;
+
+    let verifier: Box<dyn JwtVerifier> = if sub.starts_with("did:") {
+        let kid = header
+            .get("kid")
+            .and_then(Value::as_str)
+            .ok_or_else(|| SiopError::InvalidIdToken("DID subject requires a kid".into()))?;
+        if !kid_is_under_did(kid, sub) {
+            return Err(SiopError::InvalidIdToken(format!(
+                "kid {kid} is not a verification method of {sub}"
+            )));
+        }
+        let resolver = did_resolver.ok_or_else(|| {
+            SiopError::InvalidIdToken("no DID key resolver for a DID subject".into())
+        })?;
+        resolver.resolve(kid, alg)?
+    } else {
+        let jwk = unverified_payload
+            .get("sub_jwk")
+            .ok_or_else(|| SiopError::InvalidIdToken("sub_jwk required".into()))?;
+        verifier_for_jwk(jwk, alg)?
+    };
+
+    let (_, payload) =
+        decode_compact_jws_verified_with_algs(jwt, verifier.as_ref(), expected.allowed_algs)
+            .map_err(|e| SiopError::SignatureInvalid(e.to_string()))?;
+    let token: SelfIssuedIdToken = serde_json::from_value(payload)?;
+    token.validate_claims(expected)?;
+    Ok(token)
+}
+
+fn kid_is_under_did(kid: &str, did: &str) -> bool {
+    kid.strip_prefix(did)
+        .and_then(|rest| rest.strip_prefix('#'))
+        .is_some_and(|fragment| !fragment.is_empty())
+}
+
+fn verifier_for_jwk(jwk: &Value, alg: &str) -> Result<Box<dyn JwtVerifier>> {
+    let kty = jwk.get("kty").and_then(Value::as_str);
+    let crv = jwk.get("crv").and_then(Value::as_str);
+    let unusable = |reason: String| SiopError::InvalidIdToken(format!("sub_jwk: {reason}"));
+    match (alg, kty, crv) {
+        ("ES256", Some("EC"), Some("P-256")) => Ok(Box::new(
+            Es256Verifier::from_jwk(jwk).map_err(|e| unusable(e.to_string()))?,
+        )),
+        ("EdDSA", Some("OKP"), Some("Ed25519")) => Ok(Box::new(
+            EdDsaVerifier::from_jwk(jwk).map_err(|e| unusable(e.to_string()))?,
+        )),
+        _ => Err(unusable(format!(
+            "alg {alg} with kty {kty:?} / crv {crv:?} is not supported"
+        ))),
+    }
+}
+
 impl SelfIssuedIdToken {
     /// Whether this is a DID-based subject (vs JWK Thumbprint).
     pub fn is_did_subject(&self) -> bool {
@@ -62,40 +200,64 @@ impl SelfIssuedIdToken {
         self.sub_jwk.is_some()
     }
 
-    /// Validate the structural integrity of the ID Token.
+    /// Sign the claims as a compact JWS (the `id_token` a wallet returns).
+    ///
+    /// For a DID subject the signer must carry a `kid` that is a DID URL
+    /// under `sub`, so the relying party can find the key. For a JWK
+    /// Thumbprint subject the signer's key must be the one in `sub_jwk`.
+    pub fn sign(&self, signer: &dyn JwtSigner) -> Result<String> {
+        let kid = signer.key_id();
+        if self.is_did_subject() && !kid.is_some_and(|kid| kid_is_under_did(kid, &self.sub)) {
+            return Err(SiopError::InvalidIdToken(
+                "a DID subject's signer needs a kid naming a verification method of that DID"
+                    .into(),
+            ));
+        }
+        let mut header = json!({ "alg": signer.algorithm(), "typ": "JWT" });
+        if let Some(kid) = kid {
+            header["kid"] = json!(kid);
+        }
+        let payload = serde_json::to_value(self)?;
+        encode_compact_jws(&header, &payload, signer)
+            .map_err(|e| SiopError::InvalidIdToken(format!("signing failed: {e}")))
+    }
+
+    /// Check the token's claims. **Does not verify any signature**: use
+    /// [`verify_id_token`] on the received JWS, which calls this after the
+    /// signature verifies. Claims taken from an unverified JWT prove nothing,
+    /// since anyone can produce a `sub_jwk` and a matching `sub`.
     ///
     /// Checks:
     /// 1. `iss == sub` (self-issued invariant)
-    /// 2. `sub_jwk` present iff JWK Thumbprint subject
-    /// 3. For JWK Thumbprint: `sub` matches the thumbprint of `sub_jwk`
-    /// 4. Token not expired
-    /// 5. Nonce is non-empty
-    pub fn validate(&self, expected_client_id: &str, expected_nonce: &str) -> Result<()> {
-        // Step 1: iss == sub
+    /// 2. `aud` contains `expected.client_id`
+    /// 3. `nonce` equals `expected.nonce`
+    /// 4. `exp` has not passed and `iat` is not in the future (both with
+    ///    `expected.leeway_seconds`)
+    /// 5. `sub_jwk` is absent for a DID subject; otherwise present, and `sub`
+    ///    is its JWK Thumbprint
+    pub fn validate_claims(&self, expected: &IdTokenExpectations<'_>) -> Result<()> {
         if self.iss != self.sub {
             return Err(SiopError::IssSubMismatch);
         }
 
-        // Step 2: aud matches client_id
-        if self.aud != expected_client_id {
+        if !self.aud.contains(expected.client_id) {
             return Err(SiopError::AudienceMismatch {
-                expected: expected_client_id.to_string(),
-                actual: self.aud.clone(),
+                expected: expected.client_id.to_string(),
+                actual: self.aud.iter().collect::<Vec<_>>().join(" "),
             });
         }
 
-        // Step 3: nonce matches
-        if self.nonce != expected_nonce {
+        if self.nonce != expected.nonce {
             return Err(SiopError::NonceMismatch);
         }
 
-        // Step 4: not expired
-        let now = Utc::now().timestamp();
-        if now > self.exp {
+        if expected.now > self.exp.saturating_add(expected.leeway_seconds) {
             return Err(SiopError::Expired);
         }
+        if self.iat > expected.now.saturating_add(expected.leeway_seconds) {
+            return Err(SiopError::InvalidIdToken("iat is in the future".into()));
+        }
 
-        // Step 5: sub_jwk consistency
         if self.is_did_subject() {
             if self.sub_jwk.is_some() {
                 return Err(SiopError::InvalidIdToken(
@@ -103,7 +265,6 @@ impl SelfIssuedIdToken {
                 ));
             }
         } else if let Some(ref jwk) = self.sub_jwk {
-            // Verify JWK Thumbprint matches sub
             let thumbprint = affinidi_oid4vc_core::compute_jwk_thumbprint(jwk)
                 .ok_or_else(|| SiopError::InvalidIdToken("cannot compute JWK Thumbprint".into()))?;
             if self.sub != thumbprint {
@@ -176,7 +337,8 @@ impl IdTokenBuilder {
         self
     }
 
-    /// Build the ID Token.
+    /// Build the ID Token's claims. Call [`SelfIssuedIdToken::sign`] to get
+    /// the JWS to send.
     pub fn build(self) -> Result<SelfIssuedIdToken> {
         let sub = self.sub.ok_or_else(|| {
             SiopError::InvalidIdToken(
@@ -189,7 +351,7 @@ impl IdTokenBuilder {
         Ok(SelfIssuedIdToken {
             iss: sub.clone(), // iss == sub
             sub,
-            aud: self.aud,
+            aud: Audience::One(self.aud),
             exp: now + self.exp_seconds,
             iat: now,
             nonce: self.nonce,
@@ -205,7 +367,17 @@ impl IdTokenBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use affinidi_oid4vc_core::eddsa::EdDsaSigner;
+    use affinidi_oid4vc_core::es256::Es256Signer;
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     use serde_json::json;
+
+    const ALGS: &[&str] = &["ES256", "EdDSA"];
+    const DID: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+    fn expect<'a>(client_id: &'a str, nonce: &'a str) -> IdTokenExpectations<'a> {
+        IdTokenExpectations::new(ALGS, client_id, nonce)
+    }
 
     fn test_jwk() -> Value {
         json!({
@@ -214,6 +386,32 @@ mod tests {
             "x": "TCAER19Zvu3OHF4j4W4vfSVoHIP1ILilDls7vCeGemc",
             "y": "ZxjiWWbZMQGHVWKVQ4hbSIirsVfuecCE6t4jT9F2HZQ"
         })
+    }
+
+    fn did_token(client_id: &str, nonce: &str) -> SelfIssuedIdToken {
+        IdTokenBuilder::new(client_id, nonce)
+            .with_did(DID)
+            .build()
+            .unwrap()
+    }
+
+    fn signed_thumbprint_token(signer: &dyn JwtSigner, jwk: Value) -> String {
+        IdTokenBuilder::new("rp", "n")
+            .with_jwk_thumbprint(jwk)
+            .unwrap()
+            .build()
+            .unwrap()
+            .sign(signer)
+            .unwrap()
+    }
+
+    struct FixedKey(Value);
+
+    impl DidKeyResolver for FixedKey {
+        fn resolve(&self, kid: &str, alg: &str) -> Result<Box<dyn JwtVerifier>> {
+            assert!(kid.starts_with(DID));
+            verifier_for_jwk(&self.0, alg)
+        }
     }
 
     #[test]
@@ -226,110 +424,162 @@ mod tests {
             .unwrap();
 
         assert_eq!(token.iss, token.sub);
-        assert_eq!(token.aud, "https://rp.example.com");
+        assert!(token.aud.contains("https://rp.example.com"));
         assert_eq!(token.nonce, "nonce123");
-        assert!(token.sub_jwk.is_some());
+        assert!(token.is_jwk_thumbprint_subject());
         assert!(!token.is_did_subject());
+    }
+
+    #[test]
+    fn es256_thumbprint_token_signs_and_verifies() {
+        let signer = Es256Signer::generate();
+        let jwt = signed_thumbprint_token(&signer, signer.public_key_jwk());
+        let token = verify_id_token(&jwt, &expect("rp", "n"), None).unwrap();
         assert!(token.is_jwk_thumbprint_subject());
     }
 
     #[test]
-    fn build_did_token() {
-        let token = IdTokenBuilder::new("https://rp.example.com", "nonce456")
-            .with_did("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
-            .build()
-            .unwrap();
-
-        assert_eq!(token.iss, token.sub);
-        assert_eq!(
-            token.sub,
-            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
-        );
-        assert!(token.sub_jwk.is_none());
-        assert!(token.is_did_subject());
+    fn eddsa_thumbprint_token_signs_and_verifies() {
+        let signer = EdDsaSigner::generate();
+        let jwt = signed_thumbprint_token(&signer, signer.public_key_jwk());
+        assert!(verify_id_token(&jwt, &expect("rp", "n"), None).is_ok());
     }
 
     #[test]
-    fn validate_jwk_thumbprint_token() {
-        let token = IdTokenBuilder::new("rp-client-id", "test-nonce")
-            .with_jwk_thumbprint(test_jwk())
-            .unwrap()
-            .build()
-            .unwrap();
-
-        assert!(token.validate("rp-client-id", "test-nonce").is_ok());
+    fn token_signed_by_another_key_than_sub_jwk_is_rejected() {
+        let holder = Es256Signer::generate();
+        let other = Es256Signer::generate();
+        let jwt = signed_thumbprint_token(&other, holder.public_key_jwk());
+        assert!(matches!(
+            verify_id_token(&jwt, &expect("rp", "n"), None),
+            Err(SiopError::SignatureInvalid(_))
+        ));
     }
 
     #[test]
-    fn validate_did_token() {
-        let token = IdTokenBuilder::new("rp-client-id", "test-nonce")
-            .with_did("did:key:z6Mk...")
-            .build()
-            .unwrap();
+    fn claims_without_a_valid_signature_are_rejected() {
+        let signer = Es256Signer::generate();
+        let jwt = signed_thumbprint_token(&signer, signer.public_key_jwk());
+        let mut parts: Vec<&str> = jwt.split('.').collect();
+        let unsigned = format!("{}.{}.", parts[0], parts[1]);
+        assert!(verify_id_token(&unsigned, &expect("rp", "n"), None).is_err());
 
-        assert!(token.validate("rp-client-id", "test-nonce").is_ok());
+        let none_header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+        parts[0] = &none_header;
+        assert!(verify_id_token(&parts.join("."), &expect("rp", "n"), None).is_err());
     }
 
     #[test]
-    fn validate_iss_sub_mismatch_fails() {
-        let mut token = IdTokenBuilder::new("rp", "n")
-            .with_did("did:key:abc")
-            .build()
-            .unwrap();
+    fn disallowed_alg_is_rejected() {
+        let signer = EdDsaSigner::generate();
+        let jwt = signed_thumbprint_token(&signer, signer.public_key_jwk());
+        let only_es256 = IdTokenExpectations::new(&["ES256"], "rp", "n");
+        assert!(verify_id_token(&jwt, &only_es256, None).is_err());
+    }
 
+    #[test]
+    fn alg_must_match_the_sub_jwk_key_type() {
+        let signer = EdDsaSigner::generate();
+        let jwt = signed_thumbprint_token(&signer, test_jwk());
+        assert!(verify_id_token(&jwt, &expect("rp", "n"), None).is_err());
+    }
+
+    #[test]
+    fn did_token_verifies_with_resolved_key() {
+        let signer = EdDsaSigner::generate().with_kid(format!("{DID}#key-1"));
+        let jwt = did_token("rp", "n").sign(&signer).unwrap();
+        let resolver = FixedKey(signer.public_key_jwk());
+        assert!(verify_id_token(&jwt, &expect("rp", "n"), Some(&resolver)).is_ok());
+    }
+
+    #[test]
+    fn did_token_without_resolver_is_rejected() {
+        let signer = EdDsaSigner::generate().with_kid(format!("{DID}#key-1"));
+        let jwt = did_token("rp", "n").sign(&signer).unwrap();
+        assert!(verify_id_token(&jwt, &expect("rp", "n"), None).is_err());
+    }
+
+    #[test]
+    fn did_token_signer_needs_kid_under_the_did() {
+        let token = did_token("rp", "n");
+        assert!(token.sign(&EdDsaSigner::generate()).is_err());
+        let foreign = EdDsaSigner::generate().with_kid("did:key:zOther#key-1");
+        assert!(token.sign(&foreign).is_err());
+    }
+
+    #[test]
+    fn did_token_with_wrong_resolved_key_is_rejected() {
+        let signer = EdDsaSigner::generate().with_kid(format!("{DID}#key-1"));
+        let jwt = did_token("rp", "n").sign(&signer).unwrap();
+        let resolver = FixedKey(EdDsaSigner::generate().public_key_jwk());
+        assert!(verify_id_token(&jwt, &expect("rp", "n"), Some(&resolver)).is_err());
+    }
+
+    #[test]
+    fn kid_under_did_requires_a_fragment() {
+        assert!(kid_is_under_did("did:key:abc#k1", "did:key:abc"));
+        assert!(!kid_is_under_did("did:key:abc", "did:key:abc"));
+        assert!(!kid_is_under_did("did:key:abcd#k1", "did:key:abc"));
+        assert!(!kid_is_under_did("did:key:abc#", "did:key:abc"));
+    }
+
+    #[test]
+    fn validate_claims_iss_sub_mismatch_fails() {
+        let mut token = did_token("rp", "n");
         token.iss = "different".into();
         assert!(matches!(
-            token.validate("rp", "n"),
+            token.validate_claims(&expect("rp", "n")),
             Err(SiopError::IssSubMismatch)
         ));
     }
 
     #[test]
-    fn validate_wrong_audience_fails() {
-        let token = IdTokenBuilder::new("correct-rp", "n")
-            .with_did("did:key:abc")
-            .build()
-            .unwrap();
-
+    fn validate_claims_wrong_audience_fails() {
         assert!(matches!(
-            token.validate("wrong-rp", "n"),
+            did_token("correct-rp", "n").validate_claims(&expect("wrong-rp", "n")),
             Err(SiopError::AudienceMismatch { .. })
         ));
     }
 
     #[test]
-    fn validate_wrong_nonce_fails() {
-        let token = IdTokenBuilder::new("rp", "correct-nonce")
-            .with_did("did:key:abc")
-            .build()
-            .unwrap();
+    fn array_audience_is_accepted() {
+        let mut claims = serde_json::to_value(did_token("rp", "n")).unwrap();
+        claims["aud"] = json!(["other", "rp"]);
+        let token: SelfIssuedIdToken = serde_json::from_value(claims).unwrap();
+        assert!(token.validate_claims(&expect("rp", "n")).is_ok());
+    }
 
+    #[test]
+    fn validate_claims_wrong_nonce_fails() {
         assert!(matches!(
-            token.validate("rp", "wrong-nonce"),
+            did_token("rp", "correct").validate_claims(&expect("rp", "wrong")),
             Err(SiopError::NonceMismatch)
         ));
     }
 
     #[test]
-    fn validate_expired_fails() {
-        let mut token = IdTokenBuilder::new("rp", "n")
-            .with_did("did:key:abc")
-            .build()
-            .unwrap();
+    fn validate_claims_expiry_and_iat_use_given_time_and_leeway() {
+        let token = did_token("rp", "n");
+        let mut at = expect("rp", "n");
+        at.leeway_seconds = 30;
 
-        token.exp = Utc::now().timestamp() - 100;
-        assert!(matches!(token.validate("rp", "n"), Err(SiopError::Expired)));
+        at.now = token.exp + 20;
+        assert!(token.validate_claims(&at).is_ok());
+        at.now = token.exp + 31;
+        assert!(matches!(
+            token.validate_claims(&at),
+            Err(SiopError::Expired)
+        ));
+
+        at.now = token.iat - 31;
+        assert!(token.validate_claims(&at).is_err());
     }
 
     #[test]
-    fn validate_did_with_sub_jwk_fails() {
-        let mut token = IdTokenBuilder::new("rp", "n")
-            .with_did("did:key:abc")
-            .build()
-            .unwrap();
-
+    fn validate_claims_did_with_sub_jwk_fails() {
+        let mut token = did_token("rp", "n");
         token.sub_jwk = Some(test_jwk());
-        assert!(token.validate("rp", "n").is_err());
+        assert!(token.validate_claims(&expect("rp", "n")).is_err());
     }
 
     #[test]
@@ -337,22 +587,18 @@ mod tests {
         let token = IdTokenBuilder::new("rp", "n")
             .with_did("did:key:abc")
             .claim("name", json!("Alice"))
-            .claim("email", json!("alice@example.com"))
             .build()
             .unwrap();
 
         let json = serde_json::to_string(&token).unwrap();
         let parsed: SelfIssuedIdToken = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(parsed.iss, token.iss);
         assert_eq!(parsed.sub, token.sub);
+        assert_eq!(parsed.aud, Audience::One("rp".into()));
         assert_eq!(parsed.additional_claims["name"], "Alice");
-        assert_eq!(parsed.additional_claims["email"], "alice@example.com");
     }
 
     #[test]
     fn build_without_subject_fails() {
-        let result = IdTokenBuilder::new("rp", "n").build();
-        assert!(result.is_err());
+        assert!(IdTokenBuilder::new("rp", "n").build().is_err());
     }
 }
