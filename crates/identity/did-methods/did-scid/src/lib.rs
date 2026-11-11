@@ -271,8 +271,9 @@ async fn resolve_webs(webs_did: &str) -> Result<Document, DIDSCIDError> {
 /// Like `resolve_webvh_native`: this returns a bare `Document`, so a
 /// deactivation reported only in the metadata would leave the retired keys
 /// usable. It is refused here whichever `affinidi-did-webs` 0.13 release
-/// resolved it.
-#[cfg(feature = "did-webs")]
+/// resolved it. Compiled for tests too, where `affinidi-did-webs` is a
+/// dev-dependency, so its test runs without the feature.
+#[cfg(any(feature = "did-webs", test))]
 fn webs_document(
     webs_did: &str,
     resolution: affinidi_did_webs::Resolution,
@@ -882,7 +883,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "did-webs"))]
+#[cfg(test)]
 mod webs_tests {
     use crate::{errors::DIDSCIDError, webs_document};
     use affinidi_did_webs::create::{CreateConfig, create};
