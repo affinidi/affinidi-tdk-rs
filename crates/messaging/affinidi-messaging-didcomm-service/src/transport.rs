@@ -44,6 +44,13 @@ pub fn build_response(
     Ok(builder.finalize())
 }
 
+/// Builds a problem report addressed to the message's sender.
+///
+/// Do not use this, or [`send_problem_report`], to answer a message that is
+/// itself a problem report (see [`is_problem_report_type`]): two services
+/// that do so can keep a pair of reports going. Replies returned from a
+/// handler are checked for this by the listener; these functions are not,
+/// because [`HandlerContext`] does not carry the inbound message type.
 pub fn build_problem_report(
     ctx: &HandlerContext,
     report: &ProblemReport,
@@ -101,6 +108,8 @@ pub async fn send_response(
     Ok(())
 }
 
+/// Builds and sends a problem report to the message's sender. See
+/// [`build_problem_report`]: not for answering a problem report.
 pub async fn send_problem_report(
     ctx: &HandlerContext,
     report: &ProblemReport,

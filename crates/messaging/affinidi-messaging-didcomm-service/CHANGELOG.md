@@ -1,11 +1,5 @@
 # Changelog
 
-## 0.30.1 — log names a repeated TSP invite
-
-The debug line for an inbound TSP control message that was not recorded now
-also names a copy of an invite already acted on, which
-`affinidi-messaging-sdk` 0.45.8 refuses. Log text only.
-
 ## Unreleased (0.30.2) — no reply to problem reports; error text kept local
 
 Follows 0.30.1 (#1083); merge that first.
@@ -22,6 +16,19 @@ Follows 0.30.1 (#1083); merge that first.
   with the fixed comment `INTERNAL_ERROR_COMMENT`; the error text is only in
   the warning it logs. Problem report codes are unchanged; a peer that read
   the comment gets the fixed text.
+- `PROBLEM_REPORT_TYPE`, `is_problem_report_type` and
+  `UNSUPPORTED_TYPE_COMMENT` are re-exported from the crate root.
+  `build_problem_report` / `send_problem_report` document that they are not
+  for answering a problem report; they are called directly by handlers and
+  are not checked (`HandlerContext` does not carry the inbound type).
+- `examples/echo_server.rs`'s fallback follows the same rules as `Router`.
+
+## 0.30.1 — log names a repeated TSP invite
+
+The debug line for an inbound TSP control message that was not recorded now
+also names a copy of an invite already acted on, which
+`affinidi-messaging-sdk` 0.45.8 refuses. Log text only.
+
 ## Unreleased (0.30.0) — SDK 0.45
 
 Moves to `affinidi-messaging-sdk` 0.45 (`trust-tasks-rs` 0.37). The SDK is a public dependency here, so this crate moves a minor. No source change.
