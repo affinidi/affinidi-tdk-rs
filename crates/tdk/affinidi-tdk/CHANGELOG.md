@@ -1,5 +1,12 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.38.0) — affinidi-mdoc 0.5
+
+- **Changed:** the `mdoc` feature moves to `affinidi-mdoc` 0.5: item digests
+  are checked over the bytes as received, `DeviceResponse::verify` runs the
+  full reader check set, and COSE `alg` headers are checked. Stricter
+  verification is a behaviour change for callers of the re-exported crate.
+
 ## Unreleased (0.37.6) — affinidi-did-webs 0.13
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.13, on

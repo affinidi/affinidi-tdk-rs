@@ -106,6 +106,10 @@ impl Es384CoseVerifier {
 }
 
 impl CoseVerifier for Es384CoseVerifier {
+    fn algorithm(&self) -> Option<coset::iana::Algorithm> {
+        Some(coset::iana::Algorithm::ES384)
+    }
+
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<bool> {
         let sig = Signature::from_slice(signature)
             .map_err(|e| MdocError::Cose(format!("invalid ES384 signature: {e}")))?;

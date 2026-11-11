@@ -46,7 +46,87 @@ pub trait CoseSigner: Send + Sync {
 pub trait CoseVerifier: Send + Sync {
     /// Verify the signature over the data. Returns `Ok(true)` if valid.
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<bool>;
+
+    /// The one COSE algorithm this verifier checks, if it is bound to one.
+    ///
+    /// When this returns `Some`, every verification function in this crate
+    /// rejects a COSE structure whose protected `alg` names a different
+    /// algorithm. The built-in verifiers return their algorithm; the default
+    /// is `None` so existing implementations keep compiling.
+    fn algorithm(&self) -> Option<coset::iana::Algorithm> {
+        None
+    }
 }
+
+/// Read the protected `alg` of a COSE structure and check it against the
+/// verifier and an optional allow-list.
+///
+/// A missing or non-registered `alg` is refused: the algorithm is part of the
+/// signed data, and accepting a signature without knowing what it claims to be
+/// leaves the choice to whoever produced it.
+pub(crate) fn checked_algorithm(
+    protected: &coset::Header,
+    verifier: &dyn CoseVerifier,
+    allowed: Option<&[coset::iana::Algorithm]>,
+) -> std::result::Result<coset::iana::Algorithm, String> {
+    let alg = match &protected.alg {
+        Some(coset::RegisteredLabelWithPrivate::Assigned(alg)) => *alg,
+        Some(other) => return Err(format!("unsupported protected alg {other:?}")),
+        None => return Err("protected header carries no alg".into()),
+    };
+    if let Some(expected) = verifier.algorithm()
+        && expected != alg
+    {
+        return Err(format!(
+            "protected alg {alg:?} does not match the verifier's {expected:?}"
+        ));
+    }
+    if let Some(allowed) = allowed
+        && !allowed.contains(&alg)
+    {
+        return Err(format!("protected alg {alg:?} is not in the allowed list"));
+    }
+    Ok(alg)
+}
+
+/// The X.509 certificate chain (`x5chain`, label 33) of a COSE_Sign1, leaf
+/// first, DER-encoded.
+///
+/// Read from the unprotected header, where ISO 18013-5 places it, or from the
+/// protected header. Returns an empty vector when neither carries one, and an
+/// error when the value is neither a bstr nor a non-empty array of bstr.
+///
+/// The chain is **unverified** data from the credential: the caller has to
+/// validate it against its trust anchors before using the leaf key.
+pub fn x5chain(sign1: &CoseSign1) -> Result<Vec<Vec<u8>>> {
+    let label = coset::Label::Int(X5CHAIN_LABEL);
+    let value = sign1
+        .unprotected
+        .rest
+        .iter()
+        .chain(sign1.protected.header.rest.iter())
+        .find(|(key, _)| *key == label)
+        .map(|(_, value)| value);
+    match value {
+        None => Ok(Vec::new()),
+        Some(coset::cbor::Value::Bytes(cert)) => Ok(vec![cert.clone()]),
+        Some(coset::cbor::Value::Array(certs)) if !certs.is_empty() => certs
+            .iter()
+            .map(|cert| match cert {
+                coset::cbor::Value::Bytes(der) => Ok(der.clone()),
+                other => Err(MdocError::Cose(format!(
+                    "x5chain entries must be bstr, got {other:?}"
+                ))),
+            })
+            .collect(),
+        Some(other) => Err(MdocError::Cose(format!(
+            "x5chain must be a bstr or a non-empty array of bstr, got {other:?}"
+        ))),
+    }
+}
+
+/// COSE header label of `x5chain` (RFC 9360).
+pub const X5CHAIN_LABEL: i64 = 33;
 
 /// Sign an MSO with COSE_Sign1, producing the `issuerAuth` structure.
 ///
@@ -94,10 +174,17 @@ pub fn sign_mso(mso: &MobileSecurityObject, signer: &dyn CoseSigner) -> Result<C
 /// Extract and verify the MSO from a COSE_Sign1 `issuerAuth`.
 ///
 /// Returns the decoded MSO if the signature verification succeeds.
+///
+/// The protected header must carry an `alg`, and when the verifier is bound to
+/// an algorithm ([`CoseVerifier::algorithm`]) the two must agree. To restrict
+/// the accepted algorithms further use [`verify_issuer_auth_with_alg`], or
+/// [`crate::DeviceResponse::verify`] for the full set of reader checks.
 pub fn verify_issuer_auth(
     sign1: &CoseSign1,
     verifier: &dyn CoseVerifier,
 ) -> Result<MobileSecurityObject> {
+    checked_algorithm(&sign1.protected.header, verifier, None).map_err(MdocError::Cose)?;
+
     // Verify the signature
     // Note: coset passes (signature, tbs_data) — signature first, then data
     sign1
@@ -132,14 +219,8 @@ pub fn verify_issuer_auth_with_alg(
     verifier: &dyn CoseVerifier,
     expected_alg: coset::iana::Algorithm,
 ) -> Result<MobileSecurityObject> {
-    // Check the algorithm in protected header
-    let alg = &sign1.protected.header.alg;
-    let expected = coset::RegisteredLabelWithPrivate::Assigned(expected_alg);
-    if alg.as_ref() != Some(&expected) {
-        return Err(MdocError::Cose(format!(
-            "algorithm mismatch: expected {expected:?}, got {alg:?}"
-        )));
-    }
+    checked_algorithm(&sign1.protected.header, verifier, Some(&[expected_alg]))
+        .map_err(|e| MdocError::Cose(format!("algorithm mismatch: {e}")))?;
 
     verify_issuer_auth(sign1, verifier)
 }
@@ -295,6 +376,21 @@ mod tests {
         // Verify the deserialized structure
         let decoded = verify_issuer_auth(&parsed, &verifier).unwrap();
         assert_eq!(decoded.doc_type, "test.doctype");
+    }
+
+    #[test]
+    fn x5chain_reads_a_single_certificate_and_rejects_other_shapes() {
+        let mut sign1 = sign_mso(&test_mso(), &TestSigner::new(b"x5chain-test-key")).unwrap();
+        assert!(x5chain(&sign1).unwrap().is_empty());
+
+        sign1.unprotected.rest.push((
+            coset::Label::Int(X5CHAIN_LABEL),
+            coset::cbor::Value::Bytes(b"leaf".to_vec()),
+        ));
+        assert_eq!(x5chain(&sign1).unwrap(), vec![b"leaf".to_vec()]);
+
+        sign1.unprotected.rest[0].1 = coset::cbor::Value::Text("leaf".into());
+        assert!(x5chain(&sign1).is_err());
     }
 
     #[test]

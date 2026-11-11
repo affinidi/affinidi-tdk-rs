@@ -217,6 +217,8 @@ pub fn verify_reader_auth(
     reader_auth: &ReaderAuthentication,
     verifier: &dyn CoseVerifier,
 ) -> Result<bool> {
+    crate::cose::checked_algorithm(&sign1.protected.header, verifier, None)
+        .map_err(MdocError::ReaderAuth)?;
     let auth_bytes = reader_auth.to_reader_authentication_bytes()?;
 
     sign1

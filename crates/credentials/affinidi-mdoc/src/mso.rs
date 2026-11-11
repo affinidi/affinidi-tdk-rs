@@ -98,26 +98,48 @@ impl ValidityInfo {
     /// checks alone do not establish that the credential is currently valid.
     ///
     /// Returns [`MdocError::Expired`] if `now` is outside the window, or
-    /// [`MdocError::InvalidMso`] if either timestamp does not parse as
-    /// RFC 3339.
+    /// [`MdocError::InvalidMso`] if `signed`, `validFrom` or `validUntil` does
+    /// not parse as RFC 3339 or `signed` lies in the future.
     pub fn check(&self, now: time::OffsetDateTime) -> Result<()> {
+        self.check_with_leeway(now, time::Duration::ZERO)
+    }
+
+    /// [`ValidityInfo::check`] with a clock-skew allowance: `now` may be up to
+    /// `leeway` before `validFrom` or after `validUntil`.
+    ///
+    /// `signed` must also parse as RFC 3339 and must not lie more than
+    /// `leeway` in the future. A negative `leeway` is treated as zero.
+    pub fn check_with_leeway(
+        &self,
+        now: time::OffsetDateTime,
+        leeway: time::Duration,
+    ) -> Result<()> {
         use time::format_description::well_known::Rfc3339;
 
+        let leeway = leeway.max(time::Duration::ZERO);
+        let signed = time::OffsetDateTime::parse(&self.signed, &Rfc3339)
+            .map_err(|e| MdocError::InvalidMso(format!("signed not RFC 3339: {e}")))?;
         let valid_from = time::OffsetDateTime::parse(&self.valid_from, &Rfc3339)
             .map_err(|e| MdocError::InvalidMso(format!("validFrom not RFC 3339: {e}")))?;
         let valid_until = time::OffsetDateTime::parse(&self.valid_until, &Rfc3339)
             .map_err(|e| MdocError::InvalidMso(format!("validUntil not RFC 3339: {e}")))?;
 
-        if now < valid_from {
+        if now + leeway < valid_from {
             return Err(MdocError::Expired(format!(
                 "not yet valid (validFrom = {})",
                 self.valid_from
             )));
         }
-        if now > valid_until {
+        if now - leeway > valid_until {
             return Err(MdocError::Expired(format!(
                 "expired (validUntil = {})",
                 self.valid_until
+            )));
+        }
+        if signed > now + leeway {
+            return Err(MdocError::InvalidMso(format!(
+                "signed lies in the future (signed = {})",
+                self.signed
             )));
         }
         Ok(())
@@ -179,18 +201,40 @@ impl MobileSecurityObject {
         Tag24::new(self.clone())
     }
 
-    /// Verify a single IssuerSignedItem's digest against the stored digest.
-    pub fn verify_item_digest(&self, namespace: &str, item: &IssuerSignedItem) -> Result<bool> {
+    /// Verify a received item against the stored digest.
+    ///
+    /// The digest is taken over the item's bytes as received
+    /// ([`Tag24::digest`]), never over a re-encoding of the decoded item. This
+    /// is the check a verifier wants.
+    pub fn verify_tagged_item_digest(
+        &self,
+        namespace: &str,
+        item: &Tag24<IssuerSignedItem>,
+    ) -> Result<bool> {
+        let stored = self.stored_digest(namespace, item.inner.digest_id)?;
+        let computed = item.digest(&self.digest_algorithm)?;
+        Ok(computed == stored)
+    }
+
+    fn stored_digest(&self, namespace: &str, digest_id: u32) -> Result<&[u8]> {
         let ns_digests = self.value_digests.get(namespace).ok_or_else(|| {
             MdocError::InvalidNamespace(format!("namespace not found: {namespace}"))
         })?;
+        ns_digests
+            .get(&digest_id)
+            .map(|digest| digest.as_ref())
+            .ok_or_else(|| MdocError::DigestMismatch(format!("digest_id {digest_id} not found")))
+    }
 
-        let stored = ns_digests.get(&item.digest_id).ok_or_else(|| {
-            MdocError::DigestMismatch(format!("digest_id {} not found", item.digest_id))
-        })?;
-
+    /// Verify an item built in memory against the stored digest.
+    ///
+    /// This re-encodes `item` with this crate's encoder, so it only matches
+    /// items this crate encoded. For an item decoded from the wire use
+    /// [`Self::verify_tagged_item_digest`], which hashes the received bytes.
+    pub fn verify_item_digest(&self, namespace: &str, item: &IssuerSignedItem) -> Result<bool> {
+        let stored = self.stored_digest(namespace, item.digest_id)?;
         let computed = item.compute_digest(&self.digest_algorithm)?;
-        Ok(computed == stored.as_ref())
+        Ok(computed == stored)
     }
 }
 
@@ -493,5 +537,43 @@ mod tests {
         ciborium::into_writer(&legacy, &mut buf).unwrap();
         let decoded: ValidityInfo = ciborium::from_reader(&buf[..]).unwrap();
         assert_eq!(decoded, test_validity());
+    }
+
+    #[test]
+    fn a_signed_date_in_the_future_is_rejected_beyond_leeway() {
+        let validity = ValidityInfo {
+            signed: "2024-06-01T00:10:00Z".into(),
+            valid_from: "2024-01-01T00:00:00Z".into(),
+            valid_until: "2025-01-01T00:00:00Z".into(),
+        };
+        let now = time::OffsetDateTime::parse(
+            "2024-06-01T00:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        assert!(matches!(validity.check(now), Err(MdocError::InvalidMso(_))));
+        validity
+            .check_with_leeway(now, time::Duration::minutes(15))
+            .expect("within leeway");
+    }
+
+    #[test]
+    fn a_tagged_item_digest_is_taken_over_the_received_bytes() {
+        let item = IssuerSignedItem::new(0, "x", ciborium::Value::Integer(1.into()));
+        let mut namespaces = BTreeMap::new();
+        namespaces.insert("ns".to_string(), vec![item.clone()]);
+        let mso = MobileSecurityObject::create(
+            "doc",
+            "SHA-256",
+            &namespaces,
+            test_device_key(),
+            test_validity(),
+            0,
+        )
+        .unwrap();
+        let mut tagged = item.to_tagged().unwrap();
+        assert!(mso.verify_tagged_item_digest("ns", &tagged).unwrap());
+        tagged.inner_bytes.push(0x00);
+        assert!(!mso.verify_tagged_item_digest("ns", &tagged).unwrap());
     }
 }

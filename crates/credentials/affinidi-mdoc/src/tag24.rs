@@ -58,6 +58,16 @@ impl<T> Tag24<T> {
             .map_err(|e| MdocError::Cbor(format!("Tag24 tagged encoding: {e}")))?;
         Ok(buf)
     }
+
+    /// Hash `Tag(24, bstr(inner_bytes))` with the named digest algorithm
+    /// (`"SHA-256"`, `"SHA-384"` or `"SHA-512"`).
+    ///
+    /// This hashes the bytes as received, so an item decoded from another
+    /// encoder hashes to what that encoder signed, whatever its map key order
+    /// or integer widths.
+    pub fn digest(&self, algorithm: &str) -> Result<Vec<u8>> {
+        crate::issuer_signed_item::compute_hash(algorithm, &self.to_tagged_bytes()?)
+    }
 }
 
 impl<T: Serialize> Serialize for Tag24<T> {

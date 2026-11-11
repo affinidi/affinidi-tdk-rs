@@ -42,7 +42,8 @@
  * never over a re-encode. [`Tag24`]'s `Deserialize` preserves `inner_bytes`,
  * so a decode → [`verify_digests`](IssuerSigned::verify_digests) round trip
  * holds even against an encoder whose map ordering or integer widths differ
- * from ours. The round-trip tests below pin that.
+ * from ours. The tests below pin that with items whose map keys are in a
+ * different order and whose integers use wider encodings than ours.
  */
 
 use std::collections::BTreeMap;
@@ -417,8 +418,10 @@ impl DeviceResponse {
     /// Decode from the ISO 18013-5 `DeviceResponse` CBOR wire form.
     ///
     /// **This performs no cryptographic verification** — see the module docs.
-    /// Follow with [`Self::verify_issuer_auth`], [`Self::verify_digests`] and,
-    /// when holder binding matters, [`Self::verify_device_auth`].
+    /// Follow with [`Self::verify`].
+    ///
+    /// A document whose own `docType` is missing or differs from the MSO
+    /// `docType` is rejected.
     ///
     /// Rejects a response that does not carry exactly one document: zero means
     /// there is nothing to present, and this type cannot represent more than
@@ -481,8 +484,17 @@ impl DeviceResponse {
             .ok_or_else(|| MdocError::Cbor("document is missing `issuerSigned`".into()))?;
         let (disclosed, issuer_auth, mso) = issuer_signed_from_value(issuer_signed_value)?;
 
-        // As with `IssuerSigned`, docType tracks the signed MSO rather than the
-        // document's own unsigned member.
+        // The document's own docType is unsigned; it must name the same type
+        // as the MSO (ISO 18013-5 §9.3.1), which is what the struct carries.
+        let doc_type = map_get(doc_entries, KEY_DOC_TYPE)
+            .and_then(Value::as_text)
+            .ok_or_else(|| MdocError::Cbor("document is missing a text `docType`".into()))?;
+        if doc_type != mso.doc_type {
+            return Err(MdocError::InvalidMso(format!(
+                "document docType `{doc_type}` differs from the MSO docType `{}`",
+                mso.doc_type
+            )));
+        }
         let doc_type = mso.doc_type.clone();
 
         let device_signed = match map_get(doc_entries, KEY_DEVICE_SIGNED) {

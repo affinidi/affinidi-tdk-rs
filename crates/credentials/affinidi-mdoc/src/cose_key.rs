@@ -483,6 +483,63 @@ impl CoseKey {
         self.d.is_some()
     }
 
+    /// Build a signature verifier for this public key, bound to the
+    /// algorithm of its curve.
+    ///
+    /// Supports P-256 (feature `es256`), P-384 (`es384`) and Ed25519
+    /// (`eddsa`). Any other curve, a curve whose feature is off, a key whose
+    /// `alg` names a different algorithm, or a key whose `key_ops` leave out
+    /// `verify` is an error.
+    pub fn to_verifier(&self) -> Result<Box<dyn crate::cose::CoseVerifier>> {
+        self.validate()?;
+        let algorithm = self
+            .default_algorithm()
+            .ok_or_else(|| MdocError::Cose(format!("{:?} is not a signature key", self.crv)))?;
+        if let Some(alg) = self.alg
+            && alg != coset::iana::EnumI64::to_i64(&algorithm)
+        {
+            return Err(MdocError::Cose(format!(
+                "COSE_Key alg {alg} does not match its curve {:?}",
+                self.crv
+            )));
+        }
+        if let Some(ops) = &self.key_ops
+            && !ops.contains(&KeyOp::Verify)
+        {
+            return Err(MdocError::Cose(
+                "COSE_Key key_ops do not allow verify".into(),
+            ));
+        }
+        match self.crv {
+            #[cfg(feature = "es256")]
+            Curve::P256 => Ok(Box::new(crate::es256_cose::Es256CoseVerifier::from_bytes(
+                &self.sec1_uncompressed(),
+            )?)),
+            #[cfg(feature = "es384")]
+            Curve::P384 => Ok(Box::new(crate::es384_cose::Es384CoseVerifier::from_bytes(
+                &self.sec1_uncompressed(),
+            )?)),
+            #[cfg(feature = "eddsa")]
+            Curve::Ed25519 => Ok(Box::new(crate::eddsa_cose::EdDsaCoseVerifier::from_bytes(
+                &self.x,
+            )?)),
+            other => Err(MdocError::Cose(format!(
+                "no verifier for {other:?} in this build (enable its feature)"
+            ))),
+        }
+    }
+
+    #[cfg(any(feature = "es256", feature = "es384"))]
+    fn sec1_uncompressed(&self) -> Vec<u8> {
+        let mut point = Vec::with_capacity(1 + 2 * self.x.len());
+        point.push(0x04);
+        point.extend_from_slice(&self.x);
+        if let Some(y) = &self.y {
+            point.extend_from_slice(y);
+        }
+        point
+    }
+
     /// Get the COSE algorithm that matches this key's curve.
     pub fn default_algorithm(&self) -> Option<coset::iana::Algorithm> {
         match self.crv {
@@ -718,5 +775,28 @@ mod tests {
         assert_eq!(Curve::P521.name(), "P-521");
         assert_eq!(Curve::Ed25519.name(), "Ed25519");
         assert_eq!(Curve::X25519.name(), "X25519");
+    }
+
+    #[test]
+    fn to_verifier_refuses_a_conflicting_alg_and_key_agreement_keys() {
+        let x25519 = CoseKey::new_x25519(vec![9; 32]).unwrap();
+        assert!(x25519.to_verifier().is_err());
+
+        let p256 = CoseKey::new_p256(vec![1; 32], vec![2; 32])
+            .unwrap()
+            .with_alg(coset::iana::EnumI64::to_i64(&coset::iana::Algorithm::ES384));
+        assert!(p256.to_verifier().is_err());
+    }
+
+    #[cfg(feature = "es256")]
+    #[test]
+    fn to_verifier_builds_an_es256_verifier_from_a_p256_key() {
+        let signer = crate::es256_cose::Es256CoseSigner::generate();
+        let point = signer.public_key_bytes();
+        let key = CoseKey::new_p256(point[1..33].to_vec(), point[33..].to_vec()).unwrap();
+        let verifier = key.to_verifier().unwrap();
+        assert_eq!(verifier.algorithm(), Some(coset::iana::Algorithm::ES256));
+        let signature = crate::cose::CoseSigner::sign(&signer, b"data").unwrap();
+        assert!(verifier.verify(b"data", &signature).unwrap());
     }
 }
