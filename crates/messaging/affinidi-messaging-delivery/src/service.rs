@@ -1976,6 +1976,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_reply_in_thread_without_an_authenticated_sender_confirms_nothing() {
+        let h = mock();
+        let outbox = Arc::new(InMemoryOutboxStore::new());
+        sent_entry(&outbox, "thid-x").await;
+        let svc = MessagingService::new(h.transport.clone(), outbox.clone());
+        let mut sub = svc.subscribe();
+
+        let mut reply = inbound("unauthenticated-reply", Some("thid-x"), "q-anon");
+        reply.message.verified = false;
+        h.inbound_tx.send(reply).unwrap();
+
+        let got = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("the message still reaches subscribers")
+            .expect("stream item");
+        assert_eq!(got.message.id, "unauthenticated-reply");
+        assert!(!settles_delivered(&outbox, "thid-x").await);
+    }
+
+    #[tokio::test]
     async fn a_request_takes_only_the_reply_from_the_peer_it_addressed() {
         let h = mock();
         let svc = Arc::new(MessagingService::new(
