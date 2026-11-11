@@ -370,6 +370,11 @@ pub struct DIDCacheClient {
     /// verified for it, shared with the did:scid resolver.
     #[cfg(feature = "did-scid")]
     scid_sources: Arc<network_resolvers::ScidSourceBook>,
+    /// The latest did:webvh log version verified from the cache server, per
+    /// SCID. A later answer whose log is behind it, or forks from it, is
+    /// refused.
+    #[cfg(all(feature = "network", feature = "did-webvh"))]
+    webvh_versions: Arc<networking::WebvhVersionFloor>,
 }
 
 impl Clone for DIDCacheClient {
@@ -397,12 +402,15 @@ impl Clone for DIDCacheClient {
             inflight: self.inflight.clone(),
             #[cfg(feature = "did-scid")]
             scid_sources: self.scid_sources.clone(),
+            #[cfg(all(feature = "network", feature = "did-webvh"))]
+            webvh_versions: self.webvh_versions.clone(),
         }
     }
 }
 
-/// Methods network mode resolves with this client's own resolver whenever one
-/// is registered, rather than asking the cache server.
+/// Methods network mode never asks the cache server for. They are resolved with
+/// this client's own resolver, or reported as unsupported when the client was
+/// built without it.
 ///
 /// - key, peer, jwk, ethr, pkh: the document is derived from the DID itself,
 ///   exactly and offline, so a server answer could only be worse.
@@ -427,6 +435,35 @@ fn resolved_locally_in_network_mode(method: &MethodName) -> bool {
     }
 }
 
+/// Warn once, at construction, when the cache server is reached over plain
+/// `ws://` on a host other than this machine: did:web and similar answers are
+/// only as trustworthy as the connection that carried them.
+#[cfg(feature = "network")]
+fn warn_on_plain_remote_websocket(address: &str) {
+    if plain_remote_websocket(address) {
+        warn!(
+            "The cache server address {address} uses ws:// to a host other than this machine; \
+             use wss:// so the server's answers cannot be altered on the way"
+        );
+    }
+}
+
+#[cfg(feature = "network")]
+fn plain_remote_websocket(address: &str) -> bool {
+    let Ok(url) = url::Url::parse(address) else {
+        return false;
+    };
+    if url.scheme() != "ws" {
+        return false;
+    }
+    match url.host() {
+        Some(url::Host::Domain(domain)) => !domain.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => !ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => !ip.is_loopback(),
+        None => false,
+    }
+}
+
 /// Whether a document for `did` gets the mutable-method TTL. A method this
 /// crate does not model counts as mutable (see `DIDExpiry`).
 fn is_mutable_did(did: &str) -> bool {
@@ -435,14 +472,30 @@ fn is_mutable_did(did: &str) -> bool {
         .is_none_or(|m| DIDMethod::try_from(m).map_or(true, |m| m.is_mutable()))
 }
 
-/// A document is cached unless its `id` names an immutable method while the
-/// DID resolved is mutable: `DIDExpiry` reads the expiry from the `id`, so that
-/// document would outlive the cache TTL its DID is meant to have.
-pub(crate) fn cacheable(did: &str, doc: &Document) -> bool {
-    let cacheable = !is_mutable_did(did) || is_mutable_did(doc.id.as_str());
+/// Where a resolved document came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Origin {
+    /// This client's own resolver.
+    Local,
+    /// The cache server, after `verify_network_response`.
+    #[cfg_attr(not(feature = "network"), allow(dead_code))]
+    Server,
+}
+
+/// Whether a resolved document goes into the cache.
+///
+/// `DIDExpiry` gives a document whose `id` names an immutable method no
+/// expiry, so it is not cached when:
+/// - the DID resolved is mutable (the document would outlive the TTL its DID
+///   is meant to have), or
+/// - it came from the cache server: only a document this client derived
+///   itself is kept for good.
+pub(crate) fn cacheable(did: &str, doc: &Document, origin: Origin) -> bool {
+    let immutable_entry = !is_mutable_did(doc.id.as_str());
+    let cacheable = !immutable_entry || (!is_mutable_did(did) && origin == Origin::Local);
     if !cacheable {
         debug!(
-            "not caching the document for {did}: its id ({}) would give it no expiry",
+            "not caching the document for {did} ({origin:?}): its id ({}) would give it no expiry",
             doc.id.as_str()
         );
     }
@@ -698,8 +751,8 @@ impl DIDCacheClient {
 
                     let result = self.resolve_once(did, parsed_did, method, hash).await;
                     match &result {
-                        Ok(doc) => {
-                            if cacheable(did, doc) {
+                        Ok((doc, origin)) => {
+                            if cacheable(did, doc, *origin) {
                                 debug!("DID cached: {}", did);
                                 self.cache.insert(hash, doc.clone()).await;
                             }
@@ -708,7 +761,7 @@ impl DIDCacheClient {
                         Err(error) => leadership.fail(error),
                     }
 
-                    return result.map(|doc| ResolveResponse {
+                    return result.map(|(doc, _)| ResolveResponse {
                         did: did.to_string(),
                         method: method.clone(),
                         did_hash: hash,
@@ -734,37 +787,40 @@ impl DIDCacheClient {
         parsed_did: &DID,
         method: &DIDMethod,
         hash: [u64; 2],
-    ) -> Result<Document, DIDCacheError> {
+    ) -> Result<(Document, Origin), DIDCacheError> {
         let _ = (did, hash, method); // some are unused without the `network` feature
 
         #[cfg(feature = "network")]
         {
             if self.config.service_address.is_some()
                 && !self.resolves_locally_in_network_mode(parsed_did)
+                && let Some(doc) = self.network_resolve(did, hash).await?
             {
-                match self.network_resolve(did, hash).await? {
-                    Some(doc) => Ok(doc),
-                    None => self.local_resolve(parsed_did).await,
-                }
-            } else {
-                self.local_resolve(parsed_did).await
+                return Ok((doc, Origin::Server));
             }
+            self.local_resolve(parsed_did)
+                .await
+                .map(|doc| (doc, Origin::Local))
         }
 
         #[cfg(not(feature = "network"))]
         {
-            self.local_resolve(parsed_did).await
+            self.local_resolve(parsed_did)
+                .await
+                .map(|doc| (doc, Origin::Local))
         }
     }
 
     /// Whether network mode resolves `did` with this client's own resolver
     /// instead of asking the cache server: its method is one whose server
-    /// answer cannot be checked as local resolution checks it, and a resolver
-    /// is registered for it here.
+    /// answer cannot be checked as local resolution checks it.
+    ///
+    /// This holds whether or not a resolver for the method is registered. A
+    /// client built without the method's feature reports it as unsupported, as
+    /// local mode does, rather than taking the server's unchecked answer.
     #[cfg(feature = "network")]
     pub(crate) fn resolves_locally_in_network_mode(&self, did: &DID) -> bool {
-        let method = MethodName::from(&did.method());
-        resolved_locally_in_network_mode(&method) && self.resolvers.contains_key(&method)
+        resolved_locally_in_network_mode(&MethodName::from(&did.method()))
     }
 
     /// If you want to interact directly with the DID Document cache
@@ -969,6 +1025,8 @@ impl DIDCacheClient {
             inflight: Arc::new(StdMutex::new(HashMap::new())),
             #[cfg(feature = "did-scid")]
             scid_sources,
+            #[cfg(feature = "did-webvh")]
+            webvh_versions: Default::default(),
         };
         #[cfg(not(feature = "network"))]
         let client = Self {
@@ -990,8 +1048,9 @@ impl DIDCacheClient {
 
         #[cfg(feature = "network")]
         {
-            if client.config.service_address.is_some() {
+            if let Some(address) = client.config.service_address.as_deref() {
                 // Running in network mode
+                warn_on_plain_remote_websocket(address);
 
                 // Channel to communicate from SDK to network task
                 let (sdk_tx, task_rx) = mpsc::channel(32);
@@ -1147,17 +1206,42 @@ mod tests {
     }
 
     /// `DIDExpiry` reads the expiry from the document's `id`, so a mutable DID
-    /// whose document names an immutable one would never expire. Such a
-    /// document is not cached.
+    /// whose document names an immutable one would never expire, and neither
+    /// would an immutable document the cache server supplied. Neither is
+    /// cached.
     #[test]
-    fn a_mutable_did_with_an_immutable_document_id_is_not_cached() {
+    fn documents_that_would_never_expire_are_cached_only_when_derived_here() {
         let key_doc = Document::new(DID_KEY).expect("valid did");
-        assert!(!cacheable("did:web:example.com", &key_doc));
-        assert!(cacheable(DID_KEY, &key_doc));
+        assert!(!cacheable("did:web:example.com", &key_doc, Origin::Local));
+        assert!(!cacheable("did:web:example.com", &key_doc, Origin::Server));
+        assert!(cacheable(DID_KEY, &key_doc, Origin::Local));
+        assert!(!cacheable(DID_KEY, &key_doc, Origin::Server));
 
         let web_doc = Document::new("did:web:example.com").expect("valid did");
-        assert!(cacheable("did:web:example.com", &web_doc));
-        assert!(cacheable(DID_KEY, &web_doc));
+        assert!(cacheable("did:web:example.com", &web_doc, Origin::Local));
+        assert!(cacheable("did:web:example.com", &web_doc, Origin::Server));
+        assert!(cacheable(DID_KEY, &web_doc, Origin::Server));
+    }
+
+    #[cfg(feature = "network")]
+    #[test]
+    fn plain_websockets_to_remote_hosts_are_flagged() {
+        for address in [
+            "ws://cache.example.com/did/v1/ws",
+            "ws://10.0.0.5:8080/did/v1/ws",
+            "ws://[2001:db8::1]/did/v1/ws",
+        ] {
+            assert!(plain_remote_websocket(address), "{address}");
+        }
+        for address in [
+            "wss://cache.example.com/did/v1/ws",
+            "ws://127.0.0.1:8080/did/v1/ws",
+            "ws://localhost:8080/did/v1/ws",
+            "ws://[::1]:8080/did/v1/ws",
+            "not a url",
+        ] {
+            assert!(!plain_remote_websocket(address), "{address}");
+        }
     }
     use super::*;
 

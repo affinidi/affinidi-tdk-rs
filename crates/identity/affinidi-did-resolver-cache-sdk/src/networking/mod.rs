@@ -181,11 +181,13 @@ pub enum WSResponseType {
 }
 
 impl DIDCacheClient {
-    /// Resolve an agent name via the cache server, in **one** round trip.
+    /// Ask the cache server for an agent name's DID and document, in one round
+    /// trip.
     ///
-    /// Returns `(resolved DID, document)`. Without this, a name lookup in
-    /// network mode costs two round trips over two transports: HTTP to the
-    /// server for name → DID, then WebSocket for DID → document.
+    /// Returns `(DID the server maps the name to, document)`, the document
+    /// checked as [`Self::verify_network_response`] describes (`None` when it
+    /// cannot be). The DID is only a hint: `resolve_agent_name` confirms the
+    /// name through the registered backends before using either.
     ///
     /// # Talking to an older server
     ///
@@ -400,7 +402,8 @@ impl DIDCacheClient {
         if MethodName::from(&parsed.method()) == MethodName::Webvh {
             #[cfg(feature = "did-webvh")]
             if let Some(log_data) = did_log {
-                return Self::verify_webvh_log(did, doc, &log_data, did_witness_log.as_deref())
+                return self
+                    .verify_webvh_log(did, doc, &log_data, did_witness_log.as_deref())
                     .await
                     .map(Some);
             }
@@ -421,6 +424,7 @@ impl DIDCacheClient {
     /// the log produces.
     #[cfg(feature = "did-webvh")]
     async fn verify_webvh_log(
+        &self,
         did: &str,
         doc: Document,
         log_data: &str,
@@ -437,6 +441,13 @@ impl DIDCacheClient {
             .map_err(|e| {
                 DIDCacheError::DIDError(format!("WebVH log verification failed for DID {did}: {e}"))
             })?;
+
+        // The log verified. It must not be behind, or fork from, a version
+        // already verified for this SCID: a shorter prefix of a valid log
+        // verifies too, and could leave out a rotation or the deactivation.
+        // Recorded before the deactivation check, so a later answer cannot
+        // drop the deactivation entry.
+        self.webvh_versions.accept(did, log_data)?;
 
         // A cache server that predates the deactivation check still
         // serves the retired document; the log it sent says otherwise.
@@ -467,6 +478,96 @@ impl DIDCacheClient {
 
         debug!("WebVH log verification passed for DID: {}", did);
         Ok(doc)
+    }
+}
+
+/// The latest did:webvh log version this client has verified from the cache
+/// server, per SCID: its number and its `versionId`.
+///
+/// A valid prefix of a did:webvh log verifies on its own, so a server could
+/// answer with an older copy that leaves out a key rotation or the
+/// deactivation. A log is accepted only if its last entry is not behind the
+/// version recorded and it contains that version's entry unchanged; the
+/// record then moves forward. Mirrors the did:scid source book's floor.
+#[cfg(feature = "did-webvh")]
+#[derive(Debug, Default)]
+pub(crate) struct WebvhVersionFloor {
+    seen: std::sync::Mutex<std::collections::HashMap<String, (u32, String)>>,
+}
+
+#[cfg(feature = "did-webvh")]
+impl WebvhVersionFloor {
+    /// Identities remembered; past this an arbitrary one is forgotten.
+    const CAPACITY: usize = 100_000;
+
+    fn scid(did: &str) -> Option<&str> {
+        did.strip_prefix("did:webvh:")?
+            .split([':', '?', '#'])
+            .next()
+            .filter(|scid| !scid.is_empty())
+    }
+
+    /// The `versionId` of each entry of a JSON Lines log, in order.
+    fn version_ids(log: &str) -> Result<Vec<String>, DIDCacheError> {
+        log.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|entry| entry.get("versionId")?.as_str().map(str::to_string))
+                    .ok_or_else(|| {
+                        DIDCacheError::DIDError("a did:webvh log entry has no versionId".into())
+                    })
+            })
+            .collect()
+    }
+
+    fn version_number(version_id: &str) -> Option<u32> {
+        version_id.split_once('-')?.0.parse().ok()
+    }
+
+    /// Check a verified log against the version recorded for its SCID, and
+    /// record its last entry when it moves forward.
+    pub(crate) fn accept(&self, did: &str, log: &str) -> Result<(), DIDCacheError> {
+        let Some(scid) = Self::scid(did) else {
+            return Ok(());
+        };
+        let version_ids = Self::version_ids(log)?;
+        let Some(head) = version_ids.last() else {
+            return Ok(());
+        };
+        let head_number = Self::version_number(head).ok_or_else(|| {
+            DIDCacheError::DIDError(format!("invalid did:webvh versionId {head}"))
+        })?;
+
+        let Ok(mut seen) = self.seen.lock() else {
+            return Err(DIDCacheError::DIDError(
+                "the did:webvh version record is unavailable".into(),
+            ));
+        };
+        if let Some((floor_number, floor_id)) = seen.get(scid) {
+            if head_number < *floor_number {
+                return Err(DIDCacheError::DIDError(format!(
+                    "{did}: the cache server's log ends at version {head_number}, behind \
+                     version {floor_number} already verified"
+                )));
+            }
+            if !version_ids.contains(floor_id) {
+                return Err(DIDCacheError::DIDError(format!(
+                    "{did}: the cache server's log does not contain version {floor_id} \
+                     already verified"
+                )));
+            }
+            if head_number == *floor_number {
+                return Ok(());
+            }
+        } else if seen.len() >= Self::CAPACITY
+            && let Some(key) = seen.keys().next().cloned()
+        {
+            seen.remove(&key);
+        }
+        seen.insert(scid.to_string(), (head_number, head.clone()));
+        Ok(())
     }
 }
 
@@ -652,7 +753,7 @@ mod network_answer_tests {
         atomic::{AtomicUsize, Ordering},
     };
     use tokio::{
-        io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
         net::TcpListener,
         task::JoinHandle,
     };
@@ -661,9 +762,11 @@ mod network_answer_tests {
     const DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
     const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";
 
-    type Answer = Arc<dyn Fn(&WSRequest) -> WSResponseType + Send + Sync>;
+    /// Called after each request with every request received so far on the
+    /// connection; returns the frames to send back now.
+    type Answer = Arc<dyn Fn(&[WSRequest]) -> Vec<WSResponseType> + Send + Sync>;
 
-    /// A loopback cache server answering every request with `answer`.
+    /// A loopback cache server answering requests with `answer`.
     struct StandInServer {
         address: String,
         requests: Arc<AtomicUsize>,
@@ -723,6 +826,7 @@ mod network_answer_tests {
             }
 
             let mut socket = WebSocket::server(stream);
+            let mut received = Vec::new();
             while let Ok(event) = socket.recv().await {
                 match event {
                     Event::Data {
@@ -733,9 +837,12 @@ mod network_answer_tests {
                             continue;
                         };
                         requests.fetch_add(1, Ordering::SeqCst);
-                        let reply = serde_json::to_string(&answer(&request)).unwrap();
-                        if socket.send(reply.as_str()).await.is_err() {
-                            return;
+                        received.push(request);
+                        for frame in answer(&received) {
+                            let reply = serde_json::to_string(&frame).unwrap();
+                            if socket.send(reply.as_str()).await.is_err() {
+                                return;
+                            }
                         }
                     }
                     Event::Ping(data) => {
@@ -752,16 +859,26 @@ mod network_answer_tests {
         }
     }
 
+    fn response(did: &str, hash_of: &str, document: Document) -> WSResponseType {
+        WSResponseType::Response(Box::new(WSResponse::new(
+            did,
+            DIDCacheClient::hash_did(hash_of),
+            document,
+        )))
+    }
+
+    /// Answer each request, as it arrives, with `document` and `did_log`.
     fn answer_with(document: Document, did_log: Option<String>) -> Answer {
-        Arc::new(move |request: &WSRequest| {
-            WSResponseType::Response(Box::new(
+        Arc::new(move |received: &[WSRequest]| {
+            let request = received.last().unwrap();
+            vec![WSResponseType::Response(Box::new(
                 WSResponse::new(
                     request.did.clone(),
                     DIDCacheClient::hash_did(&request.did),
                     document.clone(),
                 )
                 .with_logs(did_log.clone(), None),
-            ))
+            ))]
         })
     }
 
@@ -853,6 +970,277 @@ mod network_answer_tests {
         assert_eq!(server.requests(), 0);
     }
 
+    const WEB_A: &str = "did:web:a.example";
+    const WEB_B: &str = "did:web:b.example";
+
+    /// Once both requests are in, answer each with the other's document under
+    /// its own hash.
+    #[tokio::test]
+    async fn answers_swapped_between_concurrent_requests_are_refused() {
+        let server = StandInServer::start(Arc::new(|received: &[WSRequest]| {
+            if received.len() < 2 {
+                return vec![];
+            }
+            vec![
+                response(WEB_A, WEB_A, Document::new(WEB_B).unwrap()),
+                response(WEB_B, WEB_B, Document::new(WEB_A).unwrap()),
+            ]
+        }))
+        .await;
+        let client = network_client(&server).await;
+
+        let (a, b) = tokio::join!(resolve(&client, WEB_A), resolve(&client, WEB_B));
+        assert!(a.is_err(), "{a:?}");
+        assert!(b.is_err(), "{b:?}");
+        for did in [WEB_A, WEB_B] {
+            assert!(
+                client
+                    .get_cache()
+                    .get(&DIDCacheClient::hash_did(did))
+                    .await
+                    .is_none()
+            );
+        }
+    }
+
+    /// A's document sent under B's hash reaches B's waiter, which refuses it;
+    /// A's own answer is unaffected.
+    #[tokio::test]
+    async fn an_answer_under_another_requests_hash_is_refused() {
+        let server = StandInServer::start(Arc::new(|received: &[WSRequest]| {
+            if received.len() < 2 {
+                return vec![];
+            }
+            vec![
+                response(WEB_A, WEB_B, Document::new(WEB_A).unwrap()),
+                response(WEB_A, WEB_A, Document::new(WEB_A).unwrap()),
+            ]
+        }))
+        .await;
+        let client = network_client(&server).await;
+
+        let (a, b) = tokio::join!(resolve(&client, WEB_A), resolve(&client, WEB_B));
+        assert_eq!(a.unwrap().doc.id.as_str(), WEB_A);
+        let error = b.expect_err("B received A's document");
+        assert!(error.to_string().contains(WEB_A), "{error}");
+    }
+
+    /// A method network mode resolves locally is never asked of the server,
+    /// even when this client has no resolver for it: it is unsupported, as in
+    /// local mode.
+    #[tokio::test]
+    async fn a_local_method_without_a_resolver_is_unsupported() {
+        let jwk = "did:jwk:eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImFjYklRaXVNczNpOF91c3pFakoydHBUdFJNNEVVM3l6OTFQSDZDZEgyVjAiLCJ5IjoiX0tjeUxqOXZXTXB0bm1LdG00NkdxRHo4d2Y3NEk1TEtncmwyR3pIM25TRSJ9";
+        let server = StandInServer::start(Arc::new(|received: &[WSRequest]| {
+            let did = received.last().unwrap().did.clone();
+            vec![response(&did, &did, Document::new(&did).unwrap())]
+        }))
+        .await;
+        let mut client = network_client(&server).await;
+        client.clear_resolvers(&MethodName::Jwk);
+        client.clear_resolvers(&MethodName::Key);
+
+        for did in [jwk, DID_KEY] {
+            let error = resolve(&client, did).await.expect_err("no resolver");
+            assert!(
+                matches!(error, DIDCacheError::UnsupportedMethod(_)),
+                "{did}: {error:?}"
+            );
+            assert!(
+                client
+                    .get_cache()
+                    .get(&DIDCacheClient::hash_did(did))
+                    .await
+                    .is_none()
+            );
+        }
+        assert_eq!(server.requests(), 0);
+    }
+
+    /// A document for an immutable method that came from the server is used
+    /// but not kept: the cache would give it no expiry.
+    #[tokio::test]
+    async fn an_immutable_document_from_the_server_is_not_cached() {
+        let did = "did:example:123";
+        let server = StandInServer::start(answer_with(Document::new(did).unwrap(), None)).await;
+        let client = network_client(&server).await;
+
+        let response = resolve(&client, did).await.unwrap();
+        assert_eq!(response.doc.id.as_str(), did);
+        assert_eq!(server.requests(), 1);
+        // Without the `did_example` feature this crate does not model did:example,
+        // so it counts as mutable and is cached with the TTL instead.
+        if !crate::is_mutable_did(did) {
+            assert!(
+                client
+                    .get_cache()
+                    .get(&DIDCacheClient::hash_did(did))
+                    .await
+                    .is_none()
+            );
+        }
+    }
+
+    #[cfg(feature = "agent-names")]
+    mod agent_name {
+        use super::*;
+        use ::agent_names::{AgentName, AgentNameError, AgentNameResolver, NameResolution};
+        use affinidi_did_common::DocumentBuilder;
+        use std::{future::Future, pin::Pin};
+
+        const NAME: &str = "https://bank.example/@bank";
+        const GOOD: &str = "did:web:bank.example";
+        const OTHER: &str = "did:web:elsewhere.example";
+
+        /// The name's own backend: a fixed answer.
+        struct FixedName(Option<&'static str>);
+
+        impl AgentNameResolver for FixedName {
+            fn name(&self) -> &str {
+                "fixed"
+            }
+
+            fn resolve<'a>(
+                &'a self,
+                name: &'a AgentName,
+            ) -> Pin<Box<dyn Future<Output = NameResolution> + Send + 'a>> {
+                Box::pin(async move {
+                    Some(
+                        self.0
+                            .map(str::to_string)
+                            .ok_or_else(|| AgentNameError::Unresolvable(name.as_str().into())),
+                    )
+                })
+            }
+        }
+
+        fn claiming_name(did: &str) -> Document {
+            DocumentBuilder::new(did)
+                .unwrap()
+                .also_known_as_many([NAME])
+                .build()
+        }
+
+        /// The server maps the name to OTHER, whose document claims the name;
+        /// DID requests are answered with a document claiming the name.
+        async fn setup(backend: Option<&'static str>) -> (StandInServer, DIDCacheClient) {
+            let server = StandInServer::start(Arc::new(|received: &[WSRequest]| {
+                let request = received.last().unwrap();
+                if request.agent_name.is_some() {
+                    vec![response(OTHER, &request.did, claiming_name(OTHER))]
+                } else {
+                    vec![response(
+                        &request.did,
+                        &request.did,
+                        claiming_name(&request.did),
+                    )]
+                }
+            }))
+            .await;
+            let mut client = DIDCacheClient::new(
+                DIDCacheConfigBuilder::default()
+                    .with_network_mode(&server.address)
+                    .with_agent_names_over_websocket(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
+            client.set_agent_name_resolvers(vec![Box::new(FixedName(backend))]);
+            (server, client)
+        }
+
+        #[tokio::test]
+        async fn the_servers_mapping_is_only_a_hint() {
+            let (server, client) = setup(Some(GOOD)).await;
+            let name = AgentName::parse(NAME).unwrap();
+
+            let response = tokio::time::timeout(DEADLINE, client.resolve_agent_name(&name))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(response.did, GOOD);
+            assert_eq!(response.doc.id.as_str(), GOOD);
+            assert!(response.shortcut.is_some());
+            assert_eq!(
+                client
+                    .agent_name_cache
+                    .get(&DIDCacheClient::hash_did(name.as_str()))
+                    .await
+                    .as_deref(),
+                Some(GOOD)
+            );
+            assert!(
+                client
+                    .get_cache()
+                    .get(&DIDCacheClient::hash_did(OTHER))
+                    .await
+                    .is_none(),
+                "the document for the server's DID is not kept"
+            );
+            assert_eq!(server.requests(), 2, "the name, then the confirmed DID");
+        }
+
+        #[tokio::test]
+        async fn a_name_no_backend_confirms_is_refused() {
+            let (_server, client) = setup(None).await;
+            let name = AgentName::parse(NAME).unwrap();
+
+            let result = tokio::time::timeout(DEADLINE, client.resolve_agent_name(&name))
+                .await
+                .unwrap();
+            assert!(result.is_err(), "{result:?}");
+            assert!(
+                client
+                    .agent_name_cache
+                    .get(&DIDCacheClient::hash_did(name.as_str()))
+                    .await
+                    .is_none()
+            );
+            assert!(
+                client
+                    .get_cache()
+                    .get(&DIDCacheClient::hash_did(OTHER))
+                    .await
+                    .is_none()
+            );
+        }
+    }
+
+    #[cfg(feature = "did-webvh")]
+    #[test]
+    fn a_webvh_log_behind_or_forking_from_the_version_verified_is_refused() {
+        fn log(ids: &[&str]) -> String {
+            ids.iter()
+                .map(|id| format!(r#"{{"versionId":"{id}"}}"#))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        let did = "did:webvh:QmScid:example.com";
+        let other = "did:webvh:QmOther:example.com";
+        let floor = WebvhVersionFloor::default();
+
+        floor.accept(did, &log(&["1-a", "2-b"])).unwrap();
+        // Behind.
+        assert!(floor.accept(did, &log(&["1-a"])).is_err());
+        // Same head, or moving forward through it.
+        floor.accept(did, &log(&["1-a", "2-b"])).unwrap();
+        floor
+            .accept(
+                &format!("{did}?versionId=1-a"),
+                &log(&["1-a", "2-b", "3-c"]),
+            )
+            .unwrap();
+        // A fork that skips the verified version 3.
+        assert!(
+            floor
+                .accept(did, &log(&["1-a", "2-b", "3-x", "4-d"]))
+                .is_err()
+        );
+        assert!(floor.accept(did, &log(&["1-a", "2-b"])).is_err());
+        // Another SCID is independent.
+        floor.accept(other, &log(&["1-z"])).unwrap();
+    }
+
     #[cfg(feature = "did-webvh")]
     mod webvh {
         use super::*;
@@ -861,6 +1249,7 @@ mod network_answer_tests {
             DIDWebVHState, Multibase, log_entry::LogEntryMethods, parameters::Parameters,
         };
         use serde_json::json;
+        use tokio::io::AsyncReadExt;
 
         /// A loopback HTTP listener serving `body` as `did.jsonl`.
         struct LogHost {
@@ -959,6 +1348,70 @@ mod network_answer_tests {
 
             let error = resolve(&client, &did).await.expect_err("documents differ");
             assert!(error.to_string().contains("does not match"), "{error}");
+        }
+
+        /// The server first sends a log ending in a deactivation, then the same
+        /// log without it. The shorter log verifies on its own; it is refused
+        /// because it is behind the version already verified.
+        #[tokio::test]
+        async fn an_older_copy_of_a_log_cannot_drop_its_deactivation() {
+            let mut key = Secret::generate_ed25519(None, None);
+            let pk = key.get_public_keymultibase().unwrap();
+            key.id = format!("did:key:{pk}#{pk}");
+            let template = "did:webvh:{SCID}:localhost%3A1";
+            let doc = json!({
+                "id": template,
+                "@context": ["https://www.w3.org/ns/did/v1"],
+            });
+            let params = Parameters {
+                update_keys: Some(Arc::new(vec![Multibase::new(pk)])),
+                portable: Some(false),
+                ..Default::default()
+            };
+            let genesis_time = (chrono::Utc::now() - chrono::Duration::seconds(100)).fixed_offset();
+            let mut state = DIDWebVHState::default();
+            state
+                .create_log_entry(Some(genesis_time), &doc, &params, &key)
+                .await
+                .unwrap();
+            let genesis = state.log_entries()[0].log_entry.clone();
+            let genesis_doc: Document =
+                serde_json::from_value(genesis.get_did_document().unwrap()).unwrap();
+            state.deactivate(&key).await.unwrap();
+            let lines: Vec<String> = state
+                .log_entries()
+                .iter()
+                .map(|entry| serde_json::to_string(&entry.log_entry).unwrap())
+                .collect();
+            let full = lines.join("\n");
+            let prefix = lines[0].clone();
+            let did = genesis_doc.id.to_string();
+
+            let answers = Arc::new(AtomicUsize::new(0));
+            let server = StandInServer::start(Arc::new(move |received: &[WSRequest]| {
+                let request = received.last().unwrap();
+                let log = if answers.fetch_add(1, Ordering::SeqCst) == 0 {
+                    full.clone()
+                } else {
+                    prefix.clone()
+                };
+                vec![WSResponseType::Response(Box::new(
+                    WSResponse::new(
+                        request.did.clone(),
+                        DIDCacheClient::hash_did(&request.did),
+                        genesis_doc.clone(),
+                    )
+                    .with_logs(Some(log), None),
+                ))]
+            }))
+            .await;
+            let client = network_client(&server).await;
+
+            let first = resolve(&client, &did).await.expect_err("deactivated");
+            assert!(first.to_string().contains("deactivated"), "{first}");
+            let second = resolve(&client, &did).await.expect_err("behind");
+            assert!(second.to_string().contains("behind"), "{second}");
+            assert_eq!(server.requests(), 2);
         }
 
         #[tokio::test]
