@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-webs"
-version = "0.13.0"
+version = "0.13.1"
 description = "Implementation of the did:webs DID method: did:web discovery with KERI-verified key state"
 repository.workspace = true
 edition.workspace = true
@@ -18,14 +18,14 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 # Creating identifiers, as opposed to resolving them. Optional because it pulls
-# `affinidi-keri`, and with it an LMDB-backed store this crate never uses for
-# resolution — see `create` for why the store is not required at runtime.
+# `affinidi-keri` (the controller, without its LMDB `store` feature: the key
+# event log lives in `keri.cesr`).
 create = ["dep:affinidi-keri", "dep:serde", "dep:getrandom", "chrono/clock"]
 
 [dependencies]
 affinidi-cesr = "0.1.4"
 base64 = "0.23"
-affinidi-keri = { version = "0.8", optional = true }
+affinidi-keri = { version = "0.8.1", optional = true, default-features = false }
 # Resolution parses the `dt` of KERI replies, which BADA orders by; creation
 # also stamps them, which needs the clock.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
