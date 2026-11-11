@@ -1,5 +1,11 @@
 # did:scid
 
+## Unreleased (0.4.7) — affinidi-did-webs 0.13
+
+- **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.13, on
+  affinidi-keri 0.8: native CESR bodies resolve, keripy's delegated rotations
+  verify, and the `EO` and `DND` configuration traits are enforced.
+
 ## Unreleased (0.4.6) — affinidi-did-webs 0.12
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.12, on

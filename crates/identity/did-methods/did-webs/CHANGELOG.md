@@ -2,6 +2,26 @@
 
 All notable changes to this crate are documented here.
 
+## [0.13.0] - 2026-11-11
+
+On affinidi-keri 0.8. Still alpha.
+
+### Added
+
+- **Native CESR bodies resolve (P8).** A `keri.cesr` from a keripy host with
+  default settings, whose messages have native bodies, now resolves; before,
+  it failed as unsupported.
+
+### Changed
+
+- **keripy's delegated rotations verify.** A `drt` names no delegator (no
+  `di`); the delegator is the one the `dip` named. A delegated identifier
+  that had rotated failed to resolve before.
+- **`EO` and `DND` are enforced.** An establishment-only identifier's
+  interaction events are refused, and a delegated identifier whose delegator
+  has `DND` does not resolve, though the delegator anchors it. `Kels` answers
+  the delegator's traits only from a KEL it has verified.
+
 ## [0.12.0] - 2026-11-10
 
 On affinidi-keri 0.7 and affinidi-cesr 0.1.4. Still alpha.

@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.50"
+version = "0.8.51"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-webs"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "affinidi-cesr",
  "affinidi-crypto",
@@ -373,9 +373,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-keri"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d70ed35adbb40e61817c1c5340a973bc043c007040d4b8b24fdd28847bd657d8"
+checksum = "ca088215e74016f2d52ab5f766a1e95cba24129b807da7057e958c31adb06d73"
 dependencies = [
  "affinidi-cesr",
  "affinidi-keri-core",
@@ -389,9 +389,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-keri-core"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eed1b060aad182deff2e1ed9de2cf8a4998b20755853287c795279353b41b9eb"
+checksum = "82e51b42a39051bc9dadb14dfe4005cad92b58ca18cb928e9298f3a4f5065fa3"
 dependencies = [
  "affinidi-cesr",
  "affinidi-keri-crypto",
@@ -407,9 +407,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-keri-crypto"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8bb2a4e272e200941d1df6d5758284336dc1d856b6e23d281b568c08591ef82"
+checksum = "1be557c661f4ebef63dda2e56011a91686c9c0fdf00007ca5e50334136c3e2c1"
 dependencies = [
  "affinidi-cesr",
  "argon2",
@@ -428,9 +428,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-keri-db"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2f9e6bd78c84b0d615d7904dc7b1d55fe8dc4ecd8c95b2d707016fd06225c8d"
+checksum = "4b49afcffc986225675e6390b90fe40dd5c73e63ed8bce3a75879c621bec7eef"
 dependencies = [
  "affinidi-cesr",
  "affinidi-keri-core",
@@ -887,7 +887,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.37.5"
+version = "0.37.6"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "did-scid"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-webs",

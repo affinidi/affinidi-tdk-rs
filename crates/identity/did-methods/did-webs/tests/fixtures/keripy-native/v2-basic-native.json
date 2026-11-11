@@ -1,0 +1,23 @@
+{
+  "note": "icp, ixn (one digest seal), rot, ixn; single Ed25519 key; KERI 2.0, CESR bodies",
+  "expect": "accept",
+  "keripy": {
+    "prefix": "ELaGTcB7fgM7uaqvEkYbP-ya_G89lm_IsMBjKALEy0-i",
+    "sn": 3,
+    "said": "ELfwCUUUu4rBQ8GKkt8Hi5JVA3xEejEh9_kBAWYefweA",
+    "ilk": "ixn",
+    "version": "2.0",
+    "keys": [
+      "DHCy-fQvPvwG7jt4g3vQBmrHQjcRl4vy2X4BZQ7gbXfm"
+    ],
+    "kt": "1",
+    "n": [
+      "EGdy6OAFNcwCBVsXV2E011_koY4f1Pb20ubCFXIRYpgH"
+    ],
+    "nt": "1",
+    "establishment": {
+      "sn": 2,
+      "said": "EDC2FkuYyLsjOaF4u97nqF75vQyHPb_kVEfF-4sN3WZx"
+    }
+  }
+}
