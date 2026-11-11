@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-server"
-version = "0.9.17"
+version = "0.9.16"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
