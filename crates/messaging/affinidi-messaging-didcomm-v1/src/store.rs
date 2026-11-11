@@ -40,9 +40,17 @@ impl DIDCommV1Store {
     }
 
     /// Add a local identity.
+    ///
+    /// Re-adding a DID replaces its identity: the verkey it had before is no
+    /// longer bound to it. Adding a verkey that is bound to another DID binds
+    /// it to this DID instead.
     pub fn add_local(&mut self, identity: PrivateIdentity) {
-        self.by_verkey.insert(identity.verkey, identity.did.clone());
-        self.local.insert(identity.did.to_string(), identity);
+        let did = identity.did.clone();
+        let verkey = identity.verkey;
+        if let Some(previous) = self.local.insert(did.to_string(), identity) {
+            self.unbind(&previous.verkey, &previous.did);
+        }
+        self.by_verkey.insert(verkey, did);
     }
 
     /// Get a local identity by DID.
@@ -57,9 +65,20 @@ impl DIDCommV1Store {
     /// This is what turns an authenticated verkey into a `theirDid` at unpack
     /// time; without it an authcrypt message comes back as
     /// [`AuthcryptUnknownSender`](crate::UnpackResult::AuthcryptUnknownSender).
+    ///
+    /// Re-adding a DID (for example after a key rotation) replaces its
+    /// identity: the verkey it had before is no longer bound to it, so a
+    /// message authenticated by that verkey unpacks as
+    /// [`AuthcryptUnknownSender`](crate::UnpackResult::AuthcryptUnknownSender).
+    /// Adding a verkey that is bound to another DID binds it to this DID
+    /// instead.
     pub fn add_resolved(&mut self, identity: ResolvedIdentity) {
-        self.by_verkey.insert(identity.verkey, identity.did.clone());
-        self.resolved.insert(identity.did.to_string(), identity);
+        let did = identity.did.clone();
+        let verkey = identity.verkey;
+        if let Some(previous) = self.resolved.insert(did.to_string(), identity) {
+            self.unbind(&previous.verkey, &previous.did);
+        }
+        self.by_verkey.insert(verkey, did);
     }
 
     /// Get a resolved identity by DID.
@@ -193,6 +212,80 @@ mod tests {
         assert_eq!(
             store.did_for_verkey(&verkey).unwrap().as_str(),
             "did:example:alice-renamed"
+        );
+    }
+
+    #[test]
+    fn re_adding_a_resolved_did_unbinds_its_previous_verkey() {
+        let mut store = DIDCommV1Store::new();
+        let old = PrivateIdentity::generate("did:example:alice").unwrap();
+        let new = PrivateIdentity::generate("did:example:alice").unwrap();
+
+        store.add_resolved(old.to_resolved());
+        store.add_resolved(new.to_resolved());
+
+        assert_eq!(store.did_for_verkey(&old.verkey), None);
+        assert_eq!(
+            store.did_for_verkey(&new.verkey).unwrap().as_str(),
+            "did:example:alice"
+        );
+        assert_eq!(
+            store.get_resolved("did:example:alice").unwrap().verkey,
+            new.verkey
+        );
+
+        store.remove_resolved("did:example:alice").unwrap();
+        assert_eq!(store.did_for_verkey(&new.verkey), None);
+        assert_eq!(store.did_for_verkey(&old.verkey), None);
+    }
+
+    #[test]
+    fn re_adding_a_local_did_unbinds_its_previous_verkey() {
+        let mut store = DIDCommV1Store::new();
+        let old = PrivateIdentity::generate("did:example:alice").unwrap();
+        let new = PrivateIdentity::generate("did:example:alice").unwrap();
+        let (old_verkey, new_verkey) = (old.verkey, new.verkey);
+
+        store.add_local(old);
+        store.add_local(new);
+
+        assert_eq!(store.did_for_verkey(&old_verkey), None);
+        assert_eq!(
+            store.did_for_verkey(&new_verkey).unwrap().as_str(),
+            "did:example:alice"
+        );
+    }
+
+    #[test]
+    fn re_adding_a_did_with_the_same_verkey_keeps_the_binding() {
+        let mut store = DIDCommV1Store::new();
+        let alice = PrivateIdentity::generate("did:example:alice").unwrap();
+
+        store.add_resolved(alice.to_resolved());
+        store.add_resolved(alice.to_resolved());
+
+        assert_eq!(
+            store.did_for_verkey(&alice.verkey).unwrap().as_str(),
+            "did:example:alice"
+        );
+    }
+
+    /// A DID re-added with a new verkey does not take back a verkey it once
+    /// held that is now bound to another DID.
+    #[test]
+    fn re_adding_a_did_keeps_another_dids_binding() {
+        let mut store = DIDCommV1Store::new();
+        let alice = PrivateIdentity::generate("did:example:alice").unwrap();
+        let replacement = PrivateIdentity::generate("did:example:alice").unwrap();
+        let verkey = alice.verkey;
+
+        store.add_resolved(alice.to_resolved());
+        store.add_resolved(ResolvedIdentity::new("did:example:carol", verkey).unwrap());
+        store.add_resolved(replacement.to_resolved());
+
+        assert_eq!(
+            store.did_for_verkey(&verkey).unwrap().as_str(),
+            "did:example:carol"
         );
     }
 

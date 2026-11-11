@@ -1,5 +1,20 @@
 # affinidi-messaging-didcomm-v1 changelog
 
+## Unreleased (0.2.3) — re-adding an identity replaces its verkey binding
+
+### Changed (behaviour, R3.6)
+
+- `DIDCommV1Store::add_resolved` and `add_local` (and so
+  `DIDCommV1Agent::add_peer` / `add_identity`) now unbind the verkey a DID
+  had before when the DID is added again with a different verkey, for
+  example after a key rotation. Previously the old verkey stayed bound to the
+  DID, so an authcrypt message from it still unpacked as
+  `UnpackResult::Authcrypt` from that DID, and a later `remove_resolved` left
+  it bound for good. It now unpacks as `AuthcryptUnknownSender`. A verkey the
+  DID held that has since been bound to another DID keeps that binding.
+- Adding a verkey that is already bound to a different DID still binds it to
+  the newly added DID (unchanged, now documented). No signature change.
+
 ## Unreleased (0.2.2) — `chacha20poly1305`, `salsa20`, `blake2` 0.11
 
 No behaviour change and no public API change: these are private dependencies
