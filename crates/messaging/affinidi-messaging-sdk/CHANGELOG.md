@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.45.7 — the WebSocket message cache counts each message once
+
+A message arriving with a DIDComm `id` that was already in the WebSocket
+inbound cache was counted twice but stored once. The mediator re-pushes the
+undelivered inbox when live delivery is enabled, so every reconnect could do
+this to messages still waiting in the cache, and a sender can reuse an `id`.
+Each time, the cache's message count stayed one too high after the cache
+drained. The receive-leg probe stopped firing, `ReceiveHealth::held_frames`
+never returned to 0, and once the stale count passed
+`fetch_cache_limit_count` the transport stopped reading the socket for the
+rest of its life, without reconnecting or reporting a stall.
+
+The cache now holds each message under its mediator id
+(`UnpackMetadata::sha256_hash`), which is unique per stored message, and
+derives its count from what it holds:
+
+- A message the cache already holds, delivered again (same mediator id), is
+  ignored. The first copy and its metadata stay.
+- Distinct messages that share a DIDComm `id` are each kept and handed out
+  oldest first. Before, the later one replaced the earlier, which was never
+  seen.
+- Two cached messages on one thread can each be found by
+  `live_stream_get(thid)`. Before, they shared one lookup slot, and taking
+  either one hid the other.
+
+Behaviour change (R3.6), limited to repeated ids: a redelivered message is
+handed to the application once, not twice. No API change.
+
 ## 0.45.6 — `messaging/mux/connections`
 
 - `TrustTasksOps::mux_connections(profile, &MuxConnectionsQuery)`: an
