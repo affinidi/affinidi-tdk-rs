@@ -75,6 +75,7 @@ use tracing::debug;
 pub mod caching_signer;
 pub mod conformance;
 pub mod crypto_suites;
+mod date_time;
 pub mod did_vm;
 pub mod error;
 pub mod multi;
@@ -142,12 +143,105 @@ pub struct DataIntegrityProof {
     /// `signature invalid`. Producers that set one — `affinidi-ssi-dart` does on
     /// every proof — could not be verified here at all.
     ///
-    /// This crate's own signer does not set it.
+    /// Set it with [`SignOptions::with_nonce`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
 
+    /// The proof's `id` (VC Data Integrity §2.1), a URL naming this proof so
+    /// another proof in a chain can refer to it through `previousProof`.
+    ///
+    /// Like every member below, it is part of the hashed proof configuration,
+    /// so it is carried through parse and canonicalization unchanged. Set it
+    /// with [`SignOptions::with_id`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    /// The proof's `expires` (VC Data Integrity §2.1): an `xsd:dateTimeStamp`
+    /// after which the proof is no longer valid.
+    ///
+    /// Verification refuses a proof whose `expires` has passed with
+    /// [`DataIntegrityError::ProofExpired`], allowing the same clock skew as
+    /// `created`, and refuses a value that is not a well-formed
+    /// `dateTimeStamp` with [`DataIntegrityError::MalformedProof`]. Set it with
+    /// [`SignOptions::with_expires`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires: Option<String>,
+
+    /// The proof's `domain` (VC Data Integrity §2.1): the security domain or
+    /// domains the proof is restricted to. Checked against
+    /// [`VerifyOptions::with_expected_domain`] when the verifier sets one. Set
+    /// it with [`SignOptions::with_domain`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<StringOrList>,
+
+    /// The proof's `challenge` (VC Data Integrity §2.1), supplied by the
+    /// verifier to bind the proof to one exchange. Checked against
+    /// [`VerifyOptions::with_expected_challenge`] when the verifier sets one.
+    /// Set it with [`SignOptions::with_challenge`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub challenge: Option<String>,
+
+    /// The proof's `previousProof` (VC Data Integrity §2.1): the `id` of the
+    /// proof, or proofs, this one chains from. Set it with
+    /// [`SignOptions::with_previous_proof`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_proof: Option<StringOrList>,
+
     #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
     pub context: Option<Vec<String>>,
+}
+
+/// A proof member that VC Data Integrity allows as either one string or a
+/// list of strings (`domain`, `previousProof`). Serializes in the shape it
+/// was given, so a proof configuration hashes the same bytes its producer
+/// signed.
+///
+/// `#[non_exhaustive]` so another shape can be added without a breaking
+/// release; match with a `_ =>` arm, or use [`StringOrList::contains`] /
+/// [`StringOrList::iter`].
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+#[non_exhaustive]
+pub enum StringOrList {
+    One(String),
+    List(Vec<String>),
+}
+
+impl StringOrList {
+    /// Whether `value` is the single string or one of the listed strings.
+    pub fn contains(&self, value: &str) -> bool {
+        match self {
+            Self::One(one) => one == value,
+            Self::List(list) => list.iter().any(|item| item == value),
+        }
+    }
+
+    /// The string, or each listed string.
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        let items: &[String] = match self {
+            Self::One(one) => std::slice::from_ref(one),
+            Self::List(list) => list,
+        };
+        items.iter().map(String::as_str)
+    }
+}
+
+impl From<String> for StringOrList {
+    fn from(value: String) -> Self {
+        Self::One(value)
+    }
+}
+
+impl From<&str> for StringOrList {
+    fn from(value: &str) -> Self {
+        Self::One(value.to_string())
+    }
+}
+
+impl From<Vec<String>> for StringOrList {
+    fn from(value: Vec<String>) -> Self {
+        Self::List(value)
+    }
 }
 
 impl DataIntegrityProof {
@@ -173,6 +267,11 @@ impl DataIntegrityProof {
             proof_value,
             context,
             nonce: None,
+            id: None,
+            expires: None,
+            domain: None,
+            challenge: None,
+            previous_proof: None,
         }
     }
 
@@ -246,26 +345,33 @@ impl DataIntegrityProof {
             .proof_purpose
             .unwrap_or_else(|| "assertionMethod".to_string());
 
+        let proof_options = DataIntegrityProof {
+            type_: "DataIntegrityProof".to_string(),
+            cryptosuite: crypto_suite,
+            created: Some(created_str),
+            verification_method: signer.verification_method().to_string(),
+            proof_purpose,
+            proof_value: None,
+            nonce: options.nonce,
+            id: options.id,
+            expires: options.expires.map(format_created),
+            domain: options.domain,
+            challenge: options.challenge,
+            previous_proof: options.previous_proof,
+            context: options.context,
+        };
+        check_proof_ids(&proof_options)?;
+        if let (Some(created), Some(expires)) = (&proof_options.created, &proof_options.expires) {
+            check_expires_not_before_created(
+                parse_proof_time("created", created)?,
+                parse_proof_time("expires", expires)?,
+            )?;
+        }
+
         if crypto_suite.is_rdfc() {
-            sign_rdfc(
-                data_doc,
-                crypto_suite,
-                options.context,
-                signer,
-                created_str,
-                proof_purpose,
-            )
-            .await
+            sign_rdfc(data_doc, proof_options, signer).await
         } else {
-            sign_jcs(
-                data_doc,
-                crypto_suite,
-                options.context,
-                signer,
-                created_str,
-                proof_purpose,
-            )
-            .await
+            sign_jcs(data_doc, proof_options, signer).await
         }
     }
 
@@ -354,13 +460,12 @@ impl DataIntegrityProof {
 // Internal signing helpers
 // -----------------------------------------------------------------------
 
+/// Signs `proof_options` (every member set except `proofValue`) over
+/// `data_doc` with a JCS suite.
 async fn sign_jcs<S>(
     data_doc: &S,
-    crypto_suite: CryptoSuite,
-    context: Option<Vec<String>>,
+    mut proof_options: DataIntegrityProof,
     signer: &dyn Signer,
-    created: String,
-    proof_purpose: String,
 ) -> Result<DataIntegrityProof, DataIntegrityError>
 where
     S: Serialize,
@@ -368,17 +473,6 @@ where
     let jcs = to_string(data_doc)
         .map_err(|e| DataIntegrityError::Canonicalization(format!("document: {e}")))?;
     debug!("Document (JCS): {}", jcs);
-
-    let mut proof_options = DataIntegrityProof {
-        nonce: None,
-        type_: "DataIntegrityProof".to_string(),
-        cryptosuite: crypto_suite,
-        created: Some(created),
-        verification_method: signer.verification_method().to_string(),
-        proof_purpose,
-        proof_value: None,
-        context,
-    };
 
     let proof_jcs = to_string(&proof_options)
         .map_err(|e| DataIntegrityError::Canonicalization(format!("proof config: {e}")))?;
@@ -391,13 +485,13 @@ where
     Ok(proof_options)
 }
 
+/// Signs `proof_options` (every member set except `proofValue`) over
+/// `data_doc` with an RDFC suite. A proof `@context` left unset is taken
+/// from the document.
 async fn sign_rdfc<S>(
     data_doc: &S,
-    crypto_suite: CryptoSuite,
-    context: Option<Vec<String>>,
+    mut proof_options: DataIntegrityProof,
     signer: &dyn Signer,
-    created: String,
-    proof_purpose: String,
 ) -> Result<DataIntegrityProof, DataIntegrityError>
 where
     S: Serialize,
@@ -406,7 +500,7 @@ where
         .map_err(|e| DataIntegrityError::Canonicalization(format!("document serialize: {e}")))?;
 
     // Proof context: caller override, else pulled from document @context.
-    let proof_context = if let Some(ctx) = context {
+    let proof_context = if let Some(ctx) = proof_options.context.take() {
         Some(ctx)
     } else {
         match doc_value.get("@context") {
@@ -429,16 +523,7 @@ where
         }
     };
 
-    let mut proof_options = DataIntegrityProof {
-        nonce: None,
-        type_: "DataIntegrityProof".to_string(),
-        cryptosuite: crypto_suite,
-        created: Some(created),
-        verification_method: signer.verification_method().to_string(),
-        proof_purpose,
-        proof_value: None,
-        context: proof_context,
-    };
+    proof_options.context = proof_context;
 
     let proof_value = serde_json::to_value(&proof_options).map_err(|e| {
         DataIntegrityError::Canonicalization(format!("proof config serialize: {e}"))
@@ -499,27 +584,34 @@ where
         ));
     }
 
-    // `created` is stamped by the signer's clock and checked against
-    // ours, so a strict comparison makes acceptance a race between clock
-    // skew and delivery latency. Allow `options.clock_skew` (default 60s)
-    // of drift; a negative setting is clamped to zero rather than making
-    // the check *stricter* than exact.
-    if let Some(created) = &proof_config.created {
-        let skew = options.clock_skew.max(chrono::TimeDelta::zero());
-        // `checked_add_signed` so an absurd caller-supplied skew saturates
-        // instead of panicking on overflow, as `+` would.
-        let horizon = Utc::now()
-            .checked_add_signed(skew)
-            .unwrap_or(DateTime::<Utc>::MAX_UTC);
-        let created = created
-            .parse::<DateTime<Utc>>()
-            .map_err(|e| DataIntegrityError::Conformance(format!("Invalid created date: {e}")))?;
-        if created > horizon {
-            return Err(DataIntegrityError::Conformance(format!(
-                "Created date is in the future (beyond the {}s clock-skew allowance)",
-                skew.num_seconds()
-            )));
-        }
+    check_proof_ids(&proof_config)?;
+    check_proof_times(
+        proof_config.created.as_deref(),
+        proof_config.expires.as_deref(),
+        &ProofClock {
+            now: options.verification_time.unwrap_or_else(Utc::now),
+            created_skew: options.clock_skew,
+            expiry_skew: options.expiry_clock_skew,
+        },
+    )?;
+
+    if let Some(expected) = &options.expected_domain
+        && !proof_config
+            .domain
+            .as_ref()
+            .is_some_and(|domain| domain.contains(expected))
+    {
+        return Err(DataIntegrityError::Conformance(
+            "proof domain does not match the expected domain".to_string(),
+        ));
+    }
+
+    if let Some(expected) = &options.expected_challenge
+        && proof_config.challenge.as_ref() != Some(expected)
+    {
+        return Err(DataIntegrityError::Conformance(
+            "proof challenge does not match the expected challenge".to_string(),
+        ));
     }
 
     // Canonicalize & hash (JCS or RDFC depending on suite).
@@ -646,6 +738,144 @@ where
 
 fn format_created(dt: DateTime<Utc>) -> String {
     dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// The instant and tolerances a proof's `created` and `expires` are checked
+/// against. Negative skews are treated as zero.
+pub(crate) struct ProofClock {
+    pub(crate) now: DateTime<Utc>,
+    /// How far into the future `created` may be.
+    pub(crate) created_skew: chrono::TimeDelta,
+    /// How far past `expires` the proof is still accepted.
+    pub(crate) expiry_skew: chrono::TimeDelta,
+}
+
+/// Parses a proof timestamp strictly as an `xsd:dateTimeStamp`.
+pub(crate) fn parse_proof_time(
+    member: &str,
+    value: &str,
+) -> Result<DateTime<Utc>, DataIntegrityError> {
+    date_time::parse_date_time_stamp(value).map_err(|reason| {
+        DataIntegrityError::MalformedProof(format!(
+            "{member} is not a valid dateTimeStamp ({reason}): {value}"
+        ))
+    })
+}
+
+fn check_expires_not_before_created(
+    created: DateTime<Utc>,
+    expires: DateTime<Utc>,
+) -> Result<(), DataIntegrityError> {
+    if expires < created {
+        return Err(DataIntegrityError::MalformedProof(
+            "expires is earlier than created".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Checks a proof's `created` and `expires`:
+///
+/// - both, when present, must be well-formed `xsd:dateTimeStamp`s
+///   ([`DataIntegrityError::MalformedProof`] otherwise);
+/// - `created` may be at most `created_skew` in the future
+///   ([`DataIntegrityError::Conformance`]);
+/// - `expires` may not be earlier than `created`
+///   ([`DataIntegrityError::MalformedProof`]);
+/// - the proof is expired once `now >= expires + expiry_skew`
+///   ([`DataIntegrityError::ProofExpired`]). The bound is inclusive: at the
+///   `expires` instant itself the proof is already expired.
+pub(crate) fn check_proof_times(
+    created: Option<&str>,
+    expires: Option<&str>,
+    clock: &ProofClock,
+) -> Result<(), DataIntegrityError> {
+    let zero = chrono::TimeDelta::zero();
+    let created_at = created
+        .map(|created| parse_proof_time("created", created))
+        .transpose()?;
+    let expires_at = expires
+        .map(|expires| parse_proof_time("expires", expires))
+        .transpose()?;
+
+    // `created` is stamped by the signer's clock and checked against ours,
+    // so a strict comparison makes acceptance a race between clock skew and
+    // delivery latency. `checked_add_signed` so an absurd caller-supplied
+    // skew saturates instead of panicking on overflow.
+    if let Some(created_at) = created_at {
+        let skew = clock.created_skew.max(zero);
+        let horizon = clock
+            .now
+            .checked_add_signed(skew)
+            .unwrap_or(DateTime::<Utc>::MAX_UTC);
+        if created_at > horizon {
+            return Err(DataIntegrityError::Conformance(format!(
+                "Created date is in the future (beyond the {}s clock-skew allowance)",
+                skew.num_seconds()
+            )));
+        }
+    }
+
+    if let Some(expires_at) = expires_at {
+        if let Some(created_at) = created_at {
+            check_expires_not_before_created(created_at, expires_at)?;
+        }
+        let deadline = expires_at
+            .checked_add_signed(clock.expiry_skew.max(zero))
+            .unwrap_or(DateTime::<Utc>::MAX_UTC);
+        if clock.now >= deadline {
+            return Err(DataIntegrityError::ProofExpired {
+                expires: expires.unwrap_or_default().to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Refuses an `id` or `previousProof` that is not an absolute IRI.
+///
+/// JSON-LD processors disagree about relative IRIs in these positions: the
+/// JSON-LD to-RDF algorithm drops them, and some processors refuse them, while
+/// `affinidi-rdf-encoding` keeps them. An RDFC hash over one would then
+/// differ between implementations without any error, so neither is accepted.
+pub(crate) fn check_proof_ids(proof: &DataIntegrityProof) -> Result<(), DataIntegrityError> {
+    check_proof_id_values(proof.id.as_deref(), proof.previous_proof.as_ref())
+}
+
+pub(crate) fn check_proof_id_values(
+    id: Option<&str>,
+    previous_proof: Option<&StringOrList>,
+) -> Result<(), DataIntegrityError> {
+    let ids = id.into_iter().map(|id| ("id", id)).chain(
+        previous_proof
+            .into_iter()
+            .flat_map(StringOrList::iter)
+            .map(|previous| ("previousProof", previous)),
+    );
+    for (member, value) in ids {
+        if !is_absolute_iri(value) {
+            return Err(DataIntegrityError::MalformedProof(format!(
+                "{member} must be an absolute IRI: {value:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// RFC 3987 absolute IRI shape: a scheme (`ALPHA *( ALPHA / DIGIT / "+" /
+/// "-" / "." )`), a `:`, and no whitespace or control characters.
+fn is_absolute_iri(value: &str) -> bool {
+    let Some((scheme, _)) = value.split_once(':') else {
+        return false;
+    };
+    let mut scheme_chars = scheme.chars();
+    scheme_chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && scheme_chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        && !value
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | '"'))
 }
 
 #[cfg(test)]

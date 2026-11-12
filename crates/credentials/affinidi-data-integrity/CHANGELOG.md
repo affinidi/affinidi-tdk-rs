@@ -1,5 +1,72 @@
 # Affinidi Data Integrity Changelog
 
+## 0.8.3 — `expires`, `domain`, `challenge`, `id` and `previousProof` proof members
+
+**Behaviour change (R3.6).** `DataIntegrityProof` had no field for the
+optional proof members VC Data Integrity 1.0 §2.1 defines besides `nonce`,
+so serde dropped them on parse. Every cryptosuite hashes the proof
+configuration, so a proof whose producer signed any of them failed with
+`InvalidSignature`, and a verifier could not enforce `expires`. They are now
+modelled the same way `nonce` was (#802).
+
+- New `DataIntegrityProof` fields `id`, `expires`, `domain`, `challenge`,
+  `previous_proof`, omitted from JSON when `None`. `domain` and
+  `previousProof` may be a string or a list of strings (new
+  `#[non_exhaustive]` type `StringOrList`) and serialize in the shape they
+  were given. They are kept through parse, JCS and RDFC canonicalization,
+  and verify, for every suite.
+- **Expiry.** Verification refuses a proof once its `expires` is reached
+  with the new error `DataIntegrityError::ProofExpired`. The bound is
+  inclusive (`now >= expires` is expired) and has its own tolerance,
+  `VerifyOptions::expiry_clock_skew`, which defaults to **zero**; the 60s
+  `clock_skew` still applies only to a future `created`.
+- **Strict timestamps.** `created` and `expires` must be
+  `xsd:dateTimeStamp`s (`YYYY-MM-DDThh:mm:ss[.f]` then `Z` or `±hh:mm`):
+  uppercase `T`/`Z`, month, day-of-month, hour (0-23), minute and second
+  (0-59) and offset (at most 14:00) range-checked. Anything else is refused
+  with `MalformedProof` (a malformed `created` was `Conformance` before, and
+  lenient parsing accepted forms such as a space separator or lowercase
+  `t`). `expires` earlier than `created` is refused at sign and at verify.
+- **Absolute IRIs.** `id` and each `previousProof` entry must be absolute
+  IRIs, at sign and at verify (`MalformedProof`). JSON-LD processors
+  disagree about relative IRIs there (some drop them, some refuse them,
+  `affinidi-rdf-encoding` keeps them), so an RDFC hash over one could differ
+  between implementations without an error.
+- `previousProof` is signed and hashed only; this release does not check
+  that the named proofs exist or verify (no proof-chain verification).
+- These checks apply to `verify`, `verify_with_public_key`, `verify_multi`,
+  `verify_conformance`, and the `bbs-2023` `verify_derived_proof` /
+  `verify_pseudonym_derived_proof`. `verify_conformance` and the `bbs-2023`
+  verifiers take no `VerifyOptions`: they use the current time and the
+  default skews, and do not check `domain` / `challenge`.
+- `VerifyOptions::with_verification_time` checks `created` and `expires`
+  against a fixed instant instead of the current time;
+  `with_expiry_clock_skew` sets the tolerance after `expires`.
+- `VerifyOptions::with_expected_domain` / `with_expected_challenge`: when
+  set, the proof's `domain` must be or include the value, and its
+  `challenge` must equal it. Off by default.
+- `SignOptions::with_expires`, `with_domain`, `with_challenge`,
+  `with_nonce`, `with_id`, `with_previous_proof` set the members on signed
+  proofs. Proofs signed without them are byte-for-byte unchanged.
+
+All of the touched public types were already `#[non_exhaustive]`, so the new
+fields and error variant are additive. What changes for callers:
+
+- A proof whose `expires` has been reached, or is malformed or earlier than
+  `created`, no longer verifies. Such proofs could only verify before if
+  `expires` was added after signing.
+- A proof whose `created` is not a strict `xsd:dateTimeStamp` no longer
+  verifies, and the error is `MalformedProof` rather than `Conformance`.
+- A proof that carries `id`, `domain`, `challenge` or `previousProof` now
+  verifies if it is otherwise valid, where it was refused as
+  `InvalidSignature`, unless `id` / `previousProof` is not an absolute IRI.
+  `domain` and `challenge` are not checked unless the verifier asks for
+  them.
+- A proof whose `domain` or `previousProof` is neither a string nor a list
+  of strings no longer parses.
+- The `bbs-2023` derived-proof verifiers now also refuse a `created` more
+  than 60s in the future.
+
 ## 0.8.2 — RDFC suites expand JSON-LD in safe mode
 
 **Behaviour change (R3.6).** The RDFC cryptosuites (`eddsa-rdfc-2022`,
