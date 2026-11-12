@@ -47,6 +47,9 @@ reqwest = { version = "0.13", default-features = false, features = [
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = "1"
 thiserror = "2"
+# Verification of a fetched stream runs on the blocking thread pool, under a
+# process-wide limit (`WebsResolver::resolve_with_metadata`).
+tokio = { version = "1", features = ["rt", "sync"] }
 tracing = "0.1"
 
 [dev-dependencies]

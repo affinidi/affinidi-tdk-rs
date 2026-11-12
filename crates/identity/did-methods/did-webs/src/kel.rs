@@ -187,15 +187,25 @@ impl Kels {
                 messages.len()
             )));
         }
-        let signatures = messages
+        // Stop counting at the first attachment that takes the total past the
+        // limit, so the refusal costs no more than reading up to it.
+        let over = messages
             .iter()
             .flat_map(|m| &m.attachments)
             .map(signature_count)
-            .fold(0usize, usize::saturating_add);
-        if signatures > MAX_STREAM_SIGNATURES {
+            .try_fold(0usize, |total, n| {
+                let total = total.saturating_add(n);
+                if total > MAX_STREAM_SIGNATURES {
+                    Err(())
+                } else {
+                    Ok(total)
+                }
+            })
+            .is_err();
+        if over {
             return Err(DidWebsError::Stream(format!(
-                "keri.cesr carries {signatures} signatures, more than the \
-                 {MAX_STREAM_SIGNATURES} this resolver checks"
+                "keri.cesr carries more than the {MAX_STREAM_SIGNATURES} \
+                 signatures this resolver checks"
             )));
         }
 
