@@ -795,6 +795,24 @@ pub struct TspMuxSender {
     shared: Arc<Shared>,
 }
 
+/// [`TspMuxSender`] as the wire a grant keeper talks on.
+struct TspGrantWire(TspMuxSender);
+
+impl super::mux_grant_keep::GrantWire for TspGrantWire {
+    async fn grant(
+        &self,
+        statements: Vec<Value>,
+    ) -> Result<crate::tasks::messaging::mux::grant::v0_1::Response, ATMError> {
+        self.0.grant(statements).await
+    }
+    async fn list(
+        &self,
+        cursor: Option<String>,
+    ) -> Result<crate::tasks::messaging::mux::list::v0_1::Response, ATMError> {
+        self.0.list(false, cursor, None).await
+    }
+}
+
 impl std::fmt::Debug for TspMuxSender {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TspMuxSender")
@@ -1089,6 +1107,27 @@ impl TspMuxSender {
                         .map_err(|e| ATMError::MsgReceiveError(format!("attach answer: {e}")))
                 }
             },
+        )
+    }
+
+    /// Keep stored grants to this socket's principal renewed and recreated,
+    /// as each member opted into (`auto_renew` / `auto_recreate`, both off by
+    /// default): grants and lists go on this socket, signed with this
+    /// socket's `ATM`. Hand the socket's `TspMuxFrame::Notice`s to
+    /// [`MuxGrantKeeper::handle_notice`](super::mux_grant_keep::MuxGrantKeeper::handle_notice)
+    /// before acknowledging them. Stops when the returned handle is dropped.
+    /// See [`super::mux_grant_keep`].
+    pub fn keep_grants(
+        &self,
+        members: Vec<super::mux_grant_keep::MuxGrantKeep>,
+    ) -> Result<super::mux_grant_keep::MuxGrantKeeper, ATMError> {
+        super::mux_grant_keep::spawn_grant_keep(
+            self.shared.atm.clone(),
+            self.shared.principal.clone(),
+            self.shared.mediator.clone(),
+            members,
+            self.ready(),
+            TspGrantWire(self.clone()),
         )
     }
 }

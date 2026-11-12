@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.45.15 — mux: keep stored grants renewed and recreated (opt-in); mux groups
+
+- New `protocols::mux_grant_keep`: `MuxGrantKeeper` keeps stored grants to
+  the principal alive for members whose keys this `ATM` holds. Each member
+  is a `MuxGrantKeep { member_did, scope, lifetime_secs, auto_renew,
+  auto_recreate }`; both flags are off by default (design §5.8), and with
+  both off the keeper only reports.
+  - `auto_renew`: signs a fresh grant at 75 % of the grant's lifetime, or at
+    once on a `grantsExpiring` notice for it, replacing the old one. It signs
+    the grant's current (effective) scope within the kept scope, so it never
+    widens a narrowed grant.
+  - `auto_recreate`: signs a `suspended` (a `grantsSuspended` notice, or
+    `mux/list`), `staleKey` or `expired` grant again with the member DID's
+    current key, under the epoch the grant carried.
+  - **Never recreated:** `grantsRevoked` (`revokedByMember`, `epochBumped`,
+    `admin`, `accountRemoved`, or any other reason), an `epochRevoked`
+    grant, an `epochMismatch` refusal of a renewal, and a grant that
+    disappears from `mux/list`. These end in `Revoked { reason }`.
+  - It never creates a grant the mediator does not hold (`NotStored`): store
+    the first one with `sign_grant`, then `MuxGrantKeeper::refresh()`.
+  - It looks at `mux/list` on every new connection. Failures are retried
+    after 10 s, doubling to 5 min, at most 8 times a connection; a member is
+    recreated at most 3 times an hour, so two devices holding different keys
+    of one DID cannot suspend each other for ever.
+  - `MuxGrantKeeper::status(member_did)` is a watch per member (R6.2):
+    `Waiting`, `NotStored`, `Active`, `Renewing`, `Recreating`, `Recreated`,
+    `Expiring`, `NeedsRecreate`, `Failed { error, retrying }`,
+    `Revoked { reason }` or `Ended`.
+  - Notices stay the app's: it hands each verified notice to
+    `MuxGrantKeeper::handle_notice`, which returns once the keeper has acted,
+    and then acknowledges the notice as before. The keeper never reads or
+    acknowledges notices itself.
+  - DIDComm: `mux_grant_keep::keep_grants(atm, profile, members)`.
+    `tsp-mux`: `TspMuxSender::keep_grants(members)`.
+- New `protocols::mux_groups` (design §5.7): `MuxGroups` assigns each member
+  DID to one of k labelled groups (one principal connection each) by
+  rendezvous hashing, the same in every process. Adding or removing a member
+  moves no other; adding a group moves only the members that now prefer it.
+  `partition`, `partition_bounded` (a cap per group, spilling in preference
+  order), `moves` (what a change of groups moves) and `MuxGroupRouter`
+  (a route per group). The mediator needs nothing for it.
+- Nothing changes for an app that uses neither.
+
 ## 0.45.14 — mux: keep session attaches across reconnects (opt-in)
 
 - New `protocols::mux_keep`: `MuxKeepAttached` keeps a set of member DIDs
