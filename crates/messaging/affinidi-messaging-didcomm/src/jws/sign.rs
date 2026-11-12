@@ -123,18 +123,19 @@ pub fn sign_multi(payload: &[u8], signers: &[JwsSigner]) -> Result<String, DIDCo
     let mut signatures = Vec::with_capacity(signers.len());
     for signer in signers {
         let entry = match signer {
-            JwsSigner::Ed25519 { kid, private } => build_signature(&payload_b64, "EdDSA", kid, {
-                let private = *private;
-                move |input| signing::sign(input, private).map_err(DIDCommError::from)
-            })?,
-            JwsSigner::P256 { kid, private } => build_signature(&payload_b64, "ES256", kid, {
-                let private = *private;
-                move |input| sign_ecdsa_p256(input, private)
-            })?,
+            JwsSigner::Ed25519 { kid, private } => {
+                build_signature(&payload_b64, "EdDSA", kid, |input| {
+                    signing::sign(input, private).map_err(DIDCommError::from)
+                })?
+            }
+            JwsSigner::P256 { kid, private } => {
+                build_signature(&payload_b64, "ES256", kid, |input| {
+                    sign_ecdsa_p256(input, private)
+                })?
+            }
             JwsSigner::Secp256k1 { kid, private } => {
-                build_signature(&payload_b64, "ES256K", kid, {
-                    let private = *private;
-                    move |input| sign_ecdsa_secp256k1(input, private)
+                build_signature(&payload_b64, "ES256K", kid, |input| {
+                    sign_ecdsa_secp256k1(input, private)
                 })?
             }
         };

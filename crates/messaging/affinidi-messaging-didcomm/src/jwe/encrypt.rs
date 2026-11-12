@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use crate::error::DIDCommError;
 use crate::jwe::envelope::*;
 use affinidi_crypto::jose::{aes_kw, content_encryption, ecdh, key_agreement::*};
+use zeroize::Zeroizing;
 
 /// Encrypt a plaintext payload for one or more recipients using authcrypt (ECDH-1PU).
 ///
@@ -48,7 +49,7 @@ pub fn authcrypt(
     let apv_raw = compute_apv(recipients.iter().map(|(kid, _)| *kid));
 
     // Generate CEK and IV, encrypt content
-    let cek = content_encryption::generate_cek();
+    let cek = Zeroizing::new(content_encryption::generate_cek());
     let iv = content_encryption::generate_iv();
 
     // Build protected header (needed as AAD before encryption)
@@ -72,15 +73,15 @@ pub fn authcrypt(
     // Wrap CEK for each recipient using ECDH-1PU (with tag-in-KDF)
     let mut jwe_recipients = Vec::with_capacity(recipients.len());
     for (kid, recipient_pub) in recipients {
-        let kek = ecdh::derive_sender_key_1pu(
+        let kek = Zeroizing::new(ecdh::derive_sender_key_1pu(
             &ephemeral,
             sender_private,
             recipient_pub,
             apu_raw,
             &apv_raw,
             &tag,
-        )?;
-        let wrapped = aes_kw::wrap(&kek, &cek)?;
+        )?);
+        let wrapped = aes_kw::wrap(&kek, cek.as_slice())?;
         jwe_recipients.push(Recipient {
             header: PerRecipientHeader {
                 kid: kid.to_string(),
@@ -131,7 +132,7 @@ pub fn anoncrypt(
 
     let apv_raw = compute_apv(recipients.iter().map(|(kid, _)| *kid));
 
-    let cek = content_encryption::generate_cek();
+    let cek = Zeroizing::new(content_encryption::generate_cek());
     let iv = content_encryption::generate_iv();
 
     let protected_header = ProtectedHeader {
@@ -152,8 +153,13 @@ pub fn anoncrypt(
 
     let mut jwe_recipients = Vec::with_capacity(recipients.len());
     for (kid, recipient_pub) in recipients {
-        let kek = ecdh::derive_sender_key(&ephemeral, recipient_pub, &[], &apv_raw)?;
-        let wrapped = aes_kw::wrap(&kek, &cek)?;
+        let kek = Zeroizing::new(ecdh::derive_sender_key(
+            &ephemeral,
+            recipient_pub,
+            &[],
+            &apv_raw,
+        )?);
+        let wrapped = aes_kw::wrap(&kek, cek.as_slice())?;
         jwe_recipients.push(Recipient {
             header: PerRecipientHeader {
                 kid: kid.to_string(),
@@ -191,7 +197,7 @@ pub(crate) fn authcrypt_legacy(
     let apu_raw = sender_kid.as_bytes();
     let apv_raw = compute_apv(std::iter::once(recipient_kid));
 
-    let cek = content_encryption::generate_cek();
+    let cek = Zeroizing::new(content_encryption::generate_cek());
     let iv = content_encryption::generate_iv();
 
     let protected_header = ProtectedHeader {
@@ -210,15 +216,15 @@ pub(crate) fn authcrypt_legacy(
     let (ciphertext, tag) =
         content_encryption::encrypt(plaintext, &cek, &iv, protected_b64.as_bytes())?;
 
-    let kek = ecdh::derive_sender_key_1pu_legacy(
+    let kek = Zeroizing::new(ecdh::derive_sender_key_1pu_legacy(
         &ephemeral,
         sender_private,
         recipient_pub,
         apu_raw,
         &apv_raw,
         &tag,
-    )?;
-    let wrapped = aes_kw::wrap(&kek, &cek)?;
+    )?);
+    let wrapped = aes_kw::wrap(&kek, cek.as_slice())?;
 
     let jwe = Jwe {
         protected: protected_b64,
@@ -253,7 +259,7 @@ pub(crate) fn authcrypt_with_party_info(
     let apu_raw = apu.map(str::as_bytes).unwrap_or_default();
     let apv_raw = compute_apv(std::iter::once(recipient_kid));
 
-    let cek = content_encryption::generate_cek();
+    let cek = Zeroizing::new(content_encryption::generate_cek());
     let iv = content_encryption::generate_iv();
 
     let protected_header = ProtectedHeader {
@@ -272,15 +278,15 @@ pub(crate) fn authcrypt_with_party_info(
     let (ciphertext, tag) =
         content_encryption::encrypt(plaintext, &cek, &iv, protected_b64.as_bytes())?;
 
-    let kek = ecdh::derive_sender_key_1pu(
+    let kek = Zeroizing::new(ecdh::derive_sender_key_1pu(
         &ephemeral,
         sender_private,
         recipient_pub,
         apu_raw,
         &apv_raw,
         &tag,
-    )?;
-    let wrapped = aes_kw::wrap(&kek, &cek)?;
+    )?);
+    let wrapped = aes_kw::wrap(&kek, cek.as_slice())?;
 
     let jwe = Jwe {
         protected: protected_b64,
