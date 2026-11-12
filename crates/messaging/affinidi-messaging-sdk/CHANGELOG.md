@@ -21,7 +21,10 @@
   attached again, signed for the new `ready`. Frames not acknowledged before
   the drop are delivered again: handle a repeat by its `message_id`.
 - It gives up (state `Closed`, `recv` fails) only when the mediator no longer
-  selects `tsp-mux`, or the client closes or drops it.
+  selects `tsp-mux`, when a newer connection for the same DID replaced it
+  (close reason "replaced by a newer connection": reconnecting would replace
+  the newer one, and the two would fight), or when the client closes or
+  drops it.
 - `connect_websocket_mux` is unchanged: it still never reconnects.
 - `messaging/mux/ack` 0.1 re-pinned as amended by
   trustoverip/dtgwg-trust-tasks-tf#1179 (wording: `notPermitted` only for a

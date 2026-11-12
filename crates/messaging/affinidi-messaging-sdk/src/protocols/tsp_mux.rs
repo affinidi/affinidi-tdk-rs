@@ -54,8 +54,10 @@
 //! and sends fail at once rather than queue. Once a new connection's `ready`
 //! arrives the state is `Open` again and [`TspMuxWebSocket::recv`] returns
 //! [`TspMuxFrame::Reconnected`]. It stops only when the client closes or
-//! drops it, or when the mediator no longer accepts `tsp-mux` (then `recv`
-//! fails and the state is `Closed`).
+//! drops it, when the mediator no longer accepts `tsp-mux`, or when a newer
+//! connection for the same DID replaced it (then `recv` fails and the state
+//! is `Closed`): taking the connection back would replace the newer one, and
+//! the two would fight.
 //!
 //! Each connection is new to the mediator, so nothing carries over: the
 //! member set is rebuilt from the new connection's `ready` and `attached`
@@ -639,6 +641,12 @@ async fn open_mux(
     }
 }
 
+/// The reason the mediator closes a socket with when a newer connection for
+/// the same DID took its place. A managed socket stops on it: connecting
+/// again would replace the newer connection in turn, and the two would take
+/// it from each other for ever.
+const REPLACED_REASON: &str = "replaced by a newer connection";
+
 /// Whether a failed reconnect is final: the mediator (or the profile) no
 /// longer offers a mux connection at all. Anything else is tried again.
 fn is_final(e: &ATMError) -> bool {
@@ -1033,7 +1041,11 @@ async fn run(
             }
             Ended::Lost(reason, error) => (reason, error),
         };
-        let Some(redial) = &redial else {
+        let replaced = reason.contains(REPLACED_REASON);
+        let Some(redial) = redial.as_ref().filter(|_| !replaced) else {
+            if replaced && redial.is_some() {
+                warn!(principal = %shared.principal, "tsp-mux socket replaced by a newer connection; not reconnecting");
+            }
             shared.finish(reason);
             if let Some(e) = error {
                 let _ = frames.send(Err(e)).await;
@@ -1367,7 +1379,8 @@ impl TspOps<'_> {
     /// (`ATMError::Disconnected`), and requests that were waiting fail. Each
     /// new connection is announced by [`TspMuxFrame::Reconnected`] from
     /// [`TspMuxWebSocket::recv`]. It gives up (state `Closed`, `recv` fails)
-    /// only when the mediator no longer accepts `tsp-mux`. See the
+    /// only when the mediator no longer accepts `tsp-mux`, or when a newer
+    /// connection for the same DID replaced this one. See the
     /// [module docs](super::tsp_mux) for what carries over (nothing).
     pub async fn connect_websocket_mux_managed(
         &self,
@@ -2268,6 +2281,33 @@ mod tests {
         assert_eq!(*sock.state().borrow(), TspMuxState::Open);
         assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2);
         sock.close().await.unwrap();
+    }
+
+    /// A managed socket replaced by a newer connection for the same DID stops
+    /// rather than take the connection back.
+    #[tokio::test]
+    async fn a_replaced_managed_socket_does_not_reconnect() {
+        let k = keys();
+        let (dialer, accepted) = serve_each(vec![Conn {
+            selected: "tsp-mux",
+            frames: vec![Message::Binary(ready_frame(&k).into())],
+            close: Some("replaced by a newer connection"),
+        }])
+        .await;
+        let policy = TspMuxReconnect::default()
+            .with_delays(Duration::from_millis(20), Duration::from_millis(50));
+        let mut sock = open_on(dialer, &k, Some(policy)).await;
+        let err = timeout(Duration::from_secs(5), sock.recv())
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("replaced by a newer connection"),
+            "{err}"
+        );
+        assert!(matches!(*sock.state().borrow(), TspMuxState::Closed { .. }));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     /// When the mediator stops selecting `tsp-mux`, a managed socket gives up:
