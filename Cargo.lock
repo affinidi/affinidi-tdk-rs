@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-service"
-version = "0.30.2"
+version = "0.31.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-didcomm",
@@ -649,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.45.17"
+version = "0.46.0"
 dependencies = [
  "affinidi-crypto 0.2.12",
  "affinidi-did-authentication",
@@ -906,7 +906,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.42.0"
+version = "0.43.0"
 dependencies = [
  "affinidi-crypto 0.2.12",
  "affinidi-data-integrity",
@@ -5719,6 +5719,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "regress"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32eef8b209c3c1c15dbad02c1f30f9539f00dc7253e0cbcdaae442a50a09d7c1"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "reqwest"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7210,9 +7219,9 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-proof"
-version = "0.37.0"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5312c84216c34c8ae6612aea1064bd16c2c48a9d7b99052b5d894415f41c9991"
+checksum = "48b1af715be26aa8088a172a8543747dbd7cdbf6b2a7a8f078e60f11a86bbe4c"
 dependencies = [
  "affinidi-crypto 0.2.12",
  "affinidi-data-integrity",
@@ -7220,21 +7229,23 @@ dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-encoding",
  "async-trait",
+ "chrono",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tokio",
  "trust-tasks-rs",
 ]
 
 [[package]]
 name = "trust-tasks-rs"
-version = "0.37.0"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "612559ddae3e0416cacdaa6e948d0d7ea8cb48507bd271be51bcd53f22d37300"
+checksum = "8ac68ec8d2c1a13047a8ddf8a19e3d48274af8b6944cc9f6255a5e460fa4a4a8"
 dependencies = [
  "async-trait",
  "chrono",
- "regress",
+ "regress 0.12.0",
  "serde",
  "serde_json",
  "serde_with",
@@ -7346,7 +7357,7 @@ dependencies = [
  "log",
  "proc-macro2",
  "quote",
- "regress",
+ "regress 0.11.1",
  "schemars 0.8.22",
  "semver",
  "serde",

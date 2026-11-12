@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased (0.46.0) — trust-tasks-rs 0.38
+
+- **Changed (breaking):** `trust-tasks-rs` and `trust-tasks-proof` 0.37 → 0.38.
+  The Trust Task types cross this crate's public API, so it moves a minor.
+  0.38 refuses out-of-range `issuedAt` / `expiresAt` / proof `created` fields
+  instead of rolling them over, refuses a document whose `type` is not the
+  spec it is consumed under, follows the JCS cryptosuites' `@context` rule in
+  proofs, bounds DID resolution in the `affinidi` proof backend by default
+  (10 s, no private hosts), and makes the in-memory replay guard refuse when
+  full. The APIs this crate calls (`TrustTask`, `Payload`, `ProofVerifier`,
+  `sign_trust_task`, `SignOptions`, `Verifier`, `ProofPurposeResolver`,
+  `CachedDidResolver`) keep their signatures, so there is no source change.
+- `trust-tasks-proof` 0.38 is the version that will move to `affinidi-crypto`
+  0.3 together with the workspace.
 ## 0.45.17 — mux: administrators list and revoke stored grants; monitor membership events
 
 - New `TrustTasksOps` methods for the administrator mux tasks

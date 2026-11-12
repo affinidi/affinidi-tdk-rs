@@ -1,5 +1,12 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.43.0) — affinidi-messaging-sdk 0.46
+
+- **Changed (breaking):** the `messaging` feature re-exports
+  `affinidi-messaging-sdk` 0.46 (`trust-tasks-rs` 0.38). See its CHANGELOG.
+  `affinidi-messaging-helpers` and `affinidi-messaging-text-client` require
+  this version.
+
 ## Unreleased (0.42.0) — affinidi-mdoc 0.6
 
 - **Changed:** the `mdoc` feature moves to `affinidi-mdoc` 0.6: proximity

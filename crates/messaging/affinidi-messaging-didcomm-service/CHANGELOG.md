@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (0.31.0) — affinidi-messaging-sdk 0.46
+
+- **Changed (breaking):** requires `affinidi-messaging-sdk` 0.46
+  (`trust-tasks-rs` 0.38), whose types it re-exports. No source change.
+
 ## Unreleased (0.30.2) — no reply to problem reports; error text kept local
 
 Follows 0.30.1 (#1083); merge that first.
