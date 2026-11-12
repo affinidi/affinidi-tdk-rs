@@ -698,18 +698,38 @@ async fn verify_notice_with(
     message: &Message,
     mediator_did: &str,
 ) -> Result<TrustTask<MuxNotice>, ATMError> {
-    let document = decode_mux_notice(message)
-        .ok_or_else(|| ATMError::MsgReceiveError("not a messaging/mux/notice".to_string()))?;
-    if message.body.get("issuer").and_then(Value::as_str) != Some(mediator_did) {
+    if decode_mux_notice(message).is_none() {
+        return Err(ATMError::MsgReceiveError(
+            "not a messaging/mux/notice".to_string(),
+        ));
+    }
+    verify_notice_doc(resolver, &message.body, mediator_did).await
+}
+
+/// [`verify_mux_notice`] for the notice document itself, as a `tsp-mux`
+/// socket carries it: of the notice type, issued by `mediator_did`, and with
+/// a Data Integrity proof that verifies.
+pub(crate) async fn verify_notice_doc(
+    resolver: Arc<dyn ProofPurposeResolver>,
+    doc: &Value,
+    mediator_did: &str,
+) -> Result<TrustTask<MuxNotice>, ATMError> {
+    if doc.get("type").and_then(Value::as_str) != Some(NOTICE_TYPE) {
+        return Err(ATMError::MsgReceiveError(
+            "not a messaging/mux/notice".to_string(),
+        ));
+    }
+    if doc.get("issuer").and_then(Value::as_str) != Some(mediator_did) {
         return Err(ATMError::MsgReceiveError(format!(
             "mux notice not issued by the mediator {mediator_did}"
         )));
     }
     Verifier::with_resolver(resolver)
-        .verify_raw(&message.body)
+        .verify_raw(doc)
         .await
         .map_err(|e| ATMError::MsgReceiveError(format!("mux notice proof: {e}")))?;
-    Ok(document)
+    serde_json::from_value(doc.clone())
+        .map_err(|e| ATMError::MsgReceiveError(format!("mux notice does not parse: {e}")))
 }
 
 /// Acknowledge a handled notice: delete it from the inbox (spec consumer

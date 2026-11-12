@@ -6,13 +6,23 @@
 //! `receive` (or was attached to this connection). Open it with
 //! [`TspOps::connect_websocket_mux`](super::tsp::TspOps::connect_websocket_mux).
 //!
-//! What arrives on it is demultiplexed here, by one owner (R1.7):
+//! A task owns the socket and demultiplexes what arrives on it, as the one
+//! owner (R1.7):
 //!
 //! - **Mux events.** A TSP Direct message from the mediator's VID to the
 //!   principal's whose payload is a `messaging/mux/event` document. Opened
 //!   with the principal's keys, checked (the TSP sender and the document's
 //!   `issuer` are the profile's mediator, its `recipient` is the principal)
 //!   and handed over typed, as [`TspMuxFrame::Event`].
+//! - **Notices.** A `messaging/mux/notice` from the mediator, verified (its
+//!   proof, and its issuer is the mediator), as [`TspMuxFrame::Notice`].
+//!   Acknowledge it once handled, as any frame.
+//! - **Answers to Trust Tasks.** A mux Trust Task sent on this socket
+//!   ([`TspMuxSender::request`]) gets its answer here, matched by thread id,
+//!   and never reaches [`TspMuxWebSocket::recv`]; a stored answer is
+//!   acknowledged by the socket itself. An answer to a request this socket
+//!   did not make (one sent another way, waiting on its own reply) is left
+//!   alone for its owner.
 //! - **Data frames.** Everything else. Its cleartext receiver VID names the
 //!   member (or the principal) it is for: it is handed over **unopened**, as
 //!   [`TspMuxFrame::Data`], so the application opens it with that member's
@@ -20,15 +30,24 @@
 //!   member's profile).
 //!
 //! `tsp-mux` implies `tsp-ack`: the mediator keeps each delivered frame until
-//! it is acknowledged ([`TspMuxWebSocket::ack`]). Acks are authorised against
-//! each member's `delete` scope, so an ack can be refused for one member and
-//! succeed for another; [`TspMuxAck`] reports each frame's outcome.
+//! it is acknowledged ([`TspMuxWebSocket::ack`]), with `messaging/mux/ack` on
+//! the socket itself, so the instance holding the connection answers. Acks
+//! are authorised against each member's `delete` scope, so an ack can be
+//! refused for one member and succeed for another; [`TspMuxAck`] reports each
+//! frame's outcome.
+//!
+//! Sending, requests and acks go through a [`TspMuxSender`], which is cheap to
+//! clone, so one task can send while another waits on
+//! [`recv`](TspMuxWebSocket::recv).
 //!
 //! Nothing reconnects here. A dropped socket ends [`TspMuxWebSocket::recv`]
-//! (with the mediator's close reason when it gave one), and the caller decides
-//! what to do (R6.2). On a new connection the member set is rebuilt from that
-//! connection's `ready` and `attached` events; nothing carries over.
+//! (with the mediator's close reason when it gave one), fails every request
+//! still waiting, and turns [`TspMuxWebSocket::state`] to
+//! [`TspMuxState::Closed`]; the caller decides what to do (R6.2). On a new
+//! connection the member set is rebuilt from that connection's `ready` and
+//! `attached` events; nothing carries over.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,12 +58,15 @@ use tracing::{debug, warn};
 
 use trust_tasks_proof::affinidi::ProofPurposeResolver;
 
-use super::mux::{EVENT_TYPE, MuxEvent, MuxEventKind, MuxMembers, MuxReady, check_event};
+use super::mux::{
+    EVENT_TYPE, MuxEvent, MuxEventKind, MuxMembers, MuxNotice, MuxReady, MuxRefused, check_event,
+};
 use super::tsp::{TspOps, TspWsStream};
 use crate::ATM;
 use crate::errors::ATMError;
-use crate::messages::DeleteMessageRequest;
 use crate::profiles::ATMProfile;
+use tokio::sync::{mpsc, oneshot, watch};
+use trust_tasks_rs::TrustTask;
 
 /// The WebSocket subprotocol that asks for a mux connection on a raw-TSP
 /// socket. Offered after `tsp` and `tsp-ack`, in that order.
@@ -62,6 +84,13 @@ pub const MUX_READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The mediator deletes at most this many ids per request.
 const MAX_ACK_BATCH: usize = 100;
+
+/// `messaging/mux/ack`'s answer type: pushed to the socket, never stored, so
+/// it is the one answer the socket does not acknowledge.
+const ACK_RESPONSE_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/ack/0.1#response";
+
+/// Frames read off the socket and not yet taken by [`TspMuxWebSocket::recv`].
+const FRAME_BUFFER: usize = 64;
 
 /// Lowercase hex SHA-256 of a frame's exact bytes: the `frameId` a `refused`
 /// event names. [`TspMuxWebSocket::send`] returns it for each frame sent.
@@ -98,6 +127,15 @@ pub enum TspMuxFrame {
         sender: String,
         /// The raw qb2 frame, exactly as received; pass it to
         /// [`TspMuxWebSocket::ack`] once handled.
+        frame: Vec<u8>,
+    },
+    /// A durable `messaging/mux/notice` from the mediator, verified (its
+    /// proof, and its issuer is the mediator): grants suspended, revoked or
+    /// expiring, or delegations present. Act on it, then acknowledge `frame`.
+    Notice {
+        /// The verified notice.
+        notice: Box<TrustTask<MuxNotice>>,
+        /// The raw frame, for [`TspMuxWebSocket::ack`].
         frame: Vec<u8>,
     },
     /// A binary frame that is not a parseable TSP envelope, so it names no
@@ -149,58 +187,22 @@ impl TspMuxAck {
     }
 }
 
-/// Acknowledges frames of one `tsp-mux` socket. Cloneable, so one task can
-/// ack while another reads ([`TspMuxWebSocket::acker`]). Acks go over REST,
-/// authenticated as the socket's own session: the mediator authorises a
-/// member's deletes against the members of that session.
-#[derive(Clone)]
+/// Acknowledges frames of one `tsp-mux` socket from another task
+/// ([`TspMuxWebSocket::acker`]): the [`TspMuxSender`]'s acks, on their own.
+#[derive(Clone, Debug)]
 pub struct TspMuxAcker {
-    atm: ATM,
-    rest_endpoint: String,
-    access_token: String,
-}
-
-impl std::fmt::Debug for TspMuxAcker {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TspMuxAcker")
-            .field("rest_endpoint", &self.rest_endpoint)
-            .finish_non_exhaustive()
-    }
+    sender: TspMuxSender,
 }
 
 impl TspMuxAcker {
     /// Acknowledge (delete) delivered frames. See [`TspMuxWebSocket::ack`].
     pub async fn ack(&self, frames: &[&[u8]]) -> Result<TspMuxAck, ATMError> {
-        let ids: Vec<String> = frames.iter().map(|f| message_id(f)).collect();
-        self.ack_ids(&ids).await
+        self.sender.ack(frames).await
     }
 
     /// Acknowledge by message id ([`message_id`]).
     pub async fn ack_ids(&self, ids: &[String]) -> Result<TspMuxAck, ATMError> {
-        let mut out = TspMuxAck::default();
-        for chunk in ids.chunks(MAX_ACK_BATCH) {
-            let request = DeleteMessageRequest {
-                message_ids: chunk.to_vec(),
-            };
-            match self
-                .atm
-                .delete_messages_with_token(&self.rest_endpoint, &self.access_token, &request)
-                .await
-            {
-                Ok(r) => out.settle(chunk, &r.success, &r.errors),
-                // An earlier batch may have gone through; report it rather
-                // than lose it, and the rest as not acknowledged.
-                Err(e) if !out.acked.is_empty() || !out.refused.is_empty() => {
-                    let reason = format!("ack request failed: {e}");
-                    let done = out.acked.len() + out.refused.len();
-                    out.refused
-                        .extend(ids[done..].iter().map(|id| (id.clone(), reason.clone())));
-                    return Ok(out);
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(out)
+        self.sender.ack_ids(ids).await
     }
 }
 
@@ -254,12 +256,30 @@ impl Demux {
     /// Sort one binary frame into an event or a data frame. Returns `None`
     /// for an event that must be ignored (malformed, or not addressed to this
     /// principal by this mediator; spec consumer rule 1 and "Members per
-    /// kind").
+    /// kind"). An answer to a Trust Task is handed over as data here; the
+    /// socket task routes it ([`sort`](Self::sort)).
     pub(crate) async fn classify(&self, frame: Vec<u8>) -> Option<TspMuxFrame> {
+        match self.sort(frame).await {
+            Sorted::Frame(f) => Some(f),
+            Sorted::Answer { frame, .. } => {
+                let meta = MetaEnvelope::parse(&frame).ok()?;
+                Some(TspMuxFrame::Data {
+                    receiver: meta.receiver,
+                    sender: meta.sender,
+                    frame,
+                })
+            }
+            Sorted::Ignore => None,
+        }
+    }
+
+    /// Sort one binary frame: an event, a notice, a Trust Task answer, or
+    /// data.
+    pub(crate) async fn sort(&self, frame: Vec<u8>) -> Sorted {
         let meta = match MetaEnvelope::parse(&frame) {
             Ok(m) => m,
             Err(e) => {
-                return Some(TspMuxFrame::Unreadable {
+                return Sorted::Frame(TspMuxFrame::Unreadable {
                     frame,
                     error: e.to_string(),
                 });
@@ -268,9 +288,38 @@ impl Demux {
         if meta.receiver == self.principal && meta.sender == self.mediator {
             match self.opener.open(&frame).await {
                 Ok((payload, sender)) => match self.event(&payload, &sender).await {
-                    EventCheck::Event(e) => return Some(TspMuxFrame::Event(e)),
-                    EventCheck::Ignore => return None,
-                    EventCheck::NotAnEvent => {}
+                    EventCheck::Event(e) => return Sorted::Frame(TspMuxFrame::Event(e)),
+                    EventCheck::Ignore => return Sorted::Ignore,
+                    EventCheck::NotAnEvent => {
+                        if let Ok(doc) = serde_json::from_slice::<Value>(&payload) {
+                            if let Some(thread_id) = answer_thread(&doc) {
+                                return Sorted::Answer {
+                                    thread_id,
+                                    doc,
+                                    frame,
+                                };
+                            }
+                            if doc.get("type").and_then(Value::as_str) == Some(NOTICE_TYPE) {
+                                match super::mux::verify_notice_doc(
+                                    self.resolver.clone(),
+                                    &doc,
+                                    &self.mediator,
+                                )
+                                .await
+                                {
+                                    Ok(notice) => {
+                                        return Sorted::Frame(TspMuxFrame::Notice {
+                                            notice: Box::new(notice),
+                                            frame,
+                                        });
+                                    }
+                                    // Stored all the same, so it goes to the
+                                    // caller as data rather than vanishing.
+                                    Err(e) => warn!(error = %e, "a mux notice did not verify"),
+                                }
+                            }
+                        }
+                    }
                 },
                 Err(e) => {
                     // Something from the mediator we cannot open (a stale
@@ -280,7 +329,7 @@ impl Demux {
                 }
             }
         }
-        Some(TspMuxFrame::Data {
+        Sorted::Frame(TspMuxFrame::Data {
             receiver: meta.receiver,
             sender: meta.sender,
             frame,
@@ -319,6 +368,31 @@ enum EventCheck {
     Ignore,
     NotAnEvent,
 }
+
+/// How [`Demux::sort`] sorted a frame.
+pub(crate) enum Sorted {
+    /// For the application.
+    Frame(TspMuxFrame),
+    /// A Trust Task answer from the mediator to the principal, for whoever
+    /// asked.
+    Answer {
+        thread_id: String,
+        doc: Value,
+        frame: Vec<u8>,
+    },
+    /// An event to ignore.
+    Ignore,
+}
+
+/// The thread a Trust Task answer replies to: a `#response` document, or a
+/// Trust Task error, carrying `threadId`.
+fn answer_thread(doc: &Value) -> Option<String> {
+    let thread = doc.get("threadId").and_then(Value::as_str)?;
+    let ty = doc.get("type").and_then(Value::as_str)?;
+    (ty.contains("#response") || ty.contains("/trust-task-error/")).then(|| thread.to_string())
+}
+
+const NOTICE_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/notice/0.1";
 
 /// The next frame off the socket that matters: a binary frame, or the end.
 /// `Ok(None)` when the stream ended without a close frame; `Err` on a close
@@ -403,20 +477,416 @@ pub(crate) async fn await_ready(
     }
 }
 
+/// Whether a `tsp-mux` connection is open (R6.2): watch it with
+/// [`TspMuxWebSocket::state`] or [`TspMuxSender::state`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TspMuxState {
+    /// The socket is open.
+    Open,
+    /// The socket is gone, and why: the mediator's close reason, a transport
+    /// error, or the client closing it. Nothing reconnects.
+    Closed {
+        /// What ended it.
+        reason: String,
+    },
+}
+
+/// What the socket task is asked to do.
+enum Outgoing {
+    Frame {
+        bytes: Vec<u8>,
+        done: oneshot::Sender<Result<(), ATMError>>,
+    },
+    Close {
+        done: oneshot::Sender<()>,
+    },
+}
+
+/// A Trust Task sent on the socket, waiting for its answer.
+struct Pending {
+    /// The request frame's [`frame_id`], which a `refused` event names.
+    frame_id: String,
+    answer: oneshot::Sender<Result<Value, ATMError>>,
+}
+
+/// What every handle to one connection shares.
+struct Shared {
+    atm: ATM,
+    profile: Arc<ATMProfile>,
+    principal: String,
+    mediator: String,
+    out: mpsc::Sender<Outgoing>,
+    /// By thread id.
+    pending: std::sync::Mutex<HashMap<String, Pending>>,
+    state: watch::Sender<TspMuxState>,
+}
+
+impl Shared {
+    fn closed_error(&self) -> ATMError {
+        match &*self.state.borrow() {
+            TspMuxState::Closed { reason } => {
+                ATMError::TransportError(format!("tsp-mux connection closed: {reason}"))
+            }
+            TspMuxState::Open => ATMError::TransportError("tsp-mux connection closed".into()),
+        }
+    }
+
+    /// The connection ended: say so, and fail every request still waiting.
+    fn finish(&self, reason: String) {
+        self.state.send_replace(TspMuxState::Closed {
+            reason: reason.clone(),
+        });
+        let waiting: Vec<Pending> = self
+            .pending
+            .lock()
+            .expect("pending map")
+            .drain()
+            .map(|(_, p)| p)
+            .collect();
+        for p in waiting {
+            let _ = p.answer.send(Err(ATMError::TransportError(format!(
+                "tsp-mux connection closed before the answer came: {reason}"
+            ))));
+        }
+    }
+}
+
+/// Sends on one `tsp-mux` connection: raw frames, mux Trust Tasks (answered
+/// on the socket), and acknowledgements. Cheap to clone; every clone talks to
+/// the same socket, and fails once it has closed.
+#[derive(Clone)]
+pub struct TspMuxSender {
+    shared: Arc<Shared>,
+}
+
+impl std::fmt::Debug for TspMuxSender {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TspMuxSender")
+            .field("principal", &self.shared.principal)
+            .field("state", &*self.shared.state.borrow())
+            .finish_non_exhaustive()
+    }
+}
+
+impl TspMuxSender {
+    /// Send a raw qb2 TSP frame, as the principal or as a member that granted
+    /// `send`. Returns its [`frame_id`]: a `refused` event naming that id
+    /// means the mediator refused it (the socket stays open). Without one the
+    /// mediator accepted it; `Ok` here means only that it was written.
+    pub async fn send(&self, frame: &[u8]) -> Result<String, ATMError> {
+        let (done, written) = oneshot::channel();
+        self.shared
+            .out
+            .send(Outgoing::Frame {
+                bytes: frame.to_vec(),
+                done,
+            })
+            .await
+            .map_err(|_| self.shared.closed_error())?;
+        written.await.map_err(|_| self.shared.closed_error())??;
+        Ok(frame_id(frame))
+    }
+
+    /// Send a mux Trust Task (`messaging/mux/*`) on this socket, signed as
+    /// the principal and sealed to the mediator, and wait for its answer,
+    /// which this socket routes here by thread id. A request the mediator
+    /// refuses is answered by a `refused` event naming the request frame, and
+    /// fails here with its code. Times out after 15 s, as a Trust Task sent
+    /// over TSP does.
+    ///
+    /// `attach` and `detach` act on the connection they arrive on, so this is
+    /// the only way to send them for a `tsp-mux` connection.
+    pub async fn request<P, R>(&self, payload: Value) -> Result<TrustTask<R>, ATMError>
+    where
+        P: trust_tasks_rs::Payload + serde::de::DeserializeOwned + serde::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let mut task = super::trust_tasks::mux_task::<P>(&self.shared.profile, payload)?;
+        task.issued_at = Some(chrono::Utc::now());
+        let thread_id = task.id.clone();
+        let body = serde_json::to_value(&task)
+            .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))?;
+        let body = self
+            .shared
+            .atm
+            .trust_tasks()
+            .sign(&self.shared.principal, body)
+            .await?;
+        let bytes = serde_json::to_vec(&body)
+            .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))?;
+        let frame = self
+            .shared
+            .atm
+            .tsp()
+            .pack(&self.shared.profile, &self.shared.mediator, &bytes)
+            .await?;
+        let (answer, answered) = oneshot::channel();
+        self.shared.pending.lock().expect("pending map").insert(
+            thread_id.clone(),
+            Pending {
+                frame_id: frame_id(&frame),
+                answer,
+            },
+        );
+        let forget = || {
+            self.shared
+                .pending
+                .lock()
+                .expect("pending map")
+                .remove(&thread_id);
+        };
+        if let Err(e) = self.send(&frame).await {
+            forget();
+            return Err(e);
+        }
+        let timeout = super::trust_tasks::TSP_REPLY_TIMEOUT;
+        match tokio::time::timeout(timeout, answered).await {
+            Ok(Ok(Ok(doc))) => super::trust_tasks::decode_body(&doc),
+            Ok(Ok(Err(e))) => Err(e),
+            Ok(Err(_)) => Err(self.shared.closed_error()),
+            Err(_) => {
+                forget();
+                Err(ATMError::MsgReceiveError(format!(
+                    "no answer from the mediator on the tsp-mux socket within {}s",
+                    timeout.as_secs()
+                )))
+            }
+        }
+    }
+
+    /// Acknowledge (delete) delivered frames. See [`TspMuxWebSocket::ack`].
+    pub async fn ack(&self, frames: &[&[u8]]) -> Result<TspMuxAck, ATMError> {
+        let ids: Vec<String> = frames.iter().map(|f| message_id(f)).collect();
+        self.ack_ids(&ids).await
+    }
+
+    /// Acknowledge by message id ([`message_id`]), with `messaging/mux/ack`
+    /// on the socket, in batches of 100.
+    pub async fn ack_ids(&self, ids: &[String]) -> Result<TspMuxAck, ATMError> {
+        use crate::tasks::messaging::mux::ack::v0_1::Payload;
+        let mut out = TspMuxAck::default();
+        for chunk in ids.chunks(MAX_ACK_BATCH) {
+            match self
+                .request::<Payload, Value>(serde_json::json!({ "messageIds": chunk }))
+                .await
+            {
+                Ok(answer) => {
+                    let acked: Vec<String> = answer.payload["acked"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let refused: Vec<(String, String)> = answer.payload["refused"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|r| {
+                                    Some((
+                                        r["messageId"].as_str()?.to_string(),
+                                        r["reason"].as_str().unwrap_or("refused").to_string(),
+                                    ))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    out.settle(chunk, &acked, &refused);
+                }
+                // An earlier batch may have gone through; report it rather
+                // than lose it, and the rest as not acknowledged.
+                Err(e) if !out.acked.is_empty() || !out.refused.is_empty() => {
+                    let reason = format!("ack request failed: {e}");
+                    let done = out.acked.len() + out.refused.len();
+                    out.refused
+                        .extend(ids[done..].iter().map(|id| (id.clone(), reason.clone())));
+                    return Ok(out);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(out)
+    }
+
+    /// `messaging/mux/attach` on this connection: `statements` are attach
+    /// statements ([`sign_attach`](super::mux::sign_attach)) bound to this
+    /// connection's `ready`.
+    pub async fn attach(
+        &self,
+        statements: Vec<Value>,
+    ) -> Result<crate::tasks::messaging::mux::attach::v0_1::Response, ATMError> {
+        use crate::tasks::messaging::mux::attach::v0_1::{Payload, Response};
+        Ok(self
+            .request::<Payload, Response>(serde_json::json!({ "attachments": statements }))
+            .await?
+            .payload)
+    }
+
+    /// `messaging/mux/detach` on this connection.
+    pub async fn detach(
+        &self,
+        dids: Vec<String>,
+    ) -> Result<crate::tasks::messaging::mux::detach::v0_1::Response, ATMError> {
+        use crate::tasks::messaging::mux::detach::v0_1::{Payload, Response};
+        Ok(self
+            .request::<Payload, Response>(serde_json::json!({ "dids": dids }))
+            .await?
+            .payload)
+    }
+
+    /// Whether the connection is open, as a watch: it changes once, to
+    /// [`TspMuxState::Closed`], when the socket goes.
+    pub fn state(&self) -> watch::Receiver<TspMuxState> {
+        self.shared.state.subscribe()
+    }
+}
+
+/// The task that owns one socket: it reads and sorts every frame, writes what
+/// the senders send, and routes Trust Task answers to their requests.
+async fn run(
+    mut ws: TspWsStream,
+    demux: Demux,
+    shared: Arc<Shared>,
+    mut out: mpsc::Receiver<Outgoing>,
+    frames: mpsc::Sender<Result<TspMuxFrame, ATMError>>,
+) {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+    loop {
+        tokio::select! {
+            incoming = next_binary(&mut ws) => match incoming {
+                Ok(Some(frame)) => match demux.sort(frame).await {
+                    Sorted::Frame(f) => {
+                        if let TspMuxFrame::Event(e) = &f
+                            && let Some(refused) = MuxRefused::from_event(e)
+                        {
+                            refuse_pending(&shared, &refused);
+                        }
+                        if frames.send(Ok(f)).await.is_err() {
+                            // The application dropped the socket.
+                            let _ = ws.close(None).await;
+                            shared.finish("dropped by the client".into());
+                            return;
+                        }
+                    }
+                    Sorted::Answer { thread_id, doc, frame } => {
+                        answer_pending(&shared, &thread_id, doc, frame);
+                    }
+                    Sorted::Ignore => {}
+                },
+                Ok(None) => {
+                    shared.finish("the socket ended without a close frame".into());
+                    return;
+                }
+                Err(e) => {
+                    shared.finish(e.to_string());
+                    let _ = frames.send(Err(e)).await;
+                    return;
+                }
+            },
+            cmd = out.recv() => match cmd {
+                Some(Outgoing::Frame { bytes, done }) => {
+                    let written = ws
+                        .send(Message::Binary(bytes.into()))
+                        .await
+                        .map_err(|e| ATMError::TransportError(format!("tsp-mux websocket send error: {e}")));
+                    let _ = done.send(written);
+                }
+                Some(Outgoing::Close { done }) => {
+                    let _ = ws.close(None).await;
+                    shared.finish("closed by the client".into());
+                    let _ = done.send(());
+                    return;
+                }
+                // `Shared` holds a sender for as long as this task runs, so
+                // this does not happen; stop cleanly if it does.
+                None => {
+                    let _ = ws.close(None).await;
+                    shared.finish("closed by the client".into());
+                    return;
+                }
+            },
+            _ = frames.closed() => {
+                let _ = ws.close(None).await;
+                shared.finish("dropped by the client".into());
+                return;
+            }
+        }
+    }
+}
+
+/// A `refused` event naming a request this socket sent: that request fails
+/// with the mediator's code.
+fn refuse_pending(shared: &Shared, refused: &MuxRefused) {
+    let mut pending = shared.pending.lock().expect("pending map");
+    let Some(thread) = pending
+        .iter()
+        .find(|(_, p)| p.frame_id == refused.frame_id)
+        .map(|(t, _)| t.clone())
+    else {
+        return;
+    };
+    if let Some(p) = pending.remove(&thread) {
+        let _ = p.answer.send(Err(ATMError::MsgSendError(format!(
+            "the mediator refused the Trust Task: {}{}",
+            refused.code,
+            refused
+                .reason
+                .as_deref()
+                .map(|r| format!(" ({r})"))
+                .unwrap_or_default()
+        ))));
+    }
+}
+
+/// An answer for a request this socket sent goes to it, and a stored one is
+/// acknowledged, by this socket, so nothing else consumes it (R1.7). An
+/// answer for any other request is left for its owner, unacknowledged.
+fn answer_pending(shared: &Arc<Shared>, thread_id: &str, doc: Value, frame: Vec<u8>) {
+    let pending = shared
+        .pending
+        .lock()
+        .expect("pending map")
+        .remove(thread_id);
+    let Some(p) = pending else {
+        debug!(
+            thread_id,
+            "a Trust Task answer for a request not made on this socket; left for its owner"
+        );
+        return;
+    };
+    let stored = doc.get("type").and_then(Value::as_str) != Some(ACK_RESPONSE_TYPE);
+    let _ = p.answer.send(Ok(doc));
+    if stored {
+        let sender = TspMuxSender {
+            shared: Arc::clone(shared),
+        };
+        tokio::spawn(async move {
+            match sender.ack_ids(&[message_id(&frame)]).await {
+                Ok(a) if a.is_complete() => {}
+                Ok(a) => debug!(refused = ?a.refused, "a Trust Task answer was not acknowledged"),
+                Err(e) => debug!("a Trust Task answer was not acknowledged: {e}"),
+            }
+        });
+    }
+}
+
 /// An open `tsp-mux` socket. See the [module docs](self).
 pub struct TspMuxWebSocket {
-    ws: TspWsStream,
-    demux: Demux,
+    frames: mpsc::Receiver<Result<TspMuxFrame, ATMError>>,
+    sender: TspMuxSender,
     ready: MuxReady,
     members: MuxMembers,
-    acker: TspMuxAcker,
 }
 
 impl std::fmt::Debug for TspMuxWebSocket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TspMuxWebSocket")
-            .field("principal", &self.demux.principal)
-            .field("mediator", &self.demux.mediator)
+            .field("principal", &self.sender.shared.principal)
+            .field("mediator", &self.sender.shared.mediator)
             .field("ready", &self.ready)
             .finish_non_exhaustive()
     }
@@ -437,20 +907,20 @@ impl TspMuxWebSocket {
     /// here now. It starts empty at `ready`; the stored grants admitted on
     /// connect arrive as the first `attached` event. When
     /// [`MuxReady::pending_notices`] is above zero, read the principal's
-    /// notices before trusting it (consumer rule 3).
+    /// notices ([`TspMuxFrame::Notice`]) before trusting it (consumer rule 3).
     pub fn members(&self) -> &MuxMembers {
         &self.members
     }
 
     /// The principal: the DID this socket is authenticated as.
     pub fn principal(&self) -> &str {
-        &self.demux.principal
+        &self.sender.shared.principal
     }
 
-    /// Receive the next frame: a mux event or a data frame (see
+    /// Receive the next frame: a mux event, a notice or a data frame (see
     /// [`TspMuxFrame`]). Pings and text frames are skipped, as are events the
     /// spec says to ignore (malformed, or not from this mediator to this
-    /// principal).
+    /// principal), and answers to Trust Tasks, which go to their requests.
     ///
     /// When the socket goes away it is finished, and the caller is told:
     /// `Err` with the mediator's close code and reason when it sent a close
@@ -459,53 +929,65 @@ impl TspMuxWebSocket {
     /// more, and frames not acknowledged are delivered again on the next
     /// connection.
     pub async fn recv(&mut self) -> Result<Option<TspMuxFrame>, ATMError> {
-        loop {
-            let Some(frame) = next_binary(&mut self.ws).await? else {
-                return Ok(None);
-            };
-            if let Some(frame) = self.demux.classify(frame).await {
+        match self.frames.recv().await {
+            None => Ok(None),
+            Some(Err(e)) => Err(e),
+            Some(Ok(frame)) => {
                 if let TspMuxFrame::Event(event) = &frame {
                     self.members.apply(event);
                 }
-                return Ok(Some(frame));
+                Ok(Some(frame))
             }
         }
     }
 
-    /// Send a raw qb2 TSP frame, as the principal or as a member that granted
-    /// `send`. Returns its [`frame_id`]: a `refused` event naming that id
-    /// means the mediator refused it (the socket stays open). Without one the
-    /// mediator accepted it; `Ok` here means only that it was written.
-    pub async fn send(&mut self, frame: &[u8]) -> Result<String, ATMError> {
-        use futures_util::SinkExt;
-        use tokio_tungstenite::tungstenite::Message;
-        self.ws
-            .send(Message::Binary(frame.to_vec().into()))
-            .await
-            .map_err(|e| ATMError::TransportError(format!("tsp-mux websocket send error: {e}")))?;
-        Ok(frame_id(frame))
+    /// Send a raw qb2 TSP frame. See [`TspMuxSender::send`].
+    pub async fn send(&self, frame: &[u8]) -> Result<String, ATMError> {
+        self.sender.send(frame).await
     }
 
-    /// Acknowledge delivered frames (`Data` / `Unreadable`), releasing the
-    /// mediator's copies. Call once each is safely handled. Returns the
-    /// mediator's answer per frame: acks for a member without `delete` scope
-    /// are refused, and those frames stay in its inbox. `Err` when the
+    /// Acknowledge delivered frames (`Data`, `Notice`, `Unreadable`),
+    /// releasing the mediator's copies, with `messaging/mux/ack` on this
+    /// socket. Call once each is safely handled. Returns the mediator's
+    /// answer per frame: acks for a member without `delete` scope are refused
+    /// (`notPermitted`), and those frames stay in its inbox. `Err` when the
     /// request itself failed (nothing is known to be acknowledged).
     pub async fn ack(&self, frames: &[&[u8]]) -> Result<TspMuxAck, ATMError> {
-        self.acker.ack(frames).await
+        self.sender.ack(frames).await
     }
 
     /// A handle that acknowledges frames of this socket from another task.
     pub fn acker(&self) -> TspMuxAcker {
-        self.acker.clone()
+        TspMuxAcker {
+            sender: self.sender.clone(),
+        }
     }
 
-    /// Close the socket gracefully.
-    pub async fn close(mut self) -> Result<(), ATMError> {
-        self.ws
-            .close(None)
+    /// A handle that sends on this socket from another task: frames, mux
+    /// Trust Tasks and acks.
+    pub fn sender(&self) -> TspMuxSender {
+        self.sender.clone()
+    }
+
+    /// Whether the connection is open (R6.2). See [`TspMuxSender::state`].
+    pub fn state(&self) -> watch::Receiver<TspMuxState> {
+        self.sender.state()
+    }
+
+    /// Close the socket gracefully. Requests still waiting fail.
+    pub async fn close(self) -> Result<(), ATMError> {
+        let (done, closed) = oneshot::channel();
+        if self
+            .sender
+            .shared
+            .out
+            .send(Outgoing::Close { done })
             .await
-            .map_err(|e| ATMError::TransportError(format!("tsp-mux websocket close error: {e}")))
+            .is_ok()
+        {
+            let _ = closed.await;
+        }
+        Ok(())
     }
 }
 
@@ -524,19 +1006,14 @@ impl TspOps<'_> {
     ///
     /// Delivery is delete-to-ack (`tsp-mux` implies `tsp-ack`); see
     /// [`TspMuxWebSocket::ack`]. Members' frames arrive unopened, tagged with
-    /// their receiver; the member's keys are needed to open them.
+    /// their receiver; the member's keys are needed to open them. A task owns
+    /// the socket from here; send through [`TspMuxWebSocket::sender`].
     pub async fn connect_websocket_mux(
         &self,
         profile: &Arc<ATMProfile>,
     ) -> Result<TspMuxWebSocket, ATMError> {
         let (principal, mediator) = profile.dids()?;
         let (principal, mediator) = (principal.to_string(), mediator.to_string());
-        let Some(rest_endpoint) = profile.get_mediator_rest_endpoint() else {
-            return Err(ATMError::ConfigError(format!(
-                "Profile ({}) has no mediator REST endpoint, which tsp-mux acks need",
-                profile.inner.alias
-            )));
-        };
         let raw = self.open_raw_socket(profile, &MUX_OFFER).await?;
         let mut ws = raw.ws;
         if let Err(e) = check_selection(raw.selected.as_deref()) {
@@ -545,10 +1022,10 @@ impl TspOps<'_> {
         }
         let demux = Demux {
             principal: principal.clone(),
-            mediator,
+            mediator: mediator.clone(),
             opener: Arc::new(AtmOpener {
                 atm: self.atm.clone(),
-                principal,
+                principal: principal.clone(),
             }),
             resolver: super::mux::proof_resolver(self.atm),
         };
@@ -559,16 +1036,24 @@ impl TspOps<'_> {
                 return Err(e);
             }
         };
+        let (out_tx, out_rx) = mpsc::channel(16);
+        let (frames_tx, frames_rx) = mpsc::channel(FRAME_BUFFER);
+        let (state, _) = watch::channel(TspMuxState::Open);
+        let shared = Arc::new(Shared {
+            atm: self.atm.clone(),
+            profile: Arc::clone(profile),
+            principal,
+            mediator,
+            out: out_tx,
+            pending: std::sync::Mutex::new(HashMap::new()),
+            state,
+        });
+        tokio::spawn(run(ws, demux, Arc::clone(&shared), out_rx, frames_tx));
         Ok(TspMuxWebSocket {
-            ws,
-            demux,
+            frames: frames_rx,
+            sender: TspMuxSender { shared },
             ready,
             members: MuxMembers::connected(),
-            acker: TspMuxAcker {
-                atm: self.atm.clone(),
-                rest_endpoint,
-                access_token: raw.access_token,
-            },
         })
     }
 }
@@ -1054,6 +1539,109 @@ mod tests {
         assert!(members.is_reachable(WORK));
         assert!(!members.is_reachable("did:example:home"));
         assert_eq!(members.get(WORK).unwrap().grant_id.as_deref(), Some("g1"));
+    }
+
+    /// A Trust Task answer from the mediator (a `#response` or a Trust Task
+    /// error, with `threadId`) is sorted out for its request; without a
+    /// thread, or from anyone else, it is data.
+    #[tokio::test]
+    async fn trust_task_answers_are_sorted_out_by_thread() {
+        let k = keys();
+        let d = demux(&k).await;
+        let doc = |v: Value| seal(&k.mediator, &k.principal, &serde_json::to_vec(&v).unwrap());
+        let answer = doc(json!({
+            "type": "https://trusttasks.org/spec/messaging/mux/ack/0.1#response",
+            "threadId": "urn:uuid:1",
+            "payload": {"acked": [], "refused": []},
+        }));
+        match d.sort(answer.clone()).await {
+            Sorted::Answer {
+                thread_id, frame, ..
+            } => {
+                assert_eq!(thread_id, "urn:uuid:1");
+                assert_eq!(frame, answer);
+            }
+            _ => panic!("expected an answer"),
+        }
+        let error = doc(json!({
+            "type": "https://trusttasks.org/spec/trust-task-error/0.6",
+            "threadId": "urn:uuid:2",
+            "payload": {"code": "messaging/mux:notMuxConnection"},
+        }));
+        assert!(
+            matches!(d.sort(error).await, Sorted::Answer { thread_id, .. } if thread_id == "urn:uuid:2")
+        );
+        // No thread: not an answer.
+        let unthreaded = doc(json!({
+            "type": "https://trusttasks.org/spec/messaging/ping/0.2#response",
+        }));
+        assert!(matches!(
+            d.sort(unthreaded).await,
+            Sorted::Frame(TspMuxFrame::Data { .. })
+        ));
+        // From a peer, though it looks like one: data, unopened.
+        let forged = seal(
+            &k.sender,
+            &k.principal,
+            &serde_json::to_vec(&json!({
+                "type": "https://trusttasks.org/spec/messaging/mux/ack/0.1#response",
+                "threadId": "urn:uuid:1",
+            }))
+            .unwrap(),
+        );
+        assert!(matches!(
+            d.sort(forged).await,
+            Sorted::Frame(TspMuxFrame::Data { .. })
+        ));
+    }
+
+    /// A notice from the mediator is handed over verified, as a notice; one
+    /// whose proof fails is still handed over, as data, since it is stored.
+    #[tokio::test]
+    async fn notices_are_verified_and_typed() {
+        use affinidi_secrets_resolver::secrets::Secret;
+        use trust_tasks_proof::affinidi::{SignOptions, sign_trust_task};
+        let seed = [7u8; 32];
+        let mb = Secret::generate_ed25519(None, Some(&seed))
+            .get_public_keymultibase()
+            .unwrap();
+        let mediator = format!("did:key:{mb}");
+        let secret = Secret::generate_ed25519(Some(&format!("{mediator}#{mb}")), Some(&seed));
+        let mut k = keys();
+        k.mediator = PrivateVid::generate(&mediator);
+        let d = demux_for(&mediator, &k).await;
+        let notice = json!({
+            "id": "urn:uuid:9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c01",
+            "type": NOTICE_TYPE,
+            "issuer": mediator,
+            "recipient": PRINCIPAL,
+            "issuedAt": "2026-11-12T09:00:00Z",
+            "payload": {"notice": "grantsRevoked", "revocations": [
+                {"did": WORK, "grantIds": ["g1"], "reason": "revokedByMember",
+                 "revokedAt": "2026-11-12T08:59:00Z"}]},
+        });
+        let signed = sign_trust_task(&notice, &secret, SignOptions::new())
+            .await
+            .unwrap();
+        let sealed =
+            |doc: &Value| seal(&k.mediator, &k.principal, &serde_json::to_vec(doc).unwrap());
+        let frame = sealed(&signed);
+        match d.sort(frame.clone()).await {
+            Sorted::Frame(TspMuxFrame::Notice { notice, frame: f }) => {
+                assert_eq!(f, frame);
+                assert_eq!(
+                    serde_json::to_value(&notice.payload).unwrap()["notice"],
+                    "grantsRevoked"
+                );
+            }
+            _ => panic!("expected a notice"),
+        }
+        let mut forged = signed.clone();
+        forged["payload"]["revocations"][0]["did"] = json!("did:example:other");
+        assert!(matches!(
+            d.sort(sealed(&forged)).await,
+            Sorted::Frame(TspMuxFrame::Data { .. })
+        ));
     }
 
     #[test]

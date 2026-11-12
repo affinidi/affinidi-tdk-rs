@@ -3749,11 +3749,7 @@ impl TspOps<'_> {
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
 
-        Ok(RawTspSocket {
-            ws,
-            selected,
-            access_token,
-        })
+        Ok(RawTspSocket { ws, selected })
     }
 
     // ── Internal helpers ────────────────────────────────────────────────────
@@ -3948,8 +3944,6 @@ pub(crate) struct RawTspSocket {
     pub(crate) ws: TspWsStream,
     /// The subprotocol the mediator selected (`Sec-WebSocket-Protocol`).
     pub(crate) selected: Option<String>,
-    /// The token this socket's session was authenticated with.
-    pub(crate) access_token: String,
 }
 
 /// An open **raw-TSP WebSocket** to the mediator, obtained from

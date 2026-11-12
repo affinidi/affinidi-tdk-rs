@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.45.10 — tsp-mux: Trust Tasks, acks and notices on the socket
+
+The `tsp-mux` client (`TspOps::connect_websocket_mux`) now does everything a
+DID-multiplexing connection needs on the socket itself, as the
+`messaging/mux/event` spec's "Raw-TSP sockets" section requires.
+
+- **One task owns the socket** and demultiplexes it (R1.7).
+  `TspMuxWebSocket::recv` reads what it hands over. A cloneable
+  `TspMuxSender` (`TspMuxWebSocket::sender`) sends from any task, so one task
+  can send while another waits on `recv`. `TspMuxWebSocket::send` now takes
+  `&self`.
+- **Mux Trust Tasks on the socket:** `TspMuxSender::request` signs and seals
+  a `messaging/mux/*` task to the mediator, sends it on the socket, and waits
+  for the answer, matched by thread id. A request the mediator refuses fails
+  with the code of the `refused` event that names its frame. `attach` and
+  `detach`, which act on the connection they arrive on, are wrapped:
+  `TspMuxSender::attach` / `detach`. A stored answer is acknowledged by the
+  socket. An answer to a request this socket did not make (one sent another
+  way, waiting on its own reply) is left for its owner: neither handed to
+  `recv` nor acknowledged.
+- **Acks with `messaging/mux/ack`** (new pin) on the socket, in batches of
+  100, instead of REST deletes. The instance holding the connection answers,
+  so a member's frames are acked on a multi-instance mediator too. A refused
+  ack names the spec's reason (`notFound`, `notPermitted`) in
+  `TspMuxAck::refused`.
+- **Notices:** a `messaging/mux/notice` from the mediator is verified (its
+  proof, and its issuer is the mediator) and handed over as the new
+  `TspMuxFrame::Notice { notice, frame }`. Acknowledge it once handled. One
+  that fails verification is still handed over, as `Data`, since it is
+  stored.
+- **Connection state (R6.2):** `TspMuxWebSocket::state` /
+  `TspMuxSender::state` is a watch, `TspMuxState::Open` until the socket goes,
+  then `Closed { reason }`. Requests still waiting fail then, and so does any
+  send: none is reported written once the socket has gone (R1.1). Nothing
+  reconnects.
+- `connect_websocket_mux` no longer needs the profile's mediator REST
+  endpoint.
+
+**Behaviour change (R3.6):** `TspMuxWebSocket::ack` and `TspMuxAcker` acknowledge
+with `messaging/mux/ack` on the socket, which needs a mediator that serves it
+(affinidi-messaging-mediator with affinidi/affinidi-messaging-mediator#231).
+Against a mediator without it, acks fail rather than going over REST.
+Notices that used to arrive as `TspMuxFrame::Data` now arrive as
+`TspMuxFrame::Notice`; the enum is `#[non_exhaustive]`, so matches keep
+compiling.
+
 ## 0.45.9 — REST responses parsed without panicking; every REST call bounded
 
 - `fetch_messages`, `oob_discovery().create_invite` and

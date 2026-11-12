@@ -1322,7 +1322,7 @@ impl TrustTasksOps<'_> {
     /// enforces proofs it answers `proofRequired`, which surfaces as an error
     /// here. A signing failure with a key in hand is an error, never a silent
     /// downgrade.
-    async fn sign(&self, did: &str, doc: Value) -> Result<Value, ATMError> {
+    pub(crate) async fn sign(&self, did: &str, doc: Value) -> Result<Value, ATMError> {
         let Some(secret) = self.signing_secret(did).await else {
             warn!(
                 did,
@@ -1425,13 +1425,13 @@ fn value_task(doc: Value) -> Result<TrustTask<Value>, ATMError> {
         .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))
 }
 
-fn new_id() -> String {
+pub(crate) fn new_id() -> String {
     format!("urn:uuid:{}", Uuid::new_v4())
 }
 
 /// How long a Trust Task sent over TSP waits for its reply.
 #[cfg(feature = "tsp")]
-const TSP_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+pub(crate) const TSP_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 /// How often the inbox is read while waiting for it.
 #[cfg(feature = "tsp")]
 const TSP_REPLY_POLL: std::time::Duration = std::time::Duration::from_millis(200);
@@ -1439,7 +1439,7 @@ const TSP_REPLY_POLL: std::time::Duration = std::time::Duration::from_millis(200
 #[cfg(feature = "tsp")]
 const TSP_REPLY_PAGE: usize = 20;
 
-fn decode_body<R: DeserializeOwned>(body: &Value) -> Result<TrustTask<R>, ATMError> {
+pub(crate) fn decode_body<R: DeserializeOwned>(body: &Value) -> Result<TrustTask<R>, ATMError> {
     serde_json::from_value(body.clone()).map_err(|e| {
         ATMError::MsgReceiveError(format!("response is not a Trust Task document: {e}"))
     })
@@ -1555,7 +1555,10 @@ mod mux_connections_tests {
     }
 }
 
-fn mux_task<P>(profile: &Arc<ATMProfile>, payload: Value) -> Result<TrustTask<P>, ATMError>
+pub(crate) fn mux_task<P>(
+    profile: &Arc<ATMProfile>,
+    payload: Value,
+) -> Result<TrustTask<P>, ATMError>
 where
     P: trust_tasks_rs::Payload + DeserializeOwned,
 {
