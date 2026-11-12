@@ -20,10 +20,30 @@
 //!    `data.challenge` + `data.session_id` from the mediator's `SuccessResponse`.
 //! 3. **Sign:** resolve `profile_did`, take the first Ed25519 `authentication`
 //!    verification method, load its private key from the secrets resolver, sign
-//!    the challenge, and base64url-encode the 64-byte signature.
+//!    the statement below, and base64url-encode the 64-byte signature.
 //! 4. **Authenticate:** `POST {base}/tsp/authenticate` with `{"vid",
-//!    "session_id", "signature"}`; parse the access/refresh tokens + expiries
-//!    from the `SuccessResponse`.
+//!    "session_id", "signature", "to", "created_time", "expires_time"}`; parse
+//!    the access/refresh tokens + expiries from the `SuccessResponse`.
+//!
+//! ## The signed statement
+//!
+//! The signature covers the UTF-8 bytes of this JSON object, written as
+//! RFC 8785 (JCS) canonical JSON (keys in lexicographic order, no whitespace;
+//! shown wrapped here):
+//!
+//! ```text
+//! {"body":{"challenge":"<challenge>","session_id":"<session_id>"},
+//!  "created_time":<unix secs>,"expires_time":<created_time + 60>,
+//!  "from":"<profile DID>","to":"<mediator DID>",
+//!  "typ":"https://affinidi.com/atm/1.0/tsp/authenticate"}
+//! ```
+//!
+//! These are the fields of the DIDComm authentication message. Naming the
+//! mediator (`to`), the purpose (`typ`), the session and an expiry means the
+//! signature is accepted only by the mediator it was made for, for this
+//! session, for a minute. Mediators without this change (before 0.52.0)
+//! verify a signature over the challenge string alone and refuse this one;
+//! this handler does not fall back to that form.
 //!
 //! ## Registering the handler
 //!
@@ -62,7 +82,7 @@ use affinidi_secrets_resolver::secrets::{KeyType, Secret};
 use async_trait::async_trait;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 /// Object-safe, `Send`-future view over a secrets source.
@@ -196,12 +216,85 @@ fn derive_tsp_url(endpoint: &str) -> Result<String, DIDAuthError> {
     Ok(format!("{base}/tsp/authenticate"))
 }
 
-/// Sign `challenge` with the Ed25519 `key` and base64url(no-pad)-encode the
-/// 64-byte signature.
-fn sign_challenge(challenge: &str, key: &[u8; 32]) -> Result<String, DIDAuthError> {
-    let sig: [u8; 64] = affinidi_tsp::crypto::signing::sign(challenge.as_bytes(), key)
-        .map_err(|e| DIDAuthError::Authentication(format!("couldn't sign TSP challenge: {e}")))?;
-    Ok(BASE64_URL_SAFE_NO_PAD.encode(sig))
+/// `typ` of the signed statement: what the signature is for.
+pub const TSP_AUTH_TYP: &str = "https://affinidi.com/atm/1.0/tsp/authenticate";
+
+/// How long a signed statement is valid for, in seconds (as the DIDComm
+/// authentication message).
+const STATEMENT_LIFETIME_SECS: u64 = 60;
+
+/// What a TSP client signs to log in to a mediator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TspAuthStatement<'a> {
+    /// The challenge the mediator issued.
+    pub challenge: &'a str,
+    /// The `session_id` the mediator issued with it.
+    pub session_id: &'a str,
+    /// The client's VID (a DID).
+    pub from: &'a str,
+    /// The mediator's DID.
+    pub to: &'a str,
+    /// When the statement was made (Unix seconds).
+    pub created_time: u64,
+    /// When it stops being accepted (Unix seconds).
+    pub expires_time: u64,
+}
+
+/// Serialised form of [`TspAuthStatement`]. Fields are declared in
+/// lexicographic order and every value is a string or an integer, so
+/// `serde_json` writes exactly the RFC 8785 canonical form.
+#[derive(Serialize)]
+struct StatementWire<'a> {
+    body: StatementWireBody<'a>,
+    created_time: u64,
+    expires_time: u64,
+    from: &'a str,
+    to: &'a str,
+    typ: &'a str,
+}
+
+#[derive(Serialize)]
+struct StatementWireBody<'a> {
+    challenge: &'a str,
+    session_id: &'a str,
+}
+
+impl TspAuthStatement<'_> {
+    /// The exact bytes that are signed: the canonical JSON statement described
+    /// in the [module docs](self).
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(&StatementWire {
+            body: StatementWireBody {
+                challenge: self.challenge,
+                session_id: self.session_id,
+            },
+            created_time: self.created_time,
+            expires_time: self.expires_time,
+            from: self.from,
+            to: self.to,
+            typ: TSP_AUTH_TYP,
+        })
+        // Strings and integers only: serialising cannot fail.
+        .unwrap_or_default()
+    }
+
+    /// Sign the statement with the Ed25519 `key` and base64url(no-pad)-encode
+    /// the 64-byte signature.
+    fn sign(&self, key: &[u8; 32]) -> Result<String, DIDAuthError> {
+        let sig: [u8; 64] = affinidi_tsp::crypto::signing::sign(&self.signing_bytes(), key)
+            .map_err(|e| {
+                DIDAuthError::Authentication(format!("couldn't sign TSP authentication: {e}"))
+            })?;
+        Ok(BASE64_URL_SAFE_NO_PAD.encode(sig))
+    }
+}
+
+/// Seconds since the Unix epoch.
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// JSON body for `POST {base}/challenge`.
@@ -209,12 +302,16 @@ fn challenge_body(profile_did: &str) -> String {
     json!({ "did": profile_did }).to_string()
 }
 
-/// JSON body for `POST {base}/tsp/authenticate`.
-fn authenticate_body(vid: &str, session_id: &str, signature: &str) -> String {
+/// JSON body for `POST {base}/tsp/authenticate`: the statement's fields the
+/// mediator cannot know by itself, and the signature over it.
+fn authenticate_body(statement: &TspAuthStatement<'_>, signature: &str) -> String {
     json!({
-        "vid": vid,
-        "session_id": session_id,
+        "vid": statement.from,
+        "session_id": statement.session_id,
         "signature": signature,
+        "to": statement.to,
+        "created_time": statement.created_time,
+        "expires_time": statement.expires_time,
     })
     .to_string()
 }
@@ -293,7 +390,7 @@ impl TspAuthHandler {
             DIDAuthError::Authentication("TSP challenge response had no `data`".into())
         })?;
 
-        // 3. Sign the challenge with the profile's Ed25519 authentication key.
+        // 3. Sign the statement with the profile's Ed25519 authentication key.
         let profile_doc = did_resolver
             .resolve(profile_did)
             .await
@@ -311,14 +408,23 @@ impl TspAuthHandler {
                     "no Ed25519 authentication key available for {profile_did}"
                 ))
             })?;
-        let signature = sign_challenge(&challenge, &key)?;
+        let created_time = unix_now_secs();
+        let statement = TspAuthStatement {
+            challenge: &challenge,
+            session_id: &session_id,
+            from: profile_did,
+            to: endpoint_did,
+            created_time,
+            expires_time: created_time + STATEMENT_LIFETIME_SECS,
+        };
+        let signature = statement.sign(&key)?;
 
         // 4. POST the signature to `/tsp/authenticate`.
         let tsp_url = derive_tsp_url(&endpoint)?;
         let auth_res = client
             .post(&tsp_url)
             .header("Content-Type", "application/json")
-            .body(authenticate_body(profile_did, &session_id, &signature))
+            .body(authenticate_body(&statement, &signature))
             .send()
             .await
             .map_err(|e| {
@@ -430,25 +536,50 @@ mod tests {
         assert!(matches!(err, DIDAuthError::AuthenticationAbort(_)));
     }
 
+    fn statement<'a>(to: &'a str) -> TspAuthStatement<'a> {
+        TspAuthStatement {
+            challenge: "9fJk2LmN4pQr6StU8vWx0yZaBcDeFgHi",
+            session_id: "Ab3dEf6hIj9k",
+            from: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+            to,
+            created_time: 1_800_000_000,
+            expires_time: 1_800_000_060,
+        }
+    }
+
+    /// The exact bytes signed. The mediator's `/tsp/authenticate` tests carry
+    /// the same vector, so both sides of the wire agree on them.
     #[test]
-    fn sign_challenge_roundtrips_against_verify() {
+    fn statement_signing_bytes_are_canonical_json() {
+        assert_eq!(
+            String::from_utf8(statement("did:web:mediator.example.com").signing_bytes()).unwrap(),
+            concat!(
+                r#"{"body":{"challenge":"9fJk2LmN4pQr6StU8vWx0yZaBcDeFgHi","session_id":"Ab3dEf6hIj9k"},"#,
+                r#""created_time":1800000000,"expires_time":1800000060,"#,
+                r#""from":"did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK","#,
+                r#""to":"did:web:mediator.example.com","#,
+                r#""typ":"https://affinidi.com/atm/1.0/tsp/authenticate"}"#
+            )
+        );
+    }
+
+    /// The signature verifies over the statement for its own mediator, and not
+    /// over the challenge alone or a statement naming another mediator.
+    #[test]
+    fn statement_signature_is_bound_to_its_mediator() {
         use affinidi_tsp::crypto::signing;
         // Generate a key pair via the same crate the mediator verifies with.
         let vid = affinidi_tsp::PrivateVid::generate("did:example:tsp-client");
-        let challenge = "a-server-issued-32-char-challenge";
+        let ours = statement("did:web:mediator.example.com");
 
-        let b64 = sign_challenge(challenge, &vid.signing_key).unwrap();
+        let b64 = ours.sign(&vid.signing_key).unwrap();
         let sig_bytes = BASE64_URL_SAFE_NO_PAD.decode(b64.as_bytes()).unwrap();
         let sig: [u8; 64] = sig_bytes.as_slice().try_into().unwrap();
 
-        // Mirrors the mediator: verify the signature against the VID's public key.
-        signing::verify(challenge.as_bytes(), &sig, &vid.verifying_key).unwrap();
-
-        // A signature over a different challenge must not verify.
-        let other = sign_challenge("a-different-challenge-string-here", &vid.signing_key).unwrap();
-        let other_bytes = BASE64_URL_SAFE_NO_PAD.decode(other.as_bytes()).unwrap();
-        let other_sig: [u8; 64] = other_bytes.as_slice().try_into().unwrap();
-        assert!(signing::verify(challenge.as_bytes(), &other_sig, &vid.verifying_key).is_err());
+        signing::verify(&ours.signing_bytes(), &sig, &vid.verifying_key).unwrap();
+        assert!(signing::verify(ours.challenge.as_bytes(), &sig, &vid.verifying_key).is_err());
+        let theirs = statement("did:web:other.example.com");
+        assert!(signing::verify(&theirs.signing_bytes(), &sig, &vid.verifying_key).is_err());
     }
 
     #[test]
@@ -460,15 +591,17 @@ mod tests {
 
     #[test]
     fn authenticate_body_shape() {
-        let v: serde_json::Value =
-            serde_json::from_str(&authenticate_body("did:example:alice", "sess-123", "c2ln"))
-                .unwrap();
+        let s = statement("did:web:mediator.example.com");
+        let v: serde_json::Value = serde_json::from_str(&authenticate_body(&s, "c2ln")).unwrap();
         assert_eq!(
             v,
             json!({
-                "vid": "did:example:alice",
-                "session_id": "sess-123",
+                "vid": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+                "session_id": "Ab3dEf6hIj9k",
                 "signature": "c2ln",
+                "to": "did:web:mediator.example.com",
+                "created_time": 1_800_000_000u64,
+                "expires_time": 1_800_000_060u64,
             })
         );
     }

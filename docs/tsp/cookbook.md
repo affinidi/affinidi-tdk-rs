@@ -420,8 +420,9 @@ resumes, not periodically.
 **Dual-protocol clients** (the common case) authenticate with DIDComm; TSP calls
 reuse that session automatically — nothing extra to do.
 
-**Pure-TSP clients** (no DIDComm) authenticate by signing the mediator's
-challenge with their VID's Ed25519 key. The SDK ships `TspAuthHandler`; register
+**Pure-TSP clients** (no DIDComm) authenticate by signing, with their VID's
+Ed25519 key, a statement that carries the mediator's challenge and names the
+mediator, the session and an expiry. The SDK ships `TspAuthHandler`; register
 it on the TDK at construction and every profile then authenticates over
 `/tsp/authenticate`:
 
@@ -439,9 +440,14 @@ let tdk_config = TDKConfig::builder()
 ```
 
 The handler resolves the mediator's `#auth` service, fetches a challenge, signs
-it, and POSTs to `/tsp/authenticate` — minting the **same** JWT session the
+the statement (RFC 8785 canonical JSON of `typ`
+`https://affinidi.com/atm/1.0/tsp/authenticate`, `from`, `to`, `created_time`,
+`expires_time` and a `body` of `challenge` and `session_id` — the fields of the
+DIDComm authentication message), and POSTs to `/tsp/authenticate` — minting the **same** JWT session the
 DIDComm path issues, so all downstream ACL / pickup / WS gates are reused
-unchanged.
+unchanged. The signature is accepted only by the mediator it names, for that
+session, until it expires (60 s). This needs mediator 0.52.0 or later; an older
+mediator verifies a signature over the challenge alone and refuses it.
 
 ---
 
