@@ -48,6 +48,28 @@ affinidi-did-resolver-cache-server -c /etc/affinidi/cache-conf.toml
 Any configuration value can also be overridden via environment variables
 referenced from `cache-conf.toml` (see the default config for the full list).
 
+Every setting except `capacity_count`, `expire` and `webvh_log_expire` is a
+top-level key and must appear **above** the `[cache]` header: TOML puts every
+key after a table header into that table. An unknown key, at the top level or
+under `[cache]`, fails startup with an error naming it.
+
+## Client limits
+
+| Key (env var) | Default | Effect |
+|---|---|---|
+| `rate_limit_per_ip` (`RATE_LIMIT_PER_IP`) | `100` | Sustained requests per second per client. Charged for each HTTP request and for each request message on a WebSocket, from one bucket. `0` disables. |
+| `rate_limit_burst` (`RATE_LIMIT_BURST`) | `50` | Burst above the sustained rate. Over it: HTTP 429, or a `WSResponseError` for that WebSocket request. |
+| `trusted_proxies` (`TRUSTED_PROXIES`) | empty | Comma-separated CIDRs of proxies whose `X-Forwarded-For` names the client. Empty: the connecting peer is the client. |
+| `client_ipv6_prefix` (`CLIENT_IPV6_PREFIX`) | `64` | IPv6 clients are charged and counted by this prefix. |
+| `ws_max_connections` (`WS_MAX_CONNECTIONS`) | `4096` | Open WebSocket connections in all; a new one over it gets 503. |
+| `ws_max_connections_per_ip` (`WS_MAX_CONNECTIONS_PER_IP`) | `64` | Open WebSocket connections per client; a new one over it gets 429. |
+| `ws_idle_timeout` (`WS_IDLE_TIMEOUT`) | `120` s | A WebSocket that receives nothing (pings included) for this long is closed. |
+| `ws_send_timeout` (`WS_SEND_TIMEOUT`) | `10` s | A response send that takes longer closes the connection. |
+| `ws_max_message_size` (`WS_MAX_MESSAGE_SIZE`) | `0` | Largest WebSocket message in bytes; `0` means `2 * max_did_size + 1024`. |
+
+Behind a load balancer, list it in `trusted_proxies`; otherwise every client
+is charged and counted as the load balancer's address.
+
 ## Feature flags
 
 | Feature | Default | Effect |

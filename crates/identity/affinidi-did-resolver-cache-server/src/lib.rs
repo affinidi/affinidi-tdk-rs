@@ -1,4 +1,5 @@
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
+use affinidi_rate_limit::{ClientIpExtractor, RateLimiterState};
 use axum::{
     extract::{FromRef, FromRequestParts},
     http::request::Parts,
@@ -13,6 +14,7 @@ pub(crate) mod common;
 pub mod config;
 pub mod errors;
 pub mod handlers;
+pub mod limits;
 pub mod server;
 pub mod session;
 pub mod statistics;
@@ -56,6 +58,14 @@ pub struct SharedData {
     /// something per-IP rate limiting cannot do, because the cap has to hold
     /// however many source addresses the load arrives from.
     pub agent_name_permits: Arc<Semaphore>,
+    /// The per-client limiter the HTTP layer applies. WebSocket request
+    /// messages are charged to the same buckets.
+    pub rate_limiter: RateLimiterState,
+    /// Works out the client a request is charged to. The HTTP layer, the
+    /// WebSocket message charge and the connection caps all use this one.
+    pub client_ip_extractor: ClientIpExtractor,
+    /// WebSocket connection caps, timeouts and message size.
+    pub ws_limits: Arc<limits::WsLimits>,
 }
 
 impl<S> FromRequestParts<S> for SharedData

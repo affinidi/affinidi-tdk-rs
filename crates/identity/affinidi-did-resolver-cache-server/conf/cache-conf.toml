@@ -18,7 +18,8 @@ resolve_timeout = "${RESOLVE_TIMEOUT:30}"
 
 ### max_did_size: maximum accepted DID length in bytes. Longer DIDs are
 ### rejected before resolution (HTTP 400 / WebSocket error) so a crafted
-### request can't drive unbounded work. Also bounds the WebSocket frame size.
+### request can't drive unbounded work. The WebSocket message size limit is
+### derived from it unless ws_max_message_size is set.
 ### Default: 1024 bytes
 max_did_size = "${MAX_DID_SIZE:1024}"
 
@@ -32,13 +33,14 @@ enable_http_endpoint = "${ENABLE_HTTP_ENDPOINT:true}"
 ### Default: true
 ### If true, the server will make available /resolve endpoint for websocket requests
 ### that will resolve a DID Document from the cache.
+enable_websocket_endpoint = "${ENABLE_WEBSOCKET_ENDPOINT:true}"
+
 # Agent name (DID shortcut) lookup: GET /did/v1/resolve-name/{*name}
 #
 # OFF BY DEFAULT. Enabling it lets callers make this server issue HTTP requests
 # to hosts of their choosing. The resolver refuses non-public addresses
 # (loopback, private, link-local, cloud metadata) on every redirect hop, but
-# that is not complete SSRF protection: DNS rebinding remains possible, and this
-# server has no rate limiting. Enable only if you accept that.
+# that does not stop DNS rebinding. Enable only if you accept that.
 enable_agent_names = "${ENABLE_AGENT_NAMES:false}"
 
 # Ceiling on agent name lookups fetching upstream at once.
@@ -52,7 +54,73 @@ enable_agent_names = "${ENABLE_AGENT_NAMES:false}"
 # unbounded backlog of pending fetches.
 agent_name_concurrency = "${AGENT_NAME_CONCURRENCY:16}"
 
-enable_websocket_endpoint = "${ENABLE_WEBSOCKET_ENDPOINT:true}"
+### ---------------------------------------------------------------------------
+### Client limits. These are top-level settings: keep them ABOVE the [cache]
+### header, because TOML puts every key after a table header into that table.
+### An unknown key (here or under [cache]) fails startup.
+### ---------------------------------------------------------------------------
+
+# Sustained requests per second per client address. 0 disables rate limiting.
+# Applies to HTTP requests and to each request message on a WebSocket.
+#
+# Behind a load balancer or NAT, every client arrives from the proxy's address
+# and shares one bucket: list the proxies in `trusted_proxies` below so each
+# client is charged by the address the proxy reports.
+#
+# An unparseable value falls back to the default rather than to 0, so a typo
+# cannot silently disable limiting. Set "0" explicitly to disable.
+rate_limit_per_ip = "${RATE_LIMIT_PER_IP:100}"
+
+# Token-bucket depth above the sustained per-address rate: how large a burst
+# is tolerated before requests are refused (HTTP 429, or an error response on
+# a WebSocket).
+rate_limit_burst = "${RATE_LIMIT_BURST:50}"
+
+# Comma-separated CIDRs (or single addresses) of proxies in front of this
+# server, e.g. "10.0.0.0/8,192.0.2.10". When the connecting peer is one of
+# them, the client is the first address in X-Forwarded-For, read right to left,
+# that is not itself a listed proxy. List only proxies that append the address
+# they received the connection from, and do not expose the server except
+# through them. Empty (default): the connecting peer is the client.
+# A /0 range is refused.
+trusted_proxies = "${TRUSTED_PROXIES:}"
+
+# IPv6 clients are rate limited and counted against the WebSocket
+# per-address cap by this network prefix, so a host cannot get a fresh
+# allowance by switching address inside the block it was given. 1-128;
+# 128 counts each address on its own. IPv4 clients are unaffected.
+# Default: 64
+client_ipv6_prefix = "${CLIENT_IPV6_PREFIX:64}"
+
+# Open WebSocket connections across all clients. A new connection over the
+# limit is refused with 503 before the upgrade. 0 or an unparseable value
+# keeps the default.
+# Default: 4096
+ws_max_connections = "${WS_MAX_CONNECTIONS:4096}"
+
+# Open WebSocket connections per client address (see client_ipv6_prefix).
+# A new connection over the limit is refused with 429 before the upgrade.
+# 0 or an unparseable value keeps the default.
+# Default: 64
+ws_max_connections_per_ip = "${WS_MAX_CONNECTIONS_PER_IP:64}"
+
+# Seconds a WebSocket may go without receiving any frame (requests, pings)
+# before the server closes it. The resolver SDK pings every 20 seconds.
+# 0 or an unparseable value keeps the default.
+# Default: 120
+ws_idle_timeout = "${WS_IDLE_TIMEOUT:120}"
+
+# Seconds a single WebSocket send may take; a client that does not read its
+# responses within it is disconnected. 0 or an unparseable value keeps the
+# default.
+# Default: 10
+ws_send_timeout = "${WS_SEND_TIMEOUT:10}"
+
+# Largest WebSocket message (and frame) accepted, in bytes. A larger message
+# closes the connection. 0 derives it from max_did_size:
+# 2 * max_did_size + 1024 (3072 with the default max_did_size).
+# Default: 0
+ws_max_message_size = "${WS_MAX_MESSAGE_SIZE:0}"
 
 [cache]
 ### capacity_count: Approx how many items to cache in memory
@@ -83,18 +151,3 @@ expire = "${EXPIRE:300}"
 ### The cache is bounded by ENTRY COUNT (`capacity_count`), not by bytes; a log
 ### is capped at 1 MiB on fetch, so worst-case memory is ~capacity_count MiB.
 webvh_log_expire = "${WEBVH_LOG_EXPIRE:0}"
-
-# Sustained requests per second per client IP. 0 disables rate limiting.
-#
-# ⚠ RAISE OR DISABLE THIS BEHIND A LOAD BALANCER OR NAT. The limiter keys on the
-# peer address, so every client behind a proxy shares one bucket and legitimate
-# traffic gets throttled. If you terminate TLS or route through a CDN, the only
-# address this server sees is the proxy's.
-#
-# An unparseable value falls back to the default rather than to 0, so a typo
-# cannot silently disable limiting. Set "0" explicitly to disable.
-rate_limit_per_ip = "${RATE_LIMIT_PER_IP:100}"
-
-# Token-bucket depth above the sustained per-IP rate — how large a burst is
-# tolerated before 429s begin.
-rate_limit_burst = "${RATE_LIMIT_BURST:50}"
