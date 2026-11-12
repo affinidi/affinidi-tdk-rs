@@ -184,10 +184,11 @@ impl DIDCacheClient {
     /// Ask the cache server for an agent name's DID and document, in one round
     /// trip.
     ///
-    /// Returns `(DID the server maps the name to, document)`, the document
-    /// checked as [`Self::verify_network_response`] describes (`None` when it
-    /// cannot be). The DID is only a hint: `resolve_agent_name` confirms the
-    /// name through the registered backends before using either.
+    /// Returns the server's answer as received: `did` is the DID the server
+    /// maps the name to, and nothing in it has been checked. That DID is only a
+    /// hint: `resolve_agent_name` confirms the name through the registered
+    /// backends, and runs [`Self::verify_network_response`] on the document
+    /// only when the server's DID is the confirmed one.
     ///
     /// # Talking to an older server
     ///
@@ -205,7 +206,7 @@ impl DIDCacheClient {
     pub(crate) async fn network_resolve_agent_name(
         &self,
         canonical_name: &str,
-    ) -> Result<(String, Option<Document>), DIDCacheError> {
+    ) -> Result<WSResponse, DIDCacheError> {
         let _span = span!(Level::DEBUG, "network_resolve_agent_name");
         async move {
             let name_hash = DIDCacheClient::hash_did(canonical_name);
@@ -250,20 +251,11 @@ impl DIDCacheClient {
                 }
                 value = rx => {
                     match value {
-                        Ok(WSCommands::ResponseReceived(response)) => {
-                            let response = *response;
-                            // The server reports the DID it resolved the name to;
-                            // `response.did` is that DID, not the name we sent.
-                            let did = response.did.clone();
-                            let document = self.verify_network_response(
-                                &did,
-                                response.document,
-                                response.did_log,
-                                response.did_witness_log,
-                            )
-                            .await?;
-                            Ok((did, document))
-                        }
+                        // The server reports the DID it resolved the name to;
+                        // `response.did` is that DID, not the name we sent.
+                        // Unchecked: the caller verifies it only once the
+                        // name's backends confirm that DID.
+                        Ok(WSCommands::ResponseReceived(response)) => Ok(*response),
                         Ok(WSCommands::ErrorReceived(msg)) => {
                             Err(DIDCacheError::TransportError(msg))
                         }
@@ -489,6 +481,10 @@ impl DIDCacheClient {
 /// deactivation. A log is accepted only if its last entry is not behind the
 /// version recorded and it contains that version's entry unchanged; the
 /// record then moves forward. Mirrors the did:scid source book's floor.
+///
+/// Only logs the cache server sends are recorded. A did:webvh resolved
+/// locally (an answer without its log) is not: the resolver chain hands back
+/// a document, not the log's version.
 #[cfg(feature = "did-webvh")]
 #[derive(Debug, Default)]
 pub(crate) struct WebvhVersionFloor {
@@ -524,6 +520,11 @@ impl WebvhVersionFloor {
 
     fn version_number(version_id: &str) -> Option<u32> {
         version_id.split_once('-')?.0.parse().ok()
+    }
+
+    #[cfg(all(test, feature = "agent-names"))]
+    pub(crate) fn len(&self) -> usize {
+        self.seen.lock().map(|seen| seen.len()).unwrap_or_default()
     }
 
     /// Check a verified log against the version recorded for its SCID, and
@@ -1180,6 +1181,55 @@ mod network_answer_tests {
             assert_eq!(server.requests(), 2, "the name, then the confirmed DID");
         }
 
+        /// The server maps the name to a did:webvh with a valid log. Whether no
+        /// backend confirms the name or one confirms another DID, the server's
+        /// log is never verified, so no version is recorded for it.
+        #[cfg(feature = "did-webvh")]
+        #[tokio::test]
+        async fn an_unconfirmed_hint_leaves_the_webvh_versions_unchanged() {
+            let (webvh_did, log, webvh_doc) = super::webvh::signed_log(1).await;
+            for backend in [None, Some(GOOD)] {
+                let (hint, hint_doc, hint_log) =
+                    (webvh_did.clone(), webvh_doc.clone(), log.clone());
+                let server = StandInServer::start(Arc::new(move |received: &[WSRequest]| {
+                    let request = received.last().unwrap();
+                    if request.agent_name.is_some() {
+                        vec![WSResponseType::Response(Box::new(
+                            WSResponse::new(
+                                hint.clone(),
+                                DIDCacheClient::hash_did(&request.did),
+                                hint_doc.clone(),
+                            )
+                            .with_logs(Some(hint_log.clone()), None),
+                        ))]
+                    } else {
+                        vec![response(
+                            &request.did,
+                            &request.did,
+                            claiming_name(&request.did),
+                        )]
+                    }
+                }))
+                .await;
+                let mut client = DIDCacheClient::new(
+                    DIDCacheConfigBuilder::default()
+                        .with_network_mode(&server.address)
+                        .with_agent_names_over_websocket(true)
+                        .build(),
+                )
+                .await
+                .unwrap();
+                client.set_agent_name_resolvers(vec![Box::new(FixedName(backend))]);
+                let name = AgentName::parse(NAME).unwrap();
+
+                let result = tokio::time::timeout(DEADLINE, client.resolve_agent_name(&name))
+                    .await
+                    .unwrap();
+                assert_eq!(result.is_ok(), backend.is_some(), "{backend:?}: {result:?}");
+                assert_eq!(client.webvh_versions.len(), 0, "{backend:?}");
+            }
+        }
+
         #[tokio::test]
         async fn a_name_no_backend_confirms_is_refused() {
             let (_server, client) = setup(None).await;
@@ -1285,7 +1335,12 @@ mod network_answer_tests {
         async fn hosted_log() -> (LogHost, String, String, Document) {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
+            let (did, log, document) = signed_log(port).await;
+            (serve_log(listener, log.clone()), did, log, document)
+        }
 
+        /// A signed did:webvh log for `localhost:{port}`: (DID, log, document).
+        pub(super) async fn signed_log(port: u16) -> (String, String, Document) {
             let mut key = Secret::generate_ed25519(None, None);
             let pk = key.get_public_keymultibase().unwrap();
             key.id = format!("did:key:{pk}#{pk}");
@@ -1321,7 +1376,7 @@ mod network_answer_tests {
                 .collect::<Vec<_>>()
                 .join("\n");
             let did = document.id.to_string();
-            (serve_log(listener, log.clone()), did, log, document)
+            (did, log, document)
         }
 
         #[tokio::test]

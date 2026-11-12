@@ -119,9 +119,10 @@ impl DIDCacheClient {
         // Over the WebSocket the cache server answers name -> DID -> document in
         // one exchange. Its DID is only a hint: where a name points is decided
         // by the name's own backends, the same evidence the path below uses.
-        // The two lookups run together; the server's document is kept (after
-        // `verify_network_response`) only when its DID is the one the backends
-        // confirm, and the mapping cached is always the confirmed one. A name
+        // The two lookups run together. The server's answer is checked (with
+        // `verify_network_response`) and its document kept only when its DID
+        // is the one the backends confirm; an unconfirmed answer is dropped
+        // unexamined. The mapping cached is always the confirmed one. A name
         // no backend confirms is refused, as it is without the WebSocket.
         #[cfg(all(feature = "agent-names", feature = "network"))]
         if self.config.agent_names_over_websocket
@@ -134,18 +135,35 @@ impl DIDCacheClient {
             );
             let did = confirmed?;
             match server {
-                Ok((hinted, Some(doc))) if hinted == did => {
-                    if crate::cacheable(&did, &doc, crate::Origin::Server) {
-                        self.cache.insert(Self::cache_key(&did), doc).await;
+                Ok(answer) if answer.did == did => {
+                    match self
+                        .verify_network_response(
+                            &did,
+                            answer.document,
+                            answer.did_log,
+                            answer.did_witness_log,
+                        )
+                        .await
+                    {
+                        Ok(Some(doc)) => {
+                            if crate::cacheable(&did, &doc, crate::Origin::Server) {
+                                self.cache.insert(Self::cache_key(&did), doc).await;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => warn!(
+                            "the cache server's document for agent name '{name}' ({did}) was \
+                             refused: {e}"
+                        ),
                     }
                 }
-                Ok((hinted, _)) if hinted != did => {
+                Ok(answer) => {
                     warn!(
-                        "the cache server maps agent name '{name}' to {hinted}, its backends to \
-                         {did}; using {did}"
+                        "the cache server maps agent name '{name}' to {}, its backends to \
+                         {did}; using {did}",
+                        answer.did
                     );
                 }
-                Ok(_) => {}
                 Err(e) => debug!("cache server lookup of agent name '{name}' failed: {e}"),
             }
         }

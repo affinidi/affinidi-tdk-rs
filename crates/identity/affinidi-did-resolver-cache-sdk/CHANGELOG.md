@@ -35,8 +35,9 @@
   (`with_agent_names_over_websocket`): the DID the server maps a name to is
   only a hint. The name is confirmed through the registered
   `AgentNameResolver`s, as without the WebSocket, and that confirmed DID is
-  the one cached and returned. The server's document is kept only when its DID
-  is the confirmed one. A name no backend confirms is an error, as it is
+  the one cached and returned. The server's answer is checked, and its
+  document kept, only when its DID is the confirmed one; an unconfirmed answer
+  is dropped without being examined, so it changes no client state. A name no backend confirms is an error, as it is
   without the WebSocket; before, the server's mapping was cached and returned
   with the name as its shortcut. The name lookup and the server request run
   together.
