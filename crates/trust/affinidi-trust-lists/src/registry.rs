@@ -7,8 +7,9 @@
 
 use std::collections::HashMap;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
+use crate::error::{Result, TrustListError};
 use crate::service_status::ServiceStatus;
 use crate::service_type::ServiceType;
 use crate::types::{ServiceDigitalIdentity, ServiceInformation, TrustServiceStatusList};
@@ -24,6 +25,31 @@ pub struct TrustAnchorEntry {
     pub territory: String,
     /// The service information (type, status, identity).
     pub service: ServiceInformation,
+    /// `NextUpdate` of the trust list this entry was loaded from. Past it the
+    /// entry is no longer trusted. `None` for entries added directly with
+    /// [`TrustListRegistry::add_provider`], which do not expire.
+    pub list_next_update: Option<DateTime<Utc>>,
+}
+
+impl TrustAnchorEntry {
+    /// Why the entry cannot be trusted at `now`, or `Ok` if it can: its list
+    /// must not be past `NextUpdate`, and its status at `now` (see
+    /// [`ServiceInformation::status_at`]) must be active.
+    pub fn usable_at(&self, now: DateTime<Utc>) -> std::result::Result<(), String> {
+        if let Some(next_update) = self.list_next_update
+            && now > next_update
+        {
+            return Err(format!(
+                "trust list for {} passed its next update {next_update}",
+                self.territory
+            ));
+        }
+        match self.service.status_at(now) {
+            Some(status) if status.is_active() => Ok(()),
+            Some(status) => Err(format!("Service status: {status}")),
+            None => Err(format!("no service status recorded at {now}")),
+        }
+    }
 }
 
 /// The result of looking up a trust anchor.
@@ -70,8 +96,31 @@ impl TrustListRegistry {
 
     /// Load a Trust Service Status List into the registry.
     ///
-    /// Indexes all services by their digital identity fingerprint.
-    pub fn load_trust_list(&mut self, tl: &TrustServiceStatusList) {
+    /// Indexes every service under each of its digital identities. Refuses a
+    /// list that is not current at `now` (see
+    /// [`TrustServiceStatusList::is_current_at`]), so a stale or closed list
+    /// cannot supply anchors.
+    ///
+    /// This does not authenticate the list: its XAdES signature is not
+    /// verified by this crate. Load only lists whose bytes the caller has
+    /// authenticated (see [`crate::xml::UnverifiedTrustList`]).
+    pub fn load_trust_list(
+        &mut self,
+        tl: &TrustServiceStatusList,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        if !tl.is_current_at(now) {
+            let info = &tl.scheme_information;
+            return Err(TrustListError::NotCurrent(format!(
+                "trust list for {} issued {} with next update {} is not current at {now}",
+                info.scheme_territory,
+                info.list_issue_date_time,
+                info.next_update
+                    .map_or_else(|| "none (closed list)".to_string(), |next| next.to_string()),
+            )));
+        }
+
+        let list_next_update = tl.scheme_information.next_update;
         let territory = tl.scheme_information.scheme_territory.clone();
         if !self.territories.contains(&territory) {
             self.territories.push(territory.clone());
@@ -79,17 +128,25 @@ impl TrustListRegistry {
 
         for provider in &tl.trust_service_providers {
             for service in &provider.services {
-                let fingerprint = service.digital_identity.fingerprint();
+                if service.digital_identities.is_empty() {
+                    continue;
+                }
                 let entry = TrustAnchorEntry {
                     provider_name: provider.name.clone(),
                     territory: provider.territory.clone(),
                     service: service.clone(),
+                    list_next_update,
                 };
-
-                self.index.entry(fingerprint).or_default().push(entry);
+                for identity in &service.digital_identities {
+                    self.index
+                        .entry(identity.fingerprint())
+                        .or_default()
+                        .push(entry.clone());
+                }
                 self.entry_count += 1;
             }
         }
+        Ok(())
     }
 
     /// Add a single provider with one service directly.
@@ -109,7 +166,7 @@ impl TrustListRegistry {
         let service = ServiceInformation {
             service_type,
             service_name: provider_name.to_string(),
-            digital_identity: identity,
+            digital_identities: vec![identity],
             service_status: status,
             status_starting_time: Utc::now(),
             history: Vec::new(),
@@ -119,6 +176,7 @@ impl TrustListRegistry {
             provider_name: provider_name.to_string(),
             territory: territory.to_string(),
             service,
+            list_next_update: None,
         };
 
         if !self.territories.contains(&territory.to_string()) {
@@ -131,7 +189,9 @@ impl TrustListRegistry {
 
     /// Look up a trust anchor by X.509 certificate (DER bytes).
     ///
-    /// Returns the first matching active entry, or an inactive entry if found.
+    /// Returns the first entry trusted at the system clock's current time, or
+    /// an untrusted entry with the reason if only those match. See
+    /// [`lookup_by_identity_at`](Self::lookup_by_identity_at).
     pub fn lookup_by_certificate(&self, certificate_der: &[u8]) -> LookupResult {
         let identity = ServiceDigitalIdentity::X509Certificate(certificate_der.to_vec());
         self.lookup_by_identity(&identity)
@@ -155,30 +215,71 @@ impl TrustListRegistry {
         self.lookup_by_identity(&identity)
     }
 
-    /// Generic lookup by any digital identity type.
+    /// Generic lookup by any digital identity type, at the system clock's
+    /// current time.
     pub fn lookup_by_identity(&self, identity: &ServiceDigitalIdentity) -> LookupResult {
-        let fingerprint = identity.fingerprint();
+        self.lookup_by_identity_at(identity, Utc::now())
+    }
 
-        match self.index.get(&fingerprint) {
-            None => LookupResult::NotFound,
-            Some(entries) => {
-                // Prefer active entries
-                for entry in entries {
-                    if entry.service.service_status.is_active() {
-                        return LookupResult::Trusted(entry.clone());
-                    }
-                }
-                // Return inactive entry with reason
-                if let Some(entry) = entries.first() {
-                    LookupResult::Inactive {
-                        entry: entry.clone(),
-                        reason: format!("Service status: {}", entry.service.service_status),
-                    }
-                } else {
-                    LookupResult::NotFound
+    /// Generic lookup by any digital identity type at `now`: an entry is
+    /// trusted only if [`TrustAnchorEntry::usable_at`] accepts it, i.e. its
+    /// list is not past `NextUpdate` and its status at `now` is active.
+    pub fn lookup_by_identity_at(
+        &self,
+        identity: &ServiceDigitalIdentity,
+        now: DateTime<Utc>,
+    ) -> LookupResult {
+        self.lookup_matching(identity, now, |_| true)
+    }
+
+    pub(crate) fn lookup_matching(
+        &self,
+        identity: &ServiceDigitalIdentity,
+        now: DateTime<Utc>,
+        accept: impl Fn(&TrustAnchorEntry) -> bool,
+    ) -> LookupResult {
+        let Some(entries) = self.index.get(&identity.fingerprint()) else {
+            return LookupResult::NotFound;
+        };
+        let mut first_rejected = None;
+        for entry in entries {
+            let verdict = if accept(entry) {
+                entry.usable_at(now)
+            } else {
+                Err(format!(
+                    "service type {:?} is not accepted here",
+                    entry.service.service_type
+                ))
+            };
+            match verdict {
+                Ok(()) => return LookupResult::Trusted(entry.clone()),
+                Err(reason) => {
+                    first_rejected.get_or_insert((entry, reason));
                 }
             }
         }
+        match first_rejected {
+            Some((entry, reason)) => LookupResult::Inactive {
+                entry: entry.clone(),
+                reason,
+            },
+            None => LookupResult::NotFound,
+        }
+    }
+
+    /// Every X.509 certificate identity of an entry, with the entry. Callers
+    /// check [`TrustAnchorEntry::usable_at`] and the service type themselves.
+    pub fn certificate_anchors(&self) -> impl Iterator<Item = (&TrustAnchorEntry, &[u8])> {
+        self.index.values().flatten().flat_map(|entry| {
+            entry
+                .service
+                .digital_identities
+                .iter()
+                .filter_map(move |identity| match identity {
+                    ServiceDigitalIdentity::X509Certificate(der) => Some((entry, der.as_slice())),
+                    _ => None,
+                })
+        })
     }
 
     /// Find all services of a given type across all trust lists.
@@ -200,6 +301,8 @@ impl TrustListRegistry {
     }
 
     /// Find all active PID providers.
+    ///
+    /// "Active" is the current status; list freshness is not checked here.
     pub fn pid_providers(&self) -> Vec<&TrustAnchorEntry> {
         self.find_by_service_type(&ServiceType::Pid)
             .into_iter()
@@ -208,6 +311,8 @@ impl TrustListRegistry {
     }
 
     /// Find all active wallet providers.
+    ///
+    /// "Active" is the current status; list freshness is not checked here.
     pub fn wallet_providers(&self) -> Vec<&TrustAnchorEntry> {
         self.find_by_service_type(&ServiceType::WalletProvider)
             .into_iter()
@@ -216,6 +321,8 @@ impl TrustListRegistry {
     }
 
     /// Find all active QEAA providers.
+    ///
+    /// "Active" is the current status; list freshness is not checked here.
     pub fn qeaa_providers(&self) -> Vec<&TrustAnchorEntry> {
         self.find_by_service_type(&ServiceType::QEaa)
             .into_iter()
@@ -396,7 +503,7 @@ mod tests {
         let service = ServiceInformation {
             service_type: ServiceType::QEaa,
             service_name: "EBSI QEAA".into(),
-            digital_identity: did_identity,
+            digital_identities: vec![did_identity],
             service_status: ServiceStatus::Granted,
             status_starting_time: Utc::now(),
             history: Vec::new(),
@@ -406,6 +513,7 @@ mod tests {
             provider_name: "EBSI Provider".into(),
             territory: "EU".into(),
             service,
+            list_next_update: None,
         };
 
         registry.index.entry(fingerprint).or_default().push(entry);
@@ -454,8 +562,8 @@ mod tests {
                 tsl_type: TslType::EuGeneric,
                 scheme_operator_name: "Test Authority".into(),
                 scheme_territory: "DE".into(),
-                list_issue_date_time: Utc::now(),
-                next_update: None,
+                list_issue_date_time: Utc::now() - chrono::Duration::days(1),
+                next_update: Some(Utc::now() + chrono::Duration::days(30)),
                 pointers_to_other_tsl: Vec::new(),
             },
             trust_service_providers: vec![TrustServiceProvider {
@@ -466,7 +574,10 @@ mod tests {
                 services: vec![ServiceInformation {
                     service_type: ServiceType::Pid,
                     service_name: "PID Issuance".into(),
-                    digital_identity: ServiceDigitalIdentity::X509Certificate(sample_cert(10)),
+                    digital_identities: vec![
+                        ServiceDigitalIdentity::X509Certificate(sample_cert(10)),
+                        ServiceDigitalIdentity::X509Certificate(sample_cert(11)),
+                    ],
                     service_status: ServiceStatus::Granted,
                     status_starting_time: Utc::now(),
                     history: Vec::new(),
@@ -475,13 +586,65 @@ mod tests {
         };
 
         let mut registry = TrustListRegistry::new();
-        registry.load_trust_list(&tl);
+        registry.load_trust_list(&tl, Utc::now()).unwrap();
 
         assert_eq!(registry.entry_count(), 1);
         assert!(
             registry
                 .lookup_by_certificate(&sample_cert(10))
                 .is_trusted()
+        );
+        assert!(
+            registry
+                .lookup_by_certificate(&sample_cert(11))
+                .is_trusted(),
+            "every identity of a service is indexed"
+        );
+
+        let after_next_update = Utc::now() + chrono::Duration::days(31);
+        assert!(
+            !registry
+                .lookup_by_identity_at(
+                    &ServiceDigitalIdentity::X509Certificate(sample_cert(10)),
+                    after_next_update,
+                )
+                .is_trusted(),
+            "a loaded entry is not trusted after its list's next update"
+        );
+
+        let mut named = tl.clone();
+        named.trust_service_providers[0].services[0].digital_identities =
+            vec![ServiceDigitalIdentity::X509SubjectName(
+                "CN=PID, C=DE".into(),
+            )];
+        let mut by_name = TrustListRegistry::new();
+        by_name.load_trust_list(&named, Utc::now()).unwrap();
+        assert!(
+            by_name
+                .lookup_by_identity(&ServiceDigitalIdentity::X509SubjectName(
+                    "CN=PID, C=DE".into()
+                ))
+                .is_trusted()
+        );
+        assert!(
+            !by_name.lookup_by_did("CN=PID, C=DE").is_trusted(),
+            "a subject name is not found as a DID"
+        );
+
+        let mut stale = tl.clone();
+        stale.scheme_information.next_update = Some(Utc::now() - chrono::Duration::hours(1));
+        assert!(
+            TrustListRegistry::new()
+                .load_trust_list(&stale, Utc::now())
+                .is_err()
+        );
+
+        let mut closed = tl;
+        closed.scheme_information.next_update = None;
+        assert!(
+            TrustListRegistry::new()
+                .load_trust_list(&closed, Utc::now())
+                .is_err()
         );
     }
 }

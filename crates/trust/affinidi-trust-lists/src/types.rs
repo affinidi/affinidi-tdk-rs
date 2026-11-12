@@ -22,6 +22,16 @@ pub struct TrustServiceStatusList {
     pub trust_service_providers: Vec<TrustServiceProvider>,
 }
 
+impl TrustServiceStatusList {
+    /// Whether the list is current at `now`: issued no later than `now` and
+    /// with a `NextUpdate` that has not passed. A list without `NextUpdate`
+    /// is a closed list (ETSI TS 119 612 clause 5.3.15) and is never current.
+    pub fn is_current_at(&self, now: DateTime<Utc>) -> bool {
+        let info = &self.scheme_information;
+        info.list_issue_date_time <= now && info.next_update.is_some_and(|next| now <= next)
+    }
+}
+
 /// The type of trust list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TslType {
@@ -59,9 +69,10 @@ pub struct SchemeInformation {
     pub scheme_operator_name: String,
     /// Territory/country code (e.g., "EU", "DE", "AT").
     pub scheme_territory: String,
-    /// When this version was issued.
+    /// When this version was issued (`ListIssueDateTime`).
     pub list_issue_date_time: DateTime<Utc>,
-    /// When the next update is expected.
+    /// When the next update is due (`NextUpdate`); the list is stale after
+    /// it. `None` for a closed list, whose `NextUpdate` is empty.
     pub next_update: Option<DateTime<Utc>>,
     /// Pointers to other trust lists (used by LoTL to point to national TLs).
     pub pointers_to_other_tsl: Vec<OtherTslPointer>,
@@ -105,8 +116,10 @@ pub struct ServiceInformation {
     pub service_type: ServiceType,
     /// Human-readable service name.
     pub service_name: String,
-    /// The digital identity of the service (certificate, key, or DID).
-    pub digital_identity: ServiceDigitalIdentity,
+    /// The digital identities of the service (certificates, SKIs, subject
+    /// names, keys, or DIDs). A service may list several, e.g. a renewed
+    /// certificate beside the one it replaces; each is indexed.
+    pub digital_identities: Vec<ServiceDigitalIdentity>,
     /// Current status of the service.
     pub service_status: ServiceStatus,
     /// When the current status took effect.
@@ -135,19 +148,44 @@ pub enum ServiceDigitalIdentity {
 
 impl ServiceDigitalIdentity {
     /// Compute the SHA-256 fingerprint of the identity for indexing.
+    ///
+    /// The identity kind is hashed ahead of its value, so equal bytes or
+    /// strings of different kinds (a subject name and a DID, an SKI and a
+    /// public key) have different fingerprints.
     pub fn fingerprint(&self) -> Vec<u8> {
         use sha2::{Digest, Sha256};
-        match self {
-            Self::X509Certificate(cert) => Sha256::digest(cert).to_vec(),
-            Self::X509Ski(ski) => Sha256::digest(ski).to_vec(),
-            Self::X509SubjectName(name) => Sha256::digest(name.as_bytes()).to_vec(),
-            Self::PublicKey(key) => Sha256::digest(key).to_vec(),
-            Self::Did(did) => Sha256::digest(did.as_bytes()).to_vec(),
-        }
+        let (kind, value): (&[u8], &[u8]) = match self {
+            Self::X509Certificate(cert) => (b"x509-certificate", cert),
+            Self::X509Ski(ski) => (b"x509-ski", ski),
+            Self::X509SubjectName(name) => (b"x509-subject-name", name.as_bytes()),
+            Self::PublicKey(key) => (b"public-key", key),
+            Self::Did(did) => (b"did", did.as_bytes()),
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(kind);
+        hasher.update([0u8]);
+        hasher.update(value);
+        hasher.finalize().to_vec()
     }
 }
 
-/// A historical status transition for a service.
+impl ServiceInformation {
+    /// The service's status at `now`: the current status once its
+    /// `status_starting_time` has passed, otherwise the latest history entry
+    /// that had started by `now`. `None` when no recorded status covers `now`.
+    pub fn status_at(&self, now: DateTime<Utc>) -> Option<&ServiceStatus> {
+        if self.status_starting_time <= now {
+            return Some(&self.service_status);
+        }
+        self.history
+            .iter()
+            .filter(|entry| entry.status_starting_time <= now)
+            .max_by_key(|entry| entry.status_starting_time)
+            .map(|entry| &entry.service_status)
+    }
+}
+
+/// A historical status transition for a service (`ServiceHistoryInstance`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceHistoryEntry {
     /// The service type at this point in history.
@@ -182,6 +220,54 @@ mod tests {
 
         assert_eq!(id1.fingerprint(), id2.fingerprint());
         assert_ne!(id1.fingerprint(), id3.fingerprint());
+    }
+
+    #[test]
+    fn fingerprints_are_separated_by_identity_kind() {
+        let name = ServiceDigitalIdentity::X509SubjectName("CN=Issuer, C=DE".into());
+        let did = ServiceDigitalIdentity::Did("CN=Issuer, C=DE".into());
+        assert_ne!(name.fingerprint(), did.fingerprint());
+
+        let ski = ServiceDigitalIdentity::X509Ski(vec![1, 2, 3]);
+        let key = ServiceDigitalIdentity::PublicKey(vec![1, 2, 3]);
+        let cert = ServiceDigitalIdentity::X509Certificate(vec![1, 2, 3]);
+        assert_ne!(ski.fingerprint(), key.fingerprint());
+        assert_ne!(ski.fingerprint(), cert.fingerprint());
+        assert_ne!(key.fingerprint(), cert.fingerprint());
+    }
+
+    #[test]
+    fn status_at_uses_history_before_the_current_status_started() {
+        let at = |text: &str| {
+            DateTime::parse_from_rfc3339(text)
+                .unwrap()
+                .with_timezone(&Utc)
+        };
+        let service = ServiceInformation {
+            service_type: ServiceType::CaQc,
+            service_name: "CA".into(),
+            digital_identities: Vec::new(),
+            service_status: ServiceStatus::Withdrawn,
+            status_starting_time: at("2026-06-01T00:00:00Z"),
+            history: vec![ServiceHistoryEntry {
+                service_type: ServiceType::CaQc,
+                service_status: ServiceStatus::Granted,
+                status_starting_time: at("2025-01-01T00:00:00Z"),
+            }],
+        };
+        assert_eq!(service.status_at(at("2024-01-01T00:00:00Z")), None);
+        assert!(
+            service
+                .status_at(at("2026-01-01T00:00:00Z"))
+                .unwrap()
+                .is_active()
+        );
+        assert!(
+            !service
+                .status_at(at("2026-07-01T00:00:00Z"))
+                .unwrap()
+                .is_active()
+        );
     }
 
     #[test]

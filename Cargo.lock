@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -966,11 +966,12 @@ dependencies = [
 
 [[package]]
 name = "affinidi-trust-lists"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
  "quick-xml",
+ "rcgen",
  "serde",
  "serde_json",
  "sha2 0.11.0",

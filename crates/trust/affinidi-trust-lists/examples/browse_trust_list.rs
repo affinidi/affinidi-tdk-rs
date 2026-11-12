@@ -23,7 +23,7 @@ fn main() {
             scheme_operator_name: "Bundesnetzagentur".into(),
             scheme_territory: "DE".into(),
             list_issue_date_time: Utc::now(),
-            next_update: None,
+            next_update: Some(Utc::now() + chrono::Duration::days(180)),
             pointers_to_other_tsl: Vec::new(),
         },
         trust_service_providers: vec![
@@ -36,9 +36,9 @@ fn main() {
                     ServiceInformation {
                         service_type: ServiceType::Pid,
                         service_name: "German eID PID Issuance".into(),
-                        digital_identity: ServiceDigitalIdentity::X509Certificate(
+                        digital_identities: vec![ServiceDigitalIdentity::X509Certificate(
                             b"BDR-PID-SIGNING-CERT".to_vec(),
-                        ),
+                        )],
                         service_status: ServiceStatus::Granted,
                         status_starting_time: Utc::now(),
                         history: Vec::new(),
@@ -46,9 +46,9 @@ fn main() {
                     ServiceInformation {
                         service_type: ServiceType::CaQc,
                         service_name: "D-Trust Qualified CA".into(),
-                        digital_identity: ServiceDigitalIdentity::X509Certificate(
+                        digital_identities: vec![ServiceDigitalIdentity::X509Certificate(
                             b"DTRUST-CA-QC-CERT".to_vec(),
-                        ),
+                        )],
                         service_status: ServiceStatus::Granted,
                         status_starting_time: Utc::now(),
                         history: Vec::new(),
@@ -64,9 +64,9 @@ fn main() {
                     ServiceInformation {
                         service_type: ServiceType::WalletProvider,
                         service_name: "T-Wallet EUDI Solution".into(),
-                        digital_identity: ServiceDigitalIdentity::X509Certificate(
+                        digital_identities: vec![ServiceDigitalIdentity::X509Certificate(
                             b"TELEKOM-WALLET-CERT".to_vec(),
-                        ),
+                        )],
                         service_status: ServiceStatus::Granted,
                         status_starting_time: Utc::now(),
                         history: Vec::new(),
@@ -74,9 +74,9 @@ fn main() {
                     ServiceInformation {
                         service_type: ServiceType::TsaQtst,
                         service_name: "TeleSec TimeStamp Service".into(),
-                        digital_identity: ServiceDigitalIdentity::X509Certificate(
+                        digital_identities: vec![ServiceDigitalIdentity::X509Certificate(
                             b"TELESEC-TSA-CERT".to_vec(),
-                        ),
+                        )],
                         service_status: ServiceStatus::Granted,
                         status_starting_time: Utc::now(),
                         history: Vec::new(),
@@ -91,9 +91,9 @@ fn main() {
                 services: vec![ServiceInformation {
                     service_type: ServiceType::CaPkc,
                     service_name: "Old PKI CA".into(),
-                    digital_identity: ServiceDigitalIdentity::X509Certificate(
+                    digital_identities: vec![ServiceDigitalIdentity::X509Certificate(
                         b"LEGACY-CA-CERT".to_vec(),
-                    ),
+                    )],
                     service_status: ServiceStatus::Withdrawn,
                     status_starting_time: Utc::now(),
                     history: vec![ServiceHistoryEntry {
@@ -168,7 +168,9 @@ fn main() {
     println!("--- Registry Queries ---\n");
 
     let mut registry = TrustListRegistry::new();
-    registry.load_trust_list(&tl);
+    registry
+        .load_trust_list(&tl, Utc::now())
+        .expect("the example list is current");
 
     println!("  Total entries: {}", registry.entry_count());
     println!("  Active PID providers: {}", registry.pid_providers().len());

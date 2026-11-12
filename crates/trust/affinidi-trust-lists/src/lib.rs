@@ -28,10 +28,25 @@
  *
  * # Features
  *
- * - **XML Parsing**: Full ETSI TS 119 612 XML parsing — TSPs, services, certificates
- * - **Trust Registry**: O(1) lookup by certificate, SKI, public key, or DID
- * - **X.509 Validation**: Certificate chain validation against trust anchors
+ * - **XML Parsing**: ETSI TS 119 612 XML parsing — TSPs, services, all digital
+ *   identities, service history, issue date and next update
+ * - **Trust Registry**: O(1) lookup by certificate, SKI, public key, or DID.
+ *   Loading refuses a list that is stale or closed, and an entry stops being
+ *   trusted once its list passes `NextUpdate`. Lookups and chain validation
+ *   at a given time use the service status in force at that time; the
+ *   `find_*` / `*_providers` listings use the current status and do not
+ *   check list freshness
+ * - **X.509 Validation**: Certificate path validation to a trust anchor of
+ *   the caller's chosen service types, with each certificate signature
+ *   verified (no revocation checking)
  * - **COSE x5chain**: Integration point for mdoc issuerAuth certificate chains
+ *
+ * # Not provided: trust list signature verification
+ *
+ * The XAdES signature of an XML trusted list is **not verified** by this
+ * crate. [`xml::parse_trust_list_xml`] returns an [`xml::UnverifiedTrustList`];
+ * the caller must authenticate the list's bytes before calling
+ * [`xml::UnverifiedTrustList::assume_authenticated`] and loading it.
  *
  * # Usage
  *
@@ -55,7 +70,8 @@
  * assert!(result.is_trusted());
  *
  * // Validate an x5chain from COSE_Sign1 (mdoc issuerAuth)
- * let chain_result = validate_x5chain(&[/* DER certs */], &registry);
+ * let chain_result = validate_x5chain(&[/* DER certs */], &registry, &[ServiceType::Pid]).unwrap();
+ * assert!(!chain_result.valid);
  * ```
  */
 
@@ -75,4 +91,8 @@ pub use types::{
     OtherTslPointer, SchemeInformation, ServiceDigitalIdentity, ServiceHistoryEntry,
     ServiceInformation, TrustServiceProvider, TrustServiceStatusList, TslType,
 };
-pub use x509::{CertInfo, ChainValidationResult, validate_chain, validate_x5chain};
+pub use x509::{
+    CertInfo, ChainValidationResult, validate_chain, validate_chain_at, validate_x5chain,
+    validate_x5chain_at,
+};
+pub use xml::{UnverifiedTrustList, parse_trust_list_xml};
