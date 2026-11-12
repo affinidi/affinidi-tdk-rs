@@ -78,25 +78,26 @@ impl ATM {
                 ));
             };
             let res = self
-                .inner
-                .tdk_common
-                .client()
-                .post([&mediator_url, "/fetch"].concat())
+                .rest_request_for_messages(
+                    reqwest::Method::POST,
+                    [&mediator_url, "/fetch"].concat(),
+                    options.limit,
+                )
                 .header("Content-Type", "application/json")
                 .header("Authorization", format!("Bearer {}", tokens.access_token))
                 .body(body)
                 .send()
                 .await
                 .map_err(|e| {
-                    ATMError::TransportError(format!("Could not send list_messages request: {e:?}"))
+                    ATMError::TransportError(format!(
+                        "Could not send fetch_messages request: {e:?}"
+                    ))
                 })?;
 
             debug!("API response: status({})", res.status());
             let body = check_response("fetch messages", res).await?;
 
-            let body = serde_json::from_str::<SuccessResponse<GetMessagesResponse>>(&body)
-                .ok()
-                .unwrap();
+            let body = SuccessResponse::<GetMessagesResponse>::parse("fetch messages", &body)?;
 
             let mut list = if let Some(list) = body.data {
                 list

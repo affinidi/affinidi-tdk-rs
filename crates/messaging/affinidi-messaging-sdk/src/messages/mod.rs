@@ -40,6 +40,19 @@ pub struct SuccessResponse<T: GenericDataStruct> {
     pub data: Option<T>,
 }
 
+impl<T: GenericDataStruct> SuccessResponse<T> {
+    /// Parse a body that [`check_response`](crate::errors::check_response)
+    /// accepted. A success status whose body has another shape (a proxy's
+    /// page, a different mediator version) is an error, not a panic.
+    pub(crate) fn parse(context: &str, body: &str) -> Result<Self, crate::errors::ATMError> {
+        serde_json::from_str(body).map_err(|e| {
+            crate::errors::ATMError::TransportError(format!(
+                "{context}: couldn't parse the response body: {e}"
+            ))
+        })
+    }
+}
+
 /// Specific response structure for the authentication challenge response
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct AuthenticationChallenge {
@@ -113,5 +126,26 @@ mod folder_tests {
         }
         assert_eq!(Folder::Inbox.to_string(), "inbox");
         assert_eq!(Folder::Outbox.to_string(), "outbox");
+    }
+
+    /// A success status with a body that is not the expected JSON is an
+    /// error the caller can handle, not a panic.
+    #[test]
+    fn a_success_body_of_another_shape_is_an_error() {
+        for body in ["<html>gateway</html>", "", "{}", r#"{"data":[1,2,3]}"#] {
+            let err = SuccessResponse::<GetMessagesResponse>::parse("fetch messages", body)
+                .expect_err(body);
+            assert!(
+                matches!(&err, crate::errors::ATMError::TransportError(text)
+                    if text.starts_with("fetch messages: couldn't parse")),
+                "{err:?}"
+            );
+        }
+        let ok = SuccessResponse::<String>::parse(
+            "delete OOB invitation",
+            r#"{"sessionId":"s","httpCode":200,"errorCode":0,"errorCodeStr":"NA","message":"ok","data":"done"}"#,
+        )
+        .unwrap();
+        assert_eq!(ok.data.as_deref(), Some("done"));
     }
 }

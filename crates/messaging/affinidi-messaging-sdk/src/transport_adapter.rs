@@ -231,8 +231,9 @@ impl MessageTransport for DidCommTransport {
     async fn outbox_message_ids(&self) -> Result<Option<Vec<String>>, MessagingError> {
         // The mediator holds a sent message in the sender's `Outbox` until the
         // recipient acks pickup, then deletes it; each row's `msg_id` is the
-        // `sha256(packed)` this transport returns as a `SendReceipt::hop_id`. So
-        // a hop-id that has drained from this list is the recipient's pickup.
+        // `sha256(packed)` this transport returns as a `SendReceipt::hop_id`. A
+        // hop-id that has drained from this list was picked up or expired; the
+        // listing cannot say which.
         let list = self
             .atm
             .list_messages(&self.profile, Folder::Outbox)
@@ -250,9 +251,12 @@ impl MessageTransport for DidCommTransport {
         if hop_ids.is_empty() {
             return Ok(Some(std::collections::HashMap::new()));
         }
-        // A mediator that predates receipts refuses the task. That is not a
-        // failure of this send: answer `None`, and the delivery layer falls back
-        // to inferring pickup from the outbox listing.
+        // A mediator that predates receipts refuses the task as unsupported.
+        // That is not a failure of this send: answer `None`, and the delivery
+        // layer falls back to the outbox listing. Any other failure (a timeout,
+        // a rate limit, an unreachable mediator) is an error, so the poll
+        // reports it and asks again on its next tick rather than reading the
+        // listing as if the mediator had no receipts.
         let response = match self
             .atm
             .trust_tasks()
@@ -260,10 +264,11 @@ impl MessageTransport for DidCommTransport {
             .await
         {
             Ok(response) => response,
-            Err(e) => {
-                tracing::debug!(error = %e, "message status unavailable; using the outbox listing");
+            Err(e) if is_unsupported_task(&e) => {
+                tracing::debug!(error = %e, "message status not served; using the outbox listing");
                 return Ok(None);
             }
+            Err(e) => return Err(transport_error("message status failed", e)),
         };
         // Keyed by the id each status names, and only for ids that were asked
         // about, so an answer can never settle a message it does not name.
@@ -290,6 +295,18 @@ impl MessageTransport for DidCommTransport {
                 .collect(),
         ))
     }
+}
+
+/// The mediator does not serve the Trust Task asked of it: it refused the type
+/// (`protocol.trust_task.unsupported`), or it predates Trust Tasks and refused
+/// the message as not implemented (`me.not_implemented`).
+fn is_unsupported_task(err: &ATMError) -> bool {
+    matches!(
+        err,
+        ATMError::ProblemReport(code, ..)
+            if crate::protocols::trust_task_versions::is_unsupported_type(code)
+                || code.ends_with("me.not_implemented")
+    )
 }
 
 /// Carry an ATM failure across the [`MessageTransport`] boundary.
@@ -744,6 +761,30 @@ fn authenticated_sender(message: &Message, meta: &UnpackMetadata) -> Option<Stri
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Only a mediator that does not serve the status task sends the delivery
+    /// layer to the outbox listing; any other failure is reported as one.
+    #[test]
+    fn only_an_unserved_status_task_falls_back_to_the_outbox_listing() {
+        assert!(is_unsupported_task(&ATMError::ProblemReport(
+            "e.p.protocol.trust_task.unsupported".into(),
+            String::new(),
+            String::new(),
+        )));
+        assert!(is_unsupported_task(&ATMError::ProblemReport(
+            "e.p.me.not_implemented".into(),
+            String::new(),
+            String::new(),
+        )));
+        assert!(!is_unsupported_task(&ATMError::ProblemReport(
+            "e.p.message.trust_task.rejected".into(),
+            String::new(),
+            String::new(),
+        )));
+        assert!(!is_unsupported_task(&ATMError::TransportError(
+            "request timed out".into()
+        )));
+    }
 
     /// A mediator 429 on the send keeps its type across the transport boundary.
     #[test]

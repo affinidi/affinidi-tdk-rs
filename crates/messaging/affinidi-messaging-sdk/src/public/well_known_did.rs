@@ -23,10 +23,7 @@ impl ATM {
             debug!("API well_known_did_api({})", well_known_did_atm_api);
 
             let res = self
-                .inner
-                .tdk_common
-                .client()
-                .get(well_known_did_atm_api)
+                .rest_request(reqwest::Method::GET, well_known_did_atm_api)
                 .header("Content-Type", "application/json")
                 .send()
                 .await

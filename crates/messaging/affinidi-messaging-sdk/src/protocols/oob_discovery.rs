@@ -6,7 +6,7 @@ Used to help discover 3rd party DID's while protecting your own privacy.
 
 use crate::{
     ATM,
-    errors::{ATMError, check_response},
+    errors::{ATMError, check_response, check_response_capped},
     messages::{GenericDataStruct, SuccessResponse},
     profiles::ATMProfile,
 };
@@ -20,6 +20,11 @@ use std::{
 };
 use tracing::debug;
 use uuid::Uuid;
+
+/// The most of a shortened invitation URL's response that is read. An
+/// invitation is a short DIDComm message; the URL usually arrives from outside
+/// (a QR code, a link), so its response is not trusted to be small.
+const OOB_INVITATION_MAX_BYTES: usize = 64 * 1024;
 
 #[derive(Default)]
 pub struct OOBDiscovery {}
@@ -82,10 +87,7 @@ impl OOBDiscovery {
         };
 
         let res = atm
-            .inner
-            .tdk_common
-            .client()
-            .post([&mediator_url, "/oob"].concat())
+            .rest_request(reqwest::Method::POST, [&mediator_url, "/oob"].concat())
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .body(msg)
@@ -98,9 +100,7 @@ impl OOBDiscovery {
         debug!("API response: status({})", res.status());
         let body = check_response("create OOB invitation", res).await?;
 
-        let body = serde_json::from_str::<SuccessResponse<OOBInviteResponse>>(&body)
-            .ok()
-            .unwrap();
+        let body = SuccessResponse::<OOBInviteResponse>::parse("create OOB invitation", &body)?;
 
         if let Some(data) = body.data {
             Ok(data._oobid)
@@ -115,12 +115,12 @@ impl OOBDiscovery {
     /// Retrieve an Invitation from a shortened OOB Invitation URL
     /// atm :: ATM SDK Client
     /// url :: Invitation OOB URL
+    ///
+    /// The request is bounded by the configured request timeout, and a
+    /// response body larger than 64 KiB is refused.
     pub async fn retrieve_invite(&self, atm: &ATM, url: &str) -> Result<Message, ATMError> {
         let res = atm
-            .inner
-            .tdk_common
-            .client()
-            .get(url)
+            .rest_request(reqwest::Method::GET, url)
             .header("Content-Type", "application/json")
             .send()
             .await
@@ -129,11 +129,10 @@ impl OOBDiscovery {
             })?;
 
         debug!("API response: status({})", res.status());
-        let body = check_response("retrieve OOB invitation", res).await?;
+        let body =
+            check_response_capped("retrieve OOB invitation", res, OOB_INVITATION_MAX_BYTES).await?;
 
-        let body = serde_json::from_str::<SuccessResponse<String>>(&body).map_err(|e| {
-            ATMError::TransportError(format!("Couldn't parse OOB invitation response: {e}"))
-        })?;
+        let body = SuccessResponse::<String>::parse("retrieve OOB invitation", &body)?;
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -194,10 +193,10 @@ impl OOBDiscovery {
         };
 
         let res = atm
-            .inner
-            .tdk_common
-            .client()
-            .delete(format!("{mediator_url}/oob?_oobid={oobid}"))
+            .rest_request(
+                reqwest::Method::DELETE,
+                format!("{mediator_url}/oob?_oobid={oobid}"),
+            )
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .send()
@@ -209,9 +208,7 @@ impl OOBDiscovery {
         debug!("API response: status({})", res.status());
         let body = check_response("delete OOB invitation", res).await?;
 
-        let body = serde_json::from_str::<SuccessResponse<String>>(&body)
-            .ok()
-            .unwrap();
+        let body = SuccessResponse::<String>::parse("delete OOB invitation", &body)?;
 
         if let Some(data) = body.data {
             Ok(data)
@@ -258,5 +255,102 @@ impl<'a> OOBDiscoveryOps<'a> {
         OOBDiscovery::default()
             .delete_invite(self.atm, profile, oobid)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ATMConfig;
+    use affinidi_tdk_common::TDKSharedState;
+    use affinidi_tdk_common::config::TDKConfig;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn atm_with_request_timeout(request_timeout: Duration) -> ATM {
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        let config = ATMConfig::builder()
+            .with_request_timeout(request_timeout)
+            .build()
+            .unwrap();
+        ATM::new(config, tdk).await.unwrap()
+    }
+
+    /// A server that answers one request with `response`, or with nothing at
+    /// all (holding the connection open) when `response` is `None`.
+    async fn serve_once(response: Option<Vec<u8>>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/oob", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let _ = socket.read(&mut request).await;
+            match response {
+                Some(response) => {
+                    let _ = socket.write_all(&response).await;
+                    let _ = socket.shutdown().await;
+                }
+                None => tokio::time::sleep(Duration::from_secs(60)).await,
+            }
+        });
+        url
+    }
+
+    fn ok_response(body: &[u8], with_length: bool) -> Vec<u8> {
+        let mut response = if with_length {
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes()
+        } else {
+            b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\n".to_vec()
+        };
+        response.extend_from_slice(body);
+        response
+    }
+
+    #[tokio::test]
+    async fn retrieving_an_invitation_from_a_silent_server_times_out() {
+        let atm = atm_with_request_timeout(Duration::from_millis(300)).await;
+        let url = serve_once(None).await;
+        let started = std::time::Instant::now();
+        let err = OOBDiscovery::default()
+            .retrieve_invite(&atm, &url)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ATMError::TransportError(_)), "{err:?}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn an_oversized_invitation_response_is_refused() {
+        let atm = atm_with_request_timeout(Duration::from_secs(10)).await;
+        let body = vec![b'a'; OOB_INVITATION_MAX_BYTES + 1];
+        for with_length in [true, false] {
+            let url = serve_once(Some(ok_response(&body, with_length))).await;
+            let err = OOBDiscovery::default()
+                .retrieve_invite(&atm, &url)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, ATMError::TransportError(text) if text.contains("larger than")),
+                "with_length={with_length}: {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_invitation_response_that_is_not_json_is_an_error() {
+        let atm = atm_with_request_timeout(Duration::from_secs(10)).await;
+        let url = serve_once(Some(ok_response(b"<html>login</html>", true))).await;
+        let err = OOBDiscovery::default()
+            .retrieve_invite(&atm, &url)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ATMError::TransportError(_)), "{err:?}");
     }
 }

@@ -282,10 +282,7 @@ impl ATM {
         let msg = message.to_owned();
 
         let res = self
-            .inner
-            .tdk_common
-            .client()
-            .post([&mediator_url, "/inbound"].concat())
+            .rest_request(reqwest::Method::POST, [&mediator_url, "/inbound"].concat())
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .body(msg)

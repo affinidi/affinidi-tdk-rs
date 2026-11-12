@@ -166,9 +166,10 @@ pub struct ATMConfig {
     /// force a specific policy, e.g. P-256 first for a FIPS deployment.
     pub(crate) curve_preference: Option<Vec<Curve>>,
 
-    /// Per-request timeout for mediator REST calls (delete/list/get). Bounded
-    /// so an unreachable mediator surfaces a `TransportError` in seconds
-    /// rather than blocking on the OS-level TCP RTO. Default: 15s.
+    /// Per-request timeout for the SDK's REST calls: the mediator's
+    /// send/fetch/get/list/delete, OOB invitations and the well-known DID.
+    /// Bounded so an unreachable endpoint surfaces a `TransportError` in
+    /// seconds rather than blocking on the OS-level TCP RTO. Default: 15s.
     pub(crate) request_timeout: Duration,
 
     /// Source of the current time for the SDK's expiry / TTL decisions
@@ -592,8 +593,9 @@ impl ATMConfigBuilder {
         self
     }
 
-    /// Override the per-request timeout for mediator REST calls
-    /// (delete/list/get). Lower it for snappier failure on flaky links;
+    /// Override the per-request timeout for the SDK's REST calls (the
+    /// mediator's send/fetch/get/list/delete, OOB invitations and the
+    /// well-known DID). Lower it for snappier failure on flaky links;
     /// raise it for high-latency mediators. Default: 15s.
     ///
     /// ```

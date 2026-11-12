@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.45.9 — REST responses parsed without panicking; every REST call bounded
+
+- `fetch_messages`, `oob_discovery().create_invite` and
+  `oob_discovery().delete_invite` returned a panic, not an error, when a
+  success status came with a body that was not the expected JSON (a proxy's
+  page, a different mediator version). They now return
+  `ATMError::TransportError` naming the call, as `get_messages`,
+  `list_messages` and `delete_messages_direct` already did.
+- Every REST call the SDK makes is now bounded by `ATMConfig`'s
+  `request_timeout` (default 15s). It applied only to get, list and delete
+  before; the REST send (`POST /inbound`), `fetch_messages`, the OOB
+  invitation calls and `well_known_did` had no timeout, so an unreachable
+  mediator held them until the operating system gave up on the connection.
+  `fetch_messages` and `get_messages` get 200 ms more per message they can
+  return (`limit` / the number of ids), so a full batch is not cut off by a
+  budget sized for one message.
+- `oob_discovery().retrieve_invite(url)` reads at most 64 KiB of the
+  response and refuses a larger one. An error status is reported as that
+  status even when its body is over the cap. Its URL usually comes from outside the
+  application (a QR code, a link).
+- `DidCommTransport::outbox_status` answers `Ok(None)` (use the outbox
+  listing) only when the mediator does not serve `messaging/message/status`.
+  Any other failure of the status call (a timeout, a rate limit, an
+  unreachable mediator) is now returned as an error, so the delivery layer
+  reports it and asks again on its next poll. A mediator that predates Trust
+  Tasks (`me.not_implemented`) also counts as not serving it.
+- `trust_tasks().message_status` over TSP no longer waits out the reply
+  timeout on a mediator that cannot answer it. A mediator whose `/readyz`
+  version is below 0.30.2 is refused locally with
+  `protocol.trust_task.unsupported`. One whose version is unknown and that
+  lets the task time out once is treated the same way for an hour.
+- The fetch error now says `fetch_messages` instead of `list_messages`.
+
+**Behaviour change (R3.6):** a REST call to a mediator that takes longer than
+`request_timeout` (plus the per-message allowance for fetch/get) to answer now
+fails with `TransportError`; raise it with
+`ATMConfigBuilder::with_request_timeout` for a slow mediator or very large
+batches. A failed message-status call is now an `Err` from `outbox_status`
+rather than `Ok(None)`, except where the mediator does not serve the task.
+No public signatures change.
+
 ## 0.45.8 — a repeated TSP invite does not reopen a relationship
 
 `TspOps::record_incoming_control` applied every verified invite to the
@@ -39,7 +80,6 @@ relationship reopened; it is refused. A peer still waiting on a lost accept
 recovers by sending a new invite. The SDK's own re-establishing paths always
 send a new invite. No wire format changes. Complements the same change in
 `affinidi-tsp`.
-
 ## 0.45.7 — the WebSocket message cache counts each message once
 
 A message arriving with a DIDComm `id` that was already in the WebSocket
