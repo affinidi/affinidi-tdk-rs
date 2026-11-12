@@ -216,8 +216,8 @@ impl KeyProof {
 
     /// Verify the bound claims against `policy`: `aud` names the expected
     /// issuer, the `c_nonce` (if the issuer issued one) matches, and `iat` is
-    /// fresh (within `max_age_secs` in the past and [`IAT_FUTURE_LEEWAY_SECS`]
-    /// in the future).
+    /// fresh (not negative, within `max_age_secs` in the past and
+    /// [`IAT_FUTURE_LEEWAY_SECS`] in the future).
     pub fn verify_claims(&self, policy: &ProofPolicy<'_>) -> Result<()> {
         if !self.claims.aud.contains(policy.audience) {
             return Err(Oid4vciError::InvalidProof(format!(
@@ -236,12 +236,17 @@ impl KeyProof {
                 "proof `nonce` does not match the issued c_nonce".into(),
             ));
         }
-        if self.claims.iat > policy.now + IAT_FUTURE_LEEWAY_SECS {
+        // Saturating bounds: `iat` is whatever `i64` the proof carries, so
+        // `now - iat` must not wrap.
+        if self.claims.iat < 0 {
+            return Err(Oid4vciError::InvalidProof("proof `iat` is negative".into()));
+        }
+        if self.claims.iat > policy.now.saturating_add(IAT_FUTURE_LEEWAY_SECS) {
             return Err(Oid4vciError::InvalidProof(
                 "proof `iat` is in the future".into(),
             ));
         }
-        if policy.now - self.claims.iat > policy.max_age_secs {
+        if policy.now.saturating_sub(self.claims.iat) > policy.max_age_secs {
             return Err(Oid4vciError::InvalidProof(format!(
                 "proof is stale (older than {}s)",
                 policy.max_age_secs
@@ -445,6 +450,67 @@ mod tests {
         assert!(proof.verify_claims(&policy(ISSUER, NOW - 10_000)).is_err());
         // Fresh.
         assert!(proof.verify_claims(&policy(ISSUER, NOW + 10)).is_ok());
+    }
+
+    #[test]
+    fn freshness_window_edges() {
+        let s = signer(13, "did:key:zH#0");
+        let proof = KeyProof::parse(&build_key_proof_jwt(&s, ISSUER, None, NOW).unwrap()).unwrap();
+        assert!(proof.verify_claims(&policy(ISSUER, NOW + 300)).is_ok());
+        assert!(proof.verify_claims(&policy(ISSUER, NOW + 301)).is_err());
+        assert!(
+            proof
+                .verify_claims(&policy(ISSUER, NOW - IAT_FUTURE_LEEWAY_SECS))
+                .is_ok()
+        );
+        assert!(
+            proof
+                .verify_claims(&policy(ISSUER, NOW - IAT_FUTURE_LEEWAY_SECS - 1))
+                .is_err()
+        );
+    }
+
+    /// Extreme `iat` values give an answer instead of overflowing.
+    #[test]
+    fn extreme_iat_is_rejected_without_overflow() {
+        let s = signer(14, "did:key:zH#0");
+        let proof_at = |iat: i64| {
+            KeyProof::parse(&build_key_proof_jwt(&s, ISSUER, None, iat).unwrap()).unwrap()
+        };
+        for (iat, why) in [
+            (i64::MIN, "negative"),
+            (-1, "negative"),
+            (i64::MAX, "future"),
+        ] {
+            let err = proof_at(iat)
+                .verify_claims(&policy(ISSUER, NOW))
+                .unwrap_err();
+            assert!(
+                matches!(&err, Oid4vciError::InvalidProof(m) if m.contains(why)),
+                "iat {iat}: {err:?}"
+            );
+        }
+        // A policy at the ends of the `i64` range does not overflow either.
+        let err = proof_at(0)
+            .verify_claims(&policy(ISSUER, i64::MAX))
+            .unwrap_err();
+        assert!(
+            matches!(&err, Oid4vciError::InvalidProof(m) if m.contains("stale")),
+            "{err:?}"
+        );
+        let err = proof_at(0)
+            .verify_claims(&policy(ISSUER, i64::MIN))
+            .unwrap_err();
+        assert!(
+            matches!(&err, Oid4vciError::InvalidProof(m) if m.contains("future")),
+            "{err:?}"
+        );
+        let wide = ProofPolicy {
+            max_age_secs: i64::MAX,
+            ..policy(ISSUER, i64::MAX)
+        };
+        assert!(proof_at(0).verify_claims(&wide).is_ok());
+        assert!(proof_at(i64::MAX).verify_claims(&wide).is_ok());
     }
 
     #[test]

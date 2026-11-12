@@ -1,5 +1,14 @@
 # Affinidi OpenID4VCI Changelog
 
+## Unreleased (0.2.2) — key proof freshness check does not overflow
+
+- **Fixed:** `KeyProof::verify_claims` (and so `verify`) computed
+  `now + IAT_FUTURE_LEEWAY_SECS` and `now - iat` with plain `i64` arithmetic on
+  the proof's `iat`. An `iat` of `i64::MIN` overflowed `now - iat`: a panic
+  where overflow checks are on, and without them a wrapped negative age that
+  passed the `max_age_secs` check. Both bounds now saturate.
+- **Behaviour (stricter):** a proof with a negative `iat` is refused.
+
 ## 14th June 2026 Release 0.2.1
 
 - `Oid4vciError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
