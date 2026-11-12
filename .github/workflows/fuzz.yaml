@@ -69,6 +69,8 @@ jobs:
       # Actions SHA-pinned (SEC-3898): a mutable tag like @v4 can be repointed to
       # malicious code; pin to the exact commit the tag names today.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Install nightly toolchain
         uses: dtolnay/rust-toolchain@7c8d7d138f5c09cef361f8214cf96882cd029cdb # nightly

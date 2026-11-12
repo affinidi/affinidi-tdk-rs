@@ -37,7 +37,6 @@ allow = [
   "ISC",
   "MIT-0",
   "MIT",
-  "NCSA",
   "Unlicense",
   "Zlib",
   # As stated here https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html#spdx-identifiers
@@ -61,28 +60,26 @@ allow = [
   #    "AFL-2.1",
 ]
 
+# Per-crate licence exceptions. Every entry must match a crate in Cargo.lock:
+# `cargo deny check licenses` warns `license-exception-not-encountered` for one
+# that does not, and such an entry should be deleted rather than left to
+# pre-approve a licence for whatever crate of that name arrives next. Each entry
+# carries the reason it is needed and the date it was last confirmed.
 exceptions = [
-  # changed from: { allow = ["MPL-2.0"], crate = "webpki-root-certs" },
+  # Confirmed 2026-11-13. The Mozilla root-certificate data bundled by
+  # webpki-root-certs (via rustls-platform-verifier) is published under
+  # CDLA-Permissive-2.0, a permissive data licence. Scoped to this crate so the
+  # global list does not admit it for code.
   { allow = [
     "CDLA-Permissive-2.0",
   ], crate = "webpki-root-certs" },
-  { allow = [
-    "OpenSSL",
-  ], crate = "aws-lc-sys" },
-  { allow = [
-    "MPL-2.0",
-  ], crate = "bitmaps" },
-  { allow = [
-    "MPL-2.0",
-  ], crate = "im" },
-  # `textwrap` 0.16.3 (via `affinidi-messaging-text-client`) pulls the ICU
-  # segmentation crates for line breaking, and ICU relicensed to Unicode-3.0.
-  # Not copyleft — Unicode-3.0 is the OSI-approved Unicode License v3, a
-  # permissive licence with an attribution clause covering the bundled data
-  # tables — so this is a per-crate exception rather than a global `allow`
-  # entry, for the same reason the `option-ext` note above gives: the global
-  # list is what stops a future dependency arriving under a licence nobody
-  # looked at.
+  # Confirmed 2026-11-13. `textwrap` 0.16 (via `affinidi-messaging-text-client`)
+  # pulls the ICU segmentation crates for line breaking, and ICU relicensed to
+  # Unicode-3.0. Not copyleft: Unicode-3.0 is the OSI-approved Unicode License
+  # v3, a permissive licence with an attribution clause covering the bundled
+  # data tables. It is a per-crate exception rather than a global `allow` entry
+  # because the global list is what stops a future dependency arriving under a
+  # licence nobody looked at.
   #
   # These four are the whole of it: the two `*_data` crates carry the data
   # tables, the other two the code that reads them.
@@ -98,15 +95,10 @@ exceptions = [
   { allow = [
     "Unicode-3.0",
   ], crate = "icu_segmenter_data" },
-  { allow = [
-    "MPL-2.0",
-    "CDLA-Permissive-2.0",
-  ], crate = "webpki-roots" },
-  { allow = [
-    "CC-BY-SA-3.0",
-    "MPL-2.0",
-  ], crate = "sized-chunks" },
-  # TODO: align
+  # Confirmed 2026-11-13. The ICU4X crates behind `idna` (via `url`) for
+  # internationalised domain names, together with the ICU4X support crates
+  # they share with the segmenter above. All are Unicode-3.0, for the reason
+  # given there.
   { allow = [
     "Unicode-3.0",
   ], crate = "icu_collections" },
@@ -135,16 +127,8 @@ exceptions = [
     "Unicode-3.0",
   ], crate = "potential_utf" },
   { allow = [
-    "Apache-2.0 WITH LLVM-exception",
-    "Unicode-3.0",
-    "CDLA-Permissive-2.0"
-  ], crate = "target-lexicon" },
-  { allow = [
     "Unicode-3.0",
   ], crate = "tinystr" },
-  { allow = [
-    "Unicode-3.0",
-  ], crate = "unicode-ident" },
   { allow = [
     "Unicode-3.0",
   ], crate = "writeable" },
@@ -169,6 +153,12 @@ exceptions = [
   { allow = [
     "Unicode-3.0",
   ], crate = "zerovec-derive" },
+  # Confirmed 2026-11-13. unicode-ident (via proc-macro2) is
+  # `(MIT OR Apache-2.0) AND Unicode-3.0`: its generated tables come from the
+  # Unicode Character Database.
+  { allow = [
+    "Unicode-3.0",
+  ], crate = "unicode-ident" },
 ]
 
 # Sigh
@@ -183,3 +173,9 @@ crate = "ring"
 # OpenSSL - Obviously
 expression = "ISC AND MIT AND OpenSSL"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+# Every dependency resolves from crates.io today. Refuse any other registry or
+# git source, so one cannot arrive without this file being changed.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
