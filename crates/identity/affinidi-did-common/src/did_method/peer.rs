@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::one_or_many::OneOrMany;
 
@@ -197,7 +198,10 @@ impl PeerCreateKey {
 }
 
 /// Result of key generation during did:peer creation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// It holds the private key: `Debug` does not print it, and it is zeroized
+/// when the value is dropped.
+#[derive(Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct PeerCreatedKey {
     /// The multibase-encoded public key (z6Mk...)
     pub key_multibase: String,
@@ -209,6 +213,18 @@ pub struct PeerCreatedKey {
     pub x: String,
     /// Public key Y coordinate for EC keys (None for Ed25519)
     pub y: Option<String>,
+}
+
+impl std::fmt::Debug for PeerCreatedKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PeerCreatedKey")
+            .field("key_multibase", &self.key_multibase)
+            .field("curve", &self.curve)
+            .field("d", &"<redacted>")
+            .field("x", &self.x)
+            .field("y", &self.y)
+            .finish()
+    }
 }
 
 // ============================================================================
@@ -390,6 +406,44 @@ impl PeerService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- PeerCreatedKey ---
+
+    fn created_key() -> PeerCreatedKey {
+        PeerCreatedKey {
+            key_multibase: "z6MkPublic".into(),
+            curve: "Ed25519".into(),
+            d: "c2VjcmV0LXByaXZhdGUta2V5".into(),
+            x: "cHVibGljLXg".into(),
+            y: None,
+        }
+    }
+
+    #[test]
+    fn created_key_debug_does_not_print_the_private_key() {
+        let key = created_key();
+        for printed in [format!("{key:?}"), format!("{key:#?}")] {
+            assert!(!printed.contains("c2VjcmV0LXByaXZhdGUta2V5"), "{printed}");
+            assert!(printed.contains("<redacted>"), "{printed}");
+            assert!(printed.contains("z6MkPublic"), "{printed}");
+        }
+    }
+
+    #[test]
+    fn created_key_still_serializes_its_private_key() {
+        let value = serde_json::to_value(created_key()).expect("serializes");
+        assert_eq!(value["d"], "c2VjcmV0LXByaXZhdGUta2V5");
+        let back: PeerCreatedKey = serde_json::from_value(value).expect("deserializes");
+        assert_eq!(back.d, "c2VjcmV0LXByaXZhdGUta2V5");
+    }
+
+    #[test]
+    fn created_key_zeroizes() {
+        let mut key = created_key();
+        key.zeroize();
+        assert!(key.d.is_empty());
+        assert!(key.x.is_empty());
+    }
 
     // --- PeerNumAlgo ---
 

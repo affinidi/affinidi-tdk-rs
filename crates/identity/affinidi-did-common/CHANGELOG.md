@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased (0.4.6) — `Debug` leaves private keys out; created did:peer keys zeroize
+
+- **Changed:** `Debug` for `KeyMaterial` printed `private_bytes` in full, and
+  for `KeyMaterialFormat` the `Multibase` and `Base58` private keys, although
+  the JWK inside already printed its `d` as `<redacted>`. They now print
+  `<redacted>` in their place; every other field prints as before.
+- **Changed:** `PeerCreatedKey`, which `DID::generate_peer` returns with each
+  generated private key in `d`, prints `d` as `<redacted>` and derives
+  `Zeroize` and `ZeroizeOnDrop`, so the key is cleared when the value is
+  dropped. `Clone`, `Serialize` and `Deserialize` stay: callers persist the
+  generated keys through them.
+- **Changed:** `DID::generate_peer` returns
+  `DIDError::InvalidMethodSpecificId` if a generated key carries no private
+  key, instead of recording an empty `d`. Generated keys always carry one, so
+  nothing changes in practice.
+- **Compatibility (R3.6):** no signature change. `ZeroizeOnDrop` gives
+  `PeerCreatedKey` a `Drop` impl, so code that moves a field out of it by
+  destructuring (`let PeerCreatedKey { d, .. } = key;`) or by `let d = key.d;`
+  no longer compiles; borrow or clone the field instead. No such use was found
+  in this workspace (checked with `cargo check --workspace --all-targets
+  --all-features`) or in verifiable-trust-infrastructure, cierge, openvtc,
+  affinidi-trust-registry-rs, affinidi-messaging-mediator, vti-message-bridge
+  or affinidi-webvh-service. Code that matches on the `Debug` text of these
+  types sees `<redacted>`.
+
 ## Unreleased (0.4.5) — builds with its default features off
 
 `affinidi-did-common` with `default-features = false` failed to compile:
