@@ -221,7 +221,9 @@ impl Indexer {
     }
 
     /// Extract the raw signature from qb64: decode with the code and index
-    /// characters zeroed, and keep the trailing raw bytes.
+    /// characters zeroed, and keep the trailing raw bytes. The bytes in front
+    /// of the raw signature then hold only pad bits, which CESR requires to be
+    /// zero.
     fn extract_raw(
         qb64: &str,
         code: &str,
@@ -237,7 +239,13 @@ impl Indexer {
                 got: all_bytes.len(),
             });
         }
-        Ok(all_bytes[all_bytes.len() - raw_size..].to_vec())
+        let (pad, raw) = all_bytes.split_at(all_bytes.len() - raw_size);
+        if pad.iter().any(|&byte| byte != 0) {
+            return Err(CesrError::NonCanonical(format!(
+                "pad bits after code {code} are not zero"
+            )));
+        }
+        Ok(raw.to_vec())
     }
 }
 
@@ -346,6 +354,38 @@ mod tests {
                 .qb64()
                 .unwrap();
             assert_eq!(&qb64[..8], prefix, "{code} {index} {ondex:?}");
+        }
+    }
+
+    /// The bits between the code and index characters and the signature are
+    /// zero in CESR. Setting any of them leaves the signature bytes the same,
+    /// so such a text is refused.
+    #[test]
+    fn non_zero_pad_bits_are_refused() {
+        for (code, index, ondex, position) in
+            [("A", 0, None, 2), ("B", 2, None, 2), ("2A", 0, Some(1), 6)]
+        {
+            let canonical = Indexer::new(code, index, ondex, RAW.to_vec())
+                .unwrap()
+                .qb64()
+                .unwrap();
+            assert_eq!(
+                Indexer::from_qb64(&canonical).unwrap().qb64().unwrap(),
+                canonical
+            );
+            for bit in [0b10_0000u8, 0b01_0000, 0b00_1000, 0b00_0100] {
+                let mut text = canonical.as_bytes().to_vec();
+                let value = codec::b64_char_to_index(text[position]).unwrap() | bit;
+                text[position] = codec::index_to_b64_char(value).unwrap();
+                let altered = String::from_utf8(text).unwrap();
+                assert!(
+                    matches!(
+                        Indexer::from_qb64(&altered),
+                        Err(CesrError::NonCanonical(_))
+                    ),
+                    "{code} {altered}"
+                );
+            }
         }
     }
 

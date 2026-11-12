@@ -2,6 +2,30 @@
 
 ## Changelog history
 
+## 12th November 2026
+
+### 0.1.5 — fixed-size primitives and indexed signatures refuse non-zero pad bits
+
+A fixed-size primitive with a one- or two-character code has 2 or 4 pad bits
+between the code and the raw bytes, and CESR requires them to be zero (keripy
+refuses others with "non-zeroed prepad bits"). `Matter::from_qb64` and
+`Matter::from_qb2` dropped those bits without looking at them. Up to 4 or 16
+different texts therefore parsed to the same `Matter`, and `qb64()` gave back
+only the canonical one. They now return the new `CesrError::NonCanonical`.
+`Indexer::from_qb64` had the same gap for the 4 pad bits of `A`–`F` and
+`2A`–`2F` signatures and now refuses them too. Codes whose code characters
+fill whole bytes (`1AAA`…, `0A`/`0B` and `3A`/`3B` indexed signatures) have no
+pad bits.
+
+Decoding now zeroes the code characters before decoding, as keripy does,
+and requires the bytes in front of the raw material to be zero.
+
+Behaviour change (R3.6): a non-canonical text that used to parse is refused.
+Encoders, this crate's included, never produce one, and every canonical text
+parses to the same value as before. Variable-size primitives are unchanged
+(their lead bytes are tracked separately). `CesrError` is `#[non_exhaustive]`,
+so the new variant is additive. No new dependencies.
+
 ## 10th November 2026
 
 ### 0.1.4 — indexed signature codes as keripy reads them
