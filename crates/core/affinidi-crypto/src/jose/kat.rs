@@ -65,7 +65,7 @@ fn aes256_kw_rfc3394_section_4_6() {
         EXPECTED_WRAPPED,
         "A256KW must match RFC 3394 §4.6"
     );
-    assert_eq!(aes_kw::unwrap(&kek, &wrapped).expect("unwrap"), key_data);
+    assert_eq!(*aes_kw::unwrap(&kek, &wrapped).expect("unwrap"), key_data);
 
     // Same vector through the trait surface.
     let via_trait = A256Kw.wrap(&kek, &key_data).expect("trait wrap");
@@ -118,7 +118,7 @@ fn concat_kdf_1pu_length_prefixes_tag() {
     let expected = h.finalize()[..32].to_vec();
 
     let got = concat_kdf::concat_kdf_1pu(z, alg, apu, apv, 256, &tag).unwrap();
-    assert_eq!(got, expected, "1PU KDF must length-prefix the cc_tag");
+    assert_eq!(*got, expected, "1PU KDF must length-prefix the cc_tag");
 
     let legacy = concat_kdf::concat_kdf_1pu_legacy(z, alg, apu, apv, 256, &tag).unwrap();
     assert_ne!(

@@ -13,7 +13,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use p256::elliptic_curve::Generate;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::CryptoError;
 
@@ -372,35 +372,36 @@ impl PrivateKeyAgreement {
     }
 
     /// Perform ECDH with a public key, returning the raw shared-secret bytes.
+    /// They are wiped when the returned buffer is dropped.
     pub fn diffie_hellman(
         &self,
         their_public: &PublicKeyAgreement,
-    ) -> Result<Vec<u8>, CryptoError> {
+    ) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
         match (self, their_public) {
             (PrivateKeyAgreement::X25519(sk), PublicKeyAgreement::X25519(pk)) => {
                 let sk = x25519_dalek::StaticSecret::from(*sk);
                 let pk = x25519_dalek::PublicKey::from(*pk);
-                Ok(sk.diffie_hellman(&pk).as_bytes().to_vec())
+                Ok(Zeroizing::new(sk.diffie_hellman(&pk).as_bytes().to_vec()))
             }
             (PrivateKeyAgreement::P256(sk), PublicKeyAgreement::P256(pk)) => {
                 use p256::ecdh::diffie_hellman;
                 let shared = diffie_hellman(sk.to_nonzero_scalar(), pk.as_affine());
-                Ok(shared.raw_secret_bytes().to_vec())
+                Ok(Zeroizing::new(shared.raw_secret_bytes().to_vec()))
             }
             (PrivateKeyAgreement::K256(sk), PublicKeyAgreement::K256(pk)) => {
                 use k256::ecdh::diffie_hellman;
                 let shared = diffie_hellman(sk.to_nonzero_scalar(), pk.as_affine());
-                Ok(shared.raw_secret_bytes().to_vec())
+                Ok(Zeroizing::new(shared.raw_secret_bytes().to_vec()))
             }
             (PrivateKeyAgreement::P384(sk), PublicKeyAgreement::P384(pk)) => {
                 use p384::ecdh::diffie_hellman;
                 let shared = diffie_hellman(sk.to_nonzero_scalar(), pk.as_affine());
-                Ok(shared.raw_secret_bytes().to_vec())
+                Ok(Zeroizing::new(shared.raw_secret_bytes().to_vec()))
             }
             (PrivateKeyAgreement::P521(sk), PublicKeyAgreement::P521(pk)) => {
                 use p521::ecdh::diffie_hellman;
                 let shared = diffie_hellman(sk.to_nonzero_scalar(), pk.as_affine());
-                Ok(shared.raw_secret_bytes().to_vec())
+                Ok(Zeroizing::new(shared.raw_secret_bytes().to_vec()))
             }
             _ => Err(CryptoError::KeyAgreement(
                 "curve mismatch between private and public keys".into(),

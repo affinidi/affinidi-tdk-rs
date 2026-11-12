@@ -12,6 +12,8 @@
 //! take `&[u8]` keys (not fixed-size arrays) so differently-sized
 //! algorithms share one interface; each impl length-checks its inputs.
 
+use zeroize::Zeroizing;
+
 use crate::error::CryptoError;
 
 use super::{aes_kw, concat_kdf, content_encryption, gcm, signing};
@@ -22,8 +24,8 @@ pub trait KeyWrap {
     fn algorithm(&self) -> &'static str;
     /// Wrap `key` (the CEK) under `kek`.
     fn wrap(&self, kek: &[u8], key: &[u8]) -> Result<Vec<u8>, CryptoError>;
-    /// Unwrap a wrapped key under `kek`.
-    fn unwrap(&self, kek: &[u8], wrapped: &[u8]) -> Result<Vec<u8>, CryptoError>;
+    /// Unwrap a wrapped key under `kek`. The key is wiped when dropped.
+    fn unwrap(&self, kek: &[u8], wrapped: &[u8]) -> Result<Zeroizing<Vec<u8>>, CryptoError>;
 }
 
 /// Authenticated content-encryption algorithms (JWE `enc`).
@@ -60,6 +62,7 @@ pub trait ContentEncryption {
 pub trait KeyDerivation {
     /// Derive `key_len_bits` of key-encryption key from the raw ECDH
     /// shared secret `z` and the OtherInfo parameters.
+    /// The key is wiped when dropped.
     fn derive(
         &self,
         z: &[u8],
@@ -68,7 +71,7 @@ pub trait KeyDerivation {
         apv: &[u8],
         key_len_bits: u32,
         cc_tag: &[u8],
-    ) -> Result<Vec<u8>, CryptoError>;
+    ) -> Result<Zeroizing<Vec<u8>>, CryptoError>;
 }
 
 /// JWS signing algorithms (`alg`).
@@ -105,7 +108,7 @@ impl KeyWrap for A256Kw {
         aes_kw::wrap(kek, key)
     }
 
-    fn unwrap(&self, kek: &[u8], wrapped: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    fn unwrap(&self, kek: &[u8], wrapped: &[u8]) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
         let kek: &[u8; 32] = kek
             .try_into()
             .map_err(|_| CryptoError::KeyWrap("A256KW KEK must be 32 bytes".into()))?;
@@ -263,7 +266,7 @@ impl KeyDerivation for ConcatKdf {
         apv: &[u8],
         key_len_bits: u32,
         cc_tag: &[u8],
-    ) -> Result<Vec<u8>, CryptoError> {
+    ) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
         if cc_tag.is_empty() {
             concat_kdf::concat_kdf(z, alg, apu, apv, key_len_bits)
         } else {

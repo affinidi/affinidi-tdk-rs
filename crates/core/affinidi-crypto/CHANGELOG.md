@@ -1,5 +1,68 @@
 # Affinidi Crypto Changelog
 
+## Unreleased (0.3.0) — key pairs wipe themselves when dropped
+
+### Breaking
+
+- **Changed:** every `KeyPair` (`ed25519`, `p256`, `p384`, `p521`,
+  `secp256k1`, `ml_dsa`, `slh_dsa`) is now `ZeroizeOnDrop`: dropping it wipes
+  `private_bytes` and, where there is one, the JWK (`d` included). The fields
+  stay public for reads and the types keep `Clone`, but because they now
+  implement `Drop`, a field can no longer be moved out (`kp.private_bytes`,
+  `kp.jwk` by value is error E0509).
+- **Added:** `KeyPair::into_parts()` moves the fields out without copying the
+  private key, into a new per-module `KeyPairParts` (`#[non_exhaustive]`,
+  public fields, `Debug` redacts the private key) whose `private_bytes` is a
+  `Zeroizing<Vec<u8>>`. `into_private_bytes()` and, for key pairs with a JWK,
+  `into_jwk()` take one part.
+- **Changed:** derived secrets are returned in `Zeroizing` buffers, so they
+  are wiped when the caller drops them:
+  - `PrivateKeyAgreement::diffie_hellman` → `Zeroizing<Vec<u8>>`
+  - `ecdh::derive_key_es`, `derive_key_es_recipient`, `derive_key_1pu`,
+    `derive_key_1pu_recipient`, `derive_key_1pu_recipient_legacy` →
+    `Zeroizing<Vec<u8>>`
+  - `ecdh::derive_sender_key`, `derive_sender_key_1pu`,
+    `derive_sender_key_1pu_legacy` → `Zeroizing<[u8; 32]>`
+  - `concat_kdf::concat_kdf`, `concat_kdf_1pu`, `concat_kdf_1pu_legacy` →
+    `Zeroizing<Vec<u8>>`
+  - `aes_kw::unwrap` → `Zeroizing<Vec<u8>>`
+  - the `KeyWrap::unwrap` and `KeyDerivation::derive` trait methods (and the
+    `A256Kw` / `ConcatKdf` implementations) → `Zeroizing<Vec<u8>>`
+
+### Migration
+
+- Taking the private key or JWK out of a key pair:
+
+  ```rust
+  // 0.2
+  let kp = affinidi_crypto::p256::generate(None)?;
+  let holder = Holder { private: kp.private_bytes, jwk: kp.jwk };
+
+  // 0.3
+  let mut parts = affinidi_crypto::p256::generate(None)?.into_parts();
+  let holder = Holder {
+      // moves the buffer out of the Zeroizing wrapper; nothing is copied
+      private: std::mem::take(&mut *parts.private_bytes),
+      jwk: parts.jwk,
+  };
+  ```
+
+  Keep `parts.private_bytes` (or `kp.into_private_bytes()`) as a
+  `Zeroizing<Vec<u8>>` where the holder can store it that way. Reading
+  through a borrow (`&kp.private_bytes`, `kp.public_bytes.clone()`,
+  `&kp.jwk`) is unchanged.
+- The `Zeroizing` returns dereference to the old types, so code that passes
+  them on by reference (`&kek`, `kek.as_slice()`, `cek.len()`) compiles as
+  before. Drop any `Zeroizing::new(..)` wrapper the caller added around them,
+  which would now nest. Code that needs the plain type writes `*kek` (or
+  `kek.to_vec()` to copy deliberately); comparisons in tests compare
+  `*value` with the expected `Vec`.
+- No behaviour or output changes: key generation, the KDF, key wrap and ECDH
+  produce the same bytes as 0.2.12.
+- Released on its own: the other workspace crates still require
+  `affinidi-crypto` 0.2 and build against the published 0.2.12 until they move
+  to 0.3 in a following release.
+
 ## Unreleased (0.2.12) — key pairs print without their private key; Concat KDF takes any whole-byte length
 
 - **Changed:** every generated key pair (`ed25519`, `p256`, `p384`, `p521`,

@@ -221,7 +221,10 @@ mod tests {
 
         let cek =
             derive_key_es_recipient(&bob, &alice_epk, b"A128GCM", b"Alice", b"Bob", 128).unwrap();
-        assert_eq!(URL_SAFE_NO_PAD.encode(&cek), "VqqN6vgjbSBcIijNcacQGg");
+        assert_eq!(
+            URL_SAFE_NO_PAD.encode(cek.as_slice()),
+            "VqqN6vgjbSBcIijNcacQGg"
+        );
     }
 
     #[test]

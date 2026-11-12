@@ -102,6 +102,38 @@ dependencies = [
 [[package]]
 name = "affinidi-crypto"
 version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1de4ea837b349a75fda9dee0a5a0af23b49b5ff6c5e591c04a3dcfdcbb13cea8"
+dependencies = [
+ "aes 0.9.3",
+ "aes-gcm",
+ "affinidi-encoding",
+ "base58",
+ "base64 0.23.1",
+ "cbc 0.2.1",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "hmac 0.13.0",
+ "k256",
+ "ml-dsa",
+ "multibase",
+ "p256",
+ "p384",
+ "p521",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "slh-dsa",
+ "subtle",
+ "thiserror 2.0.21",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "affinidi-crypto"
+version = "0.3.0"
 dependencies = [
  "aes 0.9.3",
  "aes-gcm",
@@ -134,7 +166,7 @@ name = "affinidi-data-integrity"
 version = "0.8.3"
 dependencies = [
  "affinidi-bbs",
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-data-integrity",
  "affinidi-did-common",
  "affinidi-rdf-encoding",
@@ -162,7 +194,7 @@ dependencies = [
 name = "affinidi-did-authentication"
 version = "0.3.14"
 dependencies = [
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-encoding",
@@ -185,7 +217,7 @@ dependencies = [
 name = "affinidi-did-common"
 version = "0.4.6"
 dependencies = [
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-encoding",
  "base64 0.23.1",
  "serde",
@@ -237,7 +269,7 @@ dependencies = [
 name = "affinidi-did-resolver-cache-sdk"
 version = "0.8.52"
 dependencies = [
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-did-common",
  "affinidi-did-ethr",
  "affinidi-did-jwk",
@@ -341,7 +373,7 @@ name = "affinidi-did-webs"
 version = "0.13.3"
 dependencies = [
  "affinidi-cesr",
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-did-common",
  "affinidi-keri",
  "affinidi-keri-core",
@@ -507,7 +539,7 @@ dependencies = [
 name = "affinidi-messaging-didcomm"
 version = "0.15.13"
 dependencies = [
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-did-common",
  "affinidi-messaging-core",
  "arbitrary",
@@ -554,7 +586,7 @@ dependencies = [
 name = "affinidi-messaging-didcomm-v1"
 version = "0.2.3"
 dependencies = [
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-messaging-core",
  "affinidi-messaging-didcomm",
  "async-trait",
@@ -581,7 +613,7 @@ dependencies = [
 name = "affinidi-messaging-helpers"
 version = "0.13.4"
 dependencies = [
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-messaging-core",
  "affinidi-messaging-didcomm",
  "affinidi-messaging-sdk",
@@ -619,7 +651,7 @@ dependencies = [
 name = "affinidi-messaging-sdk"
 version = "0.45.13"
 dependencies = [
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-did-authentication",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
@@ -713,7 +745,7 @@ dependencies = [
 name = "affinidi-oid4vc-core"
 version = "0.1.10"
 dependencies = [
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "base64 0.23.1",
  "ed25519-dalek",
  "p256",
@@ -809,7 +841,7 @@ dependencies = [
 name = "affinidi-secrets-resolver"
 version = "0.5.17"
 dependencies = [
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-encoding",
  "ahash",
  "base58",
@@ -876,7 +908,7 @@ dependencies = [
 name = "affinidi-tdk"
 version = "0.41.0"
 dependencies = [
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-data-integrity",
  "affinidi-did-authentication",
  "affinidi-did-common",
@@ -940,9 +972,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk-test-support"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-did-common",
  "affinidi-did-resolver-traits",
  "affinidi-mdoc",
@@ -7182,7 +7214,7 @@ version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5312c84216c34c8ae6612aea1064bd16c2c48a9d7b99052b5d894415f41c9991"
 dependencies = [
- "affinidi-crypto",
+ "affinidi-crypto 0.2.12",
  "affinidi-data-integrity",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",

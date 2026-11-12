@@ -10,20 +10,126 @@
 //!   the `post-quantum` feature (off by default; also available
 //!   individually as `ml-dsa` / `slh-dsa`)
 
-/// Gives a key-pair struct a `Debug` that leaves `private_bytes` out and a
-/// `Zeroize` that wipes the private material. The struct keeps its public
-/// fields (and `Clone`), so holders can still move `private_bytes` into their
-/// own zeroizing container; anything left in place is wiped by `zeroize()`.
+/// Gives a key-pair struct a `Debug` that leaves `private_bytes` out, a
+/// `Zeroize` that wipes the private material, and `ZeroizeOnDrop`: the
+/// private bytes and the JWK's `d` are wiped when the key pair is dropped.
+///
+/// Because the key pair has a `Drop`, its fields can be read and borrowed but
+/// not moved out. `into_parts()` moves them into a `KeyPairParts` instead,
+/// with the private bytes in a `Zeroizing` buffer, so taking ownership never
+/// leaves an unwiped copy behind. `into_private_bytes()` (and, where there is
+/// a JWK, `into_jwk()`) are shorthands for one part.
+///
+/// Invoked as `key_pair_hygiene!(jwk)` for key pairs with a JWK, or
+/// `key_pair_hygiene!()` for those without.
 #[allow(unused_macros)]
 macro_rules! key_pair_hygiene {
-    ($($other_field:ident),*) => {
+    (jwk) => {
+        key_pair_hygiene!(@common jwk);
+
+        /// The fields of a [`KeyPair`], moved out of it by
+        /// [`KeyPair::into_parts`]. `private_bytes` is wiped when it is
+        /// dropped, and so is the JWK's `d`. Take the `Vec` itself with
+        /// `std::mem::take(&mut *parts.private_bytes)` to hand it to another
+        /// container that wipes on drop; the buffer moves, nothing is copied.
+        #[non_exhaustive]
+        pub struct KeyPairParts {
+            pub key_type: crate::KeyType,
+            pub private_bytes: zeroize::Zeroizing<Vec<u8>>,
+            pub public_bytes: Vec<u8>,
+            pub jwk: crate::JWK,
+        }
+
+        impl std::fmt::Debug for KeyPairParts {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("KeyPairParts")
+                    .field("key_type", &self.key_type)
+                    .field("private_bytes", &"<redacted>")
+                    .field("public_bytes", &self.public_bytes)
+                    .field("jwk", &self.jwk)
+                    .finish()
+            }
+        }
+
+        impl KeyPair {
+            /// Moves the key type, the private and public bytes and the JWK
+            /// out of the key pair without copying the private key.
+            pub fn into_parts(mut self) -> KeyPairParts {
+                KeyPairParts {
+                    key_type: self.key_type,
+                    private_bytes: zeroize::Zeroizing::new(std::mem::take(
+                        &mut self.private_bytes,
+                    )),
+                    public_bytes: std::mem::take(&mut self.public_bytes),
+                    jwk: std::mem::replace(&mut self.jwk, crate::jwk::placeholder_jwk()),
+                }
+            }
+
+            /// Moves the private bytes out; everything else is wiped and
+            /// dropped.
+            pub fn into_private_bytes(self) -> zeroize::Zeroizing<Vec<u8>> {
+                self.into_parts().private_bytes
+            }
+
+            /// Moves the JWK (with its `d`) out; the raw private bytes are
+            /// wiped and dropped. The JWK wipes `d` when it is dropped.
+            pub fn into_jwk(self) -> crate::JWK {
+                self.into_parts().jwk
+            }
+        }
+    };
+    () => {
+        key_pair_hygiene!(@common);
+
+        /// The fields of a [`KeyPair`], moved out of it by
+        /// [`KeyPair::into_parts`]. `private_bytes` is wiped when it is
+        /// dropped. Take the `Vec` itself with
+        /// `std::mem::take(&mut *parts.private_bytes)` to hand it to another
+        /// container that wipes on drop; the buffer moves, nothing is copied.
+        #[non_exhaustive]
+        pub struct KeyPairParts {
+            pub key_type: crate::KeyType,
+            pub private_bytes: zeroize::Zeroizing<Vec<u8>>,
+            pub public_bytes: Vec<u8>,
+        }
+
+        impl std::fmt::Debug for KeyPairParts {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("KeyPairParts")
+                    .field("key_type", &self.key_type)
+                    .field("private_bytes", &"<redacted>")
+                    .field("public_bytes", &self.public_bytes)
+                    .finish()
+            }
+        }
+
+        impl KeyPair {
+            /// Moves the key type and the private and public bytes out of the
+            /// key pair without copying the private key.
+            pub fn into_parts(mut self) -> KeyPairParts {
+                KeyPairParts {
+                    key_type: self.key_type,
+                    private_bytes: zeroize::Zeroizing::new(std::mem::take(
+                        &mut self.private_bytes,
+                    )),
+                    public_bytes: std::mem::take(&mut self.public_bytes),
+                }
+            }
+
+            /// Moves the private bytes out; the rest is dropped.
+            pub fn into_private_bytes(self) -> zeroize::Zeroizing<Vec<u8>> {
+                self.into_parts().private_bytes
+            }
+        }
+    };
+    (@common $($other_field:ident)?) => {
         impl std::fmt::Debug for KeyPair {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.debug_struct("KeyPair")
                     .field("key_type", &self.key_type)
                     .field("private_bytes", &"<redacted>")
                     .field("public_bytes", &self.public_bytes)
-                    $(.field(stringify!($other_field), &self.$other_field))*
+                    $(.field(stringify!($other_field), &self.$other_field))?
                     .finish()
             }
         }
@@ -31,9 +137,17 @@ macro_rules! key_pair_hygiene {
         impl zeroize::Zeroize for KeyPair {
             fn zeroize(&mut self) {
                 zeroize::Zeroize::zeroize(&mut self.private_bytes);
-                $(zeroize::Zeroize::zeroize(&mut self.$other_field);)*
+                $(zeroize::Zeroize::zeroize(&mut self.$other_field);)?
             }
         }
+
+        impl Drop for KeyPair {
+            fn drop(&mut self) {
+                zeroize::Zeroize::zeroize(self);
+            }
+        }
+
+        impl zeroize::ZeroizeOnDrop for KeyPair {}
     };
 }
 
@@ -105,6 +219,21 @@ pub(crate) mod key_pair_test_support {
         assert!(
             !printed.contains(&BASE64_URL_SAFE_NO_PAD.encode(private_bytes)),
             "{printed}"
+        );
+    }
+
+    /// Compile-time check that a key pair wipes itself when dropped.
+    pub(crate) fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+
+    /// The JWK carries `private_bytes` as its `d`.
+    pub(crate) fn assert_jwk_private_is(jwk: &crate::JWK, private_bytes: &[u8]) {
+        let d = match &jwk.params {
+            crate::Params::EC(params) => params.d.clone(),
+            crate::Params::OKP(params) => params.d.clone(),
+        };
+        assert_eq!(
+            d.as_deref(),
+            Some(BASE64_URL_SAFE_NO_PAD.encode(private_bytes).as_str())
         );
     }
 

@@ -23,6 +23,20 @@ pub struct JWK {
     pub params: Params,
 }
 
+/// An empty public JWK, left behind in a key pair whose JWK has been moved
+/// out by `into_parts()` (the key pair is consumed, so it is never read).
+#[allow(dead_code)]
+pub(crate) fn placeholder_jwk() -> JWK {
+    JWK {
+        key_id: None,
+        params: Params::OKP(OctectParams {
+            curve: String::new(),
+            x: String::new(),
+            d: None,
+        }),
+    }
+}
+
 impl JWK {
     /// Construct a JWK from an optional key id and its parameters.
     pub fn new(key_id: Option<String>, params: Params) -> Self {

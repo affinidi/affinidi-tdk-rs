@@ -16,7 +16,7 @@
 //! error. Byte-level output is locked by [`super::kat`].
 
 use sha2::{Digest, Sha256};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::CryptoError;
 
@@ -38,7 +38,7 @@ pub fn concat_kdf(
     apu: &[u8],
     apv: &[u8],
     key_len_bits: u32,
-) -> Result<Vec<u8>, CryptoError> {
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
     derive(z, alg, apu, apv, key_len_bits, None)
 }
 
@@ -55,7 +55,7 @@ pub fn concat_kdf_1pu(
     apv: &[u8],
     key_len_bits: u32,
     cc_tag: &[u8],
-) -> Result<Vec<u8>, CryptoError> {
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
     concat_kdf_1pu_inner(z, alg, apu, apv, key_len_bits, cc_tag, false)
 }
 
@@ -69,7 +69,7 @@ pub fn concat_kdf_1pu_legacy(
     apv: &[u8],
     key_len_bits: u32,
     cc_tag: &[u8],
-) -> Result<Vec<u8>, CryptoError> {
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
     concat_kdf_1pu_inner(z, alg, apu, apv, key_len_bits, cc_tag, true)
 }
 
@@ -81,7 +81,7 @@ fn concat_kdf_1pu_inner(
     key_len_bits: u32,
     cc_tag: &[u8],
     legacy_tag_encoding: bool,
-) -> Result<Vec<u8>, CryptoError> {
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
     // No tag — identical to standard Concat KDF (matches ECDH-ES). The
     // legacy/spec distinction only concerns the tag encoding, so an empty
     // tag is identical either way.
@@ -116,9 +116,9 @@ fn derive(
     apv: &[u8],
     key_len_bits: u32,
     cc_tag: Option<CcTag<'_>>,
-) -> Result<Vec<u8>, CryptoError> {
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
     let key_len_bytes = output_len_bytes(key_len_bits)?;
-    let mut derived = Vec::with_capacity(key_len_bytes);
+    let mut derived = Zeroizing::new(Vec::with_capacity(key_len_bytes));
 
     let mut round: u32 = 1;
     while derived.len() < key_len_bytes {
