@@ -1,5 +1,29 @@
 # Affinidi DID Authentication
 
+## Unreleased (0.3.14) — `refresh_check` handles small expiry values
+
+### Fixed
+
+- `refresh_check` computed `access_expires_at - 5` in `u64`. For an expiry
+  below 5 (including the `0` of `AuthorizationTokens::default()`) that panicked
+  in builds with overflow checks, and in release builds wrapped to a value near
+  `u64::MAX`, so the token read as valid and was never refreshed. The margin is
+  now added to the clock with saturating arithmetic: such a token is due for a
+  refresh (or `Expired` if its refresh token has also run out). The debug log's
+  deltas are computed in `i128`, so they cannot overflow either.
+- MeetingPlace expiry timestamps before 1970 are an
+  `DIDAuthError::Authentication` error instead of wrapping to a far-future
+  `u64`. The parse errors for both expiries name the field and no longer
+  include the received value (the `refresh_expires_at` one quoted the
+  `access_expires_at` value).
+- A system clock before 1970 reads as `0` instead of panicking.
+
+### Changed
+
+- **BEHAVIOUR:** a token whose `access_expires_at` is below 5 now reports
+  `Refresh`/`Expired` rather than panicking (debug) or `Ok` (release). No API
+  change.
+
 ## Unreleased (0.3.13) — an authentication `429` is typed, and survives the retry loop
 
 A non-success response from the authentication service (`/challenge`, the

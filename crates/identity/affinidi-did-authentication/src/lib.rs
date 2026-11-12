@@ -98,28 +98,32 @@ impl TokensType {
             TokensType::MeetingPlace(m) => {
                 let tokens = AuthorizationTokens {
                     access_token: m.access_token.clone(),
-                    access_expires_at: DateTime::parse_from_rfc3339(&m.access_expires_at)
-                        .map_err(|err| {
-                            DIDAuthError::Authentication(format!(
-                                "Invalid access_expires_at timestamp ({}): {}",
-                                m.access_expires_at, err
-                            ))
-                        })?
-                        .timestamp() as u64,
+                    access_expires_at: unix_secs_from_rfc3339(
+                        "access_expires_at",
+                        &m.access_expires_at,
+                    )?,
                     refresh_token: m.refresh_token.clone(),
-                    refresh_expires_at: DateTime::parse_from_rfc3339(&m.refresh_expires_at)
-                        .map_err(|err| {
-                            DIDAuthError::Authentication(format!(
-                                "Invalid refresh_expires_at timestamp ({}): {}",
-                                m.access_expires_at, err
-                            ))
-                        })?
-                        .timestamp() as u64,
+                    refresh_expires_at: unix_secs_from_rfc3339(
+                        "refresh_expires_at",
+                        &m.refresh_expires_at,
+                    )?,
                 };
                 Ok(tokens)
             }
         }
     }
+}
+
+/// Parses an RFC 3339 expiry into seconds since the epoch. A timestamp
+/// before 1970 is an error rather than a wrapped (far-future) value.
+fn unix_secs_from_rfc3339(field: &str, value: &str) -> Result<u64> {
+    let timestamp = DateTime::parse_from_rfc3339(value)
+        .map_err(|_| {
+            DIDAuthError::Authentication(format!("{field} is not a valid RFC 3339 timestamp"))
+        })?
+        .timestamp();
+    u64::try_from(timestamp)
+        .map_err(|_| DIDAuthError::Authentication(format!("{field} is before the Unix epoch")))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -507,10 +511,7 @@ impl DIDAuthentication {
             ));
         };
 
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_now_secs();
 
         let refresh_message = Message::build(
             Uuid::new_v4().to_string(),
@@ -688,10 +689,7 @@ impl DIDAuthentication {
         endpoint_did: &str,
         body: &DidChallenges,
     ) -> Result<Message> {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_now_secs();
 
         let body = if let DidChallenges::Complex(c) = body {
             json!({"challenge": c.data.challenge, "session_id": c.session_id})
@@ -930,42 +928,57 @@ pub enum RefreshCheck {
     Expired,
 }
 
+/// How many seconds before `access_expires_at` an access token is treated as
+/// due for a refresh.
+const ACCESS_REFRESH_MARGIN_SECS: u64 = 5;
+
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 /// Checks if the tokens need to be refreshed?
 pub fn refresh_check(tokens: &AuthorizationTokens) -> RefreshCheck {
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    refresh_check_at(tokens, unix_now_secs())
+}
+
+/// `refresh_check` against a given clock reading (seconds since the epoch).
+///
+/// An access token is due for a refresh once `now` is within
+/// `ACCESS_REFRESH_MARGIN_SECS` of its expiry. The comparison adds the margin
+/// to `now` (saturating) rather than subtracting it from the expiry, so an
+/// expiry smaller than the margin (including the `0` of
+/// `AuthorizationTokens::default()`) reads as expired instead of wrapping.
+fn refresh_check_at(tokens: &AuthorizationTokens, now: u64) -> RefreshCheck {
+    let access_due = tokens.access_expires_at <= now.saturating_add(ACCESS_REFRESH_MARGIN_SECS);
+    let refresh_expired = tokens.refresh_expires_at <= now;
 
     debug!(
         "checking auth expiry: now({}), access_expires_at({}), delta({}), expired?({}), refresh_expires_at({}), delta({}), expired?({})",
         now,
         tokens.access_expires_at,
-        tokens.access_expires_at as i64 - now as i64,
-        tokens.access_expires_at - 5 <= now,
+        i128::from(tokens.access_expires_at) - i128::from(now),
+        access_due,
         tokens.refresh_expires_at,
-        tokens.refresh_expires_at as i64 - now as i64,
-        tokens.refresh_expires_at <= now
+        i128::from(tokens.refresh_expires_at) - i128::from(now),
+        refresh_expired
     );
 
-    if tokens.access_expires_at - 5 <= now {
-        if tokens.refresh_expires_at <= now {
-            // Both access and refresh tokens have expired
-            RefreshCheck::Expired
-        } else {
-            // Only the access token has expired
-            RefreshCheck::Refresh
-        }
-    } else {
-        // Tokens are still valid
-        RefreshCheck::Ok
+    match (access_due, refresh_expired) {
+        (false, _) => RefreshCheck::Ok,
+        (true, false) => RefreshCheck::Refresh,
+        (true, true) => RefreshCheck::Expired,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{AuthorizationTokens, RefreshCheck, refresh_check, refresh_decision};
-    use std::time::SystemTime;
+    use crate::{
+        ACCESS_REFRESH_MARGIN_SECS, AuthorizationTokens, RefreshCheck, refresh_check,
+        refresh_check_at, refresh_decision, unix_now_secs, unix_secs_from_rfc3339,
+    };
 
     /// Sensitive auth artifacts must be logged via `trace_sensitive` (TRACE),
     /// never at DEBUG, so operational debug logs can't leak tokens/challenges.
@@ -1018,10 +1031,7 @@ mod tests {
 
     #[test]
     fn refresh_check_valid() {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_now_secs();
         let tokens = AuthorizationTokens {
             access_expires_at: now + 900,
             refresh_expires_at: now + 1800,
@@ -1033,10 +1043,7 @@ mod tests {
 
     #[test]
     fn refresh_check_refresh() {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_now_secs();
         let tokens = AuthorizationTokens {
             access_expires_at: now,
             refresh_expires_at: now + 1800,
@@ -1048,10 +1055,7 @@ mod tests {
 
     #[test]
     fn refresh_check_expired() {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_now_secs();
         let tokens = AuthorizationTokens {
             access_expires_at: now,
             refresh_expires_at: now,
@@ -1059,6 +1063,117 @@ mod tests {
         };
 
         assert_eq!(refresh_check(&tokens), RefreshCheck::Expired);
+    }
+
+    fn tokens_expiring(access_expires_at: u64, refresh_expires_at: u64) -> AuthorizationTokens {
+        AuthorizationTokens {
+            access_expires_at,
+            refresh_expires_at,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn default_tokens_are_expired() {
+        assert_eq!(
+            refresh_check(&AuthorizationTokens::default()),
+            RefreshCheck::Expired
+        );
+    }
+
+    #[test]
+    fn an_access_expiry_below_the_margin_is_due() {
+        let now = 1_000_000;
+        for access_expires_at in 0..=ACCESS_REFRESH_MARGIN_SECS {
+            assert_eq!(
+                refresh_check_at(&tokens_expiring(access_expires_at, now + 1800), now),
+                RefreshCheck::Refresh,
+                "access_expires_at = {access_expires_at}"
+            );
+            assert_eq!(
+                refresh_check_at(&tokens_expiring(access_expires_at, 0), now),
+                RefreshCheck::Expired,
+                "access_expires_at = {access_expires_at}"
+            );
+        }
+    }
+
+    #[test]
+    fn small_expiries_at_a_small_clock() {
+        for now in 0..=ACCESS_REFRESH_MARGIN_SECS + 1 {
+            for access_expires_at in 0..=ACCESS_REFRESH_MARGIN_SECS * 3 {
+                let expected = if access_expires_at <= now + ACCESS_REFRESH_MARGIN_SECS {
+                    RefreshCheck::Refresh
+                } else {
+                    RefreshCheck::Ok
+                };
+                assert_eq!(
+                    refresh_check_at(&tokens_expiring(access_expires_at, u64::MAX), now),
+                    expected,
+                    "now = {now}, access_expires_at = {access_expires_at}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_margin_boundary() {
+        let now = 1_000_000;
+        let refresh_expires_at = now + 1800;
+        assert_eq!(
+            refresh_check_at(
+                &tokens_expiring(now + ACCESS_REFRESH_MARGIN_SECS, refresh_expires_at),
+                now
+            ),
+            RefreshCheck::Refresh
+        );
+        assert_eq!(
+            refresh_check_at(
+                &tokens_expiring(now + ACCESS_REFRESH_MARGIN_SECS + 1, refresh_expires_at),
+                now
+            ),
+            RefreshCheck::Ok
+        );
+    }
+
+    #[test]
+    fn extreme_values_do_not_overflow() {
+        assert_eq!(
+            refresh_check_at(&tokens_expiring(u64::MAX, u64::MAX), u64::MAX),
+            RefreshCheck::Expired
+        );
+        assert_eq!(
+            refresh_check_at(&tokens_expiring(u64::MAX, u64::MAX), u64::MAX - 1),
+            RefreshCheck::Refresh
+        );
+        assert_eq!(
+            refresh_check_at(&tokens_expiring(u64::MAX, u64::MAX), 0),
+            RefreshCheck::Ok
+        );
+        assert_eq!(
+            refresh_check_at(&tokens_expiring(1 << 63, u64::MAX), 0),
+            RefreshCheck::Ok
+        );
+        assert_eq!(
+            refresh_check_at(&tokens_expiring(0, 0), u64::MAX),
+            RefreshCheck::Expired
+        );
+    }
+
+    #[test]
+    fn rfc3339_expiries_before_the_epoch_are_rejected() {
+        assert_eq!(
+            unix_secs_from_rfc3339("access_expires_at", "1970-01-01T00:00:00Z").unwrap(),
+            0
+        );
+        assert_eq!(
+            unix_secs_from_rfc3339("access_expires_at", "2026-01-01T00:00:00Z").unwrap(),
+            1_767_225_600
+        );
+        assert!(unix_secs_from_rfc3339("access_expires_at", "1969-12-31T23:59:59Z").is_err());
+        let err = unix_secs_from_rfc3339("refresh_expires_at", "not a date").unwrap_err();
+        assert!(err.to_string().contains("refresh_expires_at"), "{err}");
+        assert!(!err.to_string().contains("not a date"), "{err}");
     }
 
     /// A forced refresh of a still-valid token actually refreshes.
