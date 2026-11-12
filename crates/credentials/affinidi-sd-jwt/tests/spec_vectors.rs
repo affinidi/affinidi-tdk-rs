@@ -213,7 +213,7 @@ fn spec_example_full_flow() {
     use affinidi_sd_jwt::holder::{self, KbJwtInput};
     use affinidi_sd_jwt::issuer;
     use affinidi_sd_jwt::signer::test_utils::{
-        HmacSha256Signer, HmacSha256Verifier, hmac_verifier_from_jwk, oct_jwk,
+        HmacSha256Signer, HmacSha256Verifier, hmac_test_jwk, hmac_verifier_from_jwk,
     };
     use affinidi_sd_jwt::verifier;
 
@@ -225,7 +225,7 @@ fn spec_example_full_flow() {
     let jwt_verifier = HmacSha256Verifier::new(issuer_key);
     let holder_signer = HmacSha256Signer::new(holder_key);
 
-    let holder_jwk = oct_jwk(holder_key);
+    let holder_jwk = hmac_test_jwk(holder_key);
 
     // Step 1: Issuer creates SD-JWT
     let claims = json!({
@@ -277,13 +277,14 @@ fn spec_example_full_flow() {
     assert_eq!(parsed.disclosures.len(), 2);
     assert!(parsed.kb_jwt.is_some());
 
-    let opts =
-        affinidi_sd_jwt::VerificationOptions::with_key_binding(affinidi_sd_jwt::KeyBindingCheck {
-            audience: "https://verifier.example.com",
-            nonce: "XZOUco1u_gEPknxS78sWWg",
-            freshness: affinidi_sd_jwt::KbFreshness::new(1700000000, 300),
-            holder_key: &hmac_verifier_from_jwk,
-        });
+    let opts = affinidi_sd_jwt::VerificationOptions::with_key_binding(
+        affinidi_sd_jwt::KeyBindingCheck::new(
+            "https://verifier.example.com",
+            "XZOUco1u_gEPknxS78sWWg",
+            affinidi_sd_jwt::KbFreshness::new(1700000000, 300),
+            &hmac_verifier_from_jwk,
+        ),
+    );
     let result = verifier::verify(&parsed, &jwt_verifier, &hasher, &opts).unwrap();
 
     assert!(result.is_verified());

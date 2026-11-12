@@ -29,10 +29,22 @@ is stricter.
   than a later digest error. A non-string `_sd_alg` is refused.
 - **Changed:** `issuer::issue` writes `_sd_alg` whenever the hasher is not
   `sha-256`, even with no disclosures, so such an SD-JWT still verifies.
+- **Behaviour (stricter):** with key binding, a `cnf.jwk` with `kty` `oct`,
+  with no `kty`, or with a private member (`d`, `p`, `q`, `dp`, `dq`, `qi`,
+  `oth`, `k`) is refused before the `HolderKeyVerifier` is called. The
+  verifier it returns must pin `alg` to the key's `kty`/`crv` and never accept
+  `none` or `HS*`.
+- **Changed:** `KeyBindingCheck`, `VerificationOptions` and `KbFreshness` are
+  `#[non_exhaustive]`. Build them with `KeyBindingCheck::new`,
+  `VerificationOptions::default()` / `VerificationOptions::with_key_binding`,
+  and `KbFreshness::new(..).with_max_future_skew_secs(..)`. Fields stay public
+  for reads.
 - **Added:** `DEFAULT_SD_ALG`, `HolderKeyVerifier`, `KeyBindingCheck`,
-  `VerificationOptions::with_key_binding`. `KbFreshness`, `KeyBindingCheck`,
-  `HolderKeyVerifier`, `KB_JWT_TYP` and `DEFAULT_SD_ALG` are re-exported from
-  the crate root. Test utilities gain `oct_jwk` and `hmac_verifier_from_jwk`.
+  `VerificationOptions::with_key_binding`, `KbFreshness::with_max_future_skew_secs`.
+  `KbFreshness`, `KeyBindingCheck`, `HolderKeyVerifier`, `KB_JWT_TYP` and
+  `DEFAULT_SD_ALG` are re-exported from the crate root. Test utilities (behind
+  `_test-utils`) gain `hmac_test_jwk` and `hmac_verifier_from_jwk`, a stand-in
+  holder key for HMAC tests that accepts `HS256` and is not for production.
 - Without a `KeyBindingCheck`, a KB-JWT that is present is still reported as
   `kb_verified: Some(false)` and `is_verified()` is false, as before.
 
@@ -43,12 +55,16 @@ Migration:
 let opts = VerificationOptions { verify_kb: true, expected_audience: Some(aud), expected_nonce: Some(nonce) };
 verify(&sd_jwt, &issuer_verifier, &hasher, &opts, Some(&holder_verifier))?;
 // 0.2
-let opts = VerificationOptions::with_key_binding(KeyBindingCheck {
-    audience: aud,
+let holder_key = |jwk: &serde_json::Value| -> Result<Box<dyn JwtVerifier>, SdJwtError> {
+    // Build a verifier for this public key, pinned to its own alg.
+    Ok(Box::new(my_verifier_from_jwk(jwk)?))
+};
+let opts = VerificationOptions::with_key_binding(KeyBindingCheck::new(
+    aud,
     nonce,
-    freshness: KbFreshness::new(now, 300),
-    holder_key: &|jwk: &serde_json::Value| my_verifier_from_jwk(jwk),
-});
+    KbFreshness::new(now, 300),
+    &holder_key,
+));
 verify(&sd_jwt, &issuer_verifier, &hasher, &opts)?;
 ```
 

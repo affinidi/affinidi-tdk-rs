@@ -534,12 +534,12 @@ impl CredentialScenario {
         nonce: &str,
     ) -> Result<VerificationResult, ScenarioError> {
         let now = i64::try_from(now()).unwrap_or(i64::MAX);
-        let options = VerificationOptions::with_key_binding(KeyBindingCheck {
+        let options = VerificationOptions::with_key_binding(KeyBindingCheck::new(
             audience,
             nonce,
-            freshness: KbFreshness::new(now, 300),
+            KbFreshness::new(now, 300),
             holder_key,
-        });
+        ));
         verifier::verify(presentation, issuer_verifier, &self.hasher, &options)
             .map_err(|e| ScenarioError::SdJwt(e.to_string()))
     }

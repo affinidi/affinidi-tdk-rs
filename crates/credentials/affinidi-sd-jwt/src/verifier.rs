@@ -20,9 +20,14 @@ pub const DEFAULT_SD_ALG: &str = "sha-256";
 ///
 /// [`verify`] calls it with the `jwk` member of `cnf` from the
 /// **signature-verified** issuer payload, so the KB-JWT is always checked
-/// against the key the issuer committed to. Implementations turn the JWK into
-/// a verifier for that key, with the algorithm allowlist they accept, and
-/// return an error for a key type they do not support.
+/// against the key the issuer committed to. Before the call, [`verify`]
+/// refuses a JWK with `kty` `oct` or with a private member (`d`, `p`, `q`,
+/// `dp`, `dq`, `qi`, `oth`, `k`).
+///
+/// Implementations turn the JWK into a verifier for that key and return an
+/// error for a key type they do not support. The returned verifier must pin
+/// the JWS `alg` to the key's `kty`/`crv` (e.g. `EdDSA` for OKP Ed25519,
+/// `ES256` for EC P-256) and must never accept `none` or an `HS*` algorithm.
 ///
 /// Any `Fn(&Value) -> Result<Box<dyn JwtVerifier>>` closure implements it.
 pub trait HolderKeyVerifier {
@@ -41,7 +46,12 @@ where
 
 /// How recent a Key Binding JWT's `iat` must be (RFC 9901 §7.3 step 5: the
 /// verifier checks the creation time is within an acceptable window).
+///
+/// Build with [`KbFreshness::new`], then
+/// [`with_max_future_skew_secs`](Self::with_max_future_skew_secs) to change
+/// the skew.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct KbFreshness {
     /// The verifier's current time, seconds since the epoch.
     pub now: i64,
@@ -60,6 +70,12 @@ impl KbFreshness {
             max_age_secs,
             max_future_skew_secs: 60,
         }
+    }
+
+    /// The same window, allowing `secs` of skew ahead of `now` instead of 60.
+    pub fn with_max_future_skew_secs(mut self, secs: i64) -> Self {
+        self.max_future_skew_secs = secs;
+        self
     }
 
     /// Whether `iat` falls in the window. A negative `iat` is refused, and the
@@ -84,9 +100,14 @@ impl KbFreshness {
 /// What a Key Binding JWT must show (RFC 9901 §7.3). Every member is required:
 /// a KB-JWT is only bound to this presentation when its `aud`, `nonce` and
 /// `iat` are checked and its signature verifies under the `cnf` key.
+///
+/// Build with [`KeyBindingCheck::new`].
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct KeyBindingCheck<'a> {
-    /// The `aud` the KB-JWT must carry: this verifier. Must not be empty.
+    /// The `aud` the KB-JWT must carry: this verifier. Must not be empty. The
+    /// KB-JWT's `aud` must be this single string (RFC 9901 §4.3); an array
+    /// `aud` is refused.
     pub audience: &'a str,
     /// The `nonce` the KB-JWT must carry: the one this verifier issued for
     /// the presentation. Must not be empty.
@@ -95,6 +116,25 @@ pub struct KeyBindingCheck<'a> {
     pub freshness: KbFreshness,
     /// Turns the credential's `cnf.jwk` into the KB-JWT verifier.
     pub holder_key: &'a dyn HolderKeyVerifier,
+}
+
+impl<'a> KeyBindingCheck<'a> {
+    /// A check for a KB-JWT made for `audience` and `nonce`, with `iat` in
+    /// `freshness`, signed by the `cnf.jwk` key that `holder_key` turns into
+    /// a verifier.
+    pub fn new(
+        audience: &'a str,
+        nonce: &'a str,
+        freshness: KbFreshness,
+        holder_key: &'a dyn HolderKeyVerifier,
+    ) -> Self {
+        Self {
+            audience,
+            nonce,
+            freshness,
+            holder_key,
+        }
+    }
 }
 
 impl std::fmt::Debug for KeyBindingCheck<'_> {
@@ -107,8 +147,10 @@ impl std::fmt::Debug for KeyBindingCheck<'_> {
     }
 }
 
-/// Options for SD-JWT verification.
+/// Options for SD-JWT verification: [`VerificationOptions::default`] (no key
+/// binding) or [`VerificationOptions::with_key_binding`].
 #[derive(Debug, Default, Clone, Copy)]
+#[non_exhaustive]
 pub struct VerificationOptions<'a> {
     /// `Some`: a Key Binding JWT is required and checked as described on
     /// [`KeyBindingCheck`]. `None`: key binding is not checked; a KB-JWT that
@@ -244,6 +286,7 @@ fn verify_key_binding(
                 "cnf.jwk required in payload for key binding verification".into(),
             )
         })?;
+    check_public_jwk(cnf_jwk)?;
     let holder_verifier = check.holder_key.verifier_for_jwk(cnf_jwk)?;
     let kb_payload = holder_verifier.verify_jwt(kb_jwt)?;
 
@@ -299,6 +342,35 @@ fn verify_key_binding(
     Ok(())
 }
 
+/// JWK members that carry private or symmetric key material (RFC 7518 §6).
+const PRIVATE_JWK_MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+
+/// A holder key in `cnf.jwk` must be an asymmetric public key: a symmetric
+/// (`oct`) key would be shared with whoever holds the credential, and a key
+/// with private members should never have been published.
+fn check_public_jwk(jwk: &Value) -> Result<()> {
+    match jwk.get("kty").and_then(Value::as_str) {
+        None => {
+            return Err(SdJwtError::KeyBinding("cnf.jwk has no kty".into()));
+        }
+        Some("oct") => {
+            return Err(SdJwtError::KeyBinding(
+                "cnf.jwk must be an asymmetric public key, not kty oct".into(),
+            ));
+        }
+        Some(_) => {}
+    }
+    if let Some(member) = PRIVATE_JWK_MEMBERS
+        .iter()
+        .find(|member| jwk.get(**member).is_some())
+    {
+        return Err(SdJwtError::KeyBinding(format!(
+            "cnf.jwk must be a public key, but has the private member {member}"
+        )));
+    }
+    Ok(())
+}
+
 /// The `typ` of a Key Binding JWT (RFC 9901 §4.3).
 pub const KB_JWT_TYP: &str = "kb+jwt";
 
@@ -347,7 +419,7 @@ mod tests {
     use crate::issuer;
     use crate::signer::JwtSigner;
     use crate::signer::test_utils::{
-        HmacSha256Signer, HmacSha256Verifier, hmac_verifier_from_jwk, oct_jwk,
+        HmacSha256Signer, HmacSha256Verifier, hmac_test_jwk, hmac_verifier_from_jwk,
     };
 
     const HOLDER_KEY: &[u8] = b"holder-key-for-hmac-signing!!!";
@@ -375,12 +447,17 @@ mod tests {
     /// A credential bound to `cnf_key`, presented with a KB-JWT signed by
     /// `kb_key` for `AUD` and `NONCE`.
     fn bound_presentation(cnf_key: &[u8], kb_key: &[u8]) -> SdJwt {
+        presentation_with_cnf(&hmac_test_jwk(cnf_key), kb_key)
+    }
+
+    /// A credential whose `cnf.jwk` is `cnf_jwk`, presented with a KB-JWT
+    /// signed by `kb_key` for `AUD` and `NONCE`.
+    fn presentation_with_cnf(cnf_jwk: &Value, kb_key: &[u8]) -> SdJwt {
         let hasher = Sha256Hasher;
         let signer = HmacSha256Signer::new(test_key());
         let claims = serde_json::json!({ "sub": "user123", "name": "John" });
         let frame = serde_json::json!({ "_sd": ["name"] });
-        let sd_jwt =
-            issuer::issue(&claims, &frame, &signer, &hasher, Some(&oct_jwk(cnf_key))).unwrap();
+        let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, Some(cnf_jwk)).unwrap();
         let all_refs: Vec<&Disclosure> = sd_jwt.disclosures.iter().collect();
         let kb_signer = HmacSha256Signer::new(kb_key);
         let kb_input = KbJwtInput {
@@ -553,7 +630,57 @@ mod tests {
             ..kb_check(AUD, NONCE)
         };
         verify_bound(&presentation, check).unwrap();
-        assert_eq!(seen.into_inner(), Some(oct_jwk(HOLDER_KEY)));
+        assert_eq!(seen.into_inner(), Some(hmac_test_jwk(HOLDER_KEY)));
+    }
+
+    /// A symmetric or private `cnf.jwk` is refused before the holder key
+    /// verifier sees it.
+    #[test]
+    fn a_cnf_jwk_that_is_not_an_asymmetric_public_key_is_refused() {
+        let mut private = hmac_test_jwk(HOLDER_KEY);
+        private["d"] = serde_json::json!("cHJpdmF0ZQ");
+        let cases = [
+            (
+                serde_json::json!({ "kty": "oct", "k": "aG9sZGVy" }),
+                "kty oct",
+            ),
+            (private, "private member d"),
+            (serde_json::json!({ "crv": "Ed25519", "x": "eA" }), "no kty"),
+        ];
+        for (member, extra) in [("p", "q"), ("dp", "dq"), ("qi", "oth"), ("k", "k")] {
+            let mut rsa = serde_json::json!({ "kty": "RSA", "n": "bg", "e": "AQAB" });
+            rsa[member] = serde_json::json!("eA");
+            rsa[extra] = serde_json::json!("eA");
+            let err = verify_bound(
+                &presentation_with_cnf(&rsa, HOLDER_KEY),
+                kb_check(AUD, NONCE),
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("private member"), "{rsa}: {err}");
+        }
+        for (jwk, why) in cases {
+            let called = std::cell::Cell::new(false);
+            let recording = |jwk: &Value| {
+                called.set(true);
+                hmac_verifier_from_jwk(jwk)
+            };
+            let check = KeyBindingCheck {
+                holder_key: &recording,
+                ..kb_check(AUD, NONCE)
+            };
+            let err = verify_bound(&presentation_with_cnf(&jwk, HOLDER_KEY), check).unwrap_err();
+            assert!(err.to_string().contains(why), "{jwk}: {err}");
+            assert!(!called.get(), "{jwk} reached the holder key verifier");
+        }
+    }
+
+    #[test]
+    fn constructors_build_the_same_check() {
+        let freshness = KbFreshness::new(IAT as i64, 300).with_max_future_skew_secs(5);
+        assert_eq!(freshness.max_future_skew_secs, 5);
+        let check = KeyBindingCheck::new(AUD, NONCE, freshness, &hmac_verifier_from_jwk);
+        let result = verify_bound(&bound_presentation(HOLDER_KEY, HOLDER_KEY), check).unwrap();
+        assert_eq!(result.kb_verified, Some(true));
     }
 
     #[test]
@@ -590,7 +717,7 @@ mod tests {
             &serde_json::json!({ "_sd": ["name"] }),
             &signer,
             &hasher,
-            Some(&oct_jwk(HOLDER_KEY)),
+            Some(&hmac_test_jwk(HOLDER_KEY)),
         )
         .unwrap();
         let err = verify_bound(&sd_jwt, kb_check(AUD, NONCE)).unwrap_err();
@@ -718,7 +845,7 @@ mod kb_hardening_tests {
     use crate::issuer;
     use crate::signer::JwtSigner;
     use crate::signer::test_utils::{
-        HmacSha256Signer, HmacSha256Verifier, hmac_verifier_from_jwk, oct_jwk,
+        HmacSha256Signer, HmacSha256Verifier, hmac_test_jwk, hmac_verifier_from_jwk,
     };
 
     const ISSUER_KEY: &[u8] = b"test-secret-key-for-hmac-signing!";
@@ -731,7 +858,7 @@ mod kb_hardening_tests {
             &serde_json::json!({ "_sd": ["name"] }),
             &HmacSha256Signer::new(ISSUER_KEY),
             &Sha256Hasher,
-            Some(&oct_jwk(HOLDER_KEY)),
+            Some(&hmac_test_jwk(HOLDER_KEY)),
         )
         .unwrap()
     }

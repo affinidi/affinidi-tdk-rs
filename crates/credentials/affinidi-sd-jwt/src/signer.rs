@@ -124,23 +124,30 @@ pub mod test_utils {
         }
     }
 
-    /// An `oct` JWK carrying `key`, for the `cnf.jwk` of a test credential.
-    pub fn oct_jwk(key: &[u8]) -> serde_json::Value {
-        serde_json::json!({ "kty": "oct", "k": URL_SAFE_NO_PAD.encode(key) })
+    /// The `crv` of the stand-in JWK [`hmac_test_jwk`] makes.
+    pub const HMAC_TEST_CRV: &str = "X-HMAC-TEST-ONLY";
+
+    /// A stand-in holder JWK for HMAC tests: `kty` `OKP` with the
+    /// [`HMAC_TEST_CRV`] curve and the HMAC key in `x`. A real `oct` JWK is
+    /// refused in `cnf.jwk`, so tests carry the shared key this way. **Test
+    /// only:** it publishes the HMAC key.
+    pub fn hmac_test_jwk(key: &[u8]) -> serde_json::Value {
+        serde_json::json!({ "kty": "OKP", "crv": HMAC_TEST_CRV, "x": URL_SAFE_NO_PAD.encode(key) })
     }
 
     /// A [`HolderKeyVerifier`](crate::verifier::HolderKeyVerifier) for tests:
-    /// the HMAC verifier for an `oct` JWK made by [`oct_jwk`].
+    /// the HMAC verifier for a JWK made by [`hmac_test_jwk`]. It accepts
+    /// `HS256`, which a production holder key verifier must never do.
     pub fn hmac_verifier_from_jwk(
         jwk: &serde_json::Value,
     ) -> Result<Box<dyn JwtVerifier>, SdJwtError> {
-        if jwk.get("kty").and_then(serde_json::Value::as_str) != Some("oct") {
-            return Err(SdJwtError::KeyBinding("test holder key must be oct".into()));
+        if jwk.get("crv").and_then(serde_json::Value::as_str) != Some(HMAC_TEST_CRV) {
+            return Err(SdJwtError::KeyBinding("not a test HMAC holder key".into()));
         }
         let key = jwk
-            .get("k")
+            .get("x")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| SdJwtError::KeyBinding("oct JWK has no k".into()))?;
+            .ok_or_else(|| SdJwtError::KeyBinding("test HMAC JWK has no x".into()))?;
         let key = URL_SAFE_NO_PAD.decode(key)?;
         Ok(Box::new(HmacSha256Verifier::new(&key)))
     }
