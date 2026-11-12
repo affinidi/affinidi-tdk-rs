@@ -324,10 +324,15 @@ impl Matter {
     }
 
     /// Extract raw bytes from a qb64 string given sizage and full size.
+    ///
+    /// The code characters are decoded as zeros (`A`), as keripy does, so the
+    /// bytes in front of the raw material hold only the pad bits. CESR
+    /// requires those to be zero; anything else is a second spelling of the
+    /// same primitive and is refused with [`CesrError::NonCanonical`].
     fn extract_raw(qb64: &str, sizage: &Sizage, fs: usize) -> Result<Vec<u8>, CesrError> {
-        // Decode the entire qb64 to bytes
-        let full_qb64 = &qb64[..fs];
-        let all_bytes = codec::b64_decode(full_qb64)?;
+        let mut zeroed = "A".repeat(sizage.hs);
+        zeroed.push_str(&qb64[sizage.hs..fs]);
+        let all_bytes = codec::b64_decode(&zeroed)?;
 
         // Extract based on code size
         let lead = match sizage.hs {
@@ -344,9 +349,14 @@ impl Matter {
             });
         }
 
-        // Raw bytes start after the lead bytes
-        let raw = all_bytes[lead..].to_vec();
-        Ok(raw)
+        let (pad, raw) = all_bytes.split_at(lead);
+        if pad.iter().any(|&byte| byte != 0) {
+            return Err(CesrError::NonCanonical(format!(
+                "pad bits after code {} are not zero",
+                &qb64[..sizage.hs]
+            )));
+        }
+        Ok(raw.to_vec())
     }
 }
 
@@ -409,6 +419,73 @@ mod tests {
         ));
         // ASCII input still parses or returns a normal (non-panicking) error.
         let _ = Matter::from_qb64(&"B".repeat(44));
+    }
+
+    /// Every fixed-size code in the table.
+    const FIXED_CODES: &[&str] = &[
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "0A", "0B", "0C", "0D", "0E",
+        "0F", "0G", "0I", "1AAA", "1AAB", "1AAC", "1AAD", "1AAE", "1AAF", "1AAG", "1AAH", "1AAI",
+        "1AAJ", "1AAK", "1AAL", "1AAM",
+    ];
+
+    /// Set `bits` in the 6-bit value of the Base64 character at `position`.
+    fn with_bits_set(qb64: &str, position: usize, bits: u8) -> String {
+        let mut text = qb64.as_bytes().to_vec();
+        let value = codec::b64_char_to_index(text[position]).unwrap() | bits;
+        text[position] = codec::index_to_b64_char(value).unwrap();
+        String::from_utf8(text).unwrap()
+    }
+
+    /// Parsing the encoding of a fixed-size primitive gives the primitive
+    /// back, and encoding that gives the same text, in both domains.
+    #[test]
+    fn fixed_size_encodings_round_trip_to_the_same_text() {
+        for &code in FIXED_CODES {
+            let size = Matter::raw_size_from_sizage(&matter_sizage(code).unwrap());
+            for fill in [0x00u8, 0xff, 0x5a] {
+                let matter = Matter::new(code, vec![fill; size]).unwrap();
+                let qb64 = matter.qb64().unwrap();
+                let parsed = Matter::from_qb64(&qb64).unwrap();
+                assert_eq!(parsed, matter, "{code}");
+                assert_eq!(parsed.qb64().unwrap(), qb64, "{code}");
+                let from_qb2 = Matter::from_qb2(&matter.qb2().unwrap()).unwrap();
+                assert_eq!(from_qb2, matter, "{code}");
+            }
+        }
+    }
+
+    /// CESR fills the bits between a one- or two-character code and the raw
+    /// bytes with zeros (2 bits after a one-character code, 4 after a
+    /// two-character code). A text with any of them set decodes to the same
+    /// raw bytes, so it is refused rather than accepted as a second spelling.
+    #[test]
+    fn non_zero_pad_bits_are_refused() {
+        let one_char_pad: &[u8] = &[0b10_0000, 0b01_0000];
+        let two_char_pad: &[u8] = &[0b10_0000, 0b01_0000, 0b00_1000, 0b00_0100];
+        for (code, position, pad_bits) in [
+            ("B", 1, one_char_pad),
+            ("D", 1, one_char_pad),
+            ("E", 1, one_char_pad),
+            ("J", 1, one_char_pad),
+            ("0A", 2, two_char_pad),
+            ("0B", 2, two_char_pad),
+        ] {
+            let size = Matter::raw_size_from_sizage(&matter_sizage(code).unwrap());
+            let canonical = Matter::new(code, vec![0xff; size]).unwrap().qb64().unwrap();
+            for &bit in pad_bits {
+                let altered = with_bits_set(&canonical, position, bit);
+                assert_ne!(altered, canonical);
+                assert!(
+                    matches!(Matter::from_qb64(&altered), Err(CesrError::NonCanonical(_))),
+                    "{code} {altered}"
+                );
+                let qb2 = codec::qb64_to_qb2(&altered).unwrap();
+                assert!(
+                    matches!(Matter::from_qb2(&qb2), Err(CesrError::NonCanonical(_))),
+                    "{code} {altered}"
+                );
+            }
+        }
     }
 
     #[test]

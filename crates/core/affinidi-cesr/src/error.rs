@@ -36,4 +36,9 @@ pub enum CesrError {
     /// An indexed signature's index or ondex is one its code cannot carry.
     #[error("invalid index: {0}")]
     InvalidIndex(String),
+
+    /// The text is not the canonical encoding of the primitive: the pad bits
+    /// between the code and the raw bytes are not zero.
+    #[error("non-canonical encoding: {0}")]
+    NonCanonical(String),
 }
