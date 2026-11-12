@@ -421,11 +421,10 @@ impl WebSocketTransport {
         health_tx: watch::Sender<ReceiveHealth>,
     ) -> Self {
         WebSocketTransport {
-            inbound_cache: MessageCache {
-                fetch_cache_limit_count: shared.config.fetch_cache_limit_count,
-                fetch_cache_limit_bytes: shared.config.fetch_cache_limit_bytes,
-                ..Default::default()
-            },
+            inbound_cache: MessageCache::new(
+                shared.config.fetch_cache_limit_count,
+                shared.config.fetch_cache_limit_bytes,
+            ),
             profile,
             shared,
             web_socket: None,
@@ -1252,7 +1251,7 @@ impl WebSocketTransport {
 
     /// Frames held in the caches, waiting for the application.
     fn held_frames(&self) -> usize {
-        self.inbound_cache.total_count as usize + self.packed_cache.len()
+        self.inbound_cache.len() + self.packed_cache.len()
     }
 
     /// Keep `held_since` in step with the caches. Run once per loop turn.
@@ -2140,6 +2139,25 @@ mod tests {
             .expect("the message must be cached, not lost with the gone waiter");
         assert_eq!(cached.id, "m1");
         assert!(ws.next_requests.is_empty() && ws.next_requests_list.is_empty());
+    }
+
+    /// The mediator re-pushes the undelivered inbox when live delivery is
+    /// enabled, so a message still in the cache can arrive again. It is held
+    /// once, and the cache drains back to nothing held.
+    #[tokio::test]
+    async fn a_redelivered_message_is_held_once() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        let frame = plaintext_frame("m1", None);
+
+        ws.process_inbound_didcomm_message(&atm, frame.clone())
+            .await;
+        ws.process_inbound_didcomm_message(&atm, frame).await;
+        assert_eq!(ws.held_frames(), 1);
+
+        assert_eq!(ws.inbound_cache.next().expect("cached").0.id, "m1");
+        assert!(ws.inbound_cache.next().is_none());
+        assert_eq!(ws.held_frames(), 0);
     }
 
     /// A gone waiter hands the message on to the next live one, oldest first.
