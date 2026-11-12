@@ -2,6 +2,7 @@ use affinidi_crypto::{JWK, KeyType, OctectParams, Params};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use rand::{TryRng, rngs::SysRng};
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 use crate::{
     errors::SecretsResolverError,
@@ -21,7 +22,7 @@ impl Secret {
         Secret {
             id: kid,
             type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK(keypair.jwk.clone()),
+            secret_material: SecretMaterial::JWK(keypair.jwk),
             private_bytes: keypair.private_bytes,
             public_bytes: keypair.public_bytes,
             key_type: KeyType::Ed25519,
@@ -35,7 +36,7 @@ impl Secret {
         kid: Option<&str>,
         seed: Option<&[u8; 32]>,
     ) -> Result<Self, SecretsResolverError> {
-        let seed = if let Some(seed) = seed {
+        let seed = Zeroizing::new(if let Some(seed) = seed {
             *seed
         } else {
             affinidi_crypto::ed25519::ed25519_private_to_x25519(
@@ -44,9 +45,9 @@ impl Secret {
                     .first_chunk::<32>()
                     .unwrap(),
             )
-        };
+        });
 
-        let x25519 = StaticSecret::from(seed);
+        let x25519 = StaticSecret::from(*seed);
         let x25519_public: PublicKey = PublicKey::from(&x25519);
 
         Ok(Secret {
@@ -60,7 +61,7 @@ impl Secret {
                     Some(BASE64_URL_SAFE_NO_PAD.encode(x25519.as_bytes())),
                 )),
             )),
-            private_bytes: x25519.to_bytes().to_vec(),
+            private_bytes: x25519.as_bytes().to_vec(),
             public_bytes: x25519_public.to_bytes().to_vec(),
             key_type: KeyType::X25519,
         })

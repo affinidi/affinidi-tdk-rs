@@ -24,7 +24,7 @@ impl Secret {
         Ok(Secret {
             id: kid,
             type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK(keypair.jwk.clone()),
+            secret_material: SecretMaterial::JWK(keypair.jwk),
             private_bytes: keypair.private_bytes,
             public_bytes: keypair.public_bytes,
             key_type: KeyType::Secp256k1,

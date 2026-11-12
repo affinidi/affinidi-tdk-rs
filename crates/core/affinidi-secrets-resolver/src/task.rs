@@ -1,7 +1,10 @@
 /*!
  * In multi-threaded applications, it is suggested to use a separate task to handle secrets
  *
- * This removes the need for locks and copying secrets around
+ * This removes the need for locks around the secrets store. It does not avoid
+ * copies: each `get_secret` returns a clone of the stored `Secret` over a
+ * channel. `Secret` is zeroize-on-drop, so each clone is wiped when the caller
+ * drops it.
  */
 
 use crate::secrets::Secret;
