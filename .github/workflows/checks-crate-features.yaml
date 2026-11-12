@@ -18,13 +18,16 @@ on:
       - "Cargo.lock"
       - ".github/workflows/checks-crate-features.yaml"
 
+# Runs fork pull requests with the read-only token and no secrets
+# (`pull_request`, never `pull_request_target`).
 permissions:
   contents: read
 
 jobs:
   feature-tests:
     name: ${{ matrix.crate }} [${{ matrix.features }}]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -44,7 +47,9 @@ jobs:
           - crate: affinidi-mdoc
             features: es384,mdl
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Install native deps
         run: |
@@ -52,14 +57,17 @@ jobs:
           sudo apt-get install -y --no-install-recommends libssl-dev libdbus-1-dev
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.95.0"
 
       - name: Cache cargo registry + build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: crate-features-${{ matrix.crate }}
+          # Only main writes the cache; a pull request reads it but never
+          # saves one that another branch could restore.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo test -p ${{ matrix.crate }} --features ${{ matrix.features }}
         env:
