@@ -15,8 +15,8 @@ use super::key_agreement::{EphemeralKeyPair, PrivateKeyAgreement, PublicKeyAgree
 /// `Ze || Zs` for ECDH-1PU, wiped when it goes out of scope.
 fn joined_secret(ze: &[u8], zs: &[u8]) -> Zeroizing<Vec<u8>> {
     let mut z = Zeroizing::new(Vec::with_capacity(ze.len() + zs.len()));
-    z.extend_from_slice(&ze);
-    z.extend_from_slice(&zs);
+    z.extend_from_slice(ze);
+    z.extend_from_slice(zs);
     z
 }
 

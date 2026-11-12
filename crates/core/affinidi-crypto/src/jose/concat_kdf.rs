@@ -100,7 +100,7 @@ struct CcTag<'a> {
 }
 
 fn output_len_bytes(key_len_bits: u32) -> Result<usize, CryptoError> {
-    if key_len_bits == 0 || key_len_bits % 8 != 0 || key_len_bits > MAX_KEY_LEN_BITS {
+    if key_len_bits == 0 || !key_len_bits.is_multiple_of(8) || key_len_bits > MAX_KEY_LEN_BITS {
         return Err(CryptoError::KeyDerivation(format!(
             "Concat KDF output length must be a non-zero multiple of 8 bits, at most \
              {MAX_KEY_LEN_BITS}; got {key_len_bits}"
