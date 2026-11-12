@@ -1,5 +1,42 @@
 # Affinidi Crypto Changelog
 
+## Unreleased (0.2.12) — key pairs print without their private key; Concat KDF takes any whole-byte length
+
+- **Changed:** every generated key pair (`ed25519`, `p256`, `p384`, `p521`,
+  `secp256k1`, `ml_dsa`, `slh_dsa` `KeyPair`) derived `Debug`, so `{:?}`
+  printed `private_bytes` in full. `Debug` is now hand-written: it prints
+  `private_bytes: "<redacted>"` and every other field as before (the JWK
+  already printed its `d` as `<redacted>`).
+- **Added:** `Zeroize` for every `KeyPair`. `zeroize()` wipes `private_bytes`
+  and, where there is one, the JWK. The types keep `Clone` and their public
+  fields and gain no `Drop`, because callers in this workspace and downstream
+  move `private_bytes` out into their own zeroizing containers, which a `Drop`
+  impl would forbid. A holder that keeps the key pair calls `zeroize()`.
+- **Changed:** key generation and conversion no longer leave copies of the
+  private key behind: the generators move `private_bytes` instead of cloning
+  it, `generate_x25519` wipes the Ed25519 key it derives from, and
+  `ed25519_private_to_x25519` wipes the SHA-512 expansion. The ECDH-ES and
+  ECDH-1PU KEK derivations wipe `Ze`, `Zs`, `Ze || Zs` and the KDF output they
+  copy the KEK from; AES key wrap wipes its working registers;
+  `A256CBC-HS512` builds its AES key straight from the CEK slice.
+- **Changed:** the AES key-unwrap integrity check compares in constant time,
+  like the `A256CBC-HS512` tag check.
+- **Fixed:** `concat_kdf`, `concat_kdf_1pu` and `concat_kdf_1pu_legacy` ran a
+  single SHA-256 round, so `key_len_bits` above 256 panicked on the slice, and
+  a length that was not a whole number of bytes was rounded down while the
+  unrounded value went into SuppPubInfo. They now run the SP 800-56A counter
+  loop, so any whole-byte length up to the new `MAX_KEY_LEN_BITS` (16384)
+  works, e.g. 512 bits for direct key agreement with `A256CBC-HS512`. Zero,
+  a length that is not a multiple of 8, or one above the maximum returns
+  `CryptoError::KeyDerivation`. Output for 1 to 256 bits is unchanged (the
+  known-answer tests still hold). The ES and 1PU variants share one
+  implementation.
+- **Compatibility (R3.6):** no signature change. `Debug` text of the key
+  pairs shows `<redacted>` where the private key was. `concat_kdf*` return an
+  error where they panicked before. Return types of `diffie_hellman`, the
+  `derive_*` functions and `aes_kw::unwrap` stay plain `Vec<u8>` / `[u8; 32]`;
+  callers that hold them should wrap them in `Zeroizing`.
+
 ## Unreleased (0.2.11) — A128GCM / A256GCM content encryption
 
 `jose` gains AES-GCM content encryption: `jose::gcm` (free functions) and the

@@ -5,10 +5,28 @@
 //! Ported from `affinidi-messaging-didcomm` for #327; byte-level output is
 //! locked by [`super::kat`] (the ECDH-1PU KEK golden matches PR #336).
 
+use zeroize::Zeroizing;
+
 use crate::error::CryptoError;
 
 use super::concat_kdf::{concat_kdf, concat_kdf_1pu, concat_kdf_1pu_legacy};
 use super::key_agreement::{EphemeralKeyPair, PrivateKeyAgreement, PublicKeyAgreement};
+
+/// `Ze || Zs` for ECDH-1PU, wiped when it goes out of scope.
+fn joined_secret(ze: &[u8], zs: &[u8]) -> Zeroizing<Vec<u8>> {
+    let mut z = Zeroizing::new(Vec::with_capacity(ze.len() + zs.len()));
+    z.extend_from_slice(ze);
+    z.extend_from_slice(zs);
+    z
+}
+
+/// Copies a derived 256-bit KEK out of the KDF output, wiping the output.
+fn kek_256(kek: Vec<u8>) -> Result<[u8; 32], CryptoError> {
+    let kek = Zeroizing::new(kek);
+    kek.as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::KeyAgreement("derived key wrong size".into()))
+}
 
 // ─── ECDH-ES (anonymous encryption) ─────────────────────────────────────────
 
@@ -21,7 +39,7 @@ pub fn derive_key_es(
     apv: &[u8],
     key_len: u32,
 ) -> Result<Vec<u8>, CryptoError> {
-    let z = ephemeral.diffie_hellman(recipient_public)?;
+    let z = Zeroizing::new(ephemeral.diffie_hellman(recipient_public)?);
     concat_kdf(&z, alg, apu, apv, key_len)
 }
 
@@ -34,7 +52,7 @@ pub fn derive_key_es_recipient(
     apv: &[u8],
     key_len: u32,
 ) -> Result<Vec<u8>, CryptoError> {
-    let z = recipient_private.diffie_hellman(ephemeral_public)?;
+    let z = Zeroizing::new(recipient_private.diffie_hellman(ephemeral_public)?);
     concat_kdf(&z, alg, apu, apv, key_len)
 }
 
@@ -53,8 +71,7 @@ pub fn derive_sender_key(
         apv,
         256,
     )?;
-    kek.try_into()
-        .map_err(|_| CryptoError::KeyAgreement("derived key wrong size".into()))
+    kek_256(kek)
 }
 
 // ─── ECDH-1PU (authenticated encryption) ────────────────────────────────────
@@ -75,11 +92,9 @@ pub fn derive_key_1pu(
     cc_tag: &[u8],
     key_len: u32,
 ) -> Result<Vec<u8>, CryptoError> {
-    let ze = ephemeral.diffie_hellman(recipient_public)?;
-    let zs = sender_private.diffie_hellman(recipient_public)?;
-    let mut z = Vec::with_capacity(ze.len() + zs.len());
-    z.extend_from_slice(&ze);
-    z.extend_from_slice(&zs);
+    let ze = Zeroizing::new(ephemeral.diffie_hellman(recipient_public)?);
+    let zs = Zeroizing::new(sender_private.diffie_hellman(recipient_public)?);
+    let z = joined_secret(&ze, &zs);
     concat_kdf_1pu(&z, alg, apu, apv, key_len, cc_tag)
 }
 
@@ -95,11 +110,9 @@ pub fn derive_key_1pu_recipient(
     cc_tag: &[u8],
     key_len: u32,
 ) -> Result<Vec<u8>, CryptoError> {
-    let ze = recipient_private.diffie_hellman(ephemeral_public)?;
-    let zs = recipient_private.diffie_hellman(sender_public)?;
-    let mut z = Vec::with_capacity(ze.len() + zs.len());
-    z.extend_from_slice(&ze);
-    z.extend_from_slice(&zs);
+    let ze = Zeroizing::new(recipient_private.diffie_hellman(ephemeral_public)?);
+    let zs = Zeroizing::new(recipient_private.diffie_hellman(sender_public)?);
+    let z = joined_secret(&ze, &zs);
     concat_kdf_1pu(&z, alg, apu, apv, key_len, cc_tag)
 }
 
@@ -118,11 +131,9 @@ pub fn derive_key_1pu_recipient_legacy(
     cc_tag: &[u8],
     key_len: u32,
 ) -> Result<Vec<u8>, CryptoError> {
-    let ze = recipient_private.diffie_hellman(ephemeral_public)?;
-    let zs = recipient_private.diffie_hellman(sender_public)?;
-    let mut z = Vec::with_capacity(ze.len() + zs.len());
-    z.extend_from_slice(&ze);
-    z.extend_from_slice(&zs);
+    let ze = Zeroizing::new(recipient_private.diffie_hellman(ephemeral_public)?);
+    let zs = Zeroizing::new(recipient_private.diffie_hellman(sender_public)?);
+    let z = joined_secret(&ze, &zs);
     concat_kdf_1pu_legacy(&z, alg, apu, apv, key_len, cc_tag)
 }
 
@@ -145,8 +156,7 @@ pub fn derive_sender_key_1pu(
         cc_tag,
         256,
     )?;
-    kek.try_into()
-        .map_err(|_| CryptoError::KeyAgreement("derived key wrong size".into()))
+    kek_256(kek)
 }
 
 /// Sender-side `ECDH-1PU+A256KW` wrapping key using the **legacy**
@@ -163,12 +173,9 @@ pub fn derive_sender_key_1pu_legacy(
     apv: &[u8],
     cc_tag: &[u8],
 ) -> Result<[u8; 32], CryptoError> {
-    let ze = ephemeral.private.diffie_hellman(recipient_public)?;
-    let zs = sender_private.diffie_hellman(recipient_public)?;
-    let mut z = Vec::with_capacity(ze.len() + zs.len());
-    z.extend_from_slice(&ze);
-    z.extend_from_slice(&zs);
+    let ze = Zeroizing::new(ephemeral.private.diffie_hellman(recipient_public)?);
+    let zs = Zeroizing::new(sender_private.diffie_hellman(recipient_public)?);
+    let z = joined_secret(&ze, &zs);
     let kek = concat_kdf_1pu_legacy(&z, b"ECDH-1PU+A256KW", apu, apv, 256, cc_tag)?;
-    kek.try_into()
-        .map_err(|_| CryptoError::KeyAgreement("derived key wrong size".into()))
+    kek_256(kek)
 }

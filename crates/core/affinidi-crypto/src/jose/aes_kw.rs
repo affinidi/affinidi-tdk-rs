@@ -10,6 +10,8 @@ use aes::Aes256;
 // BlockCipherEncrypt/BlockCipherDecrypt. The `encrypt_block`/`decrypt_block`
 // methods themselves are unchanged.
 use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
+use subtle::ConstantTimeEq;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::CryptoError;
 
@@ -32,10 +34,12 @@ pub fn wrap(kek: &[u8; 32], plaintext_key: &[u8]) -> Result<Vec<u8>, CryptoError
 
     // Initialize: A = IV, R[1..n] = plaintext blocks
     let mut a = IV;
-    let mut r: Vec<u64> = plaintext_key
-        .chunks_exact(8)
-        .map(|chunk| u64::from_be_bytes(chunk.try_into().unwrap()))
-        .collect();
+    let mut r: Zeroizing<Vec<u64>> = Zeroizing::new(
+        plaintext_key
+            .chunks_exact(8)
+            .map(|chunk| u64::from_be_bytes(chunk.try_into().unwrap()))
+            .collect(),
+    );
 
     // 6 * n rounds
     for j in 0..6u64 {
@@ -55,13 +59,14 @@ pub fn wrap(kek: &[u8; 32], plaintext_key: &[u8]) -> Result<Vec<u8>, CryptoError
             let t = (n_blocks as u64) * j + (i as u64) + 1;
             a = u64::from_be_bytes(block[..8].try_into().unwrap()) ^ t;
             *ri = u64::from_be_bytes(block[8..].try_into().unwrap());
+            block.zeroize();
         }
     }
 
     // Output: A || R[1] || ... || R[n]
     let mut output = Vec::with_capacity(8 + n);
     output.extend_from_slice(&a.to_be_bytes());
-    for block in &r {
+    for block in r.iter() {
         output.extend_from_slice(&block.to_be_bytes());
     }
 
@@ -85,10 +90,12 @@ pub fn unwrap(kek: &[u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError>
 
     // Initialize: A = C[0], R[i] = C[i]
     let mut a = u64::from_be_bytes(ciphertext[..8].try_into().unwrap());
-    let mut r: Vec<u64> = ciphertext[8..]
-        .chunks_exact(8)
-        .map(|chunk| u64::from_be_bytes(chunk.try_into().unwrap()))
-        .collect();
+    let mut r: Zeroizing<Vec<u64>> = Zeroizing::new(
+        ciphertext[8..]
+            .chunks_exact(8)
+            .map(|chunk| u64::from_be_bytes(chunk.try_into().unwrap()))
+            .collect(),
+    );
 
     // Unwrap: 6 * n rounds in reverse
     for j in (0..6u64).rev() {
@@ -107,18 +114,19 @@ pub fn unwrap(kek: &[u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError>
 
             a = u64::from_be_bytes(block[..8].try_into().unwrap());
             r[i] = u64::from_be_bytes(block[8..].try_into().unwrap());
+            block.zeroize();
         }
     }
 
     // Verify IV
-    if a != IV {
+    if !bool::from(a.ct_eq(&IV)) {
         return Err(CryptoError::KeyWrap(
             "key unwrap integrity check failed".into(),
         ));
     }
 
     let mut output = Vec::with_capacity(n_blocks * 8);
-    for block in &r {
+    for block in r.iter() {
         output.extend_from_slice(&block.to_be_bytes());
     }
 

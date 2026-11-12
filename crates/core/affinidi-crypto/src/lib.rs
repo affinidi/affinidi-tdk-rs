@@ -10,6 +10,33 @@
 //!   the `post-quantum` feature (off by default; also available
 //!   individually as `ml-dsa` / `slh-dsa`)
 
+/// Gives a key-pair struct a `Debug` that leaves `private_bytes` out and a
+/// `Zeroize` that wipes the private material. The struct keeps its public
+/// fields (and `Clone`), so holders can still move `private_bytes` into their
+/// own zeroizing container; anything left in place is wiped by `zeroize()`.
+#[allow(unused_macros)]
+macro_rules! key_pair_hygiene {
+    ($($other_field:ident),*) => {
+        impl std::fmt::Debug for KeyPair {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("KeyPair")
+                    .field("key_type", &self.key_type)
+                    .field("private_bytes", &"<redacted>")
+                    .field("public_bytes", &self.public_bytes)
+                    $(.field(stringify!($other_field), &self.$other_field))*
+                    .finish()
+            }
+        }
+
+        impl zeroize::Zeroize for KeyPair {
+            fn zeroize(&mut self) {
+                zeroize::Zeroize::zeroize(&mut self.private_bytes);
+                $(zeroize::Zeroize::zeroize(&mut self.$other_field);)*
+            }
+        }
+    };
+}
+
 mod error;
 mod jwk;
 mod key_type;
@@ -57,3 +84,35 @@ pub use p256::KeyPair as P256KeyPair;
 pub use p384::KeyPair as P384KeyPair;
 #[cfg(feature = "k256")]
 pub use secp256k1::KeyPair as Secp256k1KeyPair;
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) mod key_pair_test_support {
+    use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+
+    /// The `Debug` output of a key pair names the field but shows neither
+    /// the raw private bytes nor their base64url (`d`) form.
+    pub(crate) fn assert_debug_hides_private(printed: &str, private_bytes: &[u8]) {
+        assert!(!private_bytes.is_empty());
+        assert!(
+            printed.contains("private_bytes: \"<redacted>\""),
+            "{printed}"
+        );
+        assert!(
+            !printed.contains(&format!("{private_bytes:?}")),
+            "{printed}"
+        );
+        assert!(
+            !printed.contains(&BASE64_URL_SAFE_NO_PAD.encode(private_bytes)),
+            "{printed}"
+        );
+    }
+
+    /// After `zeroize()` the private bytes and the JWK's `d` are gone.
+    pub(crate) fn assert_jwk_private_wiped(jwk: &crate::JWK) {
+        match &jwk.params {
+            crate::Params::EC(params) => assert!(params.d.is_none()),
+            crate::Params::OKP(params) => assert!(params.d.is_none()),
+        }
+    }
+}

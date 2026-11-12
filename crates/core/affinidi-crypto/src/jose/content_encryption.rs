@@ -61,8 +61,8 @@ pub fn encrypt(
     padded.resize(plaintext.len() + pad_len, pad_len as u8);
 
     // AES-256-CBC encrypt
-    let enc_key_arr: [u8; 32] = enc_key.try_into().unwrap();
-    let encryptor = Aes256CbcEnc::new(&enc_key_arr.into(), iv.into());
+    let encryptor = Aes256CbcEnc::new_from_slices(enc_key, iv)
+        .map_err(|e| CryptoError::ContentEncryption(format!("AES-CBC init failed: {e}")))?;
     let ciphertext = encryptor.encrypt_padded_vec::<cbc::cipher::block_padding::NoPadding>(&padded);
 
     // HMAC-SHA-512 over: AAD || IV || ciphertext || AAD_len_bits (big-endian u64)
@@ -112,8 +112,8 @@ pub fn decrypt(
     }
 
     // AES-256-CBC decrypt
-    let enc_key_arr: [u8; 32] = enc_key.try_into().unwrap();
-    let decryptor = Aes256CbcDec::new(&enc_key_arr.into(), iv.into());
+    let decryptor = Aes256CbcDec::new_from_slices(enc_key, iv)
+        .map_err(|e| CryptoError::ContentEncryption(format!("AES-CBC init failed: {e}")))?;
     let buf = ciphertext.to_vec();
     let decrypted = decryptor
         .decrypt_padded_vec::<cbc::cipher::block_padding::NoPadding>(&buf)

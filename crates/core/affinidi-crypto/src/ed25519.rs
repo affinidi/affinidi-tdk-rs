@@ -6,6 +6,7 @@ use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use sha2::{Digest, Sha512};
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{CryptoError, JWK, KeyType, OctectParams, Params, error::Result};
 
@@ -13,7 +14,7 @@ use crate::{CryptoError, JWK, KeyType, OctectParams, Params, error::Result};
 ///
 /// `#[non_exhaustive]`: construct via [`KeyPair::new`] rather than a struct
 /// literal. Fields stay public for reads.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct KeyPair {
     pub key_type: KeyType,
@@ -21,6 +22,8 @@ pub struct KeyPair {
     pub public_bytes: Vec<u8>,
     pub jwk: JWK,
 }
+
+key_pair_hygiene!(jwk);
 
 impl KeyPair {
     /// Construct a key pair from its key type, raw private/public bytes, and
@@ -42,19 +45,20 @@ pub fn generate(seed: Option<&[u8; 32]>) -> KeyPair {
         None => SigningKey::generate(&mut rand_10::rng()),
     };
 
-    let private_bytes = signing_key.to_bytes().to_vec();
+    let private_bytes = Zeroizing::new(signing_key.to_bytes()).to_vec();
+    let private_d = BASE64_URL_SAFE_NO_PAD.encode(&private_bytes);
     let public_bytes = signing_key.verifying_key().to_bytes().to_vec();
 
     KeyPair {
         key_type: KeyType::Ed25519,
-        private_bytes: private_bytes.clone(),
+        private_bytes,
         public_bytes: public_bytes.clone(),
         jwk: JWK {
             key_id: None,
             params: Params::OKP(OctectParams {
                 curve: "Ed25519".to_string(),
                 x: BASE64_URL_SAFE_NO_PAD.encode(&public_bytes),
-                d: Some(BASE64_URL_SAFE_NO_PAD.encode(&private_bytes)),
+                d: Some(private_d),
             }),
         },
     }
@@ -66,26 +70,33 @@ pub fn generate_x25519(seed: Option<&[u8; 32]>) -> KeyPair {
         Some(seed) => StaticSecret::from(*seed),
         None => {
             // Generate from random ed25519 key
-            let ed_key = generate(None);
-            let x_seed = ed25519_private_to_x25519(&ed_key.private_bytes[..32].try_into().unwrap());
-            StaticSecret::from(x_seed)
+            let mut ed_key = generate(None);
+            let ed_secret: Zeroizing<[u8; 32]> = Zeroizing::new(
+                ed_key.private_bytes[..32]
+                    .try_into()
+                    .expect("Ed25519 private key is 32 bytes"),
+            );
+            ed_key.zeroize();
+            let x_seed = Zeroizing::new(ed25519_private_to_x25519(&ed_secret));
+            StaticSecret::from(*x_seed)
         }
     };
 
     let public: PublicKey = PublicKey::from(&secret);
-    let private_bytes = secret.to_bytes().to_vec();
+    let private_bytes = Zeroizing::new(secret.to_bytes()).to_vec();
+    let private_d = BASE64_URL_SAFE_NO_PAD.encode(&private_bytes);
     let public_bytes = public.to_bytes().to_vec();
 
     KeyPair {
         key_type: KeyType::X25519,
-        private_bytes: private_bytes.clone(),
+        private_bytes,
         public_bytes: public_bytes.clone(),
         jwk: JWK {
             key_id: None,
             params: Params::OKP(OctectParams {
                 curve: "X25519".to_string(),
                 x: BASE64_URL_SAFE_NO_PAD.encode(&public_bytes),
-                d: Some(BASE64_URL_SAFE_NO_PAD.encode(&private_bytes)),
+                d: Some(private_d),
             }),
         },
     }
@@ -101,6 +112,7 @@ pub fn ed25519_private_to_x25519(secret: &[u8; 32]) -> [u8; 32] {
 
     let mut result = [0u8; 32];
     result.copy_from_slice(&h[..32]);
+    h[..].zeroize();
     result
 }
 
@@ -175,6 +187,42 @@ pub fn x25519_public_jwk(data: &[u8]) -> Result<JWK> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ed25519_debug_hides_private_key() {
+        let keypair = generate(None);
+        crate::key_pair_test_support::assert_debug_hides_private(
+            &format!("{keypair:?}"),
+            &keypair.private_bytes,
+        );
+    }
+
+    #[test]
+    fn ed25519_zeroize_wipes_private_key() {
+        use zeroize::Zeroize;
+        let mut keypair = generate(None);
+        keypair.zeroize();
+        assert!(keypair.private_bytes.is_empty());
+        crate::key_pair_test_support::assert_jwk_private_wiped(&keypair.jwk);
+    }
+
+    #[test]
+    fn x25519_debug_hides_private_key() {
+        let keypair = generate_x25519(None);
+        crate::key_pair_test_support::assert_debug_hides_private(
+            &format!("{keypair:?}"),
+            &keypair.private_bytes,
+        );
+    }
+
+    #[test]
+    fn x25519_zeroize_wipes_private_key() {
+        use zeroize::Zeroize;
+        let mut keypair = generate_x25519(None);
+        keypair.zeroize();
+        assert!(keypair.private_bytes.is_empty());
+        crate::key_pair_test_support::assert_jwk_private_wiped(&keypair.jwk);
+    }
 
     const ED25519_SK: [u8; 32] = [
         202, 104, 239, 81, 53, 110, 80, 252, 198, 23, 155, 162, 215, 98, 223, 173, 227, 188, 110,

@@ -15,13 +15,15 @@ type EncodedPoint = p384::elliptic_curve::sec1::Sec1Point<p384::NistP384>;
 use crate::{CryptoError, ECParams, JWK, KeyType, Params, error::Result};
 
 /// Generated key pair with raw bytes and JWK representation
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct KeyPair {
     pub key_type: KeyType,
     pub private_bytes: Vec<u8>,
     pub public_bytes: Vec<u8>,
     pub jwk: JWK,
 }
+
+key_pair_hygiene!(jwk);
 
 /// Generates a random P-384 key pair using the OS RNG.
 ///
@@ -41,11 +43,12 @@ pub fn generate(secret: Option<&[u8]>) -> Result<KeyPair> {
 
     let verifying_key = VerifyingKey::from(&signing_key);
     let private_bytes = signing_key.to_bytes().to_vec();
+    let private_d = BASE64_URL_SAFE_NO_PAD.encode(&private_bytes);
     let public_bytes = verifying_key.to_sec1_point(false).to_bytes().to_vec();
 
     Ok(KeyPair {
         key_type: KeyType::P384,
-        private_bytes: private_bytes.clone(),
+        private_bytes,
         public_bytes: public_bytes.clone(),
         jwk: JWK {
             key_id: None,
@@ -53,7 +56,7 @@ pub fn generate(secret: Option<&[u8]>) -> Result<KeyPair> {
                 curve: "P-384".to_string(),
                 x: BASE64_URL_SAFE_NO_PAD.encode(verifying_key.to_sec1_point(false).x().unwrap()),
                 y: BASE64_URL_SAFE_NO_PAD.encode(verifying_key.to_sec1_point(false).y().unwrap()),
-                d: Some(BASE64_URL_SAFE_NO_PAD.encode(&private_bytes)),
+                d: Some(private_d),
             }),
         },
     })
@@ -96,6 +99,24 @@ pub fn public_jwk(data: &[u8]) -> Result<JWK> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn p384_debug_hides_private_key() {
+        let keypair = generate_random();
+        crate::key_pair_test_support::assert_debug_hides_private(
+            &format!("{keypair:?}"),
+            &keypair.private_bytes,
+        );
+    }
+
+    #[test]
+    fn p384_zeroize_wipes_private_key() {
+        use zeroize::Zeroize;
+        let mut keypair = generate_random();
+        keypair.zeroize();
+        assert!(keypair.private_bytes.is_empty());
+        crate::key_pair_test_support::assert_jwk_private_wiped(&keypair.jwk);
+    }
 
     #[test]
     fn generate_from_secret() {
