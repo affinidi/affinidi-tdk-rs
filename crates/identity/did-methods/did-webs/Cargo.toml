@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-webs"
-version = "0.13.1"
+version = "0.13.2"
 description = "Implementation of the did:webs DID method: did:web discovery with KERI-verified key state"
 repository.workspace = true
 edition.workspace = true
@@ -50,7 +50,7 @@ thiserror = "2"
 tracing = "0.1"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 wiremock = "0.6"
 
 [lints]

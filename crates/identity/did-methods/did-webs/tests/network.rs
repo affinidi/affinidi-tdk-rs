@@ -178,6 +178,53 @@ async fn an_oversized_artifact_is_refused() {
     assert!(err.to_string().contains("cap"), "{err}");
 }
 
+/// A server that answers every request with a chunked body (no
+/// `Content-Length`) that never ends, until the client hangs up.
+async fn serve_endless_chunked_body() -> std::net::SocketAddr {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match socket.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(read) => request.extend_from_slice(&buffer[..read]),
+                    }
+                }
+                let head = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+                if socket.write_all(head).await.is_err() {
+                    return;
+                }
+                let mut chunk = format!("{:x}\r\n", 64 * 1024).into_bytes();
+                chunk.extend(std::iter::repeat_n(b'{', 64 * 1024));
+                chunk.extend_from_slice(b"\r\n");
+                while socket.write_all(&chunk).await.is_ok() {}
+            });
+        }
+    });
+    address
+}
+
+#[tokio::test]
+async fn an_artifact_without_a_content_length_is_cut_off_at_the_cap() {
+    let address = serve_endless_chunked_body().await;
+    let did = format!("did:webs:{}:{AID}", address.to_string().replace(':', "%3A"));
+
+    let err = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        WebsResolver::with_policy(HostPolicy::AllowPrivate).resolve(&did),
+    )
+    .await
+    .expect("reading must stop at the cap, not run until the request timeout")
+    .expect_err("an endless artifact must be refused");
+    assert!(err.to_string().contains("cap"), "{err}");
+}
+
 #[cfg(feature = "create")]
 #[tokio::test]
 async fn a_did_json_that_disagrees_fails_resolution() {

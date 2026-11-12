@@ -223,35 +223,45 @@ impl WebsResolver {
             });
         }
 
-        // Check the advertised length first so an oversized body is refused
-        // before it is read, then check again while reading: `Content-Length`
-        // is the server's claim, not a fact.
-        if let Some(len) = response.content_length()
-            && len > MAX_ARTIFACT_BYTES as u64
-        {
-            return Err(DidWebsError::Fetch {
-                url: url.to_string(),
-                reason: format!("artifact declares {len} bytes, over the {MAX_ARTIFACT_BYTES} cap"),
-            });
-        }
-
-        let bytes = response.bytes().await.map_err(|e| DidWebsError::Fetch {
-            url: url.to_string(),
-            reason: e.to_string(),
-        })?;
-
-        if bytes.len() > MAX_ARTIFACT_BYTES {
-            return Err(DidWebsError::Fetch {
-                url: url.to_string(),
-                reason: format!(
-                    "artifact is {} bytes, over the {MAX_ARTIFACT_BYTES} cap",
-                    bytes.len()
-                ),
-            });
-        }
-
-        Ok(bytes.to_vec())
+        read_capped(response, url, MAX_ARTIFACT_BYTES).await
     }
+}
+
+/// Read a response body, refusing one larger than `cap` bytes.
+///
+/// The advertised `Content-Length` is checked before reading, so a body that
+/// declares itself too large is refused without being read. The body is then
+/// read chunk by chunk and counted as it arrives, so a body sent without a
+/// `Content-Length`, or with one smaller than the body, stops being read as
+/// soon as it passes the cap.
+async fn read_capped(
+    mut response: reqwest::Response,
+    url: &str,
+    cap: usize,
+) -> Result<Vec<u8>, DidWebsError> {
+    if let Some(len) = response.content_length()
+        && len > cap as u64
+    {
+        return Err(DidWebsError::Fetch {
+            url: url.to_string(),
+            reason: format!("artifact declares {len} bytes, over the {cap} cap"),
+        });
+    }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| DidWebsError::Fetch {
+        url: url.to_string(),
+        reason: e.to_string(),
+    })? {
+        if body.len() + chunk.len() > cap {
+            return Err(DidWebsError::Fetch {
+                url: url.to_string(),
+                reason: format!("artifact is over the {cap} cap"),
+            });
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// Check the URL's host, port and userinfo under

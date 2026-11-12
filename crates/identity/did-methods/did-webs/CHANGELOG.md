@@ -2,6 +2,40 @@
 
 All notable changes to this crate are documented here.
 
+## [0.13.2] - Unreleased
+
+### Changed (behaviour, R3.6)
+
+- **The host label must decode to a host.** `DidWebs::parse` percent-decodes
+  the host label in full and refuses it unless it is a host (a hostname, or
+  an IP literal, which this resolver also accepts: IPv4, or IPv6 in
+  brackets) and an optional numeric port: a host
+  label that decodes to user information (`@`), a path (`/`, `\`), a query
+  (`?`), a fragment (`#`), a further `%`, whitespace or a control character
+  is refused, as is a malformed escape or one that is not UTF-8. Before, the
+  label was put into the artifact URL as written (only `%3A` decoded), so a
+  label such as `a.example@b.example` was fetched from `b.example`.
+- **Path labels must decode to one path segment.** A path label that is `.`
+  or `..`, or that decodes to `/`, `\`, `?`, `#`, `@`, `%` or a control
+  character, is refused. Path labels are still written into the URL as they
+  appear in the DID.
+- **Artifact size is enforced while reading.** `MAX_ARTIFACT_BYTES` was
+  checked against `Content-Length` and then only after the whole body had
+  been read, so a body without a `Content-Length` was read in full (until the
+  request timeout) before being refused. The body is now counted chunk by
+  chunk and reading stops as soon as it passes the cap. No API change.
+
+### Fixed
+
+- `DidWebs::is_loopback` recognises a bracketed IPv6 loopback host with a
+  port (`[::1]:7676`); it split on the first `:` and never matched one. It
+  now compares the host as the URL parser normalises it, so `LOCALHOST`,
+  `0x7f.1` and `[0:0:0:0:0:0:0:1]` are recognised as well.
+- `DidWebs::host()` returns the host label percent-decoded in full, not only
+  its `%3A` port separator.
+- Comparing DIDs with non-ASCII characters no longer garbles them while
+  normalising percent-encoding case.
+
 ## [0.13.1] - 2026-11-11
 
 ### Changed

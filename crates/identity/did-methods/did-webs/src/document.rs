@@ -464,8 +464,7 @@ pub(crate) fn same_did(a: &str, b: &str) -> bool {
 /// Uppercase the hex digits of every percent-encoded triplet (RFC 3986
 /// §6.2.2.1).
 pub(crate) fn normalize_percent_encoding(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
+    let mut bytes = s.as_bytes().to_vec();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%'
@@ -473,16 +472,15 @@ pub(crate) fn normalize_percent_encoding(s: &str) -> String {
             && bytes[i + 1].is_ascii_hexdigit()
             && bytes[i + 2].is_ascii_hexdigit()
         {
-            out.push('%');
-            out.push(bytes[i + 1].to_ascii_uppercase() as char);
-            out.push(bytes[i + 2].to_ascii_uppercase() as char);
+            bytes[i + 1].make_ascii_uppercase();
+            bytes[i + 2].make_ascii_uppercase();
             i += 3;
         } else {
-            out.push(bytes[i] as char);
             i += 1;
         }
     }
-    out
+    // Only ASCII hex digits were changed, so the bytes are still UTF-8.
+    String::from_utf8(bytes).unwrap_or_else(|_| s.to_string())
 }
 
 /// Turn a CESR-encoded public key into a JWK.
@@ -738,5 +736,6 @@ mod tests {
         );
         assert_eq!(normalize_percent_encoding("100%"), "100%");
         assert_eq!(normalize_percent_encoding("a%zz"), "a%zz");
+        assert_eq!(normalize_percent_encoding("caf\u{e9}%3a"), "caf\u{e9}%3A");
     }
 }
