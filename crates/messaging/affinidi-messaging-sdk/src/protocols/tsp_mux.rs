@@ -425,17 +425,37 @@ fn answer_thread(doc: &Value) -> Option<String> {
 
 const NOTICE_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/notice/0.1";
 
-/// The next frame off the socket that matters: a binary frame, or the end.
-/// `Ok(None)` when the stream ended without a close frame; `Err` on a close
-/// frame (with the mediator's reason) or a transport error.
-async fn next_binary(ws: &mut TspWsStream) -> Result<Option<Vec<u8>>, ATMError> {
+/// What came off the socket.
+enum Incoming {
+    /// A binary frame.
+    Frame(Vec<u8>),
+    /// The stream ended without a close frame.
+    Ended,
+    /// The mediator closed the socket, or the transport failed. `replaced`
+    /// is decided from the close frame itself (see [`is_replacement`]), never
+    /// from error text.
+    Closed { error: ATMError, replaced: bool },
+}
+
+/// Whether the mediator closed this socket because a newer connection for
+/// the same DID took its place: close code 1008 (policy) with exactly the
+/// mediator's reason. Text that only contains the words does not count.
+fn is_replacement(frame: &tokio_tungstenite::tungstenite::protocol::CloseFrame) -> bool {
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+    frame.code == CloseCode::Policy && frame.reason.as_str() == REPLACED_REASON
+}
+
+/// The next frame off the socket that matters: a binary frame, the end, or a
+/// close (with the mediator's reason) or transport error.
+async fn next_incoming(ws: &mut TspWsStream) -> Incoming {
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::Message;
     loop {
         match ws.next().await {
-            Some(Ok(Message::Binary(bytes))) => return Ok(Some(bytes.to_vec())),
+            Some(Ok(Message::Binary(bytes))) => return Incoming::Frame(bytes.to_vec()),
             Some(Ok(Message::Close(frame))) => {
-                return Err(ATMError::TransportError(match frame {
+                let replaced = frame.as_ref().is_some_and(is_replacement);
+                let error = ATMError::TransportError(match frame {
                     Some(frame) if !frame.reason.is_empty() => format!(
                         "tsp-mux websocket closed by the mediator: {} ({})",
                         frame.reason, frame.code
@@ -447,16 +467,30 @@ async fn next_binary(ws: &mut TspWsStream) -> Result<Option<Vec<u8>>, ATMError> 
                         )
                     }
                     None => "tsp-mux websocket closed by the mediator (no reason given)".into(),
-                }));
+                });
+                return Incoming::Closed { error, replaced };
             }
-            None => return Ok(None),
+            None => return Incoming::Ended,
             Some(Ok(_)) => continue,
             Some(Err(e)) => {
-                return Err(ATMError::TransportError(format!(
-                    "tsp-mux websocket receive error: {e}"
-                )));
+                return Incoming::Closed {
+                    error: ATMError::TransportError(format!(
+                        "tsp-mux websocket receive error: {e}"
+                    )),
+                    replaced: false,
+                };
             }
         }
+    }
+}
+
+/// [`next_incoming`] for the handshake: `Ok(None)` when the stream ended
+/// without a close frame; `Err` on a close frame or a transport error.
+async fn next_binary(ws: &mut TspWsStream) -> Result<Option<Vec<u8>>, ATMError> {
+    match next_incoming(ws).await {
+        Incoming::Frame(bytes) => Ok(Some(bytes)),
+        Incoming::Ended => Ok(None),
+        Incoming::Closed { error, .. } => Err(error),
     }
 }
 
@@ -641,10 +675,12 @@ async fn open_mux(
     }
 }
 
-/// The reason the mediator closes a socket with when a newer connection for
-/// the same DID took its place. A managed socket stops on it: connecting
-/// again would replace the newer connection in turn, and the two would take
-/// it from each other for ever.
+/// The reason the mediator closes a socket with (code 1008) when a newer
+/// connection for the same DID took its place. A managed socket stops on it:
+/// connecting again would replace the newer connection in turn, and the two
+/// would take it from each other for ever. The mediator decides delivery
+/// anyway, so this gives a hostile one nothing it lacks; matching the code
+/// and the exact reason keeps any other close or error from stopping it.
 const REPLACED_REASON: &str = "replaced by a newer connection";
 
 /// Whether a failed reconnect is final: the mediator (or the profile) no
@@ -943,9 +979,14 @@ impl TspMuxSender {
 enum Ended {
     /// The client closed or dropped the socket: stop for good.
     Client(String),
-    /// The socket went away: the reason, and the error to hand `recv` when
-    /// nothing reconnects.
-    Lost(String, Option<ATMError>),
+    /// The socket went away: the reason, the error to hand `recv` when
+    /// nothing reconnects, and whether the mediator said a newer connection
+    /// replaced it.
+    Lost {
+        reason: String,
+        error: Option<ATMError>,
+        replaced: bool,
+    },
 }
 
 /// Serve one socket until it ends: read and sort every frame, write what the
@@ -961,8 +1002,8 @@ async fn pump(
     use tokio_tungstenite::tungstenite::Message;
     loop {
         tokio::select! {
-            incoming = next_binary(ws) => match incoming {
-                Ok(Some(frame)) => match demux.sort(frame).await {
+            incoming = next_incoming(ws) => match incoming {
+                Incoming::Frame(frame) => match demux.sort(frame).await {
                     Sorted::Frame(f) => {
                         if let TspMuxFrame::Event(e) = &f
                             && let Some(refused) = MuxRefused::from_event(e)
@@ -979,10 +1020,20 @@ async fn pump(
                     }
                     Sorted::Ignore => {}
                 },
-                Ok(None) => {
-                    return Ended::Lost("the socket ended without a close frame".into(), None);
+                Incoming::Ended => {
+                    return Ended::Lost {
+                        reason: "the socket ended without a close frame".into(),
+                        error: None,
+                        replaced: false,
+                    };
                 }
-                Err(e) => return Ended::Lost(e.to_string(), Some(e)),
+                Incoming::Closed { error, replaced } => {
+                    return Ended::Lost {
+                        reason: error.to_string(),
+                        error: Some(error),
+                        replaced,
+                    };
+                }
             },
             cmd = out.recv() => match cmd {
                 Some(Outgoing::Frame { bytes, done }) => {
@@ -1034,14 +1085,18 @@ async fn run(
     let mut up_since = tokio::time::Instant::now();
     let mut delay = Duration::ZERO;
     loop {
-        let (mut reason, error) = match pump(&mut ws, &demux, &shared, &mut out, &frames).await {
-            Ended::Client(reason) => {
-                shared.finish(reason);
-                return;
-            }
-            Ended::Lost(reason, error) => (reason, error),
-        };
-        let replaced = reason.contains(REPLACED_REASON);
+        let (mut reason, error, replaced) =
+            match pump(&mut ws, &demux, &shared, &mut out, &frames).await {
+                Ended::Client(reason) => {
+                    shared.finish(reason);
+                    return;
+                }
+                Ended::Lost {
+                    reason,
+                    error,
+                    replaced,
+                } => (reason, error, replaced),
+            };
         let Some(redial) = redial.as_ref().filter(|_| !replaced) else {
             if replaced && redial.is_some() {
                 warn!(principal = %shared.principal, "tsp-mux socket replaced by a newer connection; not reconnecting");
@@ -2090,12 +2145,15 @@ mod tests {
 
     // ─── managed reconnect ──────────────────────────────────────────────────
 
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
     /// What a fake mediator does with one accepted connection.
     struct Conn {
         selected: &'static str,
         frames: Vec<Message>,
-        /// Close with this reason after the frames; `None` holds it open.
-        close: Option<&'static str>,
+        /// Close with this code and reason after the frames; `None` holds it
+        /// open.
+        close: Option<(CloseCode, &'static str)>,
     }
 
     /// Dials the fake mediator, offering `tsp-mux`.
@@ -2132,7 +2190,7 @@ mod tests {
     ) -> (Arc<LocalDialer>, Arc<std::sync::atomic::AtomicUsize>) {
         use futures_util::StreamExt;
         use std::sync::atomic::{AtomicUsize, Ordering};
-        use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+        use tokio_tungstenite::tungstenite::protocol::CloseFrame;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let accepted = Arc::new(AtomicUsize::new(0));
@@ -2156,10 +2214,10 @@ mod tests {
                 for f in conn.frames {
                     let _ = ws.send(f).await;
                 }
-                if let Some(reason) = conn.close {
+                if let Some((code, reason)) = conn.close {
                     let _ = ws
                         .close(Some(CloseFrame {
-                            code: CloseCode::Away,
+                            code,
                             reason: reason.into(),
                         }))
                         .await;
@@ -2244,7 +2302,7 @@ mod tests {
             Conn {
                 selected: "tsp-mux",
                 frames: vec![Message::Binary(ready_frame(&k).into())],
-                close: Some("instance shutting down"),
+                close: Some((CloseCode::Away, "instance shutting down")),
             },
             Conn {
                 selected: "tsp-mux",
@@ -2291,7 +2349,7 @@ mod tests {
         let (dialer, accepted) = serve_each(vec![Conn {
             selected: "tsp-mux",
             frames: vec![Message::Binary(ready_frame(&k).into())],
-            close: Some("replaced by a newer connection"),
+            close: Some((CloseCode::Policy, REPLACED_REASON)),
         }])
         .await;
         let policy = TspMuxReconnect::default()
@@ -2310,6 +2368,70 @@ mod tests {
         assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
+    /// Only the mediator's own replacement close stops a managed socket: code
+    /// 1008 with exactly its reason. Other codes, or text that merely holds
+    /// the words, do not.
+    #[test]
+    fn only_the_exact_replacement_close_counts() {
+        use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+        let close = |code, reason: &str| CloseFrame {
+            code,
+            reason: reason.to_string().into(),
+        };
+        assert!(is_replacement(&close(CloseCode::Policy, REPLACED_REASON)));
+        assert!(!is_replacement(&close(CloseCode::Away, REPLACED_REASON)));
+        assert!(!is_replacement(&close(CloseCode::Normal, REPLACED_REASON)));
+        assert!(!is_replacement(&close(
+            CloseCode::Policy,
+            "x: replaced by a newer connection (forwarded)"
+        )));
+        assert!(!is_replacement(&close(CloseCode::Policy, "")));
+    }
+
+    /// A close that only looks like a replacement (another code, or the words
+    /// inside other text) is an ordinary drop: the managed socket reconnects.
+    #[tokio::test]
+    async fn a_lookalike_replacement_close_still_reconnects() {
+        let k = keys();
+        let (dialer, accepted) = serve_each(vec![
+            Conn {
+                selected: "tsp-mux",
+                frames: vec![Message::Binary(ready_frame(&k).into())],
+                close: Some((CloseCode::Away, REPLACED_REASON)),
+            },
+            Conn {
+                selected: "tsp-mux",
+                frames: vec![Message::Binary(ready_frame(&k).into())],
+                close: Some((
+                    CloseCode::Policy,
+                    "upstream: replaced by a newer connection",
+                )),
+            },
+            Conn {
+                selected: "tsp-mux",
+                frames: vec![Message::Binary(ready_frame(&k).into())],
+                close: None,
+            },
+        ])
+        .await;
+        let policy = TspMuxReconnect::default()
+            .with_delays(Duration::from_millis(20), Duration::from_millis(50));
+        let mut sock = open_on(dialer, &k, Some(policy)).await;
+        for _ in 0..2 {
+            let frame = timeout(Duration::from_secs(5), sock.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(frame, Some(TspMuxFrame::Reconnected { .. })),
+                "{frame:?}"
+            );
+        }
+        assert_eq!(*sock.state().borrow(), TspMuxState::Open);
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 3);
+        sock.close().await.unwrap();
+    }
+
     /// When the mediator stops selecting `tsp-mux`, a managed socket gives up:
     /// `recv` says why and the state is `Closed`.
     #[tokio::test]
@@ -2319,7 +2441,7 @@ mod tests {
             Conn {
                 selected: "tsp-mux",
                 frames: vec![Message::Binary(ready_frame(&k).into())],
-                close: Some("bye"),
+                close: Some((CloseCode::Away, "bye")),
             },
             Conn {
                 selected: "tsp",
@@ -2347,13 +2469,13 @@ mod tests {
             Conn {
                 selected: "tsp-mux",
                 frames: vec![Message::Binary(ready_frame(&k).into())],
-                close: Some("bye"),
+                close: Some((CloseCode::Away, "bye")),
             },
             // Upgraded but never sends `ready`, then goes.
             Conn {
                 selected: "tsp-mux",
                 frames: vec![],
-                close: Some("not ready"),
+                close: Some((CloseCode::Away, "not ready")),
             },
             Conn {
                 selected: "tsp-mux",
@@ -2396,7 +2518,7 @@ mod tests {
         let (dialer, accepted) = serve_each(vec![Conn {
             selected: "tsp-mux",
             frames: vec![Message::Binary(ready_frame(&k).into())],
-            close: Some("instance shutting down"),
+            close: Some((CloseCode::Away, "instance shutting down")),
         }])
         .await;
         let mut sock = open_on(dialer, &k, None).await;
@@ -2417,7 +2539,7 @@ mod tests {
         let (dialer, accepted) = serve_each(vec![Conn {
             selected: "tsp-mux",
             frames: vec![Message::Binary(ready_frame(&k).into())],
-            close: Some("bye"),
+            close: Some((CloseCode::Away, "bye")),
         }])
         .await;
         let policy =
