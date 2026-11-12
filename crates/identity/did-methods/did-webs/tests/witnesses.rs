@@ -178,3 +178,103 @@ fn resolution_refuses_an_unwitnessed_did() {
         "resolution must not return a document for a KEL missing its witnessing",
     );
 }
+
+/// The digest an establishment event commits to for `signer`'s key.
+fn commitment(signer: &Signer) -> String {
+    affinidi_keri_crypto::Diger::from_data("E", signer.verfer().qb64().expect("qb64").as_bytes())
+        .expect("digest")
+        .qb64()
+        .expect("qb64")
+}
+
+/// A rotation of `prefix` at `sn` to `key`, committing to `next`, with the
+/// given witness changes and a threshold of one.
+fn rotation(
+    prefix: &str,
+    sn: u64,
+    prior: &str,
+    key: &Signer,
+    next: &Signer,
+    cut: &[String],
+    add: &[String],
+) -> Serder {
+    let mut sad = sad!({
+        "v": "KERI10JSON000000_",
+        "t": "rot",
+        "d": "",
+        "i": prefix,
+        "s": format!("{sn:x}"),
+        "p": prior,
+        "kt": "1",
+        "k": [key.verfer().qb64().expect("qb64")],
+        "nt": "1",
+        "n": [commitment(next)],
+        "bt": "1",
+        "br": SadValue::Array(cut.iter().map(|w| sad!(w.as_str())).collect()),
+        "ba": SadValue::Array(add.iter().map(|w| sad!(w.as_str())).collect()),
+        "a": [],
+    });
+    fix_version(&mut sad);
+    said::compute_said(&mut sad, "d", "E", SerializationKind::Json).expect("said");
+    Serder::new(SerializationKind::Json, sad).expect("serder")
+}
+
+#[test]
+fn the_key_state_at_each_establishment_event_matches_a_replay_to_it() {
+    let keys: Vec<Signer> = (1..=5).map(|seed| signer(seed, true)).collect();
+    let witness = signer(20, false);
+    let second = signer(21, false);
+    let witness_prefix = witness.verfer().qb64().expect("qb64");
+    let second_prefix = second.verfer().qb64().expect("qb64");
+
+    let icp = witnessed_inception(&keys[0], &keys[1], &witness_prefix);
+    let prefix = icp.prefix().expect("prefix");
+    let mut events = vec![icp];
+    // Add a witness, keep the set, then cut it again.
+    let changes: [(&[String], &[String]); 3] = [
+        (&[], std::slice::from_ref(&second_prefix)),
+        (&[], &[]),
+        (std::slice::from_ref(&second_prefix), &[]),
+    ];
+    for (n, (cut, add)) in changes.into_iter().enumerate() {
+        let prior = events.last().expect("an event").said().expect("said");
+        events.push(rotation(
+            &prefix,
+            n as u64 + 1,
+            &prior,
+            &keys[n + 1],
+            &keys[n + 2],
+            cut,
+            add,
+        ));
+    }
+    let bytes: Vec<u8> = events
+        .iter()
+        .enumerate()
+        .flat_map(|(n, event)| stream(event, &keys[n], Some(&witness)))
+        .collect();
+
+    let kels = Kels::parse(&bytes).expect("parses");
+    kels.key_state(&prefix).expect("the log verifies");
+    let mut witness_counts = Vec::new();
+    for (sn, event) in events.iter().enumerate() {
+        let said = event.said().expect("said");
+        let recorded = kels.key_state_at(&prefix, &said).expect("recorded");
+        let replayed = Kels::parse(&bytes)
+            .expect("parses")
+            .as_of(&prefix, sn as u64)
+            .expect("narrows")
+            .key_state(&prefix)
+            .expect("replays to it");
+        assert_eq!(recorded.sn, replayed.sn);
+        assert_eq!(recorded.said, replayed.said);
+        assert_eq!(recorded.keys, replayed.keys);
+        assert_eq!(recorded.next_keys, replayed.next_keys);
+        assert_eq!(recorded.backers, replayed.backers);
+        assert_eq!(recorded.backer_threshold, replayed.backer_threshold);
+        assert_eq!(recorded.last_event_digest, replayed.last_event_digest);
+        assert_eq!(recorded.next_keys, vec![commitment(&keys[sn + 1])]);
+        witness_counts.push(recorded.backers.len());
+    }
+    assert_eq!(witness_counts, [1, 2, 2, 1]);
+}

@@ -346,6 +346,11 @@ pub struct DesignatedKeyRoles {
 
 /// Read the key roles `aid` has designated.
 ///
+/// It reads the designations whatever the identifier's state, and says
+/// nothing of a deactivation: check [`Kels::is_deactivated`] before using
+/// the keys of a deactivated identifier, or resolve with
+/// [`crate::resolve_with_metadata`], which reports it.
+///
 /// # Errors
 /// Returns [`DidWebsError::Kel`] only if `aid`'s own key event log does not
 /// verify.

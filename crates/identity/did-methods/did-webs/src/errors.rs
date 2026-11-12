@@ -57,6 +57,14 @@ pub enum DidWebsError {
     #[error("unsupportedDesignation: schema {0} is critical and not implemented")]
     UnsupportedDesignation(String),
 
+    /// The identifier is deactivated: its last rotation committed to no next
+    /// keys (§ Deactivate). Returned where only a document is returned, so
+    /// that its last keys are not taken for current ones;
+    /// [`resolve_with_metadata`](crate::resolver::resolve_with_metadata)
+    /// reports the deactivation in the metadata instead.
+    #[error("{0} is deactivated")]
+    Deactivated(String),
+
     /// A key is not one this implementation can publish for its purpose.
     #[error("invalid key: {0}")]
     InvalidKey(String),

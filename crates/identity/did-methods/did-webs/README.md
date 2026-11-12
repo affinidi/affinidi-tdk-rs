@@ -30,6 +30,20 @@ publisher of the DID.
 `nextVersionId`, `equivalentId` and `deactivated` — and a DID URL carrying
 `?versionId=<sn>` resolves the document as of that key event.
 
+A deactivated identifier (its last rotation committed to no next keys) does
+not resolve to its keys. Deactivation belongs to the DID, so it is read from
+the whole stream: `resolve` and `resolve_from_artifacts` fail with
+`DidWebsError::Deactivated` at every version, and `resolve_with_metadata`
+reports `deactivated: true` at every version. The deactivating version's
+document keeps only `id` and `alsoKnownAs`, and `update` publishes it so; an
+earlier `?versionId=` returns that version's keys for checking signatures
+made while they were current.
+
+A `keri.cesr` stream is refused past `kel::MAX_STREAM_MESSAGES` messages,
+`kel::MAX_STREAM_SIGNATURES` signatures, `kel::MAX_STREAM_BACKERS` witness
+entries or `kel::MAX_STREAM_SEALS` seals, and `WebsResolver` verifies it on
+tokio's blocking thread pool, no more at once than there are CPUs.
+
 ```rust,no_run
 # async fn run() -> Result<(), affinidi_did_webs::DidWebsError> {
 let doc = affinidi_did_webs::resolve(
@@ -355,10 +369,6 @@ twin is designated), and the specification requires the `did:keri` alias. There
 is no switch for any of them.
 
 ## What is not verified yet
-
-- **Deactivation.** A rotation committing to no next keys is reported as
-  `deactivated`, but `affinidi-keri-core` 0.4 does not yet accept the
-  `nt: "0"` such a rotation carries, so the log fails to verify instead.
 
 - **Credential schema validation.** A designated-aliases attestation is matched
   by its schema SAID and its issuance chain is verified, but the credential body
