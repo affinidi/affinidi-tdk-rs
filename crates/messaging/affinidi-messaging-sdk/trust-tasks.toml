@@ -20,10 +20,13 @@
 "messaging/message/get" = "0.1"
 "messaging/message/list" = "0.1"
 "messaging/message/status" = "0.2"
-"messaging/monitor/event" = "0.2"
-"messaging/monitor/subscribe" = "0.1"
+"messaging/monitor/event" = ["0.2", "0.3"]
+"messaging/monitor/subscribe" = ["0.1", "0.2"]
 "messaging/monitor/unsubscribe" = "0.1"
 "messaging/mux/ack" = "0.1"
+"messaging/mux/admin-list" = "0.1"
+"messaging/mux/admin-revoke" = "0.1"
+"messaging/mux/admin-revoke-all" = "0.1"
 "messaging/mux/attach" = "0.1"
 "messaging/mux/connections" = "0.1"
 "messaging/mux/detach" = "0.1"
