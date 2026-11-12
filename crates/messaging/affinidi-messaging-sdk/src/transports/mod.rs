@@ -71,6 +71,31 @@ impl ATM {
         wait_for_response: bool,
         auto_delete: bool,
     ) -> Result<SendMessageResponse, ATMError> {
+        self.send_message_inner(
+            profile,
+            message,
+            msg_id,
+            wait_for_response,
+            auto_delete,
+            true,
+        )
+        .await
+    }
+
+    /// [`send_message`](Self::send_message), choosing whether a reply that
+    /// arrives on the websocket is deleted. `send_message` always deletes it
+    /// there; a reply the mediator never stores (the answer to
+    /// `messaging/mux/ack`) must not be, or each ack would queue a delete for
+    /// an id that was never there.
+    pub(crate) async fn send_message_inner(
+        &self,
+        profile: &Arc<ATMProfile>,
+        message: &str,
+        msg_id: &str,
+        wait_for_response: bool,
+        auto_delete: bool,
+        ws_reply_delete: bool,
+    ) -> Result<SendMessageResponse, ATMError> {
         let Some(mediator) = &*profile.inner.mediator else {
             return Err(ATMError::ConfigError(
                 "No Mediator is configured for this Profile".to_string(),
@@ -141,7 +166,7 @@ impl ATM {
                         ws_channel,
                         rx,
                         Duration::from_secs(10),
-                        true,
+                        ws_reply_delete,
                     )
                     .await?;
 

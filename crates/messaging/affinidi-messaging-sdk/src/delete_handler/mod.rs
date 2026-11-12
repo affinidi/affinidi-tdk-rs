@@ -216,6 +216,13 @@ async fn delete_batch(
         return;
     }
     let alias = profile.inner.alias.clone();
+    // On a mux connection, ack on the socket: only the mediator instance that
+    // holds the connection knows its members, so a REST delete of a member's
+    // message that lands on another instance is refused, and the message is
+    // redelivered on every reconnect. REST stays the fallback.
+    if ack_on_mux_socket(atm, profile, &ids, recent).await {
+        return;
+    }
     let count = ids.len();
     let request = DeleteMessageRequest { message_ids: ids };
 
@@ -293,6 +300,55 @@ async fn delete_batch(
             }
         }
     }
+}
+
+/// Delete `ids` with `messaging/mux/ack` on the profile's mux connection, when
+/// it has a ready one. `true` when the mediator answered (each id then acked,
+/// gone, or refused and left for redelivery); `false` when there is no mux
+/// connection or the ack failed, and the caller deletes over REST instead.
+async fn ack_on_mux_socket(
+    atm: &ATM,
+    profile: &Arc<ATMProfile>,
+    ids: &[String],
+    recent: &mut RecentDeletes,
+) -> bool {
+    use crate::tasks::messaging::mux::ack::v0_1::AckRefusalReason;
+    let Some(ready) = profile.mux_ready().await else {
+        return false;
+    };
+    if ready.borrow().is_none() {
+        return false;
+    }
+    let alias = profile.inner.alias.as_str();
+    for chunk in ids.chunks(crate::protocols::trust_tasks::MUX_ACK_MAX) {
+        let answer = match atm.trust_tasks().mux_ack(profile, chunk).await {
+            Ok(answer) => answer,
+            Err(e) => {
+                debug!("deletion handler: mux ack failed ({e}); deleting over REST");
+                return false;
+            }
+        };
+        for id in &answer.acked {
+            recent.record(alias, id.as_str());
+        }
+        let mut refused = Vec::new();
+        for r in &answer.refused {
+            match r.reason {
+                // Already gone: the expected answer for a redelivered copy.
+                AckRefusalReason::NotFound => recent.record(alias, r.message_id.as_str()),
+                AckRefusalReason::NotPermitted => refused.push(r.message_id.as_str()),
+            }
+        }
+        if !refused.is_empty() {
+            warn!(
+                deleted = answer.acked.len(),
+                failed = refused.len(),
+                "deletion handler: the mediator refused to delete some ids (a member \
+                 without `delete` on this connection): {refused:?}"
+            );
+        }
+    }
+    true
 }
 
 pub enum DeletionHandlerCommands {

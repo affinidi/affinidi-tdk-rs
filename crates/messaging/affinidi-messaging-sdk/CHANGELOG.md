@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.45.13 — didcomm-mux: acks go on the socket
+
+- New `TrustTasksOps::mux_ack(profile, message_ids)`: `messaging/mux/ack` on
+  the profile's `didcomm-mux` connection, the DIDComm counterpart of the
+  `tsp-mux` acker. Each id comes back `acked` or `refused` (`notFound`,
+  `notPermitted`). At most 100 ids per call; it fails when the profile has
+  no ready mux connection.
+- **Behaviour change:** on a profile with a ready `didcomm-mux` connection,
+  background deletes (`delete_message_background`, and so `auto_delete` on
+  live streams) now go out as `messaging/mux/ack` on the socket instead of
+  a REST `DELETE`. Only the mediator instance that holds the connection knows
+  its members, so behind a load balancer a REST delete of a member's message
+  that landed on another instance was refused and the message came back on
+  every reconnect. When the ack fails (the socket dropped, no answer), the
+  delete falls back to REST as before. Needs a mediator that pushes the ack
+  answer instead of storing it (affinidi-messaging-mediator main after the
+  matching change); no released mediator has mux.
+- The answer to `mux/ack` is not deleted after it is read: the mediator
+  never stores it, and a delete would only queue another ack.
+
 ## 0.45.12 — tsp-mux: a socket that reconnects by itself
 
 - New `TspOps::connect_websocket_mux_managed(profile, TspMuxReconnect)`: a
