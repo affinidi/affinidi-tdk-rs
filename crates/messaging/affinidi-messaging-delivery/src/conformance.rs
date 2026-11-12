@@ -16,7 +16,7 @@
 //! - **dedup** — two `Guaranteed` sends with one idempotency key make one entry;
 //! - **accept-then-die** — a hop-accepted entry with no evidence settles
 //!   `Unconfirmed` at window expiry, never a false `Delivered`;
-//! - **outbox-drain** — a hop-id that drains from the sender's outbox settles
+//! - **outbox-drain** — a hop-id that drains from the sender's outbox never settles
 //!   `Delivered`;
 //! - **layer receipt** — an inbound receipt from the entry's recipient settles
 //!   it `Delivered`; the same receipt from another sender settles nothing.
@@ -243,7 +243,8 @@ pub async fn assert_accept_then_die(wire: &dyn ConformanceWire) {
 }
 
 /// **Outbox-drain:** a `Sent` entry whose hop-id was observed in the sender's
-/// outbox and then drained (recipient picked up) settles `Delivered`.
+/// outbox and then drained stays `Sent` (a pickup and an expiry look the same
+/// in the listing) and settles `Unconfirmed` at its window.
 pub async fn assert_outbox_drain(wire: &dyn ConformanceWire) {
     let (transport, ctrl) = wire.fresh().await;
     let outbox = Arc::new(InMemoryOutboxStore::new());
@@ -280,15 +281,24 @@ pub async fn assert_outbox_drain(wire: &dyn ConformanceWire) {
         "outbox-drain: still Sent while present in the outbox"
     );
 
-    // Drained after being observed → recipient picked up → Delivered.
+    // Drained after being observed → collected or expired; still Sent.
     ctrl.set_outbox_ids(vec![]).await;
     poll_outbox_drain(transport.as_ref(), outbox.as_ref())
         .await
         .unwrap();
     assert_eq!(
         outbox.get("k").await.unwrap().unwrap().state,
-        OutboxState::Delivered,
-        "outbox-drain: drain after observation settles Delivered"
+        OutboxState::Sent,
+        "outbox-drain: a drain from the listing alone is not a delivery"
+    );
+    let deadline = outbox.get("k").await.unwrap().unwrap().deliver_by_ms;
+    sweep_confirmations(outbox.as_ref(), deadline)
+        .await
+        .unwrap();
+    assert_eq!(
+        outbox.get("k").await.unwrap().unwrap().state,
+        OutboxState::Unconfirmed,
+        "outbox-drain: with no other evidence the window settles Unconfirmed"
     );
 }
 

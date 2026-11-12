@@ -107,8 +107,9 @@ pub struct OutboxEntry {
     /// Whether `hop_id` has been seen present in the transport's outbox at least
     /// once. Guards the outbox-drain check against the mediator's eventual
     /// consistency: a hop-id "absent" right after send may simply not be indexed
-    /// yet, so drain (absent) only counts as pickup *after* it was observed
-    /// present.
+    /// yet, so absence is only reported as a drain *after* it was observed
+    /// present. A drain is not delivery evidence (pickup and expiry look the
+    /// same); see [`poll_outbox_drain`](crate::poll_outbox_drain).
     pub outbox_observed: bool,
 }
 

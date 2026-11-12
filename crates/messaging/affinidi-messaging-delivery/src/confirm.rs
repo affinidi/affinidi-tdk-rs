@@ -12,9 +12,11 @@
 //!   know", never a false "delivered".
 //!
 //! This module owns the state machine. The *evidence sources* — the receiver
-//! auto-emitting a layer receipt on durable persist, polling the mediator's own
-//! outbox for drain, and re-sending over an alternate binding on expiry — layer
-//! on top and call [`confirm_delivered`] / drive the sweep.
+//! auto-emitting a layer receipt on durable persist, the mediator's receipts
+//! for collection, and re-sending over an alternate binding on expiry — layer
+//! on top and call [`confirm_delivered`] / drive the sweep. A message merely
+//! gone from the mediator's outbox listing is not one of them: it may have
+//! been collected or may have expired, and the listing cannot say which.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -227,6 +229,7 @@ pub async fn confirmation_loop_with(
     escalator: Arc<dyn ExpiryEscalator>,
 ) {
     let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
         match sweep_confirmations_with(store.as_ref(), now_unix_ms(), escalator.as_ref()).await {
@@ -257,8 +260,8 @@ pub async fn confirmation_loop_with(
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DrainPollReport {
-    /// `Sent` entries confirmed `Delivered` because their hop-id **drained** from
-    /// the sender's outbox (recipient took pickup).
+    /// `Sent` entries confirmed `Delivered` because the mediator's receipt says
+    /// the recipient collected them ([`MessageTransport::outbox_status`]).
     pub delivered: usize,
     /// `Sent` entries seen still present in the outbox this pass (awaiting pickup).
     pub observed: usize,
@@ -266,6 +269,11 @@ pub struct DrainPollReport {
     /// message was removed before the recipient took it (discarded or
     /// withdrawn). Only [`MessageTransport::outbox_status`] can report this.
     pub lost: usize,
+    /// `Sent` entries seen in the outbox listing earlier and absent from it
+    /// now. Collected or expired: the listing cannot tell which, so they stay
+    /// `Sent` and settle by their window (`Unconfirmed`, or whatever an
+    /// [`ExpiryEscalator`] decides). Only the listing fallback counts these.
+    pub drained: usize,
 }
 
 /// How many hop-ids one [`MessageTransport::outbox_status`] call asks about —
@@ -280,14 +288,13 @@ const STATUS_BATCH: usize = 100;
 /// for a transport or mediator without them.
 ///
 /// The mediator holds a sent message in the sender's outbox until the recipient
-/// acks pickup, then deletes it. So a `Sent` entry whose `hop_id` has **drained**
-/// from [`MessageTransport::outbox_message_ids`] — after being seen present there
-/// — is the transport-level signal that the recipient took delivery, and the
-/// entry settles `Delivered`.
-///
-/// The `outbox_observed` guard handles the mediator's eventual consistency: a
-/// hop-id absent immediately after send may simply not be indexed yet, so
-/// "absent" only counts as pickup **after** the id has been observed present.
+/// acks pickup or the message expires, then deletes it. A `Sent` entry whose
+/// `hop_id` is present in [`MessageTransport::outbox_message_ids`] is marked
+/// observed. One that was observed and is now absent is counted
+/// [`drained`](DrainPollReport::drained) but **not** settled: absence is the
+/// same for a pickup and an expiry, so it is no evidence of delivery. The
+/// entry stays `Sent` and settles by its window. The same holds for a listing
+/// that is capped or paged and leaves the entry out.
 ///
 /// A transport that gives no outbox signal (`outbox_message_ids` returns `None`,
 /// e.g. a stateless REST POST) yields an empty report.
@@ -400,9 +407,9 @@ async fn poll_outbox_drain_inner(
             }
             report.observed += 1;
         } else if entry.outbox_observed {
-            // Was present, now gone → recipient picked up → Delivered.
-            confirm_delivered(store, &entry.idempotency_key).await?;
-            report.delivered += 1;
+            // Was present, now gone: collected or expired, and the listing
+            // cannot say which. Left `Sent` to settle by its window.
+            report.drained += 1;
         }
         // else: absent and never observed → too early (eventual consistency); skip.
     }
@@ -410,8 +417,10 @@ async fn poll_outbox_drain_inner(
 }
 
 /// Settle `Sent` entries from the mediator's receipts, when the transport can
-/// report them. `None` when it cannot, and the caller falls back to inferring
-/// pickup from the outbox listing.
+/// report them. `None` when it cannot, and the caller falls back to the outbox
+/// listing. A transport that stops answering partway (`None` for a later
+/// batch) keeps what the earlier batches settled; the rest wait for the next
+/// poll.
 ///
 /// Receipts carry the same trust as the listing they replace — the mediator's
 /// word (see [`MessageTransport::outbox_status`]) — and remove the two ways the
@@ -453,18 +462,30 @@ async fn poll_outbox_status(
     }
 
     let mut report = DrainPollReport::default();
-    for batch in entries.chunks(STATUS_BATCH) {
+    for (index, batch) in entries.chunks(STATUS_BATCH).enumerate() {
         let hop_ids: Vec<String> = batch
             .iter()
             .filter_map(|entry| entry.hop_id.clone())
             .collect();
-        let Some(statuses) = transport
-            .outbox_status(&hop_ids)
-            .await
-            .map_err(|e| OutboxError::Backend(format!("outbox status failed: {e}")))?
-        else {
-            // No signal: use the outbox listing instead.
-            return Ok(None);
+        let answer = match transport.outbox_status(&hop_ids).await {
+            Ok(answer) => answer,
+            Err(e) if index == 0 => {
+                return Err(OutboxError::Backend(format!("outbox status failed: {e}")));
+            }
+            Err(e) => {
+                // Earlier batches were answered and settled; keep their
+                // report. The rest are asked about on the next poll.
+                tracing::warn!(error = %e, "outbox status failed partway; retrying the rest next tick");
+                return Ok(Some(report));
+            }
+        };
+        let Some(statuses) = answer else {
+            if index == 0 {
+                // No signal: use the outbox listing instead.
+                return Ok(None);
+            }
+            // Earlier batches were answered and settled; report them.
+            return Ok(Some(report));
         };
         // Each entry takes the status recorded under its own hop id, and
         // nothing else: an id the answer omits is no evidence, and a status
@@ -525,6 +546,7 @@ pub async fn outbox_drain_loop(
     interval: Duration,
 ) {
     let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut pacer = StatusPacer::new();
     loop {
         ticker.tick().await;
@@ -536,11 +558,20 @@ pub async fn outbox_drain_loop(
         )
         .await
         {
-            Ok(report) if report.delivered > 0 => {
-                tracing::debug!(
+            Ok(report) if report.lost > 0 => {
+                tracing::warn!(
+                    lost = report.lost,
                     delivered = report.delivered,
                     observed = report.observed,
-                    "outbox-drain confirmed deliveries",
+                    "the mediator removed messages before their recipients collected them",
+                );
+            }
+            Ok(report) if report.delivered > 0 || report.drained > 0 => {
+                tracing::debug!(
+                    delivered = report.delivered,
+                    drained = report.drained,
+                    observed = report.observed,
+                    "outbox-drain poll",
                 );
             }
             Ok(_) => {}
@@ -784,6 +815,11 @@ mod tests {
         status: Mutex<Option<std::collections::HashMap<String, OutboxStatus>>>,
         /// The hop ids each `outbox_status` call asked about.
         asked: Mutex<Vec<Vec<String>>>,
+        /// How many more `outbox_status` calls get an answer before it
+        /// answers `None` (or fails, with `status_then_fails`); `None` for
+        /// every call.
+        status_answers: Mutex<Option<usize>>,
+        status_then_fails: std::sync::atomic::AtomicBool,
         conn_rx: watch::Receiver<ConnState>,
         _conn_tx: watch::Sender<ConnState>,
     }
@@ -795,6 +831,8 @@ mod tests {
                 outbox: Mutex::new(outbox),
                 status: Mutex::new(None),
                 asked: Mutex::new(Vec::new()),
+                status_answers: Mutex::new(None),
+                status_then_fails: std::sync::atomic::AtomicBool::new(false),
                 conn_rx: rx,
                 _conn_tx: tx,
             }
@@ -854,6 +892,20 @@ mod tests {
             affinidi_messaging_core::MessagingError,
         > {
             self.asked.lock().unwrap().push(hop_ids.to_vec());
+            if let Some(remaining) = self.status_answers.lock().unwrap().as_mut() {
+                if *remaining == 0 {
+                    if self
+                        .status_then_fails
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        return Err(affinidi_messaging_core::MessagingError::Transport(
+                            "status timed out".into(),
+                        ));
+                    }
+                    return Ok(None);
+                }
+                *remaining -= 1;
+            }
             Ok(self.status.lock().unwrap().clone())
         }
     }
@@ -965,30 +1017,95 @@ mod tests {
         store.put(e).await.unwrap();
     }
 
+    /// Gone from the listing after being seen there is a pickup or an expiry,
+    /// and the listing cannot tell which: the entry stays `Sent` and its
+    /// window settles it `Unconfirmed`, never `Delivered`.
     #[tokio::test]
-    async fn drain_observes_then_confirms_delivered() {
+    async fn a_drain_from_the_listing_alone_is_not_a_delivery() {
         let store = InMemoryOutboxStore::new();
         sent_with_hop(&store, "k1", "h1").await;
         let transport = DrainMockTransport::new(Some(vec!["h1".to_string()]));
 
-        // Pass 1: h1 is present → observed, not yet delivered.
+        // Pass 1: h1 is present → observed.
         let r = poll_outbox_drain(&transport, &store).await.unwrap();
-        assert_eq!(r.observed, 1);
-        assert_eq!(r.delivered, 0);
+        assert_eq!((r.observed, r.delivered, r.drained), (1, 0, 0));
         let e = store.get("k1").await.unwrap().unwrap();
         assert!(e.outbox_observed);
         assert_eq!(e.state, OutboxState::Sent);
 
-        // h1 drains from the outbox (recipient picked up).
+        // h1 leaves the outbox: collected, or expired at the mediator.
         transport.set_outbox(vec![]);
 
-        // Pass 2: h1 absent AFTER being observed → Delivered.
+        // Pass 2: counted as drained, still Sent.
         let r = poll_outbox_drain(&transport, &store).await.unwrap();
-        assert_eq!(r.delivered, 1);
+        assert_eq!((r.observed, r.delivered, r.drained), (0, 0, 1));
         assert_eq!(
             store.get("k1").await.unwrap().unwrap().state,
-            OutboxState::Delivered
+            OutboxState::Sent
         );
+
+        // The window closes with no evidence → Unconfirmed.
+        let r = sweep_confirmations(&store, 61_000).await.unwrap();
+        assert_eq!(r.unconfirmed, 1);
+        assert_eq!(
+            store.get("k1").await.unwrap().unwrap().state,
+            OutboxState::Unconfirmed
+        );
+    }
+
+    /// A transport that answers the first status batch and then gives no
+    /// signal keeps what the first batch settled, and does not fall back to
+    /// the listing for the rest.
+    #[tokio::test]
+    async fn a_status_signal_lost_partway_keeps_the_settled_batches() {
+        let store = InMemoryOutboxStore::new();
+        for n in 0..(STATUS_BATCH + 1) {
+            sent_with_hop(&store, &format!("k{n:03}"), &format!("h{n:03}")).await;
+        }
+        let collected: Vec<(String, OutboxStatus)> = (0..(STATUS_BATCH + 1))
+            .map(|n| (format!("h{n:03}"), OutboxStatus::Collected))
+            .collect();
+        let borrowed: Vec<(&str, OutboxStatus)> = collected
+            .iter()
+            .map(|(id, state)| (id.as_str(), *state))
+            .collect();
+        let transport = DrainMockTransport::with_status(Some(vec![]), &borrowed);
+        *transport.status_answers.lock().unwrap() = Some(1);
+
+        let r = poll_outbox_drain(&transport, &store).await.unwrap();
+        assert_eq!((r.delivered, r.drained), (STATUS_BATCH, 0), "{r:?}");
+        let waiting = store.awaiting_confirmation().await.unwrap();
+        assert_eq!(
+            waiting.len(),
+            1,
+            "the unanswered batch waits for the next poll"
+        );
+    }
+
+    /// The same when a later batch fails outright: the settled batches are
+    /// reported, not discarded with an error.
+    #[tokio::test]
+    async fn a_status_call_failing_partway_keeps_the_settled_batches() {
+        let store = InMemoryOutboxStore::new();
+        for n in 0..(STATUS_BATCH + 1) {
+            sent_with_hop(&store, &format!("k{n:03}"), &format!("h{n:03}")).await;
+        }
+        let collected: Vec<(String, OutboxStatus)> = (0..(STATUS_BATCH + 1))
+            .map(|n| (format!("h{n:03}"), OutboxStatus::Collected))
+            .collect();
+        let borrowed: Vec<(&str, OutboxStatus)> = collected
+            .iter()
+            .map(|(id, state)| (id.as_str(), *state))
+            .collect();
+        let transport = DrainMockTransport::with_status(Some(vec![]), &borrowed);
+        *transport.status_answers.lock().unwrap() = Some(1);
+        transport
+            .status_then_fails
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let r = poll_outbox_drain(&transport, &store).await.unwrap();
+        assert_eq!(r.delivered, STATUS_BATCH, "{r:?}");
+        assert_eq!(store.awaiting_confirmation().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -1112,15 +1229,15 @@ mod tests {
     }
 
     /// A mediator without receipts answers `None`, and the outbox listing is
-    /// used exactly as before.
+    /// used: it observes, and reports a drain without settling it.
     #[tokio::test]
-    async fn without_receipts_the_outbox_listing_still_settles() {
+    async fn without_receipts_the_outbox_listing_reports_a_drain() {
         let store = InMemoryOutboxStore::new();
         sent_with_hop(&store, "k1", "h1").await;
         let transport = DrainMockTransport::new(Some(vec!["h1".to_string()]));
         poll_outbox_drain(&transport, &store).await.unwrap();
         transport.set_outbox(vec![]);
         let r = poll_outbox_drain(&transport, &store).await.unwrap();
-        assert_eq!(r.delivered, 1, "{r:?}");
+        assert_eq!((r.delivered, r.drained), (0, 1), "{r:?}");
     }
 }
