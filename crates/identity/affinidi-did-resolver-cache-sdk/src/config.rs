@@ -194,12 +194,14 @@ impl DIDCacheConfigBuilder {
         self
     }
 
-    /// Resolve agent names over the WebSocket connection instead of through the
-    /// registered backends.
+    /// Also ask the cache server for agent names over the WebSocket.
     ///
-    /// Saves a round trip and a transport: the cache server does name → DID →
-    /// document in one exchange, rather than the client making an HTTP call for
-    /// name → DID and then a WebSocket call for DID → document.
+    /// The cache server does name → DID → document in one exchange, run
+    /// alongside the registered backends' name → DID lookup. The backends
+    /// decide where the name points: the server's DID is only a hint, and its
+    /// document is used only when that DID is the one the backends confirm, which
+    /// saves the separate DID → document request. A name no backend confirms is
+    /// an error, with or without this option.
     ///
     /// **Requires `affinidi-did-resolver-cache-server` 0.9.9 or newer.** Off by
     /// default, and deliberately not auto-detected: an older server answers a

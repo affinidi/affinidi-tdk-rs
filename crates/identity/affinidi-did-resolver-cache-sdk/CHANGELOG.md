@@ -1,5 +1,61 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.52) — network mode checks the cache server's answer as local resolution would
+
+### Changed
+
+- **BEHAVIOUR (R3.6):** in network mode, the cache server's answer is checked
+  against the DID that was asked for, the way local resolution checks it:
+  - **did:key, did:peer, did:jwk, did:ethr, did:pkh, did:scid and did:webs are
+    never sent to the server.** They are resolved locally when the client is
+    built with the method's feature, and are otherwise an
+    `UnsupportedMethod` error, exactly as in local mode. key/peer/jwk/ethr/pkh
+    are derived from the DID itself; did:scid and did:webs are verified
+    against a log (and, for did:scid, against the latest version already
+    verified) that the server does not send. Previously only did:key and
+    did:peer fell back to local resolution, and only when the server failed.
+    A service with a cache server and no outbound access now fetches did:scid
+    and did:webs itself; a client without `did-jwk`, `did-ethr`, `did-pkh` or
+    `did-webs` can no longer resolve those methods through the server; a bare
+    did:scid with no source known to this client fails with "no source is
+    known" rather than taking the server's answer.
+  - **did:webvh:** the server's log is verified as before, and must not be
+    behind, or fork from, the latest version this client has already verified
+    for that SCID. A valid prefix of a log verifies on its own, so an older
+    copy could otherwise leave out a key rotation or the deactivation. The
+    version is recorded even when the log ends in a deactivation. **An answer
+    without the log is resolved locally** (under the client's host policy)
+    instead of being accepted with a warning; a client built without
+    `did-webvh` reports the method as unsupported.
+  - **Every other method (did:web, did:ebsi, custom methods):** the document's
+    `id` must equal the requested DID (without its path, query or fragment),
+    as did:web resolution already requires locally. A mismatch is a
+    `DIDCacheError::DIDError` and nothing is cached.
+- **BEHAVIOUR (R3.6), agent names over the WebSocket**
+  (`with_agent_names_over_websocket`): the DID the server maps a name to is
+  only a hint. The name is confirmed through the registered
+  `AgentNameResolver`s, as without the WebSocket, and that confirmed DID is
+  the one cached and returned. The server's answer is checked, and its
+  document kept, only when its DID is the confirmed one; an unconfirmed answer
+  is dropped without being examined, so it changes no client state. A name no backend confirms is an error, as it is
+  without the WebSocket; before, the server's mapping was cached and returned
+  with the name as its shortcut. The name lookup and the server request run
+  together.
+- Caching: a document whose `id` names an immutable method (did:key, …) is
+  cached with no expiry only when this client derived it itself for an
+  immutable DID. One from the cache server, or one answering a mutable DID,
+  is returned but not cached.
+- A `warn!` at construction when the cache server address is `ws://` to a host
+  other than this machine.
+- Rustdoc and the README describe what network mode verifies. They said the
+  client never trusts the server; for did:web and other methods with nothing
+  to verify, it trusts the server's document once its `id` matches, so the
+  README recommends `wss://` for anything but a local server.
+
+No public API change. Patch bump per
+[ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) point 3; the
+behaviour change is called out here (R3.6).
+
 ## Unreleased (0.8.51) — affinidi-did-webs 0.13
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.13, on

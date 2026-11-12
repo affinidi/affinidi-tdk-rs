@@ -116,34 +116,56 @@ impl DIDCacheClient {
     ) -> Result<ResolveResponse, DIDCacheError> {
         let name_hash = Self::hash_did(name.as_str());
 
-        // One-round-trip path: the cache server resolves name -> DID -> document
-        // in a single exchange, so there is no separate DID resolution to do.
-        // Verification still happens here, against a document this client
-        // received directly — the server is a cache, never a trust anchor.
+        // Over the WebSocket the cache server answers name -> DID -> document in
+        // one exchange. Its DID is only a hint: where a name points is decided
+        // by the name's own backends, the same evidence the path below uses.
+        // The two lookups run together. The server's answer is checked (with
+        // `verify_network_response`) and its document kept only when its DID
+        // is the one the backends confirm; an unconfirmed answer is dropped
+        // unexamined. The mapping cached is always the confirmed one. A name
+        // no backend confirms is refused, as it is without the WebSocket.
         #[cfg(all(feature = "agent-names", feature = "network"))]
-        if self.config.agent_names_over_websocket && self.network_task_tx.is_some() {
-            let (did, doc) = self.network_resolve_agent_name(name.as_str()).await?;
-
-            if let Err(e) = verify_also_known_as(&doc, name) {
-                warn!("agent name verification failed: {e}");
-                return Err(DIDCacheError::from(e));
+        if self.config.agent_names_over_websocket
+            && self.network_task_tx.is_some()
+            && self.agent_name_cache.get(&name_hash).await.is_none()
+        {
+            let (server, confirmed) = tokio::join!(
+                self.network_resolve_agent_name(name.as_str()),
+                self.resolve_name_deduplicated(name, name_hash)
+            );
+            let did = confirmed?;
+            match server {
+                Ok(answer) if answer.did == did => {
+                    match self
+                        .verify_network_response(
+                            &did,
+                            answer.document,
+                            answer.did_log,
+                            answer.did_witness_log,
+                        )
+                        .await
+                    {
+                        Ok(Some(doc)) => {
+                            if crate::cacheable(&did, &doc, crate::Origin::Server) {
+                                self.cache.insert(Self::cache_key(&did), doc).await;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => warn!(
+                            "the cache server's document for agent name '{name}' ({did}) was \
+                             refused: {e}"
+                        ),
+                    }
+                }
+                Ok(answer) => {
+                    warn!(
+                        "the cache server maps agent name '{name}' to {}, its backends to \
+                         {did}; using {did}",
+                        answer.did
+                    );
+                }
+                Err(e) => debug!("cache server lookup of agent name '{name}' failed: {e}"),
             }
-
-            let did_hash = Self::hash_did(&did);
-            // Populate the shared document cache so a later lookup by DID hits.
-            self.cache.insert(did_hash, doc.clone()).await;
-            self.agent_name_cache.insert(name_hash, did.clone()).await;
-
-            let method: crate::DIDMethod = did
-                .split(':')
-                .nth(1)
-                .and_then(|m| crate::DIDMethod::try_from(m).ok())
-                .unwrap_or(crate::DIDMethod::OTHER);
-
-            // Verification succeeded just above, so the name is safe to carry
-            // back as this DID's display shortcut.
-            return Ok(ResolveResponse::new(did, method, did_hash, doc, false)
-                .with_shortcut(DidShortcut::AgentName(name.without_scheme().to_string())));
         }
 
         let did = match self.agent_name_cache.get(&name_hash).await {

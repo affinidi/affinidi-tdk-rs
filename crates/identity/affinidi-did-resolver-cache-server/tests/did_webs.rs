@@ -4,7 +4,6 @@
 //! subscriber, so only one server can start per test process.
 #![cfg(feature = "network")]
 
-use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 use affinidi_did_resolver_cache_server::server::start_with_config;
 use std::{net::TcpListener as StdTcpListener, path::PathBuf};
 use tokio::time::{Duration, sleep};
@@ -12,20 +11,26 @@ use tokio::time::{Duration, sleep};
 /// The server resolves did:webs, under the same host policy as its other web
 /// methods: a did:webs naming a loopback host is refused by that policy, not
 /// reported as an unsupported method.
+///
+/// Asked over the server's HTTP endpoint, which shares the WebSocket's
+/// resolution path. A `DIDCacheClient` in network mode would not do: it
+/// resolves did:webs itself and never asks the server.
 #[tokio::test]
 async fn did_webs_is_resolved_under_the_host_policy() {
     let port = _start_cache_server().await;
-    let config = DIDCacheConfigBuilder::default()
-        .with_network_mode(&format!("ws://127.0.0.1:{port}/did/v1/ws"))
-        .build();
-    let client = DIDCacheClient::new(config).await.unwrap();
+    let did = "did:webs:127.0.0.1%3A1:ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe";
+    let url = format!(
+        "http://127.0.0.1:{port}/did/v1/resolve/{}",
+        did.replace('%', "%25")
+    );
 
-    let err = client
-        .resolve("did:webs:127.0.0.1%3A1:ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe")
-        .await
-        .expect_err("a loopback did:webs must be refused");
-    let message = err.to_string();
-    assert!(message.contains("host policy"), "{message}");
+    let response = reqwest::get(&url).await.expect("the server answers");
+    assert!(
+        !response.status().is_success(),
+        "a loopback did:webs must be refused"
+    );
+    let body = response.text().await.expect("an error body");
+    assert!(body.contains("host policy"), "{body}");
 }
 
 async fn _start_cache_server() -> u16 {
