@@ -120,7 +120,7 @@ digest = "sha256:3c0578ac3c034ed24f0bc80080509c872ab8c205b748db91ab0cad519f3c8ec
 slug = "messaging/mux/ack"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/mux/ack/0.1"
-digest = "sha256:042fb9afa9037fa4d539489037ed1877c6a9ab47f4e841a09731a5959731523e"
+digest = "sha256:1cb6857af57558210ac9a42e8902c3275095466eb7d9d8c97890b3e49423e72c"
 
 [[task]]
 slug = "messaging/mux/attach"
