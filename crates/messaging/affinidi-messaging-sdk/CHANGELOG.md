@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.45.17 — mux: administrators list and revoke stored grants; monitor membership events
+
+- New `TrustTasksOps` methods for the administrator mux tasks
+  (`messaging/mux/admin-list`, `admin-revoke`, `admin-revoke-all` 0.1;
+  trust-tasks#1234). Administrator accounts only; anyone else is refused
+  with `authorization.admin_required`.
+  - `mux_admin_list(profile, principal, member, cursor, limit)`: the stored
+    grants of a principal DID, a member DID or between the two, a page at a
+    time, without their signed statements. With `member`, `epoch` is that
+    DID's current epoch.
+  - `mux_admin_revoke(profile, principal, member, grant_ids, limit)`:
+    revoke them, at most `limit` (default 500) a request. `remaining` counts
+    what still matches.
+  - `mux_admin_revoke_until_done(…, max_rounds)`: sends `admin-revoke` again
+    until `remaining` is 0, at most `max_rounds` times. It returns a
+    `MuxAdminRevokeOutcome`: everything revoked, what remains, the rounds
+    sent and why it stopped (`Done`, `MaxRounds`, `NoProgress`, or
+    `Failed(error)` for a later round's error). A first-round error is
+    returned as the error, since nothing was revoked.
+  - `mux_admin_revoke_all(profile, did, epoch)`: advance a member DID's
+    epoch, voiding every grant on it. `epochMismatch` is refused with the
+    current epoch in its message.
+  - Selections the spec refuses fail before sending: neither `principal`
+    nor `member`, or `grant_ids` without `member`.
+- Monitor membership events (`messaging/monitor/subscribe` 0.2 and
+  `messaging/monitor/event` 0.3; trust-tasks#1235). Both versions are
+  pinned beside the old ones.
+  - `monitor_subscribe_with(profile, &MonitorSubscription)` sends
+    subscribe 0.2. `MonitorSubscription` takes the traffic `filter`, a
+    `membership` filter (the opt-in; none by default), `traffic(false)`
+    for a membership-only tap, the lease, the rate and `renew`. A mediator
+    before 0.2 refuses it; `monitor_subscribe` (0.1) is unchanged.
+  - `decode_monitor_event_v0_3` reads a batch at 0.3: traffic events,
+    `membership` events and `membership_dropped`. It reads 0.2 and 0.1
+    batches too, with no membership events.
+  - `decode_monitor_event` still returns 0.2. It now also reads a 0.3
+    batch, keeping its traffic events and dropping its membership events.
+- The registry marked `monitor/event` 0.2 and `monitor/subscribe` 0.1
+  superseded (an in-place draft change to their bundles). Code that names
+  `tasks::messaging::monitor::event::v0_2::Payload` or
+  `monitor::subscribe::v0_1::{Payload, Response}` now gets a deprecation
+  warning. Nothing else changes for existing callers.
+
 ## 0.45.16 — TSP login signs a statement naming the mediator, the session and an expiry
 
 - **Behaviour change (R3.6):** `TspAuthHandler` no longer signs the

@@ -23,8 +23,11 @@
 //! (see [`trust_task_versions`](super::trust_task_versions)); callers only see
 //! the 0.2 types. The other tasks have no 0.2.
 //!
-//! `monitor/event` is decoded at 0.2; a 0.1 batch from an older mediator is
-//! converted to it (see [`decode_monitor_event`]).
+//! `monitor/subscribe` is spoken at 0.1 ([`TrustTasksOps::monitor_subscribe`])
+//! and at 0.2 ([`TrustTasksOps::monitor_subscribe_with`], which adds mux
+//! membership events). [`decode_monitor_event`] decodes every batch at 0.2,
+//! traffic only; [`decode_monitor_event_v0_3`] decodes every batch at 0.3,
+//! with its membership events. Older batches are converted to either.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -742,6 +745,11 @@ impl TrustTasksOps<'_> {
     /// An administrator may watch anything; any other account only its own
     /// traffic (an omitted `dids` filter is narrowed to it). Renew before
     /// `expires_at`; the default lease is 300 s.
+    ///
+    /// This is `monitor/subscribe` 0.1: traffic events only. For mux
+    /// membership events, or to turn traffic events off, use
+    /// [`monitor_subscribe_with`](Self::monitor_subscribe_with).
+    #[allow(deprecated)]
     pub async fn monitor_subscribe(
         &self,
         profile: &Arc<ATMProfile>,
@@ -790,6 +798,38 @@ impl TrustTasksOps<'_> {
         task.recipient = Some(mediator_did.to_string());
 
         let response: TrustTask<monitor::unsubscribe::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
+    /// Send a `messaging/monitor/subscribe` 0.2 Trust Task: open (or, with
+    /// [`MonitorSubscription::renew`], renew and re-filter) a leased live tap
+    /// that can also carry mux membership events — a member DID attached to
+    /// or detached from a principal's mux connection.
+    ///
+    /// Membership events are opt-in: set [`MonitorSubscription::membership`].
+    /// Batches arrive at `messaging/monitor/event` 0.3 on the profile's live
+    /// stream; read them with [`decode_monitor_event_v0_3`]. The response's
+    /// `membership` is the filter in force, and is absent when the mediator
+    /// sends none (none asked for, or mux not enabled there). An
+    /// administrator sees every change; any other account only changes it is
+    /// party to.
+    ///
+    /// A mediator that predates 0.2 refuses the request as an unsupported
+    /// type; [`monitor_subscribe`](Self::monitor_subscribe) still works there
+    /// for traffic events.
+    pub async fn monitor_subscribe_with(
+        &self,
+        profile: &Arc<ATMProfile>,
+        subscription: &MonitorSubscription,
+    ) -> Result<monitor::subscribe::v0_2::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let p = subscription.payload()?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<monitor::subscribe::v0_2::Response> =
             self.exchange(profile, task).await?;
         Ok(response.payload)
     }
@@ -1366,6 +1406,123 @@ impl TrustTasksOps<'_> {
     }
 }
 
+/// What [`TrustTasksOps::monitor_subscribe_with`] asks for
+/// (`messaging/monitor/subscribe` 0.2). The default is the 0.1 subscription:
+/// every traffic event the requester may see, no membership events.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct MonitorSubscription {
+    /// Selects traffic events; `None` selects all the requester may see.
+    pub filter: Option<monitor::subscribe::v0_2::MonitorFilter>,
+    /// Opts in to mux membership events and selects which; `None` sends none.
+    /// An empty filter selects every one the requester may see.
+    pub membership: Option<monitor::subscribe::v0_2::MembershipFilter>,
+    /// `false` turns traffic events off, for a membership-only tap; `filter`
+    /// must then be `None`.
+    pub traffic: bool,
+    /// How long the subscription lives unless renewed (10–3600 s; the
+    /// mediator's default is 300).
+    pub lease_seconds: Option<u32>,
+    /// The rate ceiling the subscriber can absorb (1–1000).
+    pub max_events_per_second: Option<u32>,
+    /// Renew or re-filter this existing subscription instead of opening one.
+    pub renew: Option<String>,
+}
+
+impl Default for MonitorSubscription {
+    fn default() -> Self {
+        Self {
+            filter: None,
+            membership: None,
+            traffic: true,
+            lease_seconds: None,
+            max_events_per_second: None,
+            renew: None,
+        }
+    }
+}
+
+impl MonitorSubscription {
+    /// Every traffic event the requester may see, no membership events.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Only mux membership events (traffic off), selected by `membership`.
+    pub fn membership_only(membership: monitor::subscribe::v0_2::MembershipFilter) -> Self {
+        Self {
+            membership: Some(membership),
+            traffic: false,
+            ..Self::default()
+        }
+    }
+
+    /// Select traffic events with `filter`.
+    pub fn filter(mut self, filter: monitor::subscribe::v0_2::MonitorFilter) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    /// Opt in to mux membership events selected by `membership`.
+    pub fn membership(mut self, membership: monitor::subscribe::v0_2::MembershipFilter) -> Self {
+        self.membership = Some(membership);
+        self
+    }
+
+    /// Turn traffic events on or off.
+    pub fn traffic(mut self, traffic: bool) -> Self {
+        self.traffic = traffic;
+        self
+    }
+
+    /// The lease, in seconds.
+    pub fn lease_seconds(mut self, seconds: u32) -> Self {
+        self.lease_seconds = Some(seconds);
+        self
+    }
+
+    /// The rate ceiling, in events per second.
+    pub fn max_events_per_second(mut self, rate: u32) -> Self {
+        self.max_events_per_second = Some(rate);
+        self
+    }
+
+    /// Renew or re-filter the subscription `subscription_id`.
+    pub fn renew(mut self, subscription_id: impl Into<String>) -> Self {
+        self.renew = Some(subscription_id.into());
+        self
+    }
+
+    /// The request payload. `traffic` is sent only when off, so a
+    /// subscription with traffic on and no membership filter reads exactly
+    /// as at 0.1.
+    pub(crate) fn payload(&self) -> Result<monitor::subscribe::v0_2::Payload, ATMError> {
+        if !self.traffic && self.filter.is_some() {
+            return Err(ATMError::ConfigError(
+                "a monitor subscription with traffic off takes no traffic filter".into(),
+            ));
+        }
+        let renew = self
+            .renew
+            .as_deref()
+            .map(monitor::subscribe::v0_2::PayloadSubscriptionId::from_str)
+            .transpose()
+            .map_err(|e| ATMError::MsgSendError(format!("invalid subscription id: {e}")))?;
+        payload(
+            monitor::subscribe::v0_2::Payload::builder()
+                .filter(self.filter.clone())
+                .membership(self.membership.clone())
+                .traffic((!self.traffic).then_some(false))
+                .lease_seconds(self.lease_seconds.map(i64::from))
+                .max_events_per_second(
+                    self.max_events_per_second
+                        .and_then(|n| std::num::NonZeroU64::new(u64::from(n))),
+                )
+                .subscription_id(renew),
+        )
+    }
+}
+
 /// Recognise a `messaging/monitor/event` batch among live-stream messages.
 ///
 /// Returns `None` for anything else, so a live-stream reader can route monitor
@@ -1375,10 +1532,15 @@ impl TrustTasksOps<'_> {
 /// shape (each event's `at` → `occurredAt`) and parsed as the 0.2 type, so
 /// callers only see 0.2.
 ///
+/// A 0.3 batch (sent to a `monitor/subscribe` 0.2 subscription) is read
+/// as 0.2 too: its traffic events are kept and its membership events
+/// dropped. Use [`decode_monitor_event_v0_3`] to see them.
+///
 /// A batch is one document, so one event that does not parse refuses the
 /// whole batch, as it did at 0.1. That is logged at `warn` with the reason,
 /// so a dropped batch is visible rather than indistinguishable from a
 /// message that was never a monitor batch.
+#[allow(deprecated)]
 pub fn decode_monitor_event(message: &Message) -> Option<TrustTask<monitor::event::v0_2::Payload>> {
     use serde::Deserialize as _;
     use trust_tasks_rs::Payload as _;
@@ -1394,6 +1556,10 @@ pub fn decode_monitor_event(message: &Message) -> Option<TrustTask<monitor::even
         let mut doc = message.body.clone();
         monitor_event_to_v0_2(&mut doc);
         TrustTask::<monitor::event::v0_2::Payload>::deserialize(doc)
+    } else if ty == monitor::event::v0_3::Payload::TYPE_URI {
+        let mut doc = message.body.clone();
+        monitor_event_v0_3_to_v0_2(&mut doc);
+        TrustTask::<monitor::event::v0_2::Payload>::deserialize(doc)
     } else {
         return None;
     };
@@ -1405,11 +1571,61 @@ pub fn decode_monitor_event(message: &Message) -> Option<TrustTask<monitor::even
 /// The `messaging/monitor/event` Type URI a mediator before 0.48.0 pushes.
 const MONITOR_EVENT_V0_1: &str = "https://trusttasks.org/spec/messaging/monitor/event/0.1";
 
+/// Recognise a `messaging/monitor/event` batch among live-stream messages,
+/// at 0.3: traffic events, and the mux membership events of a subscription
+/// that opted in to them ([`TrustTasksOps::monitor_subscribe_with`]).
+///
+/// `membership` is empty and `membership_dropped` is `None` on a batch for a
+/// subscription without membership events. A 0.2 or 0.1 batch (from a
+/// `monitor/subscribe` 0.1 subscription, or an older mediator) is converted
+/// and read the same way: it never carries membership events.
+///
+/// Returns `None` for anything else, and for a batch that does not parse
+/// (logged at `warn`), as [`decode_monitor_event`] does.
+pub fn decode_monitor_event_v0_3(
+    message: &Message,
+) -> Option<TrustTask<monitor::event::v0_3::Payload>> {
+    use serde::Deserialize as _;
+    use trust_tasks_rs::Payload as _;
+    if message.typ != ENVELOPE_TYPE {
+        return None;
+    }
+    let ty = message.body.get("type").and_then(Value::as_str)?;
+    let parsed = if ty == monitor::event::v0_3::Payload::TYPE_URI {
+        TrustTask::<monitor::event::v0_3::Payload>::deserialize(&message.body)
+    } else if ty == MONITOR_EVENT_V0_2 || ty == MONITOR_EVENT_V0_1 {
+        // 0.3 extends 0.2 with optional members only.
+        let mut doc = message.body.clone();
+        if ty == MONITOR_EVENT_V0_1 {
+            monitor_event_to_v0_2(&mut doc);
+        }
+        doc["type"] = Value::String(monitor::event::v0_3::Payload::TYPE_URI.to_string());
+        TrustTask::<monitor::event::v0_3::Payload>::deserialize(doc)
+    } else {
+        return None;
+    };
+    parsed
+        .inspect_err(|e| warn!(r#type = ty, error = %e, "dropping a monitor/event batch that does not parse"))
+        .ok()
+}
+
+/// The `messaging/monitor/event` 0.2 Type URI.
+const MONITOR_EVENT_V0_2: &str = "https://trusttasks.org/spec/messaging/monitor/event/0.2";
+
+/// Rewrite a 0.3 monitor batch as the 0.2 one, in place: drop the
+/// membership members 0.3 added. Its traffic events are the same.
+fn monitor_event_v0_3_to_v0_2(doc: &mut Value) {
+    doc["type"] = Value::String(MONITOR_EVENT_V0_2.to_string());
+    if let Some(payload) = doc.get_mut("payload").and_then(Value::as_object_mut) {
+        payload.remove("membership");
+        payload.remove("membershipDropped");
+    }
+}
+
 /// Rewrite a 0.1 monitor batch as the 0.2 one, in place: 0.2 renames each
 /// event's `at` to `occurredAt` and changes nothing else.
 fn monitor_event_to_v0_2(doc: &mut Value) {
-    use trust_tasks_rs::Payload as _;
-    doc["type"] = Value::String(monitor::event::v0_2::Payload::TYPE_URI.to_string());
+    doc["type"] = Value::String(MONITOR_EVENT_V0_2.to_string());
     if let Some(events) = doc
         .get_mut("payload")
         .and_then(|p| p.get_mut("events"))
@@ -1587,6 +1803,174 @@ mod mux_connections_tests {
         );
         serde_json::from_value::<mux_tasks::revoke::v0_1::Payload>(revoke).expect("revoke");
     }
+
+    /// The admin-list, admin-revoke and admin-revoke-all payloads are valid
+    /// request payloads for the generated types.
+    #[test]
+    fn mux_admin_payloads_match_the_spec() {
+        let list = mux_admin_list_payload(Some("did:example:p"), None, Some("c1".into()), Some(50))
+            .unwrap();
+        assert_eq!(
+            list,
+            json!({ "principal": "did:example:p", "cursor": "c1", "limit": 50 })
+        );
+        serde_json::from_value::<mux_tasks::admin_list::v0_1::Payload>(list).expect("list");
+        let list = mux_admin_list_payload(None, Some("did:example:m"), None, None).unwrap();
+        assert_eq!(list, json!({ "member": "did:example:m" }));
+        serde_json::from_value::<mux_tasks::admin_list::v0_1::Payload>(list).expect("bare list");
+
+        let revoke = mux_admin_revoke_payload(
+            Some("did:example:p"),
+            Some("did:example:m"),
+            &["g1".into()],
+            Some(10),
+        )
+        .unwrap();
+        assert_eq!(
+            revoke,
+            json!({ "principal": "did:example:p", "member": "did:example:m",
+                    "grantIds": ["g1"], "limit": 10 })
+        );
+        serde_json::from_value::<mux_tasks::admin_revoke::v0_1::Payload>(revoke).expect("revoke");
+        let revoke = mux_admin_revoke_payload(Some("did:example:p"), None, &[], None).unwrap();
+        assert_eq!(revoke, json!({ "principal": "did:example:p" }));
+        serde_json::from_value::<mux_tasks::admin_revoke::v0_1::Payload>(revoke)
+            .expect("bare revoke");
+
+        let all = mux_admin_revoke_all_payload("did:example:m", 3);
+        assert_eq!(all, json!({ "did": "did:example:m", "epoch": 3 }));
+        serde_json::from_value::<mux_tasks::admin_revoke_all::v0_1::Payload>(all)
+            .expect("revoke-all");
+    }
+
+    #[test]
+    fn mux_admin_selections_the_spec_refuses_are_refused_here() {
+        assert!(mux_admin_list_payload(None, None, None, None).is_err());
+        assert!(mux_admin_revoke_payload(None, None, &[], None).is_err());
+        // Grant ids are unique only on a member's record.
+        assert!(
+            mux_admin_revoke_payload(Some("did:example:p"), None, &["g1".into()], None).is_err()
+        );
+    }
+
+    #[test]
+    fn mux_admin_responses_decode() {
+        let list: mux_tasks::admin_list::v0_1::Response = serde_json::from_value(json!({
+            "grants": [{
+                "grantId": "g1", "did": "did:example:m", "principal": "did:example:p",
+                "state": "active", "scope": ["receive", "delete"],
+                "expiresAt": "2026-12-01T00:00:00Z", "epoch": 2,
+                "signedAt": "2026-11-01T00:00:00Z", "narrowed": true
+            }],
+            "epoch": 2,
+            "nextCursor": "c2"
+        }))
+        .expect("admin-list response");
+        assert_eq!(list.grants.len(), 1);
+        assert_eq!(list.grants[0].epoch, 2);
+        assert_eq!(list.epoch, Some(2));
+        assert!(list.next_cursor.is_some());
+
+        let revoke: mux_tasks::admin_revoke::v0_1::Response = serde_json::from_value(json!({
+            "revoked": [{ "grantId": "g1", "did": "did:example:m", "principal": "did:example:p" }],
+            "remaining": 4,
+            "unmatchedGrantIds": ["g9"]
+        }))
+        .expect("admin-revoke response");
+        assert_eq!(revoke.revoked.len(), 1);
+        assert_eq!(revoke.remaining, 4);
+        assert_eq!(revoke.unmatched_grant_ids.len(), 1);
+
+        let all: mux_tasks::admin_revoke_all::v0_1::Response = serde_json::from_value(json!({
+            "did": "did:example:m", "epoch": 4, "epochAdvanced": true, "revokedGrants": 2
+        }))
+        .expect("admin-revoke-all response");
+        assert!(all.epoch_advanced);
+        assert_eq!((all.epoch, all.revoked_grants), (4, 2));
+    }
+
+    fn revoke_round(revoked: usize, remaining: u64) -> mux_tasks::admin_revoke::v0_1::Response {
+        let revoked: Vec<Value> = (0..revoked)
+            .map(|n| json!({ "grantId": format!("g{n}"), "did": "did:example:m", "principal": "did:example:p" }))
+            .collect();
+        serde_json::from_value(json!({ "revoked": revoked, "remaining": remaining })).unwrap()
+    }
+
+    /// Replays `rounds` in order, counting the requests sent.
+    async fn replay(
+        max_rounds: usize,
+        rounds: Vec<Result<mux_tasks::admin_revoke::v0_1::Response, ATMError>>,
+    ) -> (Result<MuxAdminRevokeOutcome, ATMError>, usize) {
+        let rounds = std::sync::Mutex::new(rounds.into_iter());
+        let sent = std::sync::atomic::AtomicUsize::new(0);
+        let outcome = revoke_rounds(max_rounds, || {
+            sent.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let next = rounds.lock().unwrap().next().expect("no round left");
+            async move { next }
+        })
+        .await;
+        (outcome, sent.into_inner())
+    }
+
+    #[tokio::test]
+    async fn revoke_until_done_stops_when_nothing_remains() {
+        let (outcome, sent) =
+            replay(10, vec![Ok(revoke_round(3, 2)), Ok(revoke_round(2, 0))]).await;
+        let outcome = outcome.unwrap();
+        assert!(outcome.is_done());
+        assert_eq!(
+            (outcome.revoked.len(), outcome.remaining, outcome.rounds),
+            (5, 0, 2)
+        );
+        assert_eq!(sent, 2);
+    }
+
+    #[tokio::test]
+    async fn revoke_until_done_is_bounded_by_max_rounds() {
+        let rounds = (0..5).map(|_| Ok(revoke_round(1, 100))).collect();
+        let (outcome, sent) = replay(3, rounds).await;
+        let outcome = outcome.unwrap();
+        assert!(matches!(outcome.stopped, MuxAdminRevokeStop::MaxRounds));
+        assert_eq!(
+            (outcome.revoked.len(), outcome.remaining, outcome.rounds),
+            (3, 100, 3)
+        );
+        assert_eq!(sent, 3);
+
+        // Zero rounds still sends one.
+        let (outcome, sent) = replay(0, vec![Ok(revoke_round(1, 1))]).await;
+        assert_eq!((outcome.unwrap().rounds, sent), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn revoke_until_done_stops_on_a_round_that_revokes_nothing() {
+        let (outcome, sent) =
+            replay(10, vec![Ok(revoke_round(2, 5)), Ok(revoke_round(0, 5))]).await;
+        let outcome = outcome.unwrap();
+        assert!(matches!(outcome.stopped, MuxAdminRevokeStop::NoProgress));
+        assert_eq!((outcome.revoked.len(), outcome.remaining), (2, 5));
+        assert_eq!(sent, 2);
+    }
+
+    #[tokio::test]
+    async fn revoke_until_done_keeps_what_was_done_when_a_later_round_fails() {
+        let contended = || {
+            ATMError::ProblemReport(
+                "messaging/mux/admin-revoke:contended".into(),
+                "send it again".into(),
+                "NONE".into(),
+            )
+        };
+        let (outcome, _) = replay(10, vec![Ok(revoke_round(2, 5)), Err(contended())]).await;
+        let outcome = outcome.unwrap();
+        assert!(matches!(outcome.stopped, MuxAdminRevokeStop::Failed(_)));
+        assert_eq!((outcome.revoked.len(), outcome.rounds), (2, 1));
+
+        // Nothing done yet: the first round's refusal is the error.
+        let (outcome, sent) = replay(10, vec![Err(contended())]).await;
+        assert!(outcome.is_err());
+        assert_eq!(sent, 1);
+    }
 }
 
 /// The `messaging/mux/list` payload; shared by both wires.
@@ -1635,6 +2019,152 @@ pub(crate) fn mux_revoke_payload(
         payload["dids"] = json!(dids);
     }
     payload
+}
+
+/// The `messaging/mux/admin-list` payload. At least one of `principal` and
+/// `member` is required.
+pub(crate) fn mux_admin_list_payload(
+    principal: Option<&str>,
+    member: Option<&str>,
+    cursor: Option<String>,
+    limit: Option<u64>,
+) -> Result<Value, ATMError> {
+    let mut payload = mux_admin_selection(principal, member)?;
+    if let Some(c) = cursor {
+        payload["cursor"] = json!(c);
+    }
+    if let Some(l) = limit {
+        payload["limit"] = json!(l);
+    }
+    Ok(payload)
+}
+
+/// The `messaging/mux/admin-revoke` payload. At least one of `principal`
+/// and `member` is required, and `grant_ids` only go with `member`.
+pub(crate) fn mux_admin_revoke_payload(
+    principal: Option<&str>,
+    member: Option<&str>,
+    grant_ids: &[String],
+    limit: Option<u64>,
+) -> Result<Value, ATMError> {
+    if !grant_ids.is_empty() && member.is_none() {
+        return Err(ATMError::ConfigError(
+            "mux admin-revoke names grant ids only with a member DID".into(),
+        ));
+    }
+    let mut payload = mux_admin_selection(principal, member)?;
+    if !grant_ids.is_empty() {
+        payload["grantIds"] = json!(grant_ids);
+    }
+    if let Some(l) = limit {
+        payload["limit"] = json!(l);
+    }
+    Ok(payload)
+}
+
+/// The `messaging/mux/admin-revoke-all` payload.
+pub(crate) fn mux_admin_revoke_all_payload(did: &str, epoch: u64) -> Value {
+    json!({ "did": did, "epoch": epoch })
+}
+
+fn mux_admin_selection(principal: Option<&str>, member: Option<&str>) -> Result<Value, ATMError> {
+    if principal.is_none() && member.is_none() {
+        return Err(ATMError::ConfigError(
+            "a mux admin task names a principal DID, a member DID or both".into(),
+        ));
+    }
+    let mut payload = json!({});
+    if let Some(p) = principal {
+        payload["principal"] = json!(p);
+    }
+    if let Some(m) = member {
+        payload["member"] = json!(m);
+    }
+    Ok(payload)
+}
+
+/// What [`TrustTasksOps::mux_admin_revoke_until_done`] did.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct MuxAdminRevokeOutcome {
+    /// Every grant revoked, over all rounds, in the order revoked.
+    pub revoked: Vec<mux_tasks::admin_revoke::v0_1::GrantRef>,
+    /// Requested grant ids that named no stored grant (from the first round).
+    pub unmatched_grant_ids: Vec<mux_tasks::admin_revoke::v0_1::GrantId>,
+    /// Grants still matching after the last round; `0` when done.
+    pub remaining: u64,
+    /// How many `admin-revoke` requests were answered.
+    pub rounds: usize,
+    /// Why it stopped.
+    pub stopped: MuxAdminRevokeStop,
+}
+
+impl MuxAdminRevokeOutcome {
+    /// Whether every matching grant is gone.
+    pub fn is_done(&self) -> bool {
+        matches!(self.stopped, MuxAdminRevokeStop::Done)
+    }
+}
+
+/// Why [`TrustTasksOps::mux_admin_revoke_until_done`] stopped.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum MuxAdminRevokeStop {
+    /// No matching grant remains.
+    Done,
+    /// It sent the most rounds it was allowed; `remaining` still match.
+    MaxRounds,
+    /// A round revoked nothing while grants still matched; sending it again
+    /// would not help.
+    NoProgress,
+    /// A round after the first failed. What earlier rounds revoked stays
+    /// revoked; a `…:contended` refusal can be sent again.
+    Failed(ATMError),
+}
+
+/// Send `round` until no grant remains, at most `max_rounds` times.
+/// The first round's error is returned as is: nothing was revoked yet.
+async fn revoke_rounds<F, Fut>(
+    max_rounds: usize,
+    mut round: F,
+) -> Result<MuxAdminRevokeOutcome, ATMError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<mux_tasks::admin_revoke::v0_1::Response, ATMError>>,
+{
+    let mut outcome = MuxAdminRevokeOutcome {
+        revoked: Vec::new(),
+        unmatched_grant_ids: Vec::new(),
+        remaining: 0,
+        rounds: 0,
+        stopped: MuxAdminRevokeStop::MaxRounds,
+    };
+    while outcome.rounds < max_rounds.max(1) {
+        let response = match round().await {
+            Ok(response) => response,
+            Err(e) if outcome.rounds == 0 => return Err(e),
+            Err(e) => {
+                outcome.stopped = MuxAdminRevokeStop::Failed(e);
+                return Ok(outcome);
+            }
+        };
+        outcome.rounds += 1;
+        if outcome.rounds == 1 {
+            outcome.unmatched_grant_ids = response.unmatched_grant_ids;
+        }
+        let progressed = !response.revoked.is_empty();
+        outcome.revoked.extend(response.revoked);
+        outcome.remaining = response.remaining;
+        if outcome.remaining == 0 {
+            outcome.stopped = MuxAdminRevokeStop::Done;
+            return Ok(outcome);
+        }
+        if !progressed {
+            outcome.stopped = MuxAdminRevokeStop::NoProgress;
+            return Ok(outcome);
+        }
+    }
+    Ok(outcome)
 }
 
 /// Most ids in one `messaging/mux/ack` (the mediator's delete limit).
@@ -1851,9 +2381,118 @@ impl TrustTasksOps<'_> {
             self.exchange(profile, task).await?;
         Ok(r.payload)
     }
+
+    /// `messaging/mux/admin-list`: an administrator lists the stored grants
+    /// of a `principal` DID, of a `member` DID, or between the two (at least
+    /// one is required), one page at a time — each grant's parties, state,
+    /// effective scope and expiry, and the epoch it was signed under. Never
+    /// the signed statements. With `member`, the response's `epoch` is that
+    /// DID's current epoch, which [`mux_admin_revoke_all`](Self::mux_admin_revoke_all)
+    /// names.
+    ///
+    /// Pass the previous page's `next_cursor` as `cursor`, with the same
+    /// DIDs, to continue; `limit` is 1–500 (the mediator's default is 100).
+    /// Administrator accounts only: anyone else is refused with
+    /// `authorization.admin_required`.
+    pub async fn mux_admin_list(
+        &self,
+        profile: &Arc<ATMProfile>,
+        principal: Option<&str>,
+        member: Option<&str>,
+        cursor: Option<String>,
+        limit: Option<u64>,
+    ) -> Result<mux_tasks::admin_list::v0_1::Response, ATMError> {
+        let task = mux_task::<mux_tasks::admin_list::v0_1::Payload>(
+            profile,
+            mux_admin_list_payload(principal, member, cursor, limit)?,
+        )?;
+        let r: TrustTask<mux_tasks::admin_list::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(r.payload)
+    }
+
+    /// `messaging/mux/admin-revoke`: an administrator revokes stored grants
+    /// of other accounts — a `principal` DID's, a `member` DID's, or those
+    /// between the two (at least one is required) — optionally only the
+    /// `grant_ids` of `member`. Revoked grants are deleted and their members
+    /// detached before the mediator answers; the statements can never be
+    /// stored again.
+    ///
+    /// One request revokes at most `limit` grants (1–500; default 500), and
+    /// `remaining` counts those still matching: send it again, or use
+    /// [`mux_admin_revoke_until_done`](Self::mux_admin_revoke_until_done).
+    /// A grant whose party is a root administrator is refused
+    /// (`…:protectedAccount`, nothing revoked) unless the requester is one.
+    /// Administrator accounts only.
+    pub async fn mux_admin_revoke(
+        &self,
+        profile: &Arc<ATMProfile>,
+        principal: Option<&str>,
+        member: Option<&str>,
+        grant_ids: &[String],
+        limit: Option<u64>,
+    ) -> Result<mux_tasks::admin_revoke::v0_1::Response, ATMError> {
+        let task = mux_task::<mux_tasks::admin_revoke::v0_1::Payload>(
+            profile,
+            mux_admin_revoke_payload(principal, member, grant_ids, limit)?,
+        )?;
+        let r: TrustTask<mux_tasks::admin_revoke::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(r.payload)
+    }
+
+    /// [`mux_admin_revoke`](Self::mux_admin_revoke), sent again while
+    /// grants still match, at most `max_rounds` times (at least once).
+    ///
+    /// Returns everything revoked and why it stopped: no grant left, the
+    /// round limit, a round that revoked nothing, or a later round's error.
+    /// An error in the first round, when nothing has been revoked, is
+    /// returned as the error.
+    pub async fn mux_admin_revoke_until_done(
+        &self,
+        profile: &Arc<ATMProfile>,
+        principal: Option<&str>,
+        member: Option<&str>,
+        grant_ids: &[String],
+        limit: Option<u64>,
+        max_rounds: usize,
+    ) -> Result<MuxAdminRevokeOutcome, ATMError> {
+        revoke_rounds(max_rounds, || {
+            self.mux_admin_revoke(profile, principal, member, grant_ids, limit)
+        })
+        .await
+    }
+
+    /// `messaging/mux/admin-revoke-all`: an administrator advances member
+    /// `did`'s epoch, voiding every grant on it (they stay listed as
+    /// `epochRevoked`) and ending its session attaches, without the member's
+    /// signature. `epoch` is the one being voided: the DID's current epoch,
+    /// as [`mux_admin_list`](Self::mux_admin_list) with `member` reports it.
+    ///
+    /// Naming an epoch that was already voided changes nothing
+    /// (`epoch_advanced` is false). Naming a later one than the current is
+    /// refused with `…:epochMismatch`, whose message gives the current
+    /// epoch. A root administrator's DID is refused (`…:protectedAccount`)
+    /// unless the requester is one, and a DID with no account with
+    /// `…:unknownAccount`. Administrator accounts only.
+    pub async fn mux_admin_revoke_all(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did: &str,
+        epoch: u64,
+    ) -> Result<mux_tasks::admin_revoke_all::v0_1::Response, ATMError> {
+        let task = mux_task::<mux_tasks::admin_revoke_all::v0_1::Payload>(
+            profile,
+            mux_admin_revoke_all_payload(did, epoch),
+        )?;
+        let r: TrustTask<mux_tasks::admin_revoke_all::v0_1::Response> =
+            self.exchange(profile, task).await?;
+        Ok(r.payload)
+    }
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use trust_tasks_proof::affinidi::Verifier;
@@ -1937,6 +2576,164 @@ mod tests {
             monitor_event("occurredAt"),
         );
         assert!(decode_monitor_event(&message).is_none());
+    }
+
+    fn membership_event() -> Value {
+        json!({
+            "occurredAt": "2026-11-13T09:00:00.5Z",
+            "change": "attached",
+            "principal": "did:example:phone",
+            "member": "did:example:work",
+            "wire": "didcomm",
+            "source": "grant",
+            "reason": "connect",
+            "sessionId": "sess-1",
+        })
+    }
+
+    fn v0_3_message(membership: Option<Value>) -> Message {
+        use trust_tasks_rs::Payload as _;
+        let mut message = monitor_message(
+            monitor::event::v0_3::Payload::TYPE_URI,
+            monitor_event("occurredAt"),
+        );
+        if let Some(membership) = membership {
+            message.body["payload"]["membership"] = json!([membership]);
+            message.body["payload"]["membershipDropped"] = json!(2);
+        }
+        message
+    }
+
+    #[test]
+    fn a_0_3_batch_with_membership_decodes() {
+        let batch = decode_monitor_event_v0_3(&v0_3_message(Some(membership_event())))
+            .expect("a 0.3 batch");
+        assert_eq!(batch.payload.events.len(), 1);
+        assert_eq!(batch.payload.membership.len(), 1);
+        assert_eq!(batch.payload.membership_dropped, Some(2));
+        let event = &batch.payload.membership[0];
+        assert_eq!(
+            event.change,
+            monitor::event::v0_3::MembershipChange::Attached
+        );
+        assert_eq!(
+            event.reason,
+            monitor::event::v0_3::MemberChangeReason::Connect
+        );
+        assert!(event.session_id.is_some());
+    }
+
+    #[test]
+    fn a_0_3_batch_without_membership_decodes() {
+        let batch = decode_monitor_event_v0_3(&v0_3_message(None)).expect("a 0.3 batch");
+        assert_eq!(batch.payload.events.len(), 1);
+        assert!(batch.payload.membership.is_empty());
+        assert_eq!(batch.payload.membership_dropped, None);
+    }
+
+    #[test]
+    fn a_membership_only_0_3_batch_decodes() {
+        let mut message = v0_3_message(Some(membership_event()));
+        message.body["payload"]["events"] = json!([]);
+        let batch = decode_monitor_event_v0_3(&message).expect("a 0.3 batch");
+        assert!(batch.payload.events.is_empty());
+        assert_eq!(batch.payload.membership.len(), 1);
+    }
+
+    #[test]
+    fn older_batches_decode_as_0_3() {
+        use trust_tasks_rs::Payload as _;
+        let v0_2 = monitor_message(
+            monitor::event::v0_2::Payload::TYPE_URI,
+            monitor_event("occurredAt"),
+        );
+        let batch = decode_monitor_event_v0_3(&v0_2).expect("a 0.2 batch, as 0.3");
+        assert_eq!(batch.payload.events.len(), 1);
+        assert!(batch.payload.membership.is_empty());
+
+        let v0_1 = monitor_message(MONITOR_EVENT_V0_1, monitor_event("at"));
+        let batch = decode_monitor_event_v0_3(&v0_1).expect("a 0.1 batch, as 0.3");
+        assert_eq!(
+            batch.payload.events[0].occurred_at.to_rfc3339(),
+            "2026-10-28T09:00:00.123+00:00"
+        );
+    }
+
+    #[test]
+    fn a_0_3_batch_decodes_as_0_2_without_its_membership() {
+        let batch = decode_monitor_event(&v0_3_message(Some(membership_event())))
+            .expect("a 0.3 batch, as 0.2");
+        assert_eq!(batch.payload.events.len(), 1);
+        assert_eq!(batch.payload.dropped, 0);
+    }
+
+    #[test]
+    fn a_0_3_batch_with_a_malformed_membership_event_is_refused() {
+        let mut event = membership_event();
+        event["change"] = json!("moved");
+        assert!(decode_monitor_event_v0_3(&v0_3_message(Some(event))).is_none());
+    }
+
+    #[test]
+    fn other_messages_are_not_0_3_monitor_batches() {
+        let message = monitor_message(
+            "https://trusttasks.org/spec/messaging/ping/0.2",
+            monitor_event("occurredAt"),
+        );
+        assert!(decode_monitor_event_v0_3(&message).is_none());
+    }
+
+    #[test]
+    fn monitor_subscriptions_match_the_spec() {
+        // The default reads as a 0.1 subscription: no traffic, no membership.
+        let plain = serde_json::to_value(MonitorSubscription::new().payload().unwrap()).unwrap();
+        assert_eq!(plain, json!({}));
+
+        let membership = monitor::subscribe::v0_2::MembershipFilter::builder()
+            .changes(Some(vec![
+                monitor::subscribe::v0_2::MembershipChange::Detached,
+            ]))
+            .dids(Some(vec!["did:example:work".parse().unwrap()]));
+        let membership: monitor::subscribe::v0_2::MembershipFilter = membership.try_into().unwrap();
+        let only = MonitorSubscription::membership_only(membership.clone())
+            .lease_seconds(60)
+            .max_events_per_second(10)
+            .renew("s1");
+        let only = serde_json::to_value(only.payload().unwrap()).unwrap();
+        assert_eq!(
+            only,
+            json!({ "traffic": false,
+                    "membership": { "changes": ["detached"], "dids": ["did:example:work"] },
+                    "leaseSeconds": 60, "maxEventsPerSecond": 10, "subscriptionId": "s1" })
+        );
+        serde_json::from_value::<monitor::subscribe::v0_2::Payload>(only).expect("spec payload");
+
+        let both = MonitorSubscription::new()
+            .filter(monitor::subscribe::v0_2::MonitorFilter::default())
+            .membership(monitor::subscribe::v0_2::MembershipFilter::default());
+        let both = serde_json::to_value(both.payload().unwrap()).unwrap();
+        assert_eq!(both, json!({ "filter": {}, "membership": {} }));
+        serde_json::from_value::<monitor::subscribe::v0_2::Payload>(both).expect("spec payload");
+
+        // The spec forbids a traffic filter with traffic off.
+        let refused = MonitorSubscription::membership_only(membership)
+            .filter(monitor::subscribe::v0_2::MonitorFilter::default());
+        assert!(refused.payload().is_err());
+    }
+
+    #[test]
+    fn a_0_2_subscribe_response_decodes() {
+        let response: monitor::subscribe::v0_2::Response = serde_json::from_value(json!({
+            "subscriptionId": "s1",
+            "expiresAt": "2026-11-13T09:05:00Z",
+            "filter": {},
+            "maxEventsPerSecond": 100,
+            "traffic": false,
+            "membership": { "wires": ["tsp"] },
+        }))
+        .expect("0.2 response");
+        assert_eq!(response.traffic, Some(false));
+        assert!(response.membership.is_some());
     }
 
     #[tokio::test]

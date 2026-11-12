@@ -102,13 +102,25 @@ digest = "sha256:1893fabb483d24671e95a0916dc00590026d0966eddcb16d7f2a2d9ad73e7d8
 slug = "messaging/monitor/event"
 version = "0.2"
 type_uri = "https://trusttasks.org/spec/messaging/monitor/event/0.2"
-digest = "sha256:a69e1e7c826b09edf5443c3004625e53fd72fcd8da271b67a890b24d0c054cce"
+digest = "sha256:25f52fd8095f35a56b475831b3a702b2508e12f5c602fc3b8c0f9f9d961f7817"
+
+[[task]]
+slug = "messaging/monitor/event"
+version = "0.3"
+type_uri = "https://trusttasks.org/spec/messaging/monitor/event/0.3"
+digest = "sha256:087cf8b4d80eff4849b186c958663dc42e0aa7aa0309dd2fee2d8ae40f635e43"
 
 [[task]]
 slug = "messaging/monitor/subscribe"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/monitor/subscribe/0.1"
-digest = "sha256:6969ac62e8016132a0c2a4950f28a25b7894127558cb940383902f68e9de3785"
+digest = "sha256:910adeec2e1c529898289516b9cd2e83789c019eff98b15bae3a80dce43b5277"
+
+[[task]]
+slug = "messaging/monitor/subscribe"
+version = "0.2"
+type_uri = "https://trusttasks.org/spec/messaging/monitor/subscribe/0.2"
+digest = "sha256:536be9624d7c311dc39464cb6f4ee24e5f4c3e6e3f92c238648731ea9302110f"
 
 [[task]]
 slug = "messaging/monitor/unsubscribe"
@@ -121,6 +133,24 @@ slug = "messaging/mux/ack"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/messaging/mux/ack/0.1"
 digest = "sha256:1cb6857af57558210ac9a42e8902c3275095466eb7d9d8c97890b3e49423e72c"
+
+[[task]]
+slug = "messaging/mux/admin-list"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/admin-list/0.1"
+digest = "sha256:55a973274d75a69aa380a3f63ccfcc081c8146acd8813e9d49bb93c15111b63a"
+
+[[task]]
+slug = "messaging/mux/admin-revoke"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/admin-revoke/0.1"
+digest = "sha256:cbffe3ae665e938a6281a73a355b7e00b96d3c30a33425c125f94ea8d5002a47"
+
+[[task]]
+slug = "messaging/mux/admin-revoke-all"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/messaging/mux/admin-revoke-all/0.1"
+digest = "sha256:30bf71416381df4e38dfe14b4efc2c56a8949c6c939bdcce875328329734fd46"
 
 [[task]]
 slug = "messaging/mux/attach"
