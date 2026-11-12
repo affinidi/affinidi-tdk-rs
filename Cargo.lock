@@ -1014,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-vc"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "affinidi-sd-jwt",
  "chrono",
