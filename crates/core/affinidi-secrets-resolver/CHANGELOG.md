@@ -1,5 +1,33 @@
 # Affinidi Secrets Manager
 
+## Unreleased (0.5.17) — fewer unwiped copies of private keys
+
+`Secret` is zeroize-on-drop, but some of the buffers it is built from were
+not wiped:
+
+- `Secret::from_multibase` wipes the whole multibase-decoded buffer, not only
+  its 32-byte stack copy.
+- `Secret::to_x25519` builds the X25519 JWK directly, so the encoded `d` lives
+  only in the zeroize-on-drop JWK, and wipes the converted scalar. Before, the
+  scalar, its base64 `String` and a `json!` value holding `d` were dropped as
+  they were. The result is the same `Secret`: same id, key type, bytes and
+  JWK (with `kid` set to the id).
+- `Secret::from_jwk_value` deserializes from the borrowed value instead of
+  cloning the whole JSON value first.
+- `Secret::get_private_keymultibase` wipes the multicodec buffer it encodes.
+- `Secret::generate_x25519` wipes the seed copy and takes the private bytes
+  without an extra array copy. The generators move the JWK from the key pair
+  instead of cloning it.
+- **Added:** `Secret::decode_multikey_zeroizing`, which returns the decoded
+  key in `Zeroizing<Vec<u8>>`. `Secret::decode_multikey` keeps its signature
+  and now wipes its intermediate buffer. Use the new function for private
+  keys.
+- The `task` module docs said the secrets task removes the need for copying
+  secrets. It does not: every `get_secret` returns a clone over a channel.
+  The docs now say so, and that each clone is wiped when dropped.
+
+No behaviour change and no breaking API change: one function is added.
+
 ## Unreleased (0.5.16) — `ThreadedSecretsResolver` waits for room instead of dropping commands
 
 `ThreadedSecretsResolver` sent every command with `try_send` on a 32-slot

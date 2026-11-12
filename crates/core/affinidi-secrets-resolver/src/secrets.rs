@@ -18,16 +18,16 @@ use crate::{
     },
 };
 pub use affinidi_crypto::KeyType;
-use affinidi_crypto::{JWK, Params};
+use affinidi_crypto::{JWK, OctectParams, Params};
 use base58::ToBase58;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tracing::warn;
 use unsigned_varint::encode as varint_encode;
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 /// A Shadow inner struct that helps with deserializing
 /// Allows for post-processing of the JWK material
@@ -199,7 +199,9 @@ impl Secret {
     /// # Ok::<(), affinidi_secrets_resolver::errors::SecretsResolverError>(())
     /// ```
     pub fn from_jwk_value(key_id: &str, jwk: &Value) -> Result<Self> {
-        let mut jwk: JWK = serde_json::from_value(jwk.to_owned())
+        // Deserialize from the borrowed value: no copy of `d` outside the
+        // (zeroize-on-drop) JWK.
+        let mut jwk = JWK::deserialize(jwk)
             .map_err(|e| SecretsResolverError::KeyError(format!("Failed to parse JWK: {e}")))?;
 
         jwk.key_id = Some(key_id.to_string());
@@ -250,11 +252,15 @@ impl Secret {
     /// kid: Optional Key ID (or random if not provided)
     ///
     pub fn from_multibase(private: &str, kid: Option<&str>) -> Result<Self> {
-        let private_bytes = multibase::decode(private).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to decode private key: {e}"))
-        })?;
+        let decoded = Zeroizing::new(
+            multibase::decode(private)
+                .map_err(|e| {
+                    SecretsResolverError::KeyError(format!("Failed to decode private key: {e}"))
+                })?
+                .1,
+        );
 
-        let private_bytes = MultiEncoded::new(private_bytes.1.as_slice())?;
+        let private_bytes = MultiEncoded::new(decoded.as_slice())?;
 
         match private_bytes.codec() {
             ED25519_PRIV => {
@@ -340,15 +346,29 @@ impl Secret {
         }
     }
 
-    /// Decodes a multikey to raw bytes
+    /// Decodes a multikey to raw bytes.
+    ///
+    /// The intermediate decoding is wiped. For a private key, prefer
+    /// [`Secret::decode_multikey_zeroizing`], whose result is wiped on drop
+    /// too.
     pub fn decode_multikey(key: &str) -> Result<Vec<u8>> {
-        let bytes = multibase::decode(key).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to multibase.decode key: {e}"))
-        })?;
-        let bytes = MultiEncoded::new(bytes.1.as_slice()).map_err(|e| {
+        Self::decode_multikey_zeroizing(key).map(|bytes| bytes.to_vec())
+    }
+
+    /// Decodes a multikey to raw bytes held in [`Zeroizing`], so a decoded
+    /// private key is wiped when it is dropped.
+    pub fn decode_multikey_zeroizing(key: &str) -> Result<Zeroizing<Vec<u8>>> {
+        let decoded = Zeroizing::new(
+            multibase::decode(key)
+                .map_err(|e| {
+                    SecretsResolverError::KeyError(format!("Failed to multibase.decode key: {e}"))
+                })?
+                .1,
+        );
+        let bytes = MultiEncoded::new(decoded.as_slice()).map_err(|e| {
             SecretsResolverError::KeyError(format!("Failed to load decoded key: {e}"))
         })?;
-        Ok(bytes.data().to_vec())
+        Ok(Zeroizing::new(bytes.data().to_vec()))
     }
 
     /// Get the multibase (Base58btc) encoded public key
@@ -444,9 +464,10 @@ impl Secret {
                 ));
             }
         };
+        let encoded = Zeroizing::new(encoded.into_bytes());
         Ok(multibase::encode(
             multibase::Base::Base58Btc,
-            encoded.into_bytes(),
+            encoded.as_slice(),
         ))
     }
 
@@ -477,24 +498,25 @@ impl Secret {
             )))
         } else {
             // Convert to X25519 Secret bytes
-            let x25519_secret = affinidi_crypto::ed25519::ed25519_private_to_x25519(
-                self.private_bytes.first_chunk::<32>().unwrap(),
-            );
+            let x25519_secret =
+                Zeroizing::new(affinidi_crypto::ed25519::ed25519_private_to_x25519(
+                    self.private_bytes.first_chunk::<32>().unwrap(),
+                ));
 
-            let x25519_sk = StaticSecret::from(x25519_secret);
+            let x25519_sk = StaticSecret::from(*x25519_secret);
             let x25519_pk = PublicKey::from(&x25519_sk);
 
-            let secret = BASE64_URL_SAFE_NO_PAD.encode(x25519_sk.as_bytes());
-            let public = BASE64_URL_SAFE_NO_PAD.encode(x25519_pk.as_bytes());
+            // The JWK is zeroize-on-drop, so the encoded `d` is wiped with it.
+            let jwk = JWK::new(
+                Some(self.id.clone()),
+                Params::OKP(OctectParams::new(
+                    "X25519".to_string(),
+                    BASE64_URL_SAFE_NO_PAD.encode(x25519_pk.as_bytes()),
+                    Some(BASE64_URL_SAFE_NO_PAD.encode(x25519_sk.as_bytes())),
+                )),
+            );
 
-            let jwk = json!({
-                "crv": "X25519",
-                "d": secret,
-                "kty": "OKP",
-                "x": public
-            });
-
-            Secret::from_jwk_value(&self.id, &jwk)
+            Secret::from_jwk(&jwk)
         }
     }
 }
@@ -596,6 +618,53 @@ mod tests {
             .expect("Couldn't convert ed25519 to x25519");
 
         assert_eq!(x25519.private_bytes.as_slice(), x25519_sk_bytes);
+    }
+
+    #[test]
+    fn to_x25519_keeps_the_id_and_carries_a_private_jwk() {
+        let jwk = json!({
+            "crv": "Ed25519",
+            "d": "ymjvUTVuUPzGF5ui12LfreO8bjZ_LbnOrh0sk0xCxMM",
+            "kty": "OKP",
+            "x": "d17TbZmkoYHZUQpzJTcuOtq0tjWYm8CKvKGYHDW6ZaE"
+        });
+        let x25519 = Secret::from_jwk_value("did:example:alice#key-1", &jwk)
+            .unwrap()
+            .to_x25519()
+            .unwrap();
+
+        assert_eq!(x25519.id, "did:example:alice#key-1");
+        assert_eq!(x25519.get_key_type(), super::KeyType::X25519);
+        let super::SecretMaterial::JWK(material) = &x25519.secret_material else {
+            panic!("expected JWK secret material");
+        };
+        assert_eq!(material.key_id.as_deref(), Some("did:example:alice#key-1"));
+        let super::Params::OKP(params) = &material.params else {
+            panic!("expected OKP params");
+        };
+        assert_eq!(params.curve, "X25519");
+        assert_eq!(
+            params.d.as_deref(),
+            Some(
+                BASE64_URL_SAFE_NO_PAD
+                    .encode(x25519.get_private_bytes())
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            params.x,
+            BASE64_URL_SAFE_NO_PAD.encode(x25519.get_public_bytes())
+        );
+    }
+
+    #[test]
+    fn decode_multikey_variants_agree() {
+        let multikey = "z3u2c8oS2oKgATvakQzVF66EAcZWJqPUzGQzWMUTKnFkv5DR";
+        let plain = Secret::decode_multikey(multikey).unwrap();
+        let zeroizing = Secret::decode_multikey_zeroizing(multikey).unwrap();
+        assert_eq!(plain.len(), 32);
+        assert_eq!(plain.as_slice(), zeroizing.as_slice());
+        assert!(Secret::decode_multikey_zeroizing("").is_err());
     }
 
     #[test]
