@@ -120,6 +120,20 @@ InviteReceived          None                           None
 Bidirectional
 ```
 
+A peer that lost its half re-forms the relationship by sending a new invite,
+which takes an established relationship back to `InviteReceived` until it is
+accepted again. A copy of an invite already acted on for that pair is refused
+with `TspError::Discarded` and changes nothing; while still `InviteReceived`, a
+re-sent copy of the invite being decided on is accepted as a no-op.
+
+## Repeated messages
+
+`TspAgent::receive` refuses a repeated copy of an invite (above), but TSP gives
+an application message no identifier or sequence number to check, so
+`receive` returns the same payload each time it is handed the same message. A
+consumer that must act on a message once deduplicates it itself — for example on
+an identifier in its own payload, or on the delivery layer's idempotency key.
+
 ## Protocol-Agnostic Usage with messaging-core
 
 For applications that need to support multiple messaging protocols (e.g. both

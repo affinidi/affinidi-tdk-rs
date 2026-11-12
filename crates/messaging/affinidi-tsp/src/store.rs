@@ -3,12 +3,23 @@
 //! Manages local private VIDs, known remote VIDs, and relationship state
 //! between VID pairs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
 
 use crate::error::TspError;
 use crate::relationship::{RelationshipEvent, RelationshipState};
 use crate::vid::{PrivateVid, ResolvedVid};
+
+/// How many received invites are remembered per VID pair.
+///
+/// The bound is per pair, not overall. Every entry is a genuine invite from
+/// the peer — one that verified — so one pair's history grows only as fast as
+/// that peer re-forms the relationship, and the bound keeps a long-lived pair
+/// from growing it without limit; the oldest is forgotten first. The map of
+/// pairs itself is not bounded: it gains an entry for every distinct peer that
+/// sends a verified invite and keeps it for the life of the store, as the
+/// relationship and digest maps do.
+const SEEN_INVITES_PER_PAIR: usize = 64;
 
 /// Build a compact relationship key from two VID strings.
 /// Format: "{our_vid}\0{their_vid}" — null byte separator is safe since VIDs can't contain it.
@@ -46,6 +57,12 @@ pub struct TspStore {
     thread_digests: RwLock<HashMap<String, [u8; 32]>>,
     /// The other half's thread id — see [`TspStore::set_reply_thread_digest`].
     reply_thread_digests: RwLock<HashMap<String, [u8; 32]>>,
+    /// Thread digests of the invites already acted on for each VID pair, oldest
+    /// first, at most [`SEEN_INVITES_PER_PAIR`] per pair (the map grows with
+    /// the number of distinct peers). Kept across a cancellation: an
+    /// invite from an earlier relationship is no fresher than one from the
+    /// current relationship. Key format: "{our_vid}\0{their_vid}".
+    seen_invites: RwLock<HashMap<String, VecDeque<[u8; 32]>>>,
 }
 
 impl TspStore {
@@ -56,7 +73,40 @@ impl TspStore {
             relationships: RwLock::new(HashMap::new()),
             thread_digests: RwLock::new(HashMap::new()),
             reply_thread_digests: RwLock::new(HashMap::new()),
+            seen_invites: RwLock::new(HashMap::new()),
         }
+    }
+
+    // --- Invites already acted on ---
+
+    /// Has an invite with this thread digest from `their_vid` already been
+    /// acted on?
+    pub(crate) fn has_seen_invite(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        digest: &[u8; 32],
+    ) -> bool {
+        let key = relationship_key(our_vid, their_vid);
+        self.seen_invites
+            .read()
+            .unwrap()
+            .get(&key)
+            .is_some_and(|seen| seen.contains(digest))
+    }
+
+    /// Remember that the invite with this thread digest has been acted on.
+    pub(crate) fn record_seen_invite(&self, our_vid: &str, their_vid: &str, digest: [u8; 32]) {
+        let key = relationship_key(our_vid, their_vid);
+        let mut seen_invites = self.seen_invites.write().unwrap();
+        let seen = seen_invites.entry(key).or_default();
+        if seen.contains(&digest) {
+            return;
+        }
+        if seen.len() == SEEN_INVITES_PER_PAIR {
+            seen.pop_front();
+        }
+        seen.push_back(digest);
     }
 
     // --- Thread-digest correlation ---
@@ -324,6 +374,18 @@ mod tests {
         assert_eq!(vids.len(), 2);
         assert!(vids.contains(&"alice".to_string()));
         assert!(vids.contains(&"bob".to_string()));
+    }
+
+    #[test]
+    fn seen_invites_keep_the_most_recent_per_pair() {
+        let store = TspStore::new();
+        for n in 0..=SEEN_INVITES_PER_PAIR {
+            store.record_seen_invite("alice", "bob", [n as u8; 32]);
+        }
+        assert!(!store.has_seen_invite("alice", "bob", &[0; 32]));
+        assert!(store.has_seen_invite("alice", "bob", &[1; 32]));
+        assert!(store.has_seen_invite("alice", "bob", &[SEEN_INVITES_PER_PAIR as u8; 32]));
+        assert!(!store.has_seen_invite("alice", "carol", &[1; 32]));
     }
 
     #[test]
