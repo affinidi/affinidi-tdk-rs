@@ -4,11 +4,12 @@
  * Demonstrates the full flow:
  * 1. RP creates an authorization request
  * 2. Wallet (Self-Issued OP) creates a self-issued ID Token
- * 3. RP validates the ID Token
+ * 3. RP verifies the signed ID Token
  *
  * Run with: `cargo run --example siop_authentication`
  */
 
+use affinidi_oid4vc_core::es256::Es256Signer;
 use affinidi_siopv2::*;
 use serde_json::json;
 
@@ -42,12 +43,8 @@ fn main() {
     // ── Step 2: Wallet creates self-issued ID Token ──
     println!("--- Step 2: Wallet creates self-issued ID Token ---");
 
-    let holder_jwk = json!({
-        "kty": "EC",
-        "crv": "P-256",
-        "x": "TCAER19Zvu3OHF4j4W4vfSVoHIP1ILilDls7vCeGemc",
-        "y": "ZxjiWWbZMQGHVWKVQ4hbSIirsVfuecCE6t4jT9F2HZQ"
-    });
+    let holder_key = Es256Signer::generate();
+    let holder_jwk = holder_key.public_key_jwk();
 
     let thumbprint = compute_jwk_thumbprint(&holder_jwk).unwrap();
     println!("  Holder JWK Thumbprint: {thumbprint}");
@@ -60,29 +57,29 @@ fn main() {
         .claim("email", json!("alice@example.com"))
         .build()
         .unwrap();
+    let id_token_jwt = id_token.sign(&holder_key).unwrap();
 
     println!(
         "  iss == sub: {} (self-issued invariant)",
         id_token.iss == id_token.sub
     );
     println!("  Subject: {}", id_token.sub);
-    println!("  Audience: {}", id_token.aud);
+    println!("  Audience: {:?}", id_token.aud);
     println!("  Self-attested claims: name, email\n");
 
-    // ── Step 3: RP validates the ID Token ──
-    println!("--- Step 3: RP validates the ID Token ---");
+    // ── Step 3: RP verifies the ID Token ──
+    println!("--- Step 3: RP verifies the ID Token ---");
 
-    match id_token.validate(&request.client_id, &request.nonce) {
-        Ok(()) => println!("  Validation: PASSED"),
-        Err(e) => println!("  Validation: FAILED - {e}"),
-    }
-
+    let expected = IdTokenExpectations::new(&["ES256"], &request.client_id, &request.nonce);
+    let id_token = verify_id_token(&id_token_jwt, &expected, None).expect("ID Token verifies");
+    println!("  Verification: PASSED");
     println!("  Checks performed:");
-    println!("    1. iss == sub (self-issued invariant)");
-    println!("    2. aud matches client_id");
-    println!("    3. nonce matches request nonce");
-    println!("    4. Token not expired");
-    println!("    5. sub == JWK Thumbprint(sub_jwk)");
+    println!("    1. alg is allowed; signature verifies with sub_jwk");
+    println!("    2. iss == sub (self-issued invariant)");
+    println!("    3. aud contains client_id");
+    println!("    4. nonce matches request nonce");
+    println!("    5. exp / iat within leeway");
+    println!("    6. sub == JWK Thumbprint(sub_jwk)");
 
     // ── Step 4: RP reads self-attested claims ──
     println!("\n--- Step 4: RP reads claims ---");

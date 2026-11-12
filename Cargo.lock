@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-siopv2"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "affinidi-oid4vc-core",
  "base64 0.23.1",
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",

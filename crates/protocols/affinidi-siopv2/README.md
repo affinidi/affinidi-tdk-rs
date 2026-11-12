@@ -11,13 +11,37 @@ Enables decentralized authentication where the End-User IS the OpenID Provider.
 
 ## Features
 
-- **Self-Issued ID Token**: Create and validate self-signed ID Tokens
-- **JWK Thumbprint subjects**: Subject identifiers via RFC 7638
-- **DID-based subjects**: Subject identifiers via DID methods
-- **Authorization request/response**: Full SIOPv2 protocol messages
-- **Provider and RP roles**: Both wallet-side and verifier-side APIs
+- **Self-Issued ID Token**: build the claims, sign them as a compact JWS
+  (`SelfIssuedIdToken::sign`), and verify a received token
+  (`verify_id_token`): algorithm allowlist, signature, `iss == sub`, `aud`,
+  `nonce`, `exp` / `iat` with leeway, and the JWK Thumbprint
+- **JWK Thumbprint subjects**: Subject identifiers via RFC 7638; the token is
+  verified with the key in `sub_jwk` (`ES256` or `EdDSA`)
+- **DID-based subjects**: Subject identifiers via DID methods; the header
+  `kid` must be a DID URL under `sub`, and the caller supplies a
+  `DidKeyResolver` (this crate does not resolve DIDs)
+- **Authorization request/response**: SIOPv2 protocol messages
 - **Cross-device flow**: `direct_post` response mode for QR code flows
-- **7-step validation**: Complete ID Token validation per spec
+
+`SelfIssuedIdToken::validate_claims` checks claims only and verifies no
+signature; do not use it on its own for a token received from a wallet.
+Neither function checks `nbf`, a maximum token lifetime, or the header `typ`.
+
+## Example
+
+```rust,ignore
+use affinidi_siopv2::*;
+
+// Wallet
+let jwt = IdTokenBuilder::new(client_id, nonce)
+    .with_jwk_thumbprint(signer.public_key_jwk())?
+    .build()?
+    .sign(&signer)?;
+
+// Relying party
+let expected = IdTokenExpectations::new(&["ES256", "EdDSA"], client_id, nonce);
+let token = verify_id_token(&jwt, &expected, None)?;
+```
 
 ## eIDAS 2.0
 
