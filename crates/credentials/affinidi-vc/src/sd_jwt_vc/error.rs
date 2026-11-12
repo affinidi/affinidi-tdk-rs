@@ -16,6 +16,19 @@ pub enum SdJwtVcError {
     #[error("Invalid issuer: {0}")]
     InvalidIssuer(String),
 
+    /// The claims to issue are not a JSON object.
+    #[error("Invalid claims: {0}")]
+    InvalidClaims(String),
+
+    /// A claim the SD-JWT VC profile keeps in the issuer-signed payload was
+    /// made selectively disclosable, or arrived through a disclosure.
+    #[error("Protected claim: {0}")]
+    ProtectedClaim(String),
+
+    /// The SD-JWT VC verified as an SD-JWT but not as an SD-JWT VC.
+    #[error("Verification failed: {0}")]
+    Verification(String),
+
     /// A required temporal claim (`iat`, `exp`, `nbf`) is missing or invalid.
     #[error("Invalid temporal claim: {0}")]
     InvalidTemporal(String),

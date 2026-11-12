@@ -9,11 +9,17 @@
  * - `status` — Credential status for revocation/suspension
  * - `cnf` — Confirmation key for holder binding
  *
+ * [`issue`] makes an SD-JWT VC. [`verify`] checks a received one: the issuer
+ * signature under the key for its `iss` ([`IssuerKeyVerifier`]), the
+ * disclosures, key binding when requested, `vct` and `iss`, and the temporal
+ * claims. It returns the `status` claim without checking it.
+ *
  * Reference: [draft-ietf-oauth-sd-jwt-vc](https://datatracker.ietf.org/doc/draft-ietf-oauth-sd-jwt-vc/)
  */
 
 use affinidi_sd_jwt::hasher::SdHasher;
-use affinidi_sd_jwt::signer::JwtSigner;
+use affinidi_sd_jwt::signer::{JwtSigner, JwtVerifier};
+use affinidi_sd_jwt::verifier::{self as sd_jwt_verifier, KeyBindingCheck, VerificationOptions};
 use affinidi_sd_jwt::{SdJwt, issuer as sd_jwt_issuer};
 use serde_json::Value;
 
@@ -21,10 +27,12 @@ pub mod error;
 
 pub use error::SdJwtVcError;
 
-/// An SD-JWT VC — an SD-JWT with enforced VC-specific claims.
+/// An SD-JWT VC: an SD-JWT carrying the VC-specific claims `vct`, `iss` and
+/// `iat`, and optionally `exp`, `nbf`, `sub`, `status` and `cnf`.
 ///
-/// Wraps `SdJwt` and ensures the payload contains the required claims:
-/// `vct`, `iss`, `iat`, and optionally `exp`, `nbf`, `sub`, `status`, `cnf`.
+/// [`issue`] produces one with those claims in place. Holding an `SdJwtVc`
+/// says nothing about whether it verifies: any `SdJwt` can be wrapped. Use
+/// [`verify`] on a received SD-JWT VC.
 #[derive(Debug, Clone)]
 pub struct SdJwtVc {
     /// The underlying SD-JWT.
@@ -54,7 +62,42 @@ impl std::fmt::Display for SdJwtVc {
     }
 }
 
-/// Issue an SD-JWT VC.
+/// The JWS `typ` [`issue`] writes (draft-ietf-oauth-sd-jwt-vc §3.2.1).
+pub const SD_JWT_VC_TYP: &str = "dc+sd-jwt";
+
+/// The JWS `typ` values [`verify`] accepts: [`SD_JWT_VC_TYP`], and
+/// `vc+sd-jwt` from earlier drafts of the specification.
+pub const ACCEPTED_TYPS: &[&str] = &[SD_JWT_VC_TYP, "vc+sd-jwt"];
+
+/// Delegates to the caller's signer, with the header `typ` set to
+/// [`SD_JWT_VC_TYP`].
+struct SdJwtVcSigner<'a> {
+    inner: &'a dyn JwtSigner,
+}
+
+impl JwtSigner for SdJwtVcSigner<'_> {
+    fn algorithm(&self) -> &str {
+        self.inner.algorithm()
+    }
+
+    fn key_id(&self) -> Option<&str> {
+        self.inner.key_id()
+    }
+
+    fn sign_jwt(
+        &self,
+        header: &Value,
+        payload: &Value,
+    ) -> Result<String, affinidi_sd_jwt::SdJwtError> {
+        let mut header = header.clone();
+        if let Some(object) = header.as_object_mut() {
+            object.insert("typ".into(), Value::String(SD_JWT_VC_TYP.into()));
+        }
+        self.inner.sign_jwt(&header, payload)
+    }
+}
+
+/// Issue an SD-JWT VC, with JWS header `typ` [`SD_JWT_VC_TYP`].
 ///
 /// # Arguments
 ///
@@ -69,13 +112,20 @@ impl std::fmt::Display for SdJwtVc {
 /// * `iat` — Issued-at timestamp (Unix seconds)
 /// * `exp` — Optional expiration timestamp (Unix seconds)
 ///
-/// # Required Claims (always in JWT payload, never selectively disclosed)
+/// # Claims kept in the JWT payload (never selectively disclosed)
 ///
-/// Per the SD-JWT VC spec, these claims MUST NOT be selectively disclosed:
-/// - `vct` — credential type
+/// `issue` always writes `vct`, `iss` and `iat`, and `exp` and `cnf` when
+/// given, and refuses a frame that would disclose any of [`PROTECTED_CLAIMS`]:
+/// - `vct`, `vct#integrity` — credential type and its integrity
 /// - `iss` — issuer
 /// - `iat` — issued at
+/// - `exp`, `nbf` — validity period
 /// - `cnf` — confirmation key (if present)
+/// - `status` — status reference (if present in `claims`)
+///
+/// draft-ietf-oauth-sd-jwt-vc lists all of these except `iat` as never
+/// selectively disclosable. Keeping `iat` in the payload, and requiring `iss`
+/// and `iat` (the draft leaves both optional), is this crate's profile.
 #[allow(clippy::too_many_arguments)]
 pub fn issue(
     vct: &str,
@@ -99,7 +149,10 @@ pub fn issue(
     }
 
     // Build the full claims object by merging VC-specific claims with user claims
-    let mut full_claims = claims.as_object().cloned().unwrap_or_default();
+    let mut full_claims = claims
+        .as_object()
+        .cloned()
+        .ok_or_else(|| SdJwtVcError::InvalidClaims("claims must be a JSON object".into()))?;
 
     // Required VC claims (never selectively disclosed)
     full_claims.insert("vct".to_string(), Value::String(vct.to_string()));
@@ -122,7 +175,7 @@ pub fn issue(
     let sd_jwt = sd_jwt_issuer::issue(
         &full_claims_value,
         disclosure_frame,
-        signer,
+        &SdJwtVcSigner { inner: signer },
         hasher,
         holder_jwk,
     )?;
@@ -130,19 +183,30 @@ pub fn issue(
     Ok(SdJwtVc { sd_jwt })
 }
 
-/// Validate that the disclosure frame does not attempt to disclose protected claims.
-///
-/// Per SD-JWT VC spec, `vct`, `iss`, `iat`, `cnf`, and `exp` MUST NOT be
-/// selectively disclosed — they must always be visible in the JWT payload.
-fn validate_frame_no_protected_claims(frame: &Value) -> error::Result<()> {
-    const PROTECTED_CLAIMS: &[&str] = &["vct", "iss", "iat", "exp", "nbf", "cnf"];
+/// Claims this crate keeps in the issuer-signed payload: they are never
+/// selectively disclosable. draft-ietf-oauth-sd-jwt-vc lists `vct`,
+/// `vct#integrity`, `iss`, `exp`, `nbf`, `cnf` and `status`. `iat` is added by
+/// this crate's profile, as [`issue`] always writes it and [`verify`] requires
+/// it.
+pub const PROTECTED_CLAIMS: &[&str] = &[
+    "vct",
+    "vct#integrity",
+    "iss",
+    "iat",
+    "exp",
+    "nbf",
+    "cnf",
+    "status",
+];
 
+/// Validate that the disclosure frame does not attempt to disclose protected claims.
+fn validate_frame_no_protected_claims(frame: &Value) -> error::Result<()> {
     if let Some(sd_array) = frame.get("_sd").and_then(|v| v.as_array()) {
         for item in sd_array {
             if let Some(name) = item.as_str()
                 && PROTECTED_CLAIMS.contains(&name)
             {
-                return Err(SdJwtVcError::InvalidVct(format!(
+                return Err(SdJwtVcError::ProtectedClaim(format!(
                     "\"{name}\" is a protected claim and must not be selectively disclosed"
                 )));
             }
@@ -152,38 +216,283 @@ fn validate_frame_no_protected_claims(frame: &Value) -> error::Result<()> {
     Ok(())
 }
 
+/// The leeway [`verify_temporal`] allows on `iat`.
+pub const IAT_LEEWAY_SECS: u64 = 60;
+
 /// Verify the temporal claims in an SD-JWT VC payload.
 ///
-/// Checks `iat`, `exp`, and `nbf` against the current time.
+/// `iat` is required and may be up to [`IAT_LEEWAY_SECS`] ahead of `now_unix`.
+/// `exp` and `nbf` are optional and checked with no leeway: the credential is
+/// expired from the instant `now_unix == exp` (RFC 7519 §4.1.4). Each claim
+/// that is present must be a non-negative integer, or the check fails.
 pub fn verify_temporal(payload: &Value, now_unix: u64) -> error::Result<()> {
-    // iat must be present
-    let iat = payload
-        .get("iat")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| SdJwtVcError::InvalidTemporal("iat is required".into()))?;
+    check_temporal(payload, now_unix, IAT_LEEWAY_SECS, 0)
+}
 
-    // iat must not be in the future (with small tolerance)
-    if iat > now_unix + 60 {
+/// [`verify_temporal`] with one `leeway_secs` for clock skew on all three
+/// claims: `iat` may be up to `leeway_secs` ahead, `exp` is honoured until
+/// `leeway_secs` after it, and `nbf` from `leeway_secs` before it.
+pub fn verify_temporal_with_leeway(
+    payload: &Value,
+    now_unix: u64,
+    leeway_secs: u64,
+) -> error::Result<()> {
+    check_temporal(payload, now_unix, leeway_secs, leeway_secs)
+}
+
+fn check_temporal(
+    payload: &Value,
+    now_unix: u64,
+    iat_leeway_secs: u64,
+    leeway_secs: u64,
+) -> error::Result<()> {
+    let iat = numeric_date(payload, "iat")?
+        .ok_or_else(|| SdJwtVcError::InvalidTemporal("iat is required".into()))?;
+    if iat > now_unix.saturating_add(iat_leeway_secs) {
         return Err(SdJwtVcError::InvalidTemporal(format!(
             "iat ({iat}) is in the future"
         )));
     }
 
-    // exp: if present, must be in the future
-    if let Some(exp) = payload.get("exp").and_then(|v| v.as_u64())
-        && now_unix > exp
+    if let Some(exp) = numeric_date(payload, "exp")?
+        && now_unix >= exp.saturating_add(leeway_secs)
     {
         return Err(SdJwtVcError::Expired);
     }
 
-    // nbf: if present, must be in the past
-    if let Some(nbf) = payload.get("nbf").and_then(|v| v.as_u64())
-        && now_unix < nbf
+    if let Some(nbf) = numeric_date(payload, "nbf")?
+        && now_unix.saturating_add(leeway_secs) < nbf
     {
         return Err(SdJwtVcError::NotYetValid);
     }
 
     Ok(())
+}
+
+/// A NumericDate claim: `None` when absent, an error when present but not a
+/// non-negative integer (a string, a fraction, a negative number, `null`).
+fn numeric_date(payload: &Value, name: &str) -> error::Result<Option<u64>> {
+    match payload.get(name) {
+        None => Ok(None),
+        Some(value) => value.as_u64().map(Some).ok_or_else(|| {
+            SdJwtVcError::InvalidTemporal(format!(
+                "{name} must be a non-negative integer, got {value}"
+            ))
+        }),
+    }
+}
+
+/// Builds the verifier for an SD-JWT VC's issuer signature from its `iss`.
+///
+/// [`verify`] reads `iss` and the JWS header from the not-yet-verified issuer
+/// JWS, calls this, and then verifies the signature with the verifier it
+/// returns. Because `iss` is covered by that signature, a credential only
+/// verifies under the key this returns for its own `iss`. Implementations
+/// resolve `iss` (a DID or an HTTPS issuer) to its key, may use the header
+/// (e.g. `kid`) to pick among that issuer's keys, and must pin the JWS `alg`
+/// to the key. Return an error for an issuer that is not trusted.
+///
+/// Any `Fn(&str, &Value) -> Result<Box<dyn JwtVerifier>>` closure implements
+/// it, called with `iss` and the JWS header.
+pub trait IssuerKeyVerifier {
+    /// A verifier for the issuer signature of a credential from `iss`.
+    fn verifier_for_issuer(&self, iss: &str, header: &Value)
+    -> error::Result<Box<dyn JwtVerifier>>;
+}
+
+impl<F> IssuerKeyVerifier for F
+where
+    F: Fn(&str, &Value) -> error::Result<Box<dyn JwtVerifier>>,
+{
+    fn verifier_for_issuer(
+        &self,
+        iss: &str,
+        header: &Value,
+    ) -> error::Result<Box<dyn JwtVerifier>> {
+        self(iss, header)
+    }
+}
+
+/// What [`verify`] requires of an SD-JWT VC.
+///
+/// Build with [`VerifyOptions::new`] and the `with_*` / `expecting_*`
+/// methods. A verifier of holder-bound presentations must set
+/// [`with_key_binding`](Self::with_key_binding): without it, a presentation
+/// carrying a KB-JWT is refused, and one without a KB-JWT is accepted as an
+/// unbound credential.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct VerifyOptions<'a> {
+    /// The verifier's current time, seconds since the epoch. It is the one
+    /// clock for the whole check: [`verify`] also uses it as the `now` of the
+    /// key binding freshness window, replacing the `now` given there.
+    pub now: u64,
+    /// Clock skew allowed on `iat`, `exp` and `nbf`
+    /// ([`verify_temporal_with_leeway`]). The KB-JWT `iat` uses the key
+    /// binding check's own window.
+    pub leeway_secs: u64,
+    /// `Some`: `vct` must equal it.
+    pub expected_vct: Option<&'a str>,
+    /// `Some`: `iss` must equal it. The issuer key always comes from `iss`
+    /// through the [`IssuerKeyVerifier`]; set this as well when only one
+    /// issuer is acceptable, e.g. when the resolver accepts several.
+    pub expected_issuer: Option<&'a str>,
+    /// `Some`: a Key Binding JWT is required and checked under the
+    /// credential's `cnf.jwk`. Its `aud` must be a single string equal to the
+    /// check's audience. `None`: no key binding, and an SD-JWT VC that
+    /// carries a KB-JWT is refused rather than accepted unchecked.
+    pub key_binding: Option<KeyBindingCheck<'a>>,
+}
+
+impl<'a> VerifyOptions<'a> {
+    /// Options at `now` (seconds since the epoch) with no leeway, no expected
+    /// `vct` or `iss`, and no key binding.
+    pub fn new(now: u64) -> Self {
+        Self {
+            now,
+            leeway_secs: 0,
+            expected_vct: None,
+            expected_issuer: None,
+            key_binding: None,
+        }
+    }
+
+    /// Allow `secs` of clock skew on `iat`, `exp` and `nbf`.
+    pub fn with_leeway_secs(mut self, secs: u64) -> Self {
+        self.leeway_secs = secs;
+        self
+    }
+
+    /// Require `vct` to equal `vct`.
+    pub fn expecting_vct(mut self, vct: &'a str) -> Self {
+        self.expected_vct = Some(vct);
+        self
+    }
+
+    /// Require `iss` to equal `issuer`.
+    pub fn expecting_issuer(mut self, issuer: &'a str) -> Self {
+        self.expected_issuer = Some(issuer);
+        self
+    }
+
+    /// Require a KB-JWT that passes `check`.
+    pub fn with_key_binding(mut self, check: KeyBindingCheck<'a>) -> Self {
+        self.key_binding = Some(check);
+        self
+    }
+}
+
+/// An SD-JWT VC that [`verify`] accepted.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct VerifiedSdJwtVc {
+    /// The claims with the presented disclosures resolved.
+    pub claims: Value,
+    /// The `vct` claim.
+    pub vct: String,
+    /// The `iss` claim.
+    pub issuer: String,
+    /// The `status` claim, if any. [`verify`] does not fetch or check a
+    /// status list: a caller that relies on revocation checks this reference
+    /// itself (e.g. with `affinidi-status-list`).
+    pub status: Option<Value>,
+    /// Whether a KB-JWT was checked under `cnf.jwk` (always true when
+    /// [`VerifyOptions::key_binding`] was given).
+    pub key_bound: bool,
+}
+
+/// Verify a serialized SD-JWT VC (or a presentation of one).
+///
+/// In order:
+/// 1. parse it, require the JWS header `typ` to be one of [`ACCEPTED_TYPS`],
+///    read `iss` (a non-empty string, equal to
+///    `options.expected_issuer` when given) and ask `issuer_key` for the
+///    verifier for that issuer;
+/// 2. verify it as an SD-JWT with that verifier and `hasher`, including the
+///    KB-JWT when `options.key_binding` is given, with `options.now` as the
+///    freshness window's `now` (see [`affinidi_sd_jwt::verifier::verify`]);
+/// 3. refuse a KB-JWT that no key binding check was asked for;
+/// 4. refuse a protected claim ([`PROTECTED_CLAIMS`]) that is not in the
+///    issuer-signed payload itself;
+/// 5. require a non-empty string `vct`, equal to `options.expected_vct` when
+///    given;
+/// 6. check `iat`, `exp` and `nbf` ([`verify_temporal_with_leeway`]).
+///
+/// The `status` claim is returned, not checked.
+pub fn verify(
+    serialized: &str,
+    issuer_key: &dyn IssuerKeyVerifier,
+    hasher: &dyn SdHasher,
+    options: &VerifyOptions,
+) -> error::Result<VerifiedSdJwtVc> {
+    let sd_jwt = SdJwt::parse(serialized, hasher)?;
+    // Decoded before the signature check only to choose the issuer key; the
+    // check below verifies these same bytes, so after it this is the
+    // issuer-signed payload.
+    let payload = sd_jwt.payload()?;
+    let header = sd_jwt.header()?;
+    let typ = header.get("typ").and_then(Value::as_str);
+    if !typ.is_some_and(|typ| ACCEPTED_TYPS.contains(&typ)) {
+        return Err(SdJwtVcError::Verification(format!(
+            "JWS typ must be one of {ACCEPTED_TYPS:?}, got {typ:?}"
+        )));
+    }
+
+    let issuer = required_string(&payload, "iss").map_err(SdJwtVcError::InvalidIssuer)?;
+    if let Some(expected) = options.expected_issuer
+        && issuer != expected
+    {
+        return Err(SdJwtVcError::InvalidIssuer(format!(
+            "expected {expected}, got {issuer}"
+        )));
+    }
+    let issuer_verifier = issuer_key.verifier_for_issuer(&issuer, &header)?;
+
+    let mut sd_options = VerificationOptions::default();
+    if let Some(mut check) = options.key_binding {
+        check.freshness.now = i64::try_from(options.now).unwrap_or(i64::MAX);
+        sd_options = VerificationOptions::with_key_binding(check);
+    }
+    let result = sd_jwt_verifier::verify(&sd_jwt, issuer_verifier.as_ref(), hasher, &sd_options)?;
+    if !result.is_verified() {
+        return Err(SdJwtVcError::Verification(
+            "the SD-JWT VC carries a Key Binding JWT but no key binding check was requested".into(),
+        ));
+    }
+
+    for name in PROTECTED_CLAIMS {
+        if result.claims.get(*name) != payload.get(*name) {
+            return Err(SdJwtVcError::ProtectedClaim(format!(
+                "\"{name}\" must be in the issuer-signed payload, not a disclosure"
+            )));
+        }
+    }
+
+    let vct = required_string(&payload, "vct").map_err(SdJwtVcError::InvalidVct)?;
+    if let Some(expected) = options.expected_vct
+        && vct != expected
+    {
+        return Err(SdJwtVcError::InvalidVct(format!(
+            "expected {expected}, got {vct}"
+        )));
+    }
+
+    verify_temporal_with_leeway(&payload, options.now, options.leeway_secs)?;
+
+    Ok(VerifiedSdJwtVc {
+        status: payload.get("status").cloned(),
+        claims: result.claims,
+        vct,
+        issuer,
+        key_bound: result.kb_verified == Some(true),
+    })
+}
+
+fn required_string(payload: &Value, name: &str) -> Result<String, String> {
+    match payload.get(name).and_then(Value::as_str) {
+        Some(value) if !value.is_empty() => Ok(value.to_string()),
+        _ => Err(format!("{name} must be a non-empty string")),
+    }
 }
 
 #[cfg(test)]
@@ -422,6 +731,113 @@ mod tests {
     }
 
     #[test]
+    fn verify_temporal_refuses_a_malformed_exp_or_nbf() {
+        for bad in [
+            serde_json::json!("1700000000"),
+            serde_json::json!(1_700_000_000.5),
+            serde_json::json!(-1),
+            serde_json::json!(i64::MIN),
+            serde_json::Value::Null,
+        ] {
+            for name in ["exp", "nbf", "iat"] {
+                let mut payload = serde_json::json!({ "iat": 1700000000 });
+                payload[name] = bad.clone();
+                assert!(
+                    matches!(
+                        verify_temporal(&payload, 1750000000),
+                        Err(SdJwtVcError::InvalidTemporal(_))
+                    ),
+                    "{name} = {bad}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn verify_temporal_expires_at_exp() {
+        let payload = serde_json::json!({ "iat": 1700000000, "exp": 1750000000 });
+        assert!(verify_temporal(&payload, 1749999999).is_ok());
+        assert!(matches!(
+            verify_temporal(&payload, 1750000000),
+            Err(SdJwtVcError::Expired)
+        ));
+    }
+
+    #[test]
+    fn verify_temporal_is_valid_from_nbf() {
+        let payload = serde_json::json!({ "iat": 1700000000, "nbf": 1750000000 });
+        assert!(verify_temporal(&payload, 1750000000).is_ok());
+        assert!(matches!(
+            verify_temporal(&payload, 1749999999),
+            Err(SdJwtVcError::NotYetValid)
+        ));
+    }
+
+    #[test]
+    fn verify_temporal_with_leeway_applies_to_every_claim() {
+        let payload =
+            serde_json::json!({ "iat": 1700000100, "exp": 1700000000, "nbf": 1700000130 });
+        assert!(verify_temporal_with_leeway(&payload, 1700000029, 30).is_err());
+        let ok = serde_json::json!({ "iat": 1700000030, "exp": 1700000000, "nbf": 1700000030 });
+        assert!(verify_temporal_with_leeway(&ok, 1700000000, 30).is_ok());
+        assert!(matches!(
+            verify_temporal_with_leeway(&ok, 1700000030, 30),
+            Err(SdJwtVcError::Expired)
+        ));
+    }
+
+    #[test]
+    fn verify_temporal_saturates_at_the_extremes() {
+        let far = serde_json::json!({ "iat": u64::MAX, "exp": u64::MAX, "nbf": u64::MAX });
+        assert!(verify_temporal_with_leeway(&far, u64::MAX - 1, 1).is_ok());
+        assert!(matches!(
+            verify_temporal_with_leeway(&far, u64::MAX, u64::MAX),
+            Err(SdJwtVcError::Expired)
+        ));
+        assert!(verify_temporal(&far, 0).is_err());
+        let epoch = serde_json::json!({ "iat": 0, "exp": 1 });
+        assert!(verify_temporal(&epoch, 0).is_ok());
+        assert!(matches!(
+            verify_temporal(&epoch, u64::MAX),
+            Err(SdJwtVcError::Expired)
+        ));
+    }
+
+    #[test]
+    fn issue_refuses_non_object_claims() {
+        let result = issue(
+            "IdentityCredential",
+            "https://issuer.example.com",
+            None,
+            &serde_json::json!(["not", "an", "object"]),
+            &serde_json::json!({}),
+            &test_signer(),
+            &Sha256Hasher,
+            None,
+            1700000000,
+            None,
+        );
+        assert!(matches!(result, Err(SdJwtVcError::InvalidClaims(_))));
+    }
+
+    #[test]
+    fn issue_refuses_a_disclosable_status() {
+        let result = issue(
+            "IdentityCredential",
+            "https://issuer.example.com",
+            None,
+            &serde_json::json!({ "status": { "status_list": { "idx": 0, "uri": "https://example.com/sl" } } }),
+            &serde_json::json!({ "_sd": ["status"] }),
+            &test_signer(),
+            &Sha256Hasher,
+            None,
+            1700000000,
+            None,
+        );
+        assert!(matches!(result, Err(SdJwtVcError::ProtectedClaim(_))));
+    }
+
+    #[test]
     fn serialize_roundtrip() {
         let hasher = Sha256Hasher;
         let signer = test_signer();
@@ -446,5 +862,357 @@ mod tests {
         let serialized = vc.serialize();
         let parsed = SdJwt::parse(&serialized, &hasher).unwrap();
         assert_eq!(parsed.disclosures.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod verify_tests {
+    use super::*;
+    use affinidi_sd_jwt::KbFreshness;
+    use affinidi_sd_jwt::hasher::Sha256Hasher;
+    use affinidi_sd_jwt::holder::{self, KbJwtInput};
+    use affinidi_sd_jwt::signer::JwtVerifier;
+    use affinidi_sd_jwt::signer::test_utils::{
+        HmacSha256Signer, HmacSha256Verifier, hmac_test_jwk, hmac_verifier_from_jwk,
+    };
+
+    const ISSUER_KEY: &[u8] = b"sd-jwt-vc-test-key-32-bytes-ok!";
+    const HOLDER_KEY: &[u8] = b"sd-jwt-vc-holder-key-32-bytes!!";
+    const VCT: &str = "https://example.com/IdentityCredential";
+    const ISS: &str = "https://issuer.example.com";
+    const AUD: &str = "https://verifier.example.com";
+    const NONCE: &str = "n-1";
+    const IAT: u64 = 1_700_000_000;
+
+    fn issued(claims: Value, exp: Option<u64>) -> SdJwtVc {
+        issue(
+            VCT,
+            ISS,
+            Some("did:example:subject"),
+            &claims,
+            &serde_json::json!({ "_sd": ["given_name", "email"] }),
+            &HmacSha256Signer::new(ISSUER_KEY),
+            &Sha256Hasher,
+            Some(&hmac_test_jwk(HOLDER_KEY)),
+            IAT,
+            exp,
+        )
+        .unwrap()
+    }
+
+    fn identity() -> Value {
+        serde_json::json!({ "given_name": "Alice", "email": "alice@example.com" })
+    }
+
+    fn presented(vc: &SdJwtVc) -> String {
+        let signer = HmacSha256Signer::new(HOLDER_KEY);
+        let reveal = holder::select_disclosures(&vc.sd_jwt, &["given_name"]);
+        let kb = KbJwtInput {
+            audience: AUD,
+            nonce: NONCE,
+            signer: &signer,
+            iat: IAT,
+        };
+        holder::present(&vc.sd_jwt, &reveal, Some(&kb), &Sha256Hasher)
+            .unwrap()
+            .serialize()
+    }
+
+    fn options() -> VerifyOptions<'static> {
+        VerifyOptions::new(IAT + 10)
+            .expecting_vct(VCT)
+            .expecting_issuer(ISS)
+            .with_key_binding(KeyBindingCheck::new(
+                AUD,
+                NONCE,
+                KbFreshness::new(0, 300),
+                &hmac_verifier_from_jwk,
+            ))
+    }
+
+    fn issuer_key(iss: &str, _header: &Value) -> error::Result<Box<dyn JwtVerifier>> {
+        if iss != ISS {
+            return Err(SdJwtVcError::InvalidIssuer(format!("{iss} is not trusted")));
+        }
+        Ok(Box::new(HmacSha256Verifier::new(ISSUER_KEY)))
+    }
+
+    fn check(serialized: &str, options: &VerifyOptions) -> error::Result<VerifiedSdJwtVc> {
+        verify(serialized, &issuer_key, &Sha256Hasher, options)
+    }
+
+    /// The issuer verifier comes from the credential's own `iss`, so a
+    /// credential signed by one issuer's key but naming another does not
+    /// verify, even when the verifier holds both keys.
+    #[test]
+    fn the_issuer_key_is_chosen_by_iss() {
+        let other_key: &[u8] = b"another-issuer-key-for-sd-jwt-v";
+        let named_iss_signed_by_other = issue(
+            VCT,
+            ISS,
+            None,
+            &identity(),
+            &serde_json::json!({}),
+            &HmacSha256Signer::new(other_key),
+            &Sha256Hasher,
+            None,
+            IAT,
+            None,
+        )
+        .unwrap()
+        .serialize();
+        let seen = std::cell::RefCell::new(Vec::new());
+        let both = |iss: &str, _: &Value| -> error::Result<Box<dyn JwtVerifier>> {
+            seen.borrow_mut().push(iss.to_string());
+            let key = if iss == ISS { ISSUER_KEY } else { other_key };
+            Ok(Box::new(HmacSha256Verifier::new(key)))
+        };
+        let options = VerifyOptions::new(IAT + 10);
+        let err = verify(&named_iss_signed_by_other, &both, &Sha256Hasher, &options).unwrap_err();
+        assert!(matches!(err, SdJwtVcError::SdJwt(_)), "{err}");
+        assert_eq!(seen.into_inner(), vec![ISS.to_string()]);
+
+        let untrusted = issue(
+            VCT,
+            "https://untrusted.example.com",
+            None,
+            &identity(),
+            &serde_json::json!({}),
+            &HmacSha256Signer::new(ISSUER_KEY),
+            &Sha256Hasher,
+            None,
+            IAT,
+            None,
+        )
+        .unwrap()
+        .serialize();
+        let err = check(&untrusted, &VerifyOptions::new(IAT + 10)).unwrap_err();
+        assert!(matches!(err, SdJwtVcError::InvalidIssuer(_)), "{err}");
+    }
+
+    /// `VerifyOptions::now` is the KB-JWT freshness clock too: the window's
+    /// own `now` (0 in `options()`) is replaced.
+    #[test]
+    fn the_key_binding_window_uses_the_verify_clock() {
+        let serialized = presented(&issued(identity(), None));
+        let late = VerifyOptions {
+            now: IAT + 301,
+            ..options()
+        };
+        let err = check(&serialized, &late).unwrap_err();
+        assert!(err.to_string().contains("older than"), "{err}");
+    }
+
+    /// A credential signed with header `typ` `typ`, otherwise valid.
+    fn issued_with_typ(typ: &str) -> String {
+        struct WithTyp<'a>(&'a str, HmacSha256Signer);
+        impl JwtSigner for WithTyp<'_> {
+            fn algorithm(&self) -> &str {
+                self.1.algorithm()
+            }
+            fn sign_jwt(
+                &self,
+                header: &Value,
+                payload: &Value,
+            ) -> Result<String, affinidi_sd_jwt::SdJwtError> {
+                let mut header = header.clone();
+                header["typ"] = self.0.into();
+                self.1.sign_jwt(&header, payload)
+            }
+        }
+        sd_jwt_issuer::issue(
+            &serde_json::json!({ "vct": VCT, "iss": ISS, "iat": IAT }),
+            &serde_json::json!({}),
+            &WithTyp(typ, HmacSha256Signer::new(ISSUER_KEY)),
+            &Sha256Hasher,
+            None,
+        )
+        .unwrap()
+        .serialize()
+    }
+
+    #[test]
+    fn issue_writes_the_sd_jwt_vc_typ() {
+        let vc = issued(identity(), None);
+        assert_eq!(vc.sd_jwt.header().unwrap()["typ"], SD_JWT_VC_TYP);
+    }
+
+    #[test]
+    fn only_sd_jwt_vc_typs_are_accepted() {
+        let options = VerifyOptions::new(IAT + 10);
+        for typ in ACCEPTED_TYPS {
+            check(&issued_with_typ(typ), &options).unwrap();
+        }
+        for typ in ["sd+jwt", "JWT", ""] {
+            let err = check(&issued_with_typ(typ), &options).unwrap_err();
+            assert!(
+                matches!(&err, SdJwtVcError::Verification(m) if m.contains("typ")),
+                "{typ}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bound_presentation_verifies() {
+        let mut claims = identity();
+        claims["status"] =
+            serde_json::json!({ "status_list": { "idx": 7, "uri": "https://example.com/sl" } });
+        let verified = check(&presented(&issued(claims, Some(IAT + 3600))), &options()).unwrap();
+        assert_eq!(verified.vct, VCT);
+        assert_eq!(verified.issuer, ISS);
+        assert!(verified.key_bound);
+        assert_eq!(verified.claims["given_name"], "Alice");
+        assert!(verified.claims.get("email").is_none());
+        assert_eq!(verified.status.unwrap()["status_list"]["idx"], 7);
+    }
+
+    #[test]
+    fn an_issued_credential_verifies_without_key_binding() {
+        let vc = issued(identity(), None);
+        let options = VerifyOptions {
+            key_binding: None,
+            ..options()
+        };
+        let verified = check(&vc.serialize(), &options).unwrap();
+        assert!(!verified.key_bound);
+        assert_eq!(verified.claims["email"], "alice@example.com");
+    }
+
+    #[test]
+    fn a_kb_jwt_that_is_not_checked_is_refused() {
+        let options = VerifyOptions {
+            key_binding: None,
+            ..options()
+        };
+        let err = check(&presented(&issued(identity(), None)), &options).unwrap_err();
+        assert!(matches!(err, SdJwtVcError::Verification(_)), "{err}");
+    }
+
+    #[test]
+    fn a_wrong_vct_or_issuer_is_refused() {
+        let serialized = presented(&issued(identity(), None));
+        let err = check(
+            &serialized,
+            &VerifyOptions {
+                expected_vct: Some("https://example.com/Other"),
+                ..options()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, SdJwtVcError::InvalidVct(_)), "{err}");
+        let err = check(
+            &serialized,
+            &VerifyOptions {
+                expected_issuer: Some("https://other.example.com"),
+                ..options()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, SdJwtVcError::InvalidIssuer(_)), "{err}");
+    }
+
+    #[test]
+    fn an_expired_credential_is_refused() {
+        let serialized = presented(&issued(identity(), Some(IAT + 10)));
+        let err = check(&serialized, &options()).unwrap_err();
+        assert!(matches!(err, SdJwtVcError::Expired), "{err}");
+    }
+
+    #[test]
+    fn a_malformed_exp_is_refused() {
+        let mut claims = identity();
+        claims["exp"] = serde_json::json!("1");
+        let vc = SdJwtVc {
+            sd_jwt: sd_jwt_issuer::issue(
+                &{
+                    let mut c = claims;
+                    c["vct"] = VCT.into();
+                    c["iss"] = ISS.into();
+                    c["iat"] = IAT.into();
+                    c
+                },
+                &serde_json::json!({}),
+                &SdJwtVcSigner {
+                    inner: &HmacSha256Signer::new(ISSUER_KEY),
+                },
+                &Sha256Hasher,
+                None,
+            )
+            .unwrap(),
+        };
+        let options = VerifyOptions {
+            key_binding: None,
+            ..options()
+        };
+        let err = check(&vc.serialize(), &options).unwrap_err();
+        assert!(matches!(err, SdJwtVcError::InvalidTemporal(_)), "{err}");
+    }
+
+    /// An SD-JWT whose `exp` is a disclosure: withholding it would hide the
+    /// expiry, so it is refused whether disclosed or not.
+    #[test]
+    fn a_protected_claim_from_a_disclosure_is_refused() {
+        let claims = serde_json::json!({ "vct": VCT, "iss": ISS, "iat": IAT, "exp": IAT + 5 });
+        let sd_jwt = sd_jwt_issuer::issue(
+            &claims,
+            &serde_json::json!({ "_sd": ["exp"] }),
+            &SdJwtVcSigner {
+                inner: &HmacSha256Signer::new(ISSUER_KEY),
+            },
+            &Sha256Hasher,
+            None,
+        )
+        .unwrap();
+        let options = VerifyOptions {
+            key_binding: None,
+            now: IAT + 10,
+            ..options()
+        };
+        let err = check(&sd_jwt.serialize(), &options).unwrap_err();
+        assert!(matches!(err, SdJwtVcError::ProtectedClaim(_)), "{err}");
+    }
+
+    #[test]
+    fn a_credential_without_vct_or_iss_is_refused() {
+        for (missing, claims) in [
+            ("vct", serde_json::json!({ "iss": ISS, "iat": IAT })),
+            ("iss", serde_json::json!({ "vct": VCT, "iat": IAT })),
+        ] {
+            let sd_jwt = sd_jwt_issuer::issue(
+                &claims,
+                &serde_json::json!({}),
+                &SdJwtVcSigner {
+                    inner: &HmacSha256Signer::new(ISSUER_KEY),
+                },
+                &Sha256Hasher,
+                None,
+            )
+            .unwrap();
+            let options = VerifyOptions {
+                key_binding: None,
+                expected_vct: None,
+                expected_issuer: None,
+                ..options()
+            };
+            let err = check(&sd_jwt.serialize(), &options).unwrap_err();
+            assert!(err.to_string().contains(missing), "{missing}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_kb_jwt_under_another_key_is_refused() {
+        let vc = issued(identity(), None);
+        let signer = HmacSha256Signer::new(b"some-other-holder-key-32-bytes!");
+        let kb = KbJwtInput {
+            audience: AUD,
+            nonce: NONCE,
+            signer: &signer,
+            iat: IAT,
+        };
+        let serialized = holder::present(&vc.sd_jwt, &[], Some(&kb), &Sha256Hasher)
+            .unwrap()
+            .serialize();
+        let err = check(&serialized, &options()).unwrap_err();
+        assert!(matches!(err, SdJwtVcError::SdJwt(_)), "{err}");
     }
 }
