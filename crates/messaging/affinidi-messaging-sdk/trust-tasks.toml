@@ -23,6 +23,7 @@
 "messaging/monitor/event" = "0.2"
 "messaging/monitor/subscribe" = "0.1"
 "messaging/monitor/unsubscribe" = "0.1"
+"messaging/mux/ack" = "0.1"
 "messaging/mux/attach" = "0.1"
 "messaging/mux/connections" = "0.1"
 "messaging/mux/detach" = "0.1"
