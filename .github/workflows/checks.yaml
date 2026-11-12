@@ -23,7 +23,7 @@ jobs:
   # `checks.yaml` so coverage can be scheduled separately — see the `coverage`
   # job below for why.
   rust-pipeline:
-    uses: affinidi/pipeline-rust/.github/workflows/checks-no-test.yaml@main
+    uses: affinidi/pipeline-rust/.github/workflows/checks-no-test.yaml@feat/release-branch-actions
     secrets: inherit
     with:
       toolchain: "1.95.0"
@@ -75,7 +75,7 @@ jobs:
 
   # Tests run on every event, including PRs — this is the gate that matters.
   test:
-    uses: affinidi/pipeline-rust/.github/workflows/test.yaml@main
+    uses: affinidi/pipeline-rust/.github/workflows/test.yaml@feat/release-branch-actions
     secrets: inherit
     with:
       toolchain: "1.95.0"
@@ -102,7 +102,7 @@ jobs:
   # gate either.
   coverage:
     if: github.event_name != 'pull_request'
-    uses: affinidi/pipeline-rust/.github/workflows/coverage.yaml@main
+    uses: affinidi/pipeline-rust/.github/workflows/coverage.yaml@feat/release-branch-actions
     secrets: inherit
     with:
       toolchain: "1.95.0"
