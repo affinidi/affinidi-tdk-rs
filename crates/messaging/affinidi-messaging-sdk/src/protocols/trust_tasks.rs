@@ -1557,6 +1557,84 @@ mod mux_connections_tests {
         serde_json::from_value::<mux_tasks::connections::v0_1::Payload>(payload)
             .expect("the payload matches the spec");
     }
+
+    /// The list, update and revoke payloads both wires send are valid
+    /// request payloads for the generated types.
+    #[test]
+    fn shared_mux_payloads_match_the_spec() {
+        let list = mux_list_payload(true, Some("c1".into()), Some(5));
+        assert_eq!(list, json!({ "as": "member", "cursor": "c1", "limit": 5 }));
+        serde_json::from_value::<mux_tasks::list::v0_1::Payload>(list).expect("list");
+        serde_json::from_value::<mux_tasks::list::v0_1::Payload>(mux_list_payload(
+            false, None, None,
+        ))
+        .expect("bare list");
+
+        let at = chrono::DateTime::parse_from_rfc3339("2026-12-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let update = mux_update_payload("g1", Some(&[MuxCapability::Receive]), Some(at));
+        assert_eq!(
+            update,
+            json!({ "grantId": "g1", "scope": ["receive"], "expiresAt": "2026-12-01T00:00:00Z" })
+        );
+        serde_json::from_value::<mux_tasks::update::v0_1::Payload>(update).expect("update");
+
+        let revoke = mux_revoke_payload(false, vec!["g1".into()], vec!["did:example:w".into()]);
+        assert_eq!(
+            revoke,
+            json!({ "as": "principal", "grantIds": ["g1"], "dids": ["did:example:w"] })
+        );
+        serde_json::from_value::<mux_tasks::revoke::v0_1::Payload>(revoke).expect("revoke");
+    }
+}
+
+/// The `messaging/mux/list` payload; shared by both wires.
+pub(crate) fn mux_list_payload(
+    as_member: bool,
+    cursor: Option<String>,
+    limit: Option<u64>,
+) -> Value {
+    let mut payload = json!({ "as": if as_member { "member" } else { "principal" } });
+    if let Some(c) = cursor {
+        payload["cursor"] = json!(c);
+    }
+    if let Some(l) = limit {
+        payload["limit"] = json!(l);
+    }
+    payload
+}
+
+/// The `messaging/mux/update` payload; shared by both wires.
+pub(crate) fn mux_update_payload(
+    grant_id: &str,
+    scope: Option<&[MuxCapability]>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Value {
+    let mut payload = json!({ "grantId": grant_id });
+    if let Some(s) = scope {
+        payload["scope"] = json!(s);
+    }
+    if let Some(e) = expires_at {
+        payload["expiresAt"] = json!(e.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    }
+    payload
+}
+
+/// The `messaging/mux/revoke` payload; shared by both wires.
+pub(crate) fn mux_revoke_payload(
+    as_member: bool,
+    grant_ids: Vec<String>,
+    dids: Vec<String>,
+) -> Value {
+    let mut payload = json!({ "as": if as_member { "member" } else { "principal" } });
+    if !grant_ids.is_empty() {
+        payload["grantIds"] = json!(grant_ids);
+    }
+    if !dids.is_empty() {
+        payload["dids"] = json!(dids);
+    }
+    payload
 }
 
 /// Most ids in one `messaging/mux/ack` (the mediator's delete limit).
@@ -1692,14 +1770,10 @@ impl TrustTasksOps<'_> {
         cursor: Option<String>,
         limit: Option<u64>,
     ) -> Result<mux_tasks::list::v0_1::Response, ATMError> {
-        let mut payload = json!({ "as": if as_member { "member" } else { "principal" } });
-        if let Some(c) = cursor {
-            payload["cursor"] = json!(c);
-        }
-        if let Some(l) = limit {
-            payload["limit"] = json!(l);
-        }
-        let task = mux_task::<mux_tasks::list::v0_1::Payload>(profile, payload)?;
+        let task = mux_task::<mux_tasks::list::v0_1::Payload>(
+            profile,
+            mux_list_payload(as_member, cursor, limit),
+        )?;
         let r: TrustTask<mux_tasks::list::v0_1::Response> = self.exchange(profile, task).await?;
         Ok(r.payload)
     }
@@ -1735,14 +1809,10 @@ impl TrustTasksOps<'_> {
         scope: Option<&[MuxCapability]>,
         expires_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<mux_tasks::update::v0_1::Response, ATMError> {
-        let mut payload = json!({ "grantId": grant_id });
-        if let Some(s) = scope {
-            payload["scope"] = json!(s);
-        }
-        if let Some(e) = expires_at {
-            payload["expiresAt"] = json!(e.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-        }
-        let task = mux_task::<mux_tasks::update::v0_1::Payload>(profile, payload)?;
+        let task = mux_task::<mux_tasks::update::v0_1::Payload>(
+            profile,
+            mux_update_payload(grant_id, scope, expires_at),
+        )?;
         let r: TrustTask<mux_tasks::update::v0_1::Response> = self.exchange(profile, task).await?;
         Ok(r.payload)
     }
@@ -1757,14 +1827,10 @@ impl TrustTasksOps<'_> {
         grant_ids: Vec<String>,
         dids: Vec<String>,
     ) -> Result<mux_tasks::revoke::v0_1::Response, ATMError> {
-        let mut payload = json!({ "as": if as_member { "member" } else { "principal" } });
-        if !grant_ids.is_empty() {
-            payload["grantIds"] = json!(grant_ids);
-        }
-        if !dids.is_empty() {
-            payload["dids"] = json!(dids);
-        }
-        let task = mux_task::<mux_tasks::revoke::v0_1::Payload>(profile, payload)?;
+        let task = mux_task::<mux_tasks::revoke::v0_1::Payload>(
+            profile,
+            mux_revoke_payload(as_member, grant_ids, dids),
+        )?;
         let r: TrustTask<mux_tasks::revoke::v0_1::Response> = self.exchange(profile, task).await?;
         Ok(r.payload)
     }

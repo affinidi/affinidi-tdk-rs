@@ -968,6 +968,86 @@ impl TspMuxSender {
             .payload)
     }
 
+    /// `messaging/mux/grant` on this socket: store grant statements
+    /// ([`sign_grant`](super::mux::sign_grant)). Each is accepted or refused
+    /// on its own. The counterpart of `TrustTasksOps::mux_grant`.
+    pub async fn grant(
+        &self,
+        statements: Vec<Value>,
+    ) -> Result<crate::tasks::messaging::mux::grant::v0_1::Response, ATMError> {
+        use crate::tasks::messaging::mux::grant::v0_1::{Payload, Response};
+        Ok(self
+            .request::<Payload, Response>(serde_json::json!({ "grants": statements }))
+            .await?
+            .payload)
+    }
+
+    /// `messaging/mux/list` on this socket: the grants the principal holds,
+    /// or (`as_member`) those on its own DID. One page; pass the previous
+    /// page's `nextCursor` as `cursor` to continue.
+    pub async fn list(
+        &self,
+        as_member: bool,
+        cursor: Option<String>,
+        limit: Option<u64>,
+    ) -> Result<crate::tasks::messaging::mux::list::v0_1::Response, ATMError> {
+        use crate::tasks::messaging::mux::list::v0_1::{Payload, Response};
+        Ok(self
+            .request::<Payload, Response>(super::trust_tasks::mux_list_payload(
+                as_member, cursor, limit,
+            ))
+            .await?
+            .payload)
+    }
+
+    /// `messaging/mux/update` on this socket: narrow a grant (smaller scope
+    /// and/or earlier expiry). Widening needs a new grant.
+    pub async fn update(
+        &self,
+        grant_id: &str,
+        scope: Option<&[super::mux::MuxCapability]>,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<crate::tasks::messaging::mux::update::v0_1::Response, ATMError> {
+        use crate::tasks::messaging::mux::update::v0_1::{Payload, Response};
+        Ok(self
+            .request::<Payload, Response>(super::trust_tasks::mux_update_payload(
+                grant_id, scope, expires_at,
+            ))
+            .await?
+            .payload)
+    }
+
+    /// `messaging/mux/revoke` on this socket. As principal, `dids` are member
+    /// DIDs to drop; as member (`as_member`), principals to remove.
+    /// `grant_ids` name grants directly either way.
+    pub async fn revoke(
+        &self,
+        as_member: bool,
+        grant_ids: Vec<String>,
+        dids: Vec<String>,
+    ) -> Result<crate::tasks::messaging::mux::revoke::v0_1::Response, ATMError> {
+        use crate::tasks::messaging::mux::revoke::v0_1::{Payload, Response};
+        Ok(self
+            .request::<Payload, Response>(super::trust_tasks::mux_revoke_payload(
+                as_member, grant_ids, dids,
+            ))
+            .await?
+            .payload)
+    }
+
+    /// `messaging/mux/revoke-all` on this socket, with a statement from
+    /// [`sign_revoke_all`](super::mux::sign_revoke_all).
+    pub async fn revoke_all(
+        &self,
+        statement: Value,
+    ) -> Result<crate::tasks::messaging::mux::revoke_all::v0_1::Response, ATMError> {
+        use crate::tasks::messaging::mux::revoke_all::v0_1::{Payload, Response};
+        Ok(self
+            .request::<Payload, Response>(serde_json::json!({ "revocation": statement }))
+            .await?
+            .payload)
+    }
+
     /// Whether the connection is open, as a watch: it changes once, to
     /// [`TspMuxState::Closed`], when the socket goes.
     pub fn state(&self) -> watch::Receiver<TspMuxState> {

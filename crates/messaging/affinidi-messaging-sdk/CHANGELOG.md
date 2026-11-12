@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.45.13 — didcomm-mux: acks go on the socket
+## 0.45.13 — didcomm-mux acks go on the socket; typed tsp-mux task helpers
 
 - New `TrustTasksOps::mux_ack(profile, message_ids)`: `messaging/mux/ack` on
   the profile's `didcomm-mux` connection, the DIDComm counterpart of the
@@ -19,6 +19,11 @@
   matching change); no released mediator has mux.
 - The answer to `mux/ack` is not deleted after it is read: the mediator
   never stores it, and a delete would only queue another ack.
+- `tsp-mux`: typed `TspMuxSender::grant`, `list`, `update`, `revoke` and
+  `revoke_all`, sent on the socket like `attach` and `detach`, with the same
+  arguments and response types as `TrustTasksOps::mux_*`. Before, these went
+  through the untyped `request`. The payloads come from one builder per
+  task, shared by both wires.
 
 ## 0.45.12 — tsp-mux: a socket that reconnects by itself
 
