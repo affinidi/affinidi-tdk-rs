@@ -21,8 +21,9 @@ use std::collections::BTreeMap;
 use coset::CoseSign1;
 
 use crate::cose::{CoseSigner, CoseVerifier, sign_mso, verify_issuer_auth};
+use crate::cose_key::CoseKey;
 use crate::device_auth::{DeviceAuthentication, DeviceNameSpaces, DeviceSigned};
-use crate::error::Result;
+use crate::error::{MdocError, Result};
 use crate::issuer_signed_item::{IssuerSignedItem, json_to_cbor};
 use crate::mso::{MobileSecurityObject, ValidityInfo};
 use crate::session_transcript::SessionTranscript;
@@ -45,12 +46,17 @@ pub struct IssuerSigned {
 }
 
 /// Builder for constructing an IssuerSigned mdoc.
+///
+/// [`MdocBuilder::device_key`] and [`MdocBuilder::validity`] have no
+/// defaults: [`MdocBuilder::build`] returns [`MdocError::MissingField`] if
+/// either was not set. The issuer decides how long a credential is valid
+/// and which holder key it is bound to.
 pub struct MdocBuilder {
     doc_type: String,
     digest_algorithm: String,
     namespaces: BTreeMap<String, Vec<IssuerSignedItem>>,
-    device_key: ciborium::Value,
-    validity: ValidityInfo,
+    device_key: Option<ciborium::Value>,
+    validity: Option<ValidityInfo>,
     decoys_per_namespace: usize,
 }
 
@@ -61,12 +67,8 @@ impl MdocBuilder {
             doc_type: doc_type.into(),
             digest_algorithm: "SHA-256".to_string(),
             namespaces: BTreeMap::new(),
-            device_key: ciborium::Value::Map(vec![]),
-            validity: ValidityInfo {
-                signed: "2024-01-01T00:00:00Z".to_string(),
-                valid_from: "2024-01-01T00:00:00Z".to_string(),
-                valid_until: "2025-01-01T00:00:00Z".to_string(),
-            },
+            device_key: None,
+            validity: None,
             decoys_per_namespace: 0,
         }
     }
@@ -77,15 +79,20 @@ impl MdocBuilder {
         self
     }
 
-    /// Set the device (holder) public key as a COSE_Key.
+    /// Set the device (holder) public key as a COSE_Key. Required.
+    ///
+    /// [`MdocBuilder::build`] checks that it parses as a COSE_Key with
+    /// well-formed key material and no private part.
     pub fn device_key(mut self, key: ciborium::Value) -> Self {
-        self.device_key = key;
+        self.device_key = Some(key);
         self
     }
 
-    /// Set the validity information.
+    /// Set the validity information. Required.
+    ///
+    /// [`MdocBuilder::build`] checks it with [`ValidityInfo::validate`].
     pub fn validity(mut self, validity: ValidityInfo) -> Self {
-        self.validity = validity;
+        self.validity = Some(validity);
         self
     }
 
@@ -119,13 +126,32 @@ impl MdocBuilder {
     }
 
     /// Build and sign the mdoc, producing an IssuerSigned.
+    ///
+    /// Returns [`MdocError::MissingField`] if the device key or validity was
+    /// not set, and an error if the device key is not a public COSE_Key or
+    /// the validity window is malformed (see [`ValidityInfo::validate`]).
     pub fn build(self, signer: &dyn CoseSigner) -> Result<IssuerSigned> {
+        let device_key = self.device_key.ok_or_else(|| {
+            MdocError::MissingField("deviceKey: set it with MdocBuilder::device_key".into())
+        })?;
+        let parsed_device_key = CoseKey::from_cbor_value(&device_key)?;
+        parsed_device_key.validate()?;
+        if parsed_device_key.is_private() {
+            return Err(MdocError::InvalidMso(
+                "deviceKey must be a public key; it has a private part".into(),
+            ));
+        }
+        let validity = self.validity.ok_or_else(|| {
+            MdocError::MissingField("validityInfo: set it with MdocBuilder::validity".into())
+        })?;
+        validity.validate()?;
+
         let mso = MobileSecurityObject::create(
             &self.doc_type,
             &self.digest_algorithm,
             &self.namespaces,
-            self.device_key,
-            self.validity,
+            device_key,
+            validity,
             self.decoys_per_namespace,
         )?;
 
@@ -383,13 +409,18 @@ mod tests {
         "eu.europa.ec.eudi.pid.1"
     }
 
+    fn test_validity() -> ValidityInfo {
+        ValidityInfo {
+            signed: "2024-01-01T00:00:00Z".to_string(),
+            valid_from: "2024-01-01T00:00:00Z".to_string(),
+            valid_until: "2025-01-01T00:00:00Z".to_string(),
+        }
+    }
+
     fn build_test_mdoc(signer: &TestSigner) -> IssuerSigned {
         MdocBuilder::new("eu.europa.ec.eudi.pid.1")
-            .validity(ValidityInfo {
-                signed: "2024-01-01T00:00:00Z".to_string(),
-                valid_from: "2024-01-01T00:00:00Z".to_string(),
-                valid_until: "2025-01-01T00:00:00Z".to_string(),
-            })
+            .device_key(crate::cose_key::test_device_key())
+            .validity(test_validity())
             .add_attribute(
                 pid_namespace(),
                 "family_name",
@@ -513,6 +544,8 @@ mod tests {
         let signer = TestSigner::new(test_key());
 
         let mdoc = MdocBuilder::new("test")
+            .device_key(crate::cose_key::test_device_key())
+            .validity(test_validity())
             .add_json_attribute("ns", "name", &serde_json::json!("Alice"))
             .add_json_attribute("ns", "age", &serde_json::json!(30))
             .add_json_attribute("ns", "verified", &serde_json::json!(true))
@@ -524,11 +557,117 @@ mod tests {
         assert_eq!(json_val, "Alice");
     }
 
+    fn complete_builder() -> MdocBuilder {
+        MdocBuilder::new("test")
+            .device_key(crate::cose_key::test_device_key())
+            .validity(test_validity())
+            .add_attribute("ns", "x", ciborium::Value::Integer(1.into()))
+    }
+
+    #[test]
+    fn build_without_validity_is_an_error() {
+        let signer = TestSigner::new(test_key());
+        let result = MdocBuilder::new("test")
+            .device_key(crate::cose_key::test_device_key())
+            .add_attribute("ns", "x", ciborium::Value::Integer(1.into()))
+            .build(&signer);
+        assert!(
+            matches!(result, Err(MdocError::MissingField(field)) if field.starts_with("validityInfo"))
+        );
+    }
+
+    #[test]
+    fn build_without_device_key_is_an_error() {
+        let signer = TestSigner::new(test_key());
+        let result = MdocBuilder::new("test")
+            .validity(test_validity())
+            .add_attribute("ns", "x", ciborium::Value::Integer(1.into()))
+            .build(&signer);
+        assert!(
+            matches!(result, Err(MdocError::MissingField(field)) if field.starts_with("deviceKey"))
+        );
+    }
+
+    #[test]
+    fn build_rejects_a_device_key_that_is_not_a_cose_key() {
+        let signer = TestSigner::new(test_key());
+        assert!(
+            complete_builder()
+                .device_key(ciborium::Value::Map(vec![]))
+                .build(&signer)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn build_rejects_a_private_device_key() {
+        let signer = TestSigner::new(test_key());
+        let mut key = CoseKey::new_ed25519(vec![7; 32]).unwrap();
+        key.d = Some(vec![9; 32]);
+        assert!(matches!(
+            complete_builder()
+                .device_key(key.to_cbor_value())
+                .build(&signer),
+            Err(MdocError::InvalidMso(_))
+        ));
+    }
+
+    #[test]
+    fn build_rejects_a_malformed_validity_window() {
+        let signer = TestSigner::new(test_key());
+        let window = |signed: &str, valid_from: &str, valid_until: &str| ValidityInfo {
+            signed: signed.to_string(),
+            valid_from: valid_from.to_string(),
+            valid_until: valid_until.to_string(),
+        };
+        for validity in [
+            window("not a date", "2024-01-01T00:00:00Z", "2025-01-01T00:00:00Z"),
+            window("2024-01-01T00:00:00Z", "2024-01-01", "2025-01-01T00:00:00Z"),
+            window("2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z", ""),
+            window(
+                "2024-02-01T00:00:00Z",
+                "2024-01-01T00:00:00Z",
+                "2025-01-01T00:00:00Z",
+            ),
+            window(
+                "2024-01-01T00:00:00Z",
+                "2025-01-01T00:00:00Z",
+                "2025-01-01T00:00:00Z",
+            ),
+            window(
+                "2024-01-01T00:00:00Z",
+                "2025-01-01T00:00:00Z",
+                "2024-06-01T00:00:00Z",
+            ),
+        ] {
+            assert!(
+                matches!(
+                    complete_builder().validity(validity.clone()).build(&signer),
+                    Err(MdocError::InvalidMso(_))
+                ),
+                "{validity:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_signs_the_validity_and_device_key_it_was_given() {
+        let signer = TestSigner::new(test_key());
+        let mdoc = complete_builder().build(&signer).unwrap();
+        assert_eq!(mdoc.mso.validity_info, test_validity());
+        assert_eq!(
+            mdoc.mso.device_key_info.device_key,
+            crate::cose_key::test_device_key()
+        );
+    }
+
     #[test]
     fn builder_with_decoys() {
         let signer = TestSigner::new(test_key());
 
         let mdoc = MdocBuilder::new("test")
+            .device_key(crate::cose_key::test_device_key())
+            .validity(test_validity())
             .decoys(5)
             .add_attribute("ns", "x", ciborium::Value::Integer(1.into()))
             .build(&signer)

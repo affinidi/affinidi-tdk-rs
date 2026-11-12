@@ -629,6 +629,7 @@ mod tests {
             .with_x5chain(vec![b"leaf-der".to_vec(), b"intermediate-der".to_vec()]);
         let public_key = issuer.public_key_bytes();
         let mdoc = MdocBuilder::new(DOC_TYPE)
+            .device_key(crate::cose_key::test_device_key())
             .validity(validity())
             .add_attribute(NS, "age_over_18", Value::Bool(true))
             .build(&issuer)

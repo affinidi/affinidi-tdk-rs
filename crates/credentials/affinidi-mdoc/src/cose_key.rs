@@ -593,6 +593,13 @@ impl KeyType {
     }
 }
 
+/// A well-formed public COSE_Key for tests that need a device key but do
+/// not check holder binding.
+#[cfg(test)]
+pub(crate) fn test_device_key() -> ciborium::Value {
+    CoseKey::new_ed25519(vec![7; 32]).unwrap().to_cbor_value()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

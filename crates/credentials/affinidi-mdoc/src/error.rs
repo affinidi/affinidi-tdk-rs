@@ -48,6 +48,10 @@ pub enum MdocError {
     #[error("Session transcript error: {0}")]
     SessionTranscript(String),
 
+    /// Proximity session encryption error.
+    #[error("Session error: {0}")]
+    Session(String),
+
     /// JSON conversion error.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),

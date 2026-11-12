@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-mdoc"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aes-gcm",
  "ciborium",
@@ -906,7 +906,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "affinidi-crypto 0.2.12",
  "affinidi-data-integrity",
@@ -972,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk-test-support"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "affinidi-crypto 0.2.12",
  "affinidi-did-common",

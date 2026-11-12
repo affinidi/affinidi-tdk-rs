@@ -538,6 +538,7 @@ mod tests {
         let signer = Es256CoseSigner::generate();
         let verifier = Es256CoseVerifier::from_bytes(&signer.public_key_bytes()).unwrap();
         let issued = MdocBuilder::new("eu.europa.ec.eudi.pid.1")
+            .device_key(crate::cose_key::test_device_key())
             .validity(validity())
             .add_json_attribute(
                 EIDAS_PID_NAMESPACE,

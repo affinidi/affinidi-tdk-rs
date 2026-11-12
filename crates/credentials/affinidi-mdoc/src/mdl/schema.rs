@@ -149,6 +149,7 @@ mod tests {
 
     fn build_complete_mdl(signer: &TestSigner) -> IssuerSigned {
         MdocBuilder::new(MDL_DOC_TYPE)
+            .device_key(crate::cose_key::test_device_key())
             .validity(test_validity())
             .add_attribute(
                 MDL_NAMESPACE,
@@ -224,6 +225,7 @@ mod tests {
     fn validate_incomplete_mdl() {
         let signer = TestSigner::new(b"test-signing-key-for-mdl-tests!");
         let mdoc = MdocBuilder::new(MDL_DOC_TYPE)
+            .device_key(crate::cose_key::test_device_key())
             .validity(test_validity())
             .add_attribute(
                 MDL_NAMESPACE,
@@ -250,6 +252,7 @@ mod tests {
         let signer = TestSigner::new(b"test-signing-key-for-mdl-tests!");
         // Build with PID doc type instead of mDL
         let mdoc = MdocBuilder::new("eu.europa.ec.eudi.pid.1")
+            .device_key(crate::cose_key::test_device_key())
             .validity(test_validity())
             .add_attribute(
                 MDL_NAMESPACE,
@@ -267,6 +270,7 @@ mod tests {
     fn validate_with_optional_fields() {
         let signer = TestSigner::new(b"test-signing-key-for-mdl-tests!");
         let mdoc = MdocBuilder::new(MDL_DOC_TYPE)
+            .device_key(crate::cose_key::test_device_key())
             .validity(test_validity())
             .add_attribute(
                 MDL_NAMESPACE,
@@ -296,6 +300,7 @@ mod tests {
     fn validate_with_unknown_fields() {
         let signer = TestSigner::new(b"test-signing-key-for-mdl-tests!");
         let mdoc = MdocBuilder::new(MDL_DOC_TYPE)
+            .device_key(crate::cose_key::test_device_key())
             .validity(test_validity())
             .add_attribute(
                 MDL_NAMESPACE,

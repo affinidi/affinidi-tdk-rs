@@ -1,5 +1,47 @@
 # Affinidi mdoc Changelog
 
+## Unreleased (0.6.0) — ISO session keys; `MdocBuilder` needs a device key and validity
+
+**Behaviour change (R3.6).** Proximity session keys derived by 0.6 differ
+from those derived by 0.5 and earlier, and `MdocBuilder::build` refuses input
+that 0.5 signed.
+
+- **Fixed — session keys follow ISO/IEC 18013-5 §9.1.1.5.** `SKDevice` and
+  `SKReader` were derived with the untagged `SessionTranscript` CBOR as the
+  HKDF salt. The salt is now SHA-256(SessionTranscriptBytes), where
+  `SessionTranscriptBytes = #6.24(bstr .cbor SessionTranscript)`, as the
+  standard specifies and as `derive_emac_key` already did. Keys now match
+  those of other conformant readers and devices; they no longer match a peer
+  running 0.5 or earlier of this crate.
+- **Breaking — `SessionKeys::derive` and `session::derive_session_key`** take
+  a `&SessionTranscript` instead of salt bytes, so the salt cannot be passed
+  in the wrong form. `SessionTranscript::derive_session_keys` is unchanged.
+- **New — `SessionEncryption` and `SessionRole`.** One side of a session:
+  encrypts with its own key (`SKReader` for the reader, `SKDevice` for the
+  mdoc) and decrypts with the peer's, building each IV as the 8-byte sender
+  identifier (0 reader, 1 mdoc) followed by a 4-byte big-endian message
+  counter starting at 1. A repeated or out-of-order incoming message fails to
+  decrypt; a failed decryption does not advance the counter; an exhausted
+  counter is an error. New: `session::session_nonce` and
+  `MdocError::Session`. `encrypt_aes256gcm` / `decrypt_aes256gcm` remain as
+  low-level primitives.
+- **New — `SessionTranscript::to_tagged_bytes`** (SessionTranscriptBytes) and
+  **`SessionTranscript::hkdf_salt`**; `derive_emac_key` uses the latter, with
+  the same output as before.
+- **Changed — `SessionKeys` overwrites both keys with zeros on drop.**
+- **Breaking — `MdocBuilder` has no default validity or device key.** It
+  defaulted to a 2024-01-01..2025-01-01 window and an empty device key map,
+  so a builder without `.validity(..)` or `.device_key(..)` signed an expired
+  credential with no holder key. `build()` now returns
+  `MdocError::MissingField` when either is unset, rejects a device key that
+  is not a well-formed public COSE_Key, and rejects a validity window that
+  `ValidityInfo::validate` refuses.
+- **New — `ValidityInfo::validate`:** all three dates parse as RFC 3339,
+  `signed` is not later than `validFrom`, and `validFrom` is earlier than
+  `validUntil`. It does not look at the clock.
+- **Fixed — `MobileSecurityObject::create`** returns an error instead of
+  overflowing when a decoy digest ID would not fit in a `u32`.
+
 ## Unreleased (0.5.0) — digests over received bytes; `DeviceResponse::verify`
 
 **Behaviour change (R3.6).** Reader-side checks are stricter, and some

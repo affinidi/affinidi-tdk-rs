@@ -12,7 +12,7 @@ licences (mDL) and eIDAS 2.0 attestations.
 
 ```toml
 [dependencies]
-affinidi-mdoc = "0.5"
+affinidi-mdoc = "0.6"
 ```
 
 ## Features
@@ -22,7 +22,12 @@ affinidi-mdoc = "0.5"
 - **Mobile Security Object (MSO)**: Issuer-signed digests of attribute values
 - **Namespace-based attributes**: Organized by doc type and namespace
 - **IssuerSigned / DeviceResponse**: Full credential and presentation structures
+- **Issuance**: `MdocBuilder` requires the holder's device key and the
+  validity window; `build()` returns an error if either is missing or malformed
 - **Selective disclosure**: Holder reveals only chosen attributes per namespace
+- **Proximity session encryption**: `SessionKeys` derives `SKDevice` /
+  `SKReader` as ISO/IEC 18013-5 §9.1.1.5 specifies, and `SessionEncryption`
+  builds the AES-256-GCM IVs and keeps the message counters
 - **Reader verification**: `DeviceResponse::verify` checks the `issuerAuth`
   algorithm and signature (issuer key from a caller-supplied verifier, or from
   a resolver handed the `x5chain`), docType, validity, item digests over the
